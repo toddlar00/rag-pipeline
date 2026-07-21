@@ -126,6 +126,63 @@ def _track_queue_worker_resources(
     return state
 
 
+def _track_parallel_resources(
+        monkeypatch, *, constructor_error=None, shutdown_error=None,
+        close_error=None):
+    state = SimpleNamespace(
+        executor_constructions=0, executors=[], futures=[], bars=[], events=[])
+
+    class RecordingProgress:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+            self.updates = 0
+            self.close_calls = 0
+            state.bars.append(self)
+
+        def update(self, amount=1):
+            self.updates += amount
+
+        def close(self):
+            self.close_calls += 1
+            state.events.append("progress_close")
+            if close_error is not None:
+                raise close_error
+
+    class RecordingExecutor:
+        def __init__(self, max_workers):
+            assert max_workers == 4
+            state.executor_constructions += 1
+            if constructor_error is not None:
+                raise constructor_error
+            self.shutdown_calls = []
+            state.executors.append(self)
+
+        def submit(self, function, *args, **kwargs):
+            future = Future()
+            state.futures.append(future)
+            try:
+                result = function(*args, **kwargs)
+            except BaseException as exc:
+                future.set_exception(exc)
+            else:
+                future.set_result(result)
+            return future
+
+        def shutdown(self, wait=True, *, cancel_futures=False):
+            self.shutdown_calls.append((wait, cancel_futures))
+            state.events.append("executor_shutdown")
+            if shutdown_error is not None:
+                raise shutdown_error
+
+    tqdm_module = ModuleType("tqdm")
+    tqdm_module.tqdm = RecordingProgress
+    monkeypatch.setitem(sys.modules, "tqdm", tqdm_module)
+    monkeypatch.setattr(
+        concurrent.futures, "ThreadPoolExecutor", RecordingExecutor)
+    return state
+
+
 def test_manifest_is_scoped_versioned_and_atomic(tmp_path):
     hashes = {"chunk_1": "abc"}
 
@@ -1561,7 +1618,8 @@ def test_qdrant_marker_cleanup_runs_after_manifest_commit(
             embedding_model="model-a")
 
 
-def _prepare_chroma_changed_existing_incremental(monkeypatch, tmp_path):
+def _prepare_chroma_changed_existing_incremental(
+        monkeypatch, tmp_path, *, embedding_model="model-a"):
     chunks_path = tmp_path / "chunks.jsonl"
     db_path = tmp_path / "chroma"
     old_record = {
@@ -1588,7 +1646,7 @@ def _prepare_chroma_changed_existing_incremental(monkeypatch, tmp_path):
     new_hash = rag._chunk_hash(new_record)
     manifest_path = rag._save_index_manifest(
         db_path, backend="chroma", collection_name="book",
-        embedding_model="model-a", embedding_dimension=2,
+        embedding_model=embedding_model, embedding_dimension=2,
         chunk_hashes={stable_id: old_hash}, source_sha256="old-source",
         source_record_count=1)
     marker_path = rag._chroma_update_marker_path(
@@ -1671,6 +1729,7 @@ def _prepare_chroma_changed_existing_incremental(monkeypatch, tmp_path):
     return SimpleNamespace(
         chunks_path=chunks_path,
         db_path=db_path,
+        embedding_model=embedding_model,
         manifest_path=manifest_path,
         marker_path=marker_path,
         stable_id=stable_id,
@@ -1707,6 +1766,196 @@ def test_chroma_marker_write_failure_prevents_first_mutation(
     assert fixture.collection.rows[fixture.stable_id]["metadata"][
         "context"] == "Old classification"
     assert fixture.manifest_path.read_bytes() == original_manifest
+    assert not fixture.marker_path.exists()
+
+
+def test_chroma_parallel_embedding_failure_preserves_primary_and_closes_progress(
+        monkeypatch, tmp_path):
+    embedding_error = RuntimeError("primary parallel embedding failure")
+    shutdown_error = RuntimeError("secondary parallel executor shutdown failure")
+    close_error = RuntimeError("secondary parallel progress close failure")
+    resources = _track_parallel_resources(
+        monkeypatch, shutdown_error=shutdown_error,
+        close_error=close_error)
+    fixture = _prepare_chroma_changed_existing_incremental(
+        monkeypatch, tmp_path, embedding_model="text-embedding-test")
+    original_manifest = fixture.manifest_path.read_bytes()
+
+    def fail_index_embedding(texts, _model, **_kwargs):
+        if texts == ["RAG index embedding-dimension probe"]:
+            return [[0.0, 1.0]]
+        raise embedding_error
+
+    monkeypatch.setattr(rag, "_embed_texts", fail_index_embedding)
+    with pytest.raises(RuntimeError) as raised:
+        rag.index_chunks(
+            fixture.chunks_path, fixture.db_path,
+            collection_name="book",
+            embedding_model=fixture.embedding_model)
+
+    assert raised.value is embedding_error
+    assert fixture.state.upserts == []
+    assert fixture.marker_path.is_file()
+    assert fixture.manifest_path.read_bytes() == original_manifest
+    assert resources.futures[0].exception() is embedding_error
+    assert resources.executors[0].shutdown_calls == [(True, False)]
+    assert resources.events == ["executor_shutdown", "progress_close"]
+    assert len(resources.bars) == 1
+    assert resources.bars[0].updates == 0
+    assert resources.bars[0].close_calls == 1
+
+
+def test_chroma_parallel_upsert_failure_closes_progress(
+        monkeypatch, tmp_path):
+    resources = _track_parallel_resources(monkeypatch)
+    fixture = _prepare_chroma_changed_existing_incremental(
+        monkeypatch, tmp_path, embedding_model="text-embedding-test")
+    original_manifest = fixture.manifest_path.read_bytes()
+    successful_upsert = fixture.collection.upsert
+    upsert_error = RuntimeError("injected parallel Chroma upsert failure")
+
+    def ambiguous_upsert(*, ids, embeddings, documents, metadatas):
+        successful_upsert(
+            ids=ids, embeddings=embeddings,
+            documents=documents, metadatas=metadatas)
+        raise upsert_error
+
+    monkeypatch.setattr(fixture.collection, "upsert", ambiguous_upsert)
+    with pytest.raises(RuntimeError) as raised:
+        rag.index_chunks(
+            fixture.chunks_path, fixture.db_path,
+            collection_name="book",
+            embedding_model=fixture.embedding_model)
+
+    assert raised.value is upsert_error
+    assert fixture.state.upserts == [[fixture.stable_id]]
+    assert fixture.marker_path.is_file()
+    assert fixture.manifest_path.read_bytes() == original_manifest
+    assert resources.executors[0].shutdown_calls == [(True, False)]
+    assert resources.events == ["executor_shutdown", "progress_close"]
+    assert resources.bars[0].updates == 0
+    assert resources.bars[0].close_calls == 1
+
+
+def test_chroma_parallel_close_failure_prevents_manifest_commit(
+        monkeypatch, tmp_path):
+    close_error = RuntimeError("injected parallel progress close failure")
+    resources = _track_parallel_resources(
+        monkeypatch, close_error=close_error)
+    fixture = _prepare_chroma_changed_existing_incremental(
+        monkeypatch, tmp_path, embedding_model="text-embedding-test")
+    original_manifest = fixture.manifest_path.read_bytes()
+
+    try:
+        raise ValueError("unrelated outer error")
+    except ValueError:
+        with pytest.raises(RuntimeError) as raised:
+            rag.index_chunks(
+                fixture.chunks_path, fixture.db_path,
+                collection_name="book",
+                embedding_model=fixture.embedding_model)
+
+    assert raised.value is close_error
+    assert fixture.state.upserts == [[fixture.stable_id]]
+    assert fixture.marker_path.is_file()
+    assert fixture.manifest_path.read_bytes() == original_manifest
+    assert resources.executors[0].shutdown_calls == [(True, False)]
+    assert resources.events == ["executor_shutdown", "progress_close"]
+    assert resources.bars[0].updates == 1
+    assert resources.bars[0].close_calls == 1
+
+
+def test_chroma_parallel_executor_constructor_failure_closes_progress(
+        monkeypatch, tmp_path):
+    setup_error = RuntimeError("injected parallel executor setup failure")
+    close_error = RuntimeError("secondary parallel progress close failure")
+    resources = _track_parallel_resources(
+        monkeypatch, constructor_error=setup_error, close_error=close_error)
+    fixture = _prepare_chroma_changed_existing_incremental(
+        monkeypatch, tmp_path, embedding_model="text-embedding-test")
+    original_manifest = fixture.manifest_path.read_bytes()
+
+    with pytest.raises(RuntimeError) as raised:
+        rag.index_chunks(
+            fixture.chunks_path, fixture.db_path,
+            collection_name="book",
+            embedding_model=fixture.embedding_model)
+
+    assert raised.value is setup_error
+    assert fixture.state.upserts == []
+    assert fixture.marker_path.is_file()
+    assert fixture.manifest_path.read_bytes() == original_manifest
+    assert resources.executor_constructions == 1
+    assert resources.executors == []
+    assert resources.events == ["progress_close"]
+    assert resources.bars[0].updates == 0
+    assert resources.bars[0].close_calls == 1
+
+
+def test_chroma_parallel_shutdown_failure_precedes_close_failure(
+        monkeypatch, tmp_path):
+    shutdown_error = RuntimeError("injected parallel executor shutdown failure")
+    close_error = RuntimeError("secondary parallel progress close failure")
+    resources = _track_parallel_resources(
+        monkeypatch, shutdown_error=shutdown_error,
+        close_error=close_error)
+    fixture = _prepare_chroma_changed_existing_incremental(
+        monkeypatch, tmp_path, embedding_model="text-embedding-test")
+    original_manifest = fixture.manifest_path.read_bytes()
+
+    with pytest.raises(RuntimeError) as raised:
+        rag.index_chunks(
+            fixture.chunks_path, fixture.db_path,
+            collection_name="book",
+            embedding_model=fixture.embedding_model)
+
+    assert raised.value is shutdown_error
+    assert fixture.state.upserts == [[fixture.stable_id]]
+    assert fixture.marker_path.is_file()
+    assert fixture.manifest_path.read_bytes() == original_manifest
+    assert resources.executors[0].shutdown_calls == [(True, False)]
+    assert resources.events == ["executor_shutdown", "progress_close"]
+    assert resources.bars[0].updates == 1
+    assert resources.bars[0].close_calls == 1
+
+
+def test_chroma_parallel_cleanup_precedes_manifest_and_marker_commit(
+        monkeypatch, tmp_path):
+    resources = _track_parallel_resources(monkeypatch)
+    fixture = _prepare_chroma_changed_existing_incremental(
+        monkeypatch, tmp_path, embedding_model="text-embedding-test")
+    original_save_manifest = rag._save_index_manifest
+    original_finish_update = rag._finish_index_update
+
+    def save_manifest(*args, **kwargs):
+        assert resources.events == ["executor_shutdown", "progress_close"]
+        assert fixture.marker_path.is_file()
+        assert resources.bars[0].updates == 1
+        assert resources.bars[0].close_calls == 1
+        resources.events.append("manifest_save")
+        return original_save_manifest(*args, **kwargs)
+
+    def finish_update(marker_path):
+        assert marker_path == fixture.marker_path
+        assert resources.events == [
+            "executor_shutdown", "progress_close", "manifest_save"]
+        manifest = json.loads(
+            fixture.manifest_path.read_text(encoding="utf-8"))
+        assert manifest["chunk_hashes"] == {
+            fixture.stable_id: fixture.new_hash}
+        resources.events.append("marker_cleanup")
+        return original_finish_update(marker_path)
+
+    monkeypatch.setattr(rag, "_save_index_manifest", save_manifest)
+    monkeypatch.setattr(rag, "_finish_index_update", finish_update)
+    rag.index_chunks(
+        fixture.chunks_path, fixture.db_path,
+        collection_name="book", embedding_model=fixture.embedding_model)
+
+    assert resources.executors[0].shutdown_calls == [(True, False)]
+    assert resources.events == [
+        "executor_shutdown", "progress_close", "manifest_save",
+        "marker_cleanup"]
     assert not fixture.marker_path.exists()
 
 

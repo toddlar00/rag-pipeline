@@ -699,7 +699,10 @@ physical stable-ID reconciliation.
 The sequential background-upsert paths for both backends share teardown that
 requests a worker stop, waits for completion, and attempts both executor and
 progress closure; progress advances only after a write succeeds, and a
-secondary cleanup error does not replace the original producer error.
+secondary cleanup error does not replace the original producer error. Chroma's
+parallel API-embedding path likewise shuts down its executor and closes its
+progress display before committing the manifest; an embedding or upsert error
+takes precedence over either cleanup failure.
 
 If the model, vector dimension, or manifest schema changes—or an older shared
 `chunk_hashes.json` sidecar is encountered—the pipeline safely rebuilds only

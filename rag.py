@@ -1040,6 +1040,52 @@ def _put_unless_worker_failed(work_queue: queue.Queue, item,
             continue
 
 
+def _finish_executor_progress(executor, progress, *, operation_name: str,
+                              primary_error: BaseException | None) -> None:
+    """Close parallel resources without masking an operation failure.
+
+    ``primary_error`` must be the exception caught from the parallel operation,
+    not ambient ``sys.exc_info()``.  Every created resource gets a cleanup
+    attempt.  An operation failure takes precedence over cleanup failures;
+    otherwise executor shutdown takes precedence over progress-bar closure.
+    """
+    cleanup_errors: list[BaseException] = []
+    if executor is not None:
+        try:
+            executor.shutdown(wait=True)
+        except BaseException as exc:
+            cleanup_errors.append(exc)
+    try:
+        progress.close()
+    except BaseException as exc:
+        cleanup_errors.append(exc)
+
+    if not cleanup_errors:
+        return
+
+    if primary_error is not None:
+        for cleanup_error in cleanup_errors:
+            if cleanup_error is primary_error:
+                continue
+            log.error(
+                "%s cleanup also failed while preserving the active error",
+                operation_name,
+                exc_info=(type(cleanup_error), cleanup_error,
+                          cleanup_error.__traceback__),
+            )
+        return
+
+    first_error, *additional_errors = cleanup_errors
+    for cleanup_error in additional_errors:
+        log.error(
+            "%s cleanup encountered an additional error",
+            operation_name,
+            exc_info=(type(cleanup_error), cleanup_error,
+                      cleanup_error.__traceback__),
+        )
+    raise first_error.with_traceback(first_error.__traceback__)
+
+
 def _finish_queue_worker(work_queue: queue.Queue, worker_future,
                          worker_executor, progress, *,
                          worker_name: str,
@@ -5821,7 +5867,10 @@ def index_chunks(chunks_path: Path, chroma_dir: Path, *,
         log.info(f"Parallel embedding with {embed_workers} workers "
                  f"({len(batches)} batches)")
         pbar = tqdm(total=len(batches), desc="Indexing", unit="batch")
-        with ThreadPoolExecutor(max_workers=embed_workers) as pool:
+        pool = None
+        parallel_error = None
+        try:
+            pool = ThreadPoolExecutor(max_workers=embed_workers)
             futures = {pool.submit(_embed_batch, p): i
                        for i, p in enumerate(prepared)}
             results_map = {}
@@ -5834,7 +5883,13 @@ def index_chunks(chunks_path: Path, chroma_dir: Path, *,
                 collection.upsert(ids=ids, embeddings=embeddings,
                                   documents=documents, metadatas=metadatas)
                 pbar.update(1)
-        pbar.close()
+        except BaseException as exc:
+            parallel_error = exc
+            raise
+        finally:
+            _finish_executor_progress(
+                pool, pbar, operation_name="Chroma parallel indexing",
+                primary_error=parallel_error)
     else:
         # Sequential with pipelined upsert for local models
         upsert_q: queue.Queue = queue.Queue(maxsize=2)
