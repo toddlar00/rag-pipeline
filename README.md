@@ -680,7 +680,8 @@ through a cyclic pagination sequence. Each audit is bounded by exact point
 counts taken before and after its payload-only scroll, and rejects count drift,
 premature termination, oversized/non-progressing pages, and repeated physical
 point IDs. Use `--full-reindex` to recover from a physical collection/manifest
-mismatch.
+mismatch. Waited point deletes and upserts must also report Qdrant's
+`completed` status before reconciliation or manifest commit can continue.
 
 Before its first collection mutation, a Qdrant indexing run also creates a
 collection-scoped recovery marker. The marker is removed only after exact

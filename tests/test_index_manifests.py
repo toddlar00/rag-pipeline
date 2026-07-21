@@ -29,6 +29,10 @@ class _FakeGrpcPointId:
         return None
 
 
+def _completed_update():
+    return SimpleNamespace(status="completed")
+
+
 def _write_chunks(path: Path) -> None:
     record = {
         "text": "The court applies the governing rule.",
@@ -454,6 +458,52 @@ def test_qdrant_scan_rejects_invalid_exact_count(count):
         rag._qdrant_stable_id_rows(FakeClient(), "book")
 
 
+@pytest.mark.parametrize(
+    "status",
+    ["completed", SimpleNamespace(value="completed")],
+)
+def test_qdrant_update_requires_completed_status(status):
+    rag._require_qdrant_update_completed(
+        SimpleNamespace(status=status), "test mutation")
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        None,
+        SimpleNamespace(),
+        SimpleNamespace(status=None),
+        SimpleNamespace(status="acknowledged"),
+        SimpleNamespace(status="wait_timeout"),
+        SimpleNamespace(status="clock_rejected"),
+        SimpleNamespace(status="COMPLETED"),
+        SimpleNamespace(status=2),
+        SimpleNamespace(status=True),
+        SimpleNamespace(status=SimpleNamespace(value="acknowledged")),
+    ],
+)
+def test_qdrant_update_rejects_noncompleted_or_missing_status(result):
+    with pytest.raises(RuntimeError, match="did not report completed status"):
+        rag._require_qdrant_update_completed(result, "test mutation")
+
+
+def test_qdrant_update_validates_public_status_enum():
+    from qdrant_client.http import models
+
+    rag._require_qdrant_update_completed(
+        models.UpdateResult(
+            operation_id=1, status=models.UpdateStatus.COMPLETED),
+        "test mutation")
+    for status in (
+            models.UpdateStatus.ACKNOWLEDGED,
+            models.UpdateStatus.WAIT_TIMEOUT):
+        with pytest.raises(
+                RuntimeError, match="did not report completed status"):
+            rag._require_qdrant_update_completed(
+                models.UpdateResult(operation_id=1, status=status),
+                "test mutation")
+
+
 def test_qdrant_empty_scan_confirms_count_before_and_after():
     calls = []
 
@@ -792,6 +842,7 @@ def _prepare_qdrant_removed_only_incremental(
             state.deletes.append(list(points_selector.points))
             for point_id in points_selector.points:
                 state.points.pop(point_id, None)
+            return _completed_update()
 
         def upsert(self, **kwargs):
             pytest.fail("a removal-only run must not upsert unchanged chunks")
@@ -867,7 +918,8 @@ def test_qdrant_missing_manifest_removal_fails_without_saving_manifest(
 
 def _prepare_qdrant_changed_existing_incremental(
         monkeypatch, tmp_path, *, delete_mutates=True, upsert_mutates=True,
-        count_values=None):
+        count_values=None, delete_status="completed",
+        upsert_status="completed"):
     chunks_path = tmp_path / "chunks.jsonl"
     db_path = tmp_path / "qdrant"
     old_record = {
@@ -911,7 +963,8 @@ def _prepare_qdrant_changed_existing_incremental(
         collection_exists=True, collection_rebuilds=0,
         delete_mutates=delete_mutates, upsert_mutates=upsert_mutates,
         count_values=(list(count_values)
-                      if count_values is not None else None))
+                      if count_values is not None else None),
+        delete_status=delete_status, upsert_status=upsert_status)
 
     class Model:
         def __init__(self, **kwargs):
@@ -962,6 +1015,7 @@ def _prepare_qdrant_changed_existing_incremental(
             if state.delete_mutates:
                 for existing_id in points_selector.points:
                     state.points.pop(existing_id, None)
+            return SimpleNamespace(status=state.delete_status)
 
         def upsert(self, *, collection_name, points, wait):
             assert wait is True
@@ -970,6 +1024,7 @@ def _prepare_qdrant_changed_existing_incremental(
             if state.upsert_mutates:
                 for point in points:
                     state.points[point.id] = point
+            return SimpleNamespace(status=state.upsert_status)
 
     qdrant_client = ModuleType("qdrant_client")
     qdrant_client.QdrantClient = FakeQdrantClient
@@ -1029,6 +1084,43 @@ def test_qdrant_changed_existing_upsert_noop_preserves_old_manifest(
     assert len(fixture.state.upserts) == 1
     assert fixture.state.points == {}
     assert fixture.state.scrolls == 3
+    assert fixture.marker_path.is_file()
+    assert fixture.manifest_path.read_bytes() == original_manifest
+
+
+def test_qdrant_noncompleted_delete_status_stops_before_reconciliation(
+        monkeypatch, tmp_path):
+    fixture = _prepare_qdrant_changed_existing_incremental(
+        monkeypatch, tmp_path, delete_status="acknowledged")
+    original_manifest = fixture.manifest_path.read_bytes()
+
+    with pytest.raises(RuntimeError, match="point deletion.*completed status"):
+        rag.index_chunks_qdrant(
+            fixture.chunks_path, fixture.db_path,
+            collection_name="book", embedding_model="model-a")
+
+    assert fixture.state.points == {}
+    assert fixture.state.scrolls == 1
+    assert fixture.state.upserts == []
+    assert fixture.marker_path.is_file()
+    assert fixture.manifest_path.read_bytes() == original_manifest
+
+
+def test_qdrant_noncompleted_upsert_status_stops_before_final_reconciliation(
+        monkeypatch, tmp_path):
+    fixture = _prepare_qdrant_changed_existing_incremental(
+        monkeypatch, tmp_path, upsert_status="wait_timeout")
+    original_manifest = fixture.manifest_path.read_bytes()
+
+    with pytest.raises(RuntimeError, match="point upsert.*completed status"):
+        rag.index_chunks_qdrant(
+            fixture.chunks_path, fixture.db_path,
+            collection_name="book", embedding_model="model-a")
+
+    assert fixture.state.points[fixture.point_id].payload["context"] == (
+        "Corrected classification")
+    assert fixture.state.scrolls == 2
+    assert len(fixture.state.upserts) == 1
     assert fixture.marker_path.is_file()
     assert fixture.manifest_path.read_bytes() == original_manifest
 
@@ -1287,6 +1379,7 @@ def test_qdrant_manifest_skip_and_model_change_preserve_sibling(
             state.upserts.append((collection_name, points))
             for point in points:
                 state.collections[collection_name][point.id] = point
+            return _completed_update()
 
         def scroll(self, collection_name, limit, offset=None, **kwargs):
             points = list(state.collections[collection_name].values())
@@ -1297,6 +1390,7 @@ def test_qdrant_manifest_skip_and_model_change_preserve_sibling(
             assert marker_path.is_file()
             for point_id in points_selector.points:
                 state.collections[collection_name].pop(point_id, None)
+            return _completed_update()
 
         def get_collection(self, collection_name):
             return SimpleNamespace(

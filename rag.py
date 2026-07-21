@@ -6229,6 +6229,15 @@ def _qdrant_exact_count(client, collection_name: str) -> int:
     return count
 
 
+def _require_qdrant_update_completed(result: object, operation: str) -> None:
+    """Require a waited Qdrant mutation to report completed status."""
+    status = getattr(result, "status", None)
+    status_value = getattr(status, "value", status)
+    if type(status_value) is not str or status_value != "completed":
+        raise RuntimeError(
+            f"Qdrant {operation} did not report completed status")
+
+
 def _qdrant_id_key(value: object) -> tuple[object, ...]:
     """Return a hashable key without collapsing distinct ID representations."""
     if type(value) is int:
@@ -6507,10 +6516,13 @@ def index_chunks_qdrant(chunks_path: Path, qdrant_dir: Path, *,
             ]
             if points_to_delete:
                 _ensure_update_guard()
-                client.delete(collection_name,
-                              points_selector=models.PointIdsList(
-                                  points=points_to_delete),
-                              wait=True)
+                delete_result = client.delete(
+                    collection_name,
+                    points_selector=models.PointIdsList(
+                        points=points_to_delete),
+                    wait=True)
+                _require_qdrant_update_completed(
+                    delete_result, "point deletion")
             _require_qdrant_stable_ids(
                 client, collection_name,
                 set(old_hashes).difference(deletion_ids))
@@ -6550,8 +6562,9 @@ def index_chunks_qdrant(chunks_path: Path, qdrant_dir: Path, *,
             item = upsert_queue.get()
             if item is None:
                 break
-            client.upsert(
+            upsert_result = client.upsert(
                 collection_name=collection_name, points=item, wait=True)
+            _require_qdrant_update_completed(upsert_result, "point upsert")
             pbar.update(1)
             upsert_queue.task_done()
 
