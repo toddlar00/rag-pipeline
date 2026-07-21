@@ -5829,25 +5829,31 @@ def index_chunks(chunks_path: Path, chroma_dir: Path, *,
                 ids, embs, docs, metas = item
                 collection.upsert(ids=ids, embeddings=embs,
                                   documents=docs, metadatas=metas)
+                pbar.update(1)
                 upsert_q.task_done()
 
-        upsert_pool = ThreadPoolExecutor(max_workers=1)
-        upsert_future = upsert_pool.submit(_upsert_worker)
         pbar = tqdm(total=len(batches), desc="Indexing", unit="batch")
-
-        for p in prepared:
-            ids, embeddings, documents, metadatas = _embed_batch(p)
-            _put_unless_worker_failed(
-                upsert_q,
-                (ids, embeddings, documents, metadatas),
-                upsert_future,
-            )
-            pbar.update(1)
-
-        _put_unless_worker_failed(upsert_q, None, upsert_future)
-        upsert_future.result()
-        upsert_pool.shutdown()
-        pbar.close()
+        upsert_pool = None
+        upsert_future = None
+        pipeline_error = None
+        try:
+            upsert_pool = ThreadPoolExecutor(max_workers=1)
+            upsert_future = upsert_pool.submit(_upsert_worker)
+            for p in prepared:
+                ids, embeddings, documents, metadatas = _embed_batch(p)
+                _put_unless_worker_failed(
+                    upsert_q,
+                    (ids, embeddings, documents, metadatas),
+                    upsert_future,
+                )
+        except BaseException as exc:
+            pipeline_error = exc
+            raise
+        finally:
+            _finish_queue_worker(
+                upsert_q, upsert_future, upsert_pool, pbar,
+                worker_name="Chroma upsert worker",
+                primary_error=pipeline_error)
 
     _save_index_manifest(
         chroma_dir, backend="chroma", collection_name=collection_name,

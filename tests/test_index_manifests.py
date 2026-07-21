@@ -1554,6 +1554,224 @@ def test_qdrant_marker_cleanup_runs_after_manifest_commit(
             embedding_model="model-a")
 
 
+def _prepare_chroma_changed_existing_incremental(monkeypatch, tmp_path):
+    chunks_path = tmp_path / "chunks.jsonl"
+    db_path = tmp_path / "chroma"
+    old_record = {
+        "text": "The source text keeps its durable identity.",
+        "metadata": {
+            "chunk_index": 0,
+            "context": "Old classification",
+            "embedding_token_count": 7,
+        },
+    }
+    new_record = {
+        **old_record,
+        "metadata": {
+            **old_record["metadata"],
+            "context": "Corrected classification",
+        },
+    }
+    chunks_path.write_text(
+        json.dumps(new_record) + "\n", encoding="utf-8")
+
+    stable_id = rag._chunk_id(old_record)
+    assert rag._chunk_id(new_record) == stable_id
+    old_hash = rag._chunk_hash(old_record)
+    new_hash = rag._chunk_hash(new_record)
+    manifest_path = rag._save_index_manifest(
+        db_path, backend="chroma", collection_name="book",
+        embedding_model="model-a", embedding_dimension=2,
+        chunk_hashes={stable_id: old_hash}, source_sha256="old-source",
+        source_record_count=1)
+    state = SimpleNamespace(upserts=[], deletes=[], collection_deletes=[])
+
+    class FakeCollection:
+        name = "book"
+
+        def __init__(self):
+            self.rows = {
+                stable_id: {
+                    "embedding": [1.0, 0.0],
+                    "document": old_record["text"],
+                    "metadata": dict(old_record["metadata"]),
+                },
+            }
+
+        def upsert(self, *, ids, embeddings, documents, metadatas):
+            state.upserts.append(list(ids))
+            for index, item_id in enumerate(ids):
+                self.rows[item_id] = {
+                    "embedding": embeddings[index],
+                    "document": documents[index],
+                    "metadata": metadatas[index],
+                }
+
+        def delete(self, *, ids):
+            state.deletes.append(list(ids))
+            for item_id in ids:
+                self.rows.pop(item_id, None)
+
+        def count(self):
+            return len(self.rows)
+
+    collection = FakeCollection()
+
+    class FakeChromaClient:
+        def __init__(self, path):
+            self.path = path
+
+        def get_collection(self, name):
+            if name != "book":
+                raise LookupError(name)
+            return collection
+
+        def get_or_create_collection(self, *, name, metadata):
+            assert name == "book"
+            return collection
+
+        def delete_collection(self, name):
+            state.collection_deletes.append(name)
+            collection.rows.clear()
+
+    chromadb = ModuleType("chromadb")
+    chromadb.PersistentClient = FakeChromaClient
+    monkeypatch.setitem(sys.modules, "chromadb", chromadb)
+    monkeypatch.setattr(
+        rag, "_count_embedding_text_tokens",
+        lambda texts, _model: ([7 for _text in texts], True))
+
+    def successful_embed(texts, _model, **_kwargs):
+        return [[0.0, 1.0] for _text in texts]
+
+    monkeypatch.setattr(rag, "_embed_texts", successful_embed)
+
+    return SimpleNamespace(
+        chunks_path=chunks_path,
+        db_path=db_path,
+        manifest_path=manifest_path,
+        stable_id=stable_id,
+        old_hash=old_hash,
+        new_hash=new_hash,
+        old_record=old_record,
+        new_record=new_record,
+        collection=collection,
+        successful_embed=successful_embed,
+        state=state,
+    )
+
+
+def test_chroma_sequential_producer_failure_stops_worker_and_retries(
+        monkeypatch, tmp_path):
+    resources = _track_queue_worker_resources(monkeypatch)
+    fixture = _prepare_chroma_changed_existing_incremental(
+        monkeypatch, tmp_path)
+    original_manifest = fixture.manifest_path.read_bytes()
+
+    def fail_index_embedding(texts, _model, **_kwargs):
+        if texts == ["RAG index embedding-dimension probe"]:
+            return [[0.0, 1.0]]
+        raise RuntimeError("injected Chroma producer failure")
+
+    monkeypatch.setattr(rag, "_embed_texts", fail_index_embedding)
+    with pytest.raises(RuntimeError, match="injected Chroma producer failure"):
+        rag.index_chunks(
+            fixture.chunks_path, fixture.db_path,
+            collection_name="book", embedding_model="model-a")
+
+    assert fixture.state.upserts == []
+    assert fixture.collection.rows[fixture.stable_id]["metadata"][
+        "context"] == "Old classification"
+    assert fixture.manifest_path.read_bytes() == original_manifest
+    assert resources.executors[0].shutdown_calls == [(True, False)]
+    assert not resources.executors[0].thread.is_alive()
+    assert resources.bars[0].updates == 0
+    assert resources.bars[0].close_calls == 1
+
+    monkeypatch.setattr(rag, "_embed_texts", fixture.successful_embed)
+    rag.index_chunks(
+        fixture.chunks_path, fixture.db_path,
+        collection_name="book", embedding_model="model-a")
+
+    assert fixture.state.upserts == [[fixture.stable_id]]
+    assert fixture.collection.rows[fixture.stable_id]["metadata"][
+        "context"] == "Corrected classification"
+    manifest = json.loads(
+        fixture.manifest_path.read_text(encoding="utf-8"))
+    assert manifest["chunk_hashes"] == {
+        fixture.stable_id: fixture.new_hash}
+
+
+def test_chroma_sequential_worker_failure_closes_resources_and_retries(
+        monkeypatch, tmp_path):
+    resources = _track_queue_worker_resources(monkeypatch)
+    fixture = _prepare_chroma_changed_existing_incremental(
+        monkeypatch, tmp_path)
+    original_manifest = fixture.manifest_path.read_bytes()
+    successful_upsert = fixture.collection.upsert
+
+    def ambiguous_upsert(*, ids, embeddings, documents, metadatas):
+        successful_upsert(
+            ids=ids, embeddings=embeddings,
+            documents=documents, metadatas=metadatas)
+        raise RuntimeError("injected Chroma upsert failure")
+
+    monkeypatch.setattr(fixture.collection, "upsert", ambiguous_upsert)
+    with pytest.raises(RuntimeError, match="injected Chroma upsert failure"):
+        rag.index_chunks(
+            fixture.chunks_path, fixture.db_path,
+            collection_name="book", embedding_model="model-a")
+
+    assert fixture.state.upserts == [[fixture.stable_id]]
+    assert fixture.collection.rows[fixture.stable_id]["metadata"][
+        "context"] == "Corrected classification"
+    assert fixture.manifest_path.read_bytes() == original_manifest
+    assert resources.executors[0].shutdown_calls == [(True, False)]
+    assert not resources.executors[0].thread.is_alive()
+    assert resources.bars[0].updates == 0
+    assert resources.bars[0].close_calls == 1
+
+    monkeypatch.setattr(fixture.collection, "upsert", successful_upsert)
+    rag.index_chunks(
+        fixture.chunks_path, fixture.db_path,
+        collection_name="book", embedding_model="model-a")
+
+    assert fixture.state.upserts == [
+        [fixture.stable_id], [fixture.stable_id]]
+    manifest = json.loads(
+        fixture.manifest_path.read_text(encoding="utf-8"))
+    assert manifest["chunk_hashes"] == {
+        fixture.stable_id: fixture.new_hash}
+
+
+def test_chroma_sequential_cleanup_precedes_manifest_commit(
+        monkeypatch, tmp_path):
+    resources = _track_queue_worker_resources(monkeypatch)
+    fixture = _prepare_chroma_changed_existing_incremental(
+        monkeypatch, tmp_path)
+    save_manifest = rag._save_index_manifest
+
+    def assert_clean_then_save(*args, **kwargs):
+        assert len(resources.executors) == 1
+        assert not resources.executors[0].thread.is_alive()
+        assert resources.executors[0].shutdown_calls == [(True, False)]
+        assert resources.bars[0].updates == 1
+        assert resources.bars[0].close_calls == 1
+        return save_manifest(*args, **kwargs)
+
+    monkeypatch.setattr(rag, "_save_index_manifest", assert_clean_then_save)
+    rag.index_chunks(
+        fixture.chunks_path, fixture.db_path,
+        collection_name="book", embedding_model="model-a")
+
+    assert resources.events == [
+        "worker_exit", "executor_shutdown", "progress_close"]
+    manifest = json.loads(
+        fixture.manifest_path.read_text(encoding="utf-8"))
+    assert manifest["chunk_hashes"] == {
+        fixture.stable_id: fixture.new_hash}
+
+
 def test_chroma_migrates_legacy_skips_compatible_and_rebuilds_model_change(
         monkeypatch, tmp_path):
     chunks_path = tmp_path / "chunks.jsonl"

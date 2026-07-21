@@ -689,10 +689,10 @@ post-write verification and atomic manifest replacement both succeed. If a run
 is interrupted or fails after mutation begins, queries fail closed while the
 marker remains; the next `index` or `full --resume` run rebuilds only that
 collection and clears the marker after the recovered index is verified and
-committed. Producer and upsert-worker paths share teardown that requests a
-worker stop, waits for completion, and attempts both executor and progress
-closure; a secondary cleanup error does not replace the original producer
-error.
+committed. The sequential background-upsert paths for both backends share
+teardown that requests a worker stop, waits for completion, and attempts both
+executor and progress closure; progress advances only after a write succeeds,
+and a secondary cleanup error does not replace the original producer error.
 
 If the model, vector dimension, or manifest schema changes—or an older shared
 `chunk_hashes.json` sidecar is encountered—the pipeline safely rebuilds only
