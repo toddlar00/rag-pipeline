@@ -1,0 +1,55 @@
+# Python bytecode and tool caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+build/
+dist/
+*.egg-info/
+*.log
+
+# Virtual environments and local environment files
+.venv/
+venv/
+env/
+.env
+.env.*
+!.env.example
+
+# Credentials and private keys
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Generated pipeline artifacts and local model caches
+output/
+markdown_output/
+.llm-cache/
+llm-cache/
+chroma_db/
+qdrant_db/
+
+# Local source documents are inputs, not distributable project assets
+*.pdf
+
+# Local databases and vector indexes
+*.db
+*.db-shm
+*.db-wal
+*.wal
+*.sqlite
+*.sqlite3
+*.index
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+Desktop.ini

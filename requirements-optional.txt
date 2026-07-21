@@ -1,0 +1,22 @@
+# ============================================================
+# RAG Pipeline — Optional Dependencies
+# ============================================================
+#
+# Install with: pip install -r requirements-optional.txt
+# ============================================================
+
+# Qdrant vector DB backend (native hybrid search)
+qdrant-client>=1.17
+
+# Voyage AI embeddings (legal-specific, paid)
+voyageai>=0.2
+
+# OpenAI and Cohere embedding/reranking adapters
+openai>=1.0
+cohere>=5.0
+
+# LLM classification + contextual retrieval
+google-genai>=1.68         # Gemini fallback; per-request timeout/retry controls
+
+# Web UI
+gradio>=6.0

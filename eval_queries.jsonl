@@ -1,0 +1,10 @@
+{"query": "minimum contacts test for personal jurisdiction", "expected_keywords": ["International Shoe", "minimum contacts", "due process"], "expected_type": "case_opinion"}
+{"query": "Rule 12(b)(6) motion to dismiss for failure to state a claim", "expected_keywords": ["12(b)(6)", "motion to dismiss", "failure to state"], "expected_type": "author_narrative"}
+{"query": "diversity jurisdiction amount in controversy", "expected_keywords": ["diversity", "amount in controversy", "75,000", "1332"], "expected_type": "author_narrative"}
+{"query": "Erie doctrine federal courts applying state law", "expected_keywords": ["Erie", "state law", "federal court", "Rules of Decision Act"], "expected_type": "case_opinion"}
+{"query": "supplemental jurisdiction pendant claims", "expected_keywords": ["supplemental jurisdiction", "1367", "Gibbs"], "expected_type": "author_narrative"}
+{"query": "class action certification requirements Rule 23", "expected_keywords": ["Rule 23", "class action", "numerosity", "commonality", "typicality"], "expected_type": "author_narrative"}
+{"query": "summary judgment standard no genuine dispute", "expected_keywords": ["summary judgment", "Rule 56", "genuine dispute", "material fact"], "expected_type": "author_narrative"}
+{"query": "personal jurisdiction stream of commerce theory", "expected_keywords": ["stream of commerce", "Asahi", "World-Wide Volkswagen"], "expected_type": "case_opinion"}
+{"query": "venue transfer 1404 convenience of parties", "expected_keywords": ["venue", "transfer", "1404", "convenience"], "expected_type": "statutory_excerpt"}
+{"query": "claim preclusion res judicata elements", "expected_keywords": ["claim preclusion", "res judicata", "final judgment", "same claim"], "expected_type": "author_narrative"}
