@@ -31,7 +31,7 @@ import time
 import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional, TypedDict
+from typing import Any, Callable, Optional, TypedDict
 from urllib.parse import urlparse
 
 from llm_runtime import (
@@ -912,6 +912,8 @@ def _build_resume_cmd(pdf: Path, args, extra_flags: str = "") -> str:
         ("llm_fallback", "ordered", "--llm-fallback"),
         ("llm_failure_policy", "best-effort", "--llm-failure-policy"),
         ("max_llm_calls", None, "--max-llm-calls"),
+        ("max_llm_transport_attempts", None,
+         "--max-llm-transport-attempts"),
         ("max_llm_reserved_tokens", None,
          "--max-llm-reserved-tokens"),
     )
@@ -3125,6 +3127,8 @@ def _call_ollama_result(prompt: str, *, url: str = DEFAULT_OLLAMA_URL,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
         )
+    except LLMBudgetExceeded:
+        raise
     except Exception as exc:
         if isinstance(exc, (ValueError, TypeError, KeyError, IndexError)):
             raise ProviderCallError(
@@ -3216,6 +3220,8 @@ def _call_gemini_result(prompt: str, *, api_key: str = "",
                 ),
             ),
         )
+    except LLMBudgetExceeded:
+        raise
     except Exception as exc:
         raise _provider_call_error(
             exc, transport_attempts=1) from None
@@ -3382,14 +3388,16 @@ class _AdaptiveThrottle:
 
 # Global throttle instance — shared across all LLM calls
 _api_throttle: Optional[_AdaptiveThrottle] = None
+_api_throttle_lock = _threading.Lock()
 
 
 def _get_throttle(max_workers: int) -> _AdaptiveThrottle:
     """Get or create the global adaptive throttle."""
     global _api_throttle
-    if _api_throttle is None or _api_throttle._max != max_workers:
-        _api_throttle = _AdaptiveThrottle(max_workers)
-    return _api_throttle
+    with _api_throttle_lock:
+        if _api_throttle is None or _api_throttle._max != max_workers:
+            _api_throttle = _AdaptiveThrottle(max_workers)
+        return _api_throttle
 
 
 def _retry_after_seconds(value: object) -> float:
@@ -3407,7 +3415,8 @@ def _call_openai_compatible_result(
         prompt: str, *, base_url: str, model: str, api_key: str = "",
         thinking: bool = False, max_tokens: int = 256,
         max_workers: int = DEFAULT_LLM_WORKERS,
-        timeout: int = 30) -> ProviderResponse:
+        timeout: int = 30,
+        _admit_retry: Callable[[], None] | None = None) -> ProviderResponse:
     """Return OpenAI-compatible text, native usage, and retry provenance."""
     if not api_key:
         raise ProviderCallError(
@@ -3432,12 +3441,17 @@ def _call_openai_compatible_result(
     for attempt in range(2):  # retry once on 429
         throttle.acquire()
         try:
+            if attempt > 0 and _admit_retry is not None:
+                _admit_retry()
             resp = requests.post(
                 f"{base_url.rstrip('/')}/chat/completions",
                 headers={"Authorization": f"Bearer {api_key}"},
                 json=payload,
                 timeout=timeout,
             )
+        except LLMBudgetExceeded:
+            throttle.release_error()
+            raise
         except Exception as exc:
             throttle.release_error()
             raise _provider_call_error(
@@ -3532,14 +3546,16 @@ def _call_openai_compatible(prompt: str, *, base_url: str,
                             max_tokens: int = 256,
                             max_workers: int = DEFAULT_LLM_WORKERS,
                             timeout: int = 30,
-                            _structured: bool = False
+                            _structured: bool = False,
+                            _admit_retry: Callable[[], None] | None = None,
                             ) -> Optional[str] | ProviderResponse:
     """Compatibility facade for an OpenAI-compatible chat completion."""
     try:
         result = _call_openai_compatible_result(
             prompt, base_url=base_url, model=model, api_key=api_key,
             thinking=thinking, max_tokens=max_tokens,
-            max_workers=max_workers, timeout=timeout)
+            max_workers=max_workers, timeout=timeout,
+            _admit_retry=_admit_retry)
         return result if _structured else result.text
     except ProviderCallError as exc:
         log.debug("OpenAI-compatible call failed: %s", exc.category)
@@ -3596,7 +3612,8 @@ def _call_llm_result(
                 req.prompt, base_url=cloud_url, model=effective_cloud_model,
                 api_key=cloud_key, max_workers=llm_workers,
                 thinking=req.thinking, max_tokens=req.max_tokens,
-                timeout=req.timeout, _structured=True)
+                timeout=req.timeout, _structured=True,
+                _admit_retry=req.admit_transport_retry)
 
         providers.append(ProviderSpec(
             name="cloud", model=effective_cloud_model,
@@ -8891,6 +8908,8 @@ def _configure_llm_runtime_from_args(args) -> None:
         events_path=getattr(args, "llm_events", None),
         report_path=getattr(args, "llm_report", None),
         max_provider_calls=getattr(args, "max_llm_calls", None),
+        max_transport_attempts=getattr(
+            args, "max_llm_transport_attempts", None),
         max_reserved_tokens=getattr(
             args, "max_llm_reserved_tokens", None),
         fallback_policy=getattr(args, "llm_fallback", "ordered"),
@@ -9161,6 +9180,10 @@ def main():
         p.add_argument(
             "--max-llm-calls", type=int, default=None,
             help="Hard cap on logical provider dispatches for this run")
+        p.add_argument(
+            "--max-llm-transport-attempts", type=int, default=None,
+            help=("Hard cap on physical provider transport admissions, "
+                  "including retries"))
         p.add_argument(
             "--max-llm-reserved-tokens", type=int, default=None,
             help=("Hard cap on estimated prompt plus maximum-output tokens "

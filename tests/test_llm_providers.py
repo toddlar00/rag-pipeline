@@ -1,12 +1,15 @@
 import json
 import sys
+import threading
 import types as python_types
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 import requests
 
 import rag
 from llm_runtime import (
+    LLMBudgetExceeded,
     LLMRequest,
     LLMRuntime,
     LLMRuntimeConfig,
@@ -53,6 +56,39 @@ class _CountingThrottle:
 
     def release_error(self):
         self.errors += 1
+
+
+def test_get_throttle_initialization_is_thread_safe(monkeypatch):
+    start = threading.Barrier(3)
+    constructors = threading.Barrier(2)
+    calls = 0
+    calls_lock = threading.Lock()
+
+    class SlowThrottle:
+        def __init__(self, max_workers):
+            nonlocal calls
+            self._max = max_workers
+            with calls_lock:
+                calls += 1
+            try:
+                constructors.wait(timeout=1)
+            except threading.BrokenBarrierError:
+                pass
+
+    def get_one():
+        start.wait(timeout=2)
+        return rag._get_throttle(4)
+
+    monkeypatch.setattr(rag, "_AdaptiveThrottle", SlowThrottle)
+    monkeypatch.setattr(rag, "_api_throttle", None)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(get_one) for _ in range(2)]
+        start.wait(timeout=2)
+        throttles = [future.result(timeout=3) for future in futures]
+
+    assert throttles[0] is throttles[1]
+    assert calls == 1
 
 
 def _openai_body(text="answer", *, prompt_tokens=17,
@@ -129,6 +165,41 @@ def test_openai_429_retry_reports_transport_attempts(monkeypatch):
     assert throttle.rate_limited == 1
     assert throttle.ok == 1
     assert throttle.errors == 0
+
+
+def test_runtime_transport_budget_blocks_openai_retry_without_second_post(
+        monkeypatch, tmp_path):
+    post_calls = 0
+
+    def rate_limited_post(*_args, **_kwargs):
+        nonlocal post_calls
+        post_calls += 1
+        return _Response(status=429, headers={"Retry-After": "0"})
+
+    throttle = _CountingThrottle()
+    runtime = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="off", cache_dir=tmp_path / "cache",
+        max_transport_attempts=1))
+    monkeypatch.setattr(rag, "_llm_runtime", runtime)
+    monkeypatch.setattr(rag.requests, "post", rate_limited_post)
+    monkeypatch.setattr(rag, "_get_throttle", lambda _workers: throttle)
+    monkeypatch.setattr(rag.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(LLMBudgetExceeded):
+        rag._call_llm_result(
+            "prompt", cloud_url="https://provider.test/v1",
+            cloud_model="model", cloud_key="secret", ollama_url="",
+            operation="test.retry_transport_budget")
+
+    counts = runtime.report_payload()["counts"]
+    assert post_calls == 1
+    assert throttle.acquired == (
+        throttle.ok + throttle.rate_limited + throttle.errors)
+    assert throttle.rate_limited == 1
+    assert counts["provider_calls"] == 1
+    assert counts["transport_admissions"] == 1
+    assert counts["transport_attempts"] == 1
+    assert counts["budget_rejections"] == 1
 
 
 def test_openai_two_rate_limits_raise_safe_error(monkeypatch):
@@ -334,13 +405,18 @@ def test_gemini_error_and_content_filter_categories(monkeypatch):
 def test_runtime_records_exact_usage_retries_and_transient_errors(tmp_path):
     runtime = LLMRuntime(LLMRuntimeConfig(
         cache_mode="off", cache_dir=tmp_path / "cache"))
-    provider = ProviderSpec(
-        name="cloud", model="model", endpoint_id="provider.test",
-        invoke=lambda _request: ProviderResponse(
+
+    def invoke(request):
+        request.admit_transport_retry()
+        return ProviderResponse(
             text="answer", prompt_tokens=40, completion_tokens=12,
             cached_prompt_tokens=10, reasoning_tokens=3,
             transport_attempts=2,
-            transient_error_categories=("rate_limited",)),
+            transient_error_categories=("rate_limited",))
+
+    provider = ProviderSpec(
+        name="cloud", model="model", endpoint_id="provider.test",
+        invoke=invoke,
     )
 
     result = runtime.execute(
@@ -359,6 +435,7 @@ def test_runtime_records_exact_usage_retries_and_transient_errors(tmp_path):
     assert result.provider_attempts[0].transient_error_categories == (
         "rate_limited",)
     assert report["counts"]["provider_calls"] == 1
+    assert report["counts"]["transport_admissions"] == 2
     assert report["counts"]["transport_attempts"] == 2
     assert report["counts"]["transport_retries"] == 1
     assert report["counts"]["exact_prompt_tokens"] == 40
@@ -372,7 +449,8 @@ def test_fallback_event_has_safe_attempt_provenance(tmp_path):
         cache_mode="off", cache_dir=tmp_path / "cache",
         events_path=events_path))
 
-    def primary(_request):
+    def primary(request):
+        request.admit_transport_retry()
         raise ProviderCallError("rate_limited", transport_attempts=2)
 
     providers = [

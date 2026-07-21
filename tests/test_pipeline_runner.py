@@ -207,6 +207,7 @@ def test_resume_command_preserves_pipeline_options():
         max_tokens=1024,
         min_words=5,
         backend="auto",
+        max_llm_transport_attempts=23,
     )
 
     command = rag._build_resume_cmd(Path("My Book.pdf"), args)
@@ -221,6 +222,7 @@ def test_resume_command_preserves_pipeline_options():
     assert "--max-tokens 1024" in command
     assert "--min-words 5" in command
     assert "--backend auto" in command
+    assert "--max-llm-transport-attempts 23" in command
     assert "deepseek-secret" not in command
     assert "gemini-secret" not in command
     assert "--cloud-key" not in command
