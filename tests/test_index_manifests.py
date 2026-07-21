@@ -77,6 +77,58 @@ def test_atomic_json_failure_preserves_previous_file(monkeypatch, tmp_path):
     assert not list(tmp_path.glob("*.tmp"))
 
 
+def test_index_update_marker_is_scoped_and_blocks_manifest_use(tmp_path):
+    manifest_path = rag._save_index_manifest(
+        tmp_path, backend="qdrant", collection_name="book",
+        embedding_model="model-a", embedding_dimension=2,
+        chunk_hashes={"chunk_a": "hash-a"})
+    rag._save_index_manifest(
+        tmp_path, backend="qdrant", collection_name="sibling",
+        embedding_model="model-a", embedding_dimension=2,
+        chunk_hashes={"chunk_b": "hash-b"})
+
+    marker_path = rag._begin_qdrant_index_update(
+        tmp_path, collection_name="book",
+        source_sha256="target-source", source_record_count=1)
+    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+
+    assert marker_path.parent == tmp_path
+    assert marker_path != manifest_path
+    assert marker["backend"] == "qdrant"
+    assert marker["collection"] == "book"
+    assert marker["target_source_sha256"] == "target-source"
+    assert rag._qdrant_update_marker_path(
+        tmp_path, collection_name="sibling") != marker_path
+
+    # Presence is authoritative even if a crash truncated the diagnostics.
+    marker_path.write_text("", encoding="utf-8")
+    hashes, rebuild, reason = rag._resolve_incremental_index_state(
+        tmp_path, backend="qdrant", collection_name="book",
+        embedding_model="model-a", embedding_dimension=2,
+        collection_exists=True, full_reindex=False)
+    assert hashes == {}
+    assert rebuild is True
+    assert "did not complete" in reason
+    with pytest.raises(ValueError, match="Index update is incomplete"):
+        rag._query_manifest_dimension(
+            tmp_path, backend="qdrant", collection_name="book",
+            embedding_model="model-a")
+
+    sibling_hashes, sibling_rebuild, _ = (
+        rag._resolve_incremental_index_state(
+            tmp_path, backend="qdrant", collection_name="sibling",
+            embedding_model="model-a", embedding_dimension=2,
+            collection_exists=True, full_reindex=False))
+    assert sibling_hashes == {"chunk_b": "hash-b"}
+    assert sibling_rebuild is False
+
+    rag._finish_index_update(marker_path)
+    assert not marker_path.exists()
+    assert rag._query_manifest_dimension(
+        tmp_path, backend="qdrant", collection_name="book",
+        embedding_model="model-a") == 2
+
+
 @pytest.mark.parametrize(
     ("payload", "message"),
     [
@@ -383,6 +435,56 @@ def test_qdrant_numeric_point_id_collision_fails_before_open(
             chunks, tmp_path / "qdrant", embedding_model="model-a")
 
 
+def test_qdrant_marker_write_failure_prevents_collection_mutation(
+        monkeypatch, tmp_path):
+    chunks_path = tmp_path / "chunks.jsonl"
+    db_path = tmp_path / "qdrant"
+    _write_chunks(chunks_path)
+    mutations = []
+
+    class FakeQdrantClient:
+        def __init__(self, path):
+            self.path = path
+
+        def collection_exists(self, collection_name):
+            return False
+
+        def create_collection(self, **kwargs):
+            mutations.append("create")
+
+        def delete_collection(self, collection_name):
+            mutations.append("delete")
+
+        def upsert(self, **kwargs):
+            mutations.append("upsert")
+
+    qdrant_client = ModuleType("qdrant_client")
+    qdrant_client.QdrantClient = FakeQdrantClient
+    qdrant_client.models = SimpleNamespace()
+    monkeypatch.setitem(sys.modules, "qdrant_client", qdrant_client)
+    monkeypatch.setattr(
+        rag, "_count_embedding_text_tokens",
+        lambda texts, _model: ([7 for _text in texts], True))
+    monkeypatch.setattr(
+        rag, "_embed_texts",
+        lambda texts, _model, **_kwargs: [
+            [0.0, 1.0] for _text in texts])
+
+    def fail_atomic_write(*_args, **_kwargs):
+        raise OSError("injected marker write failure")
+
+    monkeypatch.setattr(rag, "_atomic_write_json", fail_atomic_write)
+
+    with pytest.raises(OSError, match="marker write failure"):
+        rag.index_chunks_qdrant(
+            chunks_path, db_path,
+            collection_name="book", embedding_model="model-a")
+
+    assert mutations == []
+    assert not rag._qdrant_update_marker_path(
+        db_path, collection_name="book").exists()
+
+
 def _prepare_qdrant_removed_only_incremental(
         monkeypatch, tmp_path, *, include_removed_point):
     chunks_path = tmp_path / "chunks.jsonl"
@@ -417,6 +519,8 @@ def _prepare_qdrant_removed_only_incremental(
         embedding_model="model-a", embedding_dimension=2,
         chunk_hashes=old_hashes, source_sha256="old-source",
         source_record_count=2)
+    marker_path = rag._qdrant_update_marker_path(
+        db_path, collection_name="book")
 
     keep_point = SimpleNamespace(
         id=101, payload={"stable_id": keep_stable_id})
@@ -457,6 +561,7 @@ def _prepare_qdrant_removed_only_incremental(
 
         def delete(self, collection_name, *, points_selector, wait):
             assert wait is True
+            assert marker_path.is_file()
             state.deletes.append(list(points_selector.points))
             for point_id in points_selector.points:
                 state.points.pop(point_id, None)
@@ -483,6 +588,7 @@ def _prepare_qdrant_removed_only_incremental(
         chunks_path=chunks_path,
         db_path=db_path,
         manifest_path=manifest_path,
+        marker_path=marker_path,
         keep_stable_id=keep_stable_id,
         removed_stable_id=removed_stable_id,
         state=state,
@@ -502,6 +608,7 @@ def test_qdrant_removed_only_incremental_deletes_later_page_and_saves_manifest(
         None, "later-page", None, "later-page"]
     assert fixture.state.deletes == [[202]]
     assert set(fixture.state.points) == {101}
+    assert not fixture.marker_path.exists()
     manifest = json.loads(
         fixture.manifest_path.read_text(encoding="utf-8"))
     assert set(manifest["chunk_hashes"]) == {fixture.keep_stable_id}
@@ -524,6 +631,7 @@ def test_qdrant_missing_manifest_removal_fails_without_saving_manifest(
 
     assert fixture.state.scroll_offsets == [None, "later-page"]
     assert fixture.state.deletes == []
+    assert not fixture.marker_path.exists()
     assert fixture.manifest_path.read_bytes() == original_manifest
     manifest = json.loads(original_manifest)
     assert set(manifest["chunk_hashes"]) == {
@@ -562,6 +670,8 @@ def _prepare_qdrant_changed_existing_incremental(
         embedding_model="model-a", embedding_dimension=2,
         chunk_hashes={stable_id: old_hash}, source_sha256="old-source",
         source_record_count=1)
+    marker_path = rag._qdrant_update_marker_path(
+        db_path, collection_name="book")
 
     point_id = rag._qdrant_point_id(stable_id)
     old_point = SimpleNamespace(
@@ -569,27 +679,40 @@ def _prepare_qdrant_changed_existing_incremental(
         payload={"stable_id": stable_id, "context": "Old classification"},
     )
     state = SimpleNamespace(
-        points={point_id: old_point}, deletes=[], upserts=[], scrolls=0)
+        points={point_id: old_point}, deletes=[], upserts=[], scrolls=0,
+        collection_exists=True, collection_rebuilds=0,
+        delete_mutates=delete_mutates, upsert_mutates=upsert_mutates)
 
     class Model:
         def __init__(self, **kwargs):
             self.__dict__.update(kwargs)
 
     models = SimpleNamespace(
-        SparseVector=Model, PointStruct=Model, PointIdsList=Model)
+        VectorParams=Model,
+        SparseVectorParams=Model,
+        SparseVector=Model,
+        PointStruct=Model,
+        PointIdsList=Model,
+        Distance=SimpleNamespace(COSINE="cosine"),
+        Modifier=SimpleNamespace(IDF="idf"),
+    )
 
     class FakeQdrantClient:
         def __init__(self, path):
             self.path = path
 
         def collection_exists(self, collection_name):
-            return collection_name == "book"
+            return collection_name == "book" and state.collection_exists
 
         def delete_collection(self, collection_name):
-            pytest.fail("a compatible incremental run must not rebuild")
+            assert marker_path.is_file()
+            state.collection_rebuilds += 1
+            state.points.clear()
+            state.collection_exists = False
 
         def create_collection(self, **kwargs):
-            pytest.fail("the existing compatible collection must be reused")
+            assert marker_path.is_file()
+            state.collection_exists = True
 
         def scroll(self, collection_name, *, limit, offset,
                    with_payload, with_vectors):
@@ -598,15 +721,17 @@ def _prepare_qdrant_changed_existing_incremental(
 
         def delete(self, collection_name, *, points_selector, wait):
             assert wait is True
+            assert marker_path.is_file()
             state.deletes.append(list(points_selector.points))
-            if delete_mutates:
+            if state.delete_mutates:
                 for existing_id in points_selector.points:
                     state.points.pop(existing_id, None)
 
         def upsert(self, *, collection_name, points, wait):
             assert wait is True
+            assert marker_path.is_file()
             state.upserts.append(list(points))
-            if upsert_mutates:
+            if state.upsert_mutates:
                 for point in points:
                     state.points[point.id] = point
 
@@ -626,6 +751,7 @@ def _prepare_qdrant_changed_existing_incremental(
         chunks_path=chunks_path,
         db_path=db_path,
         manifest_path=manifest_path,
+        marker_path=marker_path,
         stable_id=stable_id,
         point_id=point_id,
         old_hash=old_hash,
@@ -648,6 +774,7 @@ def test_qdrant_changed_existing_delete_noop_preserves_old_manifest(
     assert fixture.state.deletes == [[fixture.point_id]]
     assert fixture.state.upserts == []
     assert fixture.state.scrolls == 2
+    assert fixture.marker_path.is_file()
     assert fixture.manifest_path.read_bytes() == original_manifest
 
 
@@ -666,6 +793,7 @@ def test_qdrant_changed_existing_upsert_noop_preserves_old_manifest(
     assert len(fixture.state.upserts) == 1
     assert fixture.state.points == {}
     assert fixture.state.scrolls == 3
+    assert fixture.marker_path.is_file()
     assert fixture.manifest_path.read_bytes() == original_manifest
 
 
@@ -681,6 +809,7 @@ def test_qdrant_changed_existing_is_deleted_then_replaced_before_manifest_save(
     assert fixture.state.deletes == [[fixture.point_id]]
     assert len(fixture.state.upserts) == 1
     assert fixture.state.scrolls == 3
+    assert not fixture.marker_path.exists()
     assert fixture.state.points[fixture.point_id].payload["context"] == (
         "Corrected classification")
     manifest = json.loads(
@@ -689,6 +818,72 @@ def test_qdrant_changed_existing_is_deleted_then_replaced_before_manifest_save(
         fixture.stable_id: fixture.new_hash}
     assert manifest["source_sha256"] == hashlib.sha256(
         fixture.chunks_path.read_bytes()).hexdigest()
+
+
+def test_qdrant_manifest_commit_failure_stays_dirty_and_retry_rebuilds(
+        monkeypatch, tmp_path):
+    fixture = _prepare_qdrant_changed_existing_incremental(
+        monkeypatch, tmp_path)
+    original_manifest = fixture.manifest_path.read_bytes()
+    save_manifest = rag._save_index_manifest
+
+    def fail_manifest_commit(*args, **kwargs):
+        assert fixture.marker_path.is_file()
+        raise OSError("injected manifest commit failure")
+
+    monkeypatch.setattr(rag, "_save_index_manifest", fail_manifest_commit)
+    with pytest.raises(OSError, match="manifest commit failure"):
+        rag.index_chunks_qdrant(
+            fixture.chunks_path, fixture.db_path,
+            collection_name="book", embedding_model="model-a")
+
+    assert fixture.marker_path.is_file()
+    assert fixture.manifest_path.read_bytes() == original_manifest
+    assert fixture.state.points[fixture.point_id].payload["context"] == (
+        "Corrected classification")
+    with pytest.raises(ValueError, match="Index update is incomplete"):
+        rag._query_manifest_dimension(
+            fixture.db_path, backend="qdrant", collection_name="book",
+            embedding_model="model-a")
+
+    monkeypatch.setattr(rag, "_save_index_manifest", save_manifest)
+    rag.index_chunks_qdrant(
+        fixture.chunks_path, fixture.db_path,
+        collection_name="book", embedding_model="model-a")
+
+    assert fixture.state.collection_rebuilds == 1
+    assert len(fixture.state.upserts) == 2
+    assert not fixture.marker_path.exists()
+    manifest = json.loads(
+        fixture.manifest_path.read_text(encoding="utf-8"))
+    assert manifest["chunk_hashes"] == {
+        fixture.stable_id: fixture.new_hash}
+
+
+def test_qdrant_marker_cleanup_runs_after_manifest_commit(
+        monkeypatch, tmp_path):
+    fixture = _prepare_qdrant_changed_existing_incremental(
+        monkeypatch, tmp_path)
+
+    def fail_marker_cleanup(marker_path):
+        assert marker_path.is_file()
+        manifest = json.loads(
+            fixture.manifest_path.read_text(encoding="utf-8"))
+        assert manifest["chunk_hashes"] == {
+            fixture.stable_id: fixture.new_hash}
+        raise OSError("injected marker cleanup failure")
+
+    monkeypatch.setattr(rag, "_finish_index_update", fail_marker_cleanup)
+    with pytest.raises(OSError, match="marker cleanup failure"):
+        rag.index_chunks_qdrant(
+            fixture.chunks_path, fixture.db_path,
+            collection_name="book", embedding_model="model-a")
+
+    assert fixture.marker_path.is_file()
+    with pytest.raises(ValueError, match="Index update is incomplete"):
+        rag._query_manifest_dimension(
+            fixture.db_path, backend="qdrant", collection_name="book",
+            embedding_model="model-a")
 
 
 def test_chroma_migrates_legacy_skips_compatible_and_rebuilds_model_change(
@@ -793,6 +988,8 @@ def test_qdrant_manifest_skip_and_model_change_preserve_sibling(
     state = SimpleNamespace(
         collections={"sibling": {"keep": "untouched"}},
         deleted=[], upserts=[])
+    marker_path = rag._qdrant_update_marker_path(
+        db_path, collection_name="book")
 
     class Model:
         def __init__(self, **kwargs):
@@ -816,14 +1013,17 @@ def test_qdrant_manifest_skip_and_model_change_preserve_sibling(
             return name in state.collections
 
         def create_collection(self, *, collection_name, **kwargs):
+            assert marker_path.is_file()
             state.collections[collection_name] = {}
 
         def delete_collection(self, collection_name):
+            assert marker_path.is_file()
             state.deleted.append(collection_name)
             del state.collections[collection_name]
 
         def upsert(self, *, collection_name, points, wait):
             assert wait is True
+            assert marker_path.is_file()
             state.upserts.append((collection_name, points))
             for point in points:
                 state.collections[collection_name][point.id] = point
@@ -834,6 +1034,7 @@ def test_qdrant_manifest_skip_and_model_change_preserve_sibling(
 
         def delete(self, collection_name, *, points_selector, wait):
             assert wait is True
+            assert marker_path.is_file()
             for point_id in points_selector.points:
                 state.collections[collection_name].pop(point_id, None)
 
@@ -854,18 +1055,27 @@ def test_qdrant_manifest_skip_and_model_change_preserve_sibling(
     rag.index_chunks_qdrant(
         chunks_path, db_path, collection_name="book",
         embedding_model="model-a")
+    assert not marker_path.exists()
     first_upsert_count = len(state.upserts)
     first_call_count = len(embedding_calls)
 
+    begin_update = rag._begin_qdrant_index_update
+    monkeypatch.setattr(
+        rag, "_begin_qdrant_index_update",
+        lambda *_args, **_kwargs: pytest.fail(
+            "an unchanged run must not create an update marker"))
     rag.index_chunks_qdrant(
         chunks_path, db_path, collection_name="book",
         embedding_model="model-a")
+    monkeypatch.setattr(rag, "_begin_qdrant_index_update", begin_update)
+    assert not marker_path.exists()
     assert len(state.upserts) == first_upsert_count
     assert len(embedding_calls) == first_call_count + 1  # dimension probe only
 
     rag.index_chunks_qdrant(
         chunks_path, db_path, collection_name="book",
         embedding_model="model-b")
+    assert not marker_path.exists()
 
     assert state.deleted == ["book"]
     assert state.collections["sibling"] == {"keep": "untouched"}

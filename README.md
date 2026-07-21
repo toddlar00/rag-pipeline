@@ -679,6 +679,14 @@ manifest if points are missing, unexpected, duplicated, untracked, or returned
 through a cyclic pagination sequence. Use `--full-reindex` to recover from a
 physical collection/manifest mismatch.
 
+Before its first collection mutation, a Qdrant indexing run also creates a
+collection-scoped recovery marker. The marker is removed only after exact
+post-write verification and atomic manifest replacement both succeed. If a run
+is interrupted or fails after mutation begins, queries fail closed while the
+marker remains; the next `index` or `full --resume` run rebuilds only that
+collection and clears the marker after the recovered index is verified and
+committed.
+
 If the model, vector dimension, or manifest schema changes—or an older shared
 `chunk_hashes.json` sidecar is encountered—the pipeline safely rebuilds only
 the requested collection. Sibling collections in the same database directory
