@@ -1,7 +1,9 @@
+import concurrent.futures
 import hashlib
 import json
 import queue
 import sys
+import threading
 from concurrent.futures import Future
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -48,6 +50,80 @@ def _fake_embeddings(calls, dimensions):
         return [[float(index) for index in range(dimension)] for _ in texts]
 
     return embed
+
+
+def _track_queue_worker_resources(
+        monkeypatch, *, constructor_error=None, submit_error=None,
+        shutdown_error=None, close_error=None):
+    state = SimpleNamespace(
+        executor_constructions=0, executors=[], bars=[], events=[])
+
+    class RecordingProgress:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+            self.updates = 0
+            self.close_calls = 0
+            state.bars.append(self)
+
+        def update(self, amount=1):
+            self.updates += amount
+
+        def close(self):
+            self.close_calls += 1
+            state.events.append("progress_close")
+            if close_error is not None:
+                raise close_error
+
+    class RecordingExecutor:
+        def __init__(self, max_workers):
+            assert max_workers == 1
+            state.executor_constructions += 1
+            if constructor_error is not None:
+                raise constructor_error
+            self.future = None
+            self.thread = None
+            self.shutdown_calls = []
+            state.executors.append(self)
+
+        def submit(self, function, *args, **kwargs):
+            assert self.future is None
+            if submit_error is not None:
+                raise submit_error
+            self.future = Future()
+
+            def run():
+                if not self.future.set_running_or_notify_cancel():
+                    return
+                try:
+                    result = function(*args, **kwargs)
+                except BaseException as exc:
+                    self.future.set_exception(exc)
+                else:
+                    self.future.set_result(result)
+                finally:
+                    state.events.append("worker_exit")
+
+            self.thread = threading.Thread(target=run, daemon=True)
+            self.thread.start()
+            return self.future
+
+        def shutdown(self, wait=True, *, cancel_futures=False):
+            self.shutdown_calls.append((wait, cancel_futures))
+            if wait and self.thread is not None:
+                self.thread.join(timeout=1)
+                if self.thread.is_alive():
+                    raise AssertionError("queue worker did not stop")
+            state.events.append("executor_shutdown")
+            if shutdown_error is not None:
+                raise shutdown_error
+
+    tqdm_module = ModuleType("tqdm")
+    tqdm_module.tqdm = RecordingProgress
+    monkeypatch.setitem(sys.modules, "tqdm", tqdm_module)
+    monkeypatch.setattr(
+        concurrent.futures, "ThreadPoolExecutor", RecordingExecutor)
+    return state
 
 
 def test_manifest_is_scoped_versioned_and_atomic(tmp_path):
@@ -207,6 +283,49 @@ def test_bounded_upsert_queue_surfaces_worker_failure_without_blocking():
 
     with pytest.raises(RuntimeError, match="upsert failed"):
         rag._put_unless_worker_failed(work_queue, "next batch", worker)
+
+
+def test_bounded_upsert_queue_rejects_an_exited_worker():
+    work_queue = queue.Queue(maxsize=1)
+    worker = Future()
+    worker.set_result(None)
+
+    with pytest.raises(RuntimeError, match="worker exited"):
+        rag._put_unless_worker_failed(work_queue, "next batch", worker)
+
+
+def test_queue_worker_cleanup_rejects_successful_premature_exit():
+    events = []
+    worker = Future()
+    worker.set_result(None)
+    executor = SimpleNamespace(
+        shutdown=lambda *, wait: events.append(("shutdown", wait)))
+    progress = SimpleNamespace(close=lambda: events.append(("close", None)))
+
+    with pytest.raises(RuntimeError, match="exited before it was asked"):
+        rag._finish_queue_worker(
+            queue.Queue(), worker, executor, progress,
+            worker_name="test worker", primary_error=None)
+
+    assert events == [("shutdown", True), ("close", None)]
+
+
+def test_queue_worker_cleanup_preserves_primary_traceback():
+    worker = Future()
+    executor = SimpleNamespace(shutdown=lambda *, wait: None)
+    progress = SimpleNamespace(close=lambda: None)
+
+    try:
+        raise RuntimeError("worker failed during producer put")
+    except RuntimeError as primary_error:
+        worker.set_exception(primary_error)
+        original_traceback = primary_error.__traceback__
+
+        rag._finish_queue_worker(
+            queue.Queue(), worker, executor, progress,
+            worker_name="test worker", primary_error=primary_error)
+
+        assert primary_error.__traceback__ is original_traceback
 
 
 def test_manifest_validation_rebuilds_on_schema_model_or_dimension_change(
@@ -1049,6 +1168,208 @@ def _prepare_qdrant_changed_existing_incremental(
         new_hash=new_hash,
         state=state,
     )
+
+
+def test_qdrant_producer_failure_stops_worker_and_preserves_recovery_state(
+        monkeypatch, tmp_path):
+    resources = _track_queue_worker_resources(
+        monkeypatch,
+        shutdown_error=RuntimeError("secondary executor shutdown failure"),
+        close_error=RuntimeError("secondary progress close failure"),
+    )
+    fixture = _prepare_qdrant_changed_existing_incremental(
+        monkeypatch, tmp_path)
+    original_manifest = fixture.manifest_path.read_bytes()
+
+    def fail_index_embedding(texts, _model, **_kwargs):
+        if texts == ["RAG index embedding-dimension probe"]:
+            return [[0.0, 1.0]]
+        raise RuntimeError("injected producer embedding failure")
+
+    monkeypatch.setattr(rag, "_embed_texts", fail_index_embedding)
+
+    with pytest.raises(
+            RuntimeError, match="injected producer embedding failure"):
+        rag.index_chunks_qdrant(
+            fixture.chunks_path, fixture.db_path,
+            collection_name="book", embedding_model="model-a")
+
+    assert fixture.state.deletes == [[fixture.point_id]]
+    assert fixture.state.points == {}
+    assert fixture.state.upserts == []
+    assert fixture.state.scrolls == 2
+    assert fixture.marker_path.is_file()
+    assert fixture.manifest_path.read_bytes() == original_manifest
+
+    assert len(resources.executors) == 1
+    executor = resources.executors[0]
+    assert executor.shutdown_calls == [(True, False)]
+    assert executor.future.done()
+    assert not executor.thread.is_alive()
+    assert len(resources.bars) == 1
+    assert resources.bars[0].updates == 0
+    assert resources.bars[0].close_calls == 1
+    assert resources.events == [
+        "worker_exit", "executor_shutdown", "progress_close"]
+
+
+@pytest.mark.parametrize("failure_stage", ["constructor", "submit"])
+def test_qdrant_worker_setup_failure_closes_created_resources(
+        monkeypatch, tmp_path, failure_stage):
+    setup_error = RuntimeError(f"injected executor {failure_stage} failure")
+    tracker_options = {
+        f"{failure_stage}_error": setup_error,
+    }
+    resources = _track_queue_worker_resources(
+        monkeypatch, **tracker_options)
+    fixture = _prepare_qdrant_changed_existing_incremental(
+        monkeypatch, tmp_path)
+    original_manifest = fixture.manifest_path.read_bytes()
+
+    with pytest.raises(RuntimeError) as raised:
+        rag.index_chunks_qdrant(
+            fixture.chunks_path, fixture.db_path,
+            collection_name="book", embedding_model="model-a")
+
+    assert raised.value is setup_error
+    assert resources.executor_constructions == 1
+    assert fixture.state.points == {}
+    assert fixture.state.upserts == []
+    assert fixture.state.scrolls == 2
+    assert fixture.marker_path.is_file()
+    assert fixture.manifest_path.read_bytes() == original_manifest
+    assert resources.bars[0].close_calls == 1
+
+    if failure_stage == "constructor":
+        assert resources.executors == []
+        assert resources.events == ["progress_close"]
+    else:
+        assert len(resources.executors) == 1
+        assert resources.executors[0].future is None
+        assert resources.executors[0].shutdown_calls == [(True, False)]
+        assert resources.events == ["executor_shutdown", "progress_close"]
+
+
+@pytest.mark.parametrize("failure_resource", ["shutdown", "close"])
+def test_qdrant_cleanup_failure_prevents_manifest_commit(
+        monkeypatch, tmp_path, failure_resource):
+    cleanup_error = RuntimeError(
+        f"injected {failure_resource} cleanup failure")
+    tracker_options = {
+        f"{failure_resource}_error": cleanup_error,
+    }
+    resources = _track_queue_worker_resources(
+        monkeypatch, **tracker_options)
+    fixture = _prepare_qdrant_changed_existing_incremental(
+        monkeypatch, tmp_path)
+    original_manifest = fixture.manifest_path.read_bytes()
+
+    with pytest.raises(RuntimeError) as raised:
+        rag.index_chunks_qdrant(
+            fixture.chunks_path, fixture.db_path,
+            collection_name="book", embedding_model="model-a")
+
+    assert raised.value is cleanup_error
+    assert len(fixture.state.upserts) == 1
+    assert fixture.state.points[fixture.point_id].payload["context"] == (
+        "Corrected classification")
+    assert fixture.state.scrolls == 2
+    assert fixture.marker_path.is_file()
+    assert fixture.manifest_path.read_bytes() == original_manifest
+    assert resources.executors[0].shutdown_calls == [(True, False)]
+    assert resources.bars[0].close_calls == 1
+    assert resources.events == [
+        "worker_exit", "executor_shutdown", "progress_close"]
+
+
+def test_qdrant_worker_failure_closes_resources_and_preserves_manifest(
+        monkeypatch, tmp_path):
+    resources = _track_queue_worker_resources(monkeypatch)
+    fixture = _prepare_qdrant_changed_existing_incremental(
+        monkeypatch, tmp_path)
+    original_manifest = fixture.manifest_path.read_bytes()
+    client_type = sys.modules["qdrant_client"].QdrantClient
+
+    def ambiguous_upsert(self, *, collection_name, points, wait):
+        assert wait is True
+        assert fixture.marker_path.is_file()
+        fixture.state.upserts.append(list(points))
+        for point in points:
+            fixture.state.points[point.id] = point
+        raise RuntimeError("injected Qdrant upsert failure")
+
+    monkeypatch.setattr(client_type, "upsert", ambiguous_upsert)
+
+    # An unrelated outer handler must not make cleanup mistake its exception
+    # for an active producer failure and suppress the worker error.
+    try:
+        raise ValueError("unrelated outer error")
+    except ValueError:
+        with pytest.raises(
+                RuntimeError, match="injected Qdrant upsert failure"):
+            rag.index_chunks_qdrant(
+                fixture.chunks_path, fixture.db_path,
+                collection_name="book", embedding_model="model-a")
+
+    assert len(fixture.state.upserts) == 1
+    assert fixture.state.points[fixture.point_id].payload["context"] == (
+        "Corrected classification")
+    assert fixture.state.scrolls == 2
+    assert fixture.marker_path.is_file()
+    assert fixture.manifest_path.read_bytes() == original_manifest
+
+    executor = resources.executors[0]
+    assert executor.shutdown_calls == [(True, False)]
+    assert executor.future.done()
+    assert not executor.thread.is_alive()
+    assert resources.bars[0].updates == 0
+    assert resources.bars[0].close_calls == 1
+    assert resources.events == [
+        "worker_exit", "executor_shutdown", "progress_close"]
+
+
+def test_qdrant_cleanup_does_not_mask_active_producer_failure(
+        monkeypatch, tmp_path):
+    resources = _track_queue_worker_resources(monkeypatch)
+    fixture = _prepare_qdrant_changed_existing_incremental(
+        monkeypatch, tmp_path)
+    original_manifest = fixture.manifest_path.read_bytes()
+    client_type = sys.modules["qdrant_client"].QdrantClient
+
+    def fail_upsert(self, *, collection_name, points, wait):
+        assert wait is True
+        fixture.state.upserts.append(list(points))
+        raise RuntimeError("secondary worker failure")
+
+    monkeypatch.setattr(client_type, "upsert", fail_upsert)
+    monkeypatch.setattr(
+        rag, "_batch_index_records",
+        lambda records, _model, **_kwargs: [list(records), list(records)],
+    )
+    index_embedding_calls = 0
+
+    def fail_second_index_embedding(texts, _model, **_kwargs):
+        nonlocal index_embedding_calls
+        if texts == ["RAG index embedding-dimension probe"]:
+            return [[0.0, 1.0]]
+        index_embedding_calls += 1
+        if index_embedding_calls == 1:
+            return [[0.0, 1.0] for _text in texts]
+        raise RuntimeError("primary producer failure")
+
+    monkeypatch.setattr(rag, "_embed_texts", fail_second_index_embedding)
+
+    with pytest.raises(RuntimeError, match="primary producer failure"):
+        rag.index_chunks_qdrant(
+            fixture.chunks_path, fixture.db_path,
+            collection_name="book", embedding_model="model-a")
+
+    assert len(fixture.state.upserts) == 1
+    assert fixture.marker_path.is_file()
+    assert fixture.manifest_path.read_bytes() == original_manifest
+    assert resources.executors[0].shutdown_calls == [(True, False)]
+    assert not resources.executors[0].thread.is_alive()
+    assert resources.bars[0].close_calls == 1
 
 
 def test_qdrant_changed_existing_delete_noop_preserves_old_manifest(

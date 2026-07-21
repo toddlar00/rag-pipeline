@@ -1031,11 +1031,82 @@ def _put_unless_worker_failed(work_queue: queue.Queue, item,
     while True:
         if worker_future.done():
             worker_future.result()
+            raise RuntimeError(
+                "Queue worker exited before accepting all work")
         try:
             work_queue.put(item, timeout=0.1)
             return
         except queue.Full:
             continue
+
+
+def _finish_queue_worker(work_queue: queue.Queue, worker_future,
+                         worker_executor, progress, *,
+                         worker_name: str,
+                         primary_error: BaseException | None) -> None:
+    """Stop a queue worker and close resources without masking a primary error.
+
+    This helper is intended for a ``finally`` block.  ``primary_error`` must be
+    the exception caught from this producer, not ambient ``sys.exc_info()``.
+    When present, worker or cleanup failures are logged so the producer's
+    original exception keeps its traceback.  Otherwise the first cleanup
+    failure is propagated after every resource has had a chance to close.
+    """
+    cleanup_errors: list[BaseException] = []
+
+    if worker_future is not None:
+        worker_was_done = worker_future.done()
+        try:
+            if not worker_was_done:
+                _put_unless_worker_failed(work_queue, None, worker_future)
+        except BaseException as exc:
+            cleanup_errors.append(exc)
+        else:
+            try:
+                worker_error = worker_future.exception()
+            except BaseException as exc:
+                cleanup_errors.append(exc)
+            else:
+                if worker_error is not None:
+                    cleanup_errors.append(worker_error)
+                elif worker_was_done:
+                    cleanup_errors.append(RuntimeError(
+                        f"{worker_name} exited before it was asked to stop"))
+
+    close_resources = [progress.close]
+    if worker_executor is not None:
+        close_resources.insert(
+            0, lambda: worker_executor.shutdown(wait=True))
+    for close_resource in close_resources:
+        try:
+            close_resource()
+        except BaseException as exc:
+            cleanup_errors.append(exc)
+
+    if not cleanup_errors:
+        return
+
+    if primary_error is not None:
+        for cleanup_error in cleanup_errors:
+            if cleanup_error is primary_error:
+                continue
+            log.error(
+                "%s cleanup also failed while preserving the active error",
+                worker_name,
+                exc_info=(type(cleanup_error), cleanup_error,
+                          cleanup_error.__traceback__),
+            )
+        return
+
+    first_error, *additional_errors = cleanup_errors
+    for cleanup_error in additional_errors:
+        log.error(
+            "%s cleanup encountered an additional error",
+            worker_name,
+            exc_info=(type(cleanup_error), cleanup_error,
+                      cleanup_error.__traceback__),
+        )
+    raise first_error.with_traceback(first_error.__traceback__)
 
 
 # ---------------------------------------------------------------------------
@@ -6568,49 +6639,54 @@ def index_chunks_qdrant(chunks_path: Path, qdrant_dir: Path, *,
             pbar.update(1)
             upsert_queue.task_done()
 
-    upsert_thread = ThreadPoolExecutor(max_workers=1)
-    upsert_future = upsert_thread.submit(_upsert_worker)
+    upsert_thread = None
+    upsert_future = None
+    pipeline_error = None
+    try:
+        upsert_thread = ThreadPoolExecutor(max_workers=1)
+        upsert_future = upsert_thread.submit(_upsert_worker)
+        for batch in batches:
+            # Prepare texts
+            texts = []
+            for r in batch:
+                ctx = r["metadata"].get("context", "")
+                text = r["text"]
+                texts.append(f"{ctx}\n\n{text}" if ctx else text)
 
-    for batch in batches:
-        # Prepare texts
-        texts = []
-        for r in batch:
-            ctx = r["metadata"].get("context", "")
-            text = r["text"]
-            texts.append(f"{ctx}\n\n{text}" if ctx else text)
+            # GPU: embed this batch (while previous batch upserts in background)
+            dense_vectors = _embed_texts(texts, embedding_model)
 
-        # GPU: embed this batch (while previous batch upserts in background)
-        dense_vectors = _embed_texts(texts, embedding_model)
+            # Build points
+            points = []
+            for i, r in enumerate(batch):
+                stable_id = _chunk_id(r)
+                idx = qdrant_point_ids[stable_id]
+                payload = _qdrant_payload(r, stable_id)
+                lexical_text = _lexical_document_text(
+                    r["text"], r.get("metadata", {}))
+                sp_indices, sp_values = _sparse_token_vector(lexical_text)
+                points.append(models.PointStruct(
+                    id=idx,
+                    vector={
+                        "": dense_vectors[i],
+                        "bm25": models.SparseVector(
+                            indices=sp_indices, values=sp_values,
+                        ),
+                    },
+                    payload=payload,
+                ))
 
-        # Build points
-        points = []
-        for i, r in enumerate(batch):
-            stable_id = _chunk_id(r)
-            idx = qdrant_point_ids[stable_id]
-            payload = _qdrant_payload(r, stable_id)
-            lexical_text = _lexical_document_text(
-                r["text"], r.get("metadata", {}))
-            sp_indices, sp_values = _sparse_token_vector(lexical_text)
-            points.append(models.PointStruct(
-                id=idx,
-                vector={
-                    "": dense_vectors[i],
-                    "bm25": models.SparseVector(
-                        indices=sp_indices, values=sp_values,
-                    ),
-                },
-                payload=payload,
-            ))
-
-        # Queue for background upsert (blocks if queue full — backpressure)
-        _put_unless_worker_failed(
-            upsert_queue, points, upsert_future)
-
-    # Signal worker to stop and wait for completion
-    _put_unless_worker_failed(upsert_queue, None, upsert_future)
-    upsert_future.result()
-    upsert_thread.shutdown()
-    pbar.close()
+            # Queue for background upsert (blocks if queue full — backpressure)
+            _put_unless_worker_failed(
+                upsert_queue, points, upsert_future)
+    except BaseException as exc:
+        pipeline_error = exc
+        raise
+    finally:
+        _finish_queue_worker(
+            upsert_queue, upsert_future, upsert_thread, pbar,
+            worker_name="Qdrant upsert worker",
+            primary_error=pipeline_error)
 
     verified_point_ids = _require_qdrant_stable_ids(
         client, collection_name, set(new_hashes))
