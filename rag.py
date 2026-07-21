@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional, TypedDict
 from urllib.parse import urlparse
+from uuid import UUID
 
 from llm_runtime import (
     LLMBudgetExceeded,
@@ -6216,18 +6217,61 @@ def _embedding_dimension(model_name: str) -> int:
     return len(embeddings[0])
 
 
+def _qdrant_exact_count(client, collection_name: str) -> int:
+    """Return Qdrant's exact physical point count or fail closed."""
+    result = client.count(collection_name=collection_name, exact=True)
+    count = getattr(result, "count", None)
+    if (isinstance(count, bool) or not isinstance(count, int)
+            or count < 0):
+        raise RuntimeError(
+            f"Qdrant collection '{collection_name}' returned an invalid "
+            "exact point count")
+    return count
+
+
+def _qdrant_id_key(value: object) -> tuple[object, ...]:
+    """Return a hashable key without collapsing distinct ID representations."""
+    if type(value) is int:
+        return "int", value
+    if type(value) is str:
+        return "str", value
+    if isinstance(value, UUID):
+        return "uuid.UUID", value.bytes
+
+    descriptor = getattr(value, "DESCRIPTOR", None)
+    if getattr(descriptor, "full_name", None) == "qdrant.PointId":
+        try:
+            variant = value.WhichOneof("point_id_options")
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(
+                "Qdrant returned an invalid protobuf point ID") from exc
+        if variant == "num":
+            return "protobuf", "qdrant.PointId", "num", int(value.num)
+        if variant == "uuid":
+            return "protobuf", "qdrant.PointId", "uuid", str(value.uuid)
+        raise RuntimeError(
+            "Qdrant returned an unset or unsupported protobuf point ID")
+
+    raise RuntimeError(
+        f"Qdrant returned an unsupported point ID type: "
+        f"{type(value).__name__}")
+
+
 def _qdrant_stable_id_rows(
         client, collection_name: str, *,
         page_size: int = 1000) -> list[tuple[object, str | None]]:
-    """Return every point ID and canonical stable ID across a safe scroll."""
+    """Return every stable ID through a count-bounded, drift-safe scroll."""
     if (isinstance(page_size, bool) or not isinstance(page_size, int)
             or page_size < 1):
         raise ValueError("Qdrant scroll page_size must be a positive integer")
 
+    count_before = _qdrant_exact_count(client, collection_name)
     rows = []
     offset = None
-    seen_offsets = []
-    while True:
+    seen_offsets = set()
+    seen_point_ids = set()
+    max_scroll_calls = max(1, count_before + 1)
+    for _ in range(max_scroll_calls):
         points, next_offset = client.scroll(
             collection_name,
             limit=page_size,
@@ -6235,20 +6279,41 @@ def _qdrant_stable_id_rows(
             with_payload=["stable_id"],
             with_vectors=False,
         )
+        if len(points) > page_size:
+            raise RuntimeError(
+                "Qdrant scroll returned more points than its page limit")
+        if not points and next_offset is not None:
+            raise RuntimeError(
+                "Qdrant scroll returned an empty nonterminal page")
         for point in points:
+            if len(rows) >= count_before:
+                raise RuntimeError(
+                    "Qdrant scroll exceeded its exact point count")
+            point_key = _qdrant_id_key(point.id)
+            if point_key in seen_point_ids:
+                raise RuntimeError(
+                    "Qdrant scroll repeated a physical point ID")
+            seen_point_ids.add(point_key)
             payload = point.payload if isinstance(point.payload, dict) else {}
             stable_id = payload.get("stable_id")
             if not isinstance(stable_id, str) or not stable_id.strip():
                 stable_id = None
             rows.append((point.id, stable_id))
         if next_offset is None:
-            break
-        if any(next_offset == seen for seen in seen_offsets):
+            count_after = _qdrant_exact_count(client, collection_name)
+            if len(rows) != count_before or count_after != count_before:
+                raise RuntimeError(
+                    f"Qdrant collection '{collection_name}' changed or "
+                    "returned an incomplete exact-count scroll")
+            return rows
+        offset_key = _qdrant_id_key(next_offset)
+        if offset_key in seen_offsets:
             raise RuntimeError(
                 "Qdrant scroll repeated a continuation offset")
-        seen_offsets.append(next_offset)
+        seen_offsets.add(offset_key)
         offset = next_offset
-    return rows
+    raise RuntimeError(
+        "Qdrant scroll exceeded its exact-count page budget")
 
 
 def _qdrant_point_ids_for_stable_ids(client, collection_name: str,

@@ -5,10 +5,28 @@ import sys
 from concurrent.futures import Future
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+from uuid import UUID
 
 import pytest
 
 import rag
+
+
+class _FakeGrpcPointId:
+    __hash__ = None
+    DESCRIPTOR = SimpleNamespace(full_name="qdrant.PointId")
+
+    def __init__(self, *, num=None, uuid=None):
+        self.num = num
+        self.uuid = uuid
+
+    def WhichOneof(self, name):
+        assert name == "point_id_options"
+        if self.num is not None:
+            return "num"
+        if self.uuid is not None:
+            return "uuid"
+        return None
 
 
 def _write_chunks(path: Path) -> None:
@@ -243,6 +261,7 @@ def test_legacy_sidecar_is_never_used_for_an_incremental_skip(tmp_path):
 
 def test_qdrant_removed_id_lookup_scrolls_every_page():
     calls = []
+    count_calls = []
     pages = {
         None: ([SimpleNamespace(
             id=1, payload={"stable_id": "keep"})], "page-2"),
@@ -251,6 +270,10 @@ def test_qdrant_removed_id_lookup_scrolls_every_page():
     }
 
     class FakeClient:
+        def count(self, *, collection_name, exact):
+            count_calls.append((collection_name, exact))
+            return SimpleNamespace(count=2)
+
         def scroll(self, collection_name, *, limit, offset,
                    with_payload, with_vectors):
             calls.append((collection_name, limit, offset,
@@ -262,10 +285,14 @@ def test_qdrant_removed_id_lookup_scrolls_every_page():
 
     assert point_ids == [2]
     assert [call[2] for call in calls] == [None, "page-2"]
+    assert count_calls == [("book", True), ("book", True)]
 
 
 def test_qdrant_removed_id_lookup_empty_target_does_not_scroll():
     class FakeClient:
+        def count(self, **_kwargs):
+            pytest.fail("an empty removal set must not count Qdrant")
+
         def scroll(self, *_args, **_kwargs):
             pytest.fail("an empty removal set must not scan Qdrant")
 
@@ -290,6 +317,11 @@ def test_qdrant_removed_id_lookup_collects_all_matches_across_pages():
     }
 
     class FakeClient:
+        def count(self, *, collection_name, exact):
+            assert collection_name == "book"
+            assert exact is True
+            return SimpleNamespace(count=5)
+
         def scroll(self, collection_name, *, limit, offset,
                    with_payload, with_vectors):
             calls.append(offset)
@@ -306,13 +338,13 @@ def test_qdrant_removed_id_lookup_collects_all_matches_across_pages():
     "pages",
     [
         {
-            None: ([], "loop"),
-            "loop": ([], "loop"),
+            None: ([SimpleNamespace(id=1, payload={})], "loop"),
+            "loop": ([SimpleNamespace(id=2, payload={})], "loop"),
         },
         {
-            None: ([], "offset-a"),
-            "offset-a": ([], "offset-b"),
-            "offset-b": ([], "offset-a"),
+            None: ([SimpleNamespace(id=1, payload={})], "offset-a"),
+            "offset-a": ([SimpleNamespace(id=2, payload={})], "offset-b"),
+            "offset-b": ([SimpleNamespace(id=3, payload={})], "offset-a"),
         },
     ],
     ids=["immediate", "multi-offset"],
@@ -321,6 +353,10 @@ def test_qdrant_removed_id_lookup_rejects_continuation_cycles(pages):
     calls = []
 
     class FakeClient:
+        def count(self, *, collection_name, exact):
+            assert exact is True
+            return SimpleNamespace(count=len(pages) + 1)
+
         def scroll(self, collection_name, *, limit, offset,
                    with_payload, with_vectors):
             calls.append(offset)
@@ -335,6 +371,10 @@ def test_qdrant_removed_id_lookup_rejects_continuation_cycles(pages):
 
 def test_qdrant_removed_id_lookup_requires_exact_stable_id_set():
     class FakeClient:
+        def count(self, *, collection_name, exact):
+            assert exact is True
+            return SimpleNamespace(count=2)
+
         def scroll(self, collection_name, *, limit, offset,
                    with_payload, with_vectors):
             return ([
@@ -349,6 +389,10 @@ def test_qdrant_removed_id_lookup_requires_exact_stable_id_set():
 
 def test_qdrant_identity_verifier_accepts_exact_reordered_points():
     class FakeClient:
+        def count(self, *, collection_name, exact):
+            assert exact is True
+            return SimpleNamespace(count=2)
+
         def scroll(self, collection_name, *, limit, offset,
                    with_payload, with_vectors):
             return ([
@@ -381,6 +425,10 @@ def test_qdrant_identity_verifier_accepts_exact_reordered_points():
 def test_qdrant_identity_verifier_rejects_physical_drift(
         points, expected, message):
     class FakeClient:
+        def count(self, *, collection_name, exact):
+            assert exact is True
+            return SimpleNamespace(count=len(points))
+
         def scroll(self, collection_name, *, limit, offset,
                    with_payload, with_vectors):
             return points, None
@@ -388,6 +436,181 @@ def test_qdrant_identity_verifier_rejects_physical_drift(
     with pytest.raises(RuntimeError, match=message):
         rag._require_qdrant_stable_ids(
             FakeClient(), "book", expected)
+
+
+@pytest.mark.parametrize("count", [None, True, -1, 1.5, "1"])
+def test_qdrant_scan_rejects_invalid_exact_count(count):
+    class FakeClient:
+        def count(self, *, collection_name, exact):
+            assert exact is True
+            if count is None:
+                return SimpleNamespace()
+            return SimpleNamespace(count=count)
+
+        def scroll(self, *_args, **_kwargs):
+            pytest.fail("an invalid exact count must fail before scrolling")
+
+    with pytest.raises(RuntimeError, match="invalid exact point count"):
+        rag._qdrant_stable_id_rows(FakeClient(), "book")
+
+
+def test_qdrant_empty_scan_confirms_count_before_and_after():
+    calls = []
+
+    class FakeClient:
+        def count(self, *, collection_name, exact):
+            calls.append(("count", collection_name, exact))
+            return SimpleNamespace(count=0)
+
+        def scroll(self, collection_name, *, limit, offset,
+                   with_payload, with_vectors):
+            calls.append(("scroll", offset))
+            return [], None
+
+    assert rag._qdrant_stable_id_rows(
+        FakeClient(), "book", page_size=1) == []
+    assert calls == [
+        ("count", "book", True),
+        ("scroll", None),
+        ("count", "book", True),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("count_values", "pages", "page_size", "message"),
+    [
+        ([2, 2], {
+            None: ([SimpleNamespace(id=1, payload={})], None),
+        }, 2, "incomplete exact-count scroll"),
+        ([1], {
+            None: ([
+                SimpleNamespace(id=1, payload={}),
+                SimpleNamespace(id=2, payload={}),
+            ], None),
+        }, 2, "exceeded its exact point count"),
+        ([1], {
+            None: ([], "next"),
+        }, 1, "empty nonterminal page"),
+        ([2], {
+            None: ([
+                SimpleNamespace(id=1, payload={}),
+                SimpleNamespace(id=2, payload={}),
+            ], None),
+        }, 1, "more points than its page limit"),
+        ([1, 2], {
+            None: ([SimpleNamespace(id=1, payload={})], None),
+        }, 1, "changed or returned an incomplete"),
+    ],
+    ids=["short", "overflow", "empty-nonterminal", "oversized", "drift"],
+)
+def test_qdrant_scan_rejects_count_and_pagination_inconsistency(
+        count_values, pages, page_size, message):
+    counts = list(count_values)
+
+    class FakeClient:
+        def count(self, *, collection_name, exact):
+            assert exact is True
+            return SimpleNamespace(count=counts.pop(0))
+
+        def scroll(self, collection_name, *, limit, offset,
+                   with_payload, with_vectors):
+            return pages[offset]
+
+    with pytest.raises(RuntimeError, match=message):
+        rag._qdrant_stable_id_rows(
+            FakeClient(), "book", page_size=page_size)
+
+
+@pytest.mark.parametrize(
+    "pages",
+    [
+        {
+            None: ([
+                SimpleNamespace(id=1, payload={}),
+                SimpleNamespace(id=1, payload={}),
+            ], None),
+        },
+        {
+            None: ([SimpleNamespace(id=1, payload={})], "next"),
+            "next": ([SimpleNamespace(id=1, payload={})], None),
+        },
+    ],
+    ids=["same-page", "across-pages"],
+)
+def test_qdrant_scan_rejects_repeated_physical_point_ids(pages):
+    class FakeClient:
+        def count(self, *, collection_name, exact):
+            assert exact is True
+            return SimpleNamespace(count=2)
+
+        def scroll(self, collection_name, *, limit, offset,
+                   with_payload, with_vectors):
+            return pages[offset]
+
+    with pytest.raises(RuntimeError, match="repeated a physical point ID"):
+        rag._qdrant_stable_id_rows(FakeClient(), "book", page_size=2)
+
+
+def test_qdrant_scan_normalizes_unhashable_grpc_ids_and_offsets():
+    grpc_offset = _FakeGrpcPointId(num=99)
+    repeated_offset = _FakeGrpcPointId(num=99)
+    calls = 0
+
+    class FakeClient:
+        def count(self, *, collection_name, exact):
+            assert exact is True
+            return SimpleNamespace(count=3)
+
+        def scroll(self, collection_name, *, limit, offset,
+                   with_payload, with_vectors):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return [SimpleNamespace(id=1, payload={})], grpc_offset
+            return [SimpleNamespace(id=2, payload={})], repeated_offset
+
+    with pytest.raises(RuntimeError, match="continuation offset"):
+        rag._qdrant_stable_id_rows(FakeClient(), "book", page_size=1)
+    assert calls == 2
+
+    raw_uuid = "12345678-1234-5678-1234-567812345678"
+    assert rag._qdrant_id_key(7) != rag._qdrant_id_key(
+        _FakeGrpcPointId(num=7))
+    assert rag._qdrant_id_key(UUID(raw_uuid)) != rag._qdrant_id_key(
+        _FakeGrpcPointId(uuid=raw_uuid))
+    assert rag._qdrant_id_key(raw_uuid.upper()) != rag._qdrant_id_key(
+        raw_uuid.replace("-", ""))
+
+
+def test_qdrant_scan_rejects_logically_repeated_grpc_point_id():
+    class FakeClient:
+        def count(self, *, collection_name, exact):
+            assert exact is True
+            return SimpleNamespace(count=2)
+
+        def scroll(self, collection_name, *, limit, offset,
+                   with_payload, with_vectors):
+            if offset is None:
+                return [SimpleNamespace(
+                    id=_FakeGrpcPointId(num=7), payload={})], "next"
+            return [SimpleNamespace(
+                id=_FakeGrpcPointId(num=7), payload={})], None
+
+    with pytest.raises(RuntimeError, match="repeated a physical point ID"):
+        rag._qdrant_stable_id_rows(FakeClient(), "book", page_size=1)
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        (True, "unsupported point ID type"),
+        (object(), "unsupported point ID type"),
+        (_FakeGrpcPointId(), "unset or unsupported protobuf point ID"),
+    ],
+)
+def test_qdrant_id_key_rejects_unsupported_identifiers(value, message):
+    with pytest.raises(RuntimeError, match=message):
+        rag._qdrant_id_key(value)
 
 
 def test_qdrant_payload_canonical_fields_override_legacy_metadata():
@@ -550,6 +773,10 @@ def _prepare_qdrant_removed_only_incremental(
         def create_collection(self, **kwargs):
             pytest.fail("the existing compatible collection must be reused")
 
+        def count(self, *, collection_name, exact):
+            assert exact is True
+            return SimpleNamespace(count=len(state.points))
+
         def scroll(self, collection_name, *, limit, offset,
                    with_payload, with_vectors):
             state.scroll_offsets.append(offset)
@@ -639,7 +866,8 @@ def test_qdrant_missing_manifest_removal_fails_without_saving_manifest(
 
 
 def _prepare_qdrant_changed_existing_incremental(
-        monkeypatch, tmp_path, *, delete_mutates=True, upsert_mutates=True):
+        monkeypatch, tmp_path, *, delete_mutates=True, upsert_mutates=True,
+        count_values=None):
     chunks_path = tmp_path / "chunks.jsonl"
     db_path = tmp_path / "qdrant"
     old_record = {
@@ -681,7 +909,9 @@ def _prepare_qdrant_changed_existing_incremental(
     state = SimpleNamespace(
         points={point_id: old_point}, deletes=[], upserts=[], scrolls=0,
         collection_exists=True, collection_rebuilds=0,
-        delete_mutates=delete_mutates, upsert_mutates=upsert_mutates)
+        delete_mutates=delete_mutates, upsert_mutates=upsert_mutates,
+        count_values=(list(count_values)
+                      if count_values is not None else None))
 
     class Model:
         def __init__(self, **kwargs):
@@ -713,6 +943,12 @@ def _prepare_qdrant_changed_existing_incremental(
         def create_collection(self, **kwargs):
             assert marker_path.is_file()
             state.collection_exists = True
+
+        def count(self, *, collection_name, exact):
+            assert exact is True
+            if state.count_values is not None:
+                return SimpleNamespace(count=state.count_values.pop(0))
+            return SimpleNamespace(count=len(state.points))
 
         def scroll(self, collection_name, *, limit, offset,
                    with_payload, with_vectors):
@@ -793,6 +1029,25 @@ def test_qdrant_changed_existing_upsert_noop_preserves_old_manifest(
     assert len(fixture.state.upserts) == 1
     assert fixture.state.points == {}
     assert fixture.state.scrolls == 3
+    assert fixture.marker_path.is_file()
+    assert fixture.manifest_path.read_bytes() == original_manifest
+
+
+def test_qdrant_postwrite_count_drift_keeps_recovery_marker_and_old_manifest(
+        monkeypatch, tmp_path):
+    fixture = _prepare_qdrant_changed_existing_incremental(
+        monkeypatch, tmp_path,
+        count_values=[1, 1, 0, 0, 1, 2])
+    original_manifest = fixture.manifest_path.read_bytes()
+
+    with pytest.raises(RuntimeError, match="changed or returned an incomplete"):
+        rag.index_chunks_qdrant(
+            fixture.chunks_path, fixture.db_path,
+            collection_name="book", embedding_model="model-a")
+
+    assert fixture.state.count_values == []
+    assert fixture.state.points[fixture.point_id].payload["context"] == (
+        "Corrected classification")
     assert fixture.marker_path.is_file()
     assert fixture.manifest_path.read_bytes() == original_manifest
 
@@ -1020,6 +1275,11 @@ def test_qdrant_manifest_skip_and_model_change_preserve_sibling(
             assert marker_path.is_file()
             state.deleted.append(collection_name)
             del state.collections[collection_name]
+
+        def count(self, *, collection_name, exact):
+            assert exact is True
+            return SimpleNamespace(
+                count=len(state.collections[collection_name]))
 
         def upsert(self, *, collection_name, points, wait):
             assert wait is True

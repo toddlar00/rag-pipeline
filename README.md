@@ -676,8 +676,11 @@ compatible rerun embeds only changed/new chunks, removes chunks no longer
 present, and skips unchanged chunks. Qdrant incremental runs scan payload-only
 stable IDs before mutation and again after writes, refusing to advance the
 manifest if points are missing, unexpected, duplicated, untracked, or returned
-through a cyclic pagination sequence. Use `--full-reindex` to recover from a
-physical collection/manifest mismatch.
+through a cyclic pagination sequence. Each audit is bounded by exact point
+counts taken before and after its payload-only scroll, and rejects count drift,
+premature termination, oversized/non-progressing pages, and repeated physical
+point IDs. Use `--full-reindex` to recover from a physical collection/manifest
+mismatch.
 
 Before its first collection mutation, a Qdrant indexing run also creates a
 collection-scoped recovery marker. The marker is removed only after exact
