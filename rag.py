@@ -6168,13 +6168,18 @@ def _embedding_dimension(model_name: str) -> int:
     return len(embeddings[0])
 
 
-def _qdrant_point_ids_for_stable_ids(client, collection_name: str,
-                                      stable_ids: set[str], *,
-                                      page_size: int = 1000) -> list:
-    """Find every Qdrant point matching stable IDs across paginated scrolls."""
-    point_ids = []
+def _qdrant_stable_id_rows(
+        client, collection_name: str, *,
+        page_size: int = 1000) -> list[tuple[object, str | None]]:
+    """Return every point ID and canonical stable ID across a safe scroll."""
+    if (isinstance(page_size, bool) or not isinstance(page_size, int)
+            or page_size < 1):
+        raise ValueError("Qdrant scroll page_size must be a positive integer")
+
+    rows = []
     offset = None
-    while stable_ids:
+    seen_offsets = []
+    while True:
         points, next_offset = client.scroll(
             collection_name,
             limit=page_size,
@@ -6182,17 +6187,80 @@ def _qdrant_point_ids_for_stable_ids(client, collection_name: str,
             with_payload=["stable_id"],
             with_vectors=False,
         )
-        point_ids.extend(
-            point.id for point in points
-            if (point.payload or {}).get("stable_id") in stable_ids
-        )
+        for point in points:
+            payload = point.payload if isinstance(point.payload, dict) else {}
+            stable_id = payload.get("stable_id")
+            if not isinstance(stable_id, str) or not stable_id.strip():
+                stable_id = None
+            rows.append((point.id, stable_id))
         if next_offset is None:
             break
-        if next_offset == offset:
+        if any(next_offset == seen for seen in seen_offsets):
             raise RuntimeError(
-                "Qdrant scroll returned the same continuation offset twice")
+                "Qdrant scroll repeated a continuation offset")
+        seen_offsets.append(next_offset)
         offset = next_offset
+    return rows
+
+
+def _qdrant_point_ids_for_stable_ids(client, collection_name: str,
+                                      stable_ids: set[str], *,
+                                      page_size: int = 1000) -> list:
+    """Find every Qdrant point matching the exact requested stable-ID set."""
+    requested = set(stable_ids)
+    if not requested:
+        return []
+    rows = _qdrant_stable_id_rows(
+        client, collection_name, page_size=page_size)
+    found = {stable_id for _, stable_id in rows if stable_id in requested}
+    missing = requested - found
+    if missing:
+        raise RuntimeError(
+            f"{len(missing)} requested Qdrant stable ID(s) not found; "
+            "refusing an incomplete deletion")
+    return [point_id for point_id, stable_id in rows
+            if stable_id in requested]
+
+
+def _require_qdrant_stable_ids(
+        client, collection_name: str, expected: set[str], *,
+        page_size: int = 1000) -> dict[str, list]:
+    """Require one physical point for every expected stable ID and no others."""
+    rows = _qdrant_stable_id_rows(
+        client, collection_name, page_size=page_size)
+    point_ids: dict[str, list] = {}
+    untracked = 0
+    for point_id, stable_id in rows:
+        if stable_id is None:
+            untracked += 1
+            continue
+        point_ids.setdefault(stable_id, []).append(point_id)
+
+    actual = set(point_ids)
+    missing = expected - actual
+    unexpected = actual - expected
+    duplicates = sum(
+        len(ids) - 1 for ids in point_ids.values() if len(ids) > 1)
+    if missing or unexpected or duplicates or untracked:
+        details = []
+        if missing:
+            details.append(f"{len(missing)} stable ID(s) not found")
+        if unexpected:
+            details.append(f"{len(unexpected)} unexpected stable ID(s)")
+        if duplicates:
+            details.append(f"{duplicates} duplicate stable-ID point(s)")
+        if untracked:
+            details.append(f"{untracked} point(s) without a stable ID")
+        raise RuntimeError(
+            f"Qdrant collection '{collection_name}' does not match its "
+            f"stable-ID manifest ({'; '.join(details)}). Refusing to update "
+            "the manifest; run again with --full-reindex.")
     return point_ids
+
+
+def _qdrant_point_id(stable_id: str) -> int:
+    """Map a canonical hexadecimal stable ID to a portable 63-bit point ID."""
+    return int(stable_id.removeprefix("chunk_"), 16) % (2**63)
 
 
 def _qdrant_payload(record: dict, stable_id: str) -> dict:
@@ -6240,6 +6308,11 @@ def index_chunks_qdrant(chunks_path: Path, qdrant_dir: Path, *,
                   for record in records]
     new_hashes = {chunk_id: chunk_hash
                   for _, chunk_id, chunk_hash in chunk_info}
+    qdrant_point_ids = {
+        chunk_id: _qdrant_point_id(chunk_id) for chunk_id in new_hashes}
+    if len(set(qdrant_point_ids.values())) != len(qdrant_point_ids):
+        raise ValueError(
+            "Chunks file contains colliding numeric Qdrant point IDs")
     log.info(f"Loaded {len(records)} chunks")
 
     qdrant_dir.mkdir(parents=True, exist_ok=True)
@@ -6256,6 +6329,7 @@ def index_chunks_qdrant(chunks_path: Path, qdrant_dir: Path, *,
             full_reindex=full_reindex,
         )
     )
+    reuse_existing_collection = collection_exists and not rebuild_collection
 
     if rebuild_collection:
         log.info("Rebuilding Qdrant collection '%s': %s",
@@ -6280,18 +6354,38 @@ def index_chunks_qdrant(chunks_path: Path, qdrant_dir: Path, *,
 
     # --- Incremental indexing via hash comparison ---
     if old_hashes:
-        changed = [r for r, cid, chash in chunk_info
-                   if chash != old_hashes.get(cid)]
-        # Delete removed chunks by their point IDs
+        changed_info = [
+            (record, chunk_id, chunk_hash)
+            for record, chunk_id, chunk_hash in chunk_info
+            if chunk_hash != old_hashes.get(chunk_id)
+        ]
+        changed = [record for record, _, _ in changed_info]
         removed_ids = [k for k in old_hashes if k not in new_hashes]
-        # We can't delete by string ID in Qdrant (needs int), so scroll and filter.
-        if removed_ids:
-            removed_set = set(removed_ids)
-            points_to_delete = _qdrant_point_ids_for_stable_ids(
-                client, collection_name, removed_set)
+        changed_existing_ids = [
+            chunk_id for _, chunk_id, _ in changed_info
+            if chunk_id in old_hashes
+        ]
+        # Delete removals and stale versions of changed durable IDs first. A
+        # post-delete identity check makes a no-op delete fail closed; the
+        # final check likewise catches a no-op replacement upsert.
+        deletion_ids = removed_ids + changed_existing_ids
+        existing_point_ids = _require_qdrant_stable_ids(
+            client, collection_name, set(old_hashes))
+        # We can't delete by string ID in Qdrant, so use verified point IDs.
+        if deletion_ids:
+            points_to_delete = [
+                point_id
+                for stable_id in deletion_ids
+                for point_id in existing_point_ids[stable_id]
+            ]
             if points_to_delete:
                 client.delete(collection_name,
-                              points_selector=models.PointIdsList(points=points_to_delete))
+                              points_selector=models.PointIdsList(
+                                  points=points_to_delete),
+                              wait=True)
+            _require_qdrant_stable_ids(
+                client, collection_name,
+                set(old_hashes).difference(deletion_ids))
 
         unchanged = len(records) - len(changed)
         log.info(f"Incremental: {len(changed)} changed, {unchanged} unchanged "
@@ -6306,6 +6400,10 @@ def index_chunks_qdrant(chunks_path: Path, qdrant_dir: Path, *,
                 source_record_count=source_record_count)
             return
         records = changed
+    elif reuse_existing_collection:
+        # A compatible empty manifest is safe to populate only if the physical
+        # collection is also empty.
+        _require_qdrant_stable_ids(client, collection_name, set())
 
     # Pipeline: embed batch N on GPU while upserting batch N-1 to disk
     from concurrent.futures import ThreadPoolExecutor
@@ -6321,7 +6419,8 @@ def index_chunks_qdrant(chunks_path: Path, qdrant_dir: Path, *,
             item = upsert_queue.get()
             if item is None:
                 break
-            client.upsert(collection_name=collection_name, points=item)
+            client.upsert(
+                collection_name=collection_name, points=item, wait=True)
             pbar.update(1)
             upsert_queue.task_done()
 
@@ -6343,7 +6442,7 @@ def index_chunks_qdrant(chunks_path: Path, qdrant_dir: Path, *,
         points = []
         for i, r in enumerate(batch):
             stable_id = _chunk_id(r)
-            idx = int(stable_id.removeprefix("chunk_"), 16) % (2**63)
+            idx = qdrant_point_ids[stable_id]
             payload = _qdrant_payload(r, stable_id)
             lexical_text = _lexical_document_text(
                 r["text"], r.get("metadata", {}))
@@ -6369,14 +6468,17 @@ def index_chunks_qdrant(chunks_path: Path, qdrant_dir: Path, *,
     upsert_thread.shutdown()
     pbar.close()
 
+    verified_point_ids = _require_qdrant_stable_ids(
+        client, collection_name, set(new_hashes))
     _save_index_manifest(
         qdrant_dir, backend="qdrant", collection_name=collection_name,
         embedding_model=embedding_model, embedding_dimension=dim,
         chunk_hashes=new_hashes, source_sha256=source_sha256,
         source_record_count=source_record_count)
 
-    info = client.get_collection(collection_name)
-    log.info(f"Qdrant collection '{collection_name}' -> {info.points_count} points")
+    verified_count = sum(len(ids) for ids in verified_point_ids.values())
+    log.info(
+        f"Qdrant collection '{collection_name}' -> {verified_count} points")
     log.info(f"Embedding: {embedding_model} (dim={dim})")
     log.info("Sparse vectors: BM25 (built-in hybrid search)")
     log.info(f"Persisted to {qdrant_dir}")

@@ -673,7 +673,11 @@ the hashes in an atomic, versioned manifest scoped to the database backend and
 collection. The manifest also records its schema version, embedding model,
 embedding dimension, exact source JSONL SHA-256, and source record count. A
 compatible rerun embeds only changed/new chunks, removes chunks no longer
-present, and skips unchanged chunks.
+present, and skips unchanged chunks. Qdrant incremental runs scan payload-only
+stable IDs before mutation and again after writes, refusing to advance the
+manifest if points are missing, unexpected, duplicated, untracked, or returned
+through a cyclic pagination sequence. Use `--full-reindex` to recover from a
+physical collection/manifest mismatch.
 
 If the model, vector dimension, or manifest schema changes—or an older shared
 `chunk_hashes.json` sidecar is encountered—the pipeline safely rebuilds only
