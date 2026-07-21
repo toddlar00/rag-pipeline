@@ -175,33 +175,40 @@ def test_atomic_json_failure_preserves_previous_file(monkeypatch, tmp_path):
     assert not list(tmp_path.glob("*.tmp"))
 
 
-def test_index_update_marker_is_scoped_and_blocks_manifest_use(tmp_path):
+@pytest.mark.parametrize("backend", ["qdrant", "chroma"])
+def test_index_update_marker_is_scoped_and_blocks_manifest_use(
+        tmp_path, backend):
     manifest_path = rag._save_index_manifest(
-        tmp_path, backend="qdrant", collection_name="book",
+        tmp_path, backend=backend, collection_name="book",
         embedding_model="model-a", embedding_dimension=2,
         chunk_hashes={"chunk_a": "hash-a"})
     rag._save_index_manifest(
-        tmp_path, backend="qdrant", collection_name="sibling",
+        tmp_path, backend=backend, collection_name="sibling",
         embedding_model="model-a", embedding_dimension=2,
         chunk_hashes={"chunk_b": "hash-b"})
 
-    marker_path = rag._begin_qdrant_index_update(
-        tmp_path, collection_name="book",
+    marker_path = rag._begin_index_update(
+        tmp_path, backend=backend, collection_name="book",
         source_sha256="target-source", source_record_count=1)
     marker = json.loads(marker_path.read_text(encoding="utf-8"))
 
     assert marker_path.parent == tmp_path
     assert marker_path != manifest_path
-    assert marker["backend"] == "qdrant"
+    assert marker["backend"] == backend
     assert marker["collection"] == "book"
     assert marker["target_source_sha256"] == "target-source"
-    assert rag._qdrant_update_marker_path(
-        tmp_path, collection_name="sibling") != marker_path
+    assert rag._index_update_marker_path(
+        tmp_path, backend=backend,
+        collection_name="sibling") != marker_path
+    other_backend = "chroma" if backend == "qdrant" else "qdrant"
+    assert rag._index_update_marker_path(
+        tmp_path, backend=other_backend,
+        collection_name="book") != marker_path
 
     # Presence is authoritative even if a crash truncated the diagnostics.
     marker_path.write_text("", encoding="utf-8")
     hashes, rebuild, reason = rag._resolve_incremental_index_state(
-        tmp_path, backend="qdrant", collection_name="book",
+        tmp_path, backend=backend, collection_name="book",
         embedding_model="model-a", embedding_dimension=2,
         collection_exists=True, full_reindex=False)
     assert hashes == {}
@@ -209,12 +216,12 @@ def test_index_update_marker_is_scoped_and_blocks_manifest_use(tmp_path):
     assert "did not complete" in reason
     with pytest.raises(ValueError, match="Index update is incomplete"):
         rag._query_manifest_dimension(
-            tmp_path, backend="qdrant", collection_name="book",
+            tmp_path, backend=backend, collection_name="book",
             embedding_model="model-a")
 
     sibling_hashes, sibling_rebuild, _ = (
         rag._resolve_incremental_index_state(
-            tmp_path, backend="qdrant", collection_name="sibling",
+            tmp_path, backend=backend, collection_name="sibling",
             embedding_model="model-a", embedding_dimension=2,
             collection_exists=True, full_reindex=False))
     assert sibling_hashes == {"chunk_b": "hash-b"}
@@ -223,7 +230,7 @@ def test_index_update_marker_is_scoped_and_blocks_manifest_use(tmp_path):
     rag._finish_index_update(marker_path)
     assert not marker_path.exists()
     assert rag._query_manifest_dimension(
-        tmp_path, backend="qdrant", collection_name="book",
+        tmp_path, backend=backend, collection_name="book",
         embedding_model="model-a") == 2
 
 
@@ -1584,21 +1591,19 @@ def _prepare_chroma_changed_existing_incremental(monkeypatch, tmp_path):
         embedding_model="model-a", embedding_dimension=2,
         chunk_hashes={stable_id: old_hash}, source_sha256="old-source",
         source_record_count=1)
-    state = SimpleNamespace(upserts=[], deletes=[], collection_deletes=[])
+    marker_path = rag._chroma_update_marker_path(
+        db_path, collection_name="book")
+    state = SimpleNamespace(
+        upserts=[], deletes=[], collection_deletes=[], collection_creates=[],
+        collections={})
 
     class FakeCollection:
-        name = "book"
-
-        def __init__(self):
-            self.rows = {
-                stable_id: {
-                    "embedding": [1.0, 0.0],
-                    "document": old_record["text"],
-                    "metadata": dict(old_record["metadata"]),
-                },
-            }
+        def __init__(self, name, rows=None):
+            self.name = name
+            self.rows = dict(rows or {})
 
         def upsert(self, *, ids, embeddings, documents, metadatas):
+            assert marker_path.is_file()
             state.upserts.append(list(ids))
             for index, item_id in enumerate(ids):
                 self.rows[item_id] = {
@@ -1608,6 +1613,7 @@ def _prepare_chroma_changed_existing_incremental(monkeypatch, tmp_path):
                 }
 
         def delete(self, *, ids):
+            assert marker_path.is_file()
             state.deletes.append(list(ids))
             for item_id in ids:
                 self.rows.pop(item_id, None)
@@ -1615,24 +1621,40 @@ def _prepare_chroma_changed_existing_incremental(monkeypatch, tmp_path):
         def count(self):
             return len(self.rows)
 
-    collection = FakeCollection()
+    collection = FakeCollection(
+        "book",
+        {
+            stable_id: {
+                    "embedding": [1.0, 0.0],
+                    "document": old_record["text"],
+                    "metadata": dict(old_record["metadata"]),
+            },
+        },
+    )
+    sibling = FakeCollection("sibling", {"keep": "untouched"})
+    state.collections.update(book=collection, sibling=sibling)
 
     class FakeChromaClient:
         def __init__(self, path):
             self.path = path
 
         def get_collection(self, name):
-            if name != "book":
+            if name not in state.collections:
                 raise LookupError(name)
-            return collection
+            return state.collections[name]
 
         def get_or_create_collection(self, *, name, metadata):
             assert name == "book"
-            return collection
+            if name not in state.collections:
+                assert marker_path.is_file()
+                state.collection_creates.append(name)
+                state.collections[name] = collection
+            return state.collections[name]
 
         def delete_collection(self, name):
+            assert marker_path.is_file()
             state.collection_deletes.append(name)
-            collection.rows.clear()
+            state.collections.pop(name).rows.clear()
 
     chromadb = ModuleType("chromadb")
     chromadb.PersistentClient = FakeChromaClient
@@ -1650,15 +1672,42 @@ def _prepare_chroma_changed_existing_incremental(monkeypatch, tmp_path):
         chunks_path=chunks_path,
         db_path=db_path,
         manifest_path=manifest_path,
+        marker_path=marker_path,
         stable_id=stable_id,
         old_hash=old_hash,
         new_hash=new_hash,
         old_record=old_record,
         new_record=new_record,
         collection=collection,
+        sibling=sibling,
         successful_embed=successful_embed,
         state=state,
     )
+
+
+def test_chroma_marker_write_failure_prevents_first_mutation(
+        monkeypatch, tmp_path):
+    fixture = _prepare_chroma_changed_existing_incremental(
+        monkeypatch, tmp_path)
+    original_manifest = fixture.manifest_path.read_bytes()
+
+    def fail_marker_write(*_args, **_kwargs):
+        raise OSError("injected Chroma marker write failure")
+
+    monkeypatch.setattr(rag, "_atomic_write_json", fail_marker_write)
+    with pytest.raises(OSError, match="Chroma marker write failure"):
+        rag.index_chunks(
+            fixture.chunks_path, fixture.db_path,
+            collection_name="book", embedding_model="model-a")
+
+    assert fixture.state.upserts == []
+    assert fixture.state.deletes == []
+    assert fixture.state.collection_deletes == []
+    assert fixture.state.collection_creates == []
+    assert fixture.collection.rows[fixture.stable_id]["metadata"][
+        "context"] == "Old classification"
+    assert fixture.manifest_path.read_bytes() == original_manifest
+    assert not fixture.marker_path.exists()
 
 
 def test_chroma_sequential_producer_failure_stops_worker_and_retries(
@@ -1682,11 +1731,16 @@ def test_chroma_sequential_producer_failure_stops_worker_and_retries(
     assert fixture.state.upserts == []
     assert fixture.collection.rows[fixture.stable_id]["metadata"][
         "context"] == "Old classification"
+    assert fixture.marker_path.is_file()
     assert fixture.manifest_path.read_bytes() == original_manifest
     assert resources.executors[0].shutdown_calls == [(True, False)]
     assert not resources.executors[0].thread.is_alive()
     assert resources.bars[0].updates == 0
     assert resources.bars[0].close_calls == 1
+    with pytest.raises(ValueError, match="Index update is incomplete"):
+        rag._query_manifest_dimension(
+            fixture.db_path, backend="chroma", collection_name="book",
+            embedding_model="model-a")
 
     monkeypatch.setattr(rag, "_embed_texts", fixture.successful_embed)
     rag.index_chunks(
@@ -1694,6 +1748,10 @@ def test_chroma_sequential_producer_failure_stops_worker_and_retries(
         collection_name="book", embedding_model="model-a")
 
     assert fixture.state.upserts == [[fixture.stable_id]]
+    assert fixture.state.collection_deletes == ["book"]
+    assert fixture.state.collection_creates == ["book"]
+    assert fixture.sibling.rows == {"keep": "untouched"}
+    assert not fixture.marker_path.exists()
     assert fixture.collection.rows[fixture.stable_id]["metadata"][
         "context"] == "Corrected classification"
     manifest = json.loads(
@@ -1725,11 +1783,16 @@ def test_chroma_sequential_worker_failure_closes_resources_and_retries(
     assert fixture.state.upserts == [[fixture.stable_id]]
     assert fixture.collection.rows[fixture.stable_id]["metadata"][
         "context"] == "Corrected classification"
+    assert fixture.marker_path.is_file()
     assert fixture.manifest_path.read_bytes() == original_manifest
     assert resources.executors[0].shutdown_calls == [(True, False)]
     assert not resources.executors[0].thread.is_alive()
     assert resources.bars[0].updates == 0
     assert resources.bars[0].close_calls == 1
+    with pytest.raises(ValueError, match="Index update is incomplete"):
+        rag._query_manifest_dimension(
+            fixture.db_path, backend="chroma", collection_name="book",
+            embedding_model="model-a")
 
     monkeypatch.setattr(fixture.collection, "upsert", successful_upsert)
     rag.index_chunks(
@@ -1738,10 +1801,134 @@ def test_chroma_sequential_worker_failure_closes_resources_and_retries(
 
     assert fixture.state.upserts == [
         [fixture.stable_id], [fixture.stable_id]]
+    assert fixture.state.collection_deletes == ["book"]
+    assert fixture.state.collection_creates == ["book"]
+    assert fixture.sibling.rows == {"keep": "untouched"}
+    assert not fixture.marker_path.exists()
     manifest = json.loads(
         fixture.manifest_path.read_text(encoding="utf-8"))
     assert manifest["chunk_hashes"] == {
         fixture.stable_id: fixture.new_hash}
+
+
+def test_chroma_manifest_commit_failure_keeps_recovery_state(
+        monkeypatch, tmp_path):
+    fixture = _prepare_chroma_changed_existing_incremental(
+        monkeypatch, tmp_path)
+    original_manifest = fixture.manifest_path.read_bytes()
+
+    def fail_manifest_commit(*_args, **_kwargs):
+        assert fixture.marker_path.is_file()
+        raise OSError("injected Chroma manifest commit failure")
+
+    monkeypatch.setattr(rag, "_save_index_manifest", fail_manifest_commit)
+    monkeypatch.setattr(
+        rag, "_finish_index_update",
+        lambda _path: pytest.fail(
+            "marker cleanup must not run after a manifest failure"),
+    )
+
+    with pytest.raises(OSError, match="Chroma manifest commit failure"):
+        rag.index_chunks(
+            fixture.chunks_path, fixture.db_path,
+            collection_name="book", embedding_model="model-a")
+
+    assert fixture.state.upserts == [[fixture.stable_id]]
+    assert fixture.collection.rows[fixture.stable_id]["metadata"][
+        "context"] == "Corrected classification"
+    assert fixture.marker_path.is_file()
+    assert fixture.manifest_path.read_bytes() == original_manifest
+    with pytest.raises(ValueError, match="Index update is incomplete"):
+        rag._query_manifest_dimension(
+            fixture.db_path, backend="chroma", collection_name="book",
+            embedding_model="model-a")
+
+
+def test_chroma_removal_only_commits_before_marker_cleanup(
+        monkeypatch, tmp_path):
+    fixture = _prepare_chroma_changed_existing_incremental(
+        monkeypatch, tmp_path)
+    removed_record = {
+        "text": "This obsolete rule must be removed.",
+        "metadata": {
+            "chunk_index": 1,
+            "context": "Obsolete doctrine",
+            "embedding_token_count": 7,
+        },
+    }
+    removed_id = rag._chunk_id(removed_record)
+    fixture.chunks_path.write_text(
+        json.dumps(fixture.old_record) + "\n", encoding="utf-8")
+    fixture.collection.rows[removed_id] = {
+        "embedding": [1.0, 0.0],
+        "document": removed_record["text"],
+        "metadata": dict(removed_record["metadata"]),
+    }
+    rag._save_index_manifest(
+        fixture.db_path, backend="chroma", collection_name="book",
+        embedding_model="model-a", embedding_dimension=2,
+        chunk_hashes={
+            fixture.stable_id: fixture.old_hash,
+            removed_id: rag._chunk_hash(removed_record),
+        },
+        source_sha256="old-source", source_record_count=2)
+    events = []
+    save_manifest = rag._save_index_manifest
+    finish_update = rag._finish_index_update
+
+    def assert_guarded_save(*args, **kwargs):
+        assert fixture.marker_path.is_file()
+        events.append("manifest_save")
+        return save_manifest(*args, **kwargs)
+
+    def assert_committed_then_finish(marker_path):
+        assert marker_path == fixture.marker_path
+        manifest = json.loads(
+            fixture.manifest_path.read_text(encoding="utf-8"))
+        assert manifest["chunk_hashes"] == {
+            fixture.stable_id: fixture.old_hash}
+        events.append("marker_cleanup")
+        finish_update(marker_path)
+
+    monkeypatch.setattr(rag, "_save_index_manifest", assert_guarded_save)
+    monkeypatch.setattr(rag, "_finish_index_update", assert_committed_then_finish)
+    rag.index_chunks(
+        fixture.chunks_path, fixture.db_path,
+        collection_name="book", embedding_model="model-a")
+
+    assert fixture.state.deletes == [[removed_id]]
+    assert fixture.state.upserts == []
+    assert set(fixture.collection.rows) == {fixture.stable_id}
+    assert events == ["manifest_save", "marker_cleanup"]
+    assert not fixture.marker_path.exists()
+
+
+def test_chroma_unchanged_run_never_starts_update(monkeypatch, tmp_path):
+    fixture = _prepare_chroma_changed_existing_incremental(
+        monkeypatch, tmp_path)
+    rag.index_chunks(
+        fixture.chunks_path, fixture.db_path,
+        collection_name="book", embedding_model="model-a")
+    assert not fixture.marker_path.exists()
+    fixture.state.upserts.clear()
+    fixture.state.deletes.clear()
+    fixture.state.collection_deletes.clear()
+    fixture.state.collection_creates.clear()
+
+    monkeypatch.setattr(
+        rag, "_begin_chroma_index_update",
+        lambda *_args, **_kwargs: pytest.fail(
+            "an unchanged Chroma run must not create an update marker"),
+    )
+    rag.index_chunks(
+        fixture.chunks_path, fixture.db_path,
+        collection_name="book", embedding_model="model-a")
+
+    assert fixture.state.upserts == []
+    assert fixture.state.deletes == []
+    assert fixture.state.collection_deletes == []
+    assert fixture.state.collection_creates == []
+    assert not fixture.marker_path.exists()
 
 
 def test_chroma_sequential_cleanup_precedes_manifest_commit(
@@ -1750,6 +1937,7 @@ def test_chroma_sequential_cleanup_precedes_manifest_commit(
     fixture = _prepare_chroma_changed_existing_incremental(
         monkeypatch, tmp_path)
     save_manifest = rag._save_index_manifest
+    finish_update = rag._finish_index_update
 
     def assert_clean_then_save(*args, **kwargs):
         assert len(resources.executors) == 1
@@ -1757,15 +1945,29 @@ def test_chroma_sequential_cleanup_precedes_manifest_commit(
         assert resources.executors[0].shutdown_calls == [(True, False)]
         assert resources.bars[0].updates == 1
         assert resources.bars[0].close_calls == 1
+        assert fixture.marker_path.is_file()
+        resources.events.append("manifest_save")
         return save_manifest(*args, **kwargs)
 
+    def assert_committed_then_finish(marker_path):
+        assert marker_path == fixture.marker_path
+        manifest = json.loads(
+            fixture.manifest_path.read_text(encoding="utf-8"))
+        assert manifest["chunk_hashes"] == {
+            fixture.stable_id: fixture.new_hash}
+        resources.events.append("marker_cleanup")
+        finish_update(marker_path)
+
     monkeypatch.setattr(rag, "_save_index_manifest", assert_clean_then_save)
+    monkeypatch.setattr(rag, "_finish_index_update", assert_committed_then_finish)
     rag.index_chunks(
         fixture.chunks_path, fixture.db_path,
         collection_name="book", embedding_model="model-a")
 
     assert resources.events == [
-        "worker_exit", "executor_shutdown", "progress_close"]
+        "worker_exit", "executor_shutdown", "progress_close",
+        "manifest_save", "marker_cleanup"]
+    assert not fixture.marker_path.exists()
     manifest = json.loads(
         fixture.manifest_path.read_text(encoding="utf-8"))
     assert manifest["chunk_hashes"] == {

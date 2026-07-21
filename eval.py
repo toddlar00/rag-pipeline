@@ -116,6 +116,9 @@ def _validate_declared_index(
     if rag_module is None:
         import rag as rag_module
 
+    rag_module._query_manifest_dimension(
+        db_path, backend=db_backend, collection_name=collection,
+        embedding_model=embedding_model)
     records = rag_module._load_index_records_strict(chunks_path)
     source_sha256 = hashlib.sha256(chunks_path.read_bytes()).hexdigest()
     expected_hashes = {

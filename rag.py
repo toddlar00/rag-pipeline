@@ -5738,15 +5738,29 @@ def index_chunks(chunks_path: Path, chroma_dir: Path, *,
             full_reindex=full_reindex,
         )
     )
+    update_marker_path = _chroma_update_marker_path(
+        chroma_dir, collection_name=collection_name)
+    update_guarded = update_marker_path.exists()
+
+    def _ensure_update_guard() -> None:
+        nonlocal update_guarded
+        if not update_marker_path.exists():
+            _begin_chroma_index_update(
+                chroma_dir, collection_name=collection_name,
+                source_sha256=source_sha256,
+                source_record_count=source_record_count)
+        update_guarded = True
 
     if rebuild_collection:
         log.info("Rebuilding Chroma collection '%s': %s",
                  collection_name, rebuild_reason)
+        _ensure_update_guard()
         client.delete_collection(collection_name)
         collection = None
         collection_exists = False
 
     if not collection_exists:
+        _ensure_update_guard()
         collection = client.get_or_create_collection(
             name=collection_name,
             metadata={"hnsw:space": "cosine"},
@@ -5758,6 +5772,7 @@ def index_chunks(chunks_path: Path, chroma_dir: Path, *,
                    if chash != old_hashes.get(cid)]
         removed_ids = [k for k in old_hashes if k not in new_hashes]
         if removed_ids:
+            _ensure_update_guard()
             collection.delete(ids=removed_ids)
 
         unchanged = len(records) - len(changed)
@@ -5771,6 +5786,8 @@ def index_chunks(chunks_path: Path, chroma_dir: Path, *,
                 embedding_dimension=embedding_dimension,
                 chunk_hashes=new_hashes, source_sha256=source_sha256,
                 source_record_count=source_record_count)
+            if update_guarded:
+                _finish_index_update(update_marker_path)
             return
         records = changed
 
@@ -5797,6 +5814,7 @@ def index_chunks(chunks_path: Path, chroma_dir: Path, *,
     batches = _batch_index_records(
         records, embedding_model, max_records=BATCH_SIZE)
     prepared = [_prepare_chroma_batch(batch) for batch in batches]
+    _ensure_update_guard()
 
     if embed_workers > 1:
         # Parallel embedding for API models (network I/O bound)
@@ -5861,6 +5879,7 @@ def index_chunks(chunks_path: Path, chroma_dir: Path, *,
         embedding_dimension=embedding_dimension,
         chunk_hashes=new_hashes, source_sha256=source_sha256,
         source_record_count=source_record_count)
+    _finish_index_update(update_marker_path)
 
     log.info(f"Collection '{collection.name}' → {collection.count()} documents")
     log.info(f"Embedding model: {embedding_model}")
@@ -6078,32 +6097,66 @@ def _index_manifest_path(db_dir: Path, *, backend: str,
     return db_dir / f".rag-index-{backend}-{safe_name}-{digest}.json"
 
 
+def _index_update_marker_path(db_dir: Path, *, backend: str,
+                              collection_name: str) -> Path:
+    """Return the collection-scoped marker for an unfinished index update."""
+    manifest_path = _index_manifest_path(
+        db_dir, backend=backend, collection_name=collection_name)
+    return manifest_path.with_name(
+        f"{manifest_path.stem}.updating.json")
+
+
 def _qdrant_update_marker_path(qdrant_dir: Path, *,
                                 collection_name: str) -> Path:
     """Return the collection-scoped marker for an unfinished Qdrant update."""
-    manifest_path = _index_manifest_path(
+    return _index_update_marker_path(
         qdrant_dir, backend="qdrant", collection_name=collection_name)
-    return manifest_path.with_name(
-        f"{manifest_path.stem}.updating.json")
+
+
+def _chroma_update_marker_path(chroma_dir: Path, *,
+                                collection_name: str) -> Path:
+    """Return the collection-scoped marker for an unfinished Chroma update."""
+    return _index_update_marker_path(
+        chroma_dir, backend="chroma", collection_name=collection_name)
+
+
+def _begin_index_update(
+        db_dir: Path, *, backend: str, collection_name: str,
+        source_sha256: str, source_record_count: int) -> Path:
+    """Durably mark one backend collection dirty before physical mutation."""
+    path = _index_update_marker_path(
+        db_dir, backend=backend, collection_name=collection_name)
+    if path.exists():
+        return path
+    _atomic_write_json(path, {
+        "marker_schema_version": 1,
+        "manifest_schema_version": INDEX_MANIFEST_SCHEMA_VERSION,
+        "backend": backend,
+        "collection": collection_name,
+        "target_source_sha256": source_sha256,
+        "target_source_record_count": source_record_count,
+    })
+    return path
 
 
 def _begin_qdrant_index_update(
         qdrant_dir: Path, *, collection_name: str,
         source_sha256: str, source_record_count: int) -> Path:
     """Durably mark Qdrant dirty before its first physical mutation."""
-    path = _qdrant_update_marker_path(
-        qdrant_dir, collection_name=collection_name)
-    if path.exists():
-        return path
-    _atomic_write_json(path, {
-        "marker_schema_version": 1,
-        "manifest_schema_version": INDEX_MANIFEST_SCHEMA_VERSION,
-        "backend": "qdrant",
-        "collection": collection_name,
-        "target_source_sha256": source_sha256,
-        "target_source_record_count": source_record_count,
-    })
-    return path
+    return _begin_index_update(
+        qdrant_dir, backend="qdrant", collection_name=collection_name,
+        source_sha256=source_sha256,
+        source_record_count=source_record_count)
+
+
+def _begin_chroma_index_update(
+        chroma_dir: Path, *, collection_name: str,
+        source_sha256: str, source_record_count: int) -> Path:
+    """Durably mark Chroma dirty before its first physical mutation."""
+    return _begin_index_update(
+        chroma_dir, backend="chroma", collection_name=collection_name,
+        source_sha256=source_sha256,
+        source_record_count=source_record_count)
 
 
 def _finish_index_update(marker_path: Path) -> None:
@@ -6166,12 +6219,11 @@ def _resolve_incremental_index_state(
     Rebuilding only the requested collection safely migrates it to the new
     manifest without touching sibling collections or deleting the legacy file.
     """
-    if backend == "qdrant":
-        marker_path = _qdrant_update_marker_path(
-            db_dir, collection_name=collection_name)
-        if marker_path.exists():
-            return {}, collection_exists, (
-                "previous index update did not complete")
+    marker_path = _index_update_marker_path(
+        db_dir, backend=backend, collection_name=collection_name)
+    if marker_path.exists():
+        return {}, collection_exists, (
+            "previous index update did not complete")
     if full_reindex:
         return {}, collection_exists, "full reindex requested"
     if not collection_exists:
@@ -6226,15 +6278,14 @@ def _query_manifest_dimension(
     exists, however, querying with a different model or stale schema is refused
     rather than silently comparing vectors from incompatible embedding spaces.
     """
-    if backend == "qdrant":
-        marker_path = _qdrant_update_marker_path(
-            db_dir, collection_name=collection_name)
-        if marker_path.exists():
-            raise ValueError(
-                f"Index update is incomplete for Qdrant collection "
-                f"'{collection_name}': {marker_path}. Re-run indexing to "
-                "rebuild the collection before querying."
-            )
+    marker_path = _index_update_marker_path(
+        db_dir, backend=backend, collection_name=collection_name)
+    if marker_path.exists():
+        raise ValueError(
+            f"Index update is incomplete for {backend.title()} collection "
+            f"'{collection_name}': {marker_path}. Re-run indexing to "
+            "rebuild the collection before querying."
+        )
     manifest_path = _index_manifest_path(
         db_dir, backend=backend, collection_name=collection_name)
     manifest = _load_index_manifest(

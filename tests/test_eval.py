@@ -139,6 +139,23 @@ def test_declared_index_requires_exact_manifest_and_physical_count(
     assert snapshot["embedding_dimension"] == 3
 
 
+def test_declared_index_rejects_incomplete_update(monkeypatch, tmp_path):
+    chunks, db, queries = _write_manifested_eval_corpus(tmp_path)
+    rag._begin_index_update(
+        db, backend="chroma", collection_name="book",
+        source_sha256="target-source", source_record_count=1)
+    monkeypatch.setattr(
+        rag, "_index_collection_count",
+        lambda *args, **kwargs: pytest.fail(
+            "dirty evaluation must fail before inspecting physical counts"),
+    )
+
+    with pytest.raises(ValueError, match="Index update is incomplete"):
+        retrieval_eval._validate_declared_index(
+            queries, chunks, db, db_backend="chroma", collection="book",
+            embedding_model="model-a", rag_module=rag)
+
+
 def test_declared_index_rejects_missing_manifest(tmp_path):
     chunks, db, queries = _write_manifested_eval_corpus(tmp_path)
     rag._index_manifest_path(

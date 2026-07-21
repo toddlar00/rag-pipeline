@@ -10,6 +10,9 @@ hybrid search (BM25 + vector + cross-encoder reranking), LLM classification,
 contextual retrieval, RAPTOR multi-level summaries, citation graph extraction,
 and source-grounded answer generation with explicit abstention.
 
+See [`ROADMAP.md`](ROADMAP.md) for implemented hardening milestones, merge
+status, and the ordered improvement backlog.
+
 ## Architecture
 
 ```
@@ -683,16 +686,20 @@ point IDs. Use `--full-reindex` to recover from a physical collection/manifest
 mismatch. Waited point deletes and upserts must also report Qdrant's
 `completed` status before reconciliation or manifest commit can continue.
 
-Before its first collection mutation, a Qdrant indexing run also creates a
-collection-scoped recovery marker. The marker is removed only after exact
-post-write verification and atomic manifest replacement both succeed. If a run
-is interrupted or fails after mutation begins, queries fail closed while the
-marker remains; the next `index` or `full --resume` run rebuilds only that
-collection and clears the marker after the recovered index is verified and
-committed. The sequential background-upsert paths for both backends share
-teardown that requests a worker stop, waits for completion, and attempts both
-executor and progress closure; progress advances only after a write succeeds,
-and a secondary cleanup error does not replace the original producer error.
+Before its first collection mutation, either backend creates a collection-
+scoped recovery marker. The marker is removed only after all writes finish and
+the atomic manifest replacement succeeds (including Qdrant's exact post-write
+verification). If a run is interrupted or fails after mutation begins, queries
+and corpus-pinned evaluations fail closed while the marker remains; the next
+`index` or `full --resume` run rebuilds only that backend/collection and clears
+the marker after the recovered index is committed. Chroma's marker exposes and
+recovers known interrupted runs, but does not yet provide Qdrant's exact
+physical stable-ID reconciliation.
+
+The sequential background-upsert paths for both backends share teardown that
+requests a worker stop, waits for completion, and attempts both executor and
+progress closure; progress advances only after a write succeeds, and a
+secondary cleanup error does not replace the original producer error.
 
 If the model, vector dimension, or manifest schema changes—or an older shared
 `chunk_hashes.json` sidecar is encountered—the pipeline safely rebuilds only
