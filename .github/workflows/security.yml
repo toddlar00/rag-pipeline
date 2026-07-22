@@ -7,8 +7,14 @@ on:
       - "requirements*.lock"
       - "dependency-license-policy.json"
       - "dependency-vulnerability-policy.json"
+      - "model-artifact-policy.json"
+      - "model-artifacts.lock.json"
+      - "model_artifacts.py"
+      - "rag.py"
       - "tools/check_licenses.py"
+      - "tools/check_model_artifacts.py"
       - "tools/check_vulnerabilities.py"
+      - "tools/refresh_model_artifacts.py"
       - ".github/workflows/security.yml"
   push:
     branches: [main]
@@ -17,8 +23,14 @@ on:
       - "requirements*.lock"
       - "dependency-license-policy.json"
       - "dependency-vulnerability-policy.json"
+      - "model-artifact-policy.json"
+      - "model-artifacts.lock.json"
+      - "model_artifacts.py"
+      - "rag.py"
       - "tools/check_licenses.py"
+      - "tools/check_model_artifacts.py"
       - "tools/check_vulnerabilities.py"
+      - "tools/refresh_model_artifacts.py"
       - ".github/workflows/security.yml"
   schedule:
     - cron: "43 8 * * 4"
@@ -97,6 +109,11 @@ jobs:
           fi
           test -s dependency-sbom.json
           python -m json.tool dependency-sbom.json > /dev/null
+      - name: Verify model artifacts and generate ML-BOM
+        run: >-
+          python tools/check_model_artifacts.py --verify-hub
+          --verify-installed-packages
+          --output-sbom model-artifact-sbom.json
       - name: Generate dependency license inventory
         if: always()
         run: >-
@@ -114,6 +131,7 @@ jobs:
           name: supply-chain-reports
           path: |
             dependency-sbom.json
+            model-artifact-sbom.json
             vulnerability-audit.json
             normalized-vulnerability-audit.json
             dependency-licenses.json

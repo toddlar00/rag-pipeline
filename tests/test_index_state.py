@@ -234,6 +234,7 @@ def test_query_manifest_impl_uses_current_rag_collaborators(
         "collection": "cases",
         "embedding_model": "model",
         "embedding_dimension": 5,
+        "model_artifact_lock_sha256": rag._model_artifact_lock_sha256(),
     }
 
     monkeypatch.setattr(rag, "INDEX_MANIFEST_SCHEMA_VERSION", 91)

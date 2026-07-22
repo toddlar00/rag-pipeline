@@ -41,6 +41,7 @@ import cli_policy as _cli_policy
 import ingestion_core as _ingestion_core
 import index_state as _index_state
 import llm_adapters as _llm_adapters
+import model_artifacts as _model_artifacts
 import retrieval_core as _retrieval_core
 
 from llm_runtime import (
@@ -97,6 +98,7 @@ _API_EMBEDDING_MODEL_PREFIXES = (
     "voyage-", "text-embedding-", "embed-", "cohere-", "embo-",
     "minimax-emb",
 )
+_ALLOW_UNPINNED_MODELS_ENV = "RAG_ALLOW_UNPINNED_MODELS"
 # Backward-compatible defaults for standalone commands. ``full`` and
 # ``batch`` derive collision-free, book-scoped paths for every run.
 DEFAULT_DOC_PATH = Path("output/docling_doc.json")
@@ -106,6 +108,43 @@ DEFAULT_QDRANT_DIR = Path("output/qdrant_db")
 DEFAULT_DB_BACKEND = "chroma"  # "chroma" or "qdrant"
 DEFAULT_EXPORT_PATH = Path("output/textbook.md")
 OUTPUT_DIR = Path("output")
+
+
+def _model_artifact_lock_sha256() -> str:
+    """Return the validated model lock identity used by derived artifacts."""
+    return _model_artifacts.model_artifact_lock_sha256()
+
+
+def _model_loader_source(
+        model_id: str, consumer: str, *,
+        execute_remote_code: bool = False) -> tuple[str, bool]:
+    """Resolve a reviewed model to a verified local tree.
+
+    Unknown models fail closed unless the operator explicitly opts into the
+    legacy unpinned behavior with ``RAG_ALLOW_UNPINNED_MODELS=1``.
+    """
+    artifact = _model_artifacts.model_artifact(model_id)
+    if artifact is not None:
+        if execute_remote_code:
+            if not artifact.trust_remote_code:
+                raise _model_artifacts.ModelArtifactError(
+                    f"remote code is not approved for {model_id}")
+            _model_artifacts.configure_transformers_dynamic_module_cache()
+        return str(_model_artifacts.verified_model_directory(
+            model_id, consumer)), True
+    if os.environ.get(_ALLOW_UNPINNED_MODELS_ENV) == "1":
+        if execute_remote_code:
+            _model_artifacts.configure_transformers_dynamic_module_cache()
+        log.warning(
+            "Loading unpinned model %s because %s=1; artifact provenance and "
+            "runtime byte verification are disabled.",
+            model_id,
+            _ALLOW_UNPINNED_MODELS_ENV,
+        )
+        return model_id, False
+    raise _model_artifacts.ModelArtifactError(
+        f"model is not in the reviewed artifact lock: {model_id}; set "
+        f"{_ALLOW_UNPINNED_MODELS_ENV}=1 only after reviewing the model")
 
 
 class PipelinePaths(TypedDict):
@@ -146,6 +185,7 @@ DEFAULT_DEEPSEEK_URL = "https://api.deepseek.com"
 DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-pro"
 DEFAULT_LLM_WORKERS = 10
 DEFAULT_RERANKER_MODEL = "BAAI/bge-reranker-v2-m3"
+DEFAULT_ZEROSHOT_MODEL = "facebook/bart-large-mnli"
 RERANK_OVERFETCH = 4  # retrieve N*4 from ChromaDB, rerank to N
 DEFAULT_RRF_K = _retrieval_core.DEFAULT_RRF_K
 DEFAULT_DENSE_RRF_WEIGHT = 0.5
@@ -165,7 +205,7 @@ _CONTEXT_TOKEN_RESERVE = 192
 
 # Incremental vector-index metadata. Bump this whenever the indexed payload or
 # vector layout changes in a way that requires rebuilding existing collections.
-INDEX_MANIFEST_SCHEMA_VERSION = 4
+INDEX_MANIFEST_SCHEMA_VERSION = 5
 
 # Content type labels for LLM classification prompt
 _CONTENT_LABELS = [
@@ -246,8 +286,14 @@ def _count_embedding_text_tokens(texts: list[str],
         if not embedding_model.startswith(_API_EMBEDDING_MODEL_PREFIXES):
             from transformers import AutoTokenizer
 
+            model_source, verified = _model_loader_source(
+                embedding_model, "token_counter")
+            loader_kwargs = {
+                "trust_remote_code": not verified,
+                **({"local_files_only": True} if verified else {}),
+            }
             tokenizer = AutoTokenizer.from_pretrained(
-                embedding_model, trust_remote_code=True)
+                model_source, **loader_kwargs)
             return [
                 len(tokenizer.encode(
                     text, add_special_tokens=True, truncation=False))
@@ -590,11 +636,28 @@ def _get_embedding_fn(model_name: str, *, input_type: str = "document"):
 
         def _load(self):
             if self._model is None:
-                from sentence_transformers import SentenceTransformer
                 log.debug(f"Loading embedding model '{self._name}' "
-                          f"(trust_remote_code=True)")
+                          f"from verified local artifacts")
+                artifact = _model_artifacts.model_artifact(self._name)
+                model_source, verified = _model_loader_source(
+                    self._name, "embedding",
+                    execute_remote_code=(
+                        artifact.trust_remote_code
+                        if artifact is not None else True),
+                )
+                from sentence_transformers import SentenceTransformer
+                loader_kwargs = {
+                    "trust_remote_code": (
+                        artifact.trust_remote_code
+                        if verified and artifact is not None else True),
+                }
+                if verified:
+                    loader_kwargs.update({
+                        "local_files_only": True,
+                        "model_kwargs": {"use_safetensors": True},
+                    })
                 self._model = SentenceTransformer(
-                    self._name, trust_remote_code=True,
+                    model_source, **loader_kwargs,
                 )
             return self._model
 
@@ -3844,7 +3907,7 @@ _zeroshot_classifier = None
 
 
 def _zeroshot_classify(text: str, headings: list[str] | None) -> Optional[str]:
-    """Classify using facebook/bart-large-mnli zero-shot classifier.
+    """Classify using the pinned BART-MNLI zero-shot classifier.
 
     Runs locally on GPU. No API calls, no LLM latency.
     ~50ms per chunk on RTX 5060.
@@ -3853,10 +3916,19 @@ def _zeroshot_classify(text: str, headings: list[str] | None) -> Optional[str]:
     if _zeroshot_classifier is None:
         try:
             from transformers import pipeline as hf_pipeline
-            log.info("Loading zero-shot classifier: facebook/bart-large-mnli")
+            log.info(f"Loading zero-shot classifier: {DEFAULT_ZEROSHOT_MODEL}")
+            model_source, verified = _model_loader_source(
+                DEFAULT_ZEROSHOT_MODEL, "zero_shot_classifier")
             _zeroshot_classifier = hf_pipeline(
                 "zero-shot-classification",
-                model="facebook/bart-large-mnli",
+                model=model_source,
+                **({
+                    "tokenizer": model_source,
+                    "model_kwargs": {
+                        "local_files_only": True,
+                        "use_safetensors": True,
+                    },
+                } if verified else {}),
                 device=0,  # GPU
             )
         except Exception as e:
@@ -3966,9 +4038,11 @@ def _get_reranker(model_name: str = DEFAULT_RERANKER_MODEL):
                 return _reranker_instances[model_name]
             from FlagEmbedding import FlagReranker
             log.info(f"Loading reranker: {model_name}")
+            model_source, verified = _model_loader_source(
+                model_name, "reranker")
             _reranker_instances[model_name] = FlagReranker(
-                model_name, use_fp16=True,
-                trust_remote_code=True,
+                model_source, use_fp16=True,
+                trust_remote_code=not verified,
             )
     return _reranker_instances[model_name]
 
@@ -4371,7 +4445,58 @@ def _conversion_parameters(*, batch_size_override: int | None,
         "ocr": ocr,
         "watermark_pattern": watermark.pattern if watermark else None,
         "watermark_flags": watermark.flags if watermark else None,
+        "model_artifact_lock_sha256": _model_artifact_lock_sha256(),
     }
+
+
+def _pin_docling_layout_revision(pipeline_options) -> str | None:
+    """Replace Docling's mutable layout ref with the reviewed commit hash."""
+    layout_options = pipeline_options.layout_options
+    model_spec = layout_options.model_spec
+    pinned = _model_artifacts.pinned_model_kwargs(
+        model_spec.repo_id, trust_remote_code=False)
+    revision = pinned.get("revision")
+    if revision is None:
+        return None
+    layout_options.model_spec = model_spec.model_copy(
+        update={"revision": revision})
+    return revision
+
+
+def _configure_docling_model_artifacts(
+        pipeline_options, *, include_ocr: bool,
+) -> Path:
+    """Force Docling onto verified local models and deterministic modes."""
+    from docling.datamodel.pipeline_options import (
+        RapidOcrOptions,
+        TableFormerMode,
+        TableStructureOptions,
+    )
+
+    root = _model_artifacts.verified_docling_artifact_directory(
+        include_ocr=include_ocr)
+    pipeline_options.artifacts_path = root
+    pipeline_options.table_structure_options = TableStructureOptions(
+        do_cell_matching=True,
+        mode=TableFormerMode.ACCURATE,
+    )
+    if include_ocr:
+        pipeline_options.ocr_options = RapidOcrOptions(
+            backend="onnxruntime",
+            lang=["english"],
+            det_model_path=str(
+                root / "RapidOcr/onnx/PP-OCRv6/det/PP-OCRv6_det_small.onnx"),
+            cls_model_path=str(
+                root
+                / "RapidOcr/onnx/PP-OCRv4/cls/"
+                  "ch_ppocr_mobile_v2.0_cls_mobile.onnx"),
+            rec_model_path=str(
+                root / "RapidOcr/onnx/PP-OCRv6/rec/PP-OCRv6_rec_small.onnx"),
+            # Font rendering is not used by this conversion pipeline. Leaving
+            # it unset avoids an unlicensed mutable ModelScope font download.
+            font_path=None,
+        )
+    return root
 
 
 def _converted_outputs_complete(
@@ -4525,6 +4650,12 @@ def convert_pdf(pdf_path: Path, doc_output: Path, *,
     else:
         log.info(f"Mode: CPU ({total_pages} pages — this may take a while)")
         pipeline_opts = PdfPipelineOptions(**common_opts)
+
+    if revision := _pin_docling_layout_revision(pipeline_opts):
+        log.info(f"Docling layout revision: {revision}")
+    artifacts_root = _configure_docling_model_artifacts(
+        pipeline_opts, include_ocr=effective_ocr)
+    log.info(f"Docling verified model artifacts: {artifacts_root}")
 
     converter = DocumentConverter(
         format_options={
@@ -4829,6 +4960,70 @@ def _reconstruct_heading(text, heading, chapter_num, chapter_title, **llm_kwargs
     return result
 
 
+def _chunk_parameters(*, embedding_model: str, max_tokens: int,
+                      min_words: int, dedup_threshold: float,
+                      watermark: re.Pattern | None,
+                      llm_classify: bool, zeroshot_classify: bool,
+                      contextualize: bool, ollama_url: str,
+                      ollama_model: str, gemini_key: str,
+                      cloud_url: str, cloud_model: str, cloud_key: str,
+                      llm_workers: int, thinking: bool,
+                      reconstruct_headings: bool, quality_score: bool,
+                      llm_scaffold: bool) -> dict:
+    """Return credential-free parameters that determine chunking output."""
+    gemini_enabled = bool(
+        gemini_key or os.environ.get("GEMINI_API_KEY", ""))
+    llm_config = _llm_runtime.config
+    return {
+        "chunking_policy_version": 1,
+        "classification_prompt_version": 1,
+        "embedding_model": embedding_model,
+        "max_tokens": max_tokens,
+        "min_words": min_words,
+        "dedup_threshold": dedup_threshold,
+        "watermark_pattern": watermark.pattern if watermark else None,
+        "watermark_flags": watermark.flags if watermark else None,
+        "llm_classify": llm_classify,
+        "zeroshot_classify": zeroshot_classify,
+        "zeroshot_model": (
+            DEFAULT_ZEROSHOT_MODEL if zeroshot_classify else None),
+        "contextualize": contextualize,
+        "ollama_url": ollama_url,
+        "ollama_model": ollama_model,
+        "gemini_enabled": gemini_enabled,
+        "gemini_model": DEFAULT_GEMINI_MODEL if gemini_enabled else None,
+        "cloud_url": cloud_url,
+        "cloud_model": cloud_model,
+        "cloud_enabled": bool(cloud_url and cloud_key),
+        "llm_workers": llm_workers,
+        "llm_fallback_policy": llm_config.fallback_policy,
+        "llm_failure_policy": llm_config.failure_policy,
+        "max_llm_calls": llm_config.max_provider_calls,
+        "max_llm_reserved_tokens": llm_config.max_reserved_tokens,
+        "thinking": thinking,
+        "reconstruct_headings": reconstruct_headings,
+        "quality_score": quality_score,
+        "llm_scaffold": llm_scaffold,
+        "model_artifact_lock_sha256": _model_artifact_lock_sha256(),
+    }
+
+
+def _chunks_complete(doc_path: Path, chunks_output: Path, *,
+                     parameters: dict) -> bool:
+    """Validate a chunk artifact and its source/configuration completion."""
+    try:
+        source_sha256 = _cached_artifact_sha256(doc_path)
+    except (OSError, RuntimeError):
+        return False
+    if not _fixed_artifacts_complete(
+            _artifact_completion_path(chunks_output, stage="chunking"),
+            stage="chunking", source_sha256=source_sha256,
+            source_record_count=None, parameters=parameters,
+            outputs={"chunks_jsonl": chunks_output}):
+        return False
+    return _chunk_record_count(chunks_output) is not None
+
+
 def chunk_document(doc_path: Path, chunks_output: Path, *,
                    embedding_model: str = DEFAULT_EMBEDDING_MODEL,
                    max_tokens: int = DEFAULT_MAX_TOKENS,
@@ -4858,6 +5053,19 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
     from tqdm import tqdm
 
     _require_file(doc_path, "DoclingDocument JSON")
+
+    completion_parameters = _chunk_parameters(
+        embedding_model=embedding_model, max_tokens=max_tokens,
+        min_words=min_words, dedup_threshold=dedup_threshold,
+        watermark=watermark, llm_classify=llm_classify,
+        zeroshot_classify=zeroshot_classify,
+        contextualize=contextualize, ollama_url=ollama_url,
+        ollama_model=ollama_model, gemini_key=gemini_key,
+        cloud_url=cloud_url, cloud_model=cloud_model, cloud_key=cloud_key,
+        llm_workers=llm_workers, thinking=thinking,
+        reconstruct_headings=reconstruct_headings,
+        quality_score=quality_score, llm_scaffold=llm_scaffold)
+    source_sha256 = _cached_artifact_sha256(doc_path)
 
     requested_max_tokens = max_tokens
     reserve_tokens = _CONTEXT_TOKEN_RESERVE if contextualize else 0
@@ -4911,9 +5119,15 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
         tokenizer_model = DEFAULT_EMBEDDING_MODEL_GENERAL  # stella (local)
         log.info(f"Using {tokenizer_model} tokenizer for chunking "
                  f"(embedding model {embedding_model} is API-only)")
+    tokenizer_source, tokenizer_verified = _model_loader_source(
+        tokenizer_model, "chunk_tokenizer")
     tokenizer = HuggingFaceTokenizer.from_pretrained(
-        model_name=tokenizer_model,
+        model_name=tokenizer_source,
         max_tokens=max_tokens,
+        **({
+            "local_files_only": True,
+            "trust_remote_code": False,
+        } if tokenizer_verified else {"trust_remote_code": True}),
     )
     chunker = HybridChunker(tokenizer=tokenizer, merge_peers=True)
 
@@ -5264,10 +5478,20 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
         if _zeroshot_classifier is None:
             try:
                 from transformers import pipeline as hf_pipeline
-                log.info("Loading zero-shot classifier: facebook/bart-large-mnli")
+                log.info(
+                    f"Loading zero-shot classifier: {DEFAULT_ZEROSHOT_MODEL}")
+                model_source, verified = _model_loader_source(
+                    DEFAULT_ZEROSHOT_MODEL, "zero_shot_classifier")
                 _zeroshot_classifier = hf_pipeline(
                     "zero-shot-classification",
-                    model="facebook/bart-large-mnli",
+                    model=model_source,
+                    **({
+                        "tokenizer": model_source,
+                        "model_kwargs": {
+                            "local_files_only": True,
+                            "use_safetensors": True,
+                        },
+                    } if verified else {}),
                     device=0,
                 )
             except Exception as e:
@@ -5437,7 +5661,15 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
     # Publish a complete artifact atomically. A killed chunking run therefore
     # leaves either the previous corpus or the complete new corpus, never a
     # partially truncated JSONL file.
+    if _cached_artifact_sha256(doc_path) != source_sha256:
+        raise RuntimeError(
+            f"Docling source changed while chunking: {doc_path}")
     _atomic_write_jsonl(chunks_output, enriched)
+    _write_artifact_completion(
+        _artifact_completion_path(chunks_output, stage="chunking"),
+        stage="chunking", source_sha256=source_sha256,
+        source_record_count=None, parameters=completion_parameters,
+        outputs={"chunks_jsonl": chunks_output})
 
     # Stats
     type_counts: dict[str, int] = {}
@@ -6155,6 +6387,7 @@ def _index_manifest_mismatch(
         manifest, backend=backend, collection_name=collection_name,
         embedding_model=embedding_model,
         embedding_dimension=embedding_dimension,
+        model_artifact_lock_sha256=_model_artifact_lock_sha256(),
         manifest_schema_version=INDEX_MANIFEST_SCHEMA_VERSION)
 
 
@@ -6193,6 +6426,7 @@ def _save_index_manifest(
         db_dir, backend=backend, collection_name=collection_name,
         embedding_model=embedding_model,
         embedding_dimension=embedding_dimension,
+        model_artifact_lock_sha256=_model_artifact_lock_sha256(),
         chunk_hashes=chunk_hashes, source_sha256=source_sha256,
         source_record_count=source_record_count,
         manifest_schema_version=INDEX_MANIFEST_SCHEMA_VERSION,
@@ -6212,6 +6446,7 @@ def _query_manifest_dimension_impl(
     return _index_state._query_manifest_dimension_impl(
         db_dir, backend=backend, collection_name=collection_name,
         embedding_model=embedding_model,
+        model_artifact_lock_sha256=_model_artifact_lock_sha256(),
         manifest_schema_version=INDEX_MANIFEST_SCHEMA_VERSION,
         marker_path_fn=_index_update_marker_path,
         manifest_path_fn=_index_manifest_path,
@@ -9415,11 +9650,28 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
                 operation="pipeline chunk/index transition",
                 timeout=lock_timeout):
             current_stage = "chunk"
-            chunk_count = _chunk_record_count(paths["chunks"])
+            chunk_parameters = _chunk_parameters(
+                embedding_model=args.embedding_model,
+                max_tokens=args.max_tokens, min_words=args.min_words,
+                dedup_threshold=args.dedup_threshold, watermark=watermark,
+                llm_classify=args.llm_classify,
+                zeroshot_classify=args.zeroshot_classify,
+                contextualize=args.contextualize,
+                reconstruct_headings=args.reconstruct_headings,
+                quality_score=args.quality_score,
+                llm_scaffold=getattr(args, "llm_scaffold", False),
+                **llm_kwargs)
+            chunk_count = (
+                _chunk_record_count(paths["chunks"])
+                if _chunks_complete(
+                    paths["doc"], paths["chunks"],
+                    parameters=chunk_parameters)
+                else None
+            )
             active_update_token = None
             if resume and chunk_count is not None:
                 log.info(
-                    f"  [SKIP] chunk (output exists: {paths['chunks']})")
+                    f"  [SKIP] chunk (verified complete: {paths['chunks']})")
             else:
                 marker_path = _index_update_marker_path(
                     db_dir, backend=db_backend,
@@ -9448,6 +9700,11 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
                     llm_scaffold=getattr(args, "llm_scaffold", False),
                     **llm_kwargs,
                 )
+                if not _chunks_complete(
+                        paths["doc"], paths["chunks"],
+                        parameters=chunk_parameters):
+                    raise RuntimeError(
+                        "Chunking did not publish a complete artifact set")
                 log.info(f"  [DONE] chunk -> {paths['chunks']}")
                 chunk_count = _chunk_record_count(paths["chunks"])
 

@@ -137,6 +137,8 @@ def test_declared_index_requires_exact_manifest_and_physical_count(
     assert snapshot["record_count"] == 1
     assert snapshot["schema_version"] == rag.INDEX_MANIFEST_SCHEMA_VERSION
     assert snapshot["embedding_dimension"] == 3
+    assert snapshot["model_artifact_lock_sha256"] == (
+        rag._model_artifact_lock_sha256())
 
 
 def test_declared_index_rejects_incomplete_update(monkeypatch, tmp_path):
@@ -524,6 +526,8 @@ def test_cli_writes_detailed_report_and_fails_threshold(
     assert exit_code == 2
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert payload["schema_version"] == retrieval_eval.REPORT_SCHEMA_VERSION
+    assert payload["configuration"]["model_artifact_lock_sha256"] == (
+        rag._model_artifact_lock_sha256())
     assert payload["metrics"]["ndcg@5"] == 0.3
     assert payload["query_details"][0]["query"] == "minimum contacts"
     assert "Evaluation threshold failed" in caplog.text
@@ -531,7 +535,12 @@ def test_cli_writes_detailed_report_and_fails_threshold(
 
 def test_cli_can_gate_against_a_baseline_report(monkeypatch, tmp_path):
     baseline = tmp_path / "baseline.json"
-    baseline.write_text(json.dumps({"metrics": {"mrr": 0.8}}), encoding="utf-8")
+    baseline.write_text(json.dumps({
+        "configuration": {
+            "model_artifact_lock_sha256": rag._model_artifact_lock_sha256(),
+        },
+        "metrics": {"mrr": 0.8},
+    }), encoding="utf-8")
     monkeypatch.setattr(retrieval_eval, "load_queries", lambda path: [_judged_query()])
     monkeypatch.setattr(
         retrieval_eval,
@@ -552,6 +561,32 @@ def test_cli_can_gate_against_a_baseline_report(monkeypatch, tmp_path):
     ])
 
     assert exit_code == 2
+
+
+def test_baseline_rejects_a_different_model_artifact_lock(tmp_path):
+    baseline = tmp_path / "baseline.json"
+    baseline.write_text(json.dumps({
+        "configuration": {"model_artifact_lock_sha256": "a" * 64},
+        "metrics": {"mrr": 0.8},
+    }), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="model_artifact_lock_sha256"):
+        retrieval_eval._load_baseline_metrics(
+            baseline,
+            expected_configuration={
+                "model_artifact_lock_sha256": "b" * 64},
+        )
+
+    missing = tmp_path / "legacy-baseline.json"
+    missing.write_text(json.dumps({
+        "configuration": {}, "metrics": {"mrr": 0.8},
+    }), encoding="utf-8")
+    with pytest.raises(ValueError, match="lacks model_artifact_lock_sha256"):
+        retrieval_eval._load_baseline_metrics(
+            missing,
+            expected_configuration={
+                "model_artifact_lock_sha256": "b" * 64},
+        )
 
 
 def test_compare_table_uses_requested_cutoffs(monkeypatch, tmp_path, capsys):

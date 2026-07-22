@@ -12,6 +12,7 @@ build/
 dist/
 *.egg-info/
 *.log
+model-artifact-sbom.json
 
 # Virtual environments and local environment files
 .venv/

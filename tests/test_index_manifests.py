@@ -264,6 +264,7 @@ def test_manifest_is_scoped_versioned_and_atomic(tmp_path):
         "collection": "../../Civil Procedure",
         "embedding_model": "model-a",
         "embedding_dimension": 3,
+        "model_artifact_lock_sha256": rag._model_artifact_lock_sha256(),
         "chunk_hashes": hashes,
         "source_sha256": None,
         "source_record_count": None,
@@ -273,6 +274,31 @@ def test_manifest_is_scoped_versioned_and_atomic(tmp_path):
     with pytest.raises(ValueError, match="backend"):
         rag._index_manifest_path(
             tmp_path, backend="../outside", collection_name="book")
+
+
+def test_model_lock_change_invalidates_index_reuse_and_queries(
+        monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        rag, "_model_artifact_lock_sha256", lambda: "a" * 64)
+    rag._save_index_manifest(
+        tmp_path, backend="chroma", collection_name="book",
+        embedding_model="model-a", embedding_dimension=3,
+        chunk_hashes={"chunk": "hash"})
+
+    monkeypatch.setattr(
+        rag, "_model_artifact_lock_sha256", lambda: "b" * 64)
+    hashes, rebuild, reason = rag._resolve_incremental_index_state(
+        tmp_path, backend="chroma", collection_name="book",
+        embedding_model="model-a", embedding_dimension=3,
+        collection_exists=True, full_reindex=False)
+
+    assert hashes == {}
+    assert rebuild is True
+    assert "model_artifact_lock_sha256 changed" in reason
+    with pytest.raises(ValueError, match="model_artifact_lock_sha256"):
+        rag._query_manifest_dimension_impl(
+            tmp_path, backend="chroma", collection_name="book",
+            embedding_model="model-a")
 
 
 def test_atomic_json_failure_preserves_previous_file(monkeypatch, tmp_path):

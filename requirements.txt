@@ -24,6 +24,8 @@ pypdfium2>=4.30,<6
 
 # Embedding models (nomic, legal-bert, etc.)
 sentence-transformers>=3.0,<6
+# Reviewed Nomic remote-code module imports einops directly.
+einops>=0.7,<1
 
 # Vector store (default backend)
 chromadb>=1.5.2,<2

@@ -42,7 +42,8 @@ def test_atomic_text_failure_preserves_previous_bytes(monkeypatch, tmp_path):
     assert list(tmp_path.glob(".book.md.*.tmp")) == []
 
 
-def test_conversion_completion_requires_both_untampered_outputs(tmp_path):
+def test_conversion_completion_requires_both_untampered_outputs(
+        monkeypatch, tmp_path):
     source = tmp_path / "book.pdf"
     document = tmp_path / "book.json"
     markdown = tmp_path / "book_docling.md"
@@ -61,9 +62,64 @@ def test_conversion_completion_requires_both_untampered_outputs(tmp_path):
     assert rag._converted_outputs_complete(
         source, document, markdown, parameters=parameters)
 
+    monkeypatch.setattr(
+        rag, "_model_artifact_lock_sha256", lambda: "e" * 64)
+    changed_lock_parameters = rag._conversion_parameters(
+        batch_size_override=None, backend="auto", auto_preprocess=True,
+        ocr=None, watermark=None)
+    assert not rag._converted_outputs_complete(
+        source, document, markdown, parameters=changed_lock_parameters)
+
     rag._atomic_write_text(markdown, "tampered")
     assert not rag._converted_outputs_complete(
         source, document, markdown, parameters=parameters)
+
+
+def test_chunk_completion_binds_source_options_model_lock_and_output(
+        monkeypatch, tmp_path):
+    document = tmp_path / "book.json"
+    chunks = tmp_path / "chunks.jsonl"
+    document.write_text('{"name":"book"}', encoding="utf-8")
+    _write_chunks(chunks, [_record(0, 1, "One", "complete chunk")])
+
+    def parameters(**overrides):
+        values = {
+            "embedding_model": "model-a", "max_tokens": 512,
+            "min_words": 10, "dedup_threshold": 0.9,
+            "watermark": None, "llm_classify": True,
+            "zeroshot_classify": True, "contextualize": True,
+            "ollama_url": "http://localhost:11434",
+            "ollama_model": "local-model", "gemini_key": "secret-a",
+            "cloud_url": "https://example.test/v1",
+            "cloud_model": "cloud-model", "cloud_key": "secret-b",
+            "llm_workers": 2, "thinking": False,
+            "reconstruct_headings": True, "quality_score": True,
+            "llm_scaffold": True,
+        }
+        values.update(overrides)
+        return rag._chunk_parameters(**values)
+
+    initial = parameters()
+    manifest = rag._artifact_completion_path(chunks, stage="chunking")
+    rag._write_artifact_completion(
+        manifest, stage="chunking",
+        source_sha256=rag._cached_artifact_sha256(document),
+        source_record_count=None, parameters=initial,
+        outputs={"chunks_jsonl": chunks})
+
+    assert rag._chunks_complete(document, chunks, parameters=initial)
+    assert "secret-a" not in str(initial)
+    assert "secret-b" not in str(initial)
+    assert not rag._chunks_complete(
+        document, chunks, parameters=parameters(max_tokens=256))
+
+    monkeypatch.setattr(
+        rag, "_model_artifact_lock_sha256", lambda: "f" * 64)
+    assert not rag._chunks_complete(
+        document, chunks, parameters=parameters())
+
+    document.write_text('{"name":"changed"}', encoding="utf-8")
+    assert not rag._chunks_complete(document, chunks, parameters=initial)
 
 
 def test_unified_export_manifest_binds_output_to_exact_chunks(tmp_path):

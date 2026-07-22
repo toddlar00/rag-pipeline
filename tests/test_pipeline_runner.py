@@ -46,6 +46,7 @@ def _args(**overrides):
 def _paths(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(rag, "OUTPUT_DIR", tmp_path / "output")
     monkeypatch.setattr(rag, "_converted_outputs_complete", lambda *a, **k: True)
+    monkeypatch.setattr(rag, "_chunks_complete", lambda *a, **k: True)
     monkeypatch.setattr(rag, "_unified_export_complete", lambda *a, **k: True)
     monkeypatch.setattr(rag, "_split_export_complete", lambda *a, **k: True)
     monkeypatch.setattr(rag, "_raptor_output_complete", lambda *a, **k: True)
@@ -164,6 +165,39 @@ def test_resume_revalidates_index_and_rebuilds_missing_chapter_exports(
     assert len(index_calls) == 1
     assert index_calls[0][1]["embedding_model"] == "test-embedding"
     assert index_calls[0][1]["_active_update_token"] is None
+
+
+def test_resume_rechunks_when_completion_is_missing(monkeypatch, tmp_path):
+    paths = _paths(monkeypatch, tmp_path)
+    paths["doc"].parent.mkdir(parents=True, exist_ok=True)
+    paths["doc"].write_text("{}", encoding="utf-8")
+    paths["chunks"].write_text(
+        '{"text":"stale","metadata":{}}\n', encoding="utf-8")
+    state = {"complete": False, "calls": 0}
+
+    monkeypatch.setattr(
+        rag, "_chunks_complete",
+        lambda *args, **kwargs: state["complete"])
+    monkeypatch.setattr(
+        rag, "convert_pdf",
+        lambda *args, **kwargs: pytest.fail("conversion should resume"))
+
+    def rechunk(*_args, **_kwargs):
+        state["calls"] += 1
+        paths["chunks"].write_text(
+            '{"text":"fresh","metadata":{}}\n', encoding="utf-8")
+        state["complete"] = True
+
+    monkeypatch.setattr(rag, "chunk_document", rechunk)
+    monkeypatch.setattr(
+        rag, "_index_chunks_for_backend", lambda *args, **kwargs: None)
+    monkeypatch.setattr(rag, "export_markdown", lambda *args, **kwargs: None)
+
+    rag._run_pipeline_stages(
+        Path("Book.pdf"), paths, _args(), resume=True, watermark=None)
+
+    assert state["calls"] == 1
+    assert "fresh" in paths["chunks"].read_text(encoding="utf-8")
 
 
 def test_pipeline_chunk_failure_leaves_dirty_marker(monkeypatch, tmp_path):

@@ -35,17 +35,21 @@ jobs:
         run: python -m pip install --require-hashes -r requirements-test.lock
       - name: Check dependency policy
         run: python tools/check_dependency_policy.py
+      - name: Check model artifact policy
+        run: python tools/check_model_artifacts.py
       - name: Lint
         run: python -m ruff check .
       - name: Compile Python sources
         run: >-
           python -m py_compile
           rag.py retrieval_core.py artifact_io.py chunking_core.py cli_policy.py
-          ingestion_core.py index_state.py llm_adapters.py eval.py
+          ingestion_core.py index_state.py llm_adapters.py model_artifacts.py
+          eval.py
           llm_runtime.py preprocess_pdf.py
           scaffold_to_markdown.py inspect_chunks.py ui.py
           tools/check_dependency_policy.py tools/check_licenses.py
-          tools/check_vulnerabilities.py tools/refresh_locks.py
+          tools/check_model_artifacts.py tools/check_vulnerabilities.py
+          tools/refresh_locks.py tools/refresh_model_artifacts.py
       - name: Check GPU setup shell syntax
         run: bash -n setup_rtx5060.sh
 

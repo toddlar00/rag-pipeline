@@ -1,0 +1,259 @@
+{
+  "schema_version": 2,
+  "models": [
+    {
+      "model_id": "nomic-ai/nomic-embed-text-v2-moe",
+      "source_revision": "main",
+      "hub_license": "apache-2.0",
+      "spdx_license": "Apache-2.0",
+      "aliases": [],
+      "consumers": [
+        "chunk_tokenizer",
+        "embedding",
+        "token_counter"
+      ],
+      "runtime_files": {
+        "chunk_tokenizer": [
+          "config.json",
+          "sentencepiece.bpe.model",
+          "special_tokens_map.json",
+          "tokenizer.json",
+          "tokenizer_config.json"
+        ],
+        "embedding": [
+          "1_Pooling/config.json",
+          "config.json",
+          "config_sentence_transformers.json",
+          "model.safetensors",
+          "modules.json",
+          "sentence_bert_config.json",
+          "sentencepiece.bpe.model",
+          "special_tokens_map.json",
+          "tokenizer.json",
+          "tokenizer_config.json"
+        ],
+        "token_counter": [
+          "config.json",
+          "sentencepiece.bpe.model",
+          "special_tokens_map.json",
+          "tokenizer.json",
+          "tokenizer_config.json"
+        ]
+      },
+      "runtime_transforms": [
+        {
+          "consumer": "embedding",
+          "path": "config.json",
+          "transform": "strip_auto_map_repo_prefix_v1",
+          "argument": "nomic-ai/nomic-bert-2048--",
+          "expected_occurrences": 7,
+          "output_sha256": "c0970f974acfcf7543d1cbafb71602e88b35a2e1980a5a340e1b0dd2e8917d69"
+        }
+      ],
+      "trust_remote_code": true,
+      "code_model_id": "nomic-ai/nomic-bert-2048"
+    },
+    {
+      "model_id": "nomic-ai/nomic-bert-2048",
+      "source_revision": "main",
+      "hub_license": "apache-2.0",
+      "spdx_license": "Apache-2.0",
+      "aliases": [],
+      "consumers": [
+        "embedding_remote_code"
+      ],
+      "runtime_files": {
+        "embedding_remote_code": [
+          "configuration_hf_nomic_bert.py",
+          "modeling_hf_nomic_bert.py"
+        ]
+      },
+      "trust_remote_code": true,
+      "code_model_id": "nomic-ai/nomic-bert-2048"
+    },
+    {
+      "model_id": "BAAI/bge-reranker-v2-m3",
+      "source_revision": "main",
+      "hub_license": "apache-2.0",
+      "spdx_license": "Apache-2.0",
+      "aliases": [],
+      "consumers": [
+        "reranker"
+      ],
+      "runtime_files": {
+        "reranker": [
+          "config.json",
+          "model.safetensors",
+          "sentencepiece.bpe.model",
+          "special_tokens_map.json",
+          "tokenizer.json",
+          "tokenizer_config.json"
+        ]
+      },
+      "trust_remote_code": false
+    },
+    {
+      "model_id": "facebook/bart-large-mnli",
+      "source_revision": "main",
+      "hub_license": "mit",
+      "spdx_license": "MIT",
+      "aliases": [],
+      "consumers": [
+        "zero_shot_classifier"
+      ],
+      "runtime_files": {
+        "zero_shot_classifier": [
+          "config.json",
+          "merges.txt",
+          "model.safetensors",
+          "tokenizer.json",
+          "tokenizer_config.json",
+          "vocab.json"
+        ]
+      },
+      "trust_remote_code": false
+    },
+    {
+      "model_id": "NovaSearch/stella_en_400M_v5",
+      "source_revision": "main",
+      "hub_license": "mit",
+      "spdx_license": "MIT",
+      "aliases": [
+        "dunzhang/stella_en_400M_v5"
+      ],
+      "consumers": [
+        "chunk_tokenizer",
+        "embedding",
+        "token_counter"
+      ],
+      "runtime_files": {
+        "chunk_tokenizer": [
+          "config.json",
+          "special_tokens_map.json",
+          "tokenizer.json",
+          "tokenizer_config.json",
+          "vocab.txt"
+        ],
+        "embedding": [
+          "1_Pooling/config.json",
+          "2_Dense_1024/config.json",
+          "2_Dense_1024/model.safetensors",
+          "config.json",
+          "config_sentence_transformers.json",
+          "configuration.py",
+          "model.safetensors",
+          "modeling.py",
+          "modules.json",
+          "sentence_bert_config.json",
+          "special_tokens_map.json",
+          "tokenizer.json",
+          "tokenizer_config.json",
+          "vocab.txt"
+        ],
+        "token_counter": [
+          "config.json",
+          "special_tokens_map.json",
+          "tokenizer.json",
+          "tokenizer_config.json",
+          "vocab.txt"
+        ]
+      },
+      "trust_remote_code": true,
+      "code_model_id": "NovaSearch/stella_en_400M_v5"
+    },
+    {
+      "model_id": "nlpaueb/legal-bert-base-uncased",
+      "source_revision": "main",
+      "hub_license": "cc-by-sa-4.0",
+      "spdx_license": "CC-BY-SA-4.0",
+      "aliases": [],
+      "consumers": [
+        "chunk_tokenizer",
+        "embedding",
+        "token_counter"
+      ],
+      "runtime_files": {
+        "chunk_tokenizer": [
+          "config.json",
+          "special_tokens_map.json",
+          "tokenizer_config.json",
+          "vocab.txt"
+        ],
+        "embedding": [
+          "config.json",
+          "pytorch_model.bin",
+          "special_tokens_map.json",
+          "tokenizer_config.json",
+          "vocab.txt"
+        ],
+        "token_counter": [
+          "config.json",
+          "special_tokens_map.json",
+          "tokenizer_config.json",
+          "vocab.txt"
+        ]
+      },
+      "trust_remote_code": false
+    },
+    {
+      "model_id": "docling-project/docling-layout-heron",
+      "source_revision": "main",
+      "hub_license": "apache-2.0",
+      "spdx_license": "Apache-2.0",
+      "aliases": [],
+      "consumers": [
+        "docling_layout"
+      ],
+      "runtime_files": {
+        "docling_layout": [
+          "config.json",
+          "model.safetensors",
+          "preprocessor_config.json"
+        ]
+      },
+      "trust_remote_code": false
+    },
+    {
+      "model_id": "docling-project/docling-models",
+      "source_revision": "v2.3.0",
+      "hub_license": "cdla-permissive-2.0",
+      "spdx_license": "CDLA-Permissive-2.0",
+      "aliases": [],
+      "consumers": [
+        "docling_table_structure"
+      ],
+      "runtime_files": {
+        "docling_table_structure": [
+          "model_artifacts/tableformer/accurate/tableformer_accurate.safetensors",
+          "model_artifacts/tableformer/accurate/tm_config.json"
+        ]
+      },
+      "trust_remote_code": false
+    }
+  ],
+  "package_models": [
+    {
+      "package": "rapidocr",
+      "version": "3.9.2",
+      "wheel_filename": "rapidocr-3.9.2-py3-none-any.whl",
+      "spdx_license": "Apache-2.0",
+      "consumers": [
+        "docling_ocr"
+      ],
+      "files": [
+        {
+          "path": "rapidocr/models/PP-OCRv6_det_small.onnx",
+          "role": "detection"
+        },
+        {
+          "path": "rapidocr/models/PP-OCRv6_rec_small.onnx",
+          "role": "recognition"
+        },
+        {
+          "path": "rapidocr/models/ch_ppocr_mobile_v2.0_cls_mobile.onnx",
+          "role": "classification"
+        }
+      ]
+    }
+  ]
+}

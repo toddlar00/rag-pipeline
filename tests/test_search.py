@@ -923,6 +923,7 @@ def test_metadata_aware_reranker_scores_enriched_text_but_returns_raw(
 
 def test_reranker_cache_is_keyed_by_model(monkeypatch):
     loaded = []
+    monkeypatch.setenv("RAG_ALLOW_UNPINNED_MODELS", "1")
 
     class FakeFlagReranker:
         def __init__(self, model_name, **kwargs):

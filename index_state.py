@@ -190,6 +190,7 @@ def _load_index_manifest(
 def _index_manifest_mismatch(
         manifest: dict, *, backend: str, collection_name: str,
         embedding_model: str, embedding_dimension: int,
+        model_artifact_lock_sha256: str,
         manifest_schema_version: int) -> str | None:
     """Return why *manifest* is incompatible, or ``None`` when safe to use."""
     expected = {
@@ -198,6 +199,7 @@ def _index_manifest_mismatch(
         "collection": collection_name,
         "embedding_model": embedding_model,
         "embedding_dimension": embedding_dimension,
+        "model_artifact_lock_sha256": model_artifact_lock_sha256,
     }
     for key, value in expected.items():
         if manifest.get(key) != value:
@@ -261,6 +263,7 @@ def _resolve_incremental_index_state(
 def _save_index_manifest(
         db_dir: Path, *, backend: str, collection_name: str,
         embedding_model: str, embedding_dimension: int,
+        model_artifact_lock_sha256: str,
         chunk_hashes: dict[str, str], manifest_schema_version: int,
         manifest_path_fn: PathFn,
         atomic_write_json_fn: AtomicJsonWriterFn,
@@ -275,6 +278,7 @@ def _save_index_manifest(
         "collection": collection_name,
         "embedding_model": embedding_model,
         "embedding_dimension": embedding_dimension,
+        "model_artifact_lock_sha256": model_artifact_lock_sha256,
         "chunk_hashes": chunk_hashes,
         "source_sha256": source_sha256,
         "source_record_count": source_record_count,
@@ -285,7 +289,8 @@ def _save_index_manifest(
 
 def _query_manifest_dimension_impl(
         db_dir: Path, *, backend: str, collection_name: str,
-        embedding_model: str, manifest_schema_version: int,
+        embedding_model: str, model_artifact_lock_sha256: str,
+        manifest_schema_version: int,
         marker_path_fn: PathFn,
         manifest_path_fn: PathFn,
         load_manifest_fn: ManifestLoaderFn) -> int | None:
@@ -320,6 +325,7 @@ def _query_manifest_dimension_impl(
         "backend": backend,
         "collection": collection_name,
         "embedding_model": embedding_model,
+        "model_artifact_lock_sha256": model_artifact_lock_sha256,
     }
     for key, value in expected.items():
         if manifest.get(key) != value:

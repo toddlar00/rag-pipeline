@@ -29,6 +29,8 @@ import os
 import sys
 from pathlib import Path
 
+import model_artifacts
+
 sys.path.insert(0, str(Path(__file__).parent))
 
 logging.basicConfig(
@@ -47,7 +49,7 @@ DEFAULT_DENSE_WEIGHT = 0.5
 DEFAULT_SPARSE_WEIGHT = 1.0
 DEFAULT_DB_LOCK_TIMEOUT = 30.0
 DEFAULT_OPERATION_TIMEOUT = 14400.0
-REPORT_SCHEMA_VERSION = 2
+REPORT_SCHEMA_VERSION = 3
 _JUDGMENT_ID_FIELDS = ("chunk_id", "source_id")
 _chunk_identity_cache: dict[str, tuple[tuple, str, dict]] = {}
 
@@ -199,6 +201,8 @@ def _validate_declared_index_impl(
         "embedding_dimension": dimension,
         "record_count": physical_count,
         "source_sha256": source_sha256,
+        "model_artifact_lock_sha256": manifest[
+            "model_artifact_lock_sha256"],
     }
 
 
@@ -698,13 +702,23 @@ def _load_baseline_metrics(path: Path, *,
     baseline_configuration = (
         payload.get("configuration") if isinstance(payload, dict) else None
     )
-    if (isinstance(baseline_configuration, dict)
-            and expected_configuration is not None):
+    if expected_configuration is not None:
+        if not isinstance(baseline_configuration, dict):
+            raise ValueError(
+                "Baseline report lacks configuration provenance")
+        expected_lock = expected_configuration.get(
+            "model_artifact_lock_sha256")
+        baseline_lock = baseline_configuration.get(
+            "model_artifact_lock_sha256")
+        if expected_lock is not None and baseline_lock is None:
+            raise ValueError(
+                "Baseline configuration lacks model_artifact_lock_sha256")
         comparable_keys = (
             "collection", "embedding_model", "db_backend", "k_values",
             "retrieval_depth", "queries_sha256", "use_reranker", "hybrid",
             "reranker_model", "overfetch", "rrf_k", "dense_weight",
             "sparse_weight", "index_snapshot",
+            "model_artifact_lock_sha256",
         )
         mismatches = [
             key for key in comparable_keys
@@ -831,6 +845,8 @@ def _report_config(args, **overrides) -> dict:
     return {
         "collection": args.collection,
         "embedding_model": args.embedding_model,
+        "model_artifact_lock_sha256": (
+            model_artifacts.model_artifact_lock_sha256()),
         "db_backend": args.db_backend,
         "db_lock_timeout": args.db_lock_timeout,
         "operation_timeout": args.operation_timeout,

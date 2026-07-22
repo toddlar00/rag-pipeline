@@ -103,6 +103,13 @@ inspection, and mixed-page/shared-xref removal planning. `rag.py` and
 `preprocess_pdf.py` retain lazy PyMuPDF access, paths, saving, progress, logging,
 CLI reporting, OCR/Docling orchestration, and artifact publication.
 
+`model_artifacts.py` is the standard-library-only local-model supply-chain
+layer. It validates the reviewed policy and resolved lock, synchronizes only
+consumer-allowlisted files at immutable commits, verifies raw SHA-256 bytes,
+and atomically publishes isolated regular-file trees for runtime loaders. It
+also assembles Docling's layout/TableFormer/RapidOCR tree and emits the
+CycloneDX ML-BOM companion to the Python-package SBOM.
+
 ## Quick Start
 
 The portable command-line and CPU dependency profiles are tested on CPython
@@ -688,10 +695,28 @@ count fields is rechecked during indexing.
 | `text-embedding-3-large` | OpenAI API | $0.13/M tokens | 8191 | Best commercial general-purpose. |
 | `embed-v4.0` | Cohere API | $0.10/M tokens | - | Multilingual. |
 | `dunzhang/stella_en_400M_v5` | Local GPU | Free | 8192 | High quality (requires xformers). |
-| `nlpaueb/legal-bert-base-uncased` | Local GPU | Free | 512 | Legacy, EU legal text. |
+| `nlpaueb/legal-bert-base-uncased` | Local GPU | Free | 512 | Inventory only: legacy pickle weights are blocked. |
 
 API models require env vars: `VOYAGE_API_KEY`, `OPENAI_API_KEY`, or `COHERE_API_KEY`.
 The pipeline validates keys at startup before any heavy processing.
+
+Reviewed local models are loaded only from byte-verified local directories;
+runtime loaders never receive a Hub model ID. Nomic's external Python is copied
+from its separately pinned code repository and its `auto_map` is deterministically
+rewritten to local references before offline loading. BGE, BART, and Docling use
+only selected safe weights. LegalBERT remains in the provenance inventory, but
+its only PyTorch weight is pickle-based and therefore fails closed. An unknown
+custom model also fails closed unless the operator explicitly sets
+`RAG_ALLOW_UNPINNED_MODELS=1`; that escape hatch logs that provenance and byte
+verification are disabled.
+
+The first use synchronizes the selected files into
+`~/.cache/rag-pipeline/model-artifacts` (override with
+`RAG_MODEL_ARTIFACT_CACHE`). Subsequent loads rehash that isolated tree and run
+offline. Delete a corrupt cache entry and rerun to synchronize it again; never
+edit a published cache tree in place. Each process keeps one validated registry
+snapshot so loader records and provenance cannot cross lock generations;
+restart long-running processes after intentionally replacing the policy/lock.
 
 ### Cross-Encoder Reranker
 
@@ -751,9 +776,9 @@ python rag.py query "jurisdiction" --db-backend qdrant --hybrid \
 The `index` command hashes each chunk's text and indexable metadata and stores
 the hashes in an atomic, versioned manifest scoped to the database backend and
 collection. The manifest also records its schema version, embedding model,
-embedding dimension, exact source JSONL SHA-256, and source record count. A
-compatible rerun embeds only changed/new chunks, removes chunks no longer
-present, and skips unchanged chunks. Qdrant incremental runs scan payload-only
+embedding dimension, validated model-artifact-lock SHA-256, exact source JSONL
+SHA-256, and source record count. A compatible rerun embeds only changed/new
+chunks, removes chunks no longer present, and skips unchanged chunks. Qdrant incremental runs scan payload-only
 stable IDs before mutation and again after writes, refusing to advance the
 manifest if points are missing, unexpected, duplicated, untracked, or returned
 through a cyclic pagination sequence. Each audit is bounded by exact point
@@ -822,7 +847,9 @@ Conversion JSON/Markdown pairs, unified Markdown, chapter sets, RAPTOR trees,
 and evaluation reports are published through flushed same-directory temporary
 files. Versioned completion metadata binds resumable pipeline artifacts to the
 exact source digest, record count, credential-free parameters, and output
-hashes. A hard kill before the final completion commit therefore leaves the
+hashes. Conversion and chunking parameters include the validated model-lock
+digest, and chunking also records its tokenizer/classification/provider policy
+without storing credentials. A hard kill before the final completion commit therefore leaves the
 stage fail-closed: `full --resume` regenerates it instead of accepting a
 truncated, stale, or partial artifact set. Legacy pipeline artifacts without
 completion metadata regenerate once when resumed.
@@ -844,15 +871,16 @@ secondary close errors. Chroma 1.5.2 is the minimum supported release because
 it provides the public, reference-counted `close()` needed to release shared
 local database handles without invalidating another live client.
 
-If the model, vector dimension, or manifest schema changes—or an older shared
-`chunk_hashes.json` sidecar is encountered—the pipeline safely rebuilds only
-the requested collection. Sibling collections in the same database directory
+If the model, model-artifact lock, vector dimension, or manifest schema
+changes—or an older shared `chunk_hashes.json` sidecar is encountered—the
+pipeline safely rebuilds only the requested collection. Sibling collections in the same database directory
 are not deleted. The old sidecar is left in place for compatibility while the
 rebuilt collection receives its own manifest. Manifest replacement is atomic,
 so an interrupted write cannot leave partially written incremental state.
 Chunk JSONL is parsed and schema-checked strictly before a collection can be
 changed. `full --resume` always revalidates the manifest and hashes, and queries
-refuse a model or vector dimension that conflicts with an existing manifest.
+refuse a model, model-lock generation, or vector dimension that conflicts with
+an existing manifest.
 
 ```bash
 python rag.py index \
@@ -917,12 +945,12 @@ validating their artifacts as follows:
 
 | Stage | Checks for |
 |-------|-----------|
-| Convert | Valid, non-empty DoclingDocument JSON |
-| Chunk | Valid JSONL containing chunk records |
-| Index | Vector DB collection whose document count matches the chunks file |
-| Export | Markdown file |
-| Chapter export | Non-empty `Chapters/` directory (when requested) |
-| RAPTOR | Summary tree JSON |
+| Convert | Source/config/model-lock completion plus both output hashes |
+| Chunk | Source/config/model-lock completion, output hash, and strict JSONL schema |
+| Index | Clean compatible manifest plus physical IDs/count and chunk hashes |
+| Export | Source/config completion and output hash |
+| Chapter export | Exact manifested chapter-file set and hashes |
+| RAPTOR | Source/config-bound tree schema and statistics |
 
 ```bash
 # Start a long pipeline
@@ -1311,15 +1339,24 @@ delete `.rag-locks` sidecars or `.updating.json` recovery markers manually.
 ### Stale index after re-chunking
 
 The incremental indexer uses collection-scoped content hashes and validates the
-manifest's schema, embedding model, and vector dimension. Changed chunks are
-re-embedded automatically; incompatible index state safely rebuilds only the
-requested collection. Force an unconditional rebuild with `--full-reindex` if
-needed.
+manifest's schema, embedding model, model-artifact-lock digest, and vector
+dimension. Changed chunks are re-embedded automatically; incompatible index
+state safely rebuilds only the requested collection. Force an unconditional
+rebuild with `--full-reindex` if needed.
 
 ## Security Notes
 
-- Embedding and reranker models are loaded with `trust_remote_code=True` (required
-  by some HuggingFace models). Only use trusted model names from verified publishers.
+- Built-in local models, Docling layout/TableFormer, and RapidOCR ONNX files are
+  commit/version pinned and raw-SHA-256 verified before loading. Remote Python is
+  enabled only for the reviewed Nomic and Stella local bundles; the BGE reranker
+  explicitly uses `trust_remote_code=False`. Reviewed remote Python is copied
+  through a fresh process-private Transformers module cache so stale global
+  cache entries cannot shadow the verified source tree.
+- Unknown model IDs fail closed unless `RAG_ALLOW_UNPINNED_MODELS=1` is set.
+  LegalBERT's pickle weight is inventoried but blocked; prefer safetensors.
+- Model-card and package license fields are publisher-declared evidence, not a
+  legal attestation. In particular, review LegalBERT's share-alike terms and
+  RapidOCR model-data rights before distribution.
 - API keys can come from environment variables or the interactive menu's hidden
   prompt; menu-entered keys are redacted from the displayed command, removed
   from child process arguments, scoped to the child environment, and not
@@ -1340,6 +1377,9 @@ index_state.py          # Stdlib-only index manifests and compatibility policy
 llm_adapters.py         # Typed LLM provider transport adapters
 cli_policy.py           # Stdlib-only CLI interpretation and serialization policy
 ingestion_core.py       # Stdlib-only PDF inspection and stripping safety policy
+model_artifacts.py      # Stdlib-only model lock, byte verification, and ML-BOM
+model-artifact-policy.json # Reviewed models, consumers, files, code, and licenses
+model-artifacts.lock.json # Immutable revisions and per-file raw SHA-256 inventory
 preprocess_pdf.py       # Standalone PDF preprocessing CLI facade
 eval.py                 # Evaluation harness (success@k, MRR, type accuracy)
 eval_queries.jsonl      # Starter evaluation queries (10 CivPro)
@@ -1356,7 +1396,7 @@ requirements-lock-tools.txt # Exact lockfile-generator pin
 requirements-*.lock     # Universal exact CPU locks with SHA-256 hashes
 dependency-license-policy.json # Denied licenses and reviewed exceptions
 dependency-vulnerability-policy.json # Expiring advisory exceptions and audit skips
-tools/                  # Lock refresh and dependency/license policy checks
+tools/                  # Dependency/model lock refresh and policy checks
 .github/workflows/      # CI, dependency compatibility, and security automation
 output/                 # Per-run book directories (auto-created)
 ```
@@ -1371,6 +1411,7 @@ docling>=2.31,<3                # PDF layout detection and conversion
 docling-core[chunking]>=2.70,<3 # HybridChunker and chunking extras
 pypdfium2>=4.30,<6              # PDF page counting and conversion backend
 sentence-transformers>=3.0,<6   # Local embedding models
+einops>=0.7,<1                  # Reviewed Nomic model-code dependency
 chromadb>=1.5.2,<2              # Default vector database; deterministic close()
 FlagEmbedding>=1.3,<2           # BGE cross-encoder reranker
 rank-bm25>=0.2,<0.3             # BM25 keyword search
@@ -1414,6 +1455,7 @@ a CUDA environment.
 ```bash
 pip install --require-hashes -r requirements-test.lock
 python tools/check_dependency_policy.py
+python tools/check_model_artifacts.py
 python -m ruff check .
 python -m pytest -q
 ```
@@ -1437,13 +1479,31 @@ Windows, exercises real local Chroma and Qdrant clients on Linux and Windows,
 installs the full locked CPU environment for every source PR, and separately
 checks both runtime dependency sets. A scheduled
 workflow audits the active Linux/Python 3.12 full development environment with
-`pip-audit`, retains its JSON findings, a CycloneDX SBOM, and a dependency-
-license inventory, and enforces both dependency policy files. Platform- and
+`pip-audit`, retains its JSON findings, a CycloneDX package SBOM, a CycloneDX
+ML-BOM companion, and a dependency-license inventory, and enforces both
+dependency policy files. Platform- and
 Python-specific inactive branches in the universal locks are resolution-tested
 but are not represented in that single-environment SBOM.
-Downloaded Hugging Face/Docling model artifacts and any model-provided remote
-code are also outside the Python-package SBOM; treat their revision, checksum,
-and license pinning as a separate model-supply-chain requirement.
+
+The model companion covers selected Hugging Face/Docling runtime files,
+reviewed remote code, deterministic derived files, and RapidOCR's wheel-embedded
+ONNX payloads as byte-hashed components with dependency edges. Offline schema
+validation runs on every CI job; the scheduled security job also resolves each
+immutable Hub commit, re-downloads ordinary source files and the pinned
+RapidOCR wheel, checks installed package payloads, and retains the report.
+
+```bash
+# Fast, offline policy/lock validation
+python tools/check_model_artifacts.py
+
+# Reconfirm remote provenance and emit the companion ML-BOM
+python tools/check_model_artifacts.py --verify-hub \
+  --verify-installed-packages \
+  --output-sbom model-artifact-sbom.json
+
+# Intentional update: resolve reviewed mutable refs, hash bytes, then review diff
+python tools/refresh_model_artifacts.py
+```
 
 As of 2026-07-21, every published ChromaDB 1.x release is affected by
 `PYSEC-2026-311`/`CVE-2026-45829`, a critical pre-authentication code-injection
