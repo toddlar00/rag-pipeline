@@ -15,6 +15,7 @@ Usage:
 """
 
 import argparse
+import errno
 from getpass import getpass
 import hashlib
 import json
@@ -33,7 +34,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional, TypedDict
 from urllib.parse import urlparse
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from llm_runtime import (
     LLMBudgetExceeded,
@@ -62,6 +63,7 @@ DEFAULT_EMBEDDING_MODEL_GENERAL = "nomic-ai/nomic-embed-text-v2-moe"
 DEFAULT_EMBEDDING_MODEL = DEFAULT_EMBEDDING_MODEL_GENERAL  # free, local GPU, no API key needed
 DEFAULT_MAX_TOKENS = 4096
 DEFAULT_COLLECTION = "civpro"
+DEFAULT_DB_LOCK_TIMEOUT = 30.0
 
 # Embedding model max token limits (for validation)
 EMBEDDING_MAX_TOKENS = {
@@ -100,6 +102,10 @@ class PipelinePaths(TypedDict):
     qdrant: Path
     preprocessed: Path
     collection: str
+
+
+class VectorStoreBusyError(TimeoutError):
+    """Raised when another operation retains the local vector-store lease."""
 
 
 @dataclass
@@ -811,8 +817,8 @@ def _chunk_record_count(path: Path) -> int | None:
         return None
 
 
-def _index_collection_count(db_dir: Path, collection_name: str,
-                            db_backend: str = "chroma") -> int:
+def _index_collection_count_impl(db_dir: Path, collection_name: str,
+                                 db_backend: str = "chroma") -> int:
     """Return the exact physical collection count without creating a database."""
     db_dir = Path(db_dir)
     if not db_dir.is_dir():
@@ -857,6 +863,28 @@ def _index_collection_count(db_dir: Path, collection_name: str,
         _finish_vector_client(
             client, client_name="Chroma",
             primary_error=operation_error)
+
+
+def _index_collection_count(
+        db_dir: Path, collection_name: str, db_backend: str = "chroma", *,
+        lock_timeout: float = DEFAULT_DB_LOCK_TIMEOUT) -> int:
+    """Return the physical count under the database's exclusive lease."""
+    db_path = Path(db_dir)
+    if db_backend not in {"chroma", "qdrant"}:
+        raise ValueError("db_backend must be 'chroma' or 'qdrant'")
+    with _vector_store_lock(
+            db_path, backend=db_backend, collection_name=collection_name,
+            operation="collection inspection", timeout=lock_timeout):
+        marker_path = _index_update_marker_path(
+            db_path, backend=db_backend, collection_name=collection_name)
+        if marker_path.exists():
+            raise ValueError(
+                f"Index update is incomplete for {db_backend.title()} "
+                f"collection '{collection_name}': {marker_path}. Re-run "
+                "indexing to rebuild the collection before inspecting it."
+            )
+        return _index_collection_count_impl(
+            db_path, collection_name, db_backend=db_backend)
 
 
 def _index_has_data(db_dir: Path, collection_name: str,
@@ -916,6 +944,7 @@ def _build_resume_cmd(pdf: Path, args, extra_flags: str = "") -> str:
         ("max_tokens", DEFAULT_MAX_TOKENS, "--max-tokens"),
         ("min_words", MIN_CHUNK_WORDS, "--min-words"),
         ("dedup_threshold", DEDUP_THRESHOLD, "--dedup-threshold"),
+        ("db_lock_timeout", DEFAULT_DB_LOCK_TIMEOUT, "--db-lock-timeout"),
         ("llm_workers", DEFAULT_LLM_WORKERS, "--llm-workers"),
         ("ollama_url", DEFAULT_OLLAMA_URL, "--ollama-url"),
         ("ollama_model", DEFAULT_OLLAMA_MODEL, "--ollama-model"),
@@ -968,66 +997,90 @@ def _load_jsonl(path: Path) -> list[dict]:
     return []
 
 
-def _load_index_records_strict(path: Path) -> list[dict]:
-    """Load a complete, schema-valid chunks artifact or fail without indexing.
+def _artifact_stat_fingerprint(stat_result) -> tuple[int, int, int, int, int]:
+    """Return a strong identity for one opened artifact generation."""
+    return (
+        int(stat_result.st_dev), int(stat_result.st_ino),
+        int(stat_result.st_size), int(stat_result.st_mtime_ns),
+        int(stat_result.st_ctime_ns),
+    )
 
-    The general JSONL reader is intentionally tolerant for best-effort exports.
-    An index update cannot be tolerant: skipped or malformed rows would look
-    like authoritative deletions to incremental indexing.
+
+def _read_index_artifact_snapshot(
+        path: Path) -> tuple[bytes, str, tuple[int, int, int, int, int]]:
+    """Read, identify, and hash the exact bytes from one file handle.
+
+    Opening once prevents an atomic path replacement from mixing the hash of
+    one chunks generation with records parsed from another. ``fstat`` guards
+    against an in-place write racing the read.
     """
+    path = Path(path)
+    with path.open("rb") as handle:
+        before = _artifact_stat_fingerprint(os.fstat(handle.fileno()))
+        raw = handle.read()
+        after = _artifact_stat_fingerprint(os.fstat(handle.fileno()))
+    if after != before:
+        raise RuntimeError(
+            f"Artifact changed while it was being read: {path}")
+    return raw, hashlib.sha256(raw).hexdigest(), after
+
+
+def _parse_index_records_strict(raw: bytes, path: Path) -> list[dict]:
+    """Parse and validate one already-captured chunks byte snapshot."""
     last_unicode_error = None
     for encoding in ("utf-8-sig", "latin-1"):
-        records = []
         try:
-            with path.open(encoding=encoding) as handle:
-                for line_number, line in enumerate(handle, 1):
-                    if not line.strip():
-                        continue
-                    try:
-                        record = json.loads(line)
-                    except json.JSONDecodeError as exc:
-                        raise ValueError(
-                            f"Invalid JSON in chunks file {path}:{line_number}: "
-                            f"{exc.msg}"
-                        ) from exc
-                    if not isinstance(record, dict):
-                        raise ValueError(
-                            f"Invalid chunk at {path}:{line_number}: "
-                            "record must be a JSON object"
-                        )
-                    if (not isinstance(record.get("text"), str)
-                            or not record["text"].strip()):
-                        raise ValueError(
-                            f"Invalid chunk at {path}:{line_number}: "
-                            "'text' must be a non-empty string"
-                        )
-                    if not isinstance(record.get("metadata"), dict):
-                        raise ValueError(
-                            f"Invalid chunk at {path}:{line_number}: "
-                            "'metadata' must be a JSON object"
-                        )
-                    pending = [("metadata", record["metadata"])]
-                    while pending:
-                        field_path, value = pending.pop()
-                        if isinstance(value, float) and not math.isfinite(value):
-                            raise ValueError(
-                                f"Invalid chunk at {path}:{line_number}: "
-                                f"'{field_path}' must contain finite numbers"
-                            )
-                        if isinstance(value, dict):
-                            pending.extend(
-                                (f"{field_path}.{key}", child)
-                                for key, child in value.items()
-                            )
-                        elif isinstance(value, list):
-                            pending.extend(
-                                (f"{field_path}[{index}]", child)
-                                for index, child in enumerate(value)
-                            )
-                    records.append(record)
+            contents = raw.decode(encoding)
         except UnicodeDecodeError as exc:
             last_unicode_error = exc
             continue
+
+        records = []
+        for line_number, line in enumerate(contents.splitlines(), 1):
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"Invalid JSON in chunks file {path}:{line_number}: "
+                    f"{exc.msg}"
+                ) from exc
+            if not isinstance(record, dict):
+                raise ValueError(
+                    f"Invalid chunk at {path}:{line_number}: "
+                    "record must be a JSON object"
+                )
+            if (not isinstance(record.get("text"), str)
+                    or not record["text"].strip()):
+                raise ValueError(
+                    f"Invalid chunk at {path}:{line_number}: "
+                    "'text' must be a non-empty string"
+                )
+            if not isinstance(record.get("metadata"), dict):
+                raise ValueError(
+                    f"Invalid chunk at {path}:{line_number}: "
+                    "'metadata' must be a JSON object"
+                )
+            pending = [("metadata", record["metadata"])]
+            while pending:
+                field_path, value = pending.pop()
+                if isinstance(value, float) and not math.isfinite(value):
+                    raise ValueError(
+                        f"Invalid chunk at {path}:{line_number}: "
+                        f"'{field_path}' must contain finite numbers"
+                    )
+                if isinstance(value, dict):
+                    pending.extend(
+                        (f"{field_path}.{key}", child)
+                        for key, child in value.items()
+                    )
+                elif isinstance(value, list):
+                    pending.extend(
+                        (f"{field_path}[{index}]", child)
+                        for index, child in enumerate(value)
+                    )
+            records.append(record)
 
         if not records:
             raise ValueError(f"Chunks file contains no records: {path}")
@@ -1037,7 +1090,27 @@ def _load_index_records_strict(path: Path) -> list[dict]:
                 f"Chunks file contains duplicate stable chunk IDs: {path}")
         return records
 
-    raise ValueError(f"Could not decode chunks file: {path}") from last_unicode_error
+    raise ValueError(
+        f"Could not decode chunks file: {path}") from last_unicode_error
+
+
+def _load_index_snapshot_strict(
+        path: Path,
+) -> tuple[list[dict], str, tuple[int, int, int, int, int]]:
+    """Load records, SHA-256, and identity from one exact byte snapshot."""
+    raw, source_sha256, fingerprint = _read_index_artifact_snapshot(path)
+    return _parse_index_records_strict(raw, Path(path)), source_sha256, fingerprint
+
+
+def _load_index_records_strict(path: Path) -> list[dict]:
+    """Load a complete, schema-valid chunks artifact or fail without indexing.
+
+    The general JSONL reader is intentionally tolerant for best-effort exports.
+    An index update cannot be tolerant: skipped or malformed rows would look
+    like authoritative deletions to incremental indexing.
+    """
+    records, _, _ = _load_index_snapshot_strict(path)
+    return records
 
 
 def _put_unless_worker_failed(work_queue: queue.Queue, item,
@@ -1069,6 +1142,363 @@ def _log_cleanup_error(message: str, *args,
         # diagnostics must never replace the operation/cleanup error selected
         # by the caller's explicit precedence rules.
         pass
+
+
+@dataclass
+class _VectorStoreLockState:
+    """One reentrant in-process gate for a canonical database directory."""
+
+    thread_lock: Any = field(default_factory=_threading.RLock)
+    handle: Any = None
+
+
+_vector_store_lock_states: dict[str, _VectorStoreLockState] = {}
+_vector_store_lock_states_guard = _threading.Lock()
+_vector_store_lock_local = _threading.local()
+
+
+def _reset_vector_store_locks_after_fork() -> None:
+    """Drop inherited handles and synchronization state in a forked child."""
+    global _vector_store_lock_states, _vector_store_lock_states_guard
+    global _vector_store_lock_local
+    global _artifact_sha256_cache, _artifact_sha256_cache_lock
+    global _bm25_cache, _bm25_cache_lock
+    global _reranker_instances, _reranker_lock
+    for state in _vector_store_lock_states.values():
+        if state.handle is not None:
+            try:
+                # Close only: explicitly unlocking an inherited POSIX flock
+                # could release the parent's shared open-file-description lock.
+                state.handle.close()
+            except BaseException:
+                pass
+    _vector_store_lock_states = {}
+    _vector_store_lock_states_guard = _threading.Lock()
+    _vector_store_lock_local = _threading.local()
+    if "_artifact_sha256_cache" in globals():
+        _artifact_sha256_cache = {}
+        _artifact_sha256_cache_lock = _threading.Lock()
+    if "_bm25_cache" in globals():
+        _bm25_cache = {}
+        _bm25_cache_lock = _threading.Lock()
+    if "_reranker_instances" in globals():
+        # Model objects and a mutex inherited from a multithreaded parent are
+        # not safe to reuse in the child. Reload lazily on first use instead.
+        _reranker_instances = {}
+        _reranker_lock = _threading.Lock()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_vector_store_locks_after_fork)
+
+
+def _normalize_db_lock_timeout(timeout: float) -> float:
+    """Validate a finite, bounded vector-store lease timeout."""
+    if isinstance(timeout, bool):
+        raise ValueError("db lock timeout must be a finite non-negative number")
+    try:
+        value = float(timeout)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "db lock timeout must be a finite non-negative number") from exc
+    if (not math.isfinite(value) or value < 0
+            or value > _threading.TIMEOUT_MAX):
+        raise ValueError(
+            "db lock timeout must be a finite non-negative number no greater "
+            f"than {_threading.TIMEOUT_MAX:g} seconds")
+    return value
+
+
+def _strip_windows_extended_path_prefix(value: str) -> str:
+    """Normalize Win32 extended paths to their ordinary drive/UNC spelling."""
+    if os.name != "nt":
+        return value
+    if value.casefold().startswith("\\\\?\\unc\\"):
+        return "\\\\" + value[8:]
+    if re.match(r"^\\\\\?\\[A-Za-z]:[\\/]", value):
+        return value[4:]
+    return value
+
+
+def _resolved_vector_store_path(db_dir: Path) -> Path:
+    """Resolve one database path while retaining its filesystem casing."""
+    path = Path(_strip_windows_extended_path_prefix(str(Path(db_dir))))
+    try:
+        resolved = path.resolve(strict=False)
+    except (OSError, RuntimeError):
+        resolved = Path(os.path.abspath(path))
+    return Path(_strip_windows_extended_path_prefix(str(resolved)))
+
+
+def _vector_store_lock_identity(db_dir: Path) -> tuple[Path, str]:
+    """Return the filesystem path and normalized comparison key together."""
+    resolved = _resolved_vector_store_path(db_dir)
+    return resolved, os.path.normcase(str(resolved))
+
+
+def _canonical_vector_store_key(db_dir: Path) -> str:
+    """Return one platform-normalized identity for a database directory."""
+    return _vector_store_lock_identity(db_dir)[1]
+
+
+def _vector_store_lock_path(db_dir: Path) -> Path:
+    """Return the persistent sidecar used only as an OS-locking inode."""
+    resolved, key = _vector_store_lock_identity(db_dir)
+    safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", resolved.name)
+    safe_name = safe_name.strip("._")[:40] or "vector-store"
+    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:20]
+    return resolved.parent / ".rag-locks" / f"{safe_name}-{digest}.lock"
+
+
+def _vector_store_lock_state(key: str) -> _VectorStoreLockState:
+    with _vector_store_lock_states_guard:
+        return _vector_store_lock_states.setdefault(
+            key, _VectorStoreLockState())
+
+
+def _try_vector_file_lock(handle) -> bool:
+    """Attempt one non-blocking exclusive OS lock of the sentinel's byte 0."""
+    handle.seek(0)
+    if os.name == "nt":
+        import msvcrt
+        try:
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        except OSError as exc:
+            if (exc.errno in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}
+                    or getattr(exc, "winerror", None) in {33, 36, 158}):
+                return False
+            raise
+        return True
+
+    import fcntl
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as exc:
+        if exc.errno in {errno.EACCES, errno.EAGAIN}:
+            return False
+        raise
+    return True
+
+
+def _unlock_vector_file(handle) -> None:
+    """Release the platform OS lock held by *handle*."""
+    handle.seek(0)
+    if os.name == "nt":
+        import msvcrt
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        return
+
+    import fcntl
+    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _finish_vector_file_lock(handle, *, primary_error: BaseException | None,
+                             lock_path: Path) -> None:
+    """Unlock and close a lease handle without changing error precedence."""
+    cleanup_errors: list[BaseException] = []
+    try:
+        _unlock_vector_file(handle)
+    except BaseException as exc:
+        cleanup_errors.append(exc)
+    try:
+        handle.close()
+    except BaseException as exc:
+        cleanup_errors.append(exc)
+
+    if not cleanup_errors:
+        return
+    selected_error = primary_error or cleanup_errors[0]
+    for cleanup_error in cleanup_errors:
+        if cleanup_error is selected_error:
+            continue
+        _log_cleanup_error(
+            "Vector-store lease cleanup also failed for %s",
+            lock_path,
+            error=cleanup_error,
+        )
+    if primary_error is None:
+        raise selected_error.with_traceback(selected_error.__traceback__)
+
+
+class _VectorStoreLease:
+    """Bounded, reentrant, process-safe exclusive database-directory lease."""
+
+    def __init__(self, db_dir: Path, *, backend: str, collection_name: str,
+                 operation: str, timeout: float,
+                 resource_description: str | None = None,
+                 timeout_option: str = "--db-lock-timeout"):
+        self.db_dir = Path(db_dir)
+        self.backend = backend
+        self.collection_name = collection_name
+        self.operation = operation
+        self.resource_description = resource_description or (
+            f"vector store ({backend} collection '{collection_name}')")
+        self.timeout_option = timeout_option
+        self.timeout = _normalize_db_lock_timeout(timeout)
+        resolved, self.key = _vector_store_lock_identity(self.db_dir)
+        safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", resolved.name)
+        safe_name = safe_name.strip("._")[:40] or "vector-store"
+        digest = hashlib.sha256(self.key.encode("utf-8")).hexdigest()[:20]
+        self.lock_path = (
+            resolved.parent / ".rag-locks" / f"{safe_name}-{digest}.lock")
+        self.state = _vector_store_lock_state(self.key)
+        self._process_id = os.getpid()
+        self._owner_pid = None
+        self._entered = False
+        self._reentrant = False
+        self._handle = None
+
+    def _busy_error(self) -> VectorStoreBusyError:
+        return VectorStoreBusyError(
+            f"Timed out after {self.timeout:g}s waiting for exclusive "
+            f"access during {self.operation}: {self.db_dir} "
+            f"[{self.resource_description}]. Another local operation is "
+            f"using this resource; retry after it finishes or increase "
+            f"{self.timeout_option}."
+        )
+
+    def __enter__(self):
+        if self._entered:
+            raise RuntimeError("Vector-store lease objects cannot be reused")
+        current_pid = os.getpid()
+        if current_pid != self._process_id:
+            # A lease object constructed (but not entered) before fork must use
+            # the child's freshly initialized synchronization registry.
+            self.state = _vector_store_lock_state(self.key)
+            self._process_id = current_pid
+        deadline = time.monotonic() + self.timeout
+        if not self.state.thread_lock.acquire(timeout=self.timeout):
+            raise self._busy_error()
+
+        thread_leases = getattr(
+            _vector_store_lock_local, "leases", None)
+        if thread_leases is None:
+            thread_leases = {}
+            _vector_store_lock_local.leases = thread_leases
+        if self.key in thread_leases:
+            thread_leases[self.key] += 1
+            self._entered = True
+            self._reentrant = True
+            self._owner_pid = current_pid
+            return self
+
+        handle = None
+        os_locked = False
+        try:
+            self.lock_path.parent.mkdir(
+                mode=0o700, parents=True, exist_ok=True)
+            handle = self.lock_path.open("a+b")
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write(b"\0")
+                handle.flush()
+                os.fsync(handle.fileno())
+
+            first_attempt = True
+            while True:
+                remaining = deadline - time.monotonic()
+                if (remaining <= 0
+                        and not (first_attempt and self.timeout == 0)):
+                    raise self._busy_error()
+                if _try_vector_file_lock(handle):
+                    os_locked = True
+                    break
+                first_attempt = False
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise self._busy_error()
+                time.sleep(min(0.05, remaining))
+
+            thread_leases[self.key] = 1
+            self._handle = handle
+            self.state.handle = handle
+            self._entered = True
+            self._owner_pid = current_pid
+            return self
+        except BaseException as exc:
+            thread_leases.pop(self.key, None)
+            if self.state.handle is handle:
+                self.state.handle = None
+            if handle is not None:
+                if os_locked:
+                    _finish_vector_file_lock(
+                        handle, primary_error=exc,
+                        lock_path=self.lock_path)
+                else:
+                    try:
+                        handle.close()
+                    except BaseException as close_error:
+                        _log_cleanup_error(
+                            "Vector-store lease handle cleanup failed for %s",
+                            self.lock_path,
+                            error=close_error,
+                        )
+            self.state.thread_lock.release()
+            raise
+
+    def __exit__(self, exc_type, exc, traceback):
+        if not self._entered:
+            return False
+        if self._owner_pid != os.getpid():
+            # ``after_in_child`` already closed the inherited descriptor and
+            # replaced the lock registry. Unwinding the parent's context in a
+            # forked child must not touch either parent's lock or stale TLS.
+            self._entered = False
+            self._handle = None
+            return False
+        thread_leases = _vector_store_lock_local.leases
+        cleanup_error = None
+        try:
+            depth = thread_leases.get(self.key)
+            if not isinstance(depth, int) or depth < 1:
+                raise RuntimeError("Vector-store lease ownership was lost")
+            if depth > 1:
+                thread_leases[self.key] = depth - 1
+            else:
+                thread_leases.pop(self.key)
+                if self._handle is None:
+                    raise RuntimeError("Vector-store lease handle was lost")
+                try:
+                    _finish_vector_file_lock(
+                        self._handle, primary_error=exc,
+                        lock_path=self.lock_path)
+                except BaseException as release_error:
+                    cleanup_error = release_error
+                finally:
+                    self.state.handle = None
+        finally:
+            self._entered = False
+            self.state.thread_lock.release()
+
+        if cleanup_error is not None:
+            raise cleanup_error.with_traceback(cleanup_error.__traceback__)
+        return False
+
+
+def _vector_store_lock(
+        db_dir: Path, *, backend: str, collection_name: str,
+        operation: str, timeout: float = DEFAULT_DB_LOCK_TIMEOUT,
+) -> _VectorStoreLease:
+    """Create the path-wide lease used by every local vector-store access."""
+    if backend not in {"chroma", "qdrant"}:
+        raise ValueError("backend must be 'chroma' or 'qdrant'")
+    return _VectorStoreLease(
+        db_dir, backend=backend, collection_name=collection_name,
+        operation=operation, timeout=timeout)
+
+
+def _pipeline_job_lock(
+        pdf_path: Path, *, timeout: float = DEFAULT_DB_LOCK_TIMEOUT,
+) -> _VectorStoreLease:
+    """Serialize output-run allocation and execution for one PDF stem."""
+    scope = Path(OUTPUT_DIR) / f".pipeline-job-{Path(pdf_path).stem}"
+    return _VectorStoreLease(
+        scope, backend="pipeline", collection_name=Path(pdf_path).stem,
+        operation="pipeline output allocation and execution",
+        timeout=timeout,
+        resource_description=f"pipeline outputs for '{Path(pdf_path).stem}'",
+        timeout_option="--db-lock-timeout",
+    )
 
 
 def _finish_executor_progress(executor, progress, *, operation_name: str,
@@ -5768,11 +6198,10 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
         for record, token_count in zip(enriched, final_counts):
             record["metadata"]["embedding_token_count"] = token_count
 
-    # Write JSONL
-    chunks_output.parent.mkdir(parents=True, exist_ok=True)
-    with open(chunks_output, "w", encoding="utf-8") as f:
-        for rec in enriched:
-            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    # Publish a complete artifact atomically. A killed chunking run therefore
+    # leaves either the previous corpus or the complete new corpus, never a
+    # partially truncated JSONL file.
+    _atomic_write_jsonl(chunks_output, enriched)
 
     # Stats
     type_counts: dict[str, int] = {}
@@ -5984,6 +6413,7 @@ def _index_chunks_chroma_impl(
         collection_name: str = DEFAULT_COLLECTION,
         embedding_model: str = DEFAULT_EMBEDDING_MODEL,
         full_reindex: bool = False,
+        _active_update_token: str | None = None,
         _client_owner: _VectorClientOwner) -> None:
     """Load enriched chunks and index into a local ChromaDB collection."""
     import chromadb
@@ -5992,8 +6422,7 @@ def _index_chunks_chroma_impl(
     _require_file(chunks_path, "Chunks JSONL")
 
     log.info(f"Loading chunks from {chunks_path}")
-    source_sha256 = hashlib.sha256(chunks_path.read_bytes()).hexdigest()
-    records = _load_index_records_strict(chunks_path)
+    records, source_sha256, _ = _load_index_snapshot_strict(chunks_path)
     source_record_count = len(records)
     _validate_embedding_token_counts(
         records, embedding_model, recompute=True)
@@ -6025,20 +6454,42 @@ def _index_chunks_chroma_impl(
             embedding_dimension=embedding_dimension,
             collection_exists=collection_exists,
             full_reindex=full_reindex,
+            active_update_token=_active_update_token,
         )
     )
     reuse_existing_collection = collection_exists and not rebuild_collection
     update_marker_path = _chroma_update_marker_path(
         chroma_dir, collection_name=collection_name)
-    update_guarded = update_marker_path.exists()
+    update_token = (
+        _active_update_token
+        if _index_update_marker_owned_by(
+            update_marker_path, _active_update_token, backend="chroma",
+            collection_name=collection_name)
+        else None
+    )
+    update_guarded = update_token is not None
 
     def _ensure_update_guard() -> None:
-        nonlocal update_guarded
-        if not update_marker_path.exists():
+        nonlocal update_guarded, update_token
+        if update_guarded:
+            if not _index_update_marker_owned_by(
+                    update_marker_path, update_token, backend="chroma",
+                    collection_name=collection_name):
+                raise RuntimeError(
+                    "Chroma index update marker ownership was lost before "
+                    "physical mutation")
+            return
+        update_token = uuid4().hex
+        try:
             _begin_chroma_index_update(
                 chroma_dir, collection_name=collection_name,
                 source_sha256=source_sha256,
-                source_record_count=source_record_count)
+                source_record_count=source_record_count,
+                owner_token=update_token,
+                replace_existing=update_marker_path.exists())
+        except BaseException:
+            update_token = None
+            raise
         update_guarded = True
 
     if rebuild_collection:
@@ -6095,7 +6546,9 @@ def _index_chunks_chroma_impl(
                 chunk_hashes=new_hashes, source_sha256=source_sha256,
                 source_record_count=source_record_count)
             if update_guarded:
-                _finish_index_update(update_marker_path)
+                _finish_index_update(
+                    update_marker_path, owner_token=update_token,
+                    backend="chroma", collection_name=collection_name)
             return
         records = changed
     elif reuse_existing_collection:
@@ -6203,7 +6656,9 @@ def _index_chunks_chroma_impl(
         embedding_dimension=embedding_dimension,
         chunk_hashes=new_hashes, source_sha256=source_sha256,
         source_record_count=source_record_count)
-    _finish_index_update(update_marker_path)
+    _finish_index_update(
+        update_marker_path, owner_token=update_token, backend="chroma",
+        collection_name=collection_name)
 
     log.info(
         "Collection '%s' → %d documents",
@@ -6217,23 +6672,30 @@ def _index_chunks_chroma_impl(
 def index_chunks(chunks_path: Path, chroma_dir: Path, *,
                  collection_name: str = DEFAULT_COLLECTION,
                  embedding_model: str = DEFAULT_EMBEDDING_MODEL,
-                 full_reindex: bool = False) -> None:
-    """Load enriched chunks and index into a local ChromaDB collection."""
-    client_owner = _VectorClientOwner("Chroma")
-    operation_error = None
-    try:
-        return _index_chunks_chroma_impl(
-            chunks_path, chroma_dir,
+                 full_reindex: bool = False,
+                 lock_timeout: float = DEFAULT_DB_LOCK_TIMEOUT,
+                 _active_update_token: str | None = None) -> None:
+    """Index Chroma under a path-wide, process-safe exclusive lease."""
+    with _vector_store_lock(
+            chroma_dir, backend="chroma",
             collection_name=collection_name,
-            embedding_model=embedding_model,
-            full_reindex=full_reindex,
-            _client_owner=client_owner,
-        )
-    except BaseException as exc:
-        operation_error = exc
-        raise
-    finally:
-        client_owner.finish(operation_error)
+            operation="Chroma indexing", timeout=lock_timeout):
+        client_owner = _VectorClientOwner("Chroma")
+        operation_error = None
+        try:
+            return _index_chunks_chroma_impl(
+                chunks_path, chroma_dir,
+                collection_name=collection_name,
+                embedding_model=embedding_model,
+                full_reindex=full_reindex,
+                _active_update_token=_active_update_token,
+                _client_owner=client_owner,
+            )
+        except BaseException as exc:
+            operation_error = exc
+            raise
+        finally:
+            client_owner.finish(operation_error)
 
 
 # ---------------------------------------------------------------------------
@@ -6424,15 +6886,45 @@ def _atomic_write_json(path: Path, payload: object) -> None:
         with tempfile.NamedTemporaryFile(
                 mode="w", encoding="utf-8", dir=path.parent,
                 prefix=f".{path.name}.", suffix=".tmp", delete=False) as handle:
+            temporary_path = Path(handle.name)
             json.dump(payload, handle, ensure_ascii=False, sort_keys=True,
                       separators=(",", ":"))
             handle.flush()
             os.fsync(handle.fileno())
-            temporary_path = Path(handle.name)
         os.replace(temporary_path, path)
-    except Exception:
+    except BaseException:
         if temporary_path is not None:
-            temporary_path.unlink(missing_ok=True)
+            try:
+                temporary_path.unlink(missing_ok=True)
+            except BaseException as cleanup_error:
+                _log_cleanup_error(
+                    "Temporary JSON cleanup failed for %s", temporary_path,
+                    error=cleanup_error)
+        raise
+
+
+def _atomic_write_jsonl(path: Path, records: list[dict]) -> None:
+    """Durably replace a JSONL artifact without exposing partial contents."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=path.parent,
+                prefix=f".{path.name}.", suffix=".tmp", delete=False) as handle:
+            temporary_path = Path(handle.name)
+            for record in records:
+                handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, path)
+    except BaseException:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink(missing_ok=True)
+            except BaseException as cleanup_error:
+                _log_cleanup_error(
+                    "Temporary JSONL cleanup failed for %s", temporary_path,
+                    error=cleanup_error)
         raise
 
 
@@ -6472,45 +6964,93 @@ def _chroma_update_marker_path(chroma_dir: Path, *,
 
 def _begin_index_update(
         db_dir: Path, *, backend: str, collection_name: str,
-        source_sha256: str, source_record_count: int) -> Path:
+        source_sha256: str, source_record_count: int,
+        owner_token: str | None = None,
+        replace_existing: bool = False) -> Path:
     """Durably mark one backend collection dirty before physical mutation."""
     path = _index_update_marker_path(
         db_dir, backend=backend, collection_name=collection_name)
-    if path.exists():
+    if path.exists() and not replace_existing:
         return path
-    _atomic_write_json(path, {
+    payload = {
         "marker_schema_version": 1,
         "manifest_schema_version": INDEX_MANIFEST_SCHEMA_VERSION,
         "backend": backend,
         "collection": collection_name,
         "target_source_sha256": source_sha256,
         "target_source_record_count": source_record_count,
-    })
+    }
+    if owner_token is not None:
+        payload["owner_token"] = owner_token
+    _atomic_write_json(path, payload)
     return path
+
+
+def _index_update_marker_owned_by(path: Path,
+                                  owner_token: str | None, *,
+                                  backend: str | None = None,
+                                  collection_name: str | None = None) -> bool:
+    """Return whether a marker carries this run's per-update ownership token."""
+    if owner_token is None:
+        return False
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return False
+    if not isinstance(payload, dict):
+        return False
+    if (payload.get("marker_schema_version") != 1
+            or payload.get("manifest_schema_version") != (
+                INDEX_MANIFEST_SCHEMA_VERSION)
+            or payload.get("owner_token") != owner_token
+            or not isinstance(payload.get("target_source_sha256"), str)
+            or isinstance(payload.get("target_source_record_count"), bool)
+            or not isinstance(payload.get("target_source_record_count"), int)
+            or payload["target_source_record_count"] < 0):
+        return False
+    if backend is not None and payload.get("backend") != backend:
+        return False
+    if (collection_name is not None
+            and payload.get("collection") != collection_name):
+        return False
+    return True
 
 
 def _begin_qdrant_index_update(
         qdrant_dir: Path, *, collection_name: str,
-        source_sha256: str, source_record_count: int) -> Path:
+        source_sha256: str, source_record_count: int, owner_token: str,
+        replace_existing: bool = False) -> Path:
     """Durably mark Qdrant dirty before its first physical mutation."""
     return _begin_index_update(
         qdrant_dir, backend="qdrant", collection_name=collection_name,
         source_sha256=source_sha256,
-        source_record_count=source_record_count)
+        source_record_count=source_record_count, owner_token=owner_token,
+        replace_existing=replace_existing)
 
 
 def _begin_chroma_index_update(
         chroma_dir: Path, *, collection_name: str,
-        source_sha256: str, source_record_count: int) -> Path:
+        source_sha256: str, source_record_count: int, owner_token: str,
+        replace_existing: bool = False) -> Path:
     """Durably mark Chroma dirty before its first physical mutation."""
     return _begin_index_update(
         chroma_dir, backend="chroma", collection_name=collection_name,
         source_sha256=source_sha256,
-        source_record_count=source_record_count)
+        source_record_count=source_record_count, owner_token=owner_token,
+        replace_existing=replace_existing)
 
 
-def _finish_index_update(marker_path: Path) -> None:
+def _finish_index_update(marker_path: Path, *, owner_token: str,
+                         backend: str | None = None,
+                         collection_name: str | None = None) -> None:
     """Mark an update clean after its verified manifest has been committed."""
+    if not _index_update_marker_owned_by(
+            marker_path, owner_token, backend=backend,
+            collection_name=collection_name):
+        raise RuntimeError(
+            f"Index update marker ownership changed before commit: "
+            f"{marker_path}. The collection remains dirty and must be rebuilt."
+        )
     marker_path.unlink()
 
 
@@ -6561,6 +7101,7 @@ def _resolve_incremental_index_state(
         db_dir: Path, *, backend: str, collection_name: str,
         embedding_model: str, embedding_dimension: int,
         collection_exists: bool, full_reindex: bool,
+        active_update_token: str | None = None,
 ) -> tuple[dict[str, str], bool, str]:
     """Resolve hashes and whether the named collection must be rebuilt.
 
@@ -6571,7 +7112,10 @@ def _resolve_incremental_index_state(
     """
     marker_path = _index_update_marker_path(
         db_dir, backend=backend, collection_name=collection_name)
-    if marker_path.exists():
+    if (marker_path.exists()
+            and not _index_update_marker_owned_by(
+                marker_path, active_update_token, backend=backend,
+                collection_name=collection_name)):
         return {}, collection_exists, (
             "previous index update did not complete")
     if full_reindex:
@@ -6619,7 +7163,7 @@ def _save_index_manifest(
     return path
 
 
-def _query_manifest_dimension(
+def _query_manifest_dimension_impl(
         db_dir: Path, *, backend: str, collection_name: str,
         embedding_model: str) -> int | None:
     """Validate query/index compatibility and return the indexed dimension.
@@ -6669,6 +7213,75 @@ def _query_manifest_dimension(
             f"{manifest_path}. Re-run indexing for this collection."
         )
     return dimension
+
+
+def _query_manifest_dimension(
+        db_dir: Path, *, backend: str, collection_name: str,
+        embedding_model: str,
+        lock_timeout: float = DEFAULT_DB_LOCK_TIMEOUT) -> int | None:
+    """Validate query/index compatibility under the database lease."""
+    with _vector_store_lock(
+            db_dir, backend=backend, collection_name=collection_name,
+            operation="manifest inspection", timeout=lock_timeout):
+        return _query_manifest_dimension_impl(
+            db_dir, backend=backend, collection_name=collection_name,
+            embedding_model=embedding_model)
+
+
+_artifact_sha256_cache: dict[
+    str, tuple[tuple[int, int, int, int, int], str]
+] = {}
+_artifact_sha256_cache_lock = _threading.Lock()
+_ARTIFACT_SHA256_CACHE_MAX = 16
+
+
+def _cached_artifact_sha256(path: Path) -> str:
+    """Hash one stable artifact snapshot, caching by strong stat identity."""
+    path = Path(path)
+    cache_key = os.path.normcase(str(path.resolve(strict=True)))
+    with path.open("rb") as handle:
+        before = _artifact_stat_fingerprint(os.fstat(handle.fileno()))
+        with _artifact_sha256_cache_lock:
+            cached = _artifact_sha256_cache.get(cache_key)
+            if cached is not None and cached[0] == before:
+                return cached[1]
+
+        digest = hashlib.sha256()
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+        after = _artifact_stat_fingerprint(os.fstat(handle.fileno()))
+    if after != before:
+        raise RuntimeError(
+            f"Artifact changed while it was being verified: {path}")
+    value = digest.hexdigest()
+    with _artifact_sha256_cache_lock:
+        _artifact_sha256_cache[cache_key] = (after, value)
+        while len(_artifact_sha256_cache) > _ARTIFACT_SHA256_CACHE_MAX:
+            oldest = next(iter(_artifact_sha256_cache))
+            del _artifact_sha256_cache[oldest]
+    return value
+
+
+def _require_hybrid_chunks_snapshot(
+        chunks_path: Path, db_dir: Path, *, backend: str,
+        collection_name: str) -> str | None:
+    """Validate and return the manifested lexical corpus digest, if proven."""
+    manifest = _load_index_manifest(
+        db_dir, backend=backend, collection_name=collection_name)
+    if manifest is None:
+        return None
+    expected_sha256 = manifest.get("source_sha256")
+    if not isinstance(expected_sha256, str) or not expected_sha256:
+        return None
+    actual_sha256 = _cached_artifact_sha256(chunks_path)
+    if actual_sha256 != expected_sha256:
+        raise ValueError(
+            f"Hybrid chunks artifact does not match the indexed corpus for "
+            f"{backend.title()} collection '{collection_name}': "
+            f"{chunks_path}. Re-run indexing or select the chunks file used "
+            "to build this collection."
+        )
+    return expected_sha256
 
 
 def _validate_query_vector_dimension(vector: list[float],
@@ -6887,6 +7500,7 @@ def _index_chunks_qdrant_impl(
         collection_name: str = DEFAULT_COLLECTION,
         embedding_model: str = DEFAULT_EMBEDDING_MODEL,
         full_reindex: bool = False,
+        _active_update_token: str | None = None,
         _client_owner: _VectorClientOwner) -> None:
     """Load enriched chunks and index into a local Qdrant collection.
 
@@ -6901,8 +7515,7 @@ def _index_chunks_qdrant_impl(
     _require_file(chunks_path, "Chunks JSONL")
 
     log.info(f"Loading chunks from {chunks_path}")
-    source_sha256 = hashlib.sha256(chunks_path.read_bytes()).hexdigest()
-    records = _load_index_records_strict(chunks_path)
+    records, source_sha256, _ = _load_index_snapshot_strict(chunks_path)
     source_record_count = len(records)
     _validate_embedding_token_counts(
         records, embedding_model, recompute=True)
@@ -6930,20 +7543,42 @@ def _index_chunks_qdrant_impl(
             embedding_dimension=dim,
             collection_exists=collection_exists,
             full_reindex=full_reindex,
+            active_update_token=_active_update_token,
         )
     )
     reuse_existing_collection = collection_exists and not rebuild_collection
     update_marker_path = _qdrant_update_marker_path(
         qdrant_dir, collection_name=collection_name)
-    update_guarded = update_marker_path.exists()
+    update_token = (
+        _active_update_token
+        if _index_update_marker_owned_by(
+            update_marker_path, _active_update_token, backend="qdrant",
+            collection_name=collection_name)
+        else None
+    )
+    update_guarded = update_token is not None
 
     def _ensure_update_guard() -> None:
-        nonlocal update_guarded
-        if not update_marker_path.exists():
+        nonlocal update_guarded, update_token
+        if update_guarded:
+            if not _index_update_marker_owned_by(
+                    update_marker_path, update_token, backend="qdrant",
+                    collection_name=collection_name):
+                raise RuntimeError(
+                    "Qdrant index update marker ownership was lost before "
+                    "physical mutation")
+            return
+        update_token = uuid4().hex
+        try:
             _begin_qdrant_index_update(
                 qdrant_dir, collection_name=collection_name,
                 source_sha256=source_sha256,
-                source_record_count=source_record_count)
+                source_record_count=source_record_count,
+                owner_token=update_token,
+                replace_existing=update_marker_path.exists())
+        except BaseException:
+            update_token = None
+            raise
         update_guarded = True
 
     if rebuild_collection:
@@ -7021,7 +7656,9 @@ def _index_chunks_qdrant_impl(
                 chunk_hashes=new_hashes, source_sha256=source_sha256,
                 source_record_count=source_record_count)
             if update_guarded:
-                _finish_index_update(update_marker_path)
+                _finish_index_update(
+                    update_marker_path, owner_token=update_token,
+                    backend="qdrant", collection_name=collection_name)
             return
         records = changed
     elif reuse_existing_collection:
@@ -7107,7 +7744,9 @@ def _index_chunks_qdrant_impl(
         embedding_model=embedding_model, embedding_dimension=dim,
         chunk_hashes=new_hashes, source_sha256=source_sha256,
         source_record_count=source_record_count)
-    _finish_index_update(update_marker_path)
+    _finish_index_update(
+        update_marker_path, owner_token=update_token, backend="qdrant",
+        collection_name=collection_name)
 
     verified_count = sum(len(ids) for ids in verified_point_ids.values())
     log.info(
@@ -7120,23 +7759,30 @@ def _index_chunks_qdrant_impl(
 def index_chunks_qdrant(chunks_path: Path, qdrant_dir: Path, *,
                         collection_name: str = DEFAULT_COLLECTION,
                         embedding_model: str = DEFAULT_EMBEDDING_MODEL,
-                        full_reindex: bool = False) -> None:
-    """Load enriched chunks and index into a local Qdrant collection."""
-    client_owner = _VectorClientOwner("Qdrant")
-    operation_error = None
-    try:
-        return _index_chunks_qdrant_impl(
-            chunks_path, qdrant_dir,
+                        full_reindex: bool = False,
+                        lock_timeout: float = DEFAULT_DB_LOCK_TIMEOUT,
+                        _active_update_token: str | None = None) -> None:
+    """Index Qdrant under a path-wide, process-safe exclusive lease."""
+    with _vector_store_lock(
+            qdrant_dir, backend="qdrant",
             collection_name=collection_name,
-            embedding_model=embedding_model,
-            full_reindex=full_reindex,
-            _client_owner=client_owner,
-        )
-    except BaseException as exc:
-        operation_error = exc
-        raise
-    finally:
-        client_owner.finish(operation_error)
+            operation="Qdrant indexing", timeout=lock_timeout):
+        client_owner = _VectorClientOwner("Qdrant")
+        operation_error = None
+        try:
+            return _index_chunks_qdrant_impl(
+                chunks_path, qdrant_dir,
+                collection_name=collection_name,
+                embedding_model=embedding_model,
+                full_reindex=full_reindex,
+                _active_update_token=_active_update_token,
+                _client_owner=client_owner,
+            )
+        except BaseException as exc:
+            operation_error = exc
+            raise
+        finally:
+            client_owner.finish(operation_error)
 
 
 def query_index_qdrant(query: str, qdrant_dir: Path, *,
@@ -7161,7 +7807,8 @@ def query_index_qdrant(query: str, qdrant_dir: Path, *,
                        ollama_model: str = DEFAULT_OLLAMA_MODEL,
                        gemini_key: str = "",
                        llm_workers: int = DEFAULT_LLM_WORKERS,
-                       thinking: bool = False) -> None:
+                       thinking: bool = False,
+                       lock_timeout: float = DEFAULT_DB_LOCK_TIMEOUT) -> None:
     """Query Qdrant and preserve the legacy CLI/JSON output contract."""
     try:
         response = search_index(
@@ -7171,6 +7818,7 @@ def query_index_qdrant(query: str, qdrant_dir: Path, *,
             use_reranker=use_reranker, hybrid=hybrid,
             reranker_model=reranker_model, overfetch=overfetch, rrf_k=rrf_k,
             dense_weight=dense_weight, sparse_weight=sparse_weight,
+            lock_timeout=lock_timeout,
         )
     except (FileNotFoundError, LookupError) as exc:
         log.error(str(exc))
@@ -7195,12 +7843,14 @@ def query_index_qdrant(query: str, qdrant_dir: Path, *,
 # ---------------------------------------------------------------------------
 
 _bm25_cache: dict[str, tuple] = {}  # path -> records, BM25, fingerprint, terms
+_bm25_cache_lock = _threading.Lock()
 _BM25_CACHE_MAX = 5  # evict oldest when exceeded
 
 
 def _bm25_search(query: str, chunks_path: Path, n_results: int,
                  content_type: Optional[str] = None,
-                 chapter_num: Optional[int] = None) -> tuple:
+                 chapter_num: Optional[int] = None, *,
+                 expected_source_sha256: str | None = None) -> tuple:
     """BM25 keyword search over chunks JSONL.
 
     Caches the BM25 index per file (reloads only if file changed).
@@ -7209,16 +7859,23 @@ def _bm25_search(query: str, chunks_path: Path, n_results: int,
     from rank_bm25 import BM25Okapi
 
     cache_key = str(chunks_path.resolve())
-    stat = chunks_path.stat()
+    raw, source_sha256, artifact_fingerprint = (
+        _read_index_artifact_snapshot(chunks_path))
+    if (expected_source_sha256 is not None
+            and source_sha256 != expected_source_sha256):
+        raise ValueError(
+            f"BM25 chunks snapshot changed from the indexed corpus: "
+            f"{chunks_path}")
     fingerprint = (
-        stat.st_mtime_ns, stat.st_size, INDEX_MANIFEST_SCHEMA_VERSION)
+        artifact_fingerprint, source_sha256, INDEX_MANIFEST_SCHEMA_VERSION)
 
-    if (cache_key in _bm25_cache
-            and _bm25_cache[cache_key][2] == fingerprint):
-        all_records, bm25 = _bm25_cache[cache_key][0], _bm25_cache[cache_key][1]
-        corpus_terms = _bm25_cache[cache_key][3]
+    with _bm25_cache_lock:
+        cached = _bm25_cache.get(cache_key)
+    if cached is not None and cached[2] == fingerprint:
+        all_records, bm25 = cached[0], cached[1]
+        corpus_terms = cached[3]
     else:
-        all_records = _load_index_records_strict(chunks_path)
+        all_records = _parse_index_records_strict(raw, chunks_path)
 
         corpus = [
             _legal_search_tokens(_lexical_document_text(
@@ -7227,12 +7884,13 @@ def _bm25_search(query: str, chunks_path: Path, n_results: int,
         ]
         bm25 = BM25Okapi(corpus) if corpus else None
         corpus_terms = [set(tokens) for tokens in corpus]
-        _bm25_cache[cache_key] = (
-            all_records, bm25, fingerprint, corpus_terms)
-        # Evict oldest entries if cache exceeds limit
-        while len(_bm25_cache) > _BM25_CACHE_MAX:
-            oldest = next(iter(_bm25_cache))
-            del _bm25_cache[oldest]
+        with _bm25_cache_lock:
+            _bm25_cache[cache_key] = (
+                all_records, bm25, fingerprint, corpus_terms)
+            # Evict oldest entries if cache exceeds limit
+            while len(_bm25_cache) > _BM25_CACHE_MAX:
+                oldest = next(iter(_bm25_cache))
+                del _bm25_cache[oldest]
 
     if not all_records or bm25 is None:
         return [], [], []
@@ -7386,6 +8044,7 @@ def _search_chroma_candidates_impl(
         dense_weight: float = DEFAULT_DENSE_RRF_WEIGHT,
         sparse_weight: float = DEFAULT_SPARSE_RRF_WEIGHT,
         expected_dimension: int | None = None,
+        expected_source_sha256: str | None = None,
         _client_owner: _VectorClientOwner,
 ) -> tuple[list[str], list[dict], list[float], str]:
     """Retrieve Chroma candidates, falling back cleanly from BM25."""
@@ -7434,6 +8093,7 @@ def _search_chroma_candidates_impl(
         bm25_future = pool.submit(
             _bm25_search, query, chunks_path, fetch_n,
             content_type=content_type, chapter_num=chapter_num,
+            expected_source_sha256=expected_source_sha256,
         )
         vector_results = vector_future.result()
         try:
@@ -7479,6 +8139,7 @@ def _search_chroma_candidates(
         dense_weight: float = DEFAULT_DENSE_RRF_WEIGHT,
         sparse_weight: float = DEFAULT_SPARSE_RRF_WEIGHT,
         expected_dimension: int | None = None,
+        expected_source_sha256: str | None = None,
 ) -> tuple[list[str], list[dict], list[float], str]:
     """Retrieve Chroma candidates and deterministically close the client."""
     client_owner = _VectorClientOwner("Chroma")
@@ -7493,6 +8154,7 @@ def _search_chroma_candidates(
             rrf_k=rrf_k, dense_weight=dense_weight,
             sparse_weight=sparse_weight,
             expected_dimension=expected_dimension,
+            expected_source_sha256=expected_source_sha256,
             _client_owner=client_owner,
         )
     except BaseException as exc:
@@ -7613,22 +8275,23 @@ def _search_hit_source_id(hit: SearchHit) -> str:
     return _chunk_id({"text": hit.text, "metadata": hit.metadata})
 
 
-def search_index(query: str, db_dir: Path, *,
-                 db_backend: str = DEFAULT_DB_BACKEND,
-                 n_results: int = 5,
-                 content_type: Optional[str] = None,
-                 chapter_num: Optional[int] = None,
-                 collection_name: str = DEFAULT_COLLECTION,
-                 embedding_model: str = DEFAULT_EMBEDDING_MODEL,
-                 use_reranker: bool | None = None,
-                 hybrid: bool | None = None,
-                 chunks_path: Path = DEFAULT_CHUNKS_PATH,
-                 reranker_model: str = DEFAULT_RERANKER_MODEL,
-                 overfetch: int = RERANK_OVERFETCH,
-                 rrf_k: int = DEFAULT_RRF_K,
-                 dense_weight: float = DEFAULT_DENSE_RRF_WEIGHT,
-                 sparse_weight: float = DEFAULT_SPARSE_RRF_WEIGHT,
-                 ) -> SearchResponse:
+def _search_index_impl(query: str, db_dir: Path, *,
+                       db_backend: str = DEFAULT_DB_BACKEND,
+                       n_results: int = 5,
+                       content_type: Optional[str] = None,
+                       chapter_num: Optional[int] = None,
+                       collection_name: str = DEFAULT_COLLECTION,
+                       embedding_model: str = DEFAULT_EMBEDDING_MODEL,
+                       use_reranker: bool | None = None,
+                       hybrid: bool | None = None,
+                       chunks_path: Path = DEFAULT_CHUNKS_PATH,
+                       reranker_model: str = DEFAULT_RERANKER_MODEL,
+                       overfetch: int = RERANK_OVERFETCH,
+                       rrf_k: int = DEFAULT_RRF_K,
+                       dense_weight: float = DEFAULT_DENSE_RRF_WEIGHT,
+                       sparse_weight: float = DEFAULT_SPARSE_RRF_WEIGHT,
+                       lock_timeout: float = DEFAULT_DB_LOCK_TIMEOUT,
+                       ) -> SearchResponse:
     """Search either supported vector backend and return structured results.
 
     Hybrid and reranker requests over-fetch candidates before reducing them to
@@ -7681,30 +8344,57 @@ def search_index(query: str, db_dir: Path, *,
             warnings,
             "Custom fusion weights apply only to Chroma; Qdrant used native RRF.",
         )
-    expected_dimension = _query_manifest_dimension(
-        db_path, backend=backend, collection_name=collection_name,
-        embedding_model=embedding_model)
-    fetch_n = (n_results * overfetch
-               if (hybrid_enabled or use_reranker is not False) else n_results)
+    with _vector_store_lock(
+            db_path, backend=backend, collection_name=collection_name,
+            operation="vector search", timeout=lock_timeout):
+        expected_dimension = _query_manifest_dimension(
+            db_path, backend=backend, collection_name=collection_name,
+            embedding_model=embedding_model)
+        hybrid_source_sha256 = None
+        if backend == "chroma" and hybrid_enabled and chunks_file.is_file():
+            hybrid_source_sha256 = _require_hybrid_chunks_snapshot(
+                chunks_file, db_path, backend=backend,
+                collection_name=collection_name)
+            if hybrid_source_sha256 is None:
+                _record_search_warning(
+                    warnings,
+                    "Hybrid search requires a manifested chunks SHA-256; used "
+                    "vector search for this legacy or incomplete index.",
+                )
+                hybrid_enabled = False
+        fetch_n = (
+            n_results * overfetch
+            if (hybrid_enabled or use_reranker is not False) else n_results)
 
-    if backend == "chroma":
-        docs, metas, scores, effective_mode = _search_chroma_candidates(
-            query, db_path, n_results=fetch_n,
-            content_type=content_type, chapter_num=chapter_num,
-            collection_name=collection_name, embedding_model=embedding_model,
-            hybrid=hybrid_enabled, chunks_path=chunks_file, warnings=warnings,
-            rrf_k=rrf_k, dense_weight=dense_weight,
-            sparse_weight=sparse_weight,
-            expected_dimension=expected_dimension,
-        )
-    else:
-        docs, metas, scores, effective_mode = _search_qdrant_candidates(
-            query, db_path, n_results=fetch_n,
-            content_type=content_type, chapter_num=chapter_num,
-            collection_name=collection_name, embedding_model=embedding_model,
-            hybrid=hybrid_enabled, warnings=warnings,
-            expected_dimension=expected_dimension,
-        )
+        if backend == "chroma":
+            docs, metas, scores, effective_mode = _search_chroma_candidates(
+                query, db_path, n_results=fetch_n,
+                content_type=content_type, chapter_num=chapter_num,
+                collection_name=collection_name,
+                embedding_model=embedding_model,
+                hybrid=hybrid_enabled, chunks_path=chunks_file,
+                warnings=warnings, rrf_k=rrf_k,
+                dense_weight=dense_weight, sparse_weight=sparse_weight,
+                expected_dimension=expected_dimension,
+                expected_source_sha256=hybrid_source_sha256,
+            )
+        else:
+            docs, metas, scores, effective_mode = _search_qdrant_candidates(
+                query, db_path, n_results=fetch_n,
+                content_type=content_type, chapter_num=chapter_num,
+                collection_name=collection_name,
+                embedding_model=embedding_model, hybrid=hybrid_enabled,
+                warnings=warnings, expected_dimension=expected_dimension,
+            )
+
+        if (backend == "chroma" and effective_mode == "hybrid"
+                and chunks_file.is_file()):
+            # Close the lexical-artifact TOCTOU window: a standalone atomic
+            # replacement racing this search must be checked again after BM25
+            # has consumed its exact snapshot.
+            _require_hybrid_chunks_snapshot(
+                chunks_file, db_path, backend=backend,
+                collection_name=collection_name)
 
     reranker_enabled = (
         effective_mode == "vector" if use_reranker is None else use_reranker)
@@ -7742,6 +8432,48 @@ def search_index(query: str, db_dir: Path, *,
         candidate_depth=fetch_n,
         reranker_model=reranker_model if reranker_applied else None,
     )
+
+
+def search_index(query: str, db_dir: Path, *,
+                 db_backend: str = DEFAULT_DB_BACKEND,
+                 n_results: int = 5,
+                 content_type: Optional[str] = None,
+                 chapter_num: Optional[int] = None,
+                 collection_name: str = DEFAULT_COLLECTION,
+                 embedding_model: str = DEFAULT_EMBEDDING_MODEL,
+                 use_reranker: bool | None = None,
+                 hybrid: bool | None = None,
+                 chunks_path: Path = DEFAULT_CHUNKS_PATH,
+                 reranker_model: str = DEFAULT_RERANKER_MODEL,
+                 overfetch: int = RERANK_OVERFETCH,
+                 rrf_k: int = DEFAULT_RRF_K,
+                 dense_weight: float = DEFAULT_DENSE_RRF_WEIGHT,
+                 sparse_weight: float = DEFAULT_SPARSE_RRF_WEIGHT,
+                 lock_timeout: float = DEFAULT_DB_LOCK_TIMEOUT,
+                 ) -> SearchResponse:
+    """Search a coherent local index generation under its exclusive lease."""
+    backend = db_backend.lower()
+    if backend not in {"chroma", "qdrant"}:
+        # Preserve the public validation error without creating a lock sidecar.
+        return _search_index_impl(
+            query, db_dir, db_backend=db_backend, n_results=n_results,
+            content_type=content_type, chapter_num=chapter_num,
+            collection_name=collection_name,
+            embedding_model=embedding_model, use_reranker=use_reranker,
+            hybrid=hybrid, chunks_path=chunks_path,
+            reranker_model=reranker_model, overfetch=overfetch, rrf_k=rrf_k,
+            dense_weight=dense_weight, sparse_weight=sparse_weight,
+            lock_timeout=lock_timeout)
+    db_path = Path(db_dir)
+    return _search_index_impl(
+        query, db_path, db_backend=backend, n_results=n_results,
+        content_type=content_type, chapter_num=chapter_num,
+        collection_name=collection_name,
+        embedding_model=embedding_model, use_reranker=use_reranker,
+        hybrid=hybrid, chunks_path=chunks_path,
+        reranker_model=reranker_model, overfetch=overfetch, rrf_k=rrf_k,
+        dense_weight=dense_weight, sparse_weight=sparse_weight,
+        lock_timeout=lock_timeout)
 
 
 _ANSWER_SOURCE_LIMIT = 5
@@ -8124,7 +8856,8 @@ def query_index(query: str, chroma_dir: Path, *,
                 ollama_model: str = DEFAULT_OLLAMA_MODEL,
                 gemini_key: str = "",
                 llm_workers: int = DEFAULT_LLM_WORKERS,
-                thinking: bool = False) -> None:
+                thinking: bool = False,
+                lock_timeout: float = DEFAULT_DB_LOCK_TIMEOUT) -> None:
     """Query Chroma and preserve the legacy CLI/JSON output contract."""
     try:
         response = search_index(
@@ -8135,6 +8868,7 @@ def query_index(query: str, chroma_dir: Path, *,
             chunks_path=chunks_path,
             reranker_model=reranker_model, overfetch=overfetch, rrf_k=rrf_k,
             dense_weight=dense_weight, sparse_weight=sparse_weight,
+            lock_timeout=lock_timeout,
         )
     except (FileNotFoundError, LookupError) as exc:
         log.error(str(exc))
@@ -9450,11 +10184,17 @@ def build_raptor_tree(chunks_path: Path, output_path: Path, *,
 # Step 9: Info
 # ---------------------------------------------------------------------------
 
-def show_info(chroma_dir: Path, collection_name: str = DEFAULT_COLLECTION) -> None:
+def show_info(chroma_dir: Path, collection_name: str = DEFAULT_COLLECTION, *,
+              db_backend: str = DEFAULT_DB_BACKEND,
+              lock_timeout: float = DEFAULT_DB_LOCK_TIMEOUT) -> None:
     """Show status of pipeline output artifacts.
 
     Scans the output directory for all pipeline artifacts, not just default paths.
+
+    ``chroma_dir`` retains the original public keyword for compatibility; when
+    ``db_backend='qdrant'`` it identifies the selected Qdrant directory instead.
     """
+    db_dir = Path(chroma_dir)
     print(f"\n{'='*60}")
     print(" Pipeline Output Status")
     print(f"{'='*60}\n")
@@ -9467,19 +10207,27 @@ def show_info(chroma_dir: Path, collection_name: str = DEFAULT_COLLECTION) -> No
     # Scan for all pipeline outputs in the output directory
     def _show_file(label: str, path: Path):
         try:
-            display_name = str(path.relative_to(out))
-        except ValueError:
-            display_name = str(path)
-        if path.is_dir():
-            size = sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
-            print(f"  [OK] {label:20s} {display_name:40s} ({size / 1e6:.1f} MB)")
-        else:
-            s = path.stat()
-            size = s.st_size
-            mtime = time.strftime("%Y-%m-%d %H:%M",
-                                  time.localtime(s.st_mtime))
-            print(f"  [OK] {label:20s} {display_name:40s} "
-                  f"({size / 1e6:.1f} MB, {mtime})")
+            try:
+                display_name = str(path.relative_to(out))
+            except ValueError:
+                display_name = str(path)
+            if path.is_dir():
+                size = sum(
+                    f.stat().st_size
+                    for f in path.rglob("*") if f.is_file())
+                print(
+                    f"  [OK] {label:20s} {display_name:40s} "
+                    f"({size / 1e6:.1f} MB)")
+            else:
+                stat_result = path.stat()
+                size = stat_result.st_size
+                mtime = time.strftime(
+                    "%Y-%m-%d %H:%M",
+                    time.localtime(stat_result.st_mtime))
+                print(f"  [OK] {label:20s} {display_name:40s} "
+                      f"({size / 1e6:.1f} MB, {mtime})")
+        except OSError as exc:
+            print(f"  [BUSY] {label:20s} {path} (status unavailable: {exc})")
 
     # Group by file type. Current runs live under output/<book>/ while older
     # runs may still use the output root, so scan recursively.
@@ -9591,19 +10339,22 @@ def show_info(chroma_dir: Path, collection_name: str = DEFAULT_COLLECTION) -> No
             for ch in sorted(ch_counts):
                 print(f"    Ch {ch:2d}: {ch_counts[ch]:4d} chunks")
 
-    # ChromaDB stats
-    if chroma_dir.exists():
+    # Exact selected-backend stats are protected by the vector-store lease.
+    if db_dir.exists():
+        label = "Qdrant" if db_backend == "qdrant" else "ChromaDB"
+        unit = "Points" if db_backend == "qdrant" else "Documents"
         try:
             count = _index_collection_count(
-                chroma_dir, collection_name, db_backend="chroma")
-            print("\n--- ChromaDB ---")
+                db_dir, collection_name, db_backend=db_backend,
+                lock_timeout=lock_timeout)
+            print(f"\n--- {label} ---")
             print(f"  Collection: {collection_name}")
-            print(f"  Documents:  {count}")
+            print(f"  {unit}:  {count}")
         except LookupError:
-            print("\n--- ChromaDB ---")
+            print(f"\n--- {label} ---")
             print(f"  Collection '{collection_name}' not found")
         except Exception as exc:
-            print("\n--- ChromaDB ---")
+            print(f"\n--- {label} ---")
             print(f"  Collection status unavailable: {exc}")
 
     print()
@@ -9697,7 +10448,10 @@ def _configure_llm_runtime_from_args(args) -> None:
 def _index_chunks_for_backend(chunks_path: Path, db_dir: Path, *,
                               db_backend: str, collection_name: str,
                               embedding_model: str,
-                              full_reindex: bool = False) -> None:
+                              full_reindex: bool = False,
+                              lock_timeout: float = (
+                                  DEFAULT_DB_LOCK_TIMEOUT),
+                              _active_update_token: str | None = None) -> None:
     """Dispatch indexing to the configured storage backend."""
     if db_backend == "qdrant":
         index_chunks_qdrant(
@@ -9705,6 +10459,8 @@ def _index_chunks_for_backend(chunks_path: Path, db_dir: Path, *,
             collection_name=collection_name,
             embedding_model=embedding_model,
             full_reindex=full_reindex,
+            lock_timeout=lock_timeout,
+            _active_update_token=_active_update_token,
         )
     else:
         index_chunks(
@@ -9712,6 +10468,8 @@ def _index_chunks_for_backend(chunks_path: Path, db_dir: Path, *,
             collection_name=collection_name,
             embedding_model=embedding_model,
             full_reindex=full_reindex,
+            lock_timeout=lock_timeout,
+            _active_update_token=_active_update_token,
         )
 
 
@@ -9757,43 +10515,66 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
             )
             log.info(f"  [DONE] convert -> {paths['doc']}")
 
-        current_stage = "chunk"
-        chunk_count = _chunk_record_count(paths["chunks"])
-        if resume and chunk_count is not None:
-            log.info(f"  [SKIP] chunk (output exists: {paths['chunks']})")
-        else:
-            chunk_document(
-                paths["doc"],
-                paths["chunks"],
-                embedding_model=args.embedding_model,
-                max_tokens=args.max_tokens,
-                min_words=args.min_words,
-                dedup_threshold=args.dedup_threshold,
-                watermark=watermark,
-                llm_classify=args.llm_classify,
-                zeroshot_classify=args.zeroshot_classify,
-                contextualize=args.contextualize,
-                reconstruct_headings=args.reconstruct_headings,
-                quality_score=args.quality_score,
-                llm_scaffold=getattr(args, "llm_scaffold", False),
-                **llm_kwargs,
-            )
-            log.info(f"  [DONE] chunk -> {paths['chunks']}")
+        current_stage = "chunk/index lease"
+        lock_timeout = getattr(
+            args, "db_lock_timeout", DEFAULT_DB_LOCK_TIMEOUT)
+        with _vector_store_lock(
+                db_dir, backend=db_backend, collection_name=collection,
+                operation="pipeline chunk/index transition",
+                timeout=lock_timeout):
+            current_stage = "chunk"
             chunk_count = _chunk_record_count(paths["chunks"])
+            active_update_token = None
+            if resume and chunk_count is not None:
+                log.info(
+                    f"  [SKIP] chunk (output exists: {paths['chunks']})")
+            else:
+                marker_path = _index_update_marker_path(
+                    db_dir, backend=db_backend,
+                    collection_name=collection)
+                if not marker_path.exists():
+                    active_update_token = uuid4().hex
+                    _begin_index_update(
+                        db_dir, backend=db_backend,
+                        collection_name=collection,
+                        source_sha256="pending-chunk-publication",
+                        source_record_count=0,
+                        owner_token=active_update_token)
+                chunk_document(
+                    paths["doc"],
+                    paths["chunks"],
+                    embedding_model=args.embedding_model,
+                    max_tokens=args.max_tokens,
+                    min_words=args.min_words,
+                    dedup_threshold=args.dedup_threshold,
+                    watermark=watermark,
+                    llm_classify=args.llm_classify,
+                    zeroshot_classify=args.zeroshot_classify,
+                    contextualize=args.contextualize,
+                    reconstruct_headings=args.reconstruct_headings,
+                    quality_score=args.quality_score,
+                    llm_scaffold=getattr(args, "llm_scaffold", False),
+                    **llm_kwargs,
+                )
+                log.info(f"  [DONE] chunk -> {paths['chunks']}")
+                chunk_count = _chunk_record_count(paths["chunks"])
 
-        current_stage = "index"
-        if resume:
-            log.info(
-                "  [CHECK] index manifest, model, dimension, and chunk hashes")
-        _index_chunks_for_backend(
-            paths["chunks"],
-            db_dir,
-            db_backend=db_backend,
-            collection_name=collection,
-            embedding_model=args.embedding_model,
-            full_reindex=getattr(args, "full_reindex", False),
-        )
-        log.info(f"  [DONE] index -> {db_dir}")
+            current_stage = "index"
+            if resume:
+                log.info(
+                    "  [CHECK] index manifest, model, dimension, and chunk "
+                    "hashes")
+            _index_chunks_for_backend(
+                paths["chunks"],
+                db_dir,
+                db_backend=db_backend,
+                collection_name=collection,
+                embedding_model=args.embedding_model,
+                full_reindex=getattr(args, "full_reindex", False),
+                lock_timeout=lock_timeout,
+                _active_update_token=active_update_token,
+            )
+            log.info(f"  [DONE] index -> {db_dir}")
 
         current_stage = "export"
         if resume and _file_exists_nonempty(paths["export"]):
@@ -9840,6 +10621,30 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
         "db_dir": db_dir,
         "db_backend": db_backend,
     }
+
+
+def _run_pipeline_job(pdf_path: Path, args, *, resume: bool,
+                      watermark: re.Pattern | None,
+                      announce: bool = False) -> tuple[PipelinePaths, dict]:
+    """Allocate and execute one run while holding its PDF-stem job lease."""
+    timeout = getattr(args, "db_lock_timeout", DEFAULT_DB_LOCK_TIMEOUT)
+    try:
+        with _pipeline_job_lock(pdf_path, timeout=timeout):
+            paths = (
+                _derive_output_paths_existing(pdf_path)
+                if resume else _derive_output_paths(pdf_path)
+            )
+            if announce:
+                log.info("=== FULL PIPELINE ===")
+                log.info(f"Output prefix: {paths['doc'].stem}")
+                if resume:
+                    log.info("  (--resume mode: skipping completed stages)")
+            run = _run_pipeline_stages(
+                pdf_path, paths, args, resume=resume,
+                watermark=watermark)
+            return paths, run
+    except VectorStoreBusyError as exc:
+        raise _PipelineStageError("concurrency", exc) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -9890,6 +10695,13 @@ def main():
         p.add_argument("--db-backend", type=str, default=DEFAULT_DB_BACKEND,
                         choices=["chroma", "qdrant"],
                         help=f"Vector DB backend (default: {DEFAULT_DB_BACKEND})")
+
+    def add_db_lock_flag(p):
+        p.add_argument(
+            "--db-lock-timeout", type=float,
+            default=DEFAULT_DB_LOCK_TIMEOUT,
+            help=("Seconds to wait for exclusive local vector-store access "
+                  f"(default: {DEFAULT_DB_LOCK_TIMEOUT:g})"))
 
     def add_watermark_flag(p):
         p.add_argument("--watermark", type=str, default=DEFAULT_WATERMARK,
@@ -10019,6 +10831,7 @@ def main():
     add_collection_flag(p_idx)
     add_embedding_flags(p_idx)
     add_db_backend_flag(p_idx)
+    add_db_lock_flag(p_idx)
     p_idx.add_argument("--full-reindex", action="store_true",
                         help="Force complete rebuild (skip incremental)")
 
@@ -10110,6 +10923,7 @@ def main():
     add_collection_flag(p_q)
     add_embedding_flags(p_q)
     add_db_backend_flag(p_q)
+    add_db_lock_flag(p_q)
     add_llm_provider_flags(p_q)
 
     # export
@@ -10138,6 +10952,7 @@ def main():
     p_info.add_argument("--db", type=Path, default=None)
     add_collection_flag(p_info)
     add_db_backend_flag(p_info)
+    add_db_lock_flag(p_info)
 
     # full pipeline
     p_full = sub.add_parser("full", help="End-to-end: PDF to queryable index")
@@ -10160,6 +10975,7 @@ def main():
     add_chunk_llm_flags(p_full)
     add_llm_provider_flags(p_full)
     add_db_backend_flag(p_full)
+    add_db_lock_flag(p_full)
     p_full.add_argument("--full-reindex", action="store_true",
                         help="Force full re-index, ignoring existing index state")
     p_full.add_argument("--raptor", action="store_true",
@@ -10196,6 +11012,7 @@ def main():
     add_chunk_llm_flags(p_batch)
     add_llm_provider_flags(p_batch)
     add_db_backend_flag(p_batch)
+    add_db_lock_flag(p_batch)
     p_batch.add_argument("--full-reindex", action="store_true",
                          help="Force full re-index, ignoring existing index state")
     p_batch.add_argument("--raptor", action="store_true",
@@ -10235,6 +11052,12 @@ def main():
         args.db = DEFAULT_QDRANT_DIR if db_backend == "qdrant" else DEFAULT_CHROMA_DIR
 
     full_reindex = getattr(args, "full_reindex", False)
+    if hasattr(args, "db_lock_timeout"):
+        try:
+            args.db_lock_timeout = _normalize_db_lock_timeout(
+                args.db_lock_timeout)
+        except ValueError as exc:
+            parser.error(str(exc))
     llm_kwargs = _llm_kwargs_from_args(args, include_workers=True)
     _configure_llm_runtime_from_args(args)
 
@@ -10281,6 +11104,7 @@ def main():
                 collection_name=args.collection,
                 embedding_model=args.embedding_model,
                 full_reindex=full_reindex,
+                lock_timeout=args.db_lock_timeout,
             )
 
         elif args.command == "extract-questions":
@@ -10321,6 +11145,7 @@ def main():
                       rrf_k=args.rrf_k,
                       dense_weight=args.dense_weight,
                       sparse_weight=args.sparse_weight,
+                      lock_timeout=args.db_lock_timeout,
                       answer=args.answer,
                       **llm_kwargs)
 
@@ -10334,23 +11159,17 @@ def main():
                             **llm_kwargs)
 
         elif args.command == "info":
-            show_info(args.db, args.collection)
+            show_info(
+                args.db, args.collection,
+                db_backend=db_backend,
+                lock_timeout=args.db_lock_timeout)
 
         elif args.command == "full":
             resume = getattr(args, "resume", False)
-            paths = (
-                _derive_output_paths_existing(args.pdf)
-                if resume else _derive_output_paths(args.pdf)
-            )
-
-            log.info("=== FULL PIPELINE ===")
-            log.info(f"Output prefix: {paths['doc'].stem}")
-            if resume:
-                log.info("  (--resume mode: skipping completed stages)")
-
             try:
-                run = _run_pipeline_stages(
-                    args.pdf, paths, args, resume=resume, watermark=wm)
+                paths, run = _run_pipeline_job(
+                    args.pdf, args, resume=resume, watermark=wm,
+                    announce=True)
             except _PipelineStageError as exc:
                 log.error(f"Pipeline failed at stage '{exc.stage}': {exc.cause}")
                 resume_cmd = _build_resume_cmd(args.pdf, args)
@@ -10391,12 +11210,8 @@ def main():
 
                 t0 = time.time()
                 try:
-                    paths = (
-                        _derive_output_paths_existing(pdf)
-                        if resume else _derive_output_paths(pdf)
-                    )
-                    run = _run_pipeline_stages(
-                        pdf, paths, args, resume=resume, watermark=wm)
+                    paths, run = _run_pipeline_job(
+                        pdf, args, resume=resume, watermark=wm)
 
                     elapsed = time.time() - t0
                     results.append({
@@ -10453,6 +11268,9 @@ def main():
                 log.error(f"Unknown command: {args.command}")
                 sys.exit(1)
 
+    except VectorStoreBusyError as exc:
+        log.error(str(exc))
+        sys.exit(1)
     except KeyboardInterrupt:
         print("\nInterrupted.", file=sys.stderr)
         sys.exit(130)

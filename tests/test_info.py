@@ -3,6 +3,17 @@ from pathlib import Path
 import rag
 
 
+def test_show_info_preserves_legacy_chroma_dir_keyword(
+        monkeypatch, tmp_path, capsys):
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    monkeypatch.setattr(rag, "OUTPUT_DIR", output_dir)
+
+    rag.show_info(chroma_dir=tmp_path / "missing-db")
+
+    assert "Pipeline Output Status" in capsys.readouterr().out
+
+
 def test_show_info_discovers_book_scoped_artifacts(monkeypatch, tmp_path, capsys):
     output_dir = tmp_path / "output"
     book_dir = output_dir / "Evidence"

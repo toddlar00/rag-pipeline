@@ -1,5 +1,8 @@
 from pathlib import Path
 from types import SimpleNamespace
+from concurrent.futures import ThreadPoolExecutor
+import json
+import threading
 
 import pytest
 
@@ -34,6 +37,7 @@ def _args(**overrides):
         "thinking": False,
         "split_chapters": False,
         "raptor": False,
+        "db_lock_timeout": rag.DEFAULT_DB_LOCK_TIMEOUT,
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -70,6 +74,14 @@ def test_shared_runner_passes_distinct_per_run_conversion_artifacts(
     assert convert[2]["markdown_output"] == paths["converted_markdown"]
     assert paths["converted_markdown"] != paths["export"]
     assert [call[0] for call in calls] == ["convert", "chunk", "index", "export"]
+    active_token = next(
+        call for call in calls if call[0] == "index")[2][
+            "_active_update_token"]
+    assert isinstance(active_token, str) and active_token
+    marker_path = rag._index_update_marker_path(
+        paths["chroma"], backend="chroma", collection_name="book")
+    assert json.loads(marker_path.read_text(encoding="utf-8"))[
+        "owner_token"] == active_token
     assert result["collection"] == "book"
     assert result["db_dir"] == paths["chroma"]
 
@@ -144,6 +156,71 @@ def test_resume_revalidates_index_and_rebuilds_missing_chapter_exports(
     assert exports[0][1]["split_chapters"] is True
     assert len(index_calls) == 1
     assert index_calls[0][1]["embedding_model"] == "test-embedding"
+    assert index_calls[0][1]["_active_update_token"] is None
+
+
+def test_pipeline_chunk_failure_leaves_dirty_marker(monkeypatch, tmp_path):
+    paths = _paths(monkeypatch, tmp_path)
+    monkeypatch.setattr(rag, "convert_pdf", lambda *args, **kwargs: None)
+    chunk_error = RuntimeError("injected chunk failure")
+    monkeypatch.setattr(
+        rag, "chunk_document",
+        lambda *args, **kwargs: (_ for _ in ()).throw(chunk_error))
+    monkeypatch.setattr(
+        rag, "_index_chunks_for_backend",
+        lambda *args, **kwargs: pytest.fail("failed chunks must not index"))
+
+    with pytest.raises(rag._PipelineStageError) as raised:
+        rag._run_pipeline_stages(
+            Path("Book.pdf"), paths, _args(),
+            resume=False, watermark=None)
+
+    assert raised.value.cause is chunk_error
+    marker_path = rag._index_update_marker_path(
+        paths["chroma"], backend="chroma", collection_name="book")
+    assert marker_path.is_file()
+
+
+def test_pipeline_job_lock_prevents_duplicate_run_allocation(
+        monkeypatch, tmp_path):
+    monkeypatch.setattr(rag, "OUTPUT_DIR", tmp_path / "output")
+    first_entered = threading.Event()
+    release_first = threading.Event()
+    observed_paths = []
+
+    def fake_stages(_pdf, paths, _args, **_kwargs):
+        observed_paths.append(paths["doc"].parent.name)
+        paths["doc"].parent.mkdir(parents=True, exist_ok=True)
+        if len(observed_paths) == 1:
+            first_entered.set()
+            assert release_first.wait(timeout=2)
+        return {"collection": "book", "db_dir": paths["chroma"]}
+
+    monkeypatch.setattr(rag, "_run_pipeline_stages", fake_stages)
+    args = _args(db_lock_timeout=0.05)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        first = pool.submit(
+            rag._run_pipeline_job, Path("Book.pdf"), args,
+            resume=False, watermark=None)
+        assert first_entered.wait(timeout=2)
+
+        with pytest.raises(rag._PipelineStageError) as raised:
+            rag._run_pipeline_job(
+                Path("Book.pdf"), args,
+                resume=False, watermark=None)
+        assert raised.value.stage == "concurrency"
+        assert isinstance(raised.value.cause, rag.VectorStoreBusyError)
+
+        release_first.set()
+        first_paths, _ = first.result(timeout=2)
+
+    second_paths, _ = rag._run_pipeline_job(
+        Path("Book.pdf"), _args(db_lock_timeout=1),
+        resume=False, watermark=None)
+
+    assert first_paths["doc"].parent.name == "Book"
+    assert second_paths["doc"].parent.name == "Book_2"
+    assert observed_paths == ["Book", "Book_2"]
 
 
 def test_runner_reports_the_failing_stage_including_system_exit(
@@ -207,6 +284,7 @@ def test_resume_command_preserves_pipeline_options():
         max_tokens=1024,
         min_words=5,
         backend="auto",
+        db_lock_timeout=7,
     )
 
     command = rag._build_resume_cmd(Path("My Book.pdf"), args)
@@ -221,6 +299,7 @@ def test_resume_command_preserves_pipeline_options():
     assert "--max-tokens 1024" in command
     assert "--min-words 5" in command
     assert "--backend auto" in command
+    assert "--db-lock-timeout 7" in command
     assert "deepseek-secret" not in command
     assert "gemini-secret" not in command
     assert "--cloud-key" not in command

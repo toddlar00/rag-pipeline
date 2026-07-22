@@ -227,12 +227,18 @@ def do_info():
         if not isinstance(path, Path):
             lines.append(f"- **{label}**: not configured")
         elif path.exists():
-            if path.is_dir():
-                size = sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
-                lines.append(f"- **{label}**: `{path}` ({size / 1e6:.1f} MB)")
-            else:
-                lines.append(f"- **{label}**: `{path}` "
-                             f"({path.stat().st_size / 1e6:.1f} MB)")
+            try:
+                if path.is_dir():
+                    size = sum(
+                        f.stat().st_size
+                        for f in path.rglob("*") if f.is_file())
+                    lines.append(
+                        f"- **{label}**: `{path}` ({size / 1e6:.1f} MB)")
+                else:
+                    lines.append(f"- **{label}**: `{path}` "
+                                 f"({path.stat().st_size / 1e6:.1f} MB)")
+            except OSError as exc:
+                lines.append(f"- **{label}**: status unavailable ({exc})")
         else:
             lines.append(f"- **{label}**: not found")
 

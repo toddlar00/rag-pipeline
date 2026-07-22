@@ -291,6 +291,40 @@ def test_atomic_json_failure_preserves_previous_file(monkeypatch, tmp_path):
     assert not list(tmp_path.glob("*.tmp"))
 
 
+def test_atomic_jsonl_failure_preserves_previous_file(monkeypatch, tmp_path):
+    target = tmp_path / "chunks.jsonl"
+    original = b'{"text":"old"}\n'
+    target.write_bytes(original)
+
+    def fail_replace(source, destination):
+        raise OSError("simulated JSONL replace failure")
+
+    monkeypatch.setattr(rag.os, "replace", fail_replace)
+
+    with pytest.raises(OSError, match="replace failure"):
+        rag._atomic_write_jsonl(target, [{"text": "new"}])
+
+    assert target.read_bytes() == original
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+@pytest.mark.parametrize("format_name", ["json", "jsonl"])
+def test_atomic_writer_serialization_failure_removes_temporary_file(
+        tmp_path, format_name):
+    target = tmp_path / f"artifact.{format_name}"
+    original = b"previous contents"
+    target.write_bytes(original)
+
+    with pytest.raises(TypeError):
+        if format_name == "json":
+            rag._atomic_write_json(target, {"invalid": object()})
+        else:
+            rag._atomic_write_jsonl(target, [{"invalid": object()}])
+
+    assert target.read_bytes() == original
+    assert not list(tmp_path.glob("*.tmp"))
+
+
 @pytest.mark.parametrize("backend", ["qdrant", "chroma"])
 def test_index_update_marker_is_scoped_and_blocks_manifest_use(
         tmp_path, backend):
@@ -303,9 +337,11 @@ def test_index_update_marker_is_scoped_and_blocks_manifest_use(
         embedding_model="model-a", embedding_dimension=2,
         chunk_hashes={"chunk_b": "hash-b"})
 
+    owner_token = "current-update-token"
     marker_path = rag._begin_index_update(
         tmp_path, backend=backend, collection_name="book",
-        source_sha256="target-source", source_record_count=1)
+        source_sha256="target-source", source_record_count=1,
+        owner_token=owner_token)
     marker = json.loads(marker_path.read_text(encoding="utf-8"))
 
     assert marker_path.parent == tmp_path
@@ -313,6 +349,7 @@ def test_index_update_marker_is_scoped_and_blocks_manifest_use(
     assert marker["backend"] == backend
     assert marker["collection"] == "book"
     assert marker["target_source_sha256"] == "target-source"
+    assert marker["owner_token"] == owner_token
     assert rag._index_update_marker_path(
         tmp_path, backend=backend,
         collection_name="sibling") != marker_path
@@ -321,7 +358,18 @@ def test_index_update_marker_is_scoped_and_blocks_manifest_use(
         tmp_path, backend=other_backend,
         collection_name="book") != marker_path
 
-    # Presence is authoritative even if a crash truncated the diagnostics.
+    active_hashes, active_rebuild, active_reason = (
+        rag._resolve_incremental_index_state(
+            tmp_path, backend=backend, collection_name="book",
+            embedding_model="model-a", embedding_dimension=2,
+            collection_exists=True, full_reindex=False,
+            active_update_token=owner_token))
+    assert active_hashes == {"chunk_a": "hash-a"}
+    assert active_rebuild is False
+    assert active_reason == "manifest compatible"
+
+    # Presence is authoritative even if a crash truncated the diagnostics;
+    # the former owner token cannot bypass a marker that no longer proves it.
     marker_path.write_text("", encoding="utf-8")
     hashes, rebuild, reason = rag._resolve_incremental_index_state(
         tmp_path, backend=backend, collection_name="book",
@@ -330,6 +378,17 @@ def test_index_update_marker_is_scoped_and_blocks_manifest_use(
     assert hashes == {}
     assert rebuild is True
     assert "did not complete" in reason
+
+    lost_hashes, lost_rebuild, lost_reason = (
+        rag._resolve_incremental_index_state(
+            tmp_path, backend=backend, collection_name="book",
+            embedding_model="model-a", embedding_dimension=2,
+            collection_exists=True, full_reindex=False,
+            active_update_token=owner_token))
+    assert lost_hashes == {}
+    assert lost_rebuild is True
+    assert "did not complete" in lost_reason
+
     with pytest.raises(ValueError, match="Index update is incomplete"):
         rag._query_manifest_dimension(
             tmp_path, backend=backend, collection_name="book",
@@ -343,7 +402,13 @@ def test_index_update_marker_is_scoped_and_blocks_manifest_use(
     assert sibling_hashes == {"chunk_b": "hash-b"}
     assert sibling_rebuild is False
 
-    rag._finish_index_update(marker_path)
+    with pytest.raises(RuntimeError, match="ownership changed"):
+        rag._finish_index_update(marker_path, owner_token=owner_token)
+    rag._begin_index_update(
+        tmp_path, backend=backend, collection_name="book",
+        source_sha256="target-source", source_record_count=1,
+        owner_token=owner_token, replace_existing=True)
+    rag._finish_index_update(marker_path, owner_token=owner_token)
     assert not marker_path.exists()
     assert rag._query_manifest_dimension(
         tmp_path, backend=backend, collection_name="book",
@@ -1737,6 +1802,8 @@ def _prepare_qdrant_changed_existing_incremental(
         point_id=point_id,
         old_hash=old_hash,
         new_hash=new_hash,
+        old_record=old_record,
+        new_record=new_record,
         state=state,
     )
 
@@ -2135,7 +2202,8 @@ def test_qdrant_marker_cleanup_runs_after_manifest_commit(
     fixture = _prepare_qdrant_changed_existing_incremental(
         monkeypatch, tmp_path)
 
-    def fail_marker_cleanup(marker_path):
+    def fail_marker_cleanup(marker_path, **marker_kwargs):
+        assert marker_kwargs["owner_token"]
         assert marker_path.is_file()
         manifest = json.loads(
             fixture.manifest_path.read_text(encoding="utf-8"))
@@ -2312,6 +2380,94 @@ def _prepare_chroma_changed_existing_incremental(
         successful_embed=successful_embed,
         state=state,
     )
+
+
+@pytest.mark.parametrize("backend", ["chroma", "qdrant"])
+def test_index_manifest_and_vectors_use_one_chunks_byte_snapshot(
+        monkeypatch, tmp_path, backend):
+    if backend == "chroma":
+        fixture = _prepare_chroma_changed_existing_incremental(
+            monkeypatch, tmp_path)
+    else:
+        fixture = _prepare_qdrant_changed_existing_incremental(
+            monkeypatch, tmp_path)
+
+    generation_a = fixture.chunks_path.read_bytes()
+    generation_a_sha256 = hashlib.sha256(generation_a).hexdigest()
+    replacement = {
+        **fixture.new_record,
+        "metadata": {
+            **fixture.new_record["metadata"],
+            "context": "Racing replacement generation",
+        },
+    }
+    parse_snapshot = rag._parse_index_records_strict
+    replaced = False
+
+    def replace_path_then_parse(raw, path):
+        nonlocal replaced
+        if not replaced:
+            replaced = True
+            rag._atomic_write_jsonl(path, [replacement])
+        return parse_snapshot(raw, path)
+
+    monkeypatch.setattr(
+        rag, "_parse_index_records_strict", replace_path_then_parse)
+    if backend == "chroma":
+        rag.index_chunks(
+            fixture.chunks_path, fixture.db_path,
+            collection_name="book", embedding_model="model-a")
+        persisted_context = fixture.collection.rows[
+            fixture.stable_id]["metadata"]["context"]
+    else:
+        rag.index_chunks_qdrant(
+            fixture.chunks_path, fixture.db_path,
+            collection_name="book", embedding_model="model-a")
+        persisted_context = fixture.state.points[
+            fixture.point_id].payload["context"]
+
+    manifest = json.loads(
+        fixture.manifest_path.read_text(encoding="utf-8"))
+    assert replaced is True
+    assert manifest["source_sha256"] == generation_a_sha256
+    assert manifest["chunk_hashes"] == {
+        fixture.stable_id: fixture.new_hash}
+    assert persisted_context == "Corrected classification"
+    assert json.loads(fixture.chunks_path.read_text(encoding="utf-8"))[
+        "metadata"]["context"] == "Racing replacement generation"
+
+
+@pytest.mark.parametrize("backend", ["chroma", "qdrant"])
+def test_indexer_cannot_clean_marker_replaced_after_manifest_commit(
+        monkeypatch, tmp_path, backend):
+    if backend == "chroma":
+        fixture = _prepare_chroma_changed_existing_incremental(
+            monkeypatch, tmp_path)
+        run_index = rag.index_chunks
+    else:
+        fixture = _prepare_qdrant_changed_existing_incremental(
+            monkeypatch, tmp_path)
+        run_index = rag.index_chunks_qdrant
+    save_manifest = rag._save_index_manifest
+    replacement_token = "replacement-update-token"
+
+    def replace_marker_after_save(*args, **kwargs):
+        result = save_manifest(*args, **kwargs)
+        rag._begin_index_update(
+            fixture.db_path, backend=backend, collection_name="book",
+            source_sha256="replacement-generation", source_record_count=1,
+            owner_token=replacement_token, replace_existing=True)
+        return result
+
+    monkeypatch.setattr(rag, "_save_index_manifest", replace_marker_after_save)
+    with pytest.raises(RuntimeError, match="ownership changed"):
+        run_index(
+            fixture.chunks_path, fixture.db_path,
+            collection_name="book", embedding_model="model-a")
+
+    marker = json.loads(fixture.marker_path.read_text(encoding="utf-8"))
+    assert marker["owner_token"] == replacement_token
+    assert marker["target_source_sha256"] == "replacement-generation"
 
 
 def test_chroma_marker_write_failure_prevents_first_mutation(
@@ -2549,10 +2705,10 @@ def test_chroma_changed_existing_is_deleted_then_replaced_before_manifest_save(
         events.append(("manifest_save", None))
         return save_manifest(*args, **kwargs)
 
-    def finish_after_manifest(marker_path):
+    def finish_after_manifest(marker_path, **marker_kwargs):
         assert events[-1] == ("manifest_save", None)
         events.append(("marker_cleanup", None))
-        result = finish_update(marker_path)
+        result = finish_update(marker_path, **marker_kwargs)
 
         def fail_postcommit_count():
             pytest.fail(
@@ -2838,7 +2994,7 @@ def test_chroma_parallel_cleanup_precedes_manifest_and_marker_commit(
         resources.events.append("manifest_save")
         return original_save_manifest(*args, **kwargs)
 
-    def finish_update(marker_path):
+    def finish_update(marker_path, **marker_kwargs):
         assert marker_path == fixture.marker_path
         assert resources.events == [
             "executor_shutdown", "progress_close", "manifest_save"]
@@ -2847,7 +3003,7 @@ def test_chroma_parallel_cleanup_precedes_manifest_and_marker_commit(
         assert manifest["chunk_hashes"] == {
             fixture.stable_id: fixture.new_hash}
         resources.events.append("marker_cleanup")
-        return original_finish_update(marker_path)
+        return original_finish_update(marker_path, **marker_kwargs)
 
     monkeypatch.setattr(rag, "_save_index_manifest", save_manifest)
     monkeypatch.setattr(rag, "_finish_index_update", finish_update)
@@ -2976,7 +3132,7 @@ def test_chroma_manifest_commit_failure_keeps_recovery_state(
     monkeypatch.setattr(rag, "_save_index_manifest", fail_manifest_commit)
     monkeypatch.setattr(
         rag, "_finish_index_update",
-        lambda _path: pytest.fail(
+        lambda _path, **_kwargs: pytest.fail(
             "marker cleanup must not run after a manifest failure"),
     )
 
@@ -3036,14 +3192,14 @@ def test_chroma_removal_only_commits_before_marker_cleanup(
         events.append("manifest_save")
         return save_manifest(*args, **kwargs)
 
-    def assert_committed_then_finish(marker_path):
+    def assert_committed_then_finish(marker_path, **marker_kwargs):
         assert marker_path == fixture.marker_path
         manifest = json.loads(
             fixture.manifest_path.read_text(encoding="utf-8"))
         assert manifest["chunk_hashes"] == {
             fixture.stable_id: fixture.old_hash}
         events.append("marker_cleanup")
-        finish_update(marker_path)
+        finish_update(marker_path, **marker_kwargs)
 
     monkeypatch.setattr(rag, "_save_index_manifest", assert_guarded_save)
     monkeypatch.setattr(rag, "_finish_index_update", assert_committed_then_finish)
@@ -3104,14 +3260,14 @@ def test_chroma_sequential_cleanup_precedes_manifest_commit(
         resources.events.append("manifest_save")
         return save_manifest(*args, **kwargs)
 
-    def assert_committed_then_finish(marker_path):
+    def assert_committed_then_finish(marker_path, **marker_kwargs):
         assert marker_path == fixture.marker_path
         manifest = json.loads(
             fixture.manifest_path.read_text(encoding="utf-8"))
         assert manifest["chunk_hashes"] == {
             fixture.stable_id: fixture.new_hash}
         resources.events.append("marker_cleanup")
-        finish_update(marker_path)
+        finish_update(marker_path, **marker_kwargs)
 
     monkeypatch.setattr(rag, "_save_index_manifest", assert_clean_then_save)
     monkeypatch.setattr(rag, "_finish_index_update", assert_committed_then_finish)

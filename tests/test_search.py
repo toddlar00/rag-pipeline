@@ -1,5 +1,7 @@
 import json
+import hashlib
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
@@ -30,7 +32,18 @@ def search_fakes(monkeypatch, tmp_path):
     db_dir = tmp_path / "db"
     db_dir.mkdir()
     chunks_path = tmp_path / "chunks.jsonl"
-    chunks_path.write_text("{}\n", encoding="utf-8")
+    chunks_path.write_text(
+        json.dumps({"text": "fixture chunk", "metadata": {}}) + "\n",
+        encoding="utf-8",
+    )
+    source_sha256 = hashlib.sha256(chunks_path.read_bytes()).hexdigest()
+    for backend in ("chroma", "qdrant"):
+        rag._save_index_manifest(
+            db_dir, backend=backend, collection_name=rag.DEFAULT_COLLECTION,
+            embedding_model="fake-embedding", embedding_dimension=2,
+            chunk_hashes={}, source_sha256=source_sha256,
+            source_record_count=1,
+        )
 
     def fake_embed(texts, model_name, *, input_type="document"):
         state["embedding_calls"].append((list(texts), model_name, input_type))
@@ -294,13 +307,66 @@ def test_search_preserves_query_error_over_client_close_failure(
     assert search_fakes.state[f"{backend}_close_calls"] == 1
 
 
+def test_chroma_hybrid_refuses_chunks_from_another_index_generation(
+        search_fakes):
+    original_sha256 = hashlib.sha256(
+        search_fakes.chunks_path.read_bytes()).hexdigest()
+    rag._save_index_manifest(
+        search_fakes.db_dir, backend="chroma", collection_name="book",
+        embedding_model="fake-embedding", embedding_dimension=2,
+        chunk_hashes={}, source_sha256=original_sha256,
+        source_record_count=1)
+    rag._atomic_write_jsonl(
+        search_fakes.chunks_path,
+        [{"text": "new corpus", "metadata": {}}])
+
+    with pytest.raises(ValueError, match="does not match the indexed corpus"):
+        rag.search_index(
+            "minimum contacts", search_fakes.db_dir,
+            db_backend="chroma", collection_name="book", n_results=2,
+            embedding_model="fake-embedding", hybrid=True,
+            use_reranker=False, chunks_path=search_fakes.chunks_path)
+
+    assert search_fakes.state["embedding_calls"] == []
+    assert search_fakes.state["chroma_close_calls"] == 0
+
+
+def test_chroma_hybrid_rechecks_chunks_after_lexical_read(search_fakes,
+                                                           monkeypatch):
+    original_sha256 = hashlib.sha256(
+        search_fakes.chunks_path.read_bytes()).hexdigest()
+    rag._save_index_manifest(
+        search_fakes.db_dir, backend="chroma", collection_name="book",
+        embedding_model="fake-embedding", embedding_dimension=2,
+        chunk_hashes={}, source_sha256=original_sha256,
+        source_record_count=1)
+
+    def replace_during_bm25(*_args, **_kwargs):
+        rag._atomic_write_jsonl(
+            search_fakes.chunks_path,
+            [{"text": "replacement corpus", "metadata": {}}])
+        return ["lexical"], [{"chunk_index": 0}], [1.0]
+
+    monkeypatch.setattr(rag, "_bm25_search", replace_during_bm25)
+
+    with pytest.raises(ValueError, match="does not match the indexed corpus"):
+        rag.search_index(
+            "minimum contacts", search_fakes.db_dir,
+            db_backend="chroma", collection_name="book", n_results=2,
+            embedding_model="fake-embedding", hybrid=True,
+            use_reranker=False, chunks_path=search_fakes.chunks_path)
+
+    assert search_fakes.state["chroma_close_calls"] == 1
+
+
 def test_chroma_missing_chunks_reports_hybrid_fallback(search_fakes, tmp_path):
     missing_chunks = tmp_path / "missing.jsonl"
 
     result = rag.search_index(
         "minimum contacts", search_fakes.db_dir,
         db_backend="chroma", n_results=2, hybrid=True,
-        use_reranker=False, chunks_path=missing_chunks,
+        embedding_model="fake-embedding", use_reranker=False,
+        chunks_path=missing_chunks,
     )
 
     assert result.requested_mode == "hybrid"
@@ -311,12 +377,30 @@ def test_chroma_missing_chunks_reports_hybrid_fallback(search_fakes, tmp_path):
     assert search_fakes.state["chroma_calls"][0]["n_results"] == 8
 
 
+def test_chroma_unmanifested_chunks_do_not_enter_hybrid_mode(search_fakes):
+    rag._index_manifest_path(
+        search_fakes.db_dir, backend="chroma",
+        collection_name=rag.DEFAULT_COLLECTION).unlink()
+
+    result = rag.search_index(
+        "minimum contacts", search_fakes.db_dir,
+        db_backend="chroma", n_results=2,
+        embedding_model="fake-embedding", hybrid=True,
+        use_reranker=False, chunks_path=search_fakes.chunks_path,
+    )
+
+    assert result.effective_mode == "vector"
+    assert search_fakes.state["bm25_calls"] == []
+    assert "manifested chunks SHA-256" in result.warnings[0]
+
+
 def test_chroma_auto_mode_uses_vector_cleanly_without_chunks(
         search_fakes, tmp_path):
     result = rag.search_index(
         "minimum contacts", search_fakes.db_dir,
         db_backend="chroma", n_results=2, hybrid=None,
-        use_reranker=False, chunks_path=tmp_path / "missing.jsonl",
+        embedding_model="fake-embedding", use_reranker=False,
+        chunks_path=tmp_path / "missing.jsonl",
     )
 
     assert result.requested_mode == "auto"
@@ -336,7 +420,8 @@ def test_chroma_bm25_failure_reports_hybrid_fallback(
     result = rag.search_index(
         "minimum contacts", search_fakes.db_dir,
         db_backend="chroma", n_results=2, hybrid=True,
-        use_reranker=False, chunks_path=search_fakes.chunks_path,
+        embedding_model="fake-embedding", use_reranker=False,
+        chunks_path=search_fakes.chunks_path,
     )
 
     assert result.effective_mode == "vector"
@@ -349,7 +434,7 @@ def test_qdrant_hybrid_failure_retries_vector_search(search_fakes):
     result = rag.search_index(
         "minimum contacts", search_fakes.db_dir,
         db_backend="qdrant", n_results=2, hybrid=True,
-        use_reranker=False,
+        embedding_model="fake-embedding", use_reranker=False,
     )
 
     assert result.requested_mode == "hybrid"
@@ -372,12 +457,41 @@ def test_reranker_failure_keeps_backend_ranking_and_warns(
     result = rag.search_index(
         "minimum contacts", search_fakes.db_dir,
         db_backend=backend, n_results=2, use_reranker=True,
+        embedding_model="fake-embedding",
         chunks_path=search_fakes.chunks_path,
     )
 
     assert result.reranker_applied is False
     assert len(result.hits) == 2
     assert "Reranker failed" in result.warnings[0]
+
+
+def test_search_releases_vector_lease_before_reranking(
+        search_fakes, monkeypatch):
+    acquired = []
+
+    def assert_lease_released(query, documents, metadatas, distances, top_k,
+                              **_kwargs):
+        def acquire_from_other_thread():
+            with rag._vector_store_lock(
+                    search_fakes.db_dir, backend="chroma",
+                    collection_name=rag.DEFAULT_COLLECTION,
+                    operation="reranker boundary test", timeout=0):
+                return True
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            acquired.append(pool.submit(acquire_from_other_thread).result())
+        return documents[:top_k], metadatas[:top_k], distances[:top_k]
+
+    monkeypatch.setattr(rag, "_rerank", assert_lease_released)
+    response = rag.search_index(
+        "minimum contacts", search_fakes.db_dir, db_backend="chroma",
+        n_results=2, embedding_model="fake-embedding", hybrid=False,
+        use_reranker=True, chunks_path=search_fakes.chunks_path,
+    )
+
+    assert acquired == [True]
+    assert response.reranker_applied is True
 
 
 @pytest.mark.parametrize("wrapper, backend", [
@@ -713,6 +827,54 @@ def test_bm25_searches_bounded_legal_metadata_but_returns_raw_text(tmp_path):
     assert documents[0] == records[0]["text"]
     assert metadatas[0]["primary_case"].startswith("International Shoe")
     assert all("International Shoe" not in document for document in documents)
+
+
+def test_bm25_parses_and_caches_the_captured_byte_snapshot(
+        monkeypatch, tmp_path):
+    chunks = tmp_path / "chunks.jsonl"
+    generation_a = {"text": "alpha doctrine", "metadata": {}}
+    generation_b = {"text": "bravo doctrine", "metadata": {}}
+    rag._atomic_write_jsonl(chunks, [generation_a])
+    expected_a = hashlib.sha256(chunks.read_bytes()).hexdigest()
+    parse_snapshot = rag._parse_index_records_strict
+    replaced = False
+
+    def replace_then_parse(raw, path):
+        nonlocal replaced
+        if not replaced:
+            replaced = True
+            rag._atomic_write_jsonl(path, [generation_b])
+        return parse_snapshot(raw, path)
+
+    rag._bm25_cache.clear()
+    monkeypatch.setattr(rag, "_parse_index_records_strict", replace_then_parse)
+    documents, _, _ = rag._bm25_search(
+        "alpha", chunks, 1, expected_source_sha256=expected_a)
+    expected_b = hashlib.sha256(chunks.read_bytes()).hexdigest()
+    documents_b, _, _ = rag._bm25_search(
+        "bravo", chunks, 1, expected_source_sha256=expected_b)
+
+    assert documents == [generation_a["text"]]
+    assert documents_b == [generation_b["text"]]
+
+
+def test_bm25_cache_sha_prevents_aba_stat_aliasing(monkeypatch, tmp_path):
+    chunks = tmp_path / "chunks.jsonl"
+    generation_a = {"text": "alpha doctrine", "metadata": {}}
+    generation_b = {"text": "bravo doctrine", "metadata": {}}
+    monkeypatch.setattr(
+        rag, "_artifact_stat_fingerprint", lambda _stat: (1, 2, 3, 4, 5))
+    rag._bm25_cache.clear()
+
+    for record, query in (
+            (generation_a, "alpha"),
+            (generation_b, "bravo"),
+            (generation_a, "alpha")):
+        rag._atomic_write_jsonl(chunks, [record])
+        expected = hashlib.sha256(chunks.read_bytes()).hexdigest()
+        documents, _, _ = rag._bm25_search(
+            query, chunks, 1, expected_source_sha256=expected)
+        assert documents == [record["text"]]
 
 
 def test_qdrant_sparse_query_uses_shared_legal_analyzer(search_fakes):

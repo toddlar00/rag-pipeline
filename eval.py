@@ -44,9 +44,10 @@ DEFAULT_OVERFETCH = 4
 DEFAULT_RRF_K = 10
 DEFAULT_DENSE_WEIGHT = 0.5
 DEFAULT_SPARSE_WEIGHT = 1.0
+DEFAULT_DB_LOCK_TIMEOUT = 30.0
 REPORT_SCHEMA_VERSION = 2
 _JUDGMENT_ID_FIELDS = ("chunk_id", "source_id")
-_chunk_identity_cache: dict[str, tuple[int, int, dict]] = {}
+_chunk_identity_cache: dict[str, tuple[tuple, str, dict]] = {}
 
 
 def load_queries(path: Path) -> list[dict]:
@@ -87,17 +88,20 @@ def _validate_declared_corpus(queries: list[dict], chunks_path: Path) -> None:
         raise ValueError("Evaluation queries declare inconsistent corpus snapshots")
     if not chunks_path.is_file():
         raise FileNotFoundError(f"Chunks artifact not found: {chunks_path}")
+    import rag
+    raw, actual_hash, _ = rag._read_index_artifact_snapshot(chunks_path)
     if expected_hashes:
-        actual_hash = hashlib.sha256(chunks_path.read_bytes()).hexdigest()
         expected_hash = next(iter(expected_hashes))
         if actual_hash != expected_hash:
             raise ValueError(
                 "Judged queries target a different chunks snapshot: "
                 f"expected SHA-256 {expected_hash}, got {actual_hash}")
     if expected_counts:
-        actual_count = sum(
-            1 for line in chunks_path.read_text(
-                encoding="utf-8-sig").splitlines() if line.strip())
+        try:
+            contents = raw.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            contents = raw.decode("latin-1")
+        actual_count = sum(1 for line in contents.splitlines() if line.strip())
         expected_count = next(iter(expected_counts))
         if actual_count != expected_count:
             raise ValueError(
@@ -105,7 +109,7 @@ def _validate_declared_corpus(queries: list[dict], chunks_path: Path) -> None:
                 f"expected {expected_count}, got {actual_count}")
 
 
-def _validate_declared_index(
+def _validate_declared_index_impl(
         queries: list[dict], chunks_path: Path, db_path: Path, *,
         db_backend: str, collection: str, embedding_model: str,
         rag_module=None,
@@ -119,8 +123,8 @@ def _validate_declared_index(
     rag_module._query_manifest_dimension(
         db_path, backend=db_backend, collection_name=collection,
         embedding_model=embedding_model)
-    records = rag_module._load_index_records_strict(chunks_path)
-    source_sha256 = hashlib.sha256(chunks_path.read_bytes()).hexdigest()
+    records, source_sha256, _ = (
+        rag_module._load_index_snapshot_strict(chunks_path))
     expected_hashes = {
         rag_module._chunk_id(record): rag_module._chunk_hash(record)
         for record in records
@@ -194,6 +198,26 @@ def _validate_declared_index(
         "record_count": physical_count,
         "source_sha256": source_sha256,
     }
+
+
+def _validate_declared_index(
+        queries: list[dict], chunks_path: Path, db_path: Path, *,
+        db_backend: str, collection: str, embedding_model: str,
+        rag_module=None, lock_timeout: float = DEFAULT_DB_LOCK_TIMEOUT,
+) -> dict | None:
+    """Validate one coherent manifested/physical index generation."""
+    if not any(isinstance(query.get("corpus"), dict) for query in queries):
+        return None
+    if rag_module is None:
+        import rag as rag_module
+    with rag_module._vector_store_lock(
+            db_path, backend=db_backend, collection_name=collection,
+            operation="evaluation integrity validation",
+            timeout=lock_timeout):
+        return _validate_declared_index_impl(
+            queries, chunks_path, db_path,
+            db_backend=db_backend, collection=collection,
+            embedding_model=embedding_model, rag_module=rag_module)
 
 
 def _normalize_judgments(query: dict) -> list[dict]:
@@ -288,9 +312,10 @@ def _chunk_identity_lookup(chunks_path: Path, rag_module) -> dict:
     IDs, so evaluation recovers it from the source chunks artifact.
     """
     cache_key = str(chunks_path.resolve())
-    stat = chunks_path.stat()
+    raw, source_sha256, fingerprint = (
+        rag_module._read_index_artifact_snapshot(chunks_path))
     cached = _chunk_identity_cache.get(cache_key)
-    if cached and cached[:2] == (stat.st_mtime_ns, stat.st_size):
+    if cached and cached[:2] == (fingerprint, source_sha256):
         return cached[2]
 
     lookup = {"source_index_text": {}, "index_text": {}, "text": {}}
@@ -303,34 +328,38 @@ def _chunk_identity_lookup(chunks_path: Path, rag_module) -> dict:
         else:
             mapping[key] = value
 
-    with chunks_path.open(encoding="utf-8-sig") as handle:
-        for line in handle:
-            if not line.strip():
-                continue
-            record = json.loads(line)
-            if (not isinstance(record, dict)
-                    or not isinstance(record.get("text"), str)
-                    or not isinstance(record.get("metadata"), dict)):
-                continue
-            metadata = record["metadata"]
-            chunk_id = rag_module._chunk_id(record)
-            chunk_index = metadata.get("chunk_index")
-            source_file = metadata.get("source_file")
-            add_unique(
-                lookup["source_index_text"],
-                (source_file, chunk_index, record["text"])
-                if source_file is not None and chunk_index is not None else None,
-                chunk_id,
-            )
-            add_unique(
-                lookup["index_text"],
-                (chunk_index, record["text"])
-                if chunk_index is not None else None,
-                chunk_id,
-            )
-            add_unique(lookup["text"], record["text"], chunk_id)
+    try:
+        contents = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        contents = raw.decode("latin-1")
+    for line in contents.splitlines():
+        if not line.strip():
+            continue
+        record = json.loads(line)
+        if (not isinstance(record, dict)
+                or not isinstance(record.get("text"), str)
+                or not isinstance(record.get("metadata"), dict)):
+            continue
+        metadata = record["metadata"]
+        chunk_id = rag_module._chunk_id(record)
+        chunk_index = metadata.get("chunk_index")
+        source_file = metadata.get("source_file")
+        add_unique(
+            lookup["source_index_text"],
+            (source_file, chunk_index, record["text"])
+            if source_file is not None and chunk_index is not None else None,
+            chunk_id,
+        )
+        add_unique(
+            lookup["index_text"],
+            (chunk_index, record["text"])
+            if chunk_index is not None else None,
+            chunk_id,
+        )
+        add_unique(lookup["text"], record["text"], chunk_id)
 
-    _chunk_identity_cache[cache_key] = (stat.st_mtime_ns, stat.st_size, lookup)
+    _chunk_identity_cache[cache_key] = (
+        fingerprint, source_sha256, lookup)
     return lookup
 
 
@@ -359,7 +388,8 @@ def run_search(query: str, db_path: Path, *,
                overfetch: int = DEFAULT_OVERFETCH,
                rrf_k: int = DEFAULT_RRF_K,
                dense_weight: float = DEFAULT_DENSE_WEIGHT,
-               sparse_weight: float = DEFAULT_SPARSE_WEIGHT) -> list[dict]:
+               sparse_weight: float = DEFAULT_SPARSE_WEIGHT,
+               lock_timeout: float = DEFAULT_DB_LOCK_TIMEOUT) -> list[dict]:
     """Run a search and return results as plain dictionaries."""
     import rag  # lazy import to avoid loading models at import time
 
@@ -375,6 +405,7 @@ def run_search(query: str, db_path: Path, *,
         "rrf_k": rrf_k,
         "dense_weight": dense_weight,
         "sparse_weight": sparse_weight,
+        "lock_timeout": lock_timeout,
     }
     if chunks_path is not None:
         search_options["chunks_path"] = chunks_path
@@ -497,10 +528,10 @@ def _result_detail(result: dict, rank: int, relevance: float,
     return detail
 
 
-def evaluate(queries: list[dict], db_path: Path, *,
-             k_values: list[int] | None = None,
-             include_details: bool = False,
-             **search_kwargs) -> dict:
+def _evaluate_impl(queries: list[dict], db_path: Path, *,
+                   k_values: list[int] | None = None,
+                   include_details: bool = False,
+                   **search_kwargs) -> dict:
     """Evaluate retrieval; details are opt-in for API compatibility.
 
     Success@k and MRR use explicit judgments when present, otherwise legacy
@@ -619,6 +650,25 @@ def evaluate(queries: list[dict], db_path: Path, *,
     return summary
 
 
+def evaluate(queries: list[dict], db_path: Path, *,
+             k_values: list[int] | None = None,
+             include_details: bool = False,
+             **search_kwargs) -> dict:
+    """Evaluate every query against one locked physical index generation."""
+    import rag
+
+    backend = search_kwargs.get("db_backend", "chroma")
+    collection = search_kwargs.get("collection", "civpro")
+    lock_timeout = search_kwargs.get(
+        "lock_timeout", DEFAULT_DB_LOCK_TIMEOUT)
+    with rag._vector_store_lock(
+            db_path, backend=backend, collection_name=collection,
+            operation="retrieval evaluation", timeout=lock_timeout):
+        return _evaluate_impl(
+            queries, db_path, k_values=k_values,
+            include_details=include_details, **search_kwargs)
+
+
 def _parse_metric_limits(values: list[str], *, option: str) -> dict[str, float]:
     limits = {}
     for value in values:
@@ -713,6 +763,9 @@ def _build_parser() -> argparse.ArgumentParser:
                         default="nomic-ai/nomic-embed-text-v2-moe")
     parser.add_argument("--db-backend", type=str, default="chroma",
                         choices=["chroma", "qdrant"])
+    parser.add_argument(
+        "--db-lock-timeout", type=float, default=DEFAULT_DB_LOCK_TIMEOUT,
+        help="Seconds to wait for exclusive local vector-store access")
     parser.add_argument("--compare", action="store_true",
                         help="Compare vector, hybrid, and reranked configurations")
     retrieval_mode = parser.add_mutually_exclusive_group()
@@ -773,6 +826,7 @@ def _report_config(args, **overrides) -> dict:
         "collection": args.collection,
         "embedding_model": args.embedding_model,
         "db_backend": args.db_backend,
+        "db_lock_timeout": args.db_lock_timeout,
         "k_values": sorted(set(args.k)),
         "retrieval_depth": args.depth,
         "queries_path": str(query_path),
@@ -796,9 +850,7 @@ def _print_metrics(metrics: dict) -> None:
     print()
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = _build_parser()
-    args = parser.parse_args(argv)
+def _main_with_args(args, parser: argparse.ArgumentParser) -> int:
     if args.compare and (args.fail_under or args.baseline_report
                          or args.max_regression):
         parser.error("threshold checks are supported only without --compare")
@@ -834,7 +886,8 @@ def main(argv: list[str] | None = None) -> int:
         index_snapshot = _validate_declared_index(
             queries, args.chunks, args.db,
             db_backend=args.db_backend, collection=args.collection,
-            embedding_model=args.embedding_model)
+            embedding_model=args.embedding_model,
+            lock_timeout=args.db_lock_timeout)
     except (OSError, UnicodeError, json.JSONDecodeError, LookupError,
             ValueError) as exc:
         log.error("Evaluation integrity check failed: %s", exc)
@@ -846,6 +899,7 @@ def main(argv: list[str] | None = None) -> int:
         "embedding_model": args.embedding_model,
         "chunks_path": args.chunks,
         "db_backend": args.db_backend,
+        "lock_timeout": args.db_lock_timeout,
         "n_results": args.depth,
         "reranker_model": args.reranker_model,
         "overfetch": args.overfetch,
@@ -940,6 +994,29 @@ def main(argv: list[str] | None = None) -> int:
     for failure in failures:
         log.error("Evaluation threshold failed: %s", failure)
     return 2 if failures else 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Run one generation-consistent evaluation under a database lease."""
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+    import rag
+
+    try:
+        args.db_lock_timeout = rag._normalize_db_lock_timeout(
+            args.db_lock_timeout)
+    except ValueError as exc:
+        parser.error(str(exc))
+
+    try:
+        with rag._vector_store_lock(
+                args.db, backend=args.db_backend,
+                collection_name=args.collection,
+                operation="evaluation run", timeout=args.db_lock_timeout):
+            return _main_with_args(args, parser)
+    except rag.VectorStoreBusyError as exc:
+        log.error("Evaluation could not acquire the index: %s", exc)
+        return 1
 
 
 if __name__ == "__main__":

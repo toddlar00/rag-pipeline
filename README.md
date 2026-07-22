@@ -695,12 +695,49 @@ client's advertised maximum size when available.
 Before its first collection mutation, either backend creates a collection-
 scoped recovery marker. The marker is removed only after all writes finish and
 the atomic manifest replacement succeeds (including Qdrant's exact post-write
-verification). If a run is interrupted or fails after mutation begins, queries
-and corpus-pinned evaluations fail closed while the marker remains; the next
-`index` or `full --resume` run rebuilds only that backend/collection and clears
-the marker after the recovered index is committed. These identity scans detect
-count and set drift during pagination, but are not writer locks or transactional
-snapshots; concurrent-write exclusion remains an operational requirement.
+verification). A per-update token binds marker reuse and cleanup to the run that
+created or safely replaced it, so a stale or concurrently replaced marker
+cannot be declared clean. If a run is interrupted or fails after mutation
+begins, queries, exact count inspection, and corpus-pinned evaluations fail
+closed while the marker remains; the next `index` or `full --resume` run
+rebuilds only that backend/collection and clears the marker after the recovered
+index is committed. These identity scans detect count and set drift during
+pagination; the recovery marker records crash state and is never used as a
+mutex.
+
+Every operation that opens a local vector client or relies on marker/manifest
+consistency now takes a bounded, OS-backed exclusive lease for the canonical
+database directory. The path-wide policy deliberately serializes reads as well
+as writes for both backends because Qdrant local mode permits only one process
+to open a database path. Artifact discovery and approximate directory-size
+display remain best-effort filesystem diagnostics outside the lease; exact
+collection counts are leased. The default wait is 30 seconds; use
+`--db-lock-timeout SECONDS` on `index`, `query`, `info`, `full`, or `batch`
+(`0` means fail fast). Same-thread nested validation is reentrant, lock release
+runs after client/manifest cleanup, and a killed process releases the kernel
+lock. Persistent `.rag-locks/*.lock` sidecars are only locking inodes: their
+existence never means a process owns the lease, and they must not be manually
+deleted while operations may be active. These OS locks coordinate processes on
+one filesystem host; a Dropbox-synchronized copy on another computer is a
+separate concurrency domain. Windows extended drive/UNC spellings are
+normalized, but equivalent drive-letter, administrative-UNC, and SUBST aliases
+are not a supported way to access one live database. Use one path spelling and
+do not move or rename a database directory while any operation may be active.
+The timeout bounds lock contention; filesystem hydration, sentinel setup, and
+storage-client calls themselves can still block independently.
+
+`full` and `batch` also serialize output-run allocation before choosing a book
+suffix. When they regenerate chunks, they create the collection recovery marker
+before work begins, publish the JSONL via atomic replacement, and retain the
+vector lease until the matching index commits. A crash therefore exposes
+neither partial JSONL nor an apparently clean old index paired with a new
+corpus. Chroma hybrid search independently compares the chunks SHA-256 with the
+manifest, parses and hashes one exact file-handle snapshot, and refuses
+cross-generation lexical/vector fusion until reindexing. A legacy Chroma index
+without a manifested source SHA-256 falls back to vector retrieval with a
+warning instead of fusing unproven lexical data. Reranking begins only after the
+retrieval lease and vector client are released, so model or API latency does not
+block unrelated index access.
 
 The sequential background-upsert paths for both backends share teardown that
 requests a worker stop, waits for completion, and attempts both executor and
@@ -1152,6 +1189,17 @@ set CLOUD_API_KEY=...
 The pipeline normalizes encoding automatically. Run the pipeline again to
 produce a cleaned, newly numbered book directory; `--force` forces conversion
 but does not overwrite or reuse the previous run directory.
+
+### Vector store is busy
+
+Another local process is indexing, querying, evaluating, or inspecting the same
+database directory. Let it finish or raise `--db-lock-timeout`; use `0` only
+when fail-fast behavior is preferable. A `.rag-locks` sidecar left after a
+crash is harmless and should not be deleted—the operating-system lock, not the
+file's existence, determines ownership. Always access a live database through
+one stable path spelling; do not use drive/UNC/SUBST aliases or rename the
+directory while another process may have it open. The timeout applies to lock
+contention, not cloud-drive hydration or a storage call that has already begun.
 
 ### Stale index after re-chunking
 

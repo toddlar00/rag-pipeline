@@ -345,6 +345,48 @@ def test_evaluate_fetches_largest_requested_cutoff(monkeypatch, tmp_path):
     assert observed["n_results"] == 8
 
 
+def test_evaluate_holds_one_reentrant_lease_across_all_queries(
+        monkeypatch, tmp_path):
+    lock_attempts = 0
+    unlocks = 0
+    try_lock = rag._try_vector_file_lock
+    unlock = rag._unlock_vector_file
+
+    def track_lock(handle):
+        nonlocal lock_attempts
+        lock_attempts += 1
+        return try_lock(handle)
+
+    def track_unlock(handle):
+        nonlocal unlocks
+        unlocks += 1
+        return unlock(handle)
+
+    def fake_search(_query, db_path, **_kwargs):
+        with rag._vector_store_lock(
+                db_path, backend="qdrant", collection_name="other",
+                operation="nested evaluation query", timeout=0):
+            return []
+
+    monkeypatch.setattr(rag, "_try_vector_file_lock", track_lock)
+    monkeypatch.setattr(rag, "_unlock_vector_file", track_unlock)
+    monkeypatch.setattr(retrieval_eval, "run_search", fake_search)
+
+    retrieval_eval.evaluate(
+        [
+            {"query": "first", "expected_keywords": ["answer"]},
+            {"query": "second", "expected_keywords": ["answer"]},
+        ],
+        tmp_path,
+        db_backend="chroma",
+        collection="book",
+        lock_timeout=1,
+    )
+
+    assert lock_attempts == 1
+    assert unlocks == 1
+
+
 def test_run_search_recovers_chroma_chunk_id_from_chunks_artifact(
         monkeypatch, tmp_path):
     record = {
@@ -417,6 +459,24 @@ def test_chunk_id_recovery_failure_does_not_discard_search_results(
 
     assert results == [{"text": "Still returned", "metadata": {}, "score": 0.5}]
     assert "Could not recover stable chunk IDs" in caplog.text
+
+
+def test_chunk_identity_cache_keys_exact_snapshot_sha(monkeypatch, tmp_path):
+    chunks = tmp_path / "chunks.jsonl"
+    first = {"text": "alpha identity", "metadata": {"chunk_index": 0}}
+    second = {"text": "bravo identity", "metadata": {"chunk_index": 0}}
+    monkeypatch.setattr(
+        rag, "_artifact_stat_fingerprint", lambda _stat: (1, 2, 3, 4, 5))
+    retrieval_eval._chunk_identity_cache.clear()
+
+    rag._atomic_write_jsonl(chunks, [first])
+    first_lookup = retrieval_eval._chunk_identity_lookup(chunks, rag)
+    rag._atomic_write_jsonl(chunks, [second])
+    second_lookup = retrieval_eval._chunk_identity_lookup(chunks, rag)
+
+    assert first_lookup["text"][first["text"]] == rag._chunk_id(first)
+    assert second_lookup["text"][second["text"]] == rag._chunk_id(second)
+    assert first["text"] not in second_lookup["text"]
 
 
 def test_threshold_helpers_cover_absolute_and_baseline_regressions():
