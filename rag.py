@@ -42,6 +42,7 @@ import chunking_core as _chunking_core
 import cli_policy as _cli_policy
 import ingestion_core as _ingestion_core
 import index_state as _index_state
+import job_runtime as _job_runtime
 import llm_adapters as _llm_adapters
 import model_artifacts as _model_artifacts
 import operation_contracts as _operation_contracts
@@ -9632,6 +9633,66 @@ class _PipelineStageError(RuntimeError):
         super().__init__(f"{stage}: {cause}")
 
 
+def _background_pipeline_plan(
+        context: _job_runtime.JobWorkerContext | None,
+        pdf_path: Path, item_index: int, *, fallback_resume: bool,
+        fallback_exact_run_name: str | None = None,
+        ) -> tuple[
+            bool, str | None, Callable[[str], None] | None,
+            _job_runtime.PipelineRunBinding | None]:
+    """Resolve one attempt's exact run without inferring another job's run."""
+    if context is None:
+        return (
+            fallback_resume, fallback_exact_run_name, None, None)
+    execution = context.execution
+    binding = context.store.get_pipeline_binding(
+        execution.job_id, item_index=item_index, input_path=pdf_path)
+
+    def bind(run_name: str) -> None:
+        context.store.bind_pipeline_run(
+            execution.job_id,
+            attempt_token=execution.attempt_token,
+            item_index=item_index,
+            input_path=pdf_path,
+            run_name=run_name,
+        )
+
+    if binding is None:
+        # A prior attempt may have failed before allocation became durable.
+        # Allocate afresh instead of falling back to an unrelated latest run.
+        return False, None, bind, None
+    return True, binding.run_name, bind, binding
+
+
+def _mark_background_pipeline_binding(
+        context: _job_runtime.JobWorkerContext | None,
+        pdf_path: Path, item_index: int, status: str, *,
+        primary_error: BaseException | None = None) -> None:
+    if context is None:
+        return
+    try:
+        binding = context.store.get_pipeline_binding(
+            context.execution.job_id,
+            item_index=item_index,
+            input_path=pdf_path)
+        if binding is not None:
+            context.store.mark_pipeline_binding(
+                context.execution.job_id,
+                attempt_token=context.execution.attempt_token,
+                item_index=item_index,
+                input_path=pdf_path,
+                status=status,
+            )
+    except BaseException as marker_error:
+        if primary_error is None:
+            raise
+        _log_cleanup_error(
+            "Background run-binding update failed while preserving the "
+            "pipeline error",
+            error=marker_error,
+        )
+
+
 def _resolve_cloud_endpoint(args) -> tuple[str, str]:
     """Resolve URL/model shortcuts for the configured cloud provider."""
     return _cli_policy._resolve_cloud_endpoint(
@@ -11178,6 +11239,7 @@ def main(argv: list[str] | None = None):
     operation_metrics: dict[str, int | float | bool | None] = {}
     run_completion_status: str | None = None
     llm_runtime_configured = False
+    worker_job_context = None
 
     try:
         # --- Compile watermark once ---
@@ -11202,6 +11264,9 @@ def main(argv: list[str] | None = None):
                     args.operation_timeout)
             except ValueError as exc:
                 parser.error(str(exc))
+        if args.command in _job_runtime.ALLOWED_JOB_COMMANDS:
+            worker_job_context = _job_runtime.load_worker_context(
+                args.command)
         llm_kwargs = _llm_kwargs_from_args(args, include_workers=True)
         _configure_llm_runtime_from_args(args)
         llm_runtime_configured = True
@@ -11316,12 +11381,27 @@ def main(argv: list[str] | None = None):
 
         elif args.command == "full":
             resume = getattr(args, "resume", False)
+            (effective_resume, exact_run_name, allocation_callback,
+             _binding) = _background_pipeline_plan(
+                worker_job_context, args.pdf, 1,
+                fallback_resume=resume,
+                fallback_exact_run_name=getattr(
+                    args, "exact_run_name", None),
+            )
             try:
                 paths, run = _run_pipeline_job(
-                    args.pdf, args, resume=resume, watermark=wm,
+                    args.pdf, args, resume=effective_resume, watermark=wm,
                     announce=True, telemetry=run_telemetry,
-                    exact_run_name=getattr(args, "exact_run_name", None))
-            except _PipelineStageError as exc:
+                    exact_run_name=exact_run_name,
+                    on_run_allocated=allocation_callback)
+                _mark_background_pipeline_binding(
+                    worker_job_context, args.pdf, 1, "complete")
+            except BaseException as exc:
+                _mark_background_pipeline_binding(
+                    worker_job_context, args.pdf, 1, "failed",
+                    primary_error=exc)
+                if not isinstance(exc, _PipelineStageError):
+                    raise
                 log.error(f"Pipeline failed at stage '{exc.stage}': {exc.cause}")
                 resume_cmd = _build_resume_cmd(args.pdf, args)
                 log.error("Resume from where it failed with:")
@@ -11355,6 +11435,30 @@ def main(argv: list[str] | None = None):
                 log.info(f"  BATCH [{idx}/{total}]: {pdf.name}")
                 log.info(f"{'='*60}")
 
+                (item_resume, exact_run_name, allocation_callback,
+                 binding) = _background_pipeline_plan(
+                    worker_job_context, pdf, idx,
+                    fallback_resume=resume)
+                if binding is not None and binding.status == "complete":
+                    paths = _output_paths_for_name(binding.run_name)
+                    collection = (
+                        getattr(args, "collection", None)
+                        or paths["collection"])
+                    db_dir = paths[db_backend]
+                    checkpoint_stage = f"item_{idx}.checkpoint"
+                    run_telemetry.stage_started(checkpoint_stage)
+                    run_telemetry.stage_finished(
+                        checkpoint_stage, status="skipped")
+                    results.append({
+                        "pdf": str(pdf),
+                        "status": "OK",
+                        "time": "0s",
+                        "output": str(paths["export"]),
+                        "collection": collection,
+                        "db": str(db_dir),
+                    })
+                    continue
+
                 if not pdf.exists():
                     log.error(f"PDF not found: {pdf}")
                     missing_stage = f"item_{idx}.input"
@@ -11368,8 +11472,12 @@ def main(argv: list[str] | None = None):
                 t0 = time.time()
                 try:
                     paths, run = _run_pipeline_job(
-                        pdf, args, resume=resume, watermark=wm,
-                        telemetry=run_telemetry, stage_scope=f"item_{idx}")
+                        pdf, args, resume=item_resume, watermark=wm,
+                        telemetry=run_telemetry, stage_scope=f"item_{idx}",
+                        exact_run_name=exact_run_name,
+                        on_run_allocated=allocation_callback)
+                    _mark_background_pipeline_binding(
+                        worker_job_context, pdf, idx, "complete")
 
                     elapsed = time.time() - t0
                     results.append({
@@ -11381,7 +11489,12 @@ def main(argv: list[str] | None = None):
                         "db": str(run["db_dir"]),
                     })
 
-                except _PipelineStageError as exc:
+                except BaseException as exc:
+                    _mark_background_pipeline_binding(
+                        worker_job_context, pdf, idx, "failed",
+                        primary_error=exc)
+                    if not isinstance(exc, _PipelineStageError):
+                        raise
                     elapsed = time.time() - t0
                     log.error(
                         f"Failed on {pdf.name} at stage '{exc.stage}': {exc.cause}")

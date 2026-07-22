@@ -6,6 +6,7 @@ import threading
 
 import pytest
 
+import job_runtime
 import rag
 from operation_contracts import IndexOutcome
 from run_telemetry import RunTelemetry
@@ -374,6 +375,73 @@ def test_exact_resume_binding_requires_an_existing_run(monkeypatch, tmp_path):
         rag._run_pipeline_job(
             Path("Book.pdf"), _args(), resume=True, watermark=None,
             exact_run_name="Book")
+
+
+def test_background_binding_plan_allocates_once_then_resumes_exact_run(
+        monkeypatch, tmp_path):
+    output_root = tmp_path / "output"
+    jobs = job_runtime.JobStore(tmp_path / "jobs")
+    pdf = tmp_path / "Book.pdf"
+    summary = jobs.submit_job("full", ["--pdf", str(pdf)])
+    execution = jobs.load_execution(summary.job_id)
+    context = job_runtime.JobWorkerContext(jobs, execution)
+    monkeypatch.setattr(rag, "OUTPUT_DIR", output_root)
+    monkeypatch.setattr(
+        rag, "_run_pipeline_stages",
+        lambda _pdf, paths, _args, **_kwargs: {
+            "collection": "book", "db_dir": paths["chroma"]})
+
+    resume, exact, callback, binding = rag._background_pipeline_plan(
+        context, pdf, 1, fallback_resume=True)
+    assert (resume, exact, binding) == (False, None, None)
+    first, _ = rag._run_pipeline_job(
+        pdf, _args(), resume=resume, watermark=None,
+        exact_run_name=exact, on_run_allocated=callback)
+    jobs.mark_pipeline_binding(
+        summary.job_id, attempt_token=execution.attempt_token,
+        item_index=1, input_path=pdf, status="failed")
+
+    later, _ = rag._run_pipeline_job(
+        pdf, _args(), resume=False, watermark=None)
+    resume, exact, callback, binding = rag._background_pipeline_plan(
+        context, pdf, 1, fallback_resume=True)
+    resumed, _ = rag._run_pipeline_job(
+        pdf, _args(), resume=resume, watermark=None,
+        exact_run_name=exact, on_run_allocated=callback)
+
+    assert first["doc"].parent.name == "Book"
+    assert later["doc"].parent.name == "Book_2"
+    assert binding is not None and binding.run_name == "Book"
+    assert resumed["doc"].parent.name == "Book"
+
+
+def test_background_batch_skips_completed_exact_checkpoint(
+        monkeypatch, tmp_path):
+    jobs = job_runtime.JobStore(tmp_path / "jobs")
+    pdf = tmp_path / "Book.pdf"
+    summary = jobs.submit_job("batch", [str(pdf)])
+    execution = jobs.load_execution(summary.job_id)
+    jobs.bind_pipeline_run(
+        summary.job_id, attempt_token=execution.attempt_token,
+        item_index=1, input_path=pdf, run_name="Book")
+    jobs.mark_pipeline_binding(
+        summary.job_id, attempt_token=execution.attempt_token,
+        item_index=1, input_path=pdf, status="complete")
+    starting = jobs.transition_job(
+        summary.job_id, "starting", attempt_token=execution.attempt_token)
+    jobs.transition_job(
+        summary.job_id, "running", attempt_token=execution.attempt_token,
+        expected_revision=starting.revision)
+    monkeypatch.setenv(job_runtime.JOB_ROOT_ENV, str(jobs.root))
+    monkeypatch.setenv(job_runtime.JOB_ID_ENV, summary.job_id)
+    monkeypatch.setenv(
+        job_runtime.JOB_ATTEMPT_TOKEN_ENV, execution.attempt_token)
+    monkeypatch.setattr(
+        rag, "_run_pipeline_job",
+        lambda *_args, **_kwargs: pytest.fail(
+            "completed batch checkpoint must not rerun"))
+
+    rag.main(["batch", str(pdf)])
 
 
 def test_pipeline_job_marks_manifest_failed_without_masking_error(

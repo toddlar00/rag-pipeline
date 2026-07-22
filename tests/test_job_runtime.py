@@ -404,3 +404,126 @@ def test_unexpected_root_entry_and_hardlinked_document_fail_closed(tmp_path):
         os.link(state_path, store.root / summary.job_id / "state-copy.json")
         with pytest.raises(JobCorruptError, match="bounded private file"):
             store.get_job(summary.job_id)
+
+
+def test_exact_pipeline_binding_round_trip_is_private_and_immutable(tmp_path):
+    store = JobStore(tmp_path / "jobs")
+    private_pdf = tmp_path / "Private Casebook.pdf"
+    summary = store.submit_job("full", ["--pdf", str(private_pdf)])
+    execution = store.load_execution(summary.job_id)
+
+    binding = store.bind_pipeline_run(
+        summary.job_id, attempt_token=execution.attempt_token,
+        item_index=1, input_path=private_pdf,
+        run_name="Private Casebook")
+    loaded = store.get_pipeline_binding(
+        summary.job_id, item_index=1, input_path=private_pdf)
+
+    assert loaded == binding
+    assert binding.status == "allocated"
+    bindings_path = store.root / summary.job_id / "bindings.json"
+    rendered = bindings_path.read_text(encoding="utf-8")
+    assert str(private_pdf) not in rendered
+    assert job_runtime.pipeline_input_sha256(private_pdf) in rendered
+    _assert_private(bindings_path, directory=False)
+    _assert_private(
+        store.root / summary.job_id / ".bindings.lock", directory=False)
+
+    failed = store.mark_pipeline_binding(
+        summary.job_id, attempt_token=execution.attempt_token,
+        item_index=1, input_path=private_pdf, status="failed")
+    assert failed.status == "failed"
+    reset = store.bind_pipeline_run(
+        summary.job_id, attempt_token=execution.attempt_token,
+        item_index=1, input_path=private_pdf,
+        run_name="Private Casebook")
+    assert reset.status == "allocated"
+    completed = store.mark_pipeline_binding(
+        summary.job_id, attempt_token=execution.attempt_token,
+        item_index=1, input_path=private_pdf, status="complete")
+    assert completed.status == "complete"
+    with pytest.raises(JobStateError, match="immutable"):
+        store.mark_pipeline_binding(
+            summary.job_id, attempt_token=execution.attempt_token,
+            item_index=1, input_path=private_pdf, status="failed")
+
+
+def test_pipeline_bindings_reject_drift_conflicts_and_stale_attempts(tmp_path):
+    store = JobStore(tmp_path / "jobs")
+    book = tmp_path / "Book.pdf"
+    other = tmp_path / "Other.pdf"
+    summary = store.submit_job("batch", [str(book), str(other)])
+    first = store.load_execution(summary.job_id)
+    store.bind_pipeline_run(
+        summary.job_id, attempt_token=first.attempt_token,
+        item_index=1, input_path=book, run_name="Book_2")
+
+    with pytest.raises(JobStateError, match="another input"):
+        store.get_pipeline_binding(
+            summary.job_id, item_index=1, input_path=other)
+    with pytest.raises(JobStateError, match="another exact"):
+        store.bind_pipeline_run(
+            summary.job_id, attempt_token=first.attempt_token,
+            item_index=1, input_path=book, run_name="Book_3")
+    with pytest.raises(JobValidationError, match="does not match"):
+        store.bind_pipeline_run(
+            summary.job_id, attempt_token=first.attempt_token,
+            item_index=2, input_path=other, run_name="Book")
+
+    starting = store.transition_job(
+        summary.job_id, "starting", attempt_token=first.attempt_token)
+    running = store.transition_job(
+        summary.job_id, "running", attempt_token=first.attempt_token,
+        expected_revision=starting.revision)
+    failed = store.transition_job(
+        summary.job_id, "failed", attempt_token=first.attempt_token,
+        expected_revision=running.revision)
+    store.prepare_resume(summary.job_id, expected_revision=failed.revision)
+    second = store.load_execution(summary.job_id)
+
+    with pytest.raises(JobStateError, match="stale attempt"):
+        store.bind_pipeline_run(
+            summary.job_id, attempt_token=first.attempt_token,
+            item_index=1, input_path=book, run_name="Book_2")
+    resumed = store.bind_pipeline_run(
+        summary.job_id, attempt_token=second.attempt_token,
+        item_index=1, input_path=book, run_name="Book_2")
+    assert resumed.status == "allocated"
+
+
+def test_worker_context_requires_complete_matching_manager_environment(tmp_path):
+    store = JobStore(tmp_path / "jobs")
+    summary = store.submit_job("full", ["--pdf", "Book.pdf"])
+    execution = store.load_execution(summary.job_id)
+    environment = {
+        job_runtime.JOB_ROOT_ENV: str(store.root),
+        job_runtime.JOB_ID_ENV: summary.job_id,
+        job_runtime.JOB_ATTEMPT_TOKEN_ENV: execution.attempt_token,
+    }
+
+    assert job_runtime.load_worker_context("full", environ={}) is None
+    context = job_runtime.load_worker_context("full", environ=environment)
+    assert context is not None
+    assert context.execution.job_id == summary.job_id
+    assert context.execution.attempt_token == execution.attempt_token
+    with pytest.raises(JobValidationError, match="incomplete"):
+        job_runtime.load_worker_context(
+            "full", environ={job_runtime.JOB_ROOT_ENV: str(store.root)})
+    with pytest.raises(JobStateError, match="command"):
+        job_runtime.load_worker_context("batch", environ=environment)
+    stale_environment = dict(environment)
+    stale_environment[job_runtime.JOB_ATTEMPT_TOKEN_ENV] = "f" * 32
+    with pytest.raises(JobStateError, match="stale"):
+        job_runtime.load_worker_context(
+            "full", environ=stale_environment)
+
+
+def test_non_pipeline_jobs_cannot_create_exact_run_bindings(tmp_path):
+    store = JobStore(tmp_path / "jobs")
+    summary = store.submit_job("index", ["--chunks", "Book.jsonl"])
+    execution = store.load_execution(summary.job_id)
+
+    with pytest.raises(JobStateError, match="only to full and batch"):
+        store.bind_pipeline_run(
+            summary.job_id, attempt_token=execution.attempt_token,
+            item_index=1, input_path="Book.pdf", run_name="Book")
