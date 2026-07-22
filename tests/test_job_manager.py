@@ -225,6 +225,27 @@ time.sleep(60)
     assert result.reason == "timeout"
 
 
+def test_worker_log_is_bounded_without_pipe_deadlock(tmp_path):
+    worker = _write_worker(
+        tmp_path / "large_output_worker.py",
+        "import sys\n"
+        f"sys.stdout.write('x' * {job_manager._MAX_WORKER_LOG_BYTES + 4096})\n"
+        "sys.stdout.flush()\n",
+    )
+    store = job_runtime.JobStore(tmp_path / "jobs")
+    submitted = store.submit_job("export", [], timeout_seconds=10)
+
+    result = job_manager.run_job(
+        store, submitted.job_id, script_path=worker)
+
+    paths = job_manager._attempt_paths(
+        store, submitted.job_id, 1, create=False)
+    assert result.status == "succeeded"
+    assert paths.log.stat().st_size <= job_manager._MAX_WORKER_LOG_BYTES
+    with paths.log.open("rb") as handle:
+        assert handle.read(64).startswith(b"[earlier worker output truncated")
+
+
 def test_supervisor_launch_failure_is_a_redacted_failed_attempt(tmp_path):
     store = job_runtime.JobStore(tmp_path / "jobs")
     submitted = store.submit_job("index", ["--chunks", "private.json"])

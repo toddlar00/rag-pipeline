@@ -43,6 +43,7 @@ _LOG_NAME = "worker.log"
 _EVENTS_NAME = "run.events.jsonl"
 _REPORT_NAME = "run.report.json"
 _MAX_MANAGER_JSON_BYTES = 64 * 1024
+_MAX_WORKER_LOG_BYTES = 8 * 1024 * 1024
 _HEARTBEAT_INTERVAL = 1.0
 _RECOVERY_TERMINATE_GRACE = 3.0
 _GENERIC_BACKGROUND_TIMEOUT = 4 * 60 * 60.0
@@ -186,6 +187,57 @@ def _runtime_payload(metadata: RuntimeMetadata) -> dict:
 
 def _write_runtime(path: Path, metadata: RuntimeMetadata) -> None:
     storage_policy.atomic_write_private_json(path, _runtime_payload(metadata))
+
+
+def _cap_open_worker_log(handle) -> None:
+    """Keep a live inherited log descriptor within a bounded rolling window."""
+    if os.fstat(handle.fileno()).st_size <= _MAX_WORKER_LOG_BYTES:
+        return
+    os.ftruncate(handle.fileno(), 0)
+    handle.write(b"[earlier worker output truncated at private log limit]\n")
+    handle.flush()
+
+
+def _cap_closed_worker_log(path: Path) -> None:
+    """Retain only the final bounded tail after a worker closes its handle."""
+    storage_policy.assert_no_link_components(path)
+    before = os.lstat(path)
+    if before.st_size <= _MAX_WORKER_LOG_BYTES:
+        return
+    if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+        raise JobManagerCorruptError("worker log is not one regular file")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    flags |= getattr(os, "O_BINARY", 0)
+    descriptor = os.open(path, flags)
+    try:
+        opened = os.fstat(descriptor)
+        identity = (int(opened.st_dev), int(opened.st_ino))
+        if (not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1
+                or identity != (int(before.st_dev), int(before.st_ino))):
+            raise JobManagerCorruptError("worker log changed while opening")
+        os.lseek(descriptor, -_MAX_WORKER_LOG_BYTES, os.SEEK_END)
+        chunks = []
+        remaining = _MAX_WORKER_LOG_BYTES
+        while remaining:
+            chunk = os.read(descriptor, min(remaining, 64 * 1024))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        after = os.fstat(descriptor)
+        named = os.lstat(path)
+        if ((int(after.st_dev), int(after.st_ino)) != identity
+                or (int(named.st_dev), int(named.st_ino)) != identity
+                or after.st_nlink != 1 or named.st_nlink != 1):
+            raise JobManagerCorruptError("worker log changed while reading")
+    finally:
+        os.close(descriptor)
+    marker = b"[earlier worker output truncated at private log limit]\n"
+    tail = b"".join(chunks)
+    if len(marker) + len(tail) > _MAX_WORKER_LOG_BYTES:
+        tail = tail[len(marker):]
+    storage_policy.atomic_write_private(
+        path, lambda output: output.write(marker + tail), text=False)
 
 
 def _unique_object(pairs):
@@ -769,6 +821,7 @@ def run_job(
         last_heartbeat = 0.0
         exit_code: int | None = None
         manager_error = False
+        active_log_handle = None
 
         def child_started(process) -> None:
             nonlocal worker, worker_birth, runtime, current
@@ -812,6 +865,8 @@ def run_job(
             if now_heartbeat - last_heartbeat < _HEARTBEAT_INTERVAL:
                 return
             last_heartbeat = now_heartbeat
+            if active_log_handle is not None:
+                _cap_open_worker_log(active_log_handle)
             runtime = replace(
                 runtime, heartbeat_at=now_heartbeat,
                 updated_at=now_heartbeat)
@@ -827,6 +882,7 @@ def run_job(
         }
         try:
             with storage_policy.open_private_append(paths.log) as log_handle:
+                active_log_handle = log_handle
                 exit_code = int(supervisor(
                     script_path, worker_argv,
                     operation=execution.command,
@@ -841,6 +897,12 @@ def run_job(
                     stdout_target=log_handle,
                     stderr_target=log_handle,
                 ))
+        except BaseException:
+            manager_error = True
+        finally:
+            active_log_handle = None
+        try:
+            _cap_closed_worker_log(paths.log)
         except BaseException:
             manager_error = True
 
