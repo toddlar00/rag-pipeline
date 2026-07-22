@@ -38,10 +38,11 @@ Status terms:
 | Index-state modularization | Implemented (draft) | [PR #18](https://github.com/toddlar00/rag-pipeline/pull/18) |
 | LLM-provider modularization | Implemented (draft) | [PR #19](https://github.com/toddlar00/rag-pipeline/pull/19) |
 | CLI-policy modularization | Implemented (draft) | [PR #20](https://github.com/toddlar00/rag-pipeline/pull/20) |
+| PDF-ingestion modularization | Implemented (draft) | [PR #21](https://github.com/toddlar00/rag-pipeline/pull/21) |
 
 PR #1 is independent of the index-integrity stack and can be reviewed or merged
 separately. The index-integrity stack must be reviewed and merged in order:
-**#2 -> #3 -> #4 -> #5 -> #6 -> #7 -> #8 -> #9 -> #10 -> #11 -> #12 -> #13 -> #14 -> #15 -> #16 -> #17 -> #18 -> #19 -> #20**.
+**#2 -> #3 -> #4 -> #5 -> #6 -> #7 -> #8 -> #9 -> #10 -> #11 -> #12 -> #13 -> #14 -> #15 -> #16 -> #17 -> #18 -> #19 -> #20 -> #21**.
 Until those PRs merge,
 implementation progress is ahead of integration progress.
 
@@ -57,6 +58,9 @@ implementation progress is ahead of integration progress.
   manifest for downloaded model artifacts and trusted remote model code.
 
 ### 2. Reduce monolith and coupling risk
+
+Implemented across draft PRs #15-#21; integration remains pending until the
+stack is reviewed and merged in order.
 
 - Preserve the first seam: `retrieval_core.py` is a leaf module for
   typed retrieval/grounding results and pure retrieval algorithms, while
