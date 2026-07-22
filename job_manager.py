@@ -34,6 +34,7 @@ MANAGER_SCHEMA_VERSION = 1
 JOB_ROOT_ENV = job_runtime.JOB_ROOT_ENV
 JOB_ID_ENV = job_runtime.JOB_ID_ENV
 JOB_ATTEMPT_TOKEN_ENV = job_runtime.JOB_ATTEMPT_TOKEN_ENV
+OUTPUT_ROOT_ENV = job_runtime.OUTPUT_ROOT_ENV
 
 _READY_NONCE_ENV = "RAG_PIPELINE_MANAGER_READY_NONCE"
 _ATTEMPTS_DIRECTORY = "attempts"
@@ -43,6 +44,7 @@ _LOG_NAME = "worker.log"
 _EVENTS_NAME = "run.events.jsonl"
 _REPORT_NAME = "run.report.json"
 _MAX_MANAGER_JSON_BYTES = 64 * 1024
+_MAX_RUN_REPORT_BYTES = 8 * 1024 * 1024
 _MAX_WORKER_LOG_BYTES = 8 * 1024 * 1024
 _HEARTBEAT_INTERVAL = 1.0
 _RECOVERY_TERMINATE_GRACE = 3.0
@@ -65,6 +67,10 @@ class JobManagerValidationError(JobManagerError, ValueError):
 
 class JobManagerCorruptError(JobManagerError):
     """Raised when private attempt metadata cannot be trusted."""
+
+
+class JobManagerLaunchError(JobManagerError):
+    """Raised when a detached manager cannot prove its ready handshake."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -253,7 +259,9 @@ def _reject_constant(value: str):
     raise ValueError(f"invalid JSON constant {value}")
 
 
-def _read_private_json(path: Path, *, missing_ok: bool = False) -> dict | None:
+def _read_private_json(
+        path: Path, *, missing_ok: bool = False,
+        maximum_bytes: int = _MAX_MANAGER_JSON_BYTES) -> dict | None:
     descriptor = -1
     try:
         storage_policy.assert_no_link_components(path)
@@ -267,7 +275,7 @@ def _read_private_json(path: Path, *, missing_ok: bool = False) -> dict | None:
     try:
         if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1
                 or before.st_size <= 0
-                or before.st_size > _MAX_MANAGER_JSON_BYTES):
+                or before.st_size > maximum_bytes):
             raise JobManagerCorruptError(
                 "attempt metadata is not one bounded regular file")
         if os.name == "nt":
@@ -414,18 +422,39 @@ def _load_runtime(path: Path, *, execution: job_runtime.JobExecution
     )
 
 
-def process_birth_identity(pid: int) -> str | None:
-    """Return an OS process birth identity where the platform exposes one."""
-    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
-        raise JobManagerValidationError("PID must be a positive integer")
-    if os.name == "nt":
+_WINDOWS_DEFINITIVE_GONE_ERRORS = frozenset({
+    87,    # ERROR_INVALID_PARAMETER: no process has this PID.
+    1168,  # ERROR_NOT_FOUND.
+})
+
+
+class _WindowsProcessReference:
+    """A live process-object reference that prevents PID reuse while held."""
+
+    __slots__ = ("_kernel32", "_handle")
+
+    def __init__(self, kernel32: Any, handle: Any):
+        self._kernel32 = kernel32
+        self._handle = handle
+
+    def snapshot(self) -> tuple[str, str | None]:
+        """Return ``live`` with birth identity, ``gone``, or unverifiable."""
         from ctypes import wintypes
 
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        open_process = kernel32.OpenProcess
-        open_process.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-        open_process.restype = wintypes.HANDLE
-        get_times = kernel32.GetProcessTimes
+        if self._handle is None:
+            return "unverifiable", None
+        get_exit_code = self._kernel32.GetExitCodeProcess
+        get_exit_code.argtypes = [
+            wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD),
+        ]
+        get_exit_code.restype = wintypes.BOOL
+        exit_code = wintypes.DWORD()
+        if not get_exit_code(self._handle, ctypes.byref(exit_code)):
+            return "unverifiable", None
+        if exit_code.value != 259:  # STILL_ACTIVE
+            return "gone", None
+
+        get_times = self._kernel32.GetProcessTimes
         get_times.argtypes = [
             wintypes.HANDLE,
             ctypes.POINTER(wintypes.FILETIME),
@@ -434,26 +463,72 @@ def process_birth_identity(pid: int) -> str | None:
             ctypes.POINTER(wintypes.FILETIME),
         ]
         get_times.restype = wintypes.BOOL
-        close_handle = kernel32.CloseHandle
+        creation = wintypes.FILETIME()
+        exit_time = wintypes.FILETIME()
+        kernel_time = wintypes.FILETIME()
+        user_time = wintypes.FILETIME()
+        if not get_times(
+                self._handle, ctypes.byref(creation), ctypes.byref(exit_time),
+                ctypes.byref(kernel_time), ctypes.byref(user_time)):
+            return "unverifiable", None
+        value = ((int(creation.dwHighDateTime) << 32)
+                 | int(creation.dwLowDateTime))
+        return "live", f"windows:{value}"
+
+    def close(self) -> None:
+        from ctypes import wintypes
+
+        if self._handle is None:
+            return
+        handle, self._handle = self._handle, None
+        close_handle = self._kernel32.CloseHandle
         close_handle.argtypes = [wintypes.HANDLE]
         close_handle.restype = wintypes.BOOL
-        handle = open_process(0x1000, False, pid)
-        if not handle:
-            return None
-        try:
-            creation = wintypes.FILETIME()
-            exit_time = wintypes.FILETIME()
-            kernel_time = wintypes.FILETIME()
-            user_time = wintypes.FILETIME()
-            if not get_times(
-                    handle, ctypes.byref(creation), ctypes.byref(exit_time),
-                    ctypes.byref(kernel_time), ctypes.byref(user_time)):
-                return None
-            value = ((int(creation.dwHighDateTime) << 32)
-                     | int(creation.dwLowDateTime))
-            return f"windows:{value}"
-        finally:
-            close_handle(handle)
+        close_handle(handle)
+
+    def __enter__(self) -> _WindowsProcessReference:
+        return self
+
+    def __exit__(self, _exc_type, _exc, _traceback) -> None:
+        self.close()
+
+
+def _open_windows_process_reference(
+        pid: int) -> tuple[str, _WindowsProcessReference | None]:
+    """Open a query handle, distinguishing absent from inaccessible PIDs."""
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    open_process = kernel32.OpenProcess
+    open_process.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    open_process.restype = wintypes.HANDLE
+    handle = open_process(0x1000, False, pid)
+    if not handle:
+        error = ctypes.get_last_error()
+        status = (
+            "gone" if error in _WINDOWS_DEFINITIVE_GONE_ERRORS
+            else "unverifiable"
+        )
+        return status, None
+    return "open", _WindowsProcessReference(kernel32, handle)
+
+
+def _windows_process_identity_probe(pid: int) -> tuple[str, str | None]:
+    """Return one fail-closed Windows liveness and birth snapshot."""
+    status, reference = _open_windows_process_reference(pid)
+    if reference is None:
+        return status, None
+    with reference:
+        return reference.snapshot()
+
+
+def process_birth_identity(pid: int) -> str | None:
+    """Return an OS process birth identity where the platform exposes one."""
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+        raise JobManagerValidationError("PID must be a positive integer")
+    if os.name == "nt":
+        status, identity = _windows_process_identity_probe(pid)
+        return identity if status == "live" else None
 
     proc_stat = Path("/proc") / str(pid) / "stat"
     try:
@@ -473,28 +548,8 @@ def process_birth_identity(pid: int) -> str | None:
 
 def _pid_exists(pid: int) -> bool:
     if os.name == "nt":
-        from ctypes import wintypes
-
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        open_process = kernel32.OpenProcess
-        open_process.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-        open_process.restype = wintypes.HANDLE
-        get_exit_code = kernel32.GetExitCodeProcess
-        get_exit_code.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
-        get_exit_code.restype = wintypes.BOOL
-        close_handle = kernel32.CloseHandle
-        close_handle.argtypes = [wintypes.HANDLE]
-        close_handle.restype = wintypes.BOOL
-        handle = open_process(0x1000, False, pid)
-        if not handle:
-            return False
-        try:
-            exit_code = wintypes.DWORD()
-            if not get_exit_code(handle, ctypes.byref(exit_code)):
-                return True
-            return exit_code.value == 259  # STILL_ACTIVE
-        finally:
-            close_handle(handle)
+        status, _identity = _windows_process_identity_probe(pid)
+        return status != "gone"
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -508,6 +563,13 @@ def _pid_exists(pid: int) -> bool:
 
 def probe_process_identity(pid: int, expected_birth: str | None) -> str:
     """Return ``match``, ``mismatch``, ``gone``, or ``unverifiable``."""
+    if os.name == "nt":
+        status, current = _windows_process_identity_probe(pid)
+        if status != "live":
+            return status
+        if expected_birth is None:
+            return "unverifiable"
+        return "match" if current == expected_birth else "mismatch"
     if not _pid_exists(pid):
         return "gone"
     current = process_birth_identity(pid)
@@ -552,22 +614,36 @@ def _confirm_worker_tree_gone(
 
 def _terminate_recovered_worker(pid: int, birth: str | None) -> bool:
     """Terminate only an exact live worker; never signal a PID mismatch."""
-    if probe_process_identity(pid, birth) != "match":
-        return False
     if os.name == "nt":
-        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        completed = subprocess.run(
-            ["taskkill", "/PID", str(pid), "/T", "/F"],
-            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL, check=False,
-            timeout=_RECOVERY_TERMINATE_GRACE,
-            creationflags=creationflags,
-        )
-        deadline = time.monotonic() + _RECOVERY_TERMINATE_GRACE
-        while time.monotonic() < deadline:
-            if probe_process_identity(pid, birth) != "match":
-                return completed.returncode == 0
-            time.sleep(0.05)
+        status, reference = _open_windows_process_reference(pid)
+        if status != "open" or reference is None:
+            return False
+        with reference:
+            live_status, current_birth = reference.snapshot()
+            if (live_status != "live" or birth is None
+                    or current_birth != birth):
+                return False
+            # Retaining this process-object handle prevents the verified PID
+            # from being recycled between the birth check and taskkill.
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            completed = subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL, check=False,
+                timeout=_RECOVERY_TERMINATE_GRACE,
+                creationflags=creationflags,
+            )
+            deadline = time.monotonic() + _RECOVERY_TERMINATE_GRACE
+            while time.monotonic() < deadline:
+                live_status, _current_birth = reference.snapshot()
+                if live_status == "gone":
+                    return completed.returncode == 0
+                if live_status == "unverifiable":
+                    return False
+                time.sleep(0.05)
+            return False
+
+    if probe_process_identity(pid, birth) != "match":
         return False
 
     try:
@@ -632,7 +708,8 @@ def _operation_timeout(execution: job_runtime.JobExecution) -> float:
 
 def _report_status(path: Path, *, operation: str,
                    run_id: str) -> str | None:
-    payload = _read_private_json(path, missing_ok=True)
+    payload = _read_private_json(
+        path, missing_ok=True, maximum_bytes=_MAX_RUN_REPORT_BYTES)
     if payload is None:
         return None
     if (type(payload.get("schema_version")) is not int
@@ -651,17 +728,25 @@ def _report_status(path: Path, *, operation: str,
 
 def _telemetry_status(paths: _AttemptPaths, *, operation: str,
                       run_id: str) -> str | None:
-    event_status = None
-    try:
-        recovered = run_telemetry.RunTelemetry.recover(
-            operation, run_id=run_id, events_path=paths.events,
-            report_path=paths.report)
-        if recovered.finished:
-            event_status = recovered.report_payload()["status"]
-    except (OSError, UnicodeError, ValueError):
-        event_status = None
+    # Read the terminal report first and never give recovery permission to
+    # rewrite it. An absent/empty event stream causes RunTelemetry.recover()
+    # to publish a fresh running snapshot when a report path is supplied.
     report_status = _report_status(
         paths.report, operation=operation, run_id=run_id)
+    event_status = None
+    try:
+        events_present = paths.events.stat().st_size > 0
+    except OSError:
+        events_present = False
+    if events_present:
+        try:
+            recovered = run_telemetry.RunTelemetry.recover(
+                operation, run_id=run_id, events_path=paths.events,
+                report_path=None)
+            if recovered.finished:
+                event_status = recovered.report_payload()["status"]
+        except (OSError, UnicodeError, ValueError):
+            event_status = None
     if (event_status is not None and report_status is not None
             and event_status != report_status):
         raise JobManagerCorruptError(
@@ -687,7 +772,7 @@ def _classify_terminal(*, exit_code: int | None, cancel_observed: bool,
                        telemetry_status: str | None,
                        manager_error: bool) -> str:
     if not cleanup_confirmed:
-        return "interrupted"
+        return "orphaned"
     if telemetry_status in {"succeeded", "partial"}:
         return telemetry_status
     if cancel_observed:
@@ -709,8 +794,10 @@ def _result_reason(status: str, exit_code: int | None,
         return "completed"
     if status == "cancelled":
         return "cancelled"
-    if status == "interrupted":
+    if status == "orphaned":
         return "cleanup_unconfirmed"
+    if status == "interrupted":
+        return "outcome_unconfirmed"
     if exit_code == 124:
         return "timeout"
     if cancel_observed:
@@ -763,6 +850,13 @@ def run_job(
         if execution.status != "queued":
             raise job_runtime.JobStateError(
                 "only a queued job can start a manager attempt")
+        try:
+            job_runtime.validate_execution_directories(execution)
+        except job_runtime.JobRuntimeError:
+            store.transition_job(
+                job_id, "failed", attempt_token=execution.attempt_token,
+                expected_revision=execution.revision, lease=lease)
+            raise
         paths = _attempt_paths(
             store, job_id, execution.attempt_number, create=True)
         run_id = f"{job_id}.a{execution.attempt_number}"
@@ -821,6 +915,7 @@ def run_job(
         last_heartbeat = 0.0
         exit_code: int | None = None
         manager_error = False
+        supervisor_cleanup_unconfirmed = False
         active_log_handle = None
 
         def child_started(process) -> None:
@@ -878,6 +973,7 @@ def run_job(
             JOB_ROOT_ENV: str(store.root),
             JOB_ID_ENV: job_id,
             JOB_ATTEMPT_TOKEN_ENV: execution.attempt_token,
+            OUTPUT_ROOT_ENV: str(execution.output_root),
             _READY_NONCE_ENV: None,
         }
         try:
@@ -887,6 +983,7 @@ def run_job(
                     script_path, worker_argv,
                     operation=execution.command,
                     timeout=_operation_timeout(execution),
+                    working_directory=execution.working_directory,
                     environment_overrides=environment,
                     run_id=run_id,
                     run_events=paths.events,
@@ -897,6 +994,9 @@ def run_job(
                     stdout_target=log_handle,
                     stderr_target=log_handle,
                 ))
+        except rag._SupervisorCleanupError:
+            manager_error = True
+            supervisor_cleanup_unconfirmed = True
         except BaseException:
             manager_error = True
         finally:
@@ -907,8 +1007,10 @@ def run_job(
             manager_error = True
 
         worker_pid = int(worker.pid) if worker is not None else None
-        cleanup_confirmed = _confirm_worker_tree_gone(
-            worker_pid, worker_birth)
+        cleanup_confirmed = (
+            False if supervisor_cleanup_unconfirmed else
+            _confirm_worker_tree_gone(worker_pid, worker_birth)
+        )
         try:
             telemetry_status = _telemetry_status(
                 paths, operation=execution.command, run_id=run_id)
@@ -988,12 +1090,21 @@ def launch_detached(
     if execution.status != "queued":
         raise job_runtime.JobStateError(
             "only a queued job can be launched")
+    try:
+        job_runtime.validate_execution_directories(execution)
+    except job_runtime.JobRuntimeError as exc:
+        current = reconcile_job(store, job_id, fail_queued=True)
+        raise JobManagerLaunchError(
+            "background job submission roots failed validation "
+            f"(job status {current.status})") from exc
     script_path = Path(rag.__file__) if script_path is None else Path(script_path)
     paths = _attempt_paths(
         store, job_id, execution.attempt_number, create=False)
     nonce = uuid4().hex
     environment = os.environ.copy()
-    for name in (JOB_ROOT_ENV, JOB_ID_ENV, JOB_ATTEMPT_TOKEN_ENV):
+    for name in (
+            JOB_ROOT_ENV, JOB_ID_ENV, JOB_ATTEMPT_TOKEN_ENV,
+            OUTPUT_ROOT_ENV):
         environment.pop(name, None)
     environment[_READY_NONCE_ENV] = nonce
     command = [
@@ -1006,6 +1117,7 @@ def launch_detached(
         "stdout": subprocess.DEVNULL,
         "stderr": subprocess.DEVNULL,
         "env": environment,
+        "cwd": str(execution.working_directory),
         "close_fds": True,
     }
     if os.name == "nt":
@@ -1016,7 +1128,13 @@ def launch_detached(
         )
     else:
         options["start_new_session"] = True
-    process = subprocess.Popen(command, **options)
+    try:
+        process = subprocess.Popen(command, **options)
+    except (OSError, subprocess.SubprocessError) as exc:
+        current = reconcile_job(store, job_id, fail_queued=True)
+        raise JobManagerLaunchError(
+            "background manager could not be started "
+            f"(job status {current.status})") from exc
     manager_birth = process_birth_identity(process.pid)
     deadline = time.monotonic() + float(ready_timeout)
     while time.monotonic() < deadline:
@@ -1033,10 +1151,10 @@ def launch_detached(
             # marker still cannot be accepted as ready.
             pass
         if process.poll() is not None:
-            current = store.get_job(job_id)
-            return LaunchResult(
-                job_id=job_id, status=current.status,
-                attempt_number=current.attempt_number, ready=False)
+            current = reconcile_job(store, job_id, fail_queued=True)
+            raise JobManagerLaunchError(
+                "background manager exited before its ready handshake "
+                f"(job status {current.status})")
         time.sleep(0.05)
 
     try:
@@ -1048,96 +1166,181 @@ def launch_detached(
             process.wait(timeout=5)
         except (OSError, subprocess.TimeoutExpired):
             pass
-    current = reconcile_job(store, job_id)
-    return LaunchResult(
-        job_id=job_id, status=current.status,
-        attempt_number=current.attempt_number, ready=False)
+    current = reconcile_job(store, job_id, fail_queued=True)
+    raise JobManagerLaunchError(
+        "background manager exceeded its ready-handshake deadline "
+        f"(job status {current.status})")
+
+
+def _reconcile_job_with_lease(
+        store: job_runtime.JobStore, job_id: str, *,
+        lease: job_runtime.JobLease,
+        fail_queued: bool) -> job_runtime.JobSummary:
+    execution = store.load_execution(job_id, lease=lease)
+    if execution.status in job_runtime.TERMINAL_JOB_STATUSES:
+        return store.get_job(job_id)
+    if (execution.status == "queued"
+            and store.is_cancel_requested(
+                job_id, execution.attempt_token)):
+        requested = store.transition_job(
+            job_id, "cancel_requested",
+            attempt_token=execution.attempt_token,
+            expected_revision=execution.revision, lease=lease)
+        return store.transition_job(
+            job_id, "cancelled",
+            attempt_token=execution.attempt_token,
+            expected_revision=requested.revision, lease=lease)
+    paths = _attempt_paths(
+        store, job_id, execution.attempt_number, create=False)
+    runtime_payload = _read_private_json(
+        paths.runtime, missing_ok=True)
+    if runtime_payload is None:
+        if execution.status == "queued":
+            if not fail_queued:
+                return store.get_job(job_id)
+            target = "failed"
+        else:
+            target = "orphaned"
+        return store.transition_job(
+            job_id, target, attempt_token=execution.attempt_token,
+            expected_revision=execution.revision, lease=lease)
+    runtime = _load_runtime(paths.runtime, execution=execution)
+    if execution.status == "queued":
+        cleanup_confirmed = runtime.worker_pid is None
+        target = "failed" if cleanup_confirmed else "orphaned"
+    else:
+        cleanup_confirmed = False
+        if runtime.worker_pid is None:
+            cleanup_confirmed = execution.status in {
+                "starting", "cancel_requested"}
+        else:
+            probe = probe_process_identity(
+                runtime.worker_pid, runtime.worker_birth)
+            if probe == "match":
+                cleanup_confirmed = _terminate_recovered_worker(
+                    runtime.worker_pid, runtime.worker_birth)
+            elif probe == "gone":
+                cleanup_confirmed = _confirm_worker_tree_gone(
+                    runtime.worker_pid, runtime.worker_birth)
+            # mismatch/unverifiable deliberately refuse signalling.
+        try:
+            observed = _telemetry_status(
+                paths, operation=execution.command,
+                run_id=runtime.run_id)
+        except JobManagerCorruptError:
+            observed = None
+        if not cleanup_confirmed:
+            target = "orphaned"
+        elif observed in {"succeeded", "partial", "failed"}:
+            target = observed
+        elif (observed == "cancelled"
+              and execution.status == "cancel_requested"):
+            target = "cancelled"
+        else:
+            target = "interrupted"
+    transition_revision = execution.revision
+    if (execution.status == "starting"
+            and target in {"succeeded", "partial"}):
+        # A worker can commit telemetry after its PID was recorded but before
+        # the manager durably published ``running``. Preserve the legal
+        # lifecycle while honoring that committed terminal result.
+        running = store.transition_job(
+            job_id, "running", attempt_token=execution.attempt_token,
+            expected_revision=transition_revision, lease=lease)
+        transition_revision = running.revision
+    current = store.transition_job(
+        job_id, target, attempt_token=execution.attempt_token,
+        expected_revision=transition_revision, lease=lease)
+    now = time.time()
+    reconciled = replace(
+        runtime, phase="reconciled", job_status=current.status,
+        manager_pid=os.getpid(),
+        manager_birth=process_birth_identity(os.getpid()),
+        heartbeat_at=now, cleanup_confirmed=cleanup_confirmed,
+        updated_at=now)
+    _write_runtime(paths.runtime, reconciled)
+    return current
+
+
+def _queued_reconciliation_needed(
+        store: job_runtime.JobStore, summary: job_runtime.JobSummary, *,
+        fail_queued: bool) -> bool:
+    """Avoid competing with startup for an untouched queued attempt."""
+    if summary.status != "queued" or fail_queued:
+        return True
+    execution = store.load_execution(summary.job_id)
+    if execution.status != "queued":
+        return True
+    if store.is_cancel_requested(summary.job_id, execution.attempt_token):
+        return True
+    paths = _attempt_paths(
+        store, summary.job_id, execution.attempt_number, create=False)
+    return _read_private_json(paths.runtime, missing_ok=True) is not None
 
 
 def reconcile_job(store: job_runtime.JobStore,
-                  job_id: str) -> job_runtime.JobSummary:
+                  job_id: str, *,
+                  fail_queued: bool = False,
+                  lease: job_runtime.JobLease | None = None
+                  ) -> job_runtime.JobSummary:
     """Conservatively reconcile a managerless nonterminal attempt.
 
     Live workers are terminated only when both PID and birth identity match.
     Mismatches and unverifiable identities are never signalled. No state is
     automatically resumed.
     """
-    initial = store.get_job(job_id)
-    if initial.terminal:
-        return initial
+    owns_lease = lease is None
     try:
-        lease = store.lease(job_id, timeout=0).acquire()
-    except job_runtime.JobBusyError:
-        return initial
-    try:
-        execution = store.load_execution(job_id, lease=lease)
-        paths = _attempt_paths(
-            store, job_id, execution.attempt_number, create=False)
-        runtime_payload = _read_private_json(
-            paths.runtime, missing_ok=True)
-        if runtime_payload is None:
-            if execution.status == "queued":
-                return store.get_job(job_id)
-            target = "interrupted"
-            return store.transition_job(
-                job_id, target, attempt_token=execution.attempt_token,
-                expected_revision=execution.revision, lease=lease)
-        runtime = _load_runtime(paths.runtime, execution=execution)
-        if execution.status == "queued":
-            target = "failed"
-            cleanup_confirmed = runtime.worker_pid is None
-        else:
-            cleanup_confirmed = False
-            if runtime.worker_pid is None:
-                cleanup_confirmed = True
-            else:
-                probe = probe_process_identity(
-                    runtime.worker_pid, runtime.worker_birth)
-                if probe == "match":
-                    cleanup_confirmed = _terminate_recovered_worker(
-                        runtime.worker_pid, runtime.worker_birth)
-                elif probe == "gone":
-                    cleanup_confirmed = _confirm_worker_tree_gone(
-                        runtime.worker_pid, runtime.worker_birth)
-                # mismatch/unverifiable deliberately refuse signalling.
-            try:
-                observed = _telemetry_status(
-                    paths, operation=execution.command,
-                    run_id=runtime.run_id)
-            except JobManagerCorruptError:
-                observed = None
-            if cleanup_confirmed and observed in {
-                    "succeeded", "partial", "failed"}:
-                target = observed
-            elif (cleanup_confirmed and observed == "cancelled"
-                  and execution.status == "cancel_requested"):
-                target = "cancelled"
-            else:
-                target = "interrupted"
-        transition_revision = execution.revision
-        if (execution.status == "starting"
-                and target in {"succeeded", "partial"}):
-            # A worker can commit telemetry after its PID was recorded but
-            # before the manager durably published ``running``. Preserve the
-            # legal lifecycle while honoring that committed terminal result.
-            running = store.transition_job(
-                job_id, "running", attempt_token=execution.attempt_token,
-                expected_revision=transition_revision, lease=lease)
-            transition_revision = running.revision
-        current = store.transition_job(
-            job_id, target, attempt_token=execution.attempt_token,
-            expected_revision=transition_revision, lease=lease)
-        now = time.time()
-        reconciled = replace(
-            runtime, phase="reconciled", job_status=current.status,
-            manager_pid=os.getpid(),
-            manager_birth=process_birth_identity(os.getpid()),
-            heartbeat_at=now, cleanup_confirmed=cleanup_confirmed,
-            updated_at=now)
-        _write_runtime(paths.runtime, reconciled)
-        return current
+        if owns_lease:
+            with store.store_lease():
+                initial = store.get_job(job_id)
+                if initial.terminal:
+                    return initial
+                if not _queued_reconciliation_needed(
+                        store, initial, fail_queued=fail_queued):
+                    return initial
+                try:
+                    lease = store.lease(job_id, timeout=0).acquire()
+                except job_runtime.JobBusyError:
+                    return initial
+        assert lease is not None
+        return _reconcile_job_with_lease(
+            store, job_id, lease=lease, fail_queued=fail_queued)
     finally:
-        lease.release()
+        if owns_lease and lease is not None and lease.active:
+            lease.release()
+
+
+def reconcile_all_jobs(
+        store: job_runtime.JobStore) -> list[job_runtime.JobSummary]:
+    """Snapshot jobs and reserve managerless attempts before reconciliation."""
+    pending: list[tuple[int, str, job_runtime.JobLease]] = []
+    try:
+        with store.store_lease() as root_lease:
+            results = store.list_jobs(lease=root_lease)
+            for index, summary in enumerate(results):
+                if summary.terminal:
+                    continue
+                if not _queued_reconciliation_needed(
+                        store, summary, fail_queued=False):
+                    continue
+                try:
+                    job_lease = store.lease(
+                        summary.job_id, timeout=0).acquire()
+                except job_runtime.JobBusyError:
+                    continue
+                pending.append((index, summary.job_id, job_lease))
+        for index, job_id, job_lease in pending:
+            try:
+                results[index] = reconcile_job(
+                    store, job_id, lease=job_lease)
+            finally:
+                job_lease.release()
+    finally:
+        for _index, _job_id, job_lease in pending:
+            if job_lease.active:
+                job_lease.release()
+    return results
 
 
 def _exit_for_status(status: str) -> int:
@@ -1166,7 +1369,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     # These values are capabilities for the worker only. A detached manager is
     # deliberately launched without them and removes accidental inherited
     # values before it constructs the exact child environment.
-    for name in (JOB_ROOT_ENV, JOB_ID_ENV, JOB_ATTEMPT_TOKEN_ENV):
+    for name in (
+            JOB_ROOT_ENV, JOB_ID_ENV, JOB_ATTEMPT_TOKEN_ENV,
+            OUTPUT_ROOT_ENV):
         os.environ.pop(name, None)
     store = job_runtime.JobStore(args.root)
     if args.action == "_manage":
@@ -1188,8 +1393,10 @@ __all__ = [
     "JOB_ATTEMPT_TOKEN_ENV",
     "JOB_ID_ENV",
     "JOB_ROOT_ENV",
+    "OUTPUT_ROOT_ENV",
     "JobManagerCorruptError",
     "JobManagerError",
+    "JobManagerLaunchError",
     "JobManagerValidationError",
     "LaunchResult",
     "MANAGER_SCHEMA_VERSION",
@@ -1199,6 +1406,7 @@ __all__ = [
     "main",
     "probe_process_identity",
     "process_birth_identity",
+    "reconcile_all_jobs",
     "reconcile_job",
     "run_job",
 ]

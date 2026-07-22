@@ -4,6 +4,7 @@ import json
 import multiprocessing
 import os
 import stat
+import threading
 from pathlib import Path
 
 import pytest
@@ -101,6 +102,30 @@ def test_submit_get_and_list_expose_only_redacted_summaries(tmp_path):
     assert execution.attempt_token not in repr(execution)
 
 
+def test_submission_rejects_spec_larger_than_its_read_bound(tmp_path):
+    store = JobStore(tmp_path / "jobs")
+
+    with pytest.raises(
+            JobValidationError, match="serialized job spec exceeds"):
+        store.submit_job("export", ["\\" * (64 * 1024)])
+
+    assert store.list_jobs() == []
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows forbids newline paths")
+def test_submission_rejects_unpersistable_directory_text(tmp_path):
+    store = JobStore(tmp_path / "jobs")
+    invalid_working = tmp_path / "line\nbreak"
+    invalid_working.mkdir()
+
+    with pytest.raises(JobValidationError, match="path is invalid"):
+        store.submit_job(
+            "export", [], working_directory=invalid_working,
+            output_root=tmp_path / "output")
+
+    assert store.list_jobs() == []
+
+
 def test_submit_creates_owner_only_root_job_and_documents(tmp_path):
     root = tmp_path / "private-jobs"
     store = JobStore(root)
@@ -115,7 +140,9 @@ def test_submit_creates_owner_only_root_job_and_documents(tmp_path):
     for filename in (
             ".store.lock",):
         _assert_private(root / filename, directory=False)
-    for filename in ("spec.json", "state.json", "cancel.json", ".lock"):
+    for filename in (
+            "spec.json", "state.json", "cancel.a00000000000000000001.json",
+            ".lock"):
         _assert_private(job_dir / filename, directory=False)
 
 
@@ -304,18 +331,56 @@ def test_spec_digest_detects_valid_json_mutation(tmp_path):
         store.get_job(summary.job_id)
 
 
+def test_unreleased_v1_job_layout_is_explicitly_unsupported(tmp_path):
+    store = JobStore(tmp_path / "jobs")
+    summary = store.submit_job("convert", ["--pdf", "one.pdf"])
+    spec_path = store.root / summary.job_id / "spec.json"
+    payload = json.loads(spec_path.read_text(encoding="utf-8"))
+    payload["schema_version"] = 1
+    for field in (
+            "working_directory", "working_directory_device",
+            "working_directory_inode", "output_root", "output_root_device",
+            "output_root_inode"):
+        payload.pop(field)
+    storage_policy.atomic_write_private_json(spec_path, payload)
+
+    with pytest.raises(JobCorruptError, match="job spec schema is unsupported"):
+        store.get_job(summary.job_id)
+
+
 def test_corrupt_cancel_marker_is_not_silently_ignored(tmp_path):
     store = JobStore(tmp_path / "jobs")
     summary = store.submit_job("full", ["--pdf", "book.pdf"])
     execution = _execution(store, summary.job_id)
     store.request_cancel(summary.job_id)
-    cancel_path = store.root / summary.job_id / "cancel.json"
+    cancel_path = (
+        store.root / summary.job_id / "cancel.a00000000000000000001.json")
     payload = json.loads(cancel_path.read_text(encoding="utf-8"))
     payload["attempt_token"] = "0" * 32
     storage_policy.atomic_write_private_json(cancel_path, payload)
 
     with pytest.raises(JobCorruptError, match="conflicts"):
         store.is_cancel_requested(summary.job_id, execution.attempt_token)
+
+
+def test_cancel_marker_attempt_must_match_its_filename(tmp_path):
+    store = JobStore(tmp_path / "jobs")
+    summary = store.submit_job("full", ["--pdf", "book.pdf"])
+    first_token, running = _advance_to_running(store, summary.job_id)
+    failed = store.transition_job(
+        summary.job_id, "failed", attempt_token=first_token,
+        expected_revision=running.revision)
+    store.prepare_resume(summary.job_id, expected_revision=failed.revision)
+    second = _execution(store, summary.job_id)
+    store.request_cancel(summary.job_id)
+    cancel_path = (
+        store.root / summary.job_id / "cancel.a00000000000000000002.json")
+    payload = json.loads(cancel_path.read_text(encoding="utf-8"))
+    payload["attempt_number"] = 1
+    storage_policy.atomic_write_private_json(cancel_path, payload)
+
+    with pytest.raises(JobCorruptError, match="does not match its filename"):
+        store.is_cancel_requested(summary.job_id, second.attempt_token)
 
 
 def test_atomic_state_publication_failure_preserves_prior_generation(
@@ -503,6 +568,54 @@ def test_pipeline_bindings_reject_drift_conflicts_and_stale_attempts(tmp_path):
     assert resumed.status == "allocated"
 
 
+def test_pipeline_binding_growth_preserves_last_loadable_file(tmp_path):
+    store = JobStore(tmp_path / "jobs")
+    summary = store.submit_job("batch", ["Book.pdf"])
+    execution = store.load_execution(summary.job_id)
+    _spec, state = store._load_record(summary.job_id)
+    run_name = "r" * 1000
+    input_path = f"{run_name}.pdf"
+    input_sha256 = job_runtime.pipeline_input_sha256(input_path)
+    items = []
+    crossing_index = None
+    for item_index in range(1, 513):
+        candidate = job_runtime.PipelineRunBinding(
+            item_index=item_index, input_sha256=input_sha256,
+            run_name=run_name, status="allocated")
+        proposed = job_runtime._StoredBindings(
+            job_id=summary.job_id, spec_sha256=state.spec_sha256,
+            revision=2, items=tuple([*items, candidate]))
+        if len(job_runtime._canonical_json_bytes(
+                job_runtime._bindings_payload(proposed))) > (
+                job_runtime._MAX_BINDINGS_BYTES):
+            crossing_index = item_index
+            break
+        items.append(candidate)
+    assert items and crossing_index is not None
+    stored = job_runtime._StoredBindings(
+        job_id=summary.job_id, spec_sha256=state.spec_sha256,
+        revision=1, items=tuple(items))
+    bindings_path = store.root / summary.job_id / "bindings.json"
+    storage_policy.atomic_write_private_json(
+        bindings_path, job_runtime._bindings_payload(stored))
+    original = bindings_path.read_bytes()
+
+    with pytest.raises(
+            JobValidationError, match="pipeline bindings exceed"):
+        store.bind_pipeline_run(
+            summary.job_id, attempt_token=execution.attempt_token,
+            item_index=crossing_index, input_path=input_path,
+            run_name=run_name)
+
+    assert bindings_path.read_bytes() == original
+    assert store.get_pipeline_binding(
+        summary.job_id, item_index=items[-1].item_index,
+        input_path=input_path) == items[-1]
+    assert store.get_pipeline_binding(
+        summary.job_id, item_index=crossing_index,
+        input_path=input_path) is None
+
+
 def test_worker_context_requires_complete_matching_manager_environment(tmp_path):
     store = JobStore(tmp_path / "jobs")
     summary = store.submit_job("full", ["--pdf", "Book.pdf"])
@@ -539,3 +652,118 @@ def test_non_pipeline_jobs_cannot_create_exact_run_bindings(tmp_path):
         store.bind_pipeline_run(
             summary.job_id, attempt_token=execution.attempt_token,
             item_index=1, input_path="Book.pdf", run_name="Book")
+
+
+def test_stale_cancel_writer_cannot_overwrite_new_attempt_marker(
+        monkeypatch, tmp_path):
+    store = JobStore(tmp_path / "jobs")
+    submitted = store.submit_job("full", ["--pdf", "Book.pdf"])
+    first, running = _advance_to_running(store, submitted.job_id)
+    entered = threading.Event()
+    release = threading.Event()
+    errors = []
+    original = storage_policy.atomic_write_private_json
+
+    def delayed_write(path, payload, *args, **kwargs):
+        if (payload.get("kind") == "job_cancel_request"
+                and payload.get("attempt_number") == 1):
+            entered.set()
+            assert release.wait(10)
+        return original(path, payload, *args, **kwargs)
+
+    monkeypatch.setattr(
+        storage_policy, "atomic_write_private_json", delayed_write)
+
+    def request_first_cancel():
+        try:
+            store.request_cancel(submitted.job_id)
+        except Exception as exc:  # surfaced after joining the race
+            errors.append(exc)
+
+    thread = threading.Thread(target=request_first_cancel)
+    thread.start()
+    assert entered.wait(10)
+    failed = store.transition_job(
+        submitted.job_id, "failed", attempt_token=first,
+        expected_revision=running.revision)
+    resumed = store.prepare_resume(
+        submitted.job_id, expected_revision=failed.revision)
+    second = store.load_execution(submitted.job_id)
+    second_done = threading.Event()
+
+    def request_second_cancel():
+        try:
+            store.request_cancel(submitted.job_id)
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            second_done.set()
+
+    second_thread = threading.Thread(target=request_second_cancel)
+    second_thread.start()
+    assert not second_done.wait(0.2)
+    release.set()
+    thread.join(timeout=10)
+    second_thread.join(timeout=10)
+
+    assert not thread.is_alive()
+    assert not second_thread.is_alive()
+    assert not errors
+    assert resumed.attempt_number == 2
+    assert store.is_cancel_requested(
+        submitted.job_id, second.attempt_token)
+    job_dir = store.root / submitted.job_id
+    assert (job_dir / "cancel.a00000000000000000001.json").is_file()
+    assert (job_dir / "cancel.a00000000000000000002.json").is_file()
+
+
+def test_orphaned_attempt_is_terminal_but_never_resumable(tmp_path):
+    store = JobStore(tmp_path / "jobs")
+    submitted = store.submit_job("index", ["--chunks", "Book.jsonl"])
+    token, running = _advance_to_running(store, submitted.job_id)
+    orphaned = store.transition_job(
+        submitted.job_id, "orphaned", attempt_token=token,
+        expected_revision=running.revision)
+
+    assert orphaned.terminal
+    with pytest.raises(JobStateError, match="not resumable"):
+        store.prepare_resume(submitted.job_id)
+
+
+def test_submission_directories_are_immutable_private_bindings(tmp_path):
+    working = tmp_path / "working"
+    working.mkdir()
+    output = working / "private-output"
+    store = JobStore(tmp_path / "jobs")
+    submitted = store.submit_job(
+        "export", ["--chunks", "Book.jsonl"],
+        working_directory=working, output_root=output)
+    execution = store.load_execution(submitted.job_id)
+
+    assert execution.working_directory == working.resolve()
+    assert execution.output_root == output.resolve()
+    assert str(working) not in json.dumps(submitted.as_dict())
+    job_runtime.validate_execution_directories(execution)
+
+    output.rmdir()
+    storage_policy.ensure_private_directory(output)
+    with pytest.raises(JobStateError, match="output root identity changed"):
+        job_runtime.validate_execution_directories(execution)
+
+
+def test_prepare_delete_blocks_resume_and_rejects_unsafe_states(tmp_path):
+    store = JobStore(tmp_path / "jobs")
+    submitted = store.submit_job("export", ["--chunks", "Book.jsonl"])
+    token, running = _advance_to_running(store, submitted.job_id)
+    with pytest.raises(JobStateError, match="cannot be deleted"):
+        store.prepare_delete(submitted.job_id)
+    failed = store.transition_job(
+        submitted.job_id, "failed", attempt_token=token,
+        expected_revision=running.revision)
+
+    deleting = store.prepare_delete(submitted.job_id)
+
+    assert deleting.status == "deleting"
+    assert deleting.revision == failed.revision + 1
+    with pytest.raises(JobStateError, match="not resumable"):
+        store.prepare_resume(submitted.job_id)

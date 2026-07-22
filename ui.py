@@ -491,10 +491,7 @@ def do_jobs_refresh():
         return disabled
     try:
         store = _job_store()
-        summaries = [
-            job_manager.reconcile_job(store, summary.job_id)
-            for summary in store.list_jobs()
-        ]
+        summaries = job_manager.reconcile_all_jobs(store)
         return _format_job_summaries(summaries)
     except Exception as exc:
         return f"Job status unavailable ({type(exc).__name__})."
@@ -524,7 +521,8 @@ def do_job_reindex(full_reindex):
         store = _job_store()
         submitted = store.submit_job(
             "index", arguments,
-            timeout_seconds=rag.DEFAULT_OPERATION_TIMEOUTS["index"])
+            timeout_seconds=rag.DEFAULT_OPERATION_TIMEOUTS["index"],
+            working_directory=Path.cwd(), output_root=rag.OUTPUT_DIR)
         launched = job_manager.launch_detached(
             store, submitted.job_id,
             ready_timeout=_config["job_ready_timeout"])

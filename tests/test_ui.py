@@ -217,6 +217,33 @@ def test_jobs_reindex_submits_only_the_configured_corpus(
     assert str(chunks) not in rendered
 
 
+def test_jobs_reindex_spawn_failure_does_not_strand_queued_job(
+        monkeypatch, tmp_path):
+    chunks = tmp_path / "Private_chunks.jsonl"
+    chunks.write_text("{}\n", encoding="utf-8")
+    job_root = tmp_path / "jobs"
+    monkeypatch.setitem(ui._config, "share", False)
+    monkeypatch.setitem(ui._config, "chunks_path", chunks)
+    monkeypatch.setitem(ui._config, "db_path", tmp_path / "Private_chroma")
+    monkeypatch.setitem(ui._config, "db_backend", "chroma")
+    monkeypatch.setitem(ui._config, "collection", "private_book")
+    monkeypatch.setitem(ui._config, "embedding_model", "test-embedding")
+    monkeypatch.setitem(ui._config, "db_lock_timeout", 7.0)
+    monkeypatch.setitem(ui._config, "job_root", job_root)
+    monkeypatch.setitem(ui._config, "job_ready_timeout", 0.1)
+    monkeypatch.setattr(
+        job_manager.subprocess, "Popen",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            OSError("injected spawn failure")))
+
+    rendered = ui.do_job_reindex(False)
+
+    jobs = job_runtime.JobStore(job_root).list_jobs()
+    assert "JobManagerLaunchError" in rendered
+    assert len(jobs) == 1
+    assert jobs[0].status == "failed"
+
+
 def test_jobs_controls_are_disabled_without_touching_storage_when_shared(
         monkeypatch):
     monkeypatch.setitem(ui._config, "share", True)

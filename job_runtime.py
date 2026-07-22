@@ -31,11 +31,15 @@ from uuid import uuid4
 import storage_policy
 
 
-JOB_SCHEMA_VERSION = 1
+# Version 1 was used only by the initial, unreleased background-job prototype.
+# Version 2 pins submission/output directory identities and uses attempt-scoped
+# cancellation markers. Those identities cannot be reconstructed safely.
+JOB_SCHEMA_VERSION = 2
 DEFAULT_JOB_ROOT = Path("output") / ".rag-jobs"
 JOB_ROOT_ENV = "RAG_PIPELINE_JOB_ROOT"
 JOB_ID_ENV = "RAG_PIPELINE_JOB_ID"
 JOB_ATTEMPT_TOKEN_ENV = "RAG_PIPELINE_JOB_ATTEMPT_TOKEN"
+OUTPUT_ROOT_ENV = "RAG_PIPELINE_OUTPUT_ROOT"
 
 # 4C.1 intentionally admits only bounded, non-interactive operations that are
 # useful behind a future background manager.  Short read-only query/info and
@@ -78,31 +82,42 @@ JOB_STATUSES = frozenset({
     "failed",
     "cancelled",
     "interrupted",
+    "orphaned",
+    "deleting",
 })
 TERMINAL_JOB_STATUSES = frozenset({
     "succeeded", "partial", "failed", "cancelled", "interrupted",
+    "orphaned", "deleting",
 })
 RESUMABLE_JOB_STATUSES = frozenset({
     "partial", "failed", "cancelled", "interrupted",
 })
+DELETABLE_JOB_STATUSES = frozenset({
+    "succeeded", "partial", "failed", "cancelled", "interrupted", "deleting",
+})
 
 LEGAL_JOB_TRANSITIONS = {
-    "queued": frozenset({"starting", "cancel_requested", "failed"}),
+    "queued": frozenset({
+        "starting", "cancel_requested", "failed", "orphaned",
+    }),
     "starting": frozenset({
-        "running", "cancel_requested", "failed", "interrupted",
+        "running", "cancel_requested", "failed", "interrupted", "orphaned",
     }),
     "running": frozenset({
         "cancel_requested", "succeeded", "partial", "failed",
-        "interrupted",
+        "interrupted", "orphaned",
     }),
     "cancel_requested": frozenset({
         "cancelled", "succeeded", "partial", "failed", "interrupted",
+        "orphaned",
     }),
-    "succeeded": frozenset(),
-    "partial": frozenset(),
-    "failed": frozenset(),
-    "cancelled": frozenset(),
-    "interrupted": frozenset(),
+    "succeeded": frozenset({"deleting"}),
+    "partial": frozenset({"deleting"}),
+    "failed": frozenset({"deleting"}),
+    "cancelled": frozenset({"deleting"}),
+    "interrupted": frozenset({"deleting"}),
+    "orphaned": frozenset(),
+    "deleting": frozenset(),
 }
 
 _JOB_ID = re.compile(r"^[0-9a-f]{32}$")
@@ -110,15 +125,18 @@ _ATTEMPT_TOKEN = re.compile(r"^[0-9a-f]{32}$")
 _MAX_ARGUMENT_COUNT = 512
 _MAX_ARGUMENT_BYTES = 64 * 1024
 _MAX_TIMEOUT_SECONDS = 31 * 24 * 60 * 60
+_MAX_PATH_BYTES = 32 * 1024
 _MAX_SPEC_BYTES = 128 * 1024
 _MAX_STATE_BYTES = 32 * 1024
 _MAX_CANCEL_BYTES = 16 * 1024
 _MAX_COUNTER = (1 << 63) - 1
+_MAX_FILESYSTEM_IDENTITY = (1 << 128) - 1
 _STORE_LOCK_NAME = ".store.lock"
+_RETENTION_QUARANTINE_NAME = ".rag-quarantine"
 _JOB_LOCK_NAME = ".lock"
 _SPEC_NAME = "spec.json"
 _STATE_NAME = "state.json"
-_CANCEL_NAME = "cancel.json"
+_CANCEL_NAME_TEMPLATE = "cancel.a{attempt_number:020d}.json"
 _BINDINGS_NAME = "bindings.json"
 _BINDINGS_LOCK_NAME = ".bindings.lock"
 _MAX_BINDINGS_BYTES = 256 * 1024
@@ -194,6 +212,12 @@ class JobExecution:
     job_id: str
     command: str
     argv: tuple[str, ...] = field(repr=False)
+    working_directory: Path = field(repr=False)
+    working_directory_device: int = field(repr=False)
+    working_directory_inode: int = field(repr=False)
+    output_root: Path = field(repr=False)
+    output_root_device: int = field(repr=False)
+    output_root_inode: int = field(repr=False)
     timeout_seconds: float | None
     status: str
     attempt_number: int
@@ -224,6 +248,12 @@ class _StoredSpec:
     job_id: str
     command: str
     argv: tuple[str, ...]
+    working_directory: str
+    working_directory_device: int
+    working_directory_inode: int
+    output_root: str
+    output_root_device: int
+    output_root_inode: int
     timeout_seconds: float | None
     created_at: float
 
@@ -348,6 +378,54 @@ def _validate_counter(value, name: str, *, minimum: int) -> int:
     return value
 
 
+def _validate_filesystem_identity(value: object, name: str) -> int:
+    if (isinstance(value, bool) or not isinstance(value, int)
+            or value < 0 or value > _MAX_FILESYSTEM_IDENTITY):
+        raise JobCorruptError(f"job {name} is invalid")
+    return value
+
+
+def _validate_stored_directory(value: object, name: str) -> Path:
+    if not isinstance(value, str) or not value or any(
+            control in value for control in ("\x00", "\r", "\n")):
+        raise JobCorruptError(f"job {name} is invalid")
+    try:
+        if len(value.encode("utf-8")) > _MAX_PATH_BYTES:
+            raise JobCorruptError(f"job {name} is too long")
+    except UnicodeEncodeError as exc:
+        raise JobCorruptError(f"job {name} is invalid") from exc
+    path = Path(value)
+    if not path.is_absolute():
+        raise JobCorruptError(f"job {name} must be absolute")
+    return path
+
+
+def _bind_directory(path: Path, *, name: str,
+                    private: bool) -> tuple[Path, int, int]:
+    candidate = Path(path)
+    if not candidate.is_absolute():
+        candidate = Path(os.path.abspath(candidate))
+    try:
+        _validate_stored_directory(str(candidate), name)
+    except JobCorruptError as exc:
+        raise JobValidationError(f"{name} path is invalid") from exc
+    try:
+        if private:
+            absolute = storage_policy.ensure_private_directory(candidate)
+        else:
+            absolute = candidate.resolve(strict=True)
+        _validate_stored_directory(str(absolute), name)
+        result = os.stat(absolute, follow_symlinks=False)
+    except JobCorruptError as exc:
+        raise JobValidationError(f"{name} path is invalid") from exc
+    except (OSError, RuntimeError) as exc:
+        raise JobValidationError(
+            f"{name} must be an accessible directory") from exc
+    if not stat.S_ISDIR(result.st_mode):
+        raise JobValidationError(f"{name} must be a directory")
+    return absolute, int(result.st_dev), int(result.st_ino)
+
+
 def _validate_digest(value: str) -> str:
     if (not isinstance(value, str) or len(value) != 64
             or any(character not in "0123456789abcdef" for character in value)):
@@ -370,6 +448,12 @@ def _spec_payload(spec: _StoredSpec) -> dict:
         "job_id": spec.job_id,
         "command": spec.command,
         "argv": list(spec.argv),
+        "working_directory": spec.working_directory,
+        "working_directory_device": spec.working_directory_device,
+        "working_directory_inode": spec.working_directory_inode,
+        "output_root": spec.output_root,
+        "output_root_device": spec.output_root_device,
+        "output_root_inode": spec.output_root_inode,
         "timeout_seconds": spec.timeout_seconds,
         "created_at": spec.created_at,
     }
@@ -420,11 +504,22 @@ def _bindings_payload(bindings: _StoredBindings) -> dict:
     }
 
 
-def _canonical_digest(payload: dict) -> str:
-    encoded = json.dumps(
+def _canonical_json_bytes(payload: dict) -> bytes:
+    return json.dumps(
         payload, ensure_ascii=False, sort_keys=True,
         separators=(",", ":"), allow_nan=False).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
+
+
+def _canonical_digest(payload: dict) -> str:
+    return hashlib.sha256(_canonical_json_bytes(payload)).hexdigest()
+
+
+def _bounded_bindings_payload(bindings: _StoredBindings) -> dict:
+    payload = _bindings_payload(bindings)
+    if len(_canonical_json_bytes(payload)) > _MAX_BINDINGS_BYTES:
+        raise JobValidationError(
+            "serialized pipeline bindings exceed the private storage limit")
+    return payload
 
 
 def pipeline_input_sha256(path: str | os.PathLike[str]) -> str:
@@ -602,14 +697,16 @@ def _require_exact_keys(payload: dict, expected: frozenset[str], label: str) -> 
 
 
 def _parse_spec(payload: dict, *, expected_job_id: str) -> _StoredSpec:
+    if (type(payload.get("schema_version")) is not int
+            or payload.get("schema_version") != JOB_SCHEMA_VERSION
+            or payload.get("kind") != "job_spec"):
+        raise JobCorruptError("job spec schema is unsupported")
     _require_exact_keys(payload, frozenset({
         "schema_version", "kind", "job_id", "command", "argv",
-        "timeout_seconds", "created_at",
+        "working_directory", "working_directory_device",
+        "working_directory_inode", "output_root", "output_root_device",
+        "output_root_inode", "timeout_seconds", "created_at",
     }), "job spec")
-    if (type(payload["schema_version"]) is not int
-            or payload["schema_version"] != JOB_SCHEMA_VERSION
-            or payload["kind"] != "job_spec"):
-        raise JobCorruptError("job spec schema is unsupported")
     if payload["job_id"] != expected_job_id:
         raise JobCorruptError("job spec identity does not match its directory")
     try:
@@ -618,25 +715,41 @@ def _parse_spec(payload: dict, *, expected_job_id: str) -> _StoredSpec:
         timeout_seconds = _validate_timeout(payload["timeout_seconds"])
     except JobValidationError as exc:
         raise JobCorruptError("persisted job spec is invalid") from exc
+    working_directory = _validate_stored_directory(
+        payload["working_directory"], "working_directory")
+    output_root = _validate_stored_directory(
+        payload["output_root"], "output_root")
     return _StoredSpec(
         job_id=expected_job_id,
         command=command,
         argv=argv,
+        working_directory=str(working_directory),
+        working_directory_device=_validate_filesystem_identity(
+            payload["working_directory_device"],
+            "working_directory_device"),
+        working_directory_inode=_validate_filesystem_identity(
+            payload["working_directory_inode"],
+            "working_directory_inode"),
+        output_root=str(output_root),
+        output_root_device=_validate_filesystem_identity(
+            payload["output_root_device"], "output_root_device"),
+        output_root_inode=_validate_filesystem_identity(
+            payload["output_root_inode"], "output_root_inode"),
         timeout_seconds=timeout_seconds,
         created_at=_validate_timestamp(payload["created_at"], "created_at"),
     )
 
 
 def _parse_state(payload: dict, *, expected_job_id: str) -> _StoredState:
+    if (type(payload.get("schema_version")) is not int
+            or payload.get("schema_version") != JOB_SCHEMA_VERSION
+            or payload.get("kind") != "job_state"):
+        raise JobCorruptError("job state schema is unsupported")
     _require_exact_keys(payload, frozenset({
         "schema_version", "kind", "job_id", "status", "attempt_number",
         "attempt_token", "revision", "spec_sha256", "created_at",
         "updated_at",
     }), "job state")
-    if (type(payload["schema_version"]) is not int
-            or payload["schema_version"] != JOB_SCHEMA_VERSION
-            or payload["kind"] != "job_state"):
-        raise JobCorruptError("job state schema is unsupported")
     if payload["job_id"] != expected_job_id:
         raise JobCorruptError("job state identity does not match its directory")
     status = payload["status"]
@@ -664,14 +777,14 @@ def _parse_state(payload: dict, *, expected_job_id: str) -> _StoredState:
 
 
 def _parse_cancel(payload: dict, *, expected_job_id: str) -> _CancelMarker:
+    if (type(payload.get("schema_version")) is not int
+            or payload.get("schema_version") != JOB_SCHEMA_VERSION
+            or payload.get("kind") != "job_cancel_request"):
+        raise JobCorruptError("job cancel marker schema is unsupported")
     _require_exact_keys(payload, frozenset({
         "schema_version", "kind", "job_id", "attempt_number",
         "attempt_token", "requested_at",
     }), "job cancel marker")
-    if (type(payload["schema_version"]) is not int
-            or payload["schema_version"] != JOB_SCHEMA_VERSION
-            or payload["kind"] != "job_cancel_request"):
-        raise JobCorruptError("job cancel marker schema is unsupported")
     if payload["job_id"] != expected_job_id:
         raise JobCorruptError("job cancel identity does not match its directory")
     try:
@@ -689,14 +802,14 @@ def _parse_cancel(payload: dict, *, expected_job_id: str) -> _CancelMarker:
 
 def _parse_bindings(payload: dict, *, expected_job_id: str,
                     expected_spec_sha256: str) -> _StoredBindings:
+    if (type(payload.get("schema_version")) is not int
+            or payload.get("schema_version") != JOB_SCHEMA_VERSION
+            or payload.get("kind") != "job_pipeline_bindings"):
+        raise JobCorruptError("job pipeline bindings schema is unsupported")
     _require_exact_keys(payload, frozenset({
         "schema_version", "kind", "job_id", "spec_sha256", "revision",
         "items",
     }), "job pipeline bindings")
-    if (type(payload["schema_version"]) is not int
-            or payload["schema_version"] != JOB_SCHEMA_VERSION
-            or payload["kind"] != "job_pipeline_bindings"):
-        raise JobCorruptError("job pipeline bindings schema is unsupported")
     if payload["job_id"] != expected_job_id:
         raise JobCorruptError(
             "job pipeline bindings identity does not match its directory")
@@ -924,6 +1037,10 @@ class JobStore:
             directory_identity=self._root_identity,
             job_id=None, timeout=timeout)
 
+    def store_lease(self, *, timeout: float = 5.0) -> JobLease:
+        """Serialize trusted root enumeration and directory mutations."""
+        return self._store_lease(timeout=timeout)
+
     def lease(self, job_id: str, *, timeout: float = 0.0) -> JobLease:
         directory = self._job_dir(job_id)
         directory_identity = _directory_identity(
@@ -953,6 +1070,15 @@ class JobStore:
         if _directory_identity(directory, label="job directory") != (
                 lease._directory_identity):
             raise JobCorruptError("leased job directory identity changed")
+
+    def _validate_supplied_store_lease(self, lease: JobLease) -> None:
+        if (not isinstance(lease, JobLease) or not lease.active
+                or lease.job_id is not None
+                or lease._store_key != self._store_key):
+            raise JobStateError("active store lease does not own this job root")
+        if _directory_identity(self.root, label="job root") != (
+                lease._directory_identity):
+            raise JobCorruptError("leased job root identity changed")
 
     @contextmanager
     def _mutation_lease(self, job_id: str, *, timeout: float,
@@ -1012,17 +1138,36 @@ class JobStore:
 
     def submit_job(self, command: str, argv: Sequence[str] = (), *,
                    timeout_seconds: float | None = None,
-                   job_id: str | None = None) -> JobSummary:
+                   job_id: str | None = None,
+                   working_directory: Path | None = None,
+                   output_root: Path | None = None) -> JobSummary:
         """Persist one queued job without launching it."""
         command = _validate_command(command)
         argv = _validate_argv(argv)
         timeout_seconds = _validate_timeout(timeout_seconds)
         job_id = uuid4().hex if job_id is None else _validate_job_id(job_id)
+        submitted_cwd, cwd_device, cwd_inode = _bind_directory(
+            Path.cwd() if working_directory is None else working_directory,
+            name="working_directory", private=False)
+        requested_output = Path("output") if output_root is None else Path(output_root)
+        if not requested_output.is_absolute():
+            requested_output = submitted_cwd / requested_output
+        bound_output, output_device, output_inode = _bind_directory(
+            requested_output, name="output_root", private=True)
         created_at = _now(self._clock)
         spec = _StoredSpec(
             job_id=job_id, command=command, argv=argv,
+            working_directory=str(submitted_cwd),
+            working_directory_device=cwd_device,
+            working_directory_inode=cwd_inode,
+            output_root=str(bound_output),
+            output_root_device=output_device,
+            output_root_inode=output_inode,
             timeout_seconds=timeout_seconds, created_at=created_at)
         spec_payload = _spec_payload(spec)
+        if len(_canonical_json_bytes(spec_payload)) > _MAX_SPEC_BYTES:
+            raise JobValidationError(
+                "serialized job spec exceeds the private storage limit")
         state = _StoredState(
             job_id=job_id,
             status="queued",
@@ -1033,7 +1178,7 @@ class JobStore:
             created_at=created_at,
             updated_at=created_at,
         )
-        with self._store_lease():
+        with self.store_lease():
             directory = self.root / job_id
             try:
                 os.lstat(directory)
@@ -1056,22 +1201,32 @@ class JobStore:
         spec, state = self._load_record(_validate_job_id(job_id))
         return self._summary(spec, state)
 
-    def list_jobs(self) -> list[JobSummary]:
+    def list_jobs(self, *, lease: JobLease | None = None) -> list[JobSummary]:
         """Return all jobs, failing rather than silently skipping corruption."""
-        with self._store_lease():
-            identifiers = []
-            try:
-                entries = list(os.scandir(self.root))
-            except OSError as exc:
-                raise JobCorruptError("job root could not be enumerated") from exc
-            for entry in entries:
-                if entry.name == _STORE_LOCK_NAME:
-                    continue
-                if (not _JOB_ID.fullmatch(entry.name)
-                        or not entry.is_dir(follow_symlinks=False)):
-                    raise JobCorruptError("job root contains an unexpected entry")
-                identifiers.append(entry.name)
-            summaries = [self.get_job(job_id) for job_id in identifiers]
+        if lease is None:
+            with self.store_lease() as acquired:
+                return self.list_jobs(lease=acquired)
+        self._validate_supplied_store_lease(lease)
+        identifiers = []
+        try:
+            entries = list(os.scandir(self.root))
+        except OSError as exc:
+            raise JobCorruptError("job root could not be enumerated") from exc
+        for entry in entries:
+            if entry.name == _STORE_LOCK_NAME:
+                continue
+            if entry.name == _RETENTION_QUARANTINE_NAME:
+                if not entry.is_dir(follow_symlinks=False):
+                    raise JobCorruptError(
+                        "job quarantine is not a directory")
+                _directory_identity(
+                    Path(entry.path), label="job quarantine")
+                continue
+            if (not _JOB_ID.fullmatch(entry.name)
+                    or not entry.is_dir(follow_symlinks=False)):
+                raise JobCorruptError("job root contains an unexpected entry")
+            identifiers.append(entry.name)
+        summaries = [self.get_job(job_id) for job_id in identifiers]
         return sorted(
             summaries, key=lambda item: (item.created_at, item.job_id),
             reverse=True)
@@ -1087,6 +1242,12 @@ class JobStore:
             job_id=job_id,
             command=spec.command,
             argv=spec.argv,
+            working_directory=Path(spec.working_directory),
+            working_directory_device=spec.working_directory_device,
+            working_directory_inode=spec.working_directory_inode,
+            output_root=Path(spec.output_root),
+            output_root_device=spec.output_root_device,
+            output_root_inode=spec.output_root_inode,
             timeout_seconds=spec.timeout_seconds,
             status=state.status,
             attempt_number=state.attempt_number,
@@ -1184,7 +1345,7 @@ class JobStore:
             )
             storage_policy.atomic_write_private_json(
                 self.root / job_id / _BINDINGS_NAME,
-                _bindings_payload(updated))
+                _bounded_bindings_payload(updated))
             return selected
 
     def mark_pipeline_binding(
@@ -1234,22 +1395,29 @@ class JobStore:
             )
             storage_policy.atomic_write_private_json(
                 self.root / job_id / _BINDINGS_NAME,
-                _bindings_payload(updated))
+                _bounded_bindings_payload(updated))
             return selected
 
-    def _read_cancel_marker(self, job_id: str, *,
+    def _read_cancel_marker(self, job_id: str, attempt_number: int, *,
                             missing_ok: bool) -> _CancelMarker | None:
         directory = self._job_dir(job_id)
-        path = directory / _CANCEL_NAME
+        attempt_number = _validate_counter(
+            attempt_number, "attempt_number", minimum=1)
+        path = directory / _CANCEL_NAME_TEMPLATE.format(
+            attempt_number=attempt_number)
         try:
             os.lstat(path)
         except FileNotFoundError:
             if missing_ok:
                 return None
             raise JobCorruptError("job cancel marker is missing")
-        return _parse_cancel(_read_private_json(
+        marker = _parse_cancel(_read_private_json(
             path, maximum=_MAX_CANCEL_BYTES, label="job cancel marker"),
             expected_job_id=job_id)
+        if marker.attempt_number != attempt_number:
+            raise JobCorruptError(
+                "job cancel attempt does not match its filename")
+        return marker
 
     @staticmethod
     def _marker_matches_state(marker: _CancelMarker,
@@ -1272,21 +1440,27 @@ class JobStore:
         therefore only turn this into a harmless stale marker.
         """
         job_id = _validate_job_id(job_id)
-        spec, state = self._load_record(job_id)
-        if state.status in TERMINAL_JOB_STATUSES:
-            raise JobStateError("terminal jobs cannot accept cancellation requests")
-        existing = self._read_cancel_marker(job_id, missing_ok=True)
-        if existing is not None and self._marker_matches_state(existing, state):
+        with self.store_lease():
+            spec, state = self._load_record(job_id)
+            if state.status in TERMINAL_JOB_STATUSES:
+                raise JobStateError(
+                    "terminal jobs cannot accept cancellation requests")
+            existing = self._read_cancel_marker(
+                job_id, state.attempt_number, missing_ok=True)
+            if (existing is not None
+                    and self._marker_matches_state(existing, state)):
+                return self._summary(spec, state)
+            marker = _CancelMarker(
+                job_id=job_id,
+                attempt_number=state.attempt_number,
+                attempt_token=state.attempt_token,
+                requested_at=max(state.updated_at, _now(self._clock)),
+            )
+            storage_policy.atomic_write_private_json(
+                self.root / job_id / _CANCEL_NAME_TEMPLATE.format(
+                    attempt_number=state.attempt_number),
+                _cancel_payload(marker))
             return self._summary(spec, state)
-        marker = _CancelMarker(
-            job_id=job_id,
-            attempt_number=state.attempt_number,
-            attempt_token=state.attempt_token,
-            requested_at=max(state.updated_at, _now(self._clock)),
-        )
-        storage_policy.atomic_write_private_json(
-            self.root / job_id / _CANCEL_NAME, _cancel_payload(marker))
-        return self._summary(spec, state)
 
     def is_cancel_requested(self, job_id: str, attempt_token: str) -> bool:
         """Return whether a valid marker targets the active exact attempt."""
@@ -1296,7 +1470,8 @@ class JobStore:
         if (state.attempt_token != attempt_token
                 or state.status in TERMINAL_JOB_STATUSES):
             return False
-        marker = self._read_cancel_marker(job_id, missing_ok=True)
+        marker = self._read_cancel_marker(
+            job_id, state.attempt_number, missing_ok=True)
         return (marker is not None
                 and self._marker_matches_state(marker, state))
 
@@ -1330,7 +1505,8 @@ class JobStore:
                 raise JobStateError(
                     f"illegal job transition: {state.status} -> {target_status}")
             if target_status == "cancel_requested":
-                marker = self._read_cancel_marker(job_id, missing_ok=True)
+                marker = self._read_cancel_marker(
+                    job_id, state.attempt_number, missing_ok=True)
                 if (marker is None
                         or not self._marker_matches_state(marker, state)):
                     raise JobStateError(
@@ -1387,6 +1563,37 @@ class JobStore:
                 self.root / job_id / _STATE_NAME, _state_payload(updated))
         return self._summary(spec, updated)
 
+    def prepare_delete(self, job_id: str, *,
+                       lease_timeout: float = 0.0) -> JobSummary:
+        """Irreversibly make one safely terminal job non-resumable."""
+        job_id = _validate_job_id(job_id)
+        with self.store_lease():
+            with self.lease(job_id, timeout=lease_timeout) as lease:
+                execution = self.load_execution(job_id, lease=lease)
+                if execution.status == "deleting":
+                    return self.get_job(job_id)
+                if execution.status not in DELETABLE_JOB_STATUSES:
+                    raise JobStateError(
+                        f"job status {execution.status!r} cannot be deleted")
+                return self.transition_job(
+                    job_id, "deleting",
+                    attempt_token=execution.attempt_token,
+                    expected_revision=execution.revision, lease=lease)
+
+    def retention_record(self, job_id: str, *,
+                         lease_timeout: float = 0.0) -> tuple[Path, str, float]:
+        """Return the private ownership tuple used by retention planning."""
+        job_id = _validate_job_id(job_id)
+        with self.lease(job_id, timeout=lease_timeout):
+            spec, state = self._load_record(job_id)
+            if state.status not in DELETABLE_JOB_STATUSES:
+                raise JobStateError(
+                    f"job status {state.status!r} cannot be deleted")
+            return (
+                self._job_dir(job_id), state.spec_sha256,
+                max(spec.created_at, state.updated_at),
+            )
+
 
 def load_worker_context(
         command: str, *, environ: Mapping[str, str] | None = None
@@ -1417,12 +1624,51 @@ def load_worker_context(
     return JobWorkerContext(store=store, execution=execution)
 
 
+def validate_execution_directories(execution: JobExecution) -> None:
+    """Fail closed if a job's submission roots were replaced or redirected."""
+    if not isinstance(execution, JobExecution):
+        raise JobValidationError("execution must be a JobExecution")
+    bindings = (
+        (
+            execution.working_directory,
+            execution.working_directory_device,
+            execution.working_directory_inode,
+            False,
+            "working directory",
+        ),
+        (
+            execution.output_root,
+            execution.output_root_device,
+            execution.output_root_inode,
+            True,
+            "output root",
+        ),
+    )
+    for path, expected_device, expected_inode, private, label in bindings:
+        try:
+            result = os.stat(path, follow_symlinks=False)
+            private_mode_ok = True
+            if private:
+                storage_policy.assert_no_link_components(path)
+                private_mode_ok = _private_mode_ok(path, directory=True)
+        except OSError as exc:
+            raise JobStateError(f"job {label} is unavailable") from exc
+        if (not stat.S_ISDIR(result.st_mode)
+                or (int(result.st_dev), int(result.st_ino)) != (
+                    expected_device, expected_inode)):
+            raise JobStateError(f"job {label} identity changed")
+        if private and not private_mode_ok:
+            raise JobStateError(f"job {label} is not private")
+
+
 __all__ = [
     "ALLOWED_JOB_COMMANDS",
     "DEFAULT_JOB_ROOT",
+    "DELETABLE_JOB_STATUSES",
     "JOB_ATTEMPT_TOKEN_ENV",
     "JOB_ID_ENV",
     "JOB_ROOT_ENV",
+    "OUTPUT_ROOT_ENV",
     "JOB_SCHEMA_VERSION",
     "JOB_STATUSES",
     "LEGAL_JOB_TRANSITIONS",
@@ -1446,4 +1692,5 @@ __all__ = [
     "PipelineRunBinding",
     "load_worker_context",
     "pipeline_input_sha256",
+    "validate_execution_directories",
 ]

@@ -14,6 +14,7 @@ import pytest
 
 import eval as retrieval_eval
 import rag
+import supervised_worker
 
 
 @pytest.mark.parametrize(
@@ -100,6 +101,77 @@ def test_supervised_process_propagates_exit_and_marks_child_environment(
         "1|child-only|correlated-run")
 
 
+def test_start_gate_precedes_target_and_preserves_script_semantics(tmp_path):
+    script = tmp_path / "semantic_worker.py"
+    marker = tmp_path / "semantics.json"
+    script.write_text(
+        textwrap.dedent(
+            """
+            import json
+            import os
+            from pathlib import Path
+            import sys
+
+            Path(sys.argv[1]).write_text(json.dumps({
+                "argv": sys.argv,
+                "orig_argv": sys.orig_argv,
+                "path_zero": sys.path[0],
+                "name": __name__,
+                "file": __file__,
+                "pid": os.getpid(),
+            }), encoding="utf-8")
+            """
+        ),
+        encoding="utf-8",
+    )
+    observed = {}
+
+    def register(process):
+        observed["pid"] = process.pid
+        time.sleep(0.1)
+        assert not marker.exists()
+
+    code = rag._run_cli_with_deadline(
+        script, [str(marker), "alpha", "--", "omega"],
+        operation="test", timeout=5, on_child_started=register)
+
+    payload = json.loads(marker.read_text(encoding="utf-8"))
+    resolved_script = str(script.resolve())
+    assert code == 0
+    assert payload["pid"] == observed["pid"]
+    assert payload["argv"] == [
+        resolved_script, str(marker), "alpha", "--", "omega"]
+    assert payload["orig_argv"] == [
+        sys.executable, "-u", resolved_script,
+        str(marker), "alpha", "--", "omega"]
+    assert Path(payload["path_zero"]) == script.parent.resolve()
+    assert payload["name"] == "__main__"
+    assert Path(payload["file"]) == script.resolve()
+
+
+def test_unreleased_start_gate_times_out_without_executing_target(tmp_path):
+    script = tmp_path / "must_not_run.py"
+    marker = tmp_path / "executed.txt"
+    script.write_text(
+        "from pathlib import Path\n"
+        "import sys\n"
+        "Path(sys.argv[1]).write_text('executed', encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    gate = rag._new_supervised_start_gate()
+    command = [
+        sys.executable, "-u",
+        str(Path(supervised_worker.__file__).resolve()),
+        gate.kind, gate.child_value, "0.2", str(script), str(marker),
+    ]
+    try:
+        process = subprocess.Popen(command, **gate.popen_options())
+        assert process.wait(timeout=5) == supervised_worker.STARTUP_FAILURE_EXIT
+    finally:
+        gate.close()
+    assert not marker.exists()
+
+
 def test_supervised_timeout_kills_worker_without_logging_arguments(
         tmp_path, capsys):
     script = tmp_path / "hung_worker.py"
@@ -154,8 +226,11 @@ def test_supervisor_classifies_keyboard_interrupt_as_cancellation(
         def assign(self, _process):
             pass
 
+        def terminate(self):
+            return True
+
         def close(self):
-            pass
+            return True
 
     monkeypatch.setattr(rag, "_WindowsKillJob", FakeJob)
     monkeypatch.setattr(
@@ -191,8 +266,11 @@ def test_supervisor_does_not_rewrite_telemetry_before_cleanup_is_confirmed(
         def assign(self, _process):
             pass
 
+        def terminate(self):
+            return True
+
         def close(self):
-            pass
+            return True
 
     monkeypatch.setattr(rag, "_WindowsKillJob", FakeJob)
     monkeypatch.setattr(
@@ -201,13 +279,48 @@ def test_supervisor_does_not_rewrite_telemetry_before_cleanup_is_confirmed(
         rag, "_terminate_supervised_process",
         lambda *_args, **_kwargs: False)
 
-    code = rag._run_cli_with_deadline(
-        tmp_path / "worker.py", [], operation="index", timeout=0.1,
-        run_id="still-running", run_report=report_path)
+    with pytest.raises(
+            rag._SupervisorCleanupError,
+            match="cleanup could not be confirmed"):
+        rag._run_cli_with_deadline(
+            tmp_path / "worker.py", [], operation="index", timeout=0.1,
+            run_id="still-running", run_report=report_path)
 
-    assert code == 124
     assert json.loads(report_path.read_text(encoding="utf-8"))["status"] == (
         "running")
+
+
+def test_supervisor_propagates_unconfirmed_cleanup_after_cancellation(
+        monkeypatch, tmp_path):
+    class FakeProcess:
+        pid = 12348
+
+        def poll(self):
+            return None
+
+    class FakeJob:
+        def assign(self, _process):
+            pass
+
+        def terminate(self):
+            return True
+
+        def close(self):
+            return True
+
+    monkeypatch.setattr(rag, "_WindowsKillJob", FakeJob)
+    monkeypatch.setattr(
+        rag.subprocess, "Popen", lambda *_args, **_kwargs: FakeProcess())
+    monkeypatch.setattr(
+        rag, "_terminate_supervised_process",
+        lambda *_args, **_kwargs: False)
+
+    with pytest.raises(
+            rag._SupervisorCleanupError,
+            match="cleanup could not be confirmed"):
+        rag._run_cli_with_deadline(
+            tmp_path / "worker.py", [], operation="index", timeout=5,
+            cancel_requested=lambda: True)
 
 
 def test_supervisor_honors_external_cancellation_after_child_registration(
@@ -229,8 +342,11 @@ def test_supervisor_honors_external_cancellation_after_child_registration(
         def assign(self, _process):
             pass
 
+        def terminate(self):
+            return True
+
         def close(self):
-            pass
+            return True
 
     monkeypatch.setattr(rag, "_WindowsKillJob", FakeJob)
     monkeypatch.setattr(
@@ -273,14 +389,17 @@ def test_supervisor_polls_heartbeat_and_forwards_output_targets(
             return 0
 
         def poll(self):
-            return None
+            return 0 if self.wait_count >= 2 else None
 
     class FakeJob:
         def assign(self, _process):
             pass
 
+        def terminate(self):
+            return True
+
         def close(self):
-            pass
+            return True
 
     def fake_popen(_command, **options):
         observed["popen"] = options
@@ -333,6 +452,63 @@ def test_child_registration_failure_terminates_worker(monkeypatch, tmp_path):
     assert observed["cleanup"] == 1
 
 
+def test_registration_failure_never_releases_target_code(tmp_path):
+    script = tmp_path / "must_remain_gated.py"
+    marker = tmp_path / "executed.txt"
+    script.write_text(
+        "from pathlib import Path\n"
+        "import sys\n"
+        "Path(sys.argv[1]).write_text('executed', encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="registration failed"):
+        rag._run_cli_with_deadline(
+            script, [str(marker)], operation="index", timeout=5,
+            on_child_started=lambda _process: (_ for _ in ()).throw(
+                RuntimeError("registration failed")),
+        )
+
+    assert not marker.exists()
+
+
+def test_normal_exit_fails_closed_when_tree_cleanup_is_unconfirmed(
+        monkeypatch, tmp_path):
+    cleanup_calls = []
+
+    class FakeProcess:
+        pid = 12350
+
+        def wait(self, timeout):
+            return 0
+
+        def poll(self):
+            return 0
+
+    class FakeJob:
+        def assign(self, _process):
+            pass
+
+        def terminate(self):
+            return True
+
+        def close(self):
+            return True
+
+    monkeypatch.setattr(rag, "_WindowsKillJob", FakeJob)
+    monkeypatch.setattr(
+        rag.subprocess, "Popen", lambda *_args, **_kwargs: FakeProcess())
+    monkeypatch.setattr(
+        rag, "_terminate_supervised_process",
+        lambda *_args, **_kwargs: cleanup_calls.append(True) or False)
+
+    with pytest.raises(RuntimeError, match="cleanup could not be confirmed"):
+        rag._run_cli_with_deadline(
+            tmp_path / "worker.py", [], operation="index", timeout=5)
+
+    assert len(cleanup_calls) == 1
+
+
 def test_supervised_timeout_terminates_worker_descendants(tmp_path):
     script = tmp_path / "parent_worker.py"
     heartbeat = tmp_path / "heartbeat.txt"
@@ -368,6 +544,64 @@ def test_supervised_timeout_terminates_worker_descendants(tmp_path):
     assert code == 124
     assert heartbeat.is_file()
     time.sleep(0.2)
+    stopped_value = heartbeat.read_text(encoding="utf-8")
+    time.sleep(0.3)
+    assert heartbeat.read_text(encoding="utf-8") == stopped_value
+
+
+def test_normal_worker_exit_terminates_remaining_descendants(
+        monkeypatch, tmp_path):
+    script = tmp_path / "exiting_parent.py"
+    started = tmp_path / "child.started"
+    heartbeat = tmp_path / "child.heartbeat"
+    child_code = textwrap.dedent(
+        """
+        import os
+        from pathlib import Path
+        import signal
+        import sys
+        import time
+
+        if os.name != "nt":
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        started = Path(sys.argv[1])
+        heartbeat = Path(sys.argv[2])
+        heartbeat.write_text("0", encoding="utf-8")
+        started.write_text("ready", encoding="utf-8")
+        for index in range(1, 400):
+            heartbeat.write_text(str(index), encoding="utf-8")
+            time.sleep(0.05)
+        """
+    )
+    script.write_text(
+        textwrap.dedent(
+            f"""
+            from pathlib import Path
+            import subprocess
+            import sys
+            import time
+
+            subprocess.Popen([
+                sys.executable, "-c", {child_code!r},
+                sys.argv[1], sys.argv[2]])
+            deadline = time.monotonic() + 5
+            while (not Path(sys.argv[1]).exists()
+                   and time.monotonic() < deadline):
+                time.sleep(0.01)
+            raise SystemExit(0)
+            """
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(rag, "_SUPERVISED_TERMINATE_GRACE", 0.3)
+
+    assert rag._run_cli_with_deadline(
+        script, [str(started), str(heartbeat)],
+        operation="query", timeout=5) == 0
+
+    assert started.is_file()
+    assert heartbeat.is_file()
+    time.sleep(0.15)
     stopped_value = heartbeat.read_text(encoding="utf-8")
     time.sleep(0.3)
     assert heartbeat.read_text(encoding="utf-8") == stopped_value

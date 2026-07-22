@@ -415,10 +415,11 @@ def test_background_binding_plan_allocates_once_then_resumes_exact_run(
     assert resumed["doc"].parent.name == "Book"
 
 
-def test_background_batch_skips_completed_exact_checkpoint(
+def test_background_batch_revalidates_completed_exact_checkpoint(
         monkeypatch, tmp_path):
     jobs = job_runtime.JobStore(tmp_path / "jobs")
     pdf = tmp_path / "Book.pdf"
+    pdf.write_bytes(b"changed source must be revalidated")
     summary = jobs.submit_job("batch", [str(pdf)])
     execution = jobs.load_execution(summary.job_id)
     jobs.bind_pipeline_run(
@@ -436,12 +437,24 @@ def test_background_batch_skips_completed_exact_checkpoint(
     monkeypatch.setenv(job_runtime.JOB_ID_ENV, summary.job_id)
     monkeypatch.setenv(
         job_runtime.JOB_ATTEMPT_TOKEN_ENV, execution.attempt_token)
-    monkeypatch.setattr(
-        rag, "_run_pipeline_job",
-        lambda *_args, **_kwargs: pytest.fail(
-            "completed batch checkpoint must not rerun"))
+    output_root = tmp_path / "output"
+    monkeypatch.setattr(rag, "OUTPUT_DIR", output_root)
+    observed = {}
+
+    def fake_pipeline(_pdf, _args, **kwargs):
+        observed.update(kwargs)
+        paths = rag._output_paths_for_name("Book")
+        return paths, {
+            "collection": "book",
+            "db_dir": paths["chroma"],
+        }
+
+    monkeypatch.setattr(rag, "_run_pipeline_job", fake_pipeline)
 
     rag.main(["batch", str(pdf)])
+
+    assert observed["resume"] is True
+    assert observed["exact_run_name"] == "Book"
 
 
 def test_pipeline_job_marks_manifest_failed_without_masking_error(

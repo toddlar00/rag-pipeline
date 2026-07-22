@@ -433,6 +433,50 @@ def plan_pipeline_run_deletion(
     )
 
 
+def _validate_background_job(
+        path: Path, *, expected_job_id: str,
+        expected_token: str, required_status: str | None = None) -> None:
+    spec = _read_json_object(path / "spec.json")
+    state = _read_json_object(path / "state.json")
+    if (not _TOKEN.fullmatch(expected_job_id)
+            or not _CACHE_KEY.fullmatch(expected_token)
+            or spec.get("kind") != "job_spec"
+            or state.get("kind") != "job_state"
+            or spec.get("job_id") != expected_job_id
+            or state.get("job_id") != expected_job_id
+            or state.get("spec_sha256") != expected_token):
+        raise RetentionError("background job ownership failed validation")
+    if required_status is not None and state.get("status") != required_status:
+        raise RetentionError(
+            f"background job must be {required_status!r} before deletion")
+
+
+def plan_background_job_deletion(
+        job_root: Path, job_id: str, *,
+        now: float | None = None) -> RetentionPlan:
+    """Plan deletion of one schema-validated, safely terminal job."""
+    import job_runtime
+
+    store = job_runtime.JobStore(job_root)
+    try:
+        job_path, ownership_token, updated_at = store.retention_record(job_id)
+    except job_runtime.JobRuntimeError as exc:
+        raise RetentionError(str(exc)) from exc
+    _validate_background_job(
+        job_path, expected_job_id=job_id,
+        expected_token=ownership_token)
+    current_time = time.time() if now is None else float(now)
+    candidate = _candidate(
+        category="background_job", path=job_path, root=store.root,
+        timestamp=updated_at, now=current_time,
+        ownership_token=ownership_token)
+    return RetentionPlan(
+        action="delete_background_job", root=store.root,
+        candidates=(candidate,), created_at=current_time,
+        context={"job_id": job_id, "ownership_token": ownership_token},
+    )
+
+
 def _validate_cache_payload(path: Path, key: str) -> str:
     payload = _read_json_object(path, max_bytes=_CACHE_RECORD_MAX_BYTES)
     if (payload.get("schema_version") not in {1, 2}
@@ -612,6 +656,11 @@ def _validate_candidate(
             run_name=candidate.path.name)
         if payload["ownership_token"] != candidate.ownership_token:
             raise RetentionError("pipeline run ownership changed after planning")
+    elif candidate.category == "background_job":
+        _validate_background_job(
+            candidate_path, expected_job_id=candidate.path.name,
+            expected_token=str(candidate.ownership_token),
+            required_status="deleting")
 
 
 def _delete_owned_path(path: Path) -> None:
@@ -650,9 +699,25 @@ def _quarantine_receipt(
 
 
 def apply_retention_plan(plan: RetentionPlan) -> dict[str, Any]:
+    """Apply a plan under any root-level coordination it requires."""
+    if plan.action == "delete_background_job":
+        import job_runtime
+
+        try:
+            store = job_runtime.JobStore(plan.root)
+            with store.store_lease():
+                return _apply_retention_plan_unlocked(plan)
+        except job_runtime.JobRuntimeError as exc:
+            raise RetentionError(
+                "background job store could not be locked safely") from exc
+    return _apply_retention_plan_unlocked(plan)
+
+
+def _apply_retention_plan_unlocked(plan: RetentionPlan) -> dict[str, Any]:
     """Revalidate, quarantine, then erase every candidate in one plan."""
     if plan.action not in {
-            "delete_pipeline_run", "prune_llm_cache", "prune_ui_exports"}:
+            "delete_pipeline_run", "delete_background_job",
+            "prune_llm_cache", "prune_ui_exports"}:
         raise ValueError("retention plan action is not directly applicable")
     if not plan.candidates:
         return {

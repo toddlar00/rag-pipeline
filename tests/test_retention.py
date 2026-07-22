@@ -1,8 +1,10 @@
 import json
 import os
+import threading
 
 import pytest
 
+import job_runtime
 import retention
 
 
@@ -463,3 +465,191 @@ def test_staging_failure_rolls_back_every_moved_candidate(
     quarantine = output_root / retention.QUARANTINE_DIRECTORY_NAME
     assert quarantine.is_dir()
     assert list(quarantine.iterdir()) == []
+
+
+def test_background_job_deletion_is_terminal_and_dry_run_first(tmp_path):
+    store = job_runtime.JobStore(tmp_path / "jobs")
+    submitted = store.submit_job("export", ["--chunks", "Private.jsonl"])
+    execution = store.load_execution(submitted.job_id)
+    failed = store.transition_job(
+        submitted.job_id, "failed",
+        attempt_token=execution.attempt_token,
+        expected_revision=execution.revision)
+
+    plan = retention.plan_background_job_deletion(
+        store.root, submitted.job_id)
+
+    assert plan.action == "delete_background_job"
+    assert plan.as_dict()["mode"] == "dry_run"
+    assert plan.candidates[0].path.is_dir()
+    assert store.get_job(submitted.job_id).status == failed.status
+    with pytest.raises(retention.RetentionError, match="must be 'deleting'"):
+        retention.apply_retention_plan(plan)
+    assert store.get_job(submitted.job_id).status == "failed"
+
+    deleting = store.prepare_delete(submitted.job_id)
+    assert deleting.status == "deleting"
+    applied_plan = retention.plan_background_job_deletion(
+        store.root, submitted.job_id)
+    result = retention.apply_retention_plan(applied_plan)
+
+    assert result["action"] == "delete_background_job"
+    assert result["deleted_count"] == 1
+    assert not (store.root / submitted.job_id).exists()
+    assert store.list_jobs() == []
+
+
+def test_background_job_quarantine_serializes_with_job_listing(
+        monkeypatch, tmp_path):
+    store = job_runtime.JobStore(tmp_path / "jobs")
+    submitted = store.submit_job("export", ["--chunks", "Private.jsonl"])
+    execution = store.load_execution(submitted.job_id)
+    store.transition_job(
+        submitted.job_id, "failed",
+        attempt_token=execution.attempt_token,
+        expected_revision=execution.revision)
+    store.prepare_delete(submitted.job_id)
+    plan = retention.plan_background_job_deletion(
+        store.root, submitted.job_id)
+
+    listing_inside_lock = threading.Event()
+    release_listing = threading.Event()
+    apply_entered = threading.Event()
+    real_get_job = store.get_job
+    real_apply = retention._apply_retention_plan_unlocked
+
+    def paused_get_job(job_id):
+        listing_inside_lock.set()
+        assert release_listing.wait(5)
+        return real_get_job(job_id)
+
+    def observed_apply(selected_plan):
+        apply_entered.set()
+        return real_apply(selected_plan)
+
+    monkeypatch.setattr(store, "get_job", paused_get_job)
+    monkeypatch.setattr(
+        retention, "_apply_retention_plan_unlocked", observed_apply)
+    outcomes = {}
+
+    def list_jobs():
+        try:
+            outcomes["listed"] = store.list_jobs()
+        except BaseException as exc:
+            outcomes["list_error"] = exc
+
+    def delete_job():
+        try:
+            outcomes["deleted"] = retention.apply_retention_plan(plan)
+        except BaseException as exc:
+            outcomes["delete_error"] = exc
+
+    listing = threading.Thread(target=list_jobs)
+    deleting = threading.Thread(target=delete_job)
+    listing.start()
+    assert listing_inside_lock.wait(5)
+    deleting.start()
+    assert not apply_entered.wait(0.2)
+    release_listing.set()
+    listing.join(timeout=5)
+    deleting.join(timeout=5)
+
+    assert not listing.is_alive()
+    assert not deleting.is_alive()
+    assert "list_error" not in outcomes
+    assert "delete_error" not in outcomes
+    assert outcomes["listed"][0].status == "deleting"
+    assert outcomes["deleted"]["deleted_count"] == 1
+    assert store.list_jobs() == []
+
+
+def test_cancel_request_cannot_resurrect_a_deleted_job(
+        monkeypatch, tmp_path):
+    store = job_runtime.JobStore(tmp_path / "jobs")
+    submitted = store.submit_job("export", [])
+    execution = store.load_execution(submitted.job_id)
+    starting = store.transition_job(
+        submitted.job_id, "starting",
+        attempt_token=execution.attempt_token,
+        expected_revision=execution.revision)
+    running = store.transition_job(
+        submitted.job_id, "running",
+        attempt_token=execution.attempt_token,
+        expected_revision=starting.revision)
+
+    cancellation_read = threading.Event()
+    release_cancellation = threading.Event()
+    deletion_prepared = threading.Event()
+    real_load = store._load_record
+    pause_once = True
+
+    def paused_load(job_id):
+        nonlocal pause_once
+        record = real_load(job_id)
+        if pause_once:
+            pause_once = False
+            cancellation_read.set()
+            assert release_cancellation.wait(5)
+        return record
+
+    monkeypatch.setattr(store, "_load_record", paused_load)
+    outcomes = {}
+
+    def cancel_job():
+        try:
+            outcomes["cancelled"] = store.request_cancel(submitted.job_id)
+        except BaseException as exc:
+            outcomes["cancel_error"] = exc
+
+    cancellation = threading.Thread(target=cancel_job)
+    cancellation.start()
+    assert cancellation_read.wait(5)
+    store.transition_job(
+        submitted.job_id, "failed",
+        attempt_token=execution.attempt_token,
+        expected_revision=running.revision)
+
+    def delete_job():
+        try:
+            store.prepare_delete(submitted.job_id)
+            deletion_prepared.set()
+            plan = retention.plan_background_job_deletion(
+                store.root, submitted.job_id)
+            outcomes["deleted"] = retention.apply_retention_plan(plan)
+        except BaseException as exc:
+            outcomes["delete_error"] = exc
+
+    deletion = threading.Thread(target=delete_job)
+    deletion.start()
+    assert not deletion_prepared.wait(0.2)
+    release_cancellation.set()
+    cancellation.join(timeout=5)
+    deletion.join(timeout=10)
+
+    assert not cancellation.is_alive()
+    assert not deletion.is_alive()
+    assert "cancel_error" not in outcomes
+    assert "delete_error" not in outcomes
+    assert outcomes["deleted"]["deleted_count"] == 1
+    assert not (store.root / submitted.job_id).exists()
+    assert store.list_jobs() == []
+
+
+def test_background_job_deletion_rejects_active_and_orphaned_jobs(tmp_path):
+    store = job_runtime.JobStore(tmp_path / "jobs")
+    active = store.submit_job("export", ["--chunks", "Private.jsonl"])
+    with pytest.raises(retention.RetentionError, match="cannot be deleted"):
+        retention.plan_background_job_deletion(store.root, active.job_id)
+
+    execution = store.load_execution(active.job_id)
+    starting = store.transition_job(
+        active.job_id, "starting", attempt_token=execution.attempt_token,
+        expected_revision=execution.revision)
+    store.transition_job(
+        active.job_id, "orphaned", attempt_token=execution.attempt_token,
+        expected_revision=starting.revision)
+
+    with pytest.raises(retention.RetentionError, match="cannot be deleted"):
+        retention.plan_background_job_deletion(store.root, active.job_id)
+    with pytest.raises(job_runtime.JobStateError, match="cannot be deleted"):
+        store.prepare_delete(active.job_id)

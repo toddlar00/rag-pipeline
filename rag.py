@@ -93,6 +93,7 @@ _SUPERVISED_CHILD_ENV = "RAG_PIPELINE_SUPERVISED_CHILD"
 _RUN_ID_ENV = "RAG_PIPELINE_RUN_ID"
 _SUPERVISED_TERMINATE_GRACE = 5.0
 _SUPERVISED_POLL_INTERVAL = 0.2
+_SUPERVISED_START_GATE_TIMEOUT = 60.0
 
 # Embedding model max token limits (for validation)
 EMBEDDING_MAX_TOKENS = {
@@ -117,7 +118,8 @@ DEFAULT_CHROMA_DIR = Path("output/chroma_db")
 DEFAULT_QDRANT_DIR = Path("output/qdrant_db")
 DEFAULT_DB_BACKEND = "chroma"  # "chroma" or "qdrant"
 DEFAULT_EXPORT_PATH = Path("output/textbook.md")
-OUTPUT_DIR = Path("output")
+OUTPUT_DIR = Path(os.environ.get(
+    _job_runtime.OUTPUT_ROOT_ENV, "output"))
 
 
 def _model_artifact_lock_sha256() -> str:
@@ -10197,6 +10199,18 @@ class _WindowsKillJob:
                 ("PeakJobMemoryUsed", ctypes.c_size_t),
             ]
 
+        class _BasicAccountingInformation(ctypes.Structure):
+            _fields_ = [
+                ("TotalUserTime", wintypes.LARGE_INTEGER),
+                ("TotalKernelTime", wintypes.LARGE_INTEGER),
+                ("ThisPeriodTotalUserTime", wintypes.LARGE_INTEGER),
+                ("ThisPeriodTotalKernelTime", wintypes.LARGE_INTEGER),
+                ("TotalPageFaultCount", wintypes.DWORD),
+                ("TotalProcesses", wintypes.DWORD),
+                ("ActiveProcesses", wintypes.DWORD),
+                ("TotalTerminatedProcesses", wintypes.DWORD),
+            ]
+
         kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
         create_job = kernel32.CreateJobObjectW
         create_job.argtypes = [wintypes.LPVOID, wintypes.LPCWSTR]
@@ -10212,6 +10226,12 @@ class _WindowsKillJob:
         terminate_job = kernel32.TerminateJobObject
         terminate_job.argtypes = [wintypes.HANDLE, wintypes.UINT]
         terminate_job.restype = wintypes.BOOL
+        query_information = kernel32.QueryInformationJobObject
+        query_information.argtypes = [
+            wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD,
+            ctypes.POINTER(wintypes.DWORD),
+        ]
+        query_information.restype = wintypes.BOOL
         close_handle = kernel32.CloseHandle
         close_handle.argtypes = [wintypes.HANDLE]
         close_handle.restype = wintypes.BOOL
@@ -10240,7 +10260,9 @@ class _WindowsKillJob:
         self._wintypes = wintypes
         self._assign_process = assign_process
         self._terminate_job = terminate_job
+        self._query_information = query_information
         self._close_handle = close_handle
+        self._basic_accounting_type = _BasicAccountingInformation
         self._handle = handle
 
     def assign(self, process) -> None:
@@ -10248,15 +10270,153 @@ class _WindowsKillJob:
                 self._handle, self._wintypes.HANDLE(int(process._handle))):
             raise self._ctypes.WinError(self._ctypes.get_last_error())
 
-    def close(self) -> None:
+    def close(self) -> bool:
         if self._handle:
-            self._close_handle(self._handle)
+            closed = bool(self._close_handle(self._handle))
             self._handle = None
+            return closed
+        return True
 
     def terminate(self, exit_code: int = 124) -> bool:
         if not self._handle:
             return True
         return bool(self._terminate_job(self._handle, exit_code))
+
+    def active_processes(self) -> int:
+        if not self._handle:
+            return 0
+        information = self._basic_accounting_type()
+        returned = self._wintypes.DWORD()
+        if not self._query_information(
+                self._handle, 1, self._ctypes.byref(information),
+                self._ctypes.sizeof(information),
+                self._ctypes.byref(returned)):
+            raise self._ctypes.WinError(self._ctypes.get_last_error())
+        return int(information.ActiveProcesses)
+
+    def terminate_and_confirm(
+            self, *, exit_code: int = 124,
+            timeout: float = _SUPERVISED_TERMINATE_GRACE) -> bool:
+        """Terminate every assigned process and confirm the Job is empty."""
+        confirmed = False
+        try:
+            if not self.terminate(exit_code):
+                return False
+            deadline = time.monotonic() + timeout
+            while True:
+                if self.active_processes() == 0:
+                    confirmed = True
+                    break
+                if time.monotonic() >= deadline:
+                    break
+                time.sleep(0.025)
+        except OSError:
+            confirmed = False
+        finally:
+            closed = self.close()
+        return confirmed and closed
+
+
+class _PosixSupervisedStartGate:
+    """One-shot pipe gate inherited only by the waiting bootstrap process."""
+
+    kind = "posix-pipe"
+
+    def __init__(self):
+        self._read_descriptor, self._write_descriptor = os.pipe()
+
+    @property
+    def child_value(self) -> str:
+        return str(self._read_descriptor)
+
+    def popen_options(self) -> dict:
+        return {
+            "close_fds": True,
+            "pass_fds": (self._read_descriptor,),
+        }
+
+    def release(self) -> None:
+        if self._write_descriptor < 0:
+            raise RuntimeError("supervised worker start gate is closed")
+        if os.write(self._write_descriptor, b"\x01") != 1:
+            raise OSError("supervised worker start gate release was incomplete")
+        self.close()
+
+    def close(self) -> None:
+        for attribute in ("_write_descriptor", "_read_descriptor"):
+            descriptor = getattr(self, attribute)
+            if descriptor < 0:
+                continue
+            setattr(self, attribute, -1)
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+
+class _WindowsSupervisedStartGate:
+    """One-shot inherited event used to release a contained Windows worker."""
+
+    kind = "windows-event"
+
+    def __init__(self):
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        create_event = kernel32.CreateEventW
+        create_event.argtypes = [
+            wintypes.LPVOID, wintypes.BOOL, wintypes.BOOL, wintypes.LPCWSTR,
+        ]
+        create_event.restype = wintypes.HANDLE
+        set_event = kernel32.SetEvent
+        set_event.argtypes = [wintypes.HANDLE]
+        set_event.restype = wintypes.BOOL
+        set_handle_information = kernel32.SetHandleInformation
+        set_handle_information.argtypes = [
+            wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD,
+        ]
+        set_handle_information.restype = wintypes.BOOL
+        close_handle = kernel32.CloseHandle
+        close_handle.argtypes = [wintypes.HANDLE]
+        close_handle.restype = wintypes.BOOL
+        handle = create_event(None, True, False, None)
+        if not handle:
+            raise ctypes.WinError(ctypes.get_last_error())
+        if not set_handle_information(handle, 0x00000001, 0x00000001):
+            error = ctypes.WinError(ctypes.get_last_error())
+            close_handle(handle)
+            raise error
+        self._ctypes = ctypes
+        self._set_event = set_event
+        self._close_handle = close_handle
+        self._handle = handle
+
+    @property
+    def child_value(self) -> str:
+        return str(int(self._handle))
+
+    def popen_options(self) -> dict:
+        startup = subprocess.STARTUPINFO()
+        startup.lpAttributeList = {"handle_list": [int(self._handle)]}
+        return {"close_fds": True, "startupinfo": startup}
+
+    def release(self) -> None:
+        if not self._handle:
+            raise RuntimeError("supervised worker start gate is closed")
+        if not self._set_event(self._handle):
+            raise self._ctypes.WinError(self._ctypes.get_last_error())
+        self.close()
+
+    def close(self) -> None:
+        if self._handle:
+            self._close_handle(self._handle)
+            self._handle = None
+
+
+def _new_supervised_start_gate():
+    return (_WindowsSupervisedStartGate()
+            if os.name == "nt" else _PosixSupervisedStartGate())
 
 
 class _SupervisorSignal(BaseException):
@@ -10267,13 +10427,29 @@ class _SupervisorSignal(BaseException):
         super().__init__(signum)
 
 
+class _SupervisorCleanupError(RuntimeError):
+    """Raised only after owned process-tree cleanup remains unconfirmed."""
+
+
 def _terminate_supervised_process(process, *, kill_job=None) -> bool:
     """Terminate a supervised tree and confirm the direct worker was reaped."""
     if kill_job is not None:
-        # Closing a KILL_ON_JOB_CLOSE job is atomic from the supervisor's point
-        # of view and still works if the direct worker exited before a child.
-        kill_job.terminate()
-        kill_job.close()
+        # The Job remains authoritative even if the direct worker exited before
+        # one of its descendants.  Confirm it is empty before reporting cleanup.
+        try:
+            confirm = getattr(kill_job, "terminate_and_confirm", None)
+            if confirm is not None:
+                tree_gone = bool(confirm(
+                    timeout=_SUPERVISED_TERMINATE_GRACE))
+            else:
+                tree_gone = bool(kill_job.terminate())
+                tree_gone = bool(kill_job.close()) and tree_gone
+        except BaseException:
+            tree_gone = False
+            try:
+                kill_job.close()
+            except BaseException:
+                pass
         try:
             process.wait(timeout=_SUPERVISED_TERMINATE_GRACE)
         except subprocess.TimeoutExpired:
@@ -10286,7 +10462,7 @@ def _terminate_supervised_process(process, *, kill_job=None) -> bool:
                 process.wait(timeout=_SUPERVISED_TERMINATE_GRACE)
             except subprocess.TimeoutExpired:
                 return False
-        return process.poll() is not None
+        return process.poll() is not None and tree_gone
 
     if os.name == "nt":
         # ``Popen.terminate()`` only kills the direct Windows process. The
@@ -10407,6 +10583,7 @@ def _finalize_supervised_run_telemetry(
 
 def _run_cli_with_deadline(script_path: Path, argv: list[str], *,
                            operation: str, timeout: float,
+                           working_directory: Path | None = None,
                            environment_overrides: dict[str, str | None]
                            | None = None,
                            run_id: str | None = None,
@@ -10434,13 +10611,18 @@ def _run_cli_with_deadline(script_path: Path, argv: list[str], *,
         _run_telemetry.RunTelemetry(
             operation, run_id=run_id, events_path=run_events,
             report_path=run_report).start()
-    command = [sys.executable, "-u", str(Path(script_path).resolve()), *argv]
+    target_script = str(Path(script_path).resolve())
+    bootstrap_script = str(
+        Path(__file__).with_name("supervised_worker.py").resolve())
     process_options = {"env": environment}
+    if working_directory is not None:
+        process_options["cwd"] = os.fspath(working_directory)
     if stdout_target is not None:
         process_options["stdout"] = stdout_target
     if stderr_target is not None:
         process_options["stderr"] = stderr_target
     kill_job = None
+    start_gate = None
     try:
         if os.name == "nt":
             process_options["creationflags"] = getattr(
@@ -10448,8 +10630,17 @@ def _run_cli_with_deadline(script_path: Path, argv: list[str], *,
             kill_job = _WindowsKillJob()
         else:
             process_options["start_new_session"] = True
+        start_gate = _new_supervised_start_gate()
+        process_options.update(start_gate.popen_options())
+        command = [
+            sys.executable, "-u", bootstrap_script,
+            start_gate.kind, start_gate.child_value,
+            str(_SUPERVISED_START_GATE_TIMEOUT), target_script, *argv,
+        ]
         process = subprocess.Popen(command, **process_options)
     except BaseException as exc:
+        if start_gate is not None:
+            start_gate.close()
         if kill_job is not None:
             kill_job.close()
         _finalize_supervised_run_telemetry(
@@ -10459,28 +10650,27 @@ def _run_cli_with_deadline(script_path: Path, argv: list[str], *,
             else "failed",
             exc=exc)
         raise
-    if kill_job is not None:
-        try:
+    try:
+        if kill_job is not None:
             kill_job.assign(process)
-        except BaseException as exc:
-            cleanup_complete = _terminate_supervised_process(
-                process, kill_job=kill_job)
-            if cleanup_complete:
-                _finalize_supervised_run_telemetry(
-                    operation, run_id=run_id, run_events=run_events,
-                    run_report=run_report, status="failed", exc=exc)
-            raise
-    if on_child_started is not None:
-        try:
+        if on_child_started is not None:
             on_child_started(process)
-        except BaseException as exc:
-            cleanup_complete = _terminate_supervised_process(
-                process, kill_job=kill_job)
-            if cleanup_complete:
-                _finalize_supervised_run_telemetry(
-                    operation, run_id=run_id, run_events=run_events,
-                    run_report=run_report, status="failed", exc=exc)
-            raise
+        start_gate.release()
+    except BaseException as exc:
+        start_gate.close()
+        cleanup_complete = _terminate_supervised_process(
+            process, kill_job=kill_job)
+        if cleanup_complete:
+            _finalize_supervised_run_telemetry(
+                operation, run_id=run_id, run_events=run_events,
+                run_report=run_report, status="failed", exc=exc)
+        else:
+            raise _SupervisorCleanupError(
+                "supervised worker tree cleanup could not be confirmed"
+            ) from exc
+        raise
+    finally:
+        start_gate.close()
 
     previous_handlers = {}
     if os.name != "nt" and _threading.current_thread() is _threading.main_thread():
@@ -10509,6 +10699,9 @@ def _run_cli_with_deadline(script_path: Path, argv: list[str], *,
                         operation, run_id=run_id, run_events=run_events,
                         run_report=run_report, status="cancelled",
                         exc=KeyboardInterrupt())
+                else:
+                    raise _SupervisorCleanupError(
+                        "supervised worker tree cleanup could not be confirmed")
                 return 130
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -10525,6 +10718,11 @@ def _run_cli_with_deadline(script_path: Path, argv: list[str], *,
                     heartbeat(process)
                 if not poll_callbacks or time.monotonic() >= deadline:
                     raise
+        cleanup_complete = _terminate_supervised_process(
+            process, kill_job=kill_job)
+        if not cleanup_complete:
+            raise _SupervisorCleanupError(
+                "supervised worker tree cleanup could not be confirmed")
         if exit_code:
             _finalize_supervised_run_telemetry(
                 operation, run_id=run_id, run_events=run_events,
@@ -10552,6 +10750,9 @@ def _run_cli_with_deadline(script_path: Path, argv: list[str], *,
             f"was terminated. {cleanup_status}",
             file=sys.stderr,
         )
+        if not cleanup_complete:
+            raise _SupervisorCleanupError(
+                "supervised worker tree cleanup could not be confirmed")
         return 124
     except _SupervisorSignal as exc:
         cleanup_complete = _terminate_supervised_process(
@@ -10561,6 +10762,9 @@ def _run_cli_with_deadline(script_path: Path, argv: list[str], *,
                 operation, run_id=run_id, run_events=run_events,
                 run_report=run_report, status="cancelled",
                 exc=KeyboardInterrupt())
+        else:
+            raise _SupervisorCleanupError(
+                "supervised worker tree cleanup could not be confirmed") from exc
         return 128 + exc.signum
     except KeyboardInterrupt as exc:
         cleanup_complete = _terminate_supervised_process(
@@ -10569,7 +10773,14 @@ def _run_cli_with_deadline(script_path: Path, argv: list[str], *,
             _finalize_supervised_run_telemetry(
                 operation, run_id=run_id, run_events=run_events,
                 run_report=run_report, status="cancelled", exc=exc)
+        else:
+            raise _SupervisorCleanupError(
+                "supervised worker tree cleanup could not be confirmed") from exc
         return 130
+    except _SupervisorCleanupError:
+        # Cleanup already exhausted its graceful and forced confirmation
+        # windows. Do not claim a terminal telemetry state or retry blindly.
+        raise
     except BaseException as exc:
         cleanup_complete = _terminate_supervised_process(
             process, kill_job=kill_job)
@@ -10577,6 +10788,9 @@ def _run_cli_with_deadline(script_path: Path, argv: list[str], *,
             _finalize_supervised_run_telemetry(
                 operation, run_id=run_id, run_events=run_events,
                 run_report=run_report, status="failed", exc=exc)
+        else:
+            raise _SupervisorCleanupError(
+                "supervised worker tree cleanup could not be confirmed") from exc
         raise
     finally:
         for signum, previous in previous_handlers.items():
@@ -10790,7 +11004,8 @@ def _run_jobs_command(args) -> dict[str, int | bool]:
             args.job_command)
         submitted = store.submit_job(
             command, command_arguments,
-            timeout_seconds=args.timeout)
+            timeout_seconds=args.timeout,
+            working_directory=Path.cwd(), output_root=OUTPUT_DIR)
         try:
             launch = _job_manager.launch_detached(
                 store, submitted.job_id,
@@ -10813,10 +11028,7 @@ def _run_jobs_command(args) -> dict[str, int | bool]:
         payload = {"job": summary.as_dict(), "launch": launch.as_dict()}
         summaries = [summary]
     elif action == "list":
-        summaries = []
-        for summary in store.list_jobs():
-            summaries.append(
-                _job_manager.reconcile_job(store, summary.job_id))
+        summaries = _job_manager.reconcile_all_jobs(store)
         payload = [summary.as_dict() for summary in summaries]
     elif action == "status":
         summary = _job_manager.reconcile_job(store, args.job_id)
@@ -10825,7 +11037,7 @@ def _run_jobs_command(args) -> dict[str, int | bool]:
     elif action == "cancel":
         store.request_cancel(args.job_id)
         deadline = time.monotonic() + args.wait_timeout
-        summary = store.get_job(args.job_id)
+        summary = _job_manager.reconcile_job(store, args.job_id)
         while args.wait and not summary.terminal:
             summary = _job_manager.reconcile_job(store, args.job_id)
             if summary.terminal or time.monotonic() >= deadline:
@@ -10861,6 +11073,19 @@ def _run_jobs_command(args) -> dict[str, int | bool]:
             "resumed_from_revision": resumed.revision - 1,
         }
         summaries = [summary]
+    elif action == "delete":
+        if args.apply:
+            store.prepare_delete(args.job_id)
+        plan = _retention.plan_background_job_deletion(
+            store.root, args.job_id)
+        payload = (
+            _retention.apply_retention_plan(plan)
+            if args.apply else plan.as_dict())
+        if args.job_json:
+            print(json.dumps(payload, indent=2, ensure_ascii=False))
+        else:
+            _render_storage_outcome(payload)
+        return {"jobs": 1, "terminal": 1, "applied": bool(args.apply)}
     else:
         raise _job_runtime.JobValidationError(
             "unknown background job action")
@@ -11296,6 +11521,14 @@ def main(argv: list[str] | None = None):
         "--ready-timeout", type=float, default=10.0,
         help="Seconds to wait for the detached-manager handshake")
 
+    p_job_delete = job_actions.add_parser(
+        "delete", help="Plan or apply deletion of one safely terminal job")
+    add_job_store_flags(p_job_delete)
+    p_job_delete.add_argument("job_id", help="32-character job ID")
+    p_job_delete.add_argument(
+        "--apply", action="store_true",
+        help="Execute the displayed deletion plan (default: dry run)")
+
     # full pipeline
     p_full = sub.add_parser("full", help="End-to-end: PDF to queryable index")
     p_full.add_argument("--pdf", type=Path, required=True)
@@ -11633,29 +11866,9 @@ def main(argv: list[str] | None = None):
                 log.info(f"{'='*60}")
 
                 (item_resume, exact_run_name, allocation_callback,
-                 binding) = _background_pipeline_plan(
+                 _binding) = _background_pipeline_plan(
                     worker_job_context, pdf, idx,
                     fallback_resume=resume)
-                if binding is not None and binding.status == "complete":
-                    paths = _output_paths_for_name(binding.run_name)
-                    collection = (
-                        getattr(args, "collection", None)
-                        or paths["collection"])
-                    db_dir = paths[db_backend]
-                    checkpoint_stage = f"item_{idx}.checkpoint"
-                    run_telemetry.stage_started(checkpoint_stage)
-                    run_telemetry.stage_finished(
-                        checkpoint_stage, status="skipped")
-                    results.append({
-                        "pdf": str(pdf),
-                        "status": "OK",
-                        "time": "0s",
-                        "output": str(paths["export"]),
-                        "collection": collection,
-                        "db": str(db_dir),
-                    })
-                    continue
-
                 if not pdf.exists():
                     log.error(f"PDF not found: {pdf}")
                     missing_stage = f"item_{idx}.input"
