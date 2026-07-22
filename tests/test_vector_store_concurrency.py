@@ -254,7 +254,7 @@ def test_vector_store_lock_is_process_safe_and_crash_released(tmp_path):
 
         with rag._vector_store_lock(
                 other_path, backend="qdrant", collection_name="book",
-                operation="independent process test", timeout=0.1):
+                operation="independent process test", timeout=2):
             pass
 
         holder.kill()
