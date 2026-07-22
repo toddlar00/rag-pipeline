@@ -240,27 +240,32 @@ def test_posix_escalation_kills_descendant_that_ignores_sigterm(
 
 def test_killed_worker_releases_lease_and_leaves_recovery_marker(
         tmp_path, capsys):
-    project_root = Path(__file__).resolve().parents[1]
     script = tmp_path / "locked_worker.py"
     db_path = tmp_path / "db"
+    lock_path = rag._vector_store_lock_path(db_path)
+    marker_path = rag._index_update_marker_path(
+        db_path, backend="chroma", collection_name="book")
     script.write_text(
         textwrap.dedent(
             """
+            import os
             from pathlib import Path
             import sys
             import time
 
-            sys.path.insert(0, sys.argv[1])
-            import rag
-
-            db_path = Path(sys.argv[2])
-            with rag._vector_store_lock(
-                    db_path, backend="chroma", collection_name="book",
-                    operation="hung test worker", timeout=2):
-                rag._begin_index_update(
-                    db_path, backend="chroma", collection_name="book",
-                    source_sha256="pending", source_record_count=1,
-                    owner_token="killed-worker")
+            lock_path = Path(sys.argv[1])
+            marker_path = Path(sys.argv[2])
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
+            marker_path.parent.mkdir(parents=True, exist_ok=True)
+            with lock_path.open("a+b") as lock_handle:
+                lock_handle.seek(0)
+                if os.name == "nt":
+                    import msvcrt
+                    msvcrt.locking(lock_handle.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+                marker_path.write_text("{}", encoding="utf-8")
                 time.sleep(60)
             """
         ),
@@ -268,12 +273,10 @@ def test_killed_worker_releases_lease_and_leaves_recovery_marker(
     )
 
     code = rag._run_cli_with_deadline(
-        script, [str(project_root), str(db_path)],
+        script, [str(lock_path), str(marker_path)],
         operation="index", timeout=1)
 
     assert code == 124
-    marker_path = rag._index_update_marker_path(
-        db_path, backend="chroma", collection_name="book")
     assert marker_path.is_file()
     with rag._vector_store_lock(
             db_path, backend="qdrant", collection_name="other",
