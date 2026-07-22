@@ -70,6 +70,11 @@ rank fusion, metadata filters, grounded prompt construction, and citation
 validation. Backend clients, mutable caches, LLM calls, and CLI orchestration
 remain outside that leaf module.
 
+`artifact_io.py` is a second standard-library-only leaf for fail-closed chunk
+snapshot reads, atomic file replacement, and completion-record validation.
+`rag.py` injects stable-ID, hashing, cleanup, and schema policy through its
+existing compatibility functions.
+
 ## Quick Start
 
 The portable command-line and CPU dependency profiles are tested on CPython
@@ -1301,6 +1306,7 @@ needed.
 ```
 rag.py                  # Stable command/API facade and pipeline orchestration
 retrieval_core.py       # Stdlib-only retrieval models and pure algorithms
+artifact_io.py          # Stdlib-only strict reads and atomic publication
 eval.py                 # Evaluation harness (success@k, MRR, type accuracy)
 eval_queries.jsonl      # Starter evaluation queries (10 CivPro)
 ui.py                   # Gradio web UI (Search, Export, Info tabs)

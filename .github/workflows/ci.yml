@@ -40,7 +40,8 @@ jobs:
       - name: Compile Python sources
         run: >-
           python -m py_compile
-          rag.py retrieval_core.py eval.py llm_runtime.py preprocess_pdf.py
+          rag.py retrieval_core.py artifact_io.py eval.py llm_runtime.py
+          preprocess_pdf.py
           scaffold_to_markdown.py inspect_chunks.py ui.py
           tools/check_dependency_policy.py tools/check_licenses.py
           tools/check_vulnerabilities.py tools/refresh_locks.py
