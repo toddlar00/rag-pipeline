@@ -81,6 +81,12 @@ def test_chunk_completion_binds_source_options_model_lock_and_output(
     chunks = tmp_path / "chunks.jsonl"
     document.write_text('{"name":"book"}', encoding="utf-8")
     _write_chunks(chunks, [_record(0, 1, "One", "complete chunk")])
+    monkeypatch.setattr(
+        rag, "_llm_runtime",
+        rag.LLMRuntime(rag.LLMRuntimeConfig(
+            cache_mode="off", cache_dir=tmp_path / "llm-cache",
+            max_transport_attempts=3)),
+    )
 
     def parameters(**overrides):
         values = {
@@ -100,6 +106,7 @@ def test_chunk_completion_binds_source_options_model_lock_and_output(
         return rag._chunk_parameters(**values)
 
     initial = parameters()
+    assert initial["max_llm_transport_attempts"] == 3
     manifest = rag._artifact_completion_path(chunks, stage="chunking")
     rag._write_artifact_completion(
         manifest, stage="chunking",
@@ -112,6 +119,15 @@ def test_chunk_completion_binds_source_options_model_lock_and_output(
     assert "secret-b" not in str(initial)
     assert not rag._chunks_complete(
         document, chunks, parameters=parameters(max_tokens=256))
+
+    rag._llm_runtime.configure(rag.LLMRuntimeConfig(
+        cache_mode="off", cache_dir=tmp_path / "llm-cache",
+        max_transport_attempts=4))
+    assert not rag._chunks_complete(
+        document, chunks, parameters=parameters())
+    rag._llm_runtime.configure(rag.LLMRuntimeConfig(
+        cache_mode="off", cache_dir=tmp_path / "llm-cache",
+        max_transport_attempts=3))
 
     monkeypatch.setattr(
         rag, "_model_artifact_lock_sha256", lambda: "f" * 64)

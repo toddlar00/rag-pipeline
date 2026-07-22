@@ -558,6 +558,7 @@ def test_resume_command_preserves_pipeline_options():
         backend="auto",
         db_lock_timeout=7,
         operation_timeout=99,
+        max_llm_transport_attempts=23,
     )
 
     command = rag._build_resume_cmd(Path("My Book.pdf"), args)
@@ -574,6 +575,7 @@ def test_resume_command_preserves_pipeline_options():
     assert "--backend auto" in command
     assert "--db-lock-timeout 7" in command
     assert "--operation-timeout 99" in command
+    assert "--max-llm-transport-attempts 23" in command
     assert "deepseek-secret" not in command
     assert "gemini-secret" not in command
     assert "--cloud-key" not in command

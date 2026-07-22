@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 
 import requests
 
-from llm_runtime import ProviderCallError, ProviderResponse
+from llm_runtime import LLMBudgetExceeded, ProviderCallError, ProviderResponse
 
 
 class HttpResponseProtocol(Protocol):
@@ -201,6 +201,8 @@ def _call_ollama_result(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
         )
+    except LLMBudgetExceeded:
+        raise
     except Exception as exc:
         if isinstance(exc, (ValueError, TypeError, KeyError, IndexError)):
             raise ProviderCallError(
@@ -263,6 +265,8 @@ def _call_gemini_result(
                 ),
             ),
         )
+    except LLMBudgetExceeded:
+        raise
     except Exception as exc:
         raise provider_call_error_fn(
             exc, transport_attempts=1) from None
@@ -418,7 +422,8 @@ def _call_openai_compatible_result(
         provider_token_count_fn: ProviderTokenCountFn,
         provider_value_fn: ProviderValueFn,
         provider_call_error_fn: ProviderCallErrorFn,
-        retry_after_fn: RetryAfterFn) -> ProviderResponse:
+        retry_after_fn: RetryAfterFn,
+        admit_retry_fn: Callable[[], None] | None = None) -> ProviderResponse:
     """Return OpenAI-compatible text, usage, and retry provenance."""
     if not api_key:
         raise ProviderCallError(
@@ -443,12 +448,17 @@ def _call_openai_compatible_result(
     for attempt in range(2):
         throttle.acquire()
         try:
+            if attempt > 0 and admit_retry_fn is not None:
+                admit_retry_fn()
             resp = post_fn(
                 f"{base_url.rstrip('/')}/chat/completions",
                 headers={"Authorization": f"Bearer {api_key}"},
                 json=payload,
                 timeout=timeout,
             )
+        except LLMBudgetExceeded:
+            throttle.release_error()
+            raise
         except Exception as exc:
             throttle.release_error()
             raise provider_call_error_fn(

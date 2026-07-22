@@ -76,6 +76,7 @@ class LLMRuntimeConfigValues(TypedDict):
     report_path: Path | str | None
     run_id: str | None
     max_provider_calls: int | None
+    max_transport_attempts: int | None
     max_reserved_tokens: int | None
     fallback_policy: str
     failure_policy: str
@@ -153,6 +154,8 @@ def _build_resume_cmd(
         ("llm_failure_policy", defaults.llm_failure_policy,
          "--llm-failure-policy"),
         ("max_llm_calls", None, "--max-llm-calls"),
+        ("max_llm_transport_attempts", None,
+         "--max-llm-transport-attempts"),
         ("max_llm_reserved_tokens", None,
          "--max-llm-reserved-tokens"),
     )
@@ -242,6 +245,8 @@ def _llm_runtime_config_values_from_args(
         "report_path": getattr(args, "llm_report", None),
         "run_id": getattr(args, "run_id", None),
         "max_provider_calls": getattr(args, "max_llm_calls", None),
+        "max_transport_attempts": getattr(
+            args, "max_llm_transport_attempts", None),
         "max_reserved_tokens": getattr(
             args, "max_llm_reserved_tokens", None),
         "fallback_policy": getattr(args, "llm_fallback", "ordered"),

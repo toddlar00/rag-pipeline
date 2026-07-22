@@ -780,6 +780,7 @@ default location is the platform user-cache directory
 | `--llm-fallback ordered|none` | Use the provider chain or only its first configured provider |
 | `--llm-failure-policy best-effort|strict` | Preserve feature-level fallbacks or fail when no provider returns output |
 | `--max-llm-calls N` | Hard cap on logical provider callback dispatches during the run |
+| `--max-llm-transport-attempts N` | Hard cap on physical provider transport admissions, including retries |
 | `--max-llm-reserved-tokens N` | Hard cap on conservative prompt-plus-maximum-output token reservations |
 
 ```bash
@@ -787,7 +788,8 @@ default location is the platform user-cache directory
 python rag.py generate-questions \
   --chunks output/Civil_procedure/Civil_procedure_chunks.jsonl \
   --llm-report output/Civil_procedure/llm-run.json \
-  --max-llm-calls 50 --max-llm-reserved-tokens 250000
+  --max-llm-calls 50 --max-llm-transport-attempts 60 \
+  --max-llm-reserved-tokens 250000
 
 # Retry the preferred cloud provider even if a fallback result is cached
 python rag.py brief \
@@ -819,14 +821,24 @@ reasoning-token breakdowns. Legacy/custom callbacks without native counts use
 the conservative character estimate. Cache hits preserve the selected result's
 token accounting but correctly report zero live provider or transport attempts.
 
-Budget terminology is intentionally conservative. `--max-llm-calls` counts
-logical provider dispatches; the OpenAI-compatible adapter may make one extra
-HTTP attempt after a 429 within a dispatch, and the report records that retry
-separately. Gemini receives the configured timeout and has SDK retries disabled
-so its observed transport count remains explicit. Reserved tokens use a
+Budget terminology is intentionally precise. `--max-llm-calls` counts logical
+provider callback dispatches, while `--max-llm-transport-attempts` atomically
+admits each physical HTTP or SDK call, including an adapter's internal retries.
+Once the physical cap is exhausted, no additional transport begins and ordered
+fallback stops instead of dispatching another provider. Reserved tokens use a
 provider-neutral `characters / 4 + max output` estimate and accumulate for each
-fallback attempt. Cache hits and callers sharing an in-flight request consume
-no additional budget.
+fallback dispatch. Cache hits and single-flight followers consume no logical
+dispatch, token reservation, or physical transport admission.
+
+The runtime admits the initial transport before invoking a provider callback.
+Built-in adapters also use the request's `admit_transport_retry()` hook
+immediately before every additional attempt. Custom provider callbacks with
+their own hidden retry loops must do the same before each retry; otherwise the
+physical ceiling cannot stop those extra calls. When a cap is active, a
+structured callback that reports more attempts than it admitted fails closed
+and stops fallback, with the contract violation exposed in the run report.
+Gemini receives the configured timeout and has SDK retries disabled, so its
+transport count remains explicit.
 
 ### DeepSeek V4 configuration
 

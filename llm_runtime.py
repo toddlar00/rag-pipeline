@@ -30,7 +30,7 @@ from storage_policy import (
 CACHE_KEY_SCHEMA_VERSION = 1
 CACHE_RECORD_SCHEMA_VERSION = 2
 EVENT_SCHEMA_VERSION = 2
-REPORT_SCHEMA_VERSION = 2
+REPORT_SCHEMA_VERSION = 3
 CACHE_MAX_BYTES = 32 * 1024 * 1024
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 
@@ -84,6 +84,16 @@ class LLMRequest:
     failure_policy: FailurePolicy | None = None
     cache_mode: CacheMode | None = None
     cache_dir: Path | None = None
+    _transport_retry_admission: Callable[[], None] | None = field(
+        default=None, repr=False, compare=False)
+
+    def admit_transport_retry(self) -> None:
+        """Atomically admit one additional provider transport attempt."""
+        if self._transport_retry_admission is None:
+            raise RuntimeError(
+                "transport retry admission is only available inside an "
+                "LLMRuntime provider callback")
+        self._transport_retry_admission()
 
 
 @dataclass(frozen=True)
@@ -193,10 +203,15 @@ class LLMRuntimeConfig:
     max_reserved_tokens: int | None = None
     fallback_policy: FallbackPolicy = "ordered"
     failure_policy: FailurePolicy = "best-effort"
+    max_transport_attempts: int | None = None
 
 
 class LLMBudgetExceeded(RuntimeError):
     """Raised internally when atomic admission would exceed a configured cap."""
+
+    def __init__(self, message: str, *, transport_attempts: int = 0):
+        self.transport_attempts = transport_attempts
+        super().__init__(message)
 
 
 class LLMExecutionError(RuntimeError):
@@ -280,6 +295,8 @@ class LLMRuntime:
                 "cache_write_errors": 0,
                 "event_write_errors": 0,
                 "provider_calls": 0,
+                "transport_admissions": 0,
+                "transport_contract_violations": 0,
                 "transport_attempts": 0,
                 "transport_retries": 0,
                 "exact_usage_attempts": 0,
@@ -307,6 +324,7 @@ class LLMRuntime:
             raise ValueError(f"invalid LLM failure policy: {config.failure_policy}")
         for name, value in (
                 ("max_provider_calls", config.max_provider_calls),
+                ("max_transport_attempts", config.max_transport_attempts),
                 ("max_reserved_tokens", config.max_reserved_tokens)):
             if value is not None and (
                     isinstance(value, bool) or not isinstance(value, int)
@@ -361,6 +379,9 @@ class LLMRuntime:
         if request.cache_dir is not None and not isinstance(
                 request.cache_dir, Path):
             raise TypeError("LLM cache_dir must be a pathlib.Path")
+        if (request._transport_retry_admission is not None
+                and not callable(request._transport_retry_admission)):
+            raise TypeError("transport retry admission must be callable")
 
     @staticmethod
     def _validate_providers(providers: list[ProviderSpec]) -> None:
@@ -378,7 +399,15 @@ class LLMRuntime:
                 raise TypeError("provider invoke must be callable")
 
     @staticmethod
-    def _validate_provider_response(response: ProviderResponse) -> None:
+    def _validate_provider_transport_attempts(response: ProviderResponse) -> None:
+        if (isinstance(response.transport_attempts, bool)
+                or not isinstance(response.transport_attempts, int)
+                or response.transport_attempts < 1):
+            raise ProviderCallError("invalid_response")
+
+    @classmethod
+    def _validate_provider_response(cls, response: ProviderResponse) -> None:
+        cls._validate_provider_transport_attempts(response)
         if not isinstance(response.text, str):
             raise ProviderCallError("invalid_response")
         for name, value in (
@@ -397,10 +426,6 @@ class LLMRuntime:
         if ((response.cached_prompt_tokens is not None
              or response.reasoning_tokens is not None)
                 and not has_prompt):
-            raise ProviderCallError("invalid_response")
-        if (isinstance(response.transport_attempts, bool)
-                or not isinstance(response.transport_attempts, int)
-                or response.transport_attempts < 1):
             raise ProviderCallError("invalid_response")
         if (not isinstance(response.transient_error_categories, tuple)
                 or any(category not in PROVIDER_ERROR_CATEGORIES
@@ -578,6 +603,7 @@ class LLMRuntime:
         with self._lock:
             next_calls = self._counts["provider_calls"] + 1
             next_tokens = self._counts["reserved_tokens"] + worst_case_tokens
+            next_transports = self._counts["transport_admissions"] + 1
             if (self._config.max_provider_calls is not None
                     and next_calls > self._config.max_provider_calls):
                 self._counts["budget_rejections"] += 1
@@ -586,10 +612,18 @@ class LLMRuntime:
                     and next_tokens > self._config.max_reserved_tokens):
                 self._counts["budget_rejections"] += 1
                 raise LLMBudgetExceeded("token budget exhausted")
+            if (self._config.max_transport_attempts is not None
+                    and next_transports
+                    > self._config.max_transport_attempts):
+                self._counts["budget_rejections"] += 1
+                raise LLMBudgetExceeded("transport-attempt budget exhausted")
             self._counts["provider_calls"] = next_calls
             self._counts["reserved_tokens"] = next_tokens
+            self._counts["transport_admissions"] = next_transports
             metrics = self._providers.setdefault(provider, {
                 "attempts": 0, "succeeded": 0, "failed": 0,
+                "transport_admissions": 0,
+                "transport_contract_violations": 0,
                 "transport_attempts": 0,
                 "transport_retries": 0,
                 "latency_ms": 0.0, "prompt_tokens": 0,
@@ -605,6 +639,33 @@ class LLMRuntime:
                 "error_categories": {},
             })
             metrics["attempts"] += 1
+            metrics["transport_admissions"] += 1
+
+    def _reserve_transport_retry(self, provider: str) -> None:
+        """Atomically reserve one retry without another logical dispatch."""
+        with self._lock:
+            next_transports = self._counts["transport_admissions"] + 1
+            if (self._config.max_transport_attempts is not None
+                    and next_transports
+                    > self._config.max_transport_attempts):
+                self._counts["budget_rejections"] += 1
+                raise LLMBudgetExceeded("transport-attempt budget exhausted")
+            self._counts["transport_admissions"] = next_transports
+            self._providers[provider]["transport_admissions"] += 1
+
+    def _require_transport_admissions(
+            self, provider: str, *, reported: int, admitted: int) -> None:
+        """Fail closed when a capped callback reports an unadmitted retry."""
+        with self._lock:
+            if (self._config.max_transport_attempts is None
+                    or reported <= admitted):
+                return
+            self._counts["transport_contract_violations"] += 1
+            self._counts["budget_rejections"] += 1
+            self._providers[provider]["transport_contract_violations"] += 1
+        raise LLMBudgetExceeded(
+            "provider reported an unadmitted transport attempt",
+            transport_attempts=reported)
 
     def _record_provider_outcome(
             self, provider: str, *, succeeded: bool, latency_ms: float,
@@ -681,12 +742,50 @@ class LLMRuntime:
             fallback_path.append(provider.name)
 
             attempt_started = time.perf_counter()
+            admitted_transport_attempts = 1
+
+            def admit_transport_retry() -> None:
+                nonlocal admitted_transport_attempts
+                self._reserve_transport_retry(provider.name)
+                admitted_transport_attempts += 1
+
+            provider_request = replace(
+                request,
+                _transport_retry_admission=admit_transport_retry,
+            )
+
+            def record_budget_exhaustion(exc: LLMBudgetExceeded) -> None:
+                latency = (time.perf_counter() - attempt_started) * 1000
+                observed_attempts = max(
+                    admitted_transport_attempts, exc.transport_attempts)
+                self._record_provider_outcome(
+                    provider.name, succeeded=False, latency_ms=latency,
+                    transport_attempts=observed_attempts,
+                    prompt_tokens=0, completion_tokens=0,
+                    usage_source="unavailable",
+                    error_category="budget_exceeded")
+                attempt_records.append(LLMAttempt(
+                    provider=provider.name, model=provider.model,
+                    succeeded=False, latency_ms=latency,
+                    error_category="budget_exceeded",
+                    transport_attempts=observed_attempts,
+                    prompt_tokens=0, completion_tokens=0,
+                    cached_prompt_tokens=0, reasoning_tokens=0,
+                    usage_exact=False, usage_source="unavailable"))
+
             try:
-                raw_response = provider.invoke(request)
+                raw_response = provider.invoke(provider_request)
                 if isinstance(raw_response, ProviderResponse):
+                    self._validate_provider_transport_attempts(raw_response)
+                    self._require_transport_admissions(
+                        provider.name,
+                        reported=raw_response.transport_attempts,
+                        admitted=admitted_transport_attempts)
                     self._validate_provider_response(raw_response)
                     normalized = raw_response.text.strip()
-                    transport_attempts = raw_response.transport_attempts
+                    transport_attempts = max(
+                        raw_response.transport_attempts,
+                        admitted_transport_attempts)
                     prompt_tokens = (
                         raw_response.prompt_tokens
                         if raw_response.prompt_tokens is not None
@@ -705,7 +804,7 @@ class LLMRuntime:
                         raw_response.transient_error_categories)
                 elif isinstance(raw_response, str):
                     normalized = raw_response.strip()
-                    transport_attempts = 1
+                    transport_attempts = admitted_transport_attempts
                     prompt_tokens = estimated_prompt_tokens
                     completion_tokens = _estimate_tokens(normalized)
                     cached_prompt_tokens = 0
@@ -714,7 +813,7 @@ class LLMRuntime:
                     transient_errors = ()
                 elif raw_response is None:
                     normalized = ""
-                    transport_attempts = 1
+                    transport_attempts = admitted_transport_attempts
                     prompt_tokens = 0
                     completion_tokens = 0
                     cached_prompt_tokens = 0
@@ -723,15 +822,30 @@ class LLMRuntime:
                     transient_errors = ()
                 else:
                     raise ProviderCallError("invalid_response")
-            except LLMBudgetExceeded:
+            except LLMBudgetExceeded as exc:
+                record_budget_exhaustion(exc)
                 last_error = "budget_exceeded"
                 break
             except Exception as exc:  # Provider boundary is intentionally broad.
+                if isinstance(exc, ProviderCallError):
+                    try:
+                        self._require_transport_admissions(
+                            provider.name,
+                            reported=exc.transport_attempts,
+                            admitted=admitted_transport_attempts)
+                    except LLMBudgetExceeded as budget_exc:
+                        record_budget_exhaustion(budget_exc)
+                        last_error = "budget_exceeded"
+                        break
                 latency = (time.perf_counter() - attempt_started) * 1000
                 category = self._error_category(exc)
-                transport_attempts = (
-                    exc.transport_attempts
-                    if isinstance(exc, ProviderCallError) else 1)
+                if isinstance(exc, ProviderCallError):
+                    transport_attempts = (
+                        0 if exc.transport_attempts == 0 else max(
+                            exc.transport_attempts,
+                            admitted_transport_attempts))
+                else:
+                    transport_attempts = admitted_transport_attempts
                 self._record_provider_outcome(
                     provider.name, succeeded=False, latency_ms=latency,
                     transport_attempts=transport_attempts,
@@ -1026,10 +1140,15 @@ class LLMRuntime:
                     "fallback_policy": config.fallback_policy,
                     "failure_policy": config.failure_policy,
                     "max_provider_calls": config.max_provider_calls,
+                    "max_transport_attempts": config.max_transport_attempts,
                     "max_reserved_tokens": config.max_reserved_tokens,
                 },
                 "accounting": {
                     "provider_calls": "logical fallback-chain dispatches",
+                    "transport_admissions": (
+                        "atomic permissions for underlying adapter requests"),
+                    "transport_contract_violations": (
+                        "capped callbacks reporting unadmitted retries"),
                     "transport_attempts": (
                         "underlying adapter requests, including retries"),
                     "token_usage": (

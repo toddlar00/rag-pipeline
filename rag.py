@@ -3755,16 +3755,18 @@ _AdaptiveThrottle = _llm_adapters._AdaptiveThrottle
 
 # Global throttle instance — shared across all LLM calls
 _api_throttle: Optional[_AdaptiveThrottle] = None
+_api_throttle_lock = _threading.Lock()
 
 
 def _get_throttle(max_workers: int) -> _AdaptiveThrottle:
     """Get or create the global adaptive throttle."""
     global _api_throttle
-    if _api_throttle is None or _api_throttle._max != max_workers:
-        _api_throttle = _AdaptiveThrottle(
-            max_workers, sleep_fn=time.sleep,
-            info_fn=log.info, warning_fn=log.warning)
-    return _api_throttle
+    with _api_throttle_lock:
+        if _api_throttle is None or _api_throttle._max != max_workers:
+            _api_throttle = _AdaptiveThrottle(
+                max_workers, sleep_fn=time.sleep,
+                info_fn=log.info, warning_fn=log.warning)
+        return _api_throttle
 
 
 _retry_after_seconds = _llm_adapters._retry_after_seconds
@@ -3774,7 +3776,8 @@ def _call_openai_compatible_result(
         prompt: str, *, base_url: str, model: str, api_key: str = "",
         thinking: bool = False, max_tokens: int = 256,
         max_workers: int = DEFAULT_LLM_WORKERS,
-        timeout: int = 30) -> ProviderResponse:
+        timeout: int = 30,
+        _admit_retry: Callable[[], None] | None = None) -> ProviderResponse:
     """Return OpenAI-compatible text, native usage, and retry provenance."""
     return _llm_adapters._call_openai_compatible_result(
         prompt, base_url=base_url, model=model, api_key=api_key,
@@ -3785,7 +3788,8 @@ def _call_openai_compatible_result(
         provider_token_count_fn=_provider_token_count,
         provider_value_fn=_provider_value,
         provider_call_error_fn=_provider_call_error,
-        retry_after_fn=_retry_after_seconds)
+        retry_after_fn=_retry_after_seconds,
+        admit_retry_fn=_admit_retry)
 
 
 def _call_openai_compatible(prompt: str, *, base_url: str,
@@ -3794,14 +3798,16 @@ def _call_openai_compatible(prompt: str, *, base_url: str,
                             max_tokens: int = 256,
                             max_workers: int = DEFAULT_LLM_WORKERS,
                             timeout: int = 30,
-                            _structured: bool = False
+                            _structured: bool = False,
+                            _admit_retry: Callable[[], None] | None = None,
                             ) -> Optional[str] | ProviderResponse:
     """Compatibility facade for an OpenAI-compatible chat completion."""
     try:
         result = _call_openai_compatible_result(
             prompt, base_url=base_url, model=model, api_key=api_key,
             thinking=thinking, max_tokens=max_tokens,
-            max_workers=max_workers, timeout=timeout)
+            max_workers=max_workers, timeout=timeout,
+            _admit_retry=_admit_retry)
         return result if _structured else result.text
     except ProviderCallError as exc:
         log.debug("OpenAI-compatible call failed: %s", exc.category)
@@ -3848,7 +3854,8 @@ def _call_llm_result(
                 req.prompt, base_url=cloud_url, model=effective_cloud_model,
                 api_key=cloud_key, max_workers=llm_workers,
                 thinking=req.thinking, max_tokens=req.max_tokens,
-                timeout=req.timeout, _structured=True)
+                timeout=req.timeout, _structured=True,
+                _admit_retry=req.admit_transport_retry)
 
         providers.append(ProviderSpec(
             name="cloud", model=effective_cloud_model,
@@ -5074,6 +5081,7 @@ def _chunk_parameters(*, embedding_model: str, max_tokens: int,
         "llm_fallback_policy": llm_config.fallback_policy,
         "llm_failure_policy": llm_config.failure_policy,
         "max_llm_calls": llm_config.max_provider_calls,
+        "max_llm_transport_attempts": llm_config.max_transport_attempts,
         "max_llm_reserved_tokens": llm_config.max_reserved_tokens,
         "thinking": thinking,
         "reconstruct_headings": reconstruct_headings,
@@ -11264,6 +11272,10 @@ def main(argv: list[str] | None = None):
         p.add_argument(
             "--max-llm-calls", type=int, default=None,
             help="Hard cap on logical provider dispatches for this run")
+        p.add_argument(
+            "--max-llm-transport-attempts", type=int, default=None,
+            help=("Hard cap on physical provider transport admissions, "
+                  "including retries"))
         p.add_argument(
             "--max-llm-reserved-tokens", type=int, default=None,
             help=("Hard cap on estimated prompt plus maximum-output tokens "

@@ -13,6 +13,8 @@ from llm_runtime import (
     LLMRequest,
     LLMRuntime,
     LLMRuntimeConfig,
+    ProviderCallError,
+    ProviderResponse,
     ProviderSpec,
 )
 
@@ -32,7 +34,8 @@ def test_success_is_cached_and_warm_read_skips_provider(tmp_path):
         return "answer"
 
     runtime = LLMRuntime(LLMRuntimeConfig(
-        cache_mode="readwrite", cache_dir=tmp_path / "cache"))
+        cache_mode="readwrite", cache_dir=tmp_path / "cache",
+        max_transport_attempts=1))
     request = LLMRequest(prompt="Explain Erie.", operation="test.answer")
     provider = _provider(invoke)
 
@@ -45,7 +48,9 @@ def test_success_is_cached_and_warm_read_skips_provider(tmp_path):
     assert second.text == "answer"
     assert calls == 1
     assert len(list((tmp_path / "cache").rglob("*.json"))) == 1
-    assert runtime.report_payload()["counts"]["provider_calls"] == 1
+    counts = runtime.report_payload()["counts"]
+    assert counts["provider_calls"] == 1
+    assert counts["transport_admissions"] == 1
 
 
 def test_request_id_covers_semantic_inputs(tmp_path):
@@ -231,7 +236,8 @@ def test_cache_write_failure_preserves_live_result(monkeypatch, tmp_path):
 
 def test_single_flight_collapses_concurrent_requests(monkeypatch, tmp_path):
     runtime = LLMRuntime(LLMRuntimeConfig(
-        cache_mode="off", cache_dir=tmp_path / "cache"))
+        cache_mode="off", cache_dir=tmp_path / "cache",
+        max_transport_attempts=1))
     request = LLMRequest(prompt="prompt", operation="test.single_flight")
     task_barrier = threading.Barrier(8)
     all_joined = threading.Event()
@@ -270,7 +276,9 @@ def test_single_flight_collapses_concurrent_requests(monkeypatch, tmp_path):
     assert sum(result.cache_status == "disabled" for result in results) == 1
     assert sum(result.cache_status == "shared" for result in results) == 7
     assert len({result.request_id for result in results}) == 1
-    assert runtime.report_payload()["counts"]["provider_calls"] == 1
+    counts = runtime.report_payload()["counts"]
+    assert counts["provider_calls"] == 1
+    assert counts["transport_admissions"] == 1
 
 
 def test_ordered_fallback_records_actual_provider_and_attempts(tmp_path):
@@ -360,6 +368,224 @@ def test_provider_dispatch_budget_is_hard(tmp_path):
     counts = runtime.report_payload()["counts"]
     assert calls == 1
     assert counts["provider_calls"] == 1
+    assert counts["transport_admissions"] == 1
+    assert counts["budget_rejections"] == 1
+
+
+@pytest.mark.parametrize("invalid_limit", [0, -1, True, 1.5])
+def test_transport_attempt_budget_requires_positive_integer(
+        tmp_path, invalid_limit):
+    with pytest.raises(ValueError, match="max_transport_attempts"):
+        LLMRuntime(LLMRuntimeConfig(
+            cache_mode="off", cache_dir=tmp_path / "cache",
+            max_transport_attempts=invalid_limit))
+
+
+def test_transport_budget_preserves_legacy_provider_callbacks(tmp_path):
+    calls = 0
+
+    def invoke(_request):
+        nonlocal calls
+        calls += 1
+        return "answer"
+
+    runtime = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="off", cache_dir=tmp_path / "cache",
+        max_transport_attempts=1))
+
+    result = runtime.execute(
+        LLMRequest(prompt="prompt", operation="test.legacy_transport"),
+        [_provider(invoke)],
+    )
+
+    assert result.text == "answer"
+    assert calls == 1
+    counts = runtime.report_payload()["counts"]
+    assert counts["provider_calls"] == 1
+    assert counts["transport_admissions"] == 1
+    assert counts["transport_attempts"] == 1
+
+
+def test_custom_provider_retry_hook_accounts_additional_transport(tmp_path):
+    calls = []
+
+    def invoke(request):
+        calls.append("first")
+        request.admit_transport_retry()
+        calls.append("retry")
+        return "answer"
+
+    runtime = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="off", cache_dir=tmp_path / "cache",
+        max_transport_attempts=2))
+
+    result = runtime.execute(
+        LLMRequest(prompt="prompt", operation="test.custom_retry"),
+        [_provider(invoke)],
+    )
+
+    assert result.text == "answer"
+    assert result.transport_attempts == 2
+    assert calls == ["first", "retry"]
+    report = runtime.report_payload()
+    assert report["counts"]["transport_admissions"] == 2
+    assert report["counts"]["transport_attempts"] == 2
+    assert report["providers"]["primary"]["transport_admissions"] == 2
+
+
+def test_capped_runtime_rejects_unadmitted_structured_retry(tmp_path):
+    runtime = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="off", cache_dir=tmp_path / "cache",
+        max_transport_attempts=1))
+    provider = _provider(lambda _request: ProviderResponse(
+        text="answer", transport_attempts=2))
+
+    with pytest.raises(LLMBudgetExceeded):
+        runtime.execute(
+            LLMRequest(prompt="prompt", operation="test.unadmitted_retry"),
+            [provider],
+        )
+
+    counts = runtime.report_payload()["counts"]
+    assert counts["provider_calls"] == 1
+    assert counts["transport_admissions"] == 1
+    assert counts["transport_attempts"] == 2
+    assert counts["transport_contract_violations"] == 1
+    assert counts["budget_rejections"] == 1
+
+
+def test_unadmitted_malformed_response_stops_fallback(tmp_path):
+    secondary_calls = 0
+
+    def secondary(_request):
+        nonlocal secondary_calls
+        secondary_calls += 1
+        return "unexpected"
+
+    runtime = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="off", cache_dir=tmp_path / "cache",
+        max_transport_attempts=3))
+
+    with pytest.raises(LLMBudgetExceeded):
+        runtime.execute(
+            LLMRequest(prompt="prompt", operation="test.malformed_retry"),
+            [
+                _provider(lambda _request: ProviderResponse(
+                    text="answer", prompt_tokens=5,
+                    transport_attempts=2)),
+                _provider(secondary, name="secondary", model="model-b"),
+            ],
+        )
+
+    counts = runtime.report_payload()["counts"]
+    assert secondary_calls == 0
+    assert counts["provider_calls"] == 1
+    assert counts["transport_admissions"] == 1
+    assert counts["transport_attempts"] == 2
+    assert counts["transport_contract_violations"] == 1
+
+
+def test_unadmitted_provider_error_stops_fallback(tmp_path):
+    secondary_calls = 0
+
+    def primary(_request):
+        raise ProviderCallError("rate_limited", transport_attempts=2)
+
+    def secondary(_request):
+        nonlocal secondary_calls
+        secondary_calls += 1
+        return "unexpected"
+
+    runtime = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="off", cache_dir=tmp_path / "cache",
+        max_transport_attempts=3))
+
+    with pytest.raises(LLMBudgetExceeded):
+        runtime.execute(
+            LLMRequest(prompt="prompt", operation="test.unadmitted_error"),
+            [
+                _provider(primary),
+                _provider(secondary, name="secondary", model="model-b"),
+            ],
+        )
+
+    counts = runtime.report_payload()["counts"]
+    assert secondary_calls == 0
+    assert counts["provider_calls"] == 1
+    assert counts["transport_admissions"] == 1
+    assert counts["transport_attempts"] == 2
+    assert counts["transport_contract_violations"] == 1
+
+
+def test_transport_attempt_budget_is_atomic_across_threads(tmp_path):
+    workers = 12
+    limit = 4
+    task_barrier = threading.Barrier(workers)
+    calls_lock = threading.Lock()
+    calls = 0
+
+    def invoke(_request):
+        nonlocal calls
+        with calls_lock:
+            calls += 1
+        return "answer"
+
+    runtime = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="off", cache_dir=tmp_path / "cache",
+        max_transport_attempts=limit))
+    provider = _provider(invoke)
+
+    def run_one(index):
+        task_barrier.wait(timeout=5)
+        try:
+            runtime.execute(LLMRequest(
+                prompt=f"prompt-{index}",
+                operation="test.concurrent_transport_budget"), [provider])
+        except LLMBudgetExceeded:
+            return False
+        return True
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        admitted = list(pool.map(run_one, range(workers)))
+
+    counts = runtime.report_payload()["counts"]
+    assert sum(admitted) == limit
+    assert calls == limit
+    assert counts["provider_calls"] == limit
+    assert counts["transport_admissions"] == limit
+    assert counts["transport_attempts"] == limit
+    assert counts["budget_rejections"] == workers - limit
+
+
+def test_exhausted_transport_budget_prevents_fallback_dispatch(tmp_path):
+    calls = {"primary": 0, "secondary": 0}
+
+    def primary(_request):
+        calls["primary"] += 1
+        return None
+
+    def secondary(_request):
+        calls["secondary"] += 1
+        return "unexpected"
+
+    runtime = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="off", cache_dir=tmp_path / "cache",
+        max_transport_attempts=1))
+
+    with pytest.raises(LLMBudgetExceeded):
+        runtime.execute(
+            LLMRequest(prompt="prompt", operation="test.transport_fallback"),
+            [
+                _provider(primary),
+                _provider(secondary, name="secondary", model="model-b"),
+            ],
+        )
+
+    counts = runtime.report_payload()["counts"]
+    assert calls == {"primary": 1, "secondary": 0}
+    assert counts["provider_calls"] == 1
+    assert counts["transport_admissions"] == 1
+    assert counts["transport_attempts"] == 1
     assert counts["budget_rejections"] == 1
 
 
@@ -386,6 +612,8 @@ def test_reserved_token_budget_uses_atomic_worst_case_admission(tmp_path):
 
     counts = runtime.report_payload()["counts"]
     assert calls == 1
+    assert counts["provider_calls"] == 1
+    assert counts["transport_admissions"] == 1
     assert counts["reserved_tokens"] == 11
     assert counts["budget_rejections"] == 1
 
@@ -572,6 +800,7 @@ def test_cli_runtime_flags_configure_run_and_write_report(
         "--llm-fallback", "none",
         "--llm-failure-policy", "strict",
         "--max-llm-calls", "7",
+        "--max-llm-transport-attempts", "11",
         "--max-llm-reserved-tokens", "900",
     ])
 
@@ -584,8 +813,10 @@ def test_cli_runtime_flags_configure_run_and_write_report(
     assert configured.fallback_policy == "none"
     assert configured.failure_policy == "strict"
     assert configured.max_provider_calls == 7
+    assert configured.max_transport_attempts == 11
     assert configured.max_reserved_tokens == 900
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["configuration"]["cache_mode"] == "refresh"
+    assert report["configuration"]["max_transport_attempts"] == 11
     assert report["counts"]["requests"] == 0
     assert isolated_rag_runtime.config.cache_mode == "off"
