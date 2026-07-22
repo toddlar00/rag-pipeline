@@ -40,10 +40,11 @@ Status terms:
 | CLI-policy modularization | Implemented (draft) | [PR #20](https://github.com/toddlar00/rag-pipeline/pull/20) |
 | PDF-ingestion modularization | Implemented (draft) | [PR #21](https://github.com/toddlar00/rag-pipeline/pull/21) |
 | Model-artifact supply chain and ML-BOM | Implemented (draft) | [PR #22](https://github.com/toddlar00/rag-pipeline/pull/22) |
+| Multi-subject adversarial retrieval evaluation | Implemented (draft) | [PR #23](https://github.com/toddlar00/rag-pipeline/pull/23) |
 
 PR #1 is independent of the index-integrity stack and can be reviewed or merged
 separately. The index-integrity stack must be reviewed and merged in order:
-**#2 -> #3 -> #4 -> #5 -> #6 -> #7 -> #8 -> #9 -> #10 -> #11 -> #12 -> #13 -> #14 -> #15 -> #16 -> #17 -> #18 -> #19 -> #20 -> #21 -> #22**.
+**#2 -> #3 -> #4 -> #5 -> #6 -> #7 -> #8 -> #9 -> #10 -> #11 -> #12 -> #13 -> #14 -> #15 -> #16 -> #17 -> #18 -> #19 -> #20 -> #21 -> #22 -> #23**.
 Until those PRs merge,
 implementation progress is ahead of integration progress.
 
@@ -75,6 +76,14 @@ stack is reviewed and merged in order.
   keeping backend-specific payload and validation rules local.
 
 ### 3. Expand retrieval evaluation
+
+Implemented in draft PR #23 with pinned CC0 Property and Constitutional Law
+mini corpora, adversarial citation/abstention/filter/long-context fixtures,
+portable deterministic baselines, redacted CI artifacts, and relevance,
+grounding, latency, memory, storage, token-use, and caller-priced cost metrics.
+The controlled suites validate the evaluation machinery; expert review and
+production dense/hybrid/reranked calibration remain necessary for each full
+private corpus before its scores become release gates.
 
 - Build corpus-pinned judged sets for additional subjects and books rather than
   treating the Civil Procedure calibration as universal.
