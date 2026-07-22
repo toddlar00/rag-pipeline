@@ -75,6 +75,11 @@ snapshot reads, atomic file replacement, and completion-record validation.
 `rag.py` injects stable-ID, hashing, cleanup, and schema policy through its
 existing compatibility functions.
 
+`chunking_core.py` is the standard-library-only text preparation layer. It
+owns deterministic normalization, structural filtering, near-duplicate
+detection, rule-based content classification, and basic chunk metadata helpers;
+Docling, LLM enrichment, and chunk publication remain orchestrated by `rag.py`.
+
 ## Quick Start
 
 The portable command-line and CPU dependency profiles are tested on CPython
@@ -1307,6 +1312,7 @@ needed.
 rag.py                  # Stable command/API facade and pipeline orchestration
 retrieval_core.py       # Stdlib-only retrieval models and pure algorithms
 artifact_io.py          # Stdlib-only strict reads and atomic publication
+chunking_core.py         # Stdlib-only text preparation and classification
 eval.py                 # Evaluation harness (success@k, MRR, type accuracy)
 eval_queries.jsonl      # Starter evaluation queries (10 CivPro)
 ui.py                   # Gradio web UI (Search, Export, Info tabs)

@@ -37,6 +37,7 @@ from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
 import artifact_io as _artifact_io
+import chunking_core as _chunking_core
 import retrieval_core as _retrieval_core
 
 from llm_runtime import (
@@ -128,9 +129,9 @@ GroundedAnswer = _retrieval_core.GroundedAnswer
 SearchResponse = _retrieval_core.SearchResponse
 
 # Minimum word count for a chunk to be kept (filters frontmatter scraps)
-MIN_CHUNK_WORDS = 20
+MIN_CHUNK_WORDS = _chunking_core.MIN_CHUNK_WORDS
 # Similarity threshold for deduplication (1.0 = identical)
-DEDUP_THRESHOLD = 0.95
+DEDUP_THRESHOLD = _chunking_core.DEDUP_THRESHOLD
 
 # LLM classification / contextual retrieval defaults
 DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
@@ -4458,39 +4459,11 @@ def _normalize_text(text: str) -> str:
     Handles: non-breaking spaces (\\xa0), smart quotes, en/em dashes,
     ligatures (fi, fl, ff, ffi, ffl), and stray control characters.
     """
-    if not text:
-        return ""
-    replacements = {
-        "\xa0": " ",          # non-breaking space → regular space
-        "\u2018": "'",        # left single quote
-        "\u2019": "'",        # right single quote
-        "\u201c": '"',        # left double quote
-        "\u201d": '"',        # right double quote
-        "\u2013": "-",        # en dash
-        "\u2014": " - ",      # em dash
-        "\ufb01": "fi",       # fi ligature
-        "\ufb02": "fl",       # fl ligature
-        "\ufb00": "ff",       # ff ligature
-        "\ufb03": "ffi",      # ffi ligature
-        "\ufb04": "ffl",      # ffl ligature
-        "\ufffd": "",         # replacement character (discard)
-    }
-    for old, new in replacements.items():
-        text = text.replace(old, new)
-    # Decode Private Use Area (PUA) font glyphs to ASCII digits.
-    # Some PDFs use custom fonts that map U+F643..U+F64C to digits 0-9.
-    if any(0xE000 <= ord(c) <= 0xF8FF for c in text):
-        _pua_map = {chr(0xF643 + i): str(i) for i in range(10)}
-        text = "".join(_pua_map.get(c, c) for c in text)
-    # Collapse runs of whitespace (but preserve paragraph breaks)
-    text = _WHITESPACE_RE.sub(" ", text)
-    # Collapse 3+ newlines into 2
-    text = _NEWLINES_RE.sub("\n\n", text)
-    # Strip repeated page headers/footers
-    text = _strip_headers_footers(text)
-    # Remove near-duplicate lines (TOC-style repetition within 5 lines)
-    text = _dedup_nearby_lines(text)
-    return text.strip()
+    return _chunking_core._normalize_text(
+        text,
+        strip_headers_footers_fn=_strip_headers_footers,
+        dedup_nearby_lines_fn=_dedup_nearby_lines,
+    )
 
 
 def _strip_headers_footers(text: str) -> str:
@@ -4501,139 +4474,47 @@ def _strip_headers_footers(text: str) -> str:
     often legitimate legal headings (for example ``PERSONAL JURISDICTION`` or
     ``IV.``) and must be preserved.
     """
-    if not text:
-        return text
-    # Remove standalone page-number lines
-    text = _HEADER_FOOTER_RE.sub("", text)
-    return text
+    return _chunking_core._strip_headers_footers(text)
 
 
 def _dedup_nearby_lines(text: str, window: int = 5) -> str:
     """Remove lines that duplicate another line within *window* lines above."""
-    lines = text.split("\n")
-    out: list[str] = []
-    for i, line in enumerate(lines):
-        stripped = line.strip()
-        if not stripped:
-            out.append(line)
-            continue
-        # Look back up to `window` non-empty lines
-        start = max(0, len(out) - window)
-        dup = False
-        for prev in out[start:]:
-            if prev.strip() == stripped:
-                dup = True
-                break
-        if not dup:
-            out.append(line)
-    return "\n".join(out)
+    return _chunking_core._dedup_nearby_lines(text, window)
 
 
 # --- Front/back matter detection ---
 
 # Pages that are structural (TOC, index, title page, copyright) not content
-_STRUCTURAL_PATTERNS = [
-    re.compile(r"^(Table of )?Contents$", re.IGNORECASE | re.MULTILINE),
-    re.compile(r"^Index$", re.IGNORECASE | re.MULTILINE),
-    re.compile(r"^Preface$", re.IGNORECASE | re.MULTILINE),
-    re.compile(r"^Acknowledgments?$", re.IGNORECASE | re.MULTILINE),
-    re.compile(r"^About the Authors?$", re.IGNORECASE | re.MULTILINE),
-    re.compile(r"^(Series |Editorial )?Advisory Board$", re.IGNORECASE | re.MULTILINE),
-]
+_STRUCTURAL_PATTERNS = _chunking_core._STRUCTURAL_PATTERNS
 
 # TOC-like content: lines that are mostly "Topic ... page_number"
-_TOC_LINE_RE = re.compile(r"^.{5,80}\s+\d{1,4}\s*$", re.MULTILINE)
+_TOC_LINE_RE = _chunking_core._TOC_LINE_RE
 # Index-like content: lines that are "Term, page, page, page"
-_INDEX_LINE_RE = re.compile(r"^[A-Z].{2,60},\s*\d{1,4}(?:[-,]\s*\d{1,4})*\s*$", re.MULTILINE)
+_INDEX_LINE_RE = _chunking_core._INDEX_LINE_RE
 
 
-def _is_structural_content(text: str, headings: list[str] | None) -> bool:
-    """Detect TOC, index, title pages, copyright — not substantive content."""
-    heading_text = " ".join(headings) if headings else ""
-
-    # Check headings for structural markers
-    for pat in _STRUCTURAL_PATTERNS:
-        if pat.search(heading_text):
-            return True
-
-    # Check if text is TOC-shaped (many lines ending in page numbers)
-    lines = text.strip().split("\n")
-    if len(lines) > 3:
-        toc_matches = len(_TOC_LINE_RE.findall(text))
-        if toc_matches > len(lines) * 0.4:
-            return True
-
-    # Check if text is index-shaped
-    if len(lines) > 5:
-        idx_matches = len(_INDEX_LINE_RE.findall(text))
-        if idx_matches > len(lines) * 0.4:
-            return True
-
-    # Very short text with no real content (title pages, blank pages)
-    word_count = len(text.split())
-    if word_count < 15 and not any(c.islower() for c in text[:100]):
-        return True
-
-    return False
+_is_structural_content = _chunking_core._is_structural_content
 
 
 # --- Deduplication ---
 
-def _text_fingerprint(text: str) -> str:
-    """Produce a normalized fingerprint for near-duplicate detection."""
-    # Lowercase, strip whitespace, keep only alnum
-    return _FP_RE.sub("", text.lower())
+_text_fingerprint = _chunking_core._text_fingerprint
 
 
-def _make_trigrams(fp: str) -> frozenset[str]:
-    """Pre-compute character trigrams for a fingerprint."""
-    if len(fp) < 3:
-        return frozenset()
-    return frozenset(fp[i:i+3] for i in range(len(fp) - 2))
+_make_trigrams = _chunking_core._make_trigrams
 
 
 def _deduplicate_chunks(chunks: list[dict],
                         threshold: float = DEDUP_THRESHOLD) -> list[dict]:
-    """Remove near-duplicate chunks based on trigram Jaccard similarity.
-
-    Pre-computes trigram sets for O(1) lookups instead of O(n) per comparison.
-    Uses length-based pre-filter to skip obviously different chunks.
-    """
-    if not chunks:
-        return chunks
-
-    kept: list[dict] = []
-    seen: list[tuple[int, frozenset[str]]] = []
-    for chunk in chunks:
-        fp = _text_fingerprint(chunk["text"])
-        fp_len = len(fp)
-        trigrams_a = _make_trigrams(fp)
-        if not trigrams_a:
-            # There is not enough signal to compare reliably. Deduplication
-            # should not silently become a second empty/tiny-content filter.
-            kept.append(chunk)
-            continue
-
-        is_dupe = False
-        for seen_len, trigrams_b in seen:
-            # Length pre-filter: skip if lengths differ by >20%
-            if abs(fp_len - seen_len) / max(fp_len, seen_len) > 0.2:
-                continue
-            if not trigrams_b:
-                continue
-            jaccard = len(trigrams_a & trigrams_b) / len(trigrams_a | trigrams_b)
-            if jaccard >= threshold:
-                is_dupe = True
-                break
-
-        if not is_dupe:
-            kept.append(chunk)
-            seen.append((fp_len, trigrams_a))
-
-    removed = len(chunks) - len(kept)
-    if removed > 0:
-        log.info(f"Deduplication: removed {removed} near-duplicate chunks")
-    return kept
+    """Deduplicate through the facade's current helpers and logger."""
+    return _chunking_core._deduplicate_chunks(
+        chunks,
+        threshold,
+        text_fingerprint_fn=_text_fingerprint,
+        make_trigrams_fn=_make_trigrams,
+        removed_callback=lambda removed: log.info(
+            f"Deduplication: removed {removed} near-duplicate chunks"),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -5208,133 +5089,43 @@ _ZS_LABEL_MAP = {
     "chapter introduction and overview": "chapter_introduction",
 }
 
-_WHITESPACE_RE = re.compile(r"[^\S\n]+")
-_NEWLINES_RE = re.compile(r"\n{3,}")
-_FP_RE = re.compile(r"[^a-z0-9]")
+_WHITESPACE_RE = _chunking_core._WHITESPACE_RE
+_NEWLINES_RE = _chunking_core._NEWLINES_RE
+_FP_RE = _chunking_core._FP_RE
 _THINK_TAG_RE = _retrieval_core._THINK_TAG_RE
-_HEADER_FOOTER_RE = re.compile(r"^\s*\d{1,4}\s*$", re.MULTILINE)
+_HEADER_FOOTER_RE = _chunking_core._HEADER_FOOTER_RE
 
-NOTES_Q_RE = re.compile(r"^(?:Notes and Questions|Questions)\b", re.MULTILINE)
+NOTES_Q_RE = _chunking_core.NOTES_Q_RE
 # Matches "Chapter 3 · Title" OR "3  ·  PERSONAL JURISDICTION" (Docling heading format)
-CHAPTER_RE = re.compile(
-    r"^(?:Chapter\s+)?(\d{1,2})\s*[·\-\xb7\u00b7\u2022–—]\s*(.+)$",
-    re.MULTILINE,
-)
+CHAPTER_RE = _chunking_core.CHAPTER_RE
 # Fallback: ALL-CAPS chapter headings like "CHAPTER 5  VENUE" or "5  VENUE"
 CHAPTER_CAPS_RE = re.compile(
     r"^(?:CHAPTER\s+)?(\d{1,2})\s{2,}([A-Z][A-Z\s,]{4,})$",
     re.MULTILINE,
 )
 SECTION_RE = re.compile(r"^([A-G])\.\s+(.+)$", re.MULTILINE)
-CASE_EXTRACT_RE = re.compile(
-    r"((?:(?:In re|Ex parte)\s+)?[A-Z][A-Za-z\'\-\.]+(?:\s+[A-Z][A-Za-z\'\-\.]+)*"
-    r"\s+v\.\s+"
-    r"[A-Z][A-Za-z\'\-\.]+(?:\s+[A-Za-z\'\-\.,]+)*)"
-)
+CASE_EXTRACT_RE = _chunking_core.CASE_EXTRACT_RE
 
 
 # Footnote markers: superscript-style numbering at start of lines
-_FOOTNOTE_NUM_RE = re.compile(r"^\s*(?:\d{1,3}[.\)]\s|[\u00b9\u00b2\u00b3\u2070-\u2079]+\s|\[\d{1,3}\]\s)", re.MULTILINE)
+_FOOTNOTE_NUM_RE = _chunking_core._FOOTNOTE_NUM_RE
 # Legal citation shorthand common in footnotes
-_FOOTNOTE_CITE_MARKERS = ["Id.", "id.", "supra", "infra", "See ", "see ", "Cf.", "cf.", "e.g.,", "Compare "]
+_FOOTNOTE_CITE_MARKERS = _chunking_core._FOOTNOTE_CITE_MARKERS
 
 
 def classify_content_type(text: str, headings: list[str] | None) -> str:
-    """Classify a chunk's content type based on text patterns and headings."""
-    if not text.strip():
-        return "empty"
-
-    # Structural content (TOC, index, title pages) — filter these out downstream
-    if _is_structural_content(text, headings):
-        return "structural"
-
-    heading_text = " ".join(headings) if headings else ""
-
-    if NOTES_Q_RE.search(heading_text) or NOTES_Q_RE.search(text[:200]):
-        return "notes_and_questions"
-
-    if CHAPTER_RE.search(heading_text):
-        if any("Introduction" in h for h in (headings or [])):
-            return "chapter_introduction"
-
-    # Case opinions have distinctive markers
-    case_markers = [
-        "Justice ", "Judge ", "JUSTICE ", "JUDGE ",
-        "delivered the opinion", "Opinion of the Court",
-        "concurring", "dissenting", "affirmed", "reversed",
-        "certiorari", "Argued ", "Decided ",
-    ]
-    if sum(1 for m in case_markers if m in text) >= 2:
-        return "case_opinion"
-
-    # Statutory excerpts
-    statute_markers = ["U.S.C.", "§", "Fed. R. Civ. P.", "Rule "]
-    if sum(1 for m in statute_markers if m in text[:500]) >= 2:
-        return "statutory_excerpt"
-
-    # Footnotes: numbered paragraphs with heavy citation density
-    lines = text.strip().split("\n")
-    fn_numbered = len(_FOOTNOTE_NUM_RE.findall(text))
-    fn_cite_count = sum(1 for m in _FOOTNOTE_CITE_MARKERS if m in text)
-    if fn_numbered >= 2 and fn_cite_count >= 3:
-        return "footnote"
-    # Also catch single-footnote chunks
-    if fn_numbered >= 1 and fn_cite_count >= 4 and len(text.split()) < 200:
-        return "footnote"
-
-    # Table-heavy content: pipe-separated, tab-separated, or aligned columns
-    pipe_lines = sum(1 for line in lines if line.count("|") >= 2)
-    if len(lines) > 2 and pipe_lines > len(lines) * 0.3:
-        return "table"
-
-    # Tab-separated columns: 3+ non-empty lines each with 2+ tab characters
-    tab_lines = [line for line in lines if line.count("\t") >= 2]
-    if len(tab_lines) >= 3:
-        return "table"
-
-    # Note: Aligned-column detection was removed because it false-positives
-    # on indented legal text (numbered paragraphs, statutory subsections).
-    # Pipe-density and tab-detection above are sufficient for real tables.
-
-    return "author_narrative"
+    """Classify through the facade's current structural-content helper."""
+    return _chunking_core.classify_content_type(
+        text, headings, structural_content_fn=_is_structural_content)
 
 
-def extract_case_names(text: str) -> list[str]:
-    """Extract case names mentioned in the chunk."""
-    matches = CASE_EXTRACT_RE.findall(text)
-    seen = set()
-    result = []
-    for m in matches:
-        cleaned = m.strip().rstrip(".,;")
-        # Strip leading citation signals
-        signal_prefixes = ["See ", "see ", "Cf. ", "cf. ", "Compare ", "In ", "But see ", "E.g., "]
-        for prefix in signal_prefixes:
-            if cleaned.startswith(prefix):
-                cleaned = cleaned[len(prefix):]
-        # Filter out section headings mistakenly captured as case names
-        if "The Rest" in cleaned or "The Story" in cleaned:
-            continue
-        if cleaned not in seen and len(cleaned) > 5:
-            seen.add(cleaned)
-            result.append(cleaned)
-    return result[:10]
+extract_case_names = _chunking_core.extract_case_names
 
 
-def build_section_path(headings: list[str] | None) -> str:
-    if not headings:
-        return ""
-    return " → ".join(h.strip() for h in headings if h.strip())
+build_section_path = _chunking_core.build_section_path
 
 
-def estimate_page_range(chunk_index: int, total_chunks: int,
-                        total_pages: int) -> str:
-    """Rough page estimate based on chunk position (fallback only)."""
-    if total_chunks <= 1 or total_pages <= 1:
-        return "~p.1"
-    bounded_index = min(max(chunk_index, 0), total_chunks - 1)
-    position = bounded_index / (total_chunks - 1)
-    page = 1 + round(position * (total_pages - 1))
-    return f"~p.{page}"
+estimate_page_range = _chunking_core.estimate_page_range
 
 
 def enrich_chunk(chunk_text: str, headings: list[str] | None,
