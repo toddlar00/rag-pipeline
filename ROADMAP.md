@@ -106,8 +106,17 @@ post-quarantine identity validation, and dry-run-first run/cache/UI retention
 under pipeline and vector leases. PR #26 adds private immutable job specs,
 atomic attempt state, detached process-tree supervision, explicit cancellation
 and resume, exact run binding, bounded logs, conservative restart recovery, and
-a local-only Jobs UI. The stable application service remains the next ordered
-slice.
+a local-only Jobs UI. Its independent durability audit additionally gates the
+same worker PID until OS containment and durable registration, propagates every
+unconfirmed cleanup into non-resumable `orphaned`, holds a verified Windows
+process handle across recovery termination, scopes cancellation markers per
+attempt, pins and revalidates working/output directory identities, rejects
+oversize persisted specs and bindings before publication, revalidates completed
+batch stages, and coordinates reconciliation, cancellation, quarantine, and
+deletion with short root plus per-job leases. Job-store schema v2 intentionally
+fails closed on the unreleased v1 prototype because its missing directory
+identities cannot be reconstructed safely. The stable application service
+remains the next ordered slice.
 
 - Emit structured stage/index/LLM metrics with run IDs and actionable failure
   diagnostics.

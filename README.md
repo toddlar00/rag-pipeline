@@ -199,7 +199,7 @@ python rag.py batch Civil_procedure.pdf Torts_casebook.pdf Con_law.pdf --resume
 | `full` | End-to-end: all steps in one command (with `--resume`) |
 | `batch` | Process multiple PDFs end-to-end with per-PDF resume |
 | `storage` | Dry-run-first retention for owned runs, caches, and UI exports |
-| `jobs` | Submit, inspect, cancel, and explicitly resume durable background work |
+| `jobs` | Submit, inspect, cancel, resume, and safely delete durable background work |
 
 Global flags: `-v` / `--verbose` (DEBUG output), `--quiet` (warnings only).
 
@@ -210,6 +210,8 @@ Commands that can open a vector store run in an isolated worker process. Use
 timeout terminates the Windows worker Job Object or the POSIX worker process
 group, releases its operating-system lease, retains any interrupted-update
 marker, prints no command arguments or secrets, and exits with status `124`.
+The target waits behind an OS start gate until containment and durable worker
+registration finish, and normal direct-worker exit also drains descendants.
 Guided-menu index, query, info, full, and batch actions use the same boundary.
 On POSIX, a descendant that deliberately starts a new session is outside the
 process-group guarantee. Defaults are:
@@ -253,6 +255,10 @@ python rag.py jobs cancel JOB_ID --wait --wait-timeout 30
 
 # Resume is always explicit and creates a new attempt; it is never automatic
 python rag.py jobs resume JOB_ID
+
+# Deletion is terminal-only and dry-run-first
+python rag.py jobs delete JOB_ID
+python rag.py jobs delete JOB_ID --apply
 ```
 
 The allowed commands are `preprocess`, `convert`, `chunk`, `index`,
@@ -265,31 +271,52 @@ This keeps secrets out of the immutable private job spec and normal status
 responses, but environment credentials are still available to the worker
 process under the current user account.
 
-Each job uses an immutable digest-bound `spec.json`, atomic `state.json`, an
-attempt-token-bound cancellation marker, and one OS-backed manager lease under
-`output/.rag-jobs/JOB_ID/`. Attempts store private runtime metadata, a bounded
-8 MiB worker-log tail, and correlated event/report files. POSIX uses verified
+Each job uses an immutable digest-bound `spec.json`, atomic `state.json`, a
+separate attempt-token-bound cancellation marker for every attempt, and one
+OS-backed manager lease under `output/.rag-jobs/JOB_ID/`. The spec pins the
+canonical submission working directory and private output-root filesystem
+identities, and every detached attempt runs from that directory. Attempts store
+private runtime metadata, a bounded final 8 MiB worker-log tail, and correlated
+event/report files. POSIX uses verified
 `0700`/`0600` modes; Windows uses a protected DACL for only the current SID.
 Logs can contain source paths and model output even though status and telemetry
 are redacted, so treat the entire job root as sensitive. Job records persist
-for audit and explicit resume; there is no automatic deletion.
+for audit and explicit resume; there is no automatic deletion. `jobs delete`
+uses ownership validation, an irreversible `deleting` state, quarantine,
+identity revalidation, and explicit `--apply` before removing a safe terminal
+job. It refuses active jobs and jobs with unconfirmed cleanup.
+
+The current on-disk job-store schema is version 2. The version-1 prototype was
+never released and is intentionally not auto-migrated: it did not persist the
+submission/output directory identities needed to authorize a resumed worker.
+Version-1 records therefore fail closed with an unsupported-schema error. Only
+archive or remove such development records after independently confirming that
+their manager and worker trees are gone.
 
 The state machine is `queued -> starting -> running -> terminal`, with
 `cancel_requested` between a running attempt and confirmed cancellation.
 Terminal states are `succeeded`, `partial`, `failed`, `cancelled`, and
-`interrupted`. The manager never claims `cancelled` until process-tree cleanup
-and matching cancellation telemetry are both confirmed. A status/list call
-reconciles a managerless attempt using PID plus process-birth identity; it will
-not signal a reused or unverifiable PID and never auto-resumes provider calls.
-Windows Job Objects kill descendants if a manager exits. POSIX recovery targets
-only the recorded process-group leader after exact birth verification; any
-uncertainty becomes `interrupted` and requires operator review.
+`interrupted`; `orphaned` is a terminal but deliberately non-resumable state for
+unverifiable or uncleared processes, and `deleting` is irreversible. The
+manager never claims `cancelled` until process-tree cleanup and matching
+cancellation telemetry are both confirmed. Queued cancellation terminalizes
+without launching a worker. A status/list call reconciles a managerless attempt
+using PID plus process-birth identity; it will not signal a reused or
+unverifiable PID and never auto-resumes provider calls. Windows Job Objects kill
+descendants if a manager exits. Linux recovery targets only an exact
+PID/birth-matched process-group leader. Platforms without a verifiable birth
+identity and all cleanup uncertainty become `orphaned`, blocking resume.
+On POSIX, a descendant that deliberately calls `setsid()` can escape the
+worker's process group; do not execute untrusted worker extensions under this
+local supervision boundary.
 
 For `full` and `batch`, the worker durably binds a pathname hash and item index
 to the allocated run while holding the per-PDF lease. A resumed attempt targets
 that exact run even if another same-stem run was created later. Completed batch
-items are checkpoint-skipped; failed or untouched items resume or allocate
-exactly once. Resuming cloud/LLM work can repeat paid or externally visible
+items re-enter exact-run resume so source, completion manifests, and outputs are
+revalidated; valid stages then skip individually. Failed or untouched items
+resume or allocate exactly once. Resuming cloud/LLM work can repeat paid or
+externally visible
 calls that failed before their response was durably committed, so inspect
 status/logs and provider usage before choosing `jobs resume`.
 
@@ -1665,6 +1692,7 @@ storage_policy.py       # Owner-only DACL/mode and atomic publication policy
 retention.py            # Ownership manifests and dry-run-first lifecycle plans
 job_runtime.py          # Durable private job schemas, bindings, transitions, leases
 job_manager.py          # Detached supervision, cancellation, and restart recovery
+supervised_worker.py    # Gated same-PID bootstrap for pre-execution containment
 model-artifact-policy.json # Reviewed models, consumers, files, code, and licenses
 model-artifacts.lock.json # Immutable revisions and per-file raw SHA-256 inventory
 preprocess_pdf.py       # Standalone PDF preprocessing CLI facade
