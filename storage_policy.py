@@ -17,9 +17,10 @@ import stat
 import tempfile
 import threading
 from collections.abc import Callable, Iterable
+from contextlib import contextmanager
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 
 PRIVATE_DIRECTORY_MODE = 0o700
@@ -920,6 +921,76 @@ def append_private_jsonl(path: Path, payload: dict) -> None:
         _append_private_jsonl_windows(path, encoded, parent_identity)
     else:
         _append_private_jsonl_posix(path, encoded, parent_identity)
+
+
+@contextmanager
+def open_private_append(
+        path: Path, *, text: bool = False) -> Iterator[Any]:
+    """Open one verified private regular file for streaming append.
+
+    The returned handle is suitable for direct ``subprocess`` stdout/stderr
+    redirection. The parent is private, links and hardlinks are rejected, the
+    descriptor is owner-only, and publication identity is checked again when
+    the context exits.
+    """
+    path, parent_identity = _prepare_private_output(path)
+    flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT
+    flags |= getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    if not text:
+        flags |= getattr(os, "O_BINARY", 0)
+    descriptor = os.open(path, flags, PRIVATE_FILE_MODE)
+    handle = None
+    try:
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1:
+            raise StoragePolicyError(
+                "private stream target must be one regular, unlinked file")
+        if os.name == "nt":
+            # New files inherit the already-private parent DACL. Normalize the
+            # pathname while this descriptor pins the verified regular file;
+            # the private parent excludes cross-user replacement races.
+            _windows_apply_private_dacl(path, directory=False)
+        else:
+            os.fchmod(descriptor, PRIVATE_FILE_MODE)
+        assert_no_link_components(path.parent)
+        if _parent_identity(path.parent) != parent_identity:
+            raise StoragePolicyError(
+                "private stream parent changed before use")
+        published = os.stat(path, follow_symlinks=False)
+        identity = (int(opened.st_dev), int(opened.st_ino))
+        if (int(published.st_dev), int(published.st_ino)) != identity:
+            raise StoragePolicyError(
+                "private stream target changed while opening")
+
+        if text:
+            handle = os.fdopen(descriptor, "a", encoding="utf-8", newline="")
+        else:
+            handle = os.fdopen(descriptor, "ab", buffering=0)
+        descriptor = -1
+        try:
+            yield handle
+        finally:
+            handle.flush()
+            os.fsync(handle.fileno())
+            final_handle = os.fstat(handle.fileno())
+            final_path = os.stat(path, follow_symlinks=False)
+            if (
+                not stat.S_ISREG(final_handle.st_mode)
+                or final_handle.st_nlink != 1
+                or (int(final_handle.st_dev), int(final_handle.st_ino)) !=
+                identity
+                or (int(final_path.st_dev), int(final_path.st_ino)) != identity
+            ):
+                raise StoragePolicyError(
+                    "private stream target changed before close")
+    finally:
+        if handle is not None:
+            handle.close()
+        elif descriptor >= 0:
+            os.close(descriptor)
+    _verify_private_file(path)
+    _fsync_parent_directory(path)
 
 
 def harden_private_tree(root: Path) -> dict[str, int]:

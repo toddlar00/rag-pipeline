@@ -58,6 +58,38 @@ def test_atomic_text_json_and_jsonl_writers_publish_private_files(tmp_path):
         _assert_private_permissions(path, directory=False)
 
 
+def test_private_append_handle_streams_bytes_and_text(tmp_path):
+    private = storage_policy.ensure_private_directory(tmp_path / "private")
+    binary_path = private / "worker.log"
+    text_path = private / "manager.log"
+
+    with storage_policy.open_private_append(binary_path) as handle:
+        handle.write(b"first\n")
+    with storage_policy.open_private_append(binary_path) as handle:
+        handle.write(b"second\n")
+    with storage_policy.open_private_append(text_path, text=True) as handle:
+        handle.write("private ✓\n")
+
+    assert binary_path.read_bytes() == b"first\nsecond\n"
+    assert text_path.read_text(encoding="utf-8") == "private ✓\n"
+    _assert_private_permissions(binary_path, directory=False)
+    _assert_private_permissions(text_path, directory=False)
+
+
+def test_private_append_handle_rejects_hardlinked_target(tmp_path):
+    private = storage_policy.ensure_private_directory(tmp_path / "private")
+    source = private / "source.log"
+    alias = private / "alias.log"
+    storage_policy.atomic_write_private_text(source, "unchanged")
+    os.link(source, alias)
+
+    with pytest.raises(storage_policy.StoragePolicyError, match="unlinked"):
+        with storage_policy.open_private_append(alias):
+            pytest.fail("hardlinked stream target must not be returned")
+
+    assert source.read_text(encoding="utf-8") == "unchanged"
+
+
 def test_atomic_replace_failure_preserves_target_and_removes_temporary_file(
     tmp_path,
 ):
