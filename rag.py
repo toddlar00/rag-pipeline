@@ -5739,6 +5739,138 @@ def _prepare_chroma_batch(
     return ids, embedding_inputs, documents, metadatas
 
 
+def _chroma_exact_count(collection, collection_name: str) -> int:
+    """Return Chroma's API-visible logical record count or fail closed."""
+    count = collection.count()
+    if (isinstance(count, bool) or not isinstance(count, int)
+            or count < 0):
+        raise RuntimeError(
+            f"Chroma collection '{collection_name}' returned an invalid "
+            "logical record count")
+    return count
+
+
+def _chroma_mutation_batch_size(client, *, upper_bound: int = 1000) -> int:
+    """Return a conservative batch size within the client's advertised cap."""
+    if (isinstance(upper_bound, bool) or not isinstance(upper_bound, int)
+            or upper_bound < 1):
+        raise ValueError("Chroma mutation upper_bound must be a positive integer")
+    get_max_batch_size = getattr(client, "get_max_batch_size", None)
+    if callable(get_max_batch_size):
+        max_batch_size = get_max_batch_size()
+    else:
+        missing = object()
+        max_batch_size = getattr(client, "max_batch_size", missing)
+        if max_batch_size is missing:
+            return upper_bound
+    if (isinstance(max_batch_size, bool)
+            or not isinstance(max_batch_size, int)
+            or max_batch_size < 1):
+        raise RuntimeError("Chroma client returned an invalid maximum batch size")
+    return min(upper_bound, max_batch_size)
+
+
+def _chroma_stable_id_rows(
+        collection, collection_name: str, *,
+        page_size: int = 1000) -> list[tuple[str, str | None]]:
+    """Return every Chroma ID through a count-bounded, drift-safe scan."""
+    if (isinstance(page_size, bool) or not isinstance(page_size, int)
+            or page_size < 1):
+        raise ValueError("Chroma get page_size must be a positive integer")
+
+    count_before = _chroma_exact_count(collection, collection_name)
+    rows: list[tuple[str, str | None]] = []
+    seen_ids: set[str] = set()
+    max_get_calls = count_before + 1
+    for _ in range(max_get_calls):
+        result = collection.get(
+            limit=page_size,
+            offset=len(rows),
+            include=["metadatas"],
+        )
+        if not isinstance(result, dict):
+            raise RuntimeError("Chroma get returned an invalid result")
+        ids = result.get("ids")
+        metadatas = result.get("metadatas")
+        if not isinstance(ids, list) or not isinstance(metadatas, list):
+            raise RuntimeError(
+                "Chroma get omitted its IDs or metadata page")
+        if len(ids) != len(metadatas):
+            raise RuntimeError(
+                "Chroma get returned misaligned IDs and metadata")
+        if len(ids) > page_size:
+            raise RuntimeError(
+                "Chroma get returned more records than its page limit")
+        if not ids:
+            count_after = _chroma_exact_count(collection, collection_name)
+            if len(rows) != count_before or count_after != count_before:
+                raise RuntimeError(
+                    f"Chroma collection '{collection_name}' changed or "
+                    "returned an incomplete exact-count scan")
+            return rows
+
+        for physical_id, metadata in zip(ids, metadatas):
+            if len(rows) >= count_before:
+                raise RuntimeError(
+                    "Chroma get exceeded its logical record count")
+            if not isinstance(physical_id, str) or not physical_id.strip():
+                raise RuntimeError(
+                    "Chroma get returned an invalid document ID")
+            if physical_id in seen_ids:
+                raise RuntimeError(
+                    "Chroma get repeated a document ID")
+            seen_ids.add(physical_id)
+            metadata = metadata if isinstance(metadata, dict) else {}
+            stable_id = metadata.get("stable_id")
+            if not isinstance(stable_id, str) or not stable_id.strip():
+                stable_id = None
+            rows.append((physical_id, stable_id))
+
+    raise RuntimeError("Chroma get exceeded its exact-count page budget")
+
+
+def _require_chroma_stable_ids(
+        collection, collection_name: str, expected: set[str], *,
+        page_size: int = 1000) -> set[str]:
+    """Require exact Chroma document and metadata stable-ID identities."""
+    rows = _chroma_stable_id_rows(
+        collection, collection_name, page_size=page_size)
+    physical_ids = {physical_id for physical_id, _ in rows}
+    metadata_ids: dict[str, list[str]] = {}
+    untracked = 0
+    mismatched = 0
+    for physical_id, stable_id in rows:
+        if stable_id is None:
+            untracked += 1
+            continue
+        metadata_ids.setdefault(stable_id, []).append(physical_id)
+        if stable_id != physical_id:
+            mismatched += 1
+
+    missing = expected - physical_ids
+    unexpected = physical_ids - expected
+    duplicates = sum(
+        len(ids) - 1 for ids in metadata_ids.values() if len(ids) > 1)
+    if missing or unexpected or duplicates or untracked or mismatched:
+        details = []
+        if missing:
+            details.append(f"{len(missing)} stable ID(s) not found")
+        if unexpected:
+            details.append(f"{len(unexpected)} unexpected stable ID(s)")
+        if duplicates:
+            details.append(f"{duplicates} duplicate stable-ID record(s)")
+        if untracked:
+            details.append(f"{untracked} record(s) without a stable ID")
+        if mismatched:
+            details.append(
+                f"{mismatched} document ID/stable ID mismatch(es)")
+        raise RuntimeError(
+            f"Chroma collection '{collection_name}' does not match its "
+            f"stable-ID manifest ({'; '.join(details)}). Refusing to update "
+            "the manifest; run again with --full-reindex.")
+    return physical_ids
+
+
 def index_chunks(chunks_path: Path, chroma_dir: Path, *,
                  collection_name: str = DEFAULT_COLLECTION,
                  embedding_model: str = DEFAULT_EMBEDDING_MODEL,
@@ -5784,6 +5916,7 @@ def index_chunks(chunks_path: Path, chroma_dir: Path, *,
             full_reindex=full_reindex,
         )
     )
+    reuse_existing_collection = collection_exists and not rebuild_collection
     update_marker_path = _chroma_update_marker_path(
         chroma_dir, collection_name=collection_name)
     update_guarded = update_marker_path.exists()
@@ -5814,12 +5947,29 @@ def index_chunks(chunks_path: Path, chroma_dir: Path, *,
 
     # --- Incremental indexing: skip unchanged chunks ---
     if old_hashes:
-        changed = [r for r, cid, chash in chunk_info
-                   if chash != old_hashes.get(cid)]
+        changed_info = [
+            (record, chunk_id, chunk_hash)
+            for record, chunk_id, chunk_hash in chunk_info
+            if chunk_hash != old_hashes.get(chunk_id)
+        ]
+        changed = [record for record, _, _ in changed_info]
         removed_ids = [k for k in old_hashes if k not in new_hashes]
-        if removed_ids:
+        changed_existing_ids = [
+            chunk_id for _, chunk_id, _ in changed_info
+            if chunk_id in old_hashes
+        ]
+        deletion_ids = removed_ids + changed_existing_ids
+        _require_chroma_stable_ids(
+            collection, collection_name, set(old_hashes))
+        if deletion_ids:
+            delete_batch_size = _chroma_mutation_batch_size(client)
             _ensure_update_guard()
-            collection.delete(ids=removed_ids)
+            for start in range(0, len(deletion_ids), delete_batch_size):
+                collection.delete(
+                    ids=deletion_ids[start:start + delete_batch_size])
+            _require_chroma_stable_ids(
+                collection, collection_name,
+                set(old_hashes).difference(deletion_ids))
 
         unchanged = len(records) - len(changed)
         log.info(f"Incremental: {len(changed)} changed, {unchanged} unchanged "
@@ -5836,6 +5986,10 @@ def index_chunks(chunks_path: Path, chroma_dir: Path, *,
                 _finish_index_update(update_marker_path)
             return
         records = changed
+    elif reuse_existing_collection:
+        # A compatible empty manifest is safe to populate only if the physical
+        # collection is also empty.
+        _require_chroma_stable_ids(collection, collection_name, set())
 
     # --- Parallel embedding + pipelined upsert ---
     # For API-based embeddings (Voyage, OpenAI, Cohere), embed batches in
@@ -5928,6 +6082,8 @@ def index_chunks(chunks_path: Path, chroma_dir: Path, *,
                 worker_name="Chroma upsert worker",
                 primary_error=pipeline_error)
 
+    verified_ids = _require_chroma_stable_ids(
+        collection, collection_name, set(new_hashes))
     _save_index_manifest(
         chroma_dir, backend="chroma", collection_name=collection_name,
         embedding_model=embedding_model,
@@ -5936,7 +6092,7 @@ def index_chunks(chunks_path: Path, chroma_dir: Path, *,
         source_record_count=source_record_count)
     _finish_index_update(update_marker_path)
 
-    log.info(f"Collection '{collection.name}' → {collection.count()} documents")
+    log.info(f"Collection '{collection.name}' → {len(verified_ids)} documents")
     log.info(f"Embedding model: {embedding_model}")
     log.info(f"Persisted to {chroma_dir}")
 

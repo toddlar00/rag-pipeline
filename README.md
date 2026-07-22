@@ -685,6 +685,12 @@ premature termination, oversized/non-progressing pages, and repeated physical
 point IDs. Use `--full-reindex` to recover from a physical collection/manifest
 mismatch. Waited point deletes and upserts must also report Qdrant's
 `completed` status before reconciliation or manifest commit can continue.
+Chroma compatible runs perform the corresponding count-sandwiched, bounded
+scan of API-visible document IDs and their `stable_id` metadata before any
+incremental mutation, after deletions, and after all upserts. Changed durable
+IDs are deleted and verified absent before replacement, so silent delete or
+upsert no-ops cannot advance the manifest. Chroma delete batches respect the
+client's advertised maximum size when available.
 
 Before its first collection mutation, either backend creates a collection-
 scoped recovery marker. The marker is removed only after all writes finish and
@@ -692,9 +698,9 @@ the atomic manifest replacement succeeds (including Qdrant's exact post-write
 verification). If a run is interrupted or fails after mutation begins, queries
 and corpus-pinned evaluations fail closed while the marker remains; the next
 `index` or `full --resume` run rebuilds only that backend/collection and clears
-the marker after the recovered index is committed. Chroma's marker exposes and
-recovers known interrupted runs, but does not yet provide Qdrant's exact
-physical stable-ID reconciliation.
+the marker after the recovered index is committed. These identity scans detect
+count and set drift during pagination, but are not writer locks or transactional
+snapshots; concurrent-write exclusion remains an operational requirement.
 
 The sequential background-upsert paths for both backends share teardown that
 requests a worker stop, waits for completion, and attempts both executor and

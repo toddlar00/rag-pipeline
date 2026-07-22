@@ -446,6 +446,231 @@ def test_legacy_sidecar_is_never_used_for_an_incremental_skip(tmp_path):
     assert legacy.is_file()
 
 
+def test_chroma_identity_verifier_accepts_short_paginated_records():
+    calls = []
+    rows = [
+        ("chunk_b", {"stable_id": "chunk_b"}),
+        ("chunk_a", {"stable_id": "chunk_a"}),
+    ]
+
+    class FakeCollection:
+        def count(self):
+            calls.append(("count",))
+            return len(rows)
+
+        def get(self, *, limit, offset, include):
+            calls.append(("get", limit, offset, include))
+            page = rows[offset:offset + 1]
+            return {
+                "ids": [item_id for item_id, _ in page],
+                "metadatas": [metadata for _, metadata in page],
+            }
+
+    actual = rag._require_chroma_stable_ids(
+        FakeCollection(), "book", {"chunk_a", "chunk_b"}, page_size=3)
+
+    assert actual == {"chunk_a", "chunk_b"}
+    assert calls == [
+        ("count",),
+        ("get", 3, 0, ["metadatas"]),
+        ("get", 3, 1, ["metadatas"]),
+        ("get", 3, 2, ["metadatas"]),
+        ("count",),
+    ]
+
+
+def test_chroma_empty_scan_confirms_terminal_page_and_count():
+    calls = []
+
+    class FakeCollection:
+        def count(self):
+            calls.append(("count",))
+            return 0
+
+        def get(self, *, limit, offset, include):
+            calls.append(("get", limit, offset, include))
+            return {"ids": [], "metadatas": []}
+
+    assert rag._chroma_stable_id_rows(
+        FakeCollection(), "book", page_size=7) == []
+    assert calls == [
+        ("count",),
+        ("get", 7, 0, ["metadatas"]),
+        ("count",),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("rows", "expected", "message"),
+    [
+        ([
+            ("chunk_a", {"stable_id": "chunk_a"}),
+            ("chunk_c", {"stable_id": "chunk_c"}),
+        ], {"chunk_a", "chunk_b"}, "not found.*unexpected"),
+        ([
+            ("chunk_a", {"stable_id": "chunk_a"}),
+            ("chunk_alias", {"stable_id": "chunk_a"}),
+        ], {"chunk_a", "chunk_alias"}, "duplicate stable-ID.*mismatch"),
+        ([
+            ("chunk_a", None),
+        ], {"chunk_a"}, "without a stable ID"),
+        ([
+            ("chunk_a", {"stable_id": "chunk_b"}),
+        ], {"chunk_a"}, "document ID/stable ID mismatch"),
+    ],
+    ids=["equal-count-swap", "duplicate-metadata", "untracked", "mismatch"],
+)
+def test_chroma_identity_verifier_rejects_physical_drift(
+        rows, expected, message):
+    class FakeCollection:
+        def count(self):
+            return len(rows)
+
+        def get(self, *, limit, offset, include):
+            page = rows[offset:offset + limit]
+            return {
+                "ids": [item_id for item_id, _ in page],
+                "metadatas": [metadata for _, metadata in page],
+            }
+
+    with pytest.raises(RuntimeError, match=message):
+        rag._require_chroma_stable_ids(
+            FakeCollection(), "book", expected, page_size=2)
+
+
+@pytest.mark.parametrize("count", [None, True, -1, 1.5, "1"])
+def test_chroma_scan_rejects_invalid_physical_count(count):
+    class FakeCollection:
+        def count(self):
+            return count
+
+        def get(self, **_kwargs):
+            pytest.fail("an invalid count must fail before Chroma get")
+
+    with pytest.raises(RuntimeError, match="invalid logical record count"):
+        rag._chroma_stable_id_rows(FakeCollection(), "book")
+
+
+def test_chroma_mutation_batch_size_respects_client_cap_and_fallback():
+    class CappedClient:
+        def get_max_batch_size(self):
+            return 37
+
+    class LegacyCappedClient:
+        max_batch_size = 29
+
+    assert rag._chroma_mutation_batch_size(CappedClient()) == 37
+    assert rag._chroma_mutation_batch_size(LegacyCappedClient()) == 29
+    assert rag._chroma_mutation_batch_size(
+        CappedClient(), upper_bound=20) == 20
+    assert rag._chroma_mutation_batch_size(object()) == 1000
+
+
+@pytest.mark.parametrize("batch_size", [None, True, 0, -1, 1.5, "1"])
+def test_chroma_mutation_batch_size_rejects_invalid_client_cap(batch_size):
+    class InvalidClient:
+        def get_max_batch_size(self):
+            return batch_size
+
+    with pytest.raises(RuntimeError, match="invalid maximum batch size"):
+        rag._chroma_mutation_batch_size(InvalidClient())
+
+    class InvalidLegacyClient:
+        max_batch_size = batch_size
+
+    with pytest.raises(RuntimeError, match="invalid maximum batch size"):
+        rag._chroma_mutation_batch_size(InvalidLegacyClient())
+
+
+@pytest.mark.parametrize("page_size", [None, True, 0, -1, 1.5, "1"])
+def test_chroma_scan_rejects_invalid_page_size(page_size):
+    class FakeCollection:
+        def count(self):
+            pytest.fail("an invalid page size must fail before counting")
+
+    with pytest.raises(ValueError, match="positive integer"):
+        rag._chroma_stable_id_rows(
+            FakeCollection(), "book", page_size=page_size)
+
+
+@pytest.mark.parametrize(
+    ("count_values", "responses", "page_size", "message"),
+    [
+        ([1, 1], [
+            {"ids": [], "metadatas": []},
+        ], 1, "incomplete exact-count scan"),
+        ([2], [
+            {
+                "ids": ["chunk_a", "chunk_b"],
+                "metadatas": [
+                    {"stable_id": "chunk_a"},
+                    {"stable_id": "chunk_b"},
+                ],
+            },
+        ], 1, "more records than its page limit"),
+        ([1], [
+            {"ids": ["chunk_a"], "metadatas": []},
+        ], 1, "misaligned IDs and metadata"),
+        ([1, 2], [
+            {"ids": ["chunk_a"],
+             "metadatas": [{"stable_id": "chunk_a"}]},
+            {"ids": [], "metadatas": []},
+        ], 1, "changed or returned an incomplete"),
+        ([2], [
+            {"ids": ["chunk_a"],
+             "metadatas": [{"stable_id": "chunk_a"}]},
+            {"ids": ["chunk_a"],
+             "metadatas": [{"stable_id": "chunk_a"}]},
+        ], 1, "repeated a document ID"),
+        ([1], [
+            {"ids": [None], "metadatas": [None]},
+        ], 1, "invalid document ID"),
+        ([1], [
+            {"ids": ["chunk_a"],
+             "metadatas": [{"stable_id": "chunk_a"}]},
+            {"ids": ["chunk_b"],
+             "metadatas": [{"stable_id": "chunk_b"}]},
+        ], 1, "exceeded its logical record count"),
+    ],
+    ids=[
+        "early-empty", "oversized", "misaligned", "count-drift",
+        "repeated-id", "invalid-id", "overflow",
+    ],
+)
+def test_chroma_scan_rejects_count_and_pagination_inconsistency(
+        count_values, responses, page_size, message):
+    counts = list(count_values)
+    pages = list(responses)
+
+    class FakeCollection:
+        def count(self):
+            return counts.pop(0)
+
+        def get(self, *, limit, offset, include):
+            return pages.pop(0)
+
+    with pytest.raises(RuntimeError, match=message):
+        rag._chroma_stable_id_rows(
+            FakeCollection(), "book", page_size=page_size)
+
+
+@pytest.mark.parametrize(
+    "result",
+    [None, [], {"ids": []}, {"metadatas": []},
+     {"ids": (), "metadatas": []}],
+)
+def test_chroma_scan_rejects_malformed_get_result(result):
+    class FakeCollection:
+        def count(self):
+            return 0
+
+        def get(self, **_kwargs):
+            return result
+
+    with pytest.raises(RuntimeError, match="invalid result|omitted"):
+        rag._chroma_stable_id_rows(FakeCollection(), "book")
+
+
 def test_qdrant_removed_id_lookup_scrolls_every_page():
     calls = []
     count_calls = []
@@ -1619,7 +1844,8 @@ def test_qdrant_marker_cleanup_runs_after_manifest_commit(
 
 
 def _prepare_chroma_changed_existing_incremental(
-        monkeypatch, tmp_path, *, embedding_model="model-a"):
+        monkeypatch, tmp_path, *, embedding_model="model-a",
+        delete_mutates=True, upsert_mutates=True, count_values=None):
     chunks_path = tmp_path / "chunks.jsonl"
     db_path = tmp_path / "chroma"
     old_record = {
@@ -1653,7 +1879,10 @@ def _prepare_chroma_changed_existing_incremental(
         db_path, collection_name="book")
     state = SimpleNamespace(
         upserts=[], deletes=[], collection_deletes=[], collection_creates=[],
-        collections={})
+        collections={}, gets=[], delete_mutates=delete_mutates,
+        upsert_mutates=upsert_mutates,
+        count_values=(list(count_values)
+                      if count_values is not None else None))
 
     class FakeCollection:
         def __init__(self, name, rows=None):
@@ -1663,21 +1892,38 @@ def _prepare_chroma_changed_existing_incremental(
         def upsert(self, *, ids, embeddings, documents, metadatas):
             assert marker_path.is_file()
             state.upserts.append(list(ids))
-            for index, item_id in enumerate(ids):
-                self.rows[item_id] = {
-                    "embedding": embeddings[index],
-                    "document": documents[index],
-                    "metadata": metadatas[index],
-                }
+            if state.upsert_mutates:
+                for index, item_id in enumerate(ids):
+                    self.rows[item_id] = {
+                        "embedding": embeddings[index],
+                        "document": documents[index],
+                        "metadata": metadatas[index],
+                    }
 
         def delete(self, *, ids):
             assert marker_path.is_file()
             state.deletes.append(list(ids))
-            for item_id in ids:
-                self.rows.pop(item_id, None)
+            if state.delete_mutates:
+                for item_id in ids:
+                    self.rows.pop(item_id, None)
 
         def count(self):
+            if state.count_values is not None:
+                return state.count_values.pop(0)
             return len(self.rows)
+
+        def get(self, *, limit, offset, include):
+            assert include == ["metadatas"]
+            state.gets.append((self.name, limit, offset))
+            ids = list(self.rows)[offset:offset + limit]
+            return {
+                "ids": ids,
+                "metadatas": [
+                    self.rows[item_id].get("metadata")
+                    if isinstance(self.rows[item_id], dict) else None
+                    for item_id in ids
+                ],
+            }
 
     collection = FakeCollection(
         "book",
@@ -1685,7 +1931,10 @@ def _prepare_chroma_changed_existing_incremental(
             stable_id: {
                     "embedding": [1.0, 0.0],
                     "document": old_record["text"],
-                    "metadata": dict(old_record["metadata"]),
+                    "metadata": {
+                        **old_record["metadata"],
+                        "stable_id": stable_id,
+                    },
             },
         },
     )
@@ -1766,6 +2015,291 @@ def test_chroma_marker_write_failure_prevents_first_mutation(
     assert fixture.collection.rows[fixture.stable_id]["metadata"][
         "context"] == "Old classification"
     assert fixture.manifest_path.read_bytes() == original_manifest
+    assert not fixture.marker_path.exists()
+
+
+def test_chroma_preflight_drift_fails_before_marker_or_mutation(
+        monkeypatch, tmp_path):
+    fixture = _prepare_chroma_changed_existing_incremental(
+        monkeypatch, tmp_path)
+    original_manifest = fixture.manifest_path.read_bytes()
+    unexpected_id = "chunk_unexpected"
+    fixture.collection.rows[unexpected_id] = {
+        "embedding": [1.0, 0.0],
+        "document": "Untracked physical record",
+        "metadata": {"stable_id": unexpected_id},
+    }
+
+    with pytest.raises(RuntimeError, match="unexpected stable ID"):
+        rag.index_chunks(
+            fixture.chunks_path, fixture.db_path,
+            collection_name="book", embedding_model="model-a")
+
+    assert fixture.state.deletes == []
+    assert fixture.state.upserts == []
+    assert not fixture.marker_path.exists()
+    assert fixture.manifest_path.read_bytes() == original_manifest
+
+
+def test_chroma_compatible_empty_manifest_rejects_physical_records(
+        monkeypatch, tmp_path):
+    fixture = _prepare_chroma_changed_existing_incremental(
+        monkeypatch, tmp_path)
+    rag._save_index_manifest(
+        fixture.db_path, backend="chroma", collection_name="book",
+        embedding_model="model-a", embedding_dimension=2,
+        chunk_hashes={}, source_sha256="empty-source",
+        source_record_count=0)
+    original_manifest = fixture.manifest_path.read_bytes()
+
+    with pytest.raises(RuntimeError, match="unexpected stable ID"):
+        rag.index_chunks(
+            fixture.chunks_path, fixture.db_path,
+            collection_name="book", embedding_model="model-a")
+
+    assert fixture.state.deletes == []
+    assert fixture.state.upserts == []
+    assert not fixture.marker_path.exists()
+    assert fixture.manifest_path.read_bytes() == original_manifest
+
+
+def test_chroma_changed_existing_delete_noop_preserves_old_manifest(
+        monkeypatch, tmp_path):
+    fixture = _prepare_chroma_changed_existing_incremental(
+        monkeypatch, tmp_path, delete_mutates=False)
+    original_manifest = fixture.manifest_path.read_bytes()
+
+    with pytest.raises(RuntimeError, match="unexpected stable ID"):
+        rag.index_chunks(
+            fixture.chunks_path, fixture.db_path,
+            collection_name="book", embedding_model="model-a")
+
+    assert fixture.state.deletes == [[fixture.stable_id]]
+    assert fixture.state.upserts == []
+    assert fixture.collection.rows[fixture.stable_id]["metadata"][
+        "context"] == "Old classification"
+    assert fixture.marker_path.is_file()
+    assert fixture.manifest_path.read_bytes() == original_manifest
+
+
+def test_chroma_partial_delete_preserves_old_manifest(monkeypatch, tmp_path):
+    fixture = _prepare_chroma_changed_existing_incremental(
+        monkeypatch, tmp_path)
+    removed_record = {
+        "text": "A second stale record must also be deleted.",
+        "metadata": {
+            "chunk_index": 1,
+            "context": "Obsolete doctrine",
+            "embedding_token_count": 7,
+        },
+    }
+    removed_id = rag._chunk_id(removed_record)
+    fixture.collection.rows[removed_id] = {
+        "embedding": [1.0, 0.0],
+        "document": removed_record["text"],
+        "metadata": {
+            **removed_record["metadata"],
+            "stable_id": removed_id,
+        },
+    }
+    rag._save_index_manifest(
+        fixture.db_path, backend="chroma", collection_name="book",
+        embedding_model="model-a", embedding_dimension=2,
+        chunk_hashes={
+            fixture.stable_id: fixture.old_hash,
+            removed_id: rag._chunk_hash(removed_record),
+        },
+        source_sha256="old-source", source_record_count=2)
+    original_manifest = fixture.manifest_path.read_bytes()
+    delete = fixture.collection.delete
+    requested_deletions = []
+
+    def partial_delete(*, ids):
+        requested_deletions.append(list(ids))
+        delete(ids=ids[:1])
+
+    monkeypatch.setattr(fixture.collection, "delete", partial_delete)
+    with pytest.raises(RuntimeError, match="unexpected stable ID"):
+        rag.index_chunks(
+            fixture.chunks_path, fixture.db_path,
+            collection_name="book", embedding_model="model-a")
+
+    assert requested_deletions == [[removed_id, fixture.stable_id]]
+    assert fixture.state.deletes == [[removed_id]]
+    assert set(fixture.collection.rows) == {fixture.stable_id}
+    assert fixture.state.upserts == []
+    assert fixture.marker_path.is_file()
+    assert fixture.manifest_path.read_bytes() == original_manifest
+
+
+def test_chroma_changed_existing_upsert_noop_preserves_old_manifest(
+        monkeypatch, tmp_path):
+    fixture = _prepare_chroma_changed_existing_incremental(
+        monkeypatch, tmp_path, upsert_mutates=False)
+    original_manifest = fixture.manifest_path.read_bytes()
+
+    with pytest.raises(RuntimeError, match="stable ID.*not found"):
+        rag.index_chunks(
+            fixture.chunks_path, fixture.db_path,
+            collection_name="book", embedding_model="model-a")
+
+    assert fixture.state.deletes == [[fixture.stable_id]]
+    assert fixture.state.upserts == [[fixture.stable_id]]
+    assert fixture.collection.rows == {}
+    assert fixture.marker_path.is_file()
+    assert fixture.manifest_path.read_bytes() == original_manifest
+
+
+def test_chroma_new_record_upsert_noop_preserves_old_manifest(
+        monkeypatch, tmp_path):
+    fixture = _prepare_chroma_changed_existing_incremental(
+        monkeypatch, tmp_path, upsert_mutates=False)
+    original_manifest = fixture.manifest_path.read_bytes()
+    added_record = {
+        "text": "A newly added rule must become a physical record.",
+        "metadata": {
+            "chunk_index": 1,
+            "context": "New doctrine",
+            "embedding_token_count": 7,
+        },
+    }
+    added_id = rag._chunk_id(added_record)
+    fixture.chunks_path.write_text(
+        json.dumps(fixture.old_record) + "\n"
+        + json.dumps(added_record) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="stable ID.*not found"):
+        rag.index_chunks(
+            fixture.chunks_path, fixture.db_path,
+            collection_name="book", embedding_model="model-a")
+
+    assert fixture.state.deletes == []
+    assert fixture.state.upserts == [[added_id]]
+    assert set(fixture.collection.rows) == {fixture.stable_id}
+    assert fixture.marker_path.is_file()
+    assert fixture.manifest_path.read_bytes() == original_manifest
+
+
+def test_chroma_postwrite_count_drift_preserves_old_manifest(
+        monkeypatch, tmp_path):
+    fixture = _prepare_chroma_changed_existing_incremental(
+        monkeypatch, tmp_path,
+        count_values=[1, 1, 0, 0, 1, 2])
+    original_manifest = fixture.manifest_path.read_bytes()
+
+    with pytest.raises(RuntimeError, match="changed or returned an incomplete"):
+        rag.index_chunks(
+            fixture.chunks_path, fixture.db_path,
+            collection_name="book", embedding_model="model-a")
+
+    assert fixture.state.count_values == []
+    assert fixture.state.deletes == [[fixture.stable_id]]
+    assert fixture.state.upserts == [[fixture.stable_id]]
+    assert fixture.collection.rows[fixture.stable_id]["metadata"][
+        "context"] == "Corrected classification"
+    assert fixture.marker_path.is_file()
+    assert fixture.manifest_path.read_bytes() == original_manifest
+
+
+def test_chroma_changed_existing_is_deleted_then_replaced_before_manifest_save(
+        monkeypatch, tmp_path):
+    fixture = _prepare_chroma_changed_existing_incremental(
+        monkeypatch, tmp_path)
+    require_stable_ids = rag._require_chroma_stable_ids
+    save_manifest = rag._save_index_manifest
+    finish_update = rag._finish_index_update
+    events = []
+
+    def reconcile(collection, collection_name, expected, **kwargs):
+        result = require_stable_ids(
+            collection, collection_name, expected, **kwargs)
+        events.append(("reconcile", frozenset(expected)))
+        return result
+
+    def save_after_reconciliation(*args, **kwargs):
+        assert events == [
+            ("reconcile", frozenset({fixture.stable_id})),
+            ("reconcile", frozenset()),
+            ("reconcile", frozenset({fixture.stable_id})),
+        ]
+        events.append(("manifest_save", None))
+        return save_manifest(*args, **kwargs)
+
+    def finish_after_manifest(marker_path):
+        assert events[-1] == ("manifest_save", None)
+        events.append(("marker_cleanup", None))
+        result = finish_update(marker_path)
+
+        def fail_postcommit_count():
+            pytest.fail(
+                "a committed Chroma update must not perform another count")
+
+        monkeypatch.setattr(
+            fixture.collection, "count", fail_postcommit_count)
+        return result
+
+    monkeypatch.setattr(rag, "_require_chroma_stable_ids", reconcile)
+    monkeypatch.setattr(rag, "_save_index_manifest", save_after_reconciliation)
+    monkeypatch.setattr(rag, "_finish_index_update", finish_after_manifest)
+
+    rag.index_chunks(
+        fixture.chunks_path, fixture.db_path,
+        collection_name="book", embedding_model="model-a")
+
+    assert fixture.state.deletes == [[fixture.stable_id]]
+    assert fixture.state.upserts == [[fixture.stable_id]]
+    assert fixture.collection.rows[fixture.stable_id]["metadata"][
+        "context"] == "Corrected classification"
+    assert not fixture.marker_path.exists()
+    manifest = json.loads(
+        fixture.manifest_path.read_text(encoding="utf-8"))
+    assert manifest["chunk_hashes"] == {
+        fixture.stable_id: fixture.new_hash}
+    assert events[-2:] == [
+        ("manifest_save", None), ("marker_cleanup", None)]
+
+
+def test_chroma_deletions_respect_client_batch_limit(monkeypatch, tmp_path):
+    fixture = _prepare_chroma_changed_existing_incremental(
+        monkeypatch, tmp_path)
+    removed_record = {
+        "text": "This obsolete record must be deleted in its own batch.",
+        "metadata": {
+            "chunk_index": 1,
+            "context": "Obsolete doctrine",
+            "embedding_token_count": 7,
+        },
+    }
+    removed_id = rag._chunk_id(removed_record)
+    fixture.collection.rows[removed_id] = {
+        "embedding": [1.0, 0.0],
+        "document": removed_record["text"],
+        "metadata": {
+            **removed_record["metadata"],
+            "stable_id": removed_id,
+        },
+    }
+    rag._save_index_manifest(
+        fixture.db_path, backend="chroma", collection_name="book",
+        embedding_model="model-a", embedding_dimension=2,
+        chunk_hashes={
+            fixture.stable_id: fixture.old_hash,
+            removed_id: rag._chunk_hash(removed_record),
+        },
+        source_sha256="old-source", source_record_count=2)
+    client_type = sys.modules["chromadb"].PersistentClient
+    monkeypatch.setattr(
+        client_type, "get_max_batch_size", lambda _self: 1, raising=False)
+
+    rag.index_chunks(
+        fixture.chunks_path, fixture.db_path,
+        collection_name="book", embedding_model="model-a")
+
+    assert fixture.state.deletes == [[removed_id], [fixture.stable_id]]
+    assert fixture.state.upserts == [[fixture.stable_id]]
+    assert set(fixture.collection.rows) == {fixture.stable_id}
     assert not fixture.marker_path.exists()
 
 
@@ -1978,8 +2512,8 @@ def test_chroma_sequential_producer_failure_stops_worker_and_retries(
             collection_name="book", embedding_model="model-a")
 
     assert fixture.state.upserts == []
-    assert fixture.collection.rows[fixture.stable_id]["metadata"][
-        "context"] == "Old classification"
+    assert fixture.state.deletes == [[fixture.stable_id]]
+    assert fixture.collection.rows == {}
     assert fixture.marker_path.is_file()
     assert fixture.manifest_path.read_bytes() == original_manifest
     assert resources.executors[0].shutdown_calls == [(True, False)]
@@ -2111,7 +2645,10 @@ def test_chroma_removal_only_commits_before_marker_cleanup(
     fixture.collection.rows[removed_id] = {
         "embedding": [1.0, 0.0],
         "document": removed_record["text"],
-        "metadata": dict(removed_record["metadata"]),
+        "metadata": {
+            **removed_record["metadata"],
+            "stable_id": removed_id,
+        },
     }
     rag._save_index_manifest(
         fixture.db_path, backend="chroma", collection_name="book",
@@ -2251,6 +2788,14 @@ def test_chroma_migrates_legacy_skips_compatible_and_rebuilds_model_change(
 
         def count(self):
             return len(self.rows)
+
+        def get(self, *, limit, offset, include):
+            assert include == ["metadatas"]
+            ids = list(self.rows)[offset:offset + limit]
+            return {
+                "ids": ids,
+                "metadatas": [self.rows[item_id][2] for item_id in ids],
+            }
 
     state.collections["book"] = FakeCollection("book")
     state.collections["sibling"] = FakeCollection("sibling")
