@@ -25,6 +25,8 @@ import os
 import queue
 import re
 import requests
+import signal
+import subprocess
 import sys
 import tempfile
 import threading as _threading
@@ -64,6 +66,17 @@ DEFAULT_EMBEDDING_MODEL = DEFAULT_EMBEDDING_MODEL_GENERAL  # free, local GPU, no
 DEFAULT_MAX_TOKENS = 4096
 DEFAULT_COLLECTION = "civpro"
 DEFAULT_DB_LOCK_TIMEOUT = 30.0
+DEFAULT_OPERATION_TIMEOUTS = {
+    "index": 7200.0,
+    "query": 300.0,
+    "info": 120.0,
+    "full": 14400.0,
+    "batch": 43200.0,
+    "evaluation": 14400.0,
+}
+ARTIFACT_COMPLETION_SCHEMA_VERSION = 1
+_SUPERVISED_CHILD_ENV = "RAG_PIPELINE_SUPERVISED_CHILD"
+_SUPERVISED_TERMINATE_GRACE = 5.0
 
 # Embedding model max token limits (for validation)
 EMBEDDING_MAX_TOKENS = {
@@ -945,6 +958,8 @@ def _build_resume_cmd(pdf: Path, args, extra_flags: str = "") -> str:
         ("min_words", MIN_CHUNK_WORDS, "--min-words"),
         ("dedup_threshold", DEDUP_THRESHOLD, "--dedup-threshold"),
         ("db_lock_timeout", DEFAULT_DB_LOCK_TIMEOUT, "--db-lock-timeout"),
+        ("operation_timeout", DEFAULT_OPERATION_TIMEOUTS["full"],
+         "--operation-timeout"),
         ("llm_workers", DEFAULT_LLM_WORKERS, "--llm-workers"),
         ("ollama_url", DEFAULT_OLLAMA_URL, "--ollama-url"),
         ("ollama_model", DEFAULT_OLLAMA_MODEL, "--ollama-model"),
@@ -5089,6 +5104,44 @@ def _detect_gpu() -> tuple:
     return AcceleratorDevice.CUDA, batch_size, gpu_name
 
 
+def _conversion_parameters(*, batch_size_override: int | None,
+                           backend: str, auto_preprocess: bool,
+                           ocr: bool | None,
+                           watermark: re.Pattern | None) -> dict:
+    return {
+        "batch_size_override": batch_size_override,
+        "backend": backend,
+        "auto_preprocess": auto_preprocess,
+        "ocr": ocr,
+        "watermark_pattern": watermark.pattern if watermark else None,
+        "watermark_flags": watermark.flags if watermark else None,
+    }
+
+
+def _converted_outputs_complete(
+        pdf_path: Path, doc_output: Path, markdown_output: Path, *,
+        parameters: dict) -> bool:
+    try:
+        source_sha256 = _cached_artifact_sha256(pdf_path)
+    except (OSError, RuntimeError):
+        return False
+    manifest_path = _artifact_completion_path(
+        doc_output, stage="conversion")
+    if not _fixed_artifacts_complete(
+            manifest_path, stage="conversion",
+            source_sha256=source_sha256, source_record_count=None,
+            parameters=parameters,
+            outputs={"docling_json": doc_output,
+                     "docling_markdown": markdown_output}):
+        return False
+    try:
+        document = json.loads(doc_output.read_text(encoding="utf-8"))
+        return isinstance(document, dict) and bool(
+            markdown_output.read_text(encoding="utf-8").strip())
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return False
+
+
 def convert_pdf(pdf_path: Path, doc_output: Path, *,
                 batch_size_override: int | None = None,
                 backend: str = "pypdfium2",
@@ -5101,10 +5154,20 @@ def convert_pdf(pdf_path: Path, doc_output: Path, *,
     """Convert PDF to Docling's internal document representation."""
     import os
 
-    _require_file(pdf_path, "PDF file")
+    source_pdf_path = Path(pdf_path)
+    _require_file(source_pdf_path, "PDF file")
+    pdf_path = source_pdf_path
 
-    if doc_output.exists() and not force:
-        log.info(f"Output already exists: {doc_output}")
+    md_path = markdown_output or doc_output.with_name(
+        f"{doc_output.stem}_docling.md")
+    completion_parameters = _conversion_parameters(
+        batch_size_override=batch_size_override, backend=backend,
+        auto_preprocess=auto_preprocess, ocr=ocr, watermark=watermark)
+
+    if (not force and _converted_outputs_complete(
+            source_pdf_path, doc_output, md_path,
+            parameters=completion_parameters)):
+        log.info(f"Conversion outputs already complete: {doc_output}")
         log.info("  Use --force to overwrite, or skip to the next step.")
         return
 
@@ -5266,16 +5329,20 @@ def convert_pdf(pdf_path: Path, doc_output: Path, *,
     dl_doc = result.document
 
     # Persist DoclingDocument
-    doc_output.parent.mkdir(parents=True, exist_ok=True)
     dl_doc_json = dl_doc.model_dump_json(indent=2)
-    doc_output.write_text(dl_doc_json, encoding="utf-8")
+    _atomic_write_text(doc_output, dl_doc_json)
     log.info(f"DoclingDocument saved → {doc_output} ({len(dl_doc_json) / 1e6:.1f} MB)")
 
     # Markdown export — normalize encoding + strip watermark
-    md_path = markdown_output or doc_output.with_name(
-        f"{doc_output.stem}_docling.md")
     md_text = _normalize_text(strip_watermark(dl_doc.export_to_markdown(), watermark))
-    md_path.write_text(md_text, encoding="utf-8")
+    _atomic_write_text(md_path, md_text)
+    _write_artifact_completion(
+        _artifact_completion_path(doc_output, stage="conversion"),
+        stage="conversion",
+        source_sha256=_cached_artifact_sha256(source_pdf_path),
+        source_record_count=None, parameters=completion_parameters,
+        outputs={"docling_json": doc_output,
+                 "docling_markdown": md_path})
     log.info(f"Markdown export  → {md_path}")
 
 
@@ -6876,6 +6943,111 @@ def _load_hash_index(db_dir: Path) -> dict[str, str]:
 def _save_hash_index(db_dir: Path, hashes: dict[str, str]) -> None:
     """Atomically store the legacy hash sidecar for external compatibility."""
     _atomic_write_json(db_dir / "chunk_hashes.json", hashes)
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    """Durably replace a text artifact without exposing partial contents."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=path.parent,
+                prefix=f".{path.name}.", suffix=".tmp", delete=False) as handle:
+            temporary_path = Path(handle.name)
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, path)
+    except BaseException:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink(missing_ok=True)
+            except BaseException as cleanup_error:
+                _log_cleanup_error(
+                    "Temporary text cleanup failed for %s", temporary_path,
+                    error=cleanup_error)
+        raise
+
+
+def _artifact_parameters_sha256(parameters: dict) -> str:
+    """Return a stable credential-free configuration fingerprint."""
+    serialized = json.dumps(
+        parameters, ensure_ascii=False, sort_keys=True,
+        separators=(",", ":"), default=str)
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _artifact_completion_path(target: Path, *, stage: str) -> Path:
+    if stage == "split_export":
+        return target / ".rag-complete.json"
+    return target.with_name(f".{target.name}.{stage}.complete.json")
+
+
+def _write_artifact_completion(
+        manifest_path: Path, *, stage: str, source_sha256: str,
+        source_record_count: int | None, parameters: dict,
+        outputs: dict[str, Path]) -> None:
+    output_records = []
+    for role, path in sorted(outputs.items()):
+        stat_result = path.stat()
+        if not path.is_file() or stat_result.st_size <= 0:
+            raise RuntimeError(
+                f"Cannot commit incomplete {stage} output: {path}")
+        output_records.append({
+            "role": role,
+            "name": path.name,
+            "size": stat_result.st_size,
+            "sha256": _cached_artifact_sha256(path),
+        })
+    _atomic_write_json(manifest_path, {
+        "schema_version": ARTIFACT_COMPLETION_SCHEMA_VERSION,
+        "stage": stage,
+        "source_sha256": source_sha256,
+        "source_record_count": source_record_count,
+        "parameters_sha256": _artifact_parameters_sha256(parameters),
+        "outputs": output_records,
+    })
+
+
+def _fixed_artifacts_complete(
+        manifest_path: Path, *, stage: str, source_sha256: str,
+        source_record_count: int | None, parameters: dict,
+        outputs: dict[str, Path]) -> bool:
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            return False
+        expected_header = {
+            "schema_version": ARTIFACT_COMPLETION_SCHEMA_VERSION,
+            "stage": stage,
+            "source_sha256": source_sha256,
+            "source_record_count": source_record_count,
+            "parameters_sha256": _artifact_parameters_sha256(parameters),
+        }
+        if any(payload.get(key) != value
+               for key, value in expected_header.items()):
+            return False
+        records = payload.get("outputs")
+        if not isinstance(records, list) or len(records) != len(outputs):
+            return False
+        by_role = {
+            record.get("role"): record for record in records
+            if isinstance(record, dict) and isinstance(record.get("role"), str)
+        }
+        if set(by_role) != set(outputs):
+            return False
+        for role, path in outputs.items():
+            record = by_role[role]
+            if record.get("name") != path.name or not path.is_file():
+                return False
+            stat_result = path.stat()
+            if (stat_result.st_size <= 0
+                    or record.get("size") != stat_result.st_size
+                    or record.get("sha256") != _cached_artifact_sha256(path)):
+                return False
+        return True
+    except (OSError, UnicodeError, json.JSONDecodeError, RuntimeError):
+        return False
 
 
 def _atomic_write_json(path: Path, payload: object) -> None:
@@ -8949,15 +9121,11 @@ def _format_chunk(rec: dict) -> list[str]:
     return lines
 
 
-def _load_and_filter_chunks(chunks_path: Path, *,
-                            include_types: list[str] | None = None,
-                            exclude_types: list[str] | None = None,
-                            chapters: list[int] | None = None) -> list[dict]:
-    """Load chunks JSONL and apply filters."""
-    _require_file(chunks_path, "Chunks JSONL")
-
-    records = _load_jsonl(chunks_path)
-
+def _filter_chunk_records(records: list[dict], *,
+                          include_types: list[str] | None = None,
+                          exclude_types: list[str] | None = None,
+                          chapters: list[int] | None = None) -> list[dict]:
+    """Apply export filters to one already-captured chunks generation."""
     log.info(f"Loaded {len(records)} chunks for export")
 
     if exclude_types is None:
@@ -8977,6 +9145,17 @@ def _load_and_filter_chunks(chunks_path: Path, *,
     log.info(f"After filtering: {len(filtered)} chunks "
              f"(excluded {len(records) - len(filtered)})")
     return filtered
+
+
+def _load_and_filter_chunks(chunks_path: Path, *,
+                            include_types: list[str] | None = None,
+                            exclude_types: list[str] | None = None,
+                            chapters: list[int] | None = None) -> list[dict]:
+    """Load chunks JSONL and apply filters."""
+    _require_file(chunks_path, "Chunks JSONL")
+    return _filter_chunk_records(
+        _load_jsonl(chunks_path), include_types=include_types,
+        exclude_types=exclude_types, chapters=chapters)
 
 
 def _section_heading_level(part: str, depth: int) -> str:
@@ -9119,6 +9298,88 @@ def _export_plaintext(chunks: list[dict], export_path: Path) -> None:
     log.info(f"Metadata sidecar -> {meta_path}")
 
 
+def _markdown_export_parameters(*, include_types: list[str] | None,
+                                exclude_types: list[str] | None,
+                                chapters: list[int] | None,
+                                split_chapters: bool) -> dict:
+    effective_excludes = (
+        ["structural", "empty"]
+        if exclude_types is None else exclude_types)
+    return {
+        "format": "markdown",
+        "include_types": sorted(set(include_types or [])),
+        "exclude_types": sorted(set(effective_excludes)),
+        "chapters": sorted(set(chapters or [])),
+        "split_chapters": split_chapters,
+    }
+
+
+def _chunks_identity(path: Path) -> tuple[str, int] | None:
+    try:
+        records, source_sha256, _ = _load_index_snapshot_strict(path)
+        return source_sha256, len(records)
+    except (OSError, UnicodeError, ValueError, RuntimeError):
+        return None
+
+
+def _unified_export_complete(chunks_path: Path, export_path: Path, *,
+                             parameters: dict) -> bool:
+    identity = _chunks_identity(chunks_path)
+    if identity is None:
+        return False
+    source_sha256, source_count = identity
+    return _fixed_artifacts_complete(
+        _artifact_completion_path(export_path, stage="unified_export"),
+        stage="unified_export", source_sha256=source_sha256,
+        source_record_count=source_count, parameters=parameters,
+        outputs={"markdown": export_path})
+
+
+def _owned_chapter_filename(name: str) -> bool:
+    return bool(
+        name == "front_matter.md"
+        or re.fullmatch(r"ch\d+(?:_[\w-]+)?\.md", name))
+
+
+def _split_export_complete(chunks_path: Path, chapters_dir: Path, *,
+                           parameters: dict) -> bool:
+    identity = _chunks_identity(chunks_path)
+    if identity is None:
+        return False
+    manifest_path = _artifact_completion_path(
+        chapters_dir, stage="split_export")
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        records = payload.get("outputs") if isinstance(payload, dict) else None
+        if not isinstance(records, list) or not records:
+            return False
+        names = []
+        for record in records:
+            if not isinstance(record, dict):
+                return False
+            name = record.get("name")
+            if (not isinstance(name, str) or not _owned_chapter_filename(name)
+                    or record.get("role") != name):
+                return False
+            names.append(name)
+        if len(names) != len(set(names)):
+            return False
+        actual_names = {
+            path.name for path in chapters_dir.glob("*.md")
+            if _owned_chapter_filename(path.name)
+        }
+        if actual_names != set(names):
+            return False
+        source_sha256, source_count = identity
+        return _fixed_artifacts_complete(
+            manifest_path, stage="split_export",
+            source_sha256=source_sha256,
+            source_record_count=source_count, parameters=parameters,
+            outputs={name: chapters_dir / name for name in names})
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return False
+
+
 def export_markdown(chunks_path: Path, export_path: Path, *,
                     include_types: list[str] | None = None,
                     exclude_types: list[str] | None = None,
@@ -9149,8 +9410,10 @@ def export_markdown(chunks_path: Path, export_path: Path, *,
     if split_chapters and format != "markdown":
         raise ValueError("split_chapters is supported only for markdown exports")
 
-    filtered = _load_and_filter_chunks(
-        chunks_path,
+    records, source_sha256, _ = _load_index_snapshot_strict(chunks_path)
+    source_record_count = len(records)
+    filtered = _filter_chunk_records(
+        records,
         include_types=include_types,
         exclude_types=exclude_types,
         chapters=chapters,
@@ -9205,6 +9468,7 @@ def export_markdown(chunks_path: Path, export_path: Path, *,
 
         total_files = 0
         total_words = 0
+        published_files = {}
         for ch_num in sorted(by_chapter.keys(), key=lambda x: (x is None, x)):
             ch_chunks = by_chapter[ch_num]
             ch_title = ""
@@ -9248,20 +9512,40 @@ def export_markdown(chunks_path: Path, export_path: Path, *,
                         md += f"- [Chapter {ref_ch} - {ref_title}]({ref_file})\n"
 
             filepath = out_dir / filename
-            filepath.write_text(md, encoding="utf-8")
+            _atomic_write_text(filepath, md)
+            published_files[filename] = filepath
             wc = len(md.split())
             total_words += wc
             total_files += 1
             log.info(f"  {filename} ({len(ch_chunks)} chunks, {wc:,} words)")
 
+        for prior_path in out_dir.glob("*.md"):
+            if (_owned_chapter_filename(prior_path.name)
+                    and prior_path.name not in published_files):
+                prior_path.unlink()
+        parameters = _markdown_export_parameters(
+            include_types=include_types, exclude_types=exclude_types,
+            chapters=chapters, split_chapters=True)
+        _write_artifact_completion(
+            _artifact_completion_path(out_dir, stage="split_export"),
+            stage="split_export", source_sha256=source_sha256,
+            source_record_count=source_record_count, parameters=parameters,
+            outputs=published_files)
         log.info(f"Exported {total_files} chapter files -> {out_dir}/ "
                  f"({total_words:,} words total)")
         log.info(f"Upload the entire {out_dir.parent}/ folder to Claude Projects.")
     else:
         # Single combined file
         output = _assemble_markdown(filtered)
-        export_path.parent.mkdir(parents=True, exist_ok=True)
-        export_path.write_text(output, encoding="utf-8")
+        _atomic_write_text(export_path, output)
+        parameters = _markdown_export_parameters(
+            include_types=include_types, exclude_types=exclude_types,
+            chapters=chapters, split_chapters=False)
+        _write_artifact_completion(
+            _artifact_completion_path(export_path, stage="unified_export"),
+            stage="unified_export", source_sha256=source_sha256,
+            source_record_count=source_record_count, parameters=parameters,
+            outputs={"markdown": export_path})
         word_count = len(output.split())
         log.info(f"Exported {len(filtered)} chunks -> {export_path} "
                  f"({len(output) / 1e6:.1f} MB, {word_count:,} words)")
@@ -9967,6 +10251,88 @@ def _cluster_embeddings(embeddings: list[list[float]], k: int) -> list[list[int]
     return [c for c in clusters if c]  # remove empty clusters
 
 
+def _raptor_parameters(*, embedding_model: str, cloud_url: str,
+                       cloud_model: str, cloud_key: str,
+                       ollama_url: str, ollama_model: str,
+                       gemini_key: str, thinking: bool) -> dict:
+    return {
+        "embedding_model": embedding_model,
+        "cloud_url": cloud_url,
+        "cloud_model": cloud_model,
+        "cloud_configured": bool(cloud_url and cloud_key),
+        "ollama_url": ollama_url,
+        "ollama_model": ollama_model,
+        "gemini_configured": bool(gemini_key),
+        "thinking": thinking,
+        "prompt_version": 1,
+    }
+
+
+def _raptor_output_complete(chunks_path: Path, output_path: Path, *,
+                            parameters: dict) -> bool:
+    identity = _chunks_identity(chunks_path)
+    if identity is None:
+        return False
+    source_sha256, source_count = identity
+    try:
+        tree = json.loads(output_path.read_text(encoding="utf-8"))
+        if not isinstance(tree, dict):
+            return False
+        expected = {
+            "schema_version": ARTIFACT_COMPLETION_SCHEMA_VERSION,
+            "source_sha256": source_sha256,
+            "source_record_count": source_count,
+            "parameters_sha256": _artifact_parameters_sha256(parameters),
+        }
+        if any(tree.get(key) != value for key, value in expected.items()):
+            return False
+        levels = tree.get("levels")
+        nodes = tree.get("nodes")
+        stats = tree.get("stats")
+        if levels not in {2, 3} or not isinstance(nodes, list) or not nodes:
+            return False
+        if not isinstance(stats, dict):
+            return False
+        node_ids = []
+        level_counts = {0: 0, 1: 0, 2: 0}
+        for node in nodes:
+            if not isinstance(node, dict):
+                return False
+            node_id = node.get("node_id")
+            level = node.get("level")
+            if (not isinstance(node_id, str) or not node_id
+                    or level not in level_counts
+                    or not isinstance(node.get("children"), list)):
+                return False
+            node_ids.append(node_id)
+            level_counts[level] += 1
+        if len(node_ids) != len(set(node_ids)):
+            return False
+        known_ids = set(node_ids)
+        node_levels = {node["node_id"]: node["level"] for node in nodes}
+        if any(child not in known_ids for node in nodes
+               for child in node["children"]):
+            return False
+        if any(
+                (node["level"] == 0 and node["children"])
+                or any(node_levels[child] != node["level"] - 1
+                       for child in node["children"])
+                for node in nodes):
+            return False
+        if ((levels == 2 and level_counts[2] != 0)
+                or (levels == 3 and level_counts[2] == 0)):
+            return False
+        return (
+            level_counts[0] == source_count
+            and stats.get("level_0") == level_counts[0]
+            and stats.get("level_1") == level_counts[1]
+            and stats.get("level_2") == level_counts[2]
+            and stats.get("total") == len(nodes)
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError, TypeError):
+        return False
+
+
 def build_raptor_tree(chunks_path: Path, output_path: Path, *,
                       embedding_model: str = DEFAULT_EMBEDDING_MODEL,
                       cloud_url: str = DEFAULT_CLOUD_URL,
@@ -9989,8 +10355,13 @@ def build_raptor_tree(chunks_path: Path, output_path: Path, *,
     from concurrent.futures import ThreadPoolExecutor, as_completed
     from tqdm import tqdm
 
-    _require_file(chunks_path, "Chunks JSONL")
-    records = _load_jsonl(chunks_path)
+    records, source_sha256, _ = _load_index_snapshot_strict(chunks_path)
+    source_record_count = len(records)
+    parameters = _raptor_parameters(
+        embedding_model=embedding_model, cloud_url=cloud_url,
+        cloud_model=cloud_model, cloud_key=cloud_key,
+        ollama_url=ollama_url, ollama_model=ollama_model,
+        gemini_key=gemini_key, thinking=thinking)
     log.info(f"RAPTOR: building tree over {len(records)} chunks")
 
     if not records:
@@ -10022,7 +10393,7 @@ def build_raptor_tree(chunks_path: Path, output_path: Path, *,
     except Exception as e:
         log.error(f"RAPTOR embedding failed: {e}")
         log.error("  Check --embedding-model and API keys.")
-        return
+        raise RuntimeError("RAPTOR embedding failed") from e
 
     tree_nodes = []
     # Add level 0 nodes
@@ -10095,8 +10466,8 @@ def build_raptor_tree(chunks_path: Path, output_path: Path, *,
     log.info(f"  Generated {len(texts_l1)} section summaries")
 
     if not texts_l1:
-        log.warning("No summaries generated. Check LLM connectivity.")
-        return
+        raise RuntimeError(
+            "RAPTOR produced no summaries; check LLM connectivity")
 
     # --- Level 2: Chapter summaries (cluster Level 1 nodes) ---
     log.info("RAPTOR Level 2: Embedding section summaries...")
@@ -10106,12 +10477,16 @@ def build_raptor_tree(chunks_path: Path, output_path: Path, *,
         log.error(f"RAPTOR Level 2 embedding failed: {e}")
         log.error("  Saving partial tree (Level 0 + Level 1 only).")
         # Save what we have
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        tree = {"levels": 2, "nodes": tree_nodes,
+        tree = {
+                "schema_version": ARTIFACT_COMPLETION_SCHEMA_VERSION,
+                "source_sha256": source_sha256,
+                "source_record_count": source_record_count,
+                "parameters_sha256": _artifact_parameters_sha256(parameters),
+                "levels": 2, "nodes": tree_nodes,
                 "stats": {"level_0": sum(1 for n in tree_nodes if n["level"] == 0),
                            "level_1": sum(1 for n in tree_nodes if n["level"] == 1),
                            "level_2": 0, "total": len(tree_nodes)}}
-        output_path.write_text(json.dumps(tree, indent=2, ensure_ascii=False), encoding="utf-8")
+        _atomic_write_json(output_path, tree)
         return
 
     # Target ~15 chapter-level clusters
@@ -10160,6 +10535,10 @@ def build_raptor_tree(chunks_path: Path, output_path: Path, *,
     # --- Save tree ---
     output_path.parent.mkdir(parents=True, exist_ok=True)
     tree = {
+        "schema_version": ARTIFACT_COMPLETION_SCHEMA_VERSION,
+        "source_sha256": source_sha256,
+        "source_record_count": source_record_count,
+        "parameters_sha256": _artifact_parameters_sha256(parameters),
         "levels": 3,
         "nodes": tree_nodes,
         "stats": {
@@ -10169,8 +10548,7 @@ def build_raptor_tree(chunks_path: Path, output_path: Path, *,
             "total": len(tree_nodes),
         },
     }
-    output_path.write_text(json.dumps(tree, indent=2, ensure_ascii=False),
-                           encoding="utf-8")
+    _atomic_write_json(output_path, tree)
 
     s = tree["stats"]
     log.info(f"RAPTOR tree -> {output_path}")
@@ -10498,7 +10876,13 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
 
     current_stage = "convert"
     try:
-        if resume and _json_file_is_valid(paths["doc"]):
+        conversion_parameters = _conversion_parameters(
+            batch_size_override=args.batch_size, backend=args.backend,
+            auto_preprocess=not args.no_preprocess,
+            ocr=getattr(args, "ocr", None), watermark=watermark)
+        if resume and _converted_outputs_complete(
+                pdf_path, paths["doc"], paths["converted_markdown"],
+                parameters=conversion_parameters):
             log.info(f"  [SKIP] convert (output exists: {paths['doc']})")
         else:
             convert_pdf(
@@ -10513,6 +10897,11 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
                 preprocessed_output=paths["preprocessed"],
                 markdown_output=paths["converted_markdown"],
             )
+            if not _converted_outputs_complete(
+                    pdf_path, paths["doc"], paths["converted_markdown"],
+                    parameters=conversion_parameters):
+                raise RuntimeError(
+                    "Conversion did not publish a complete artifact set")
             log.info(f"  [DONE] convert -> {paths['doc']}")
 
         current_stage = "chunk/index lease"
@@ -10577,14 +10966,29 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
             log.info(f"  [DONE] index -> {db_dir}")
 
         current_stage = "export"
-        if resume and _file_exists_nonempty(paths["export"]):
+        unified_parameters = _markdown_export_parameters(
+            include_types=None, exclude_types=None, chapters=None,
+            split_chapters=False)
+        if resume and _unified_export_complete(
+                paths["chunks"], paths["export"],
+                parameters=unified_parameters):
             log.info(f"  [SKIP] unified export (output exists: {paths['export']})")
         else:
             export_markdown(paths["chunks"], paths["export"], **llm_kwargs)
+            if not _unified_export_complete(
+                    paths["chunks"], paths["export"],
+                    parameters=unified_parameters):
+                raise RuntimeError(
+                    "Unified export did not publish a complete artifact set")
             log.info(f"  [DONE] unified export -> {paths['export']}")
 
         if getattr(args, "split_chapters", False):
-            if resume and _file_exists_nonempty(paths["chapters_dir"]):
+            split_parameters = _markdown_export_parameters(
+                include_types=None, exclude_types=None, chapters=None,
+                split_chapters=True)
+            if resume and _split_export_complete(
+                    paths["chunks"], paths["chapters_dir"],
+                    parameters=split_parameters):
                 log.info(
                     f"  [SKIP] chapter export (output exists: {paths['chapters_dir']})")
             else:
@@ -10595,13 +10999,29 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
                     chapters_dir=paths["chapters_dir"],
                     **llm_kwargs,
                 )
+                if not _split_export_complete(
+                        paths["chunks"], paths["chapters_dir"],
+                        parameters=split_parameters):
+                    raise RuntimeError(
+                        "Chapter export did not publish a complete artifact set")
                 log.info(f"  [DONE] chapter export -> {paths['chapters_dir']}")
 
         if getattr(args, "raptor", False):
             current_stage = "raptor"
             raptor_out = paths["chunks"].with_name(
                 paths["chunks"].stem.replace("_chunks", "") + "_raptor.json")
-            if resume and _file_exists_nonempty(raptor_out):
+            raptor_parameters = _raptor_parameters(
+                embedding_model=args.embedding_model,
+                cloud_url=llm_kwargs["cloud_url"],
+                cloud_model=llm_kwargs["cloud_model"],
+                cloud_key=llm_kwargs["cloud_key"],
+                ollama_url=llm_kwargs["ollama_url"],
+                ollama_model=llm_kwargs["ollama_model"],
+                gemini_key=llm_kwargs["gemini_key"],
+                thinking=llm_kwargs["thinking"])
+            if resume and _raptor_output_complete(
+                    paths["chunks"], raptor_out,
+                    parameters=raptor_parameters):
                 log.info(f"  [SKIP] raptor (output exists: {raptor_out})")
             else:
                 build_raptor_tree(
@@ -10610,6 +11030,11 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
                     embedding_model=args.embedding_model,
                     **llm_kwargs,
                 )
+                if not _raptor_output_complete(
+                        paths["chunks"], raptor_out,
+                        parameters=raptor_parameters):
+                    raise RuntimeError(
+                        "RAPTOR did not publish a complete tree")
                 log.info(f"  [DONE] raptor -> {raptor_out}")
 
     except (Exception, SystemExit) as exc:
@@ -10651,6 +11076,396 @@ def _run_pipeline_job(pdf_path: Path, args, *, resume: bool,
 # CLI
 # ---------------------------------------------------------------------------
 
+def _normalize_operation_timeout(timeout: float) -> float:
+    """Validate a finite positive deadline accepted by process waiting APIs."""
+    if isinstance(timeout, bool):
+        raise ValueError(
+            "operation timeout must be a finite positive number")
+    try:
+        value = float(timeout)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "operation timeout must be a finite positive number") from exc
+    if (not math.isfinite(value) or value <= 0
+            or value > _threading.TIMEOUT_MAX):
+        raise ValueError(
+            "operation timeout must be a finite positive number no greater "
+            f"than {_threading.TIMEOUT_MAX:g} seconds")
+    return value
+
+
+def _cli_operation_timeout(argv: list[str], operation: str) -> float:
+    """Read the last CLI deadline without replacing argparse validation."""
+    default = DEFAULT_OPERATION_TIMEOUTS[operation]
+    raw_value = None
+    if operation == "evaluation":
+        command_index = -1
+    else:
+        try:
+            command_index = argv.index(operation)
+        except ValueError:
+            return default
+    for index in range(command_index + 1, len(argv)):
+        token = argv[index]
+        if token == "--":
+            break
+        if token == "--operation-timeout":
+            raw_value = argv[index + 1] if index + 1 < len(argv) else None
+        elif token.startswith("--operation-timeout="):
+            raw_value = token.split("=", 1)[1]
+    if raw_value is None:
+        return default
+    try:
+        return _normalize_operation_timeout(raw_value)
+    except ValueError:
+        # The child parser will produce the normal user-facing usage error. Use
+        # a safe default merely to supervise that short-lived validation run.
+        return default
+
+
+class _WindowsKillJob:
+    """Windows Job Object that kills every assigned process when closed."""
+
+    _KILL_ON_JOB_CLOSE = 0x00002000
+    _EXTENDED_LIMIT_INFORMATION = 9
+
+    def __init__(self):
+        import ctypes
+        from ctypes import wintypes
+
+        class _IoCounters(ctypes.Structure):
+            _fields_ = [
+                ("ReadOperationCount", ctypes.c_ulonglong),
+                ("WriteOperationCount", ctypes.c_ulonglong),
+                ("OtherOperationCount", ctypes.c_ulonglong),
+                ("ReadTransferCount", ctypes.c_ulonglong),
+                ("WriteTransferCount", ctypes.c_ulonglong),
+                ("OtherTransferCount", ctypes.c_ulonglong),
+            ]
+
+        class _BasicLimitInformation(ctypes.Structure):
+            _fields_ = [
+                ("PerProcessUserTimeLimit", wintypes.LARGE_INTEGER),
+                ("PerJobUserTimeLimit", wintypes.LARGE_INTEGER),
+                ("LimitFlags", wintypes.DWORD),
+                ("MinimumWorkingSetSize", ctypes.c_size_t),
+                ("MaximumWorkingSetSize", ctypes.c_size_t),
+                ("ActiveProcessLimit", wintypes.DWORD),
+                ("Affinity", ctypes.c_size_t),
+                ("PriorityClass", wintypes.DWORD),
+                ("SchedulingClass", wintypes.DWORD),
+            ]
+
+        class _ExtendedLimitInformation(ctypes.Structure):
+            _fields_ = [
+                ("BasicLimitInformation", _BasicLimitInformation),
+                ("IoInfo", _IoCounters),
+                ("ProcessMemoryLimit", ctypes.c_size_t),
+                ("JobMemoryLimit", ctypes.c_size_t),
+                ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                ("PeakJobMemoryUsed", ctypes.c_size_t),
+            ]
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        create_job = kernel32.CreateJobObjectW
+        create_job.argtypes = [wintypes.LPVOID, wintypes.LPCWSTR]
+        create_job.restype = wintypes.HANDLE
+        set_information = kernel32.SetInformationJobObject
+        set_information.argtypes = [
+            wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD,
+        ]
+        set_information.restype = wintypes.BOOL
+        assign_process = kernel32.AssignProcessToJobObject
+        assign_process.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+        assign_process.restype = wintypes.BOOL
+        terminate_job = kernel32.TerminateJobObject
+        terminate_job.argtypes = [wintypes.HANDLE, wintypes.UINT]
+        terminate_job.restype = wintypes.BOOL
+        close_handle = kernel32.CloseHandle
+        close_handle.argtypes = [wintypes.HANDLE]
+        close_handle.restype = wintypes.BOOL
+        set_handle_information = kernel32.SetHandleInformation
+        set_handle_information.argtypes = [
+            wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD,
+        ]
+        set_handle_information.restype = wintypes.BOOL
+
+        handle = create_job(None, None)
+        if not handle:
+            raise ctypes.WinError(ctypes.get_last_error())
+        if not set_handle_information(handle, 0x00000001, 0):
+            error = ctypes.WinError(ctypes.get_last_error())
+            close_handle(handle)
+            raise error
+        limits = _ExtendedLimitInformation()
+        limits.BasicLimitInformation.LimitFlags = self._KILL_ON_JOB_CLOSE
+        if not set_information(
+                handle, self._EXTENDED_LIMIT_INFORMATION,
+                ctypes.byref(limits), ctypes.sizeof(limits)):
+            error = ctypes.WinError(ctypes.get_last_error())
+            close_handle(handle)
+            raise error
+        self._ctypes = ctypes
+        self._wintypes = wintypes
+        self._assign_process = assign_process
+        self._terminate_job = terminate_job
+        self._close_handle = close_handle
+        self._handle = handle
+
+    def assign(self, process) -> None:
+        if not self._assign_process(
+                self._handle, self._wintypes.HANDLE(int(process._handle))):
+            raise self._ctypes.WinError(self._ctypes.get_last_error())
+
+    def close(self) -> None:
+        if self._handle:
+            self._close_handle(self._handle)
+            self._handle = None
+
+    def terminate(self, exit_code: int = 124) -> bool:
+        if not self._handle:
+            return True
+        return bool(self._terminate_job(self._handle, exit_code))
+
+
+class _SupervisorSignal(BaseException):
+    """Internal control flow used to clean up before honoring a signal."""
+
+    def __init__(self, signum: int):
+        self.signum = signum
+        super().__init__(signum)
+
+
+def _terminate_supervised_process(process, *, kill_job=None) -> bool:
+    """Terminate a supervised worker and escalate after a short grace period."""
+    if kill_job is not None:
+        # Closing a KILL_ON_JOB_CLOSE job is atomic from the supervisor's point
+        # of view and still works if the direct worker exited before a child.
+        terminated = kill_job.terminate()
+        kill_job.close()
+        if not terminated and process.poll() is None:
+            try:
+                process.kill()
+            except OSError:
+                pass
+        try:
+            process.wait(timeout=_SUPERVISED_TERMINATE_GRACE)
+        except subprocess.TimeoutExpired:
+            try:
+                process.kill()
+            except OSError:
+                pass
+        return terminated
+
+    if os.name == "nt":
+        # ``Popen.terminate()`` only kills the direct Windows process. The
+        # vector client or model runtime may have descendants that retain DB
+        # handles, so ask the OS to terminate the exact PID tree instead.
+        taskkill_options = {
+            "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.DEVNULL,
+            "check": False,
+            "timeout": _SUPERVISED_TERMINATE_GRACE,
+        }
+        create_no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        if create_no_window:
+            taskkill_options["creationflags"] = create_no_window
+        taskkill_succeeded = False
+        try:
+            completed = subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                **taskkill_options,
+            )
+            taskkill_succeeded = completed.returncode == 0
+            if completed.returncode and process.poll() is None:
+                process.kill()
+        except (OSError, subprocess.SubprocessError):
+            if process.poll() is None:
+                try:
+                    process.kill()
+                except OSError:
+                    pass
+        try:
+            process.wait(timeout=_SUPERVISED_TERMINATE_GRACE)
+        except subprocess.TimeoutExpired:
+            if process.poll() is None:
+                try:
+                    process.kill()
+                except OSError:
+                    pass
+            try:
+                process.wait(timeout=_SUPERVISED_TERMINATE_GRACE)
+            except subprocess.TimeoutExpired:
+                pass
+        return taskkill_succeeded
+
+    def send_signal(sig) -> None:
+        try:
+            os.killpg(process.pid, sig)
+        except ProcessLookupError:
+            pass
+
+    try:
+        send_signal(signal.SIGTERM)
+    except OSError:
+        if process.poll() is None:
+            process.kill()
+
+    deadline = time.monotonic() + _SUPERVISED_TERMINATE_GRACE
+    while time.monotonic() < deadline:
+        process.poll()  # reap the direct worker so only live descendants count
+        try:
+            os.killpg(process.pid, 0)
+        except ProcessLookupError:
+            break
+        except PermissionError:
+            # The group still exists even if the current account cannot signal
+            # one of its members.
+            pass
+        time.sleep(0.05)
+    try:
+        send_signal(signal.SIGKILL)
+    except OSError:
+        pass
+    if process.poll() is None:
+        try:
+            process.wait(timeout=_SUPERVISED_TERMINATE_GRACE)
+        except subprocess.TimeoutExpired:
+            pass
+    return True
+
+
+def _run_cli_with_deadline(script_path: Path, argv: list[str], *,
+                           operation: str, timeout: float,
+                           environment_overrides: dict[str, str | None]
+                           | None = None) -> int:
+    """Run one CLI operation in a killable process with a wall-clock deadline."""
+    timeout = _normalize_operation_timeout(timeout)
+    environment = os.environ.copy()
+    environment[_SUPERVISED_CHILD_ENV] = "1"
+    for name, value in (environment_overrides or {}).items():
+        if value is None:
+            environment.pop(name, None)
+        else:
+            environment[name] = value
+    command = [sys.executable, "-u", str(Path(script_path).resolve()), *argv]
+    process_options = {"env": environment}
+    kill_job = None
+    if os.name == "nt":
+        process_options["creationflags"] = getattr(
+            subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        kill_job = _WindowsKillJob()
+    else:
+        process_options["start_new_session"] = True
+    try:
+        process = subprocess.Popen(command, **process_options)
+    except BaseException:
+        if kill_job is not None:
+            kill_job.close()
+        raise
+    if kill_job is not None:
+        try:
+            kill_job.assign(process)
+        except BaseException:
+            try:
+                process.kill()
+                process.wait(timeout=_SUPERVISED_TERMINATE_GRACE)
+            except (OSError, subprocess.SubprocessError):
+                pass
+            kill_job.close()
+            raise
+
+    previous_handlers = {}
+    if os.name != "nt" and _threading.current_thread() is _threading.main_thread():
+        def raise_supervisor_signal(received, _frame):
+            raise _SupervisorSignal(received)
+
+        for signal_name in ("SIGTERM", "SIGHUP"):
+            signum = getattr(signal, signal_name, None)
+            if signum is None:
+                continue
+            previous_handlers[signum] = signal.getsignal(signum)
+            signal.signal(signum, raise_supervisor_signal)
+    try:
+        return int(process.wait(timeout=timeout))
+    except subprocess.TimeoutExpired:
+        cleanup_complete = _terminate_supervised_process(
+            process, kill_job=kill_job)
+        cleanup_status = (
+            "Any operating-system vector-store lease was released; retry "
+            "the command to recover an interrupted index."
+            if cleanup_complete else
+            "Worker cleanup could not be confirmed; verify that no child "
+            "process remains before retrying the index."
+        )
+        print(
+            f"Operation '{operation}' exceeded its {timeout:g}s deadline and "
+            f"was terminated. {cleanup_status}",
+            file=sys.stderr,
+        )
+        return 124
+    except _SupervisorSignal as exc:
+        _terminate_supervised_process(process, kill_job=kill_job)
+        return 128 + exc.signum
+    except BaseException:
+        _terminate_supervised_process(process, kill_job=kill_job)
+        raise
+    finally:
+        for signum, previous in previous_handlers.items():
+            signal.signal(signum, previous)
+        if kill_job is not None:
+            kill_job.close()
+
+
+def _rag_cli_command(argv: list[str]) -> str | None:
+    """Return the argparse subcommand after global flag-only options."""
+    for token in argv:
+        if token in {"-v", "--verbose", "--quiet", "--"}:
+            continue
+        if not token.startswith("-"):
+            return token
+    return None
+
+
+def _run_rag_entrypoint(
+        argv: list[str] | None = None, *,
+        environment_overrides: dict[str, str | None] | None = None) -> int:
+    """Run the CLI, supervising vector-using commands in a child process."""
+    cli_args = list(sys.argv[1:] if argv is None else argv)
+    command = _rag_cli_command(cli_args)
+    if not cli_args or command == "menu":
+        interactive_menu()
+        return 0
+    if (command in DEFAULT_OPERATION_TIMEOUTS
+            and os.environ.get(_SUPERVISED_CHILD_ENV) != "1"):
+        supervisor_options = {
+            "operation": command,
+            "timeout": _cli_operation_timeout(cli_args, command),
+        }
+        if environment_overrides:
+            supervisor_options["environment_overrides"] = environment_overrides
+        return _run_cli_with_deadline(
+            Path(__file__), cli_args, **supervisor_options)
+
+    previous_environment = {}
+    missing_environment = set()
+    for name, value in (environment_overrides or {}).items():
+        if name in os.environ:
+            previous_environment[name] = os.environ[name]
+        else:
+            missing_environment.add(name)
+        if value is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = value
+    try:
+        main(cli_args)
+    finally:
+        for name in missing_environment:
+            os.environ.pop(name, None)
+        os.environ.update(previous_environment)
+    return 0
+
 CONTENT_TYPES = [
     "case_opinion", "notes_and_questions", "author_narrative",
     "statutory_excerpt", "chapter_introduction", "table",
@@ -10658,7 +11473,7 @@ CONTENT_TYPES = [
 ]
 
 
-def main():
+def main(argv: list[str] | None = None):
     # Ensure print() handles non-ASCII (case names, Unicode dashes) on Windows
     if sys.stdout and hasattr(sys.stdout, "reconfigure"):
         try:
@@ -10702,6 +11517,13 @@ def main():
             default=DEFAULT_DB_LOCK_TIMEOUT,
             help=("Seconds to wait for exclusive local vector-store access "
                   f"(default: {DEFAULT_DB_LOCK_TIMEOUT:g})"))
+
+    def add_operation_timeout_flag(p, command: str):
+        default = DEFAULT_OPERATION_TIMEOUTS[command]
+        p.add_argument(
+            "--operation-timeout", type=float, default=default,
+            help=("Maximum wall-clock seconds for the isolated command worker "
+                  f"(default: {default:g})"))
 
     def add_watermark_flag(p):
         p.add_argument("--watermark", type=str, default=DEFAULT_WATERMARK,
@@ -10832,6 +11654,7 @@ def main():
     add_embedding_flags(p_idx)
     add_db_backend_flag(p_idx)
     add_db_lock_flag(p_idx)
+    add_operation_timeout_flag(p_idx, "index")
     p_idx.add_argument("--full-reindex", action="store_true",
                         help="Force complete rebuild (skip incremental)")
 
@@ -10924,6 +11747,7 @@ def main():
     add_embedding_flags(p_q)
     add_db_backend_flag(p_q)
     add_db_lock_flag(p_q)
+    add_operation_timeout_flag(p_q, "query")
     add_llm_provider_flags(p_q)
 
     # export
@@ -10953,6 +11777,7 @@ def main():
     add_collection_flag(p_info)
     add_db_backend_flag(p_info)
     add_db_lock_flag(p_info)
+    add_operation_timeout_flag(p_info, "info")
 
     # full pipeline
     p_full = sub.add_parser("full", help="End-to-end: PDF to queryable index")
@@ -10976,6 +11801,7 @@ def main():
     add_llm_provider_flags(p_full)
     add_db_backend_flag(p_full)
     add_db_lock_flag(p_full)
+    add_operation_timeout_flag(p_full, "full")
     p_full.add_argument("--full-reindex", action="store_true",
                         help="Force full re-index, ignoring existing index state")
     p_full.add_argument("--raptor", action="store_true",
@@ -11013,6 +11839,7 @@ def main():
     add_llm_provider_flags(p_batch)
     add_db_backend_flag(p_batch)
     add_db_lock_flag(p_batch)
+    add_operation_timeout_flag(p_batch, "batch")
     p_batch.add_argument("--full-reindex", action="store_true",
                          help="Force full re-index, ignoring existing index state")
     p_batch.add_argument("--raptor", action="store_true",
@@ -11027,7 +11854,7 @@ def main():
     p_batch.add_argument("--resume", action="store_true",
                          help="Skip already-completed stages per PDF (resume failed batch)")
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     # --- Configure logging ---
     level = logging.WARNING if args.quiet else (
@@ -11056,6 +11883,12 @@ def main():
         try:
             args.db_lock_timeout = _normalize_db_lock_timeout(
                 args.db_lock_timeout)
+        except ValueError as exc:
+            parser.error(str(exc))
+    if hasattr(args, "operation_timeout"):
+        try:
+            args.operation_timeout = _normalize_operation_timeout(
+                args.operation_timeout)
         except ValueError as exc:
             parser.error(str(exc))
     llm_kwargs = _llm_kwargs_from_args(args, include_workers=True)
@@ -11513,6 +12346,40 @@ def _redact_cli_secrets(args: list[str]) -> list[str]:
     return redacted
 
 
+def _menu_secrets_to_environment(
+        args: list[str]) -> tuple[list[str], dict[str, str]]:
+    """Remove hidden-prompt secrets from argv and scope them to the child."""
+    cloud_url = DEFAULT_CLOUD_URL
+    for index, value in enumerate(args[:-1]):
+        if value in {"--cloud-url", "--llm-url"}:
+            cloud_url = args[index + 1]
+
+    safe_args = []
+    environment = {}
+    index = 0
+    while index < len(args):
+        flag = args[index]
+        if flag in {"--cloud-key", "--api-key", "--gemini-key"}:
+            if index + 1 >= len(args):
+                safe_args.append(flag)
+                index += 1
+                continue
+            secret = args[index + 1]
+            if flag == "--gemini-key":
+                environment["GEMINI_API_KEY"] = secret
+            elif _is_deepseek_cloud(cloud_url):
+                environment["DEEPSEEK_API_KEY"] = secret
+            elif _is_minimax_cloud(cloud_url):
+                environment["MINIMAX_API_KEY"] = secret
+            else:
+                environment["CLOUD_API_KEY"] = secret
+            index += 2
+            continue
+        safe_args.append(flag)
+        index += 1
+    return safe_args, environment
+
+
 def interactive_menu():
     """User-friendly guided pipeline menu."""
     print("\n" + "=" * 60)
@@ -11815,21 +12682,23 @@ def interactive_menu():
     print(f"  Running: {cmd}")
     print(f"  {'='*50}\n")
 
+    safe_args, secret_environment = _menu_secrets_to_environment(args)
+
     # Run it
     original_argv = sys.argv
     try:
-        sys.argv = ["rag.py"] + args
-        main()
+        sys.argv = ["rag.py"] + safe_args
+        exit_code = _run_rag_entrypoint(
+            safe_args, environment_overrides=secret_environment)
+        if exit_code:
+            print(f"  Command exited with status {exit_code}.", file=sys.stderr)
     finally:
         sys.argv = original_argv
 
 
 if __name__ == "__main__":
     try:
-        if len(sys.argv) <= 1 or sys.argv[1] == "menu":
-            interactive_menu()
-        else:
-            main()
+        sys.exit(_run_rag_entrypoint())
     except KeyboardInterrupt:
         print("\nCancelled.", file=sys.stderr)
         sys.exit(130)

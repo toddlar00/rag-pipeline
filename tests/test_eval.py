@@ -635,3 +635,20 @@ def test_json_report_writer_creates_parent_and_trailing_newline(tmp_path):
 
     assert json.loads(path.read_text(encoding="utf-8"))["metrics"]["mrr"] == 1.0
     assert path.read_text(encoding="utf-8").endswith("\n")
+
+
+def test_json_report_writer_preserves_previous_report_on_replace_failure(
+        monkeypatch, tmp_path):
+    path = tmp_path / "report.json"
+    path.write_text('{"old": true}\n', encoding="utf-8")
+
+    monkeypatch.setattr(
+        rag.os, "replace",
+        lambda *_args: (_ for _ in ()).throw(OSError("replace failed")),
+    )
+
+    with pytest.raises(OSError, match="replace failed"):
+        retrieval_eval._write_report(path, {"new": True})
+
+    assert json.loads(path.read_text(encoding="utf-8")) == {"old": True}
+    assert list(tmp_path.glob(".report.json.*.tmp")) == []

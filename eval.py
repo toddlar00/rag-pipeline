@@ -25,6 +25,7 @@ import hashlib
 import json
 import logging
 import math
+import os
 import sys
 from pathlib import Path
 
@@ -45,6 +46,7 @@ DEFAULT_RRF_K = 10
 DEFAULT_DENSE_WEIGHT = 0.5
 DEFAULT_SPARSE_WEIGHT = 1.0
 DEFAULT_DB_LOCK_TIMEOUT = 30.0
+DEFAULT_OPERATION_TIMEOUT = 14400.0
 REPORT_SCHEMA_VERSION = 2
 _JUDGMENT_ID_FIELDS = ("chunk_id", "source_id")
 _chunk_identity_cache: dict[str, tuple[tuple, str, dict]] = {}
@@ -743,11 +745,10 @@ def _threshold_failures(metrics: dict, minimums: dict[str, float], *,
 
 
 def _write_report(path: Path, payload: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
+    import rag
+
+    rag._atomic_write_text(
+        path, json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -766,6 +767,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--db-lock-timeout", type=float, default=DEFAULT_DB_LOCK_TIMEOUT,
         help="Seconds to wait for exclusive local vector-store access")
+    parser.add_argument(
+        "--operation-timeout", type=float,
+        default=DEFAULT_OPERATION_TIMEOUT,
+        help=("Maximum wall-clock seconds for the isolated evaluation worker "
+              f"(default: {DEFAULT_OPERATION_TIMEOUT:g})"))
     parser.add_argument("--compare", action="store_true",
                         help="Compare vector, hybrid, and reranked configurations")
     retrieval_mode = parser.add_mutually_exclusive_group()
@@ -827,6 +833,7 @@ def _report_config(args, **overrides) -> dict:
         "embedding_model": args.embedding_model,
         "db_backend": args.db_backend,
         "db_lock_timeout": args.db_lock_timeout,
+        "operation_timeout": args.operation_timeout,
         "k_values": sorted(set(args.k)),
         "retrieval_depth": args.depth,
         "queries_path": str(query_path),
@@ -1005,6 +1012,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         args.db_lock_timeout = rag._normalize_db_lock_timeout(
             args.db_lock_timeout)
+        args.operation_timeout = rag._normalize_operation_timeout(
+            args.operation_timeout)
     except ValueError as exc:
         parser.error(str(exc))
 
@@ -1019,5 +1028,17 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
 
+def _run_eval_entrypoint(argv: list[str] | None = None) -> int:
+    """Supervise the evaluation process so a stuck client can be terminated."""
+    import rag
+
+    cli_args = list(sys.argv[1:] if argv is None else argv)
+    if os.environ.get(rag._SUPERVISED_CHILD_ENV) == "1":
+        return main(cli_args)
+    return rag._run_cli_with_deadline(
+        Path(__file__), cli_args, operation="evaluation",
+        timeout=rag._cli_operation_timeout(cli_args, "evaluation"))
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(_run_eval_entrypoint())

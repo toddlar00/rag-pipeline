@@ -45,6 +45,10 @@ def _args(**overrides):
 
 def _paths(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(rag, "OUTPUT_DIR", tmp_path / "output")
+    monkeypatch.setattr(rag, "_converted_outputs_complete", lambda *a, **k: True)
+    monkeypatch.setattr(rag, "_unified_export_complete", lambda *a, **k: True)
+    monkeypatch.setattr(rag, "_split_export_complete", lambda *a, **k: True)
+    monkeypatch.setattr(rag, "_raptor_output_complete", lambda *a, **k: True)
     return rag._output_paths_for_name("Book")
 
 
@@ -147,6 +151,9 @@ def test_resume_revalidates_index_and_rebuilds_missing_chapter_exports(
     monkeypatch.setattr(
         rag, "export_markdown",
         lambda *args, **kwargs: exports.append((args, kwargs)))
+    monkeypatch.setattr(
+        rag, "_split_export_complete",
+        lambda *args, **kwargs: bool(exports))
 
     rag._run_pipeline_stages(
         Path("Book.pdf"), paths, _args(split_chapters=True),
@@ -285,6 +292,7 @@ def test_resume_command_preserves_pipeline_options():
         min_words=5,
         backend="auto",
         db_lock_timeout=7,
+        operation_timeout=99,
     )
 
     command = rag._build_resume_cmd(Path("My Book.pdf"), args)
@@ -300,6 +308,7 @@ def test_resume_command_preserves_pipeline_options():
     assert "--min-words 5" in command
     assert "--backend auto" in command
     assert "--db-lock-timeout 7" in command
+    assert "--operation-timeout 99" in command
     assert "deepseek-secret" not in command
     assert "gemini-secret" not in command
     assert "--cloud-key" not in command

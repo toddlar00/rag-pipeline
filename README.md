@@ -136,6 +136,36 @@ python rag.py batch Civil_procedure.pdf Torts_casebook.pdf Con_law.pdf --resume
 
 Global flags: `-v` / `--verbose` (DEBUG output), `--quiet` (warnings only).
 
+### Hard operation deadlines
+
+Commands that can open a vector store run in an isolated worker process. Use
+`--operation-timeout SECONDS` to replace the positive wall-clock deadline; a
+timeout terminates the Windows worker Job Object or the POSIX worker process
+group, releases its operating-system lease, retains any interrupted-update
+marker, prints no command arguments or secrets, and exits with status `124`.
+Guided-menu index, query, info, full, and batch actions use the same boundary.
+On POSIX, a descendant that deliberately starts a new session is outside the
+process-group guarantee. Defaults are:
+
+| Command | Deadline |
+|---------|----------|
+| `query` | 300 seconds |
+| `info` | 120 seconds |
+| `index` | 7,200 seconds |
+| `full` | 14,400 seconds |
+| `batch` | 43,200 seconds |
+| `eval.py` | 14,400 seconds |
+
+The Web UI applies the same isolated boundary to the vector-store work in each
+Search and Info callback; its defaults are 300 and 120 seconds. Override them
+with `--search-timeout` and `--info-timeout` when starting `ui.py`.
+
+`--db-lock-timeout` only bounds how long a worker waits to acquire the database
+lease. `--operation-timeout` bounds the whole isolated command, including a
+storage call that never returns. Direct Python API calls remain in the caller's
+process; applications requiring a hard cancellation boundary should invoke the
+CLI or isolate those calls in their own supervised process.
+
 ### Interactive Menu
 
 Running `python rag.py` with no arguments launches a guided menu that walks
@@ -143,8 +173,10 @@ through file selection, options, and command construction. All commands are
 accessible through the menu, with file path validation and sensible defaults.
 For LLM-backed operations, the menu also offers DeepSeek V4 Pro/Flash, MiniMax,
 Ollama, Gemini, and custom providers. API keys entered there use a hidden prompt
-and are redacted from the generated command shown on screen; press Enter at the
-key prompt to use the corresponding environment variable instead.
+and are redacted from the generated command shown on screen. They are removed
+from worker process arguments and supplied only through that worker's child-only
+environment; press Enter at the key prompt to use the corresponding ambient
+environment variable instead.
 
 ## Searching
 
@@ -723,8 +755,10 @@ separate concurrency domain. Windows extended drive/UNC spellings are
 normalized, but equivalent drive-letter, administrative-UNC, and SUBST aliases
 are not a supported way to access one live database. Use one path spelling and
 do not move or rename a database directory while any operation may be active.
-The timeout bounds lock contention; filesystem hydration, sentinel setup, and
-storage-client calls themselves can still block independently.
+The lease timeout bounds only lock contention. The outer CLI/evaluation/menu
+operation deadline bounds filesystem hydration, sentinel setup, and
+storage-client calls. Web UI vector-client calls have their own isolated
+deadlines; its best-effort artifact-size scan remains outside that boundary.
 
 `full` and `batch` also serialize output-run allocation before choosing a book
 suffix. When they regenerate chunks, they create the collection recovery marker
@@ -738,6 +772,15 @@ without a manifested source SHA-256 falls back to vector retrieval with a
 warning instead of fusing unproven lexical data. Reranking begins only after the
 retrieval lease and vector client are released, so model or API latency does not
 block unrelated index access.
+
+Conversion JSON/Markdown pairs, unified Markdown, chapter sets, RAPTOR trees,
+and evaluation reports are published through flushed same-directory temporary
+files. Versioned completion metadata binds resumable pipeline artifacts to the
+exact source digest, record count, credential-free parameters, and output
+hashes. A hard kill before the final completion commit therefore leaves the
+stage fail-closed: `full --resume` regenerates it instead of accepting a
+truncated, stale, or partial artifact set. Legacy pipeline artifacts without
+completion metadata regenerate once when resumed.
 
 The sequential background-upsert paths for both backends share teardown that
 requests a worker stop, waits for completion, and attempts both executor and
@@ -1050,6 +1093,10 @@ python ui.py --db-backend qdrant \
 ```
 
 Add `--share` to either complete command to create a public Gradio link.
+Search retrieval and Info's exact vector count execute in killable workers. Use
+`--search-timeout SECONDS`, `--info-timeout SECONDS`, and
+`--db-lock-timeout SECONDS` to tune their hard deadlines and local lease wait
+independently.
 
 **Search tab**: query box, content type/chapter filters, three-state retrieval
 and reranker controls (Auto/forced/disabled), formatted results with metadata.
@@ -1201,6 +1248,16 @@ one stable path spelling; do not use drive/UNC/SUBST aliases or rename the
 directory while another process may have it open. The timeout applies to lock
 contention, not cloud-drive hydration or a storage call that has already begun.
 
+### Operation exceeded its deadline
+
+The supervised Windows Job Object or POSIX worker process group was terminated
+with exit status `124`. For an interrupted index/full/batch run, keep the
+recovery and artifact-completion metadata in place and rerun the same command
+(or `full --resume`); incomplete stages regenerate and the indexer rebuilds the
+affected collection before declaring it clean. Increase
+`--operation-timeout` for an expected long model or storage operation. Do not
+delete `.rag-locks` sidecars or `.updating.json` recovery markers manually.
+
 ### Stale index after re-chunking
 
 The incremental indexer uses collection-scoped content hashes and validates the
@@ -1214,7 +1271,8 @@ needed.
 - Embedding and reranker models are loaded with `trust_remote_code=True` (required
   by some HuggingFace models). Only use trusted model names from verified publishers.
 - API keys can come from environment variables or the interactive menu's hidden
-  prompt; menu-entered keys are redacted from the displayed command and are not
+  prompt; menu-entered keys are redacted from the displayed command, removed
+  from child process arguments, scoped to the child environment, and not
   written to a configuration file.
 - Direct CLI key flags (`--api-key`, `--cloud-key`, and `--gemini-key`) are
   supported, but their values can be visible in process listings and shell

@@ -13,6 +13,7 @@ import argparse
 import json
 import shutil
 import sys
+import tempfile
 import time
 from pathlib import Path
 from uuid import uuid4
@@ -37,7 +38,115 @@ _config = {
     "db_backend": "chroma",
     "collection": None,
     "embedding_model": "nomic-ai/nomic-embed-text-v2-moe",
+    "db_lock_timeout": rag.DEFAULT_DB_LOCK_TIMEOUT,
+    "search_timeout": rag.DEFAULT_OPERATION_TIMEOUTS["query"],
+    "info_timeout": rag.DEFAULT_OPERATION_TIMEOUTS["info"],
 }
+
+_VECTOR_WORKER_FLAG = "--vector-worker"
+
+
+class _VectorWorkerError(RuntimeError):
+    def __init__(self, error_type: str, message: str):
+        self.error_type = error_type
+        super().__init__(message)
+
+
+def _execute_vector_request(request: dict) -> dict:
+    """Execute one vector operation inside the isolated UI worker."""
+    action = request.get("action")
+    config = request["config"]
+    if action == "search":
+        options = request["options"]
+        response = rag.search_index(
+            request["query"], Path(config["db_path"]),
+            db_backend=config["db_backend"],
+            n_results=options["n_results"],
+            content_type=options["content_type"],
+            chapter_num=options["chapter_num"],
+            collection_name=config["collection"],
+            embedding_model=config["embedding_model"],
+            use_reranker=options["use_reranker"],
+            hybrid=options["hybrid"],
+            chunks_path=Path(config["chunks_path"]),
+            lock_timeout=config["db_lock_timeout"],
+        )
+        return {
+            "hits": [
+                {"text": hit.text, "metadata": hit.metadata,
+                 "score": hit.score}
+                for hit in response.hits
+            ],
+            "effective_mode": response.effective_mode,
+            "reranker_applied": response.reranker_applied,
+            "warnings": response.warnings,
+        }
+    if action == "info":
+        return {"count": rag._index_collection_count(
+            Path(config["db_path"]), config["collection"],
+            db_backend=config["db_backend"],
+            lock_timeout=config["db_lock_timeout"],
+        )}
+    raise ValueError(f"Unsupported UI vector action: {action!r}")
+
+
+def _vector_worker_main(request_path: Path, result_path: Path) -> int:
+    try:
+        request = json.loads(request_path.read_text(encoding="utf-8"))
+        result = {"ok": True, "result": _execute_vector_request(request)}
+    except Exception as exc:
+        result = {
+            "ok": False,
+            "error_type": type(exc).__name__,
+            "message": str(exc),
+        }
+    rag._atomic_write_json(result_path, result)
+    return 0
+
+
+def _supervised_vector_request(action: str, payload: dict, *,
+                               timeout: float) -> dict:
+    """Run a UI storage callback behind the CLI's hard process boundary."""
+    request = {"action": action, **payload}
+    with tempfile.TemporaryDirectory(prefix="rag-ui-vector-") as temp_dir:
+        request_path = Path(temp_dir) / "request.json"
+        result_path = Path(temp_dir) / "result.json"
+        rag._atomic_write_json(request_path, request)
+        exit_code = rag._run_cli_with_deadline(
+            Path(__file__),
+            [_VECTOR_WORKER_FLAG, str(request_path), str(result_path)],
+            operation=f"UI {action}", timeout=timeout)
+        if exit_code == 124:
+            raise TimeoutError(
+                f"UI {action} exceeded its {timeout:g}s deadline")
+        if exit_code:
+            raise RuntimeError(
+                f"UI {action} worker exited with status {exit_code}")
+        try:
+            envelope = json.loads(result_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise RuntimeError(
+                f"UI {action} worker returned no valid result") from exc
+        if not envelope.get("ok"):
+            raise _VectorWorkerError(
+                str(envelope.get("error_type", "RuntimeError")),
+                str(envelope.get("message", "Vector operation failed")),
+            )
+        result = envelope.get("result")
+        if not isinstance(result, dict):
+            raise RuntimeError(f"UI {action} worker returned an invalid result")
+        return result
+
+
+def _vector_config_payload() -> dict:
+    return {
+        "db_path": str(_config["db_path"]),
+        "chunks_path": str(_config["chunks_path"]),
+        "db_backend": _config["db_backend"],
+        "collection": _config["collection"],
+        "embedding_model": _config["embedding_model"],
+        "db_lock_timeout": _config["db_lock_timeout"],
+    }
 
 
 def _load_chunk_metadata() -> dict:
@@ -110,43 +219,44 @@ def do_search(query, content_type, chapter, n_results, hybrid, use_reranker,
         # One configured database path has one backend. Keep the optional
         # argument for callers of the old function signature, but never let a
         # UI selection reinterpret the configured path as another backend.
-        configured_backend = _config["db_backend"]
-        response = rag.search_index(
-            query,
-            db_path,
-            db_backend=configured_backend,
-            n_results=int(n_results),
-            content_type=ct,
-            chapter_num=ch,
-            collection_name=_config["collection"],
-            embedding_model=_config["embedding_model"],
-            use_reranker=use_reranker,
-            hybrid=hybrid,
-            chunks_path=chunks_path,
+        response = _supervised_vector_request(
+            "search",
+            {
+                "query": query,
+                "config": _vector_config_payload(),
+                "options": {
+                    "n_results": int(n_results),
+                    "content_type": ct,
+                    "chapter_num": ch,
+                    "use_reranker": use_reranker,
+                    "hybrid": hybrid,
+                },
+            },
+            timeout=_config["search_timeout"],
         )
 
         elapsed = time.time() - t0
-        mode = response.effective_mode
-        if response.reranker_applied:
+        mode = response["effective_mode"]
+        if response["reranker_applied"]:
             mode += " + reranked"
 
         # Format output
         lines = [
-            f"**{len(response.hits)} results** ({mode}, {elapsed:.1f}s)\n"
+            f"**{len(response['hits'])} results** ({mode}, {elapsed:.1f}s)\n"
         ]
-        for warning in response.warnings:
+        for warning in response["warnings"]:
             lines.append(f"> Warning: {warning}\n")
 
-        for i, hit in enumerate(response.hits):
-            doc = hit.text
-            meta = hit.metadata
+        for i, hit in enumerate(response["hits"]):
+            doc = hit["text"]
+            meta = hit["metadata"]
             ct_val = meta.get("content_type", "?")
             section = meta.get("section_path", "")
             case = meta.get("primary_case", "")
             pages = meta.get("page_range", "")
             ctx = meta.get("context", "")
 
-            lines.append(f"### Result {i+1} (score: {hit.score:.3f})")
+            lines.append(f"### Result {i+1} (score: {hit['score']:.3f})")
             lines.append(f"**Type:** {ct_val} | **Pages:** {pages}")
             if section:
                 lines.append(f"**Section:** {section}")
@@ -255,13 +365,21 @@ def do_info():
         return "\n".join(lines)
     try:
         backend = _config["db_backend"]
-        count = rag._index_collection_count(
-            db_path, collection, db_backend=backend)
+        result = _supervised_vector_request(
+            "info", {"config": _vector_config_payload()},
+            timeout=_config["info_timeout"])
+        count = result["count"]
         lines.append("\n### Qdrant" if backend == "qdrant"
                      else "\n### ChromaDB")
         lines.append(f"- Collection: {collection}")
         lines.append(
             f"- {'Points' if backend == 'qdrant' else 'Documents'}: {count}")
+    except _VectorWorkerError as exc:
+        if exc.error_type != "LookupError":
+            lines.append(f"\n### Vector DB status unavailable: {exc}")
+        else:
+            lines.append(
+                f"\n### Vector DB: collection '{_config['collection']}' not found")
     except LookupError:
         lines.append(f"\n### Vector DB: collection '{_config['collection']}' not found")
     except Exception as exc:
@@ -356,7 +474,7 @@ def build_app():
 # Main
 # ---------------------------------------------------------------------------
 
-def main():
+def main(argv: list[str] | None = None):
     parser = argparse.ArgumentParser(description="RAG Pipeline Web UI")
     parser.add_argument("--port", type=int, default=7860)
     parser.add_argument("--chunks", type=Path, required=True,
@@ -368,19 +486,44 @@ def main():
     parser.add_argument("--collection", type=str, required=True)
     parser.add_argument("--embedding-model", type=str,
                         default="nomic-ai/nomic-embed-text-v2-moe")
+    parser.add_argument(
+        "--db-lock-timeout", type=float, default=rag.DEFAULT_DB_LOCK_TIMEOUT,
+        help="Seconds to wait for local vector-store access")
+    parser.add_argument(
+        "--search-timeout", type=float,
+        default=rag.DEFAULT_OPERATION_TIMEOUTS["query"],
+        help="Hard wall-clock deadline for each isolated search")
+    parser.add_argument(
+        "--info-timeout", type=float,
+        default=rag.DEFAULT_OPERATION_TIMEOUTS["info"],
+        help="Hard wall-clock deadline for each isolated status lookup")
     parser.add_argument("--share", action="store_true",
                         help="Create a public Gradio share link")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+    try:
+        args.db_lock_timeout = rag._normalize_db_lock_timeout(
+            args.db_lock_timeout)
+        args.search_timeout = rag._normalize_operation_timeout(
+            args.search_timeout)
+        args.info_timeout = rag._normalize_operation_timeout(
+            args.info_timeout)
+    except ValueError as exc:
+        parser.error(str(exc))
 
     _config["chunks_path"] = args.chunks
     _config["db_backend"] = args.db_backend
     _config["db_path"] = args.db
     _config["collection"] = args.collection
     _config["embedding_model"] = args.embedding_model
+    _config["db_lock_timeout"] = args.db_lock_timeout
+    _config["search_timeout"] = args.search_timeout
+    _config["info_timeout"] = args.info_timeout
 
     app = build_app()
     app.launch(server_port=args.port, share=args.share)
 
 
 if __name__ == "__main__":
+    if len(sys.argv) == 4 and sys.argv[1] == _VECTOR_WORKER_FLAG:
+        sys.exit(_vector_worker_main(Path(sys.argv[2]), Path(sys.argv[3])))
     main()
