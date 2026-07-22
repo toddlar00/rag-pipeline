@@ -10750,6 +10750,132 @@ def _run_storage_command(args) -> dict[str, int]:
     }
 
 
+def _render_job_summaries(summaries: list[_job_runtime.JobSummary]) -> None:
+    if not summaries:
+        print("No background jobs.")
+        return
+    print(f"{'JOB ID':32}  {'COMMAND':20}  {'STATUS':16}  ATTEMPT")
+    for summary in summaries:
+        print(
+            f"{summary.job_id:32}  {summary.command:20}  "
+            f"{summary.status:16}  {summary.attempt_number}")
+
+
+def _background_submit_tokens(tokens: list[str]) -> tuple[str, list[str]]:
+    tokens = list(tokens)
+    if tokens and tokens[0] == "--":
+        tokens.pop(0)
+    if not tokens:
+        raise _job_runtime.JobValidationError(
+            "jobs submit requires '-- COMMAND [ARG ...]'")
+    command, command_arguments = tokens[0], tokens[1:]
+    if command in {"full", "batch"} and any(
+            token == "--resume" or token.startswith("--resume=")
+            for token in command_arguments):
+        raise _job_runtime.JobValidationError(
+            "initial background submissions cannot infer an existing run; "
+            "submit a fresh job and use 'jobs resume' after interruption")
+    return command, command_arguments
+
+
+def _run_jobs_command(args) -> dict[str, int | bool]:
+    import job_manager as _job_manager
+
+    store = _job_runtime.JobStore(args.job_root)
+    action = args.job_action
+    payload: dict | list[dict]
+    summaries: list[_job_runtime.JobSummary]
+    if action == "submit":
+        command, command_arguments = _background_submit_tokens(
+            args.job_command)
+        submitted = store.submit_job(
+            command, command_arguments,
+            timeout_seconds=args.timeout)
+        try:
+            launch = _job_manager.launch_detached(
+                store, submitted.job_id,
+                ready_timeout=args.ready_timeout)
+        except BaseException as launch_error:
+            try:
+                execution = store.load_execution(submitted.job_id)
+                store.transition_job(
+                    submitted.job_id, "failed",
+                    attempt_token=execution.attempt_token,
+                    expected_revision=execution.revision,
+                    lease_timeout=0)
+            except BaseException as marker_error:
+                _log_cleanup_error(
+                    "Background launch-state update failed while preserving "
+                    "the launch error",
+                    error=marker_error)
+            raise launch_error
+        summary = store.get_job(submitted.job_id)
+        payload = {"job": summary.as_dict(), "launch": launch.as_dict()}
+        summaries = [summary]
+    elif action == "list":
+        summaries = []
+        for summary in store.list_jobs():
+            summaries.append(
+                _job_manager.reconcile_job(store, summary.job_id))
+        payload = [summary.as_dict() for summary in summaries]
+    elif action == "status":
+        summary = _job_manager.reconcile_job(store, args.job_id)
+        summaries = [summary]
+        payload = summary.as_dict()
+    elif action == "cancel":
+        store.request_cancel(args.job_id)
+        deadline = time.monotonic() + args.wait_timeout
+        summary = store.get_job(args.job_id)
+        while args.wait and not summary.terminal:
+            summary = _job_manager.reconcile_job(store, args.job_id)
+            if summary.terminal or time.monotonic() >= deadline:
+                break
+            time.sleep(0.1)
+        summaries = [summary]
+        payload = summary.as_dict()
+    elif action == "resume":
+        current = _job_manager.reconcile_job(store, args.job_id)
+        resumed = store.prepare_resume(
+            args.job_id, expected_revision=current.revision)
+        try:
+            launch = _job_manager.launch_detached(
+                store, args.job_id, ready_timeout=args.ready_timeout)
+        except BaseException as launch_error:
+            try:
+                execution = store.load_execution(args.job_id)
+                store.transition_job(
+                    args.job_id, "failed",
+                    attempt_token=execution.attempt_token,
+                    expected_revision=execution.revision,
+                    lease_timeout=0)
+            except BaseException as marker_error:
+                _log_cleanup_error(
+                    "Background resume-state update failed while preserving "
+                    "the launch error",
+                    error=marker_error)
+            raise launch_error
+        summary = store.get_job(args.job_id)
+        payload = {
+            "job": summary.as_dict(),
+            "launch": launch.as_dict(),
+            "resumed_from_revision": resumed.revision - 1,
+        }
+        summaries = [summary]
+    else:
+        raise _job_runtime.JobValidationError(
+            "unknown background job action")
+
+    if args.job_json:
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+    else:
+        _render_job_summaries(summaries)
+    return {
+        "jobs": len(summaries),
+        "terminal": sum(summary.terminal for summary in summaries),
+        "applied": action in {"submit", "cancel", "resume"},
+    }
+
+
 CONTENT_TYPES = [
     "case_opinion", "notes_and_questions", "author_narrative",
     "statutory_excerpt", "chapter_introduction", "table",
@@ -11113,6 +11239,63 @@ def main(argv: list[str] | None = None):
     add_db_lock_flag(p_storage)
     add_operation_timeout_flag(p_storage, "storage")
 
+    # durable background jobs
+    p_jobs = sub.add_parser(
+        "jobs", help="Submit and manage durable background operations")
+    job_actions = p_jobs.add_subparsers(
+        dest="job_action", required=True)
+
+    def add_job_store_flags(job_parser):
+        job_parser.add_argument(
+            "--job-root", type=Path,
+            default=_job_runtime.DEFAULT_JOB_ROOT,
+            help=("Private durable job root (default: "
+                  f"{_job_runtime.DEFAULT_JOB_ROOT})"))
+        job_parser.add_argument(
+            "--json", action="store_true", dest="job_json",
+            help="Emit a redacted JSON response")
+
+    p_job_submit = job_actions.add_parser(
+        "submit", help="Persist and launch one allowed operation")
+    add_job_store_flags(p_job_submit)
+    p_job_submit.add_argument(
+        "--timeout", type=float, default=None,
+        help="Manager wall-clock deadline in seconds")
+    p_job_submit.add_argument(
+        "--ready-timeout", type=float, default=10.0,
+        help="Seconds to wait for the detached-manager handshake")
+    p_job_submit.add_argument(
+        "job_command", nargs=argparse.REMAINDER,
+        help="Command after '--', for example: -- full --pdf Book.pdf")
+
+    p_job_list = job_actions.add_parser(
+        "list", help="List redacted durable job summaries")
+    add_job_store_flags(p_job_list)
+
+    p_job_status = job_actions.add_parser(
+        "status", help="Reconcile and show one durable job")
+    add_job_store_flags(p_job_status)
+    p_job_status.add_argument("job_id")
+
+    p_job_cancel = job_actions.add_parser(
+        "cancel", help="Request attempt-bound process-tree cancellation")
+    add_job_store_flags(p_job_cancel)
+    p_job_cancel.add_argument("job_id")
+    p_job_cancel.add_argument(
+        "--wait", action="store_true",
+        help="Wait briefly for a terminal state")
+    p_job_cancel.add_argument(
+        "--wait-timeout", type=float, default=30.0,
+        help="Maximum cancellation wait in seconds (default: 30)")
+
+    p_job_resume = job_actions.add_parser(
+        "resume", help="Launch a new explicit attempt from a terminal job")
+    add_job_store_flags(p_job_resume)
+    p_job_resume.add_argument("job_id")
+    p_job_resume.add_argument(
+        "--ready-timeout", type=float, default=10.0,
+        help="Seconds to wait for the detached-manager handshake")
+
     # full pipeline
     p_full = sub.add_parser("full", help="End-to-end: PDF to queryable index")
     p_full.add_argument("--pdf", type=Path, required=True)
@@ -11379,6 +11562,20 @@ def main(argv: list[str] | None = None):
         elif args.command == "storage":
             operation_metrics.update(_run_storage_command(args))
 
+        elif args.command == "jobs":
+            import job_manager as _job_manager
+
+            if hasattr(args, "wait_timeout"):
+                try:
+                    args.wait_timeout = _normalize_operation_timeout(
+                        args.wait_timeout)
+                except ValueError as exc:
+                    parser.error(str(exc))
+            try:
+                operation_metrics.update(_run_jobs_command(args))
+            except _job_manager.JobManagerError as exc:
+                raise _job_runtime.JobRuntimeError(str(exc)) from exc
+
         elif args.command == "full":
             resume = getattr(args, "resume", False)
             (effective_resume, exact_run_name, allocation_callback,
@@ -11576,7 +11773,8 @@ def main(argv: list[str] | None = None):
         run_telemetry.terminate_active_stages("cancelled", exc)
         print("\nInterrupted.", file=sys.stderr)
         sys.exit(130)
-    except (_retention.RetentionError,
+    except (_job_runtime.JobRuntimeError,
+            _retention.RetentionError,
             _storage_policy.StoragePolicyError) as exc:
         if observed_command_stage:
             run_telemetry.stage_failed(args.command, exc)

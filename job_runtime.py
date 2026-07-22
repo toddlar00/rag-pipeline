@@ -60,6 +60,13 @@ SECRET_OPTIONS = frozenset({
     "--cloud-key",
     "--gemini-key",
 })
+RESERVED_JOB_OPTIONS = frozenset({
+    "--operation-timeout",
+    "--resume-run",
+    "--run-events",
+    "--run-id",
+    "--run-report",
+})
 
 JOB_STATUSES = frozenset({
     "queued",
@@ -299,6 +306,15 @@ def _validate_argv(argv: Sequence[str]) -> tuple[str, ...]:
             raise JobValidationError(
                 "credential values cannot be submitted as background arguments; "
                 "use provider environment configuration")
+        reserved_option = option in RESERVED_JOB_OPTIONS or (
+            len(option) > 2
+            and any(reserved.startswith(option)
+                    for reserved in RESERVED_JOB_OPTIONS)
+        )
+        if reserved_option:
+            raise JobValidationError(
+                "background manager owns timeout, resume binding, and run "
+                "telemetry options")
         normalized.append(token)
     if total_bytes > _MAX_ARGUMENT_BYTES:
         raise JobValidationError("background command arguments are too large")
@@ -1411,6 +1427,7 @@ __all__ = [
     "JOB_STATUSES",
     "LEGAL_JOB_TRANSITIONS",
     "RESUMABLE_JOB_STATUSES",
+    "RESERVED_JOB_OPTIONS",
     "SECRET_OPTIONS",
     "TERMINAL_JOB_STATUSES",
     "JobAlreadyExistsError",

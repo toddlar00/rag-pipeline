@@ -627,6 +627,10 @@ def test_rag_entrypoint_supervises_only_vector_commands(monkeypatch):
     assert calls == [("main", ["export"])]
     calls.clear()
 
+    assert rag._run_rag_entrypoint(["jobs", "list"]) == 0
+    assert calls == [("main", ["jobs", "list"])]
+    calls.clear()
+
     assert rag._run_rag_entrypoint(["--help"]) == 0
     assert calls == [("main", ["--help"])]
 

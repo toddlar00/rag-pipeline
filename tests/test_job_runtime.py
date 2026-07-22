@@ -79,7 +79,7 @@ def test_submit_get_and_list_expose_only_redacted_summaries(tmp_path):
     store = JobStore(root)
 
     submitted = store.submit_job(
-        "full", ["--pdf", str(private_pdf), "--resume"],
+        "full", ["--pdf", str(private_pdf)],
         timeout_seconds=600)
     loaded = store.get_job(submitted.job_id)
 
@@ -95,7 +95,7 @@ def test_submit_get_and_list_expose_only_redacted_summaries(tmp_path):
     assert "--pdf" not in rendered
 
     execution = store.load_execution(submitted.job_id)
-    assert execution.argv == ("--pdf", str(private_pdf), "--resume")
+    assert execution.argv == ("--pdf", str(private_pdf))
     assert execution.timeout_seconds == 600
     assert str(private_pdf) not in repr(execution)
     assert execution.attempt_token not in repr(execution)
@@ -130,6 +130,18 @@ def test_submit_rejects_secret_bearing_arguments(tmp_path, argv):
     with pytest.raises(JobValidationError, match="credential"):
         store.submit_job("full", argv)
     assert not any(path.name != ".store.lock" for path in store.root.iterdir())
+
+
+@pytest.mark.parametrize("argv", [
+    ["--run-id", "caller-owned"],
+    ["--run-r", "private/report.json"],
+    ["--operation-timeout=1"],
+    ["--resume-run", "Book"],
+])
+def test_submit_rejects_manager_owned_arguments(tmp_path, argv):
+    store = JobStore(tmp_path / "jobs")
+    with pytest.raises(JobValidationError, match="manager owns"):
+        store.submit_job("full", argv)
 
 
 @pytest.mark.parametrize("command", ["jobs", "query", "info", "storage"])
