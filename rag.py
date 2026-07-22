@@ -34,7 +34,7 @@ import threading as _threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional, TypedDict
+from typing import Any, Callable, Optional, TypedDict
 from uuid import UUID, uuid4
 
 import artifact_io as _artifact_io
@@ -91,6 +91,7 @@ ARTIFACT_COMPLETION_SCHEMA_VERSION = 1
 _SUPERVISED_CHILD_ENV = "RAG_PIPELINE_SUPERVISED_CHILD"
 _RUN_ID_ENV = "RAG_PIPELINE_RUN_ID"
 _SUPERVISED_TERMINATE_GRACE = 5.0
+_SUPERVISED_POLL_INTERVAL = 0.2
 
 # Embedding model max token limits (for validation)
 EMBEDDING_MAX_TOKENS = {
@@ -10318,7 +10319,14 @@ def _run_cli_with_deadline(script_path: Path, argv: list[str], *,
                            | None = None,
                            run_id: str | None = None,
                            run_events: Path | None = None,
-                           run_report: Path | None = None) -> int:
+                           run_report: Path | None = None,
+                           cancel_requested: Callable[[], bool]
+                           | None = None,
+                           on_child_started: Callable[[Any], None]
+                           | None = None,
+                           heartbeat: Callable[[Any], None] | None = None,
+                           stdout_target: Any = None,
+                           stderr_target: Any = None) -> int:
     """Run one CLI operation in a killable process with a wall-clock deadline."""
     timeout = _normalize_operation_timeout(timeout)
     environment = os.environ.copy()
@@ -10336,6 +10344,10 @@ def _run_cli_with_deadline(script_path: Path, argv: list[str], *,
             report_path=run_report).start()
     command = [sys.executable, "-u", str(Path(script_path).resolve()), *argv]
     process_options = {"env": environment}
+    if stdout_target is not None:
+        process_options["stdout"] = stdout_target
+    if stderr_target is not None:
+        process_options["stderr"] = stderr_target
     kill_job = None
     try:
         if os.name == "nt":
@@ -10366,6 +10378,17 @@ def _run_cli_with_deadline(script_path: Path, argv: list[str], *,
                     operation, run_id=run_id, run_events=run_events,
                     run_report=run_report, status="failed", exc=exc)
             raise
+    if on_child_started is not None:
+        try:
+            on_child_started(process)
+        except BaseException as exc:
+            cleanup_complete = _terminate_supervised_process(
+                process, kill_job=kill_job)
+            if cleanup_complete:
+                _finalize_supervised_run_telemetry(
+                    operation, run_id=run_id, run_events=run_events,
+                    run_report=run_report, status="failed", exc=exc)
+            raise
 
     previous_handlers = {}
     if os.name != "nt" and _threading.current_thread() is _threading.main_thread():
@@ -10379,7 +10402,37 @@ def _run_cli_with_deadline(script_path: Path, argv: list[str], *,
             previous_handlers[signum] = signal.getsignal(signum)
             signal.signal(signum, raise_supervisor_signal)
     try:
-        exit_code = int(process.wait(timeout=timeout))
+        deadline = time.monotonic() + timeout
+        poll_callbacks = cancel_requested is not None or heartbeat is not None
+        while True:
+            if cancel_requested is not None and cancel_requested():
+                observed_exit = process.poll()
+                if observed_exit is not None:
+                    exit_code = int(observed_exit)
+                    break
+                cleanup_complete = _terminate_supervised_process(
+                    process, kill_job=kill_job)
+                if cleanup_complete:
+                    _finalize_supervised_run_telemetry(
+                        operation, run_id=run_id, run_events=run_events,
+                        run_report=run_report, status="cancelled",
+                        exc=KeyboardInterrupt())
+                return 130
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(command, timeout)
+            wait_timeout = (
+                min(remaining, _SUPERVISED_POLL_INTERVAL)
+                if poll_callbacks else remaining
+            )
+            try:
+                exit_code = int(process.wait(timeout=wait_timeout))
+                break
+            except subprocess.TimeoutExpired:
+                if heartbeat is not None:
+                    heartbeat(process)
+                if not poll_callbacks or time.monotonic() >= deadline:
+                    raise
         if exit_code:
             _finalize_supervised_run_telemetry(
                 operation, run_id=run_id, run_events=run_events,

@@ -210,6 +210,129 @@ def test_supervisor_does_not_rewrite_telemetry_before_cleanup_is_confirmed(
         "running")
 
 
+def test_supervisor_honors_external_cancellation_after_child_registration(
+        monkeypatch, tmp_path):
+    report_path = tmp_path / "report.json"
+    observed = {"registered": [], "waited": False}
+
+    class FakeProcess:
+        pid = 12347
+
+        def wait(self, timeout):
+            observed["waited"] = True
+            return 0
+
+        def poll(self):
+            return None
+
+    class FakeJob:
+        def assign(self, _process):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(rag, "_WindowsKillJob", FakeJob)
+    monkeypatch.setattr(
+        rag.subprocess, "Popen", lambda *_args, **_kwargs: FakeProcess())
+    monkeypatch.setattr(
+        rag, "_terminate_supervised_process",
+        lambda *_args, **_kwargs: True)
+
+    code = rag._run_cli_with_deadline(
+        tmp_path / "worker.py", [], operation="index", timeout=5,
+        run_id="cancel-request-run", run_report=report_path,
+        cancel_requested=lambda: True,
+        on_child_started=lambda process: observed["registered"].append(
+            process.pid),
+    )
+
+    assert code == 130
+    assert observed == {"registered": [12347], "waited": False}
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["status"] == "cancelled"
+    assert report["failure"]["category"] == "cancelled"
+
+
+def test_supervisor_polls_heartbeat_and_forwards_output_targets(
+        monkeypatch, tmp_path):
+    observed = {"popen": None, "heartbeats": []}
+    stdout_target = object()
+    stderr_target = object()
+
+    class FakeProcess:
+        pid = 12348
+
+        def __init__(self):
+            self.wait_count = 0
+
+        def wait(self, timeout):
+            self.wait_count += 1
+            if self.wait_count == 1:
+                raise subprocess.TimeoutExpired("worker", timeout)
+            return 0
+
+        def poll(self):
+            return None
+
+    class FakeJob:
+        def assign(self, _process):
+            pass
+
+        def close(self):
+            pass
+
+    def fake_popen(_command, **options):
+        observed["popen"] = options
+        return FakeProcess()
+
+    monkeypatch.setattr(rag, "_WindowsKillJob", FakeJob)
+    monkeypatch.setattr(rag.subprocess, "Popen", fake_popen)
+
+    assert rag._run_cli_with_deadline(
+        tmp_path / "worker.py", [], operation="index", timeout=5,
+        heartbeat=lambda process: observed["heartbeats"].append(process.pid),
+        stdout_target=stdout_target, stderr_target=stderr_target,
+    ) == 0
+
+    assert observed["heartbeats"] == [12348]
+    assert observed["popen"]["stdout"] is stdout_target
+    assert observed["popen"]["stderr"] is stderr_target
+
+
+def test_child_registration_failure_terminates_worker(monkeypatch, tmp_path):
+    observed = {"cleanup": 0}
+
+    class FakeProcess:
+        pid = 12349
+
+    class FakeJob:
+        def assign(self, _process):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(rag, "_WindowsKillJob", FakeJob)
+    monkeypatch.setattr(
+        rag.subprocess, "Popen", lambda *_args, **_kwargs: FakeProcess())
+
+    def fake_cleanup(*_args, **_kwargs):
+        observed["cleanup"] += 1
+        return True
+
+    monkeypatch.setattr(rag, "_terminate_supervised_process", fake_cleanup)
+
+    with pytest.raises(RuntimeError, match="registration failed"):
+        rag._run_cli_with_deadline(
+            tmp_path / "worker.py", [], operation="index", timeout=5,
+            on_child_started=lambda _process: (_ for _ in ()).throw(
+                RuntimeError("registration failed")),
+        )
+
+    assert observed["cleanup"] == 1
+
+
 def test_supervised_timeout_terminates_worker_descendants(tmp_path):
     script = tmp_path / "parent_worker.py"
     heartbeat = tmp_path / "heartbeat.txt"
