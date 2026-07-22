@@ -41,10 +41,11 @@ Status terms:
 | PDF-ingestion modularization | Implemented (draft) | [PR #21](https://github.com/toddlar00/rag-pipeline/pull/21) |
 | Model-artifact supply chain and ML-BOM | Implemented (draft) | [PR #22](https://github.com/toddlar00/rag-pipeline/pull/22) |
 | Multi-subject adversarial retrieval evaluation | Implemented (draft) | [PR #23](https://github.com/toddlar00/rag-pipeline/pull/23) |
+| Structured run telemetry and committed index outcomes | Implemented (draft) | [PR #24](https://github.com/toddlar00/rag-pipeline/pull/24) |
 
 PR #1 is independent of the index-integrity stack and can be reviewed or merged
 separately. The index-integrity stack must be reviewed and merged in order:
-**#2 -> #3 -> #4 -> #5 -> #6 -> #7 -> #8 -> #9 -> #10 -> #11 -> #12 -> #13 -> #14 -> #15 -> #16 -> #17 -> #18 -> #19 -> #20 -> #21 -> #22 -> #23**.
+**#2 -> #3 -> #4 -> #5 -> #6 -> #7 -> #8 -> #9 -> #10 -> #11 -> #12 -> #13 -> #14 -> #15 -> #16 -> #17 -> #18 -> #19 -> #20 -> #21 -> #22 -> #23 -> #24**.
 Until those PRs merge,
 implementation progress is ahead of integration progress.
 
@@ -93,6 +94,14 @@ private corpus before its scores become release gates.
 - Measure latency, memory, index size, and LLM/embedding cost alongside relevance.
 
 ### 4. Improve operations, privacy, and product surfaces
+
+The first operations slice is implemented in draft PR #24: supervisor-allocated
+run IDs correlate prompt-free stage, committed index, and LLM metrics; killed
+workers receive terminal recovery only after confirmed cleanup; failed batch
+items remain visible through a `partial` run status; and aliased telemetry
+outputs fail before work begins. Sensitive-storage lifecycle policy,
+background-job cancellation/resume, and the stable application service remain
+ordered follow-up slices.
 
 - Emit structured stage/index/LLM metrics with run IDs and actionable failure
   diagnostics.
