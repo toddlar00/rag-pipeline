@@ -745,10 +745,17 @@ def test_submission_directories_are_immutable_private_bindings(tmp_path):
     assert str(working) not in json.dumps(submitted.as_dict())
     job_runtime.validate_execution_directories(execution)
 
-    output.rmdir()
-    storage_policy.ensure_private_directory(output)
-    with pytest.raises(JobStateError, match="output root identity changed"):
-        job_runtime.validate_execution_directories(execution)
+    held_directory = (
+        os.open(output, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        if os.name != "nt" else None)
+    try:
+        output.rmdir()
+        storage_policy.ensure_private_directory(output)
+        with pytest.raises(JobStateError, match="output root identity changed"):
+            job_runtime.validate_execution_directories(execution)
+    finally:
+        if held_directory is not None:
+            os.close(held_directory)
 
 
 def test_prepare_delete_blocks_resume_and_rejects_unsafe_states(tmp_path):

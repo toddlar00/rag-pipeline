@@ -149,13 +149,21 @@ def test_direct_run_job_terminalizes_invalid_directory_binding(tmp_path):
     store = job_runtime.JobStore(tmp_path / "jobs")
     submitted = store.submit_job(
         "export", [], working_directory=working, output_root=output_root)
-    output_root.rmdir()
-    storage_policy.ensure_private_directory(output_root)
+    held_directory = (
+        os.open(output_root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        if os.name != "nt" else None)
+    try:
+        output_root.rmdir()
+        storage_policy.ensure_private_directory(output_root)
 
-    with pytest.raises(
-            job_runtime.JobStateError, match="output root identity changed"):
-        job_manager.run_job(
-            store, submitted.job_id, script_path=tmp_path / "unused.py")
+        with pytest.raises(
+                job_runtime.JobStateError,
+                match="output root identity changed"):
+            job_manager.run_job(
+                store, submitted.job_id, script_path=tmp_path / "unused.py")
+    finally:
+        if held_directory is not None:
+            os.close(held_directory)
 
     assert store.get_job(submitted.job_id).status == "failed"
     assert not (store.root / submitted.job_id / "attempts").exists()
