@@ -44,11 +44,11 @@ Status terms:
 | Structured run telemetry and committed index outcomes | Implemented (draft) | [PR #24](https://github.com/toddlar00/rag-pipeline/pull/24) |
 | Private storage policy and lifecycle retention | Implemented (draft) | [PR #25](https://github.com/toddlar00/rag-pipeline/pull/25) |
 | Durable cancellable/resumable background jobs | Implemented (draft) | [PR #26](https://github.com/toddlar00/rag-pipeline/pull/26) |
-| Stable authenticated local service/API | Implemented (draft) | Current stacked draft; PR publication pending |
+| Stable authenticated local service/API | Implemented (draft) | [PR #27](https://github.com/toddlar00/rag-pipeline/pull/27) |
 
 PR #1 is independent of the index-integrity stack and can be reviewed or merged
 separately. The index-integrity stack must be reviewed and merged in order:
-**#2 -> #3 -> #4 -> #5 -> #6 -> #7 -> #8 -> #9 -> #10 -> #11 -> #12 -> #13 -> #14 -> #15 -> #16 -> #17 -> #18 -> #19 -> #20 -> #21 -> #22 -> #23 -> #24 -> #25 -> #26**.
+**#2 -> #3 -> #4 -> #5 -> #6 -> #7 -> #8 -> #9 -> #10 -> #11 -> #12 -> #13 -> #14 -> #15 -> #16 -> #17 -> #18 -> #19 -> #20 -> #21 -> #22 -> #23 -> #24 -> #25 -> #26 -> #27**.
 Until those PRs merge,
 implementation progress is ahead of integration progress.
 
@@ -99,8 +99,7 @@ private corpus before its scores become release gates.
 ### 4. Improve operations, privacy, and product surfaces
 
 The first three operations slices are implemented in draft PRs #24-#26, and
-the stable service/API slice is implemented on the current stacked draft while
-its PR publication remains pending.
+the stable service/API slice is implemented in draft PR #27.
 PR #24 adds supervisor-allocated run IDs that correlate prompt-free stage,
 committed-index, and LLM metrics; confirmed killed-worker recovery; visible
 `partial` batch status; and aliased-output rejection. PR #25 adds verified
@@ -127,8 +126,8 @@ static OpenAPI. It also holds a singleton service-state lease, reconciles
 crash-left queued attempts into explicit-resume failures, uses verified private
 temporary storage, and adds Linux/Windows CI coverage for the live socket
 contract.
-It remains draft work until the branch is independently re-audited, published,
-and all exact-head CI/security checks pass.
+It remains draft work until the stack is reviewed, merged in order, and all
+exact-head CI/security checks pass.
 
 - Emit structured stage/index/LLM metrics with run IDs and actionable failure
   diagnostics.
