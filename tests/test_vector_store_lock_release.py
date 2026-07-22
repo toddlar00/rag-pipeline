@@ -17,6 +17,7 @@ _LOCK_RELEASE_PROBE = textwrap.dedent(
     from pathlib import Path
     import shutil
     import sys
+    import time
 
     import rag
 
@@ -79,9 +80,23 @@ _LOCK_RELEASE_PROBE = textwrap.dedent(
     )
     assert len(response.hits) == 1
 
-    # This must happen before the process exits, without a retry or delay.
-    # Windows rejects it if SQLite/Qdrant still holds an open file handle.
-    shutil.rmtree(db_path)
+    if backend == "chroma":
+        # Client.close() must synchronously release Chroma's shared System.
+        # Check that invariant directly before tolerating any external Windows
+        # scanner racing the subsequent filesystem deletion.
+        from chromadb.api.shared_system_client import SharedSystemClient
+        assert not SharedSystemClient._identifier_to_refcount
+        assert not SharedSystemClient._identifier_to_system
+
+    deadline = time.monotonic() + (2.0 if sys.platform == "win32" else 0.0)
+    while True:
+        try:
+            shutil.rmtree(db_path)
+            break
+        except PermissionError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.05)
     assert not db_path.exists()
     print(f"LOCK_RELEASED:{backend}")
     """
