@@ -1,5 +1,6 @@
 from pathlib import Path
 from types import SimpleNamespace
+import json
 
 import pytest
 
@@ -147,7 +148,8 @@ def test_split_export_uses_unique_directory_and_returns_archive(
     chunks = tmp_path / "Book_chunks.jsonl"
     chunks.write_text("{}\n", encoding="utf-8")
     monkeypatch.setitem(ui._config, "chunks_path", chunks)
-    monkeypatch.setattr(ui, "uuid4", lambda: SimpleNamespace(hex="unique-run"))
+    export_id = "a" * 32
+    monkeypatch.setattr(ui, "uuid4", lambda: SimpleNamespace(hex=export_id))
 
     def fake_export(chunks_path, out_path, **kwargs):
         assert kwargs["split_chapters"] is True
@@ -159,7 +161,12 @@ def test_split_export_uses_unique_directory_and_returns_archive(
 
     summary, archive = ui.do_export([], True, "", True)
 
-    expected_root = tmp_path / "ui_exports" / "unique-run"
+    expected_root = tmp_path / "ui_exports" / export_id
     assert "ch01.md" in summary
     assert Path(archive).is_file()
     assert Path(archive).parent == expected_root
+    marker = json.loads((
+        expected_root / ui._UI_EXPORT_MARKER).read_text(encoding="utf-8"))
+    assert marker["state"] == "complete"
+    assert marker["ownership_token"] == export_id
+    assert marker["artifacts"] == ["Chapters", "chapters.zip"]

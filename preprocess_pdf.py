@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 import ingestion_core as _ingestion_core
+from storage_policy import atomic_publish_private_file
 
 
 def _require_positive_dimension(min_dimension: int) -> None:
@@ -156,7 +157,11 @@ def strip_background_images(
                 for issue in outcome.deletion_issues
             )
             print(f"\nSaving to {output_path} (garbage collecting)...")
-            doc.save(str(output_path), garbage=4, deflate=True, clean=True)
+            atomic_publish_private_file(
+                output_path,
+                lambda staging_path: doc.save(
+                    str(staging_path), garbage=4, deflate=True, clean=True),
+            )
             output_written = True
     finally:
         doc.close()

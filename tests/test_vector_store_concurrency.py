@@ -14,6 +14,7 @@ import time
 import pytest
 
 import rag
+import retention
 
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -40,6 +41,26 @@ def test_vector_store_lock_key_is_canonical_and_path_wide(
         operation="test", timeout=0)
     assert chroma.key == qdrant.key
     assert chroma.lock_path == qdrant.lock_path
+
+
+def test_owned_run_keeps_vector_lock_outside_deletable_root(tmp_path):
+    output_root = tmp_path / "output"
+    run_root = output_root / "book"
+    db_root = run_root / "book_chroma"
+    retention.ensure_pipeline_run_manifest(
+        output_root,
+        run_root,
+        job_scope="book",
+        owned_siblings=[],
+        vector_stores=[{
+            "backend": "chroma",
+            "collection": "book",
+            "path": db_root,
+        }],
+    )
+
+    assert rag._vector_store_lock_path(db_root).parent == (
+        output_root / ".rag-locks")
 
 
 @pytest.mark.parametrize("timeout", [True, False, None, -1, float("inf"),

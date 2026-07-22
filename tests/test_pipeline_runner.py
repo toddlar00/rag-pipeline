@@ -283,6 +283,68 @@ def test_pipeline_job_lock_prevents_duplicate_run_allocation(
     assert observed_paths == ["Book", "Book_2"]
 
 
+def test_pipeline_job_commits_an_owned_run_manifest(monkeypatch, tmp_path):
+    output_root = tmp_path / "output"
+    monkeypatch.setattr(rag, "OUTPUT_DIR", output_root)
+    observed = {}
+
+    def fake_stages(_pdf, paths, _args, **_kwargs):
+        observed["paths"] = paths
+        return {"collection": "book", "db_dir": paths["chroma"]}
+
+    monkeypatch.setattr(rag, "_run_pipeline_stages", fake_stages)
+
+    paths, _ = rag._run_pipeline_job(
+        Path("Book.pdf"), _args(), resume=False, watermark=None)
+
+    manifest = json.loads((
+        paths["doc"].parent / ".rag-run.json").read_text(encoding="utf-8"))
+    assert manifest["state"] == "complete"
+    assert manifest["run_name"] == "Book"
+    assert manifest["job_scope"] == "Book"
+    assert manifest["owned_siblings"] == ["Book_preprocessed.pdf"]
+    assert {record["backend"] for record in manifest["vector_stores"]} == {
+        "chroma", "qdrant"}
+
+
+def test_pipeline_job_marks_manifest_failed_without_masking_error(
+        monkeypatch, tmp_path):
+    output_root = tmp_path / "output"
+    monkeypatch.setattr(rag, "OUTPUT_DIR", output_root)
+    failure = RuntimeError("injected stage failure")
+    monkeypatch.setattr(
+        rag, "_run_pipeline_stages",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(failure))
+
+    with pytest.raises(RuntimeError) as raised:
+        rag._run_pipeline_job(
+            Path("Book.pdf"), _args(), resume=False, watermark=None)
+
+    assert raised.value is failure
+    manifest = json.loads((
+        output_root / "Book" / ".rag-run.json").read_text(encoding="utf-8"))
+    assert manifest["state"] == "failed"
+
+
+def test_resume_does_not_claim_a_legacy_unowned_run(monkeypatch, tmp_path):
+    output_root = tmp_path / "output"
+    run_root = output_root / "Book"
+    run_root.mkdir(parents=True)
+    (run_root / "legacy.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(rag, "OUTPUT_DIR", output_root)
+    monkeypatch.setattr(
+        rag, "_run_pipeline_stages",
+        lambda _pdf, paths, _args, **_kwargs: {
+            "collection": "book", "db_dir": paths["chroma"]})
+
+    paths, _ = rag._run_pipeline_job(
+        Path("Book.pdf"), _args(), resume=True, watermark=None)
+
+    assert paths["doc"].parent == run_root
+    assert not (run_root / ".rag-run.json").exists()
+    assert (run_root / "legacy.json").read_text(encoding="utf-8") == "{}"
+
+
 def test_runner_reports_the_failing_stage_including_system_exit(
         monkeypatch, tmp_path):
     paths = _paths(monkeypatch, tmp_path)

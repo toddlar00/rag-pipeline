@@ -11,16 +11,17 @@ Usage:
 
 import argparse
 import json
-import shutil
 import sys
 import tempfile
 import time
+import zipfile
 from pathlib import Path
 from uuid import uuid4
 
 # Import pipeline functions
 sys.path.insert(0, str(Path(__file__).parent))
 import rag
+import storage_policy
 
 
 # ---------------------------------------------------------------------------
@@ -42,6 +43,25 @@ _config = {
 }
 
 _VECTOR_WORKER_FLAG = "--vector-worker"
+_UI_EXPORT_MARKER = ".rag-owned.json"
+
+
+def _write_export_marker(
+        export_root: Path, *, export_id: str, created_at: float,
+        state: str, artifacts: list[str] | None = None) -> None:
+    storage_policy.atomic_write_private_json(
+        export_root / _UI_EXPORT_MARKER,
+        {
+            "schema_version": 1,
+            "kind": "ui_export",
+            "ownership_token": export_id,
+            "created_at": created_at,
+            "updated_at": time.time(),
+            "state": state,
+            "artifacts": sorted(artifacts or []),
+        },
+        indent=2,
+    )
 
 
 class _VectorWorkerError(RuntimeError):
@@ -290,33 +310,75 @@ def do_export(include_types, exclude_structural, chapters_str, split):
         except ValueError:
             return "Invalid chapter numbers. Use comma-separated integers.", None
 
-    export_root = chunks_path.parent / "ui_exports" / uuid4().hex
+    export_id = uuid4().hex
+    created_at = time.time()
+    export_root = chunks_path.parent / "ui_exports" / export_id
+    storage_policy.ensure_private_directory(export_root)
+    _write_export_marker(
+        export_root, export_id=export_id, created_at=created_at,
+        state="creating")
     out_path = export_root / "textbook.md"
     chapters_dir = export_root / "Chapters"
-    rag.export_markdown(
-        chunks_path, out_path,
-        include_types=inc_types,
-        exclude_types=exclude,
-        chapters=chapters,
-        split_chapters=split,
-        chapters_dir=chapters_dir,
-    )
+    try:
+        rag.export_markdown(
+            chunks_path, out_path,
+            include_types=inc_types,
+            exclude_types=exclude,
+            chapters=chapters,
+            split_chapters=split,
+            chapters_dir=chapters_dir,
+        )
 
-    if split:
-        files = list(chapters_dir.glob("*.md"))
-        if not files:
-            return "No chapter files were produced for the selected filters.", None
-        summary = f"Exported {len(files)} chapter files to `{chapters_dir}/`:\n"
-        for f in sorted(files):
-            summary += f"- {f.name} ({f.stat().st_size / 1024:.0f} KB)\n"
-        archive = shutil.make_archive(
-            str(export_root / "chapters"), "zip", root_dir=chapters_dir)
-        return summary, archive
+        if split:
+            files = list(chapters_dir.glob("*.md"))
+            if not files:
+                _write_export_marker(
+                    export_root, export_id=export_id,
+                    created_at=created_at, state="failed")
+                return (
+                    "No chapter files were produced for the selected filters.",
+                    None,
+                )
+            summary = (
+                f"Exported {len(files)} chapter files to `{chapters_dir}/`:\n")
+            for file_path in sorted(files):
+                storage_policy.assert_no_link_components(file_path)
+                summary += (
+                    f"- {file_path.name} "
+                    f"({file_path.stat().st_size / 1024:.0f} KB)\n")
+            archive_path = export_root / "chapters.zip"
 
-    if not out_path.is_file():
-        return "No content was produced for the selected filters.", None
-    size = out_path.stat().st_size / 1024
-    return f"Exported to `{out_path}` ({size:.0f} KB)", str(out_path)
+            def write_archive(handle) -> None:
+                with zipfile.ZipFile(
+                        handle, mode="w",
+                        compression=zipfile.ZIP_DEFLATED) as archive:
+                    for file_path in sorted(files):
+                        archive.write(file_path, arcname=file_path.name)
+
+            storage_policy.atomic_write_private(
+                archive_path, write_archive, text=False)
+            _write_export_marker(
+                export_root, export_id=export_id,
+                created_at=created_at, state="complete",
+                artifacts=["Chapters", archive_path.name])
+            return summary, str(archive_path)
+
+        if not out_path.is_file():
+            _write_export_marker(
+                export_root, export_id=export_id,
+                created_at=created_at, state="failed")
+            return "No content was produced for the selected filters.", None
+        size = out_path.stat().st_size / 1024
+        _write_export_marker(
+            export_root, export_id=export_id,
+            created_at=created_at, state="complete",
+            artifacts=[out_path.name])
+        return f"Exported to `{out_path}` ({size:.0f} KB)", str(out_path)
+    except BaseException:
+        _write_export_marker(
+            export_root, export_id=export_id,
+            created_at=created_at, state="failed")
+        raise
 
 
 # ---------------------------------------------------------------------------

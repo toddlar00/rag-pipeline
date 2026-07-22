@@ -114,6 +114,9 @@ CycloneDX ML-BOM companion to the Python-package SBOM.
 `IndexOutcome` returned by both vector backends. `run_telemetry.py` provides the
 shared run ID, stage lifecycle, safe diagnostic, event-stream, aggregate-report,
 and interrupted-worker recovery contract used by the CLI and LLM runtime.
+`storage_policy.py` is the shared owner-only permission and link-aware atomic
+publication layer. `retention.py` validates pipeline/UI/cache ownership and
+implements dry-run-first quarantine and deletion plans.
 
 ## Quick Start
 
@@ -143,6 +146,7 @@ that directory:
 ```
 output/
 |-- Civil_procedure/
+|   |-- .rag-run.json                     # Retention ownership/state marker
 |   |-- Civil_procedure.json             # DoclingDocument
 |   |-- Civil_procedure_docling.md        # Raw Docling conversion markdown
 |   |-- Civil_procedure_chunks.jsonl      # Enriched chunks
@@ -160,6 +164,9 @@ A new `full` or `batch` run never reuses an existing book directory: it creates
 number. The suffix is also applied to every artifact and the collection name
 (for example, `civil_procedure_2`). `--force` does not change this allocation;
 `--resume` reuses the latest existing run and skips its completed stages.
+Runs created before ownership manifests were introduced can still resume, but
+remain deliberately ineligible for automatic deletion: retention does not infer
+ownership from a legacy filename or directory layout.
 
 ### Multiple textbooks
 
@@ -265,10 +272,64 @@ Run telemetry intentionally omits source and output paths, prompts, responses,
 credentials, endpoints, and exception messages. Its message fingerprint is a
 process-keyed opaque digest rather than a reusable plaintext hash. This does not
 sanitize normal console/file logs, which can still contain paths and operational
-details. New POSIX telemetry directories/files request modes `0700`/`0600`; on
-Windows, `chmod` is not a DACL guarantee. Store telemetry in an access-controlled
-directory on Windows until the storage-policy milestone adds explicit ACL and
-retention enforcement.
+details. Telemetry uses the same private storage policy as pipeline artifacts
+and LLM outputs: POSIX directories/files are verified at `0700`/`0600`, while
+Windows paths receive a protected DACL granting full control only to the current
+user SID.
+
+### Private storage and retention
+
+Sensitive pipeline artifacts, derived study outputs, vector-store roots, LLM
+cache/events/reports, telemetry, lock sentinels, and UI exports use one shared
+storage policy. Existing managed parent directories are hardened before content
+is staged. Atomic writers reject symbolic-link/junction components, stage and
+flush a private file, and replace the final path; append-only LLM events reject
+hard-linked files and use a no-follow Windows handle or POSIX descriptor.
+Pathname-only PDF writers publish through a private random staging path. On
+Windows, this is real ACL enforcement rather than `chmod` emulation.
+Existing cache and vector-store trees are recursively migrated before use;
+root-identity records under the private sibling `.rag-storage-policy/`
+directory avoid repeating that full scan. Legacy pipeline runs are recursively
+hardened whenever they resume.
+
+Each new `full` or `batch` run receives a private `.rag-run.json` ownership
+manifest. UI exports receive `.rag-owned.json` and become retention-eligible
+only after they reach `complete`. Cleanup is always a dry run unless `--apply`
+is present:
+
+```bash
+# Inspect, then delete one manifest-owned run under pipeline/vector leases
+python rag.py storage --delete-run Civil_procedure
+python rag.py storage --delete-run Civil_procedure --apply
+
+# Prune validated plaintext LLM responses older than 30 days and keep the
+# remaining owned cache within the default 5 GiB ceiling
+python rag.py storage --prune-llm-cache --older-than-days 30
+python rag.py storage --prune-llm-cache --older-than-days 30 --apply
+
+# Prune completed UI exports; incomplete/failed directories require review
+python rag.py storage --prune-ui-exports --older-than-days 7
+
+# Inspect recoverable leftovers from an interrupted deletion, then purge them
+python rag.py storage --purge-quarantine --older-than-days 7
+python rag.py storage --purge-quarantine --older-than-days 7 --apply
+```
+
+Use `--output-root`, `--llm-cache-dir`, `--max-cache-bytes`, and `--json` for
+custom locations, size policy, and automation. A plan deletes only data whose
+marker/schema/token or cache key validates; unowned directories, special files,
+links, junctions, and hard-linked content fail closed. Applied run deletion
+replans after acquiring the run and all existing vector-store leases, moves the
+exact owned entries into `.rag-quarantine`, and rolls back staged moves if the
+transaction cannot complete. Each moved inode/tree is fingerprinted again in
+quarantine before erasure, so a post-plan atomic replacement is preserved and
+the operation rolls back. Do not manually delete `.rag-run.json`,
+`.rag-owned.json`, storage-policy records, update markers, or lock sidecars.
+
+Deletion here is logical filesystem deletion, not a guarantee of physical
+erasure. Dropbox/cloud history, backups, snapshots, another hard-link alias,
+and SSD wear-leveling may retain bytes. Use the provider's retention controls
+and device-appropriate cryptographic erasure when those copies are in scope.
 
 ### Interactive Menu
 
@@ -455,8 +516,9 @@ records become misses and are repaired by the next successful call.
 The cache itself contains successful response text in plaintext. Treat its
 directory as sensitive when textbook excerpts, client facts, or other private
 material can appear in model output. Use `--llm-cache-mode off` for no disk
-cache, `readonly` to consume existing entries without writing, or a protected
-`--llm-cache-dir`. The default location is the platform user-cache directory
+cache, `readonly` to consume existing entries without writing, or a custom
+`--llm-cache-dir`. Cache paths are protected by the shared storage policy. The
+default location is the platform user-cache directory
 (`%LOCALAPPDATA%/rag-pipeline/llm-cache` on Windows when available,
 `$XDG_CACHE_HOME/rag-pipeline/llm-cache` on Linux when configured).
 
@@ -866,7 +928,7 @@ as writes for both backends because Qdrant local mode permits only one process
 to open a database path. Artifact discovery and approximate directory-size
 display remain best-effort filesystem diagnostics outside the lease; exact
 collection counts are leased. The default wait is 30 seconds; use
-`--db-lock-timeout SECONDS` on `index`, `query`, `info`, `full`, or `batch`
+`--db-lock-timeout SECONDS` on `index`, `query`, `info`, `storage`, `full`, or `batch`
 (`0` means fail fast). Same-thread nested validation is reentrant, lock release
 runs after client/manifest cleanup, and a killed process releases the kernel
 lock. Persistent `.rag-locks/*.lock` sidecars are only locking inodes: their
@@ -1310,7 +1372,9 @@ python ui.py --db-backend qdrant \
   --collection civil_procedure
 ```
 
-Add `--share` to either complete command to create a public Gradio link.
+Add `--share` to either complete command to create a public Gradio link. This
+can expose private queries, retrieved passages, metadata, and exports to anyone
+who obtains the link; do not use it for a sensitive corpus.
 Search retrieval and Info's exact vector count execute in killable workers. Use
 `--search-timeout SECONDS`, `--info-timeout SECONDS`, and
 `--db-lock-timeout SECONDS` to tune their hard deadlines and local lease wait
@@ -1509,7 +1573,8 @@ rebuild with `--full-reindex` if needed.
 - Direct CLI key flags (`--api-key`, `--cloud-key`, and `--gemini-key`) are
   supported, but their values can be visible in process listings and shell
   history. Prefer environment variables or the interactive menu.
-- All file paths are user-specified; no path validation/sandboxing is applied.
+- Input paths remain user-selected and are not a general-purpose sandbox.
+  Managed sensitive outputs use the private, link-aware storage policy above.
 
 ## File Structure
 
@@ -1525,6 +1590,8 @@ ingestion_core.py       # Stdlib-only PDF inspection and stripping safety policy
 model_artifacts.py      # Stdlib-only model lock, byte verification, and ML-BOM
 operation_contracts.py  # Committed vector-index outcome contract
 run_telemetry.py        # Correlated stage events, reports, and recovery
+storage_policy.py       # Owner-only DACL/mode and atomic publication policy
+retention.py            # Ownership manifests and dry-run-first lifecycle plans
 model-artifact-policy.json # Reviewed models, consumers, files, code, and licenses
 model-artifacts.lock.json # Immutable revisions and per-file raw SHA-256 inventory
 preprocess_pdf.py       # Standalone PDF preprocessing CLI facade

@@ -15,6 +15,7 @@ Usage:
 """
 
 import argparse
+from contextlib import ExitStack
 import errno
 from getpass import getpass
 import hashlib
@@ -26,6 +27,7 @@ import queue
 import re
 import requests
 import signal
+import stat
 import subprocess
 import sys
 import threading as _threading
@@ -43,8 +45,10 @@ import index_state as _index_state
 import llm_adapters as _llm_adapters
 import model_artifacts as _model_artifacts
 import operation_contracts as _operation_contracts
+import retention as _retention
 import retrieval_core as _retrieval_core
 import run_telemetry as _run_telemetry
+import storage_policy as _storage_policy
 
 from llm_runtime import (
     LLMBudgetExceeded,
@@ -81,6 +85,7 @@ DEFAULT_OPERATION_TIMEOUTS = {
     "full": 14400.0,
     "batch": 43200.0,
     "evaluation": 14400.0,
+    "storage": 600.0,
 }
 ARTIFACT_COMPLETION_SCHEMA_VERSION = 1
 _SUPERVISED_CHILD_ENV = "RAG_PIPELINE_SUPERVISED_CHILD"
@@ -872,6 +877,7 @@ def _index_collection_count(
     with _vector_store_lock(
             db_path, backend=db_backend, collection_name=collection_name,
             operation="collection inspection", timeout=lock_timeout):
+        db_path = _storage_policy.ensure_private_tree(db_path)
         marker_path = _index_update_marker_path(
             db_path, backend=db_backend, collection_name=collection_name)
         if marker_path.exists():
@@ -1123,13 +1129,29 @@ def _canonical_vector_store_key(db_dir: Path) -> str:
     return _vector_store_lock_identity(db_dir)[1]
 
 
+def _vector_store_lock_directory(resolved: Path) -> Path:
+    """Keep owned-run sentinels outside the deletable run directory."""
+    run_root = resolved.parent
+    output_root = run_root.parent
+    marker = run_root / _retention.RUN_MANIFEST_NAME
+    if marker.exists() or _storage_policy.path_is_link_like(marker):
+        _, manifest = _retention.load_pipeline_run_manifest(
+            output_root, run_root.name)
+        relative = resolved.relative_to(output_root).as_posix()
+        if any(record["path"] == relative
+               for record in manifest["vector_stores"]):
+            return output_root / ".rag-locks"
+    return run_root / ".rag-locks"
+
+
 def _vector_store_lock_path(db_dir: Path) -> Path:
     """Return the persistent sidecar used only as an OS-locking inode."""
     resolved, key = _vector_store_lock_identity(db_dir)
     safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", resolved.name)
     safe_name = safe_name.strip("._")[:40] or "vector-store"
     digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:20]
-    return resolved.parent / ".rag-locks" / f"{safe_name}-{digest}.lock"
+    return _vector_store_lock_directory(
+        resolved) / f"{safe_name}-{digest}.lock"
 
 
 def _vector_store_lock_state(key: str) -> _VectorStoreLockState:
@@ -1222,7 +1244,8 @@ class _VectorStoreLease:
         safe_name = safe_name.strip("._")[:40] or "vector-store"
         digest = hashlib.sha256(self.key.encode("utf-8")).hexdigest()[:20]
         self.lock_path = (
-            resolved.parent / ".rag-locks" / f"{safe_name}-{digest}.lock")
+            _vector_store_lock_directory(resolved)
+            / f"{safe_name}-{digest}.lock")
         self.state = _vector_store_lock_state(self.key)
         self._process_id = os.getpid()
         self._owner_pid = None
@@ -1267,9 +1290,20 @@ class _VectorStoreLease:
         handle = None
         os_locked = False
         try:
-            self.lock_path.parent.mkdir(
-                mode=0o700, parents=True, exist_ok=True)
-            handle = self.lock_path.open("a+b")
+            _storage_policy.ensure_private_directory(self.lock_path.parent)
+            _storage_policy.assert_no_link_components(self.lock_path)
+            flags = os.O_RDWR | os.O_APPEND | os.O_CREAT
+            flags |= getattr(os, "O_NOFOLLOW", 0)
+            descriptor = os.open(
+                self.lock_path, flags, _storage_policy.PRIVATE_FILE_MODE)
+            handle = os.fdopen(descriptor, "a+b")
+            lock_stat = os.fstat(handle.fileno())
+            if (not stat.S_ISREG(lock_stat.st_mode)
+                    or lock_stat.st_nlink != 1):
+                raise _storage_policy.StoragePolicyError(
+                    "vector-store lock must be one regular, unlinked file")
+            _storage_policy.enforce_private_path(
+                self.lock_path, directory=False)
             handle.seek(0, os.SEEK_END)
             if handle.tell() == 0:
                 handle.write(b"\0")
@@ -1371,9 +1405,11 @@ def _vector_store_lock(
 
 def _pipeline_job_lock(
         pdf_path: Path, *, timeout: float = DEFAULT_DB_LOCK_TIMEOUT,
+        output_root: Path | None = None,
 ) -> _VectorStoreLease:
     """Serialize output-run allocation and execution for one PDF stem."""
-    scope = Path(OUTPUT_DIR) / f".pipeline-job-{Path(pdf_path).stem}"
+    root = Path(OUTPUT_DIR) if output_root is None else Path(output_root)
+    scope = root / f".pipeline-job-{Path(pdf_path).stem}"
     return _VectorStoreLease(
         scope, backend="pipeline", collection_name=Path(pdf_path).stem,
         operation="pipeline output allocation and execution",
@@ -4379,8 +4415,11 @@ def preprocess_pdf(input_path: Path, output_path: Path, *,
             log.warning("No background images were removed; keeping original PDF.")
             return None
 
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        doc.save(str(output_path), garbage=4, deflate=True, clean=True)
+        _storage_policy.atomic_publish_private_file(
+            output_path,
+            lambda staging: doc.save(
+                str(staging), garbage=4, deflate=True, clean=True),
+        )
     finally:
         doc.close()
 
@@ -5384,7 +5423,8 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
         qc_path = chunks_output.parent / f"{chunks_output.stem}_qc_flags.json"
         prog_check["doc_path"] = str(doc_path)
         prog_check["team_audit"] = assign_team.audit
-        qc_path.write_text(json.dumps(prog_check, indent=2, default=str))
+        _atomic_write_text(
+            qc_path, json.dumps(prog_check, indent=2, default=str))
         log.warning(f"QC report saved to {qc_path}")
 
     # II. Manager reviews edge cases
@@ -5907,7 +5947,7 @@ def _index_chunks_chroma_impl(
     _prepare_chroma_batch(records)
     log.info(f"Loaded {len(records)} chunks")
 
-    chroma_dir.mkdir(parents=True, exist_ok=True)
+    chroma_dir = _storage_policy.ensure_private_tree(chroma_dir)
     client = _client_owner.own(
         chromadb.PersistentClient(path=str(chroma_dir)))
 
@@ -6781,7 +6821,7 @@ def _index_chunks_qdrant_impl(
             "Chunks file contains colliding numeric Qdrant point IDs")
     log.info(f"Loaded {len(records)} chunks")
 
-    qdrant_dir.mkdir(parents=True, exist_ok=True)
+    qdrant_dir = _storage_policy.ensure_private_tree(qdrant_dir)
     client = _client_owner.own(
         QdrantClient(path=str(qdrant_dir)))
 
@@ -7546,6 +7586,7 @@ def _search_index_impl(query: str, db_dir: Path, *,
     with _vector_store_lock(
             db_path, backend=backend, collection_name=collection_name,
             operation="vector search", timeout=lock_timeout):
+        db_path = _storage_policy.ensure_private_tree(db_path)
         expected_dimension = _query_manifest_dimension(
             db_path, backend=backend, collection_name=collection_name,
             embedding_model=embedding_model)
@@ -8064,7 +8105,7 @@ def _export_plaintext(chunks: list[dict], export_path: Path) -> None:
     """
     txt_path = export_path.with_suffix(".txt")
     meta_path = export_path.parent / (export_path.stem + ".metadata.json")
-    export_path.parent.mkdir(parents=True, exist_ok=True)
+    _storage_policy.ensure_private_directory(export_path.parent)
 
     text_parts: list[str] = []
     metadata_records: list[dict] = []
@@ -8117,10 +8158,10 @@ def _export_plaintext(chunks: list[dict], export_path: Path) -> None:
         })
 
     full_text = "".join(text_parts)
-    txt_path.write_text(full_text, encoding="utf-8")
-    meta_path.write_text(
+    _atomic_write_text(txt_path, full_text)
+    _atomic_write_text(
+        meta_path,
         json.dumps(metadata_records, indent=2, ensure_ascii=False),
-        encoding="utf-8",
     )
     log.info(f"Exported {len(chunks)} chunks (plaintext) -> {txt_path} "
              f"({len(full_text) / 1e6:.1f} MB)")
@@ -8275,7 +8316,7 @@ def export_markdown(chunks_path: Path, export_path: Path, *,
         # e.g., output/Constitutional Law/Chapters/
         out_dir = chapters_dir if chapters_dir else (
             export_path.parent / "Chapters")
-        out_dir.mkdir(parents=True, exist_ok=True)
+        _storage_policy.ensure_private_directory(out_dir)
 
         # Build chapter index for cross-references
         chapter_index: dict[int, str] = {}  # ch_num -> filename
@@ -8444,10 +8485,7 @@ def extract_questions(chunks_path: Path, output_path: Path) -> None:
                     "section_path": meta.get("section_path", ""),
                 })
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, "w", encoding="utf-8") as f:
-        for q in questions:
-            f.write(json.dumps(q, ensure_ascii=False) + "\n")
+    _atomic_write_jsonl(output_path, questions)
 
     log.info(f"Extracted {len(questions)} questions from "
              f"{len(records)} N&Q chunks -> {output_path}")
@@ -8602,10 +8640,7 @@ def generate_exam_questions(chunks_path: Path, output_path: Path, *,
             all_questions.extend(qs)
             log.info(f"  Chapter {ch_num}: {len(qs)} questions")
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, "w", encoding="utf-8") as f:
-        for q in all_questions:
-            f.write(json.dumps(q, ensure_ascii=False) + "\n")
+    _atomic_write_jsonl(output_path, all_questions)
 
     log.info(f"Generated {len(all_questions)} exam questions from "
              f"{len(by_chapter)} chapters -> {output_path}")
@@ -8754,9 +8789,8 @@ def build_citation_graph(chunks_path: Path, output_path: Path) -> None:
         },
     }
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(graph, indent=2, ensure_ascii=False),
-                           encoding="utf-8")
+    _atomic_write_text(
+        output_path, json.dumps(graph, indent=2, ensure_ascii=False))
 
     s = graph["stats"]
     log.info(f"Citation graph -> {output_path}")
@@ -8856,7 +8890,6 @@ def generate_briefs(chunks_path: Path, output_path: Path, *,
             "chapter_num": meta.get("chapter_num"),
         }
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
     briefs: list[dict] = []
 
     with ThreadPoolExecutor(max_workers=llm_workers) as pool:
@@ -8871,9 +8904,7 @@ def generate_briefs(chunks_path: Path, output_path: Path, *,
     # Sort by chapter then page for stable output
     briefs.sort(key=lambda b: (b.get("chapter_num") or 0, b.get("page_range", "")))
 
-    with open(output_path, "w", encoding="utf-8") as f:
-        for brief in briefs:
-            f.write(json.dumps(brief, ensure_ascii=False) + "\n")
+    _atomic_write_jsonl(output_path, briefs)
 
     log.info(f"Generated {len(briefs)} case briefs -> {output_path}")
 
@@ -9002,16 +9033,17 @@ def _export_flashcards(chunks: list[dict], export_path: Path, *,
 
     # Write TSV (Anki import format)
     tsv_path = export_path.with_suffix(".tsv")
-    tsv_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(tsv_path, "w", encoding="utf-8") as f:
-        for card in cards:
-            tags_str = " ".join(card["tags"])
-            f.write(f"{card['front']}\t{card['back']}\t{tags_str}\n")
+    tsv_lines = []
+    for card in cards:
+        tags_str = " ".join(card["tags"])
+        tsv_lines.append(
+            f"{card['front']}\t{card['back']}\t{tags_str}\n")
+    _atomic_write_text(tsv_path, "".join(tsv_lines))
 
     # Write JSON sidecar with full metadata
     json_path = export_path.with_suffix(".flashcards.json")
-    json_path.write_text(json.dumps(cards, indent=2, ensure_ascii=False),
-                         encoding="utf-8")
+    _atomic_write_text(
+        json_path, json.dumps(cards, indent=2, ensure_ascii=False))
 
     log.info(f"Generated {len(cards)} flashcards")
     log.info(f"  Anki TSV:  {tsv_path}")
@@ -9362,7 +9394,7 @@ def build_raptor_tree(chunks_path: Path, output_path: Path, *,
                 })
 
     # --- Save tree ---
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    _storage_policy.ensure_private_directory(output_path.parent)
     tree = {
         "schema_version": ARTIFACT_COMPLETION_SCHEMA_VERSION,
         "source_sha256": source_sha256,
@@ -9938,15 +9970,67 @@ def _run_pipeline_job(pdf_path: Path, args, *, resume: bool,
                 _derive_output_paths_existing(pdf_path)
                 if resume else _derive_output_paths(pdf_path)
             )
+            collection = (
+                getattr(args, "collection", None) or paths["collection"])
+            run_root = paths["doc"].parent
+            manifest_candidate = run_root / _retention.RUN_MANIFEST_NAME
+            legacy_unowned = (
+                resume and run_root.is_dir()
+                and not manifest_candidate.exists()
+                and any(run_root.iterdir()))
+            if legacy_unowned:
+                _storage_policy.harden_private_tree(run_root)
+                manifest_path = None
+                log.warning(
+                    "Resuming a legacy run without an ownership manifest; "
+                    "storage retention will not infer ownership for %s",
+                    run_root)
+            else:
+                manifest_path = _retention.ensure_pipeline_run_manifest(
+                    OUTPUT_DIR,
+                    run_root,
+                    job_scope=Path(pdf_path).stem,
+                    owned_siblings=[paths["preprocessed"]],
+                    vector_stores=[
+                        {
+                            "backend": "chroma",
+                            "collection": collection,
+                            "path": paths["chroma"],
+                        },
+                        {
+                            "backend": "qdrant",
+                            "collection": collection,
+                            "path": paths["qdrant"],
+                        },
+                    ],
+                )
             if announce:
                 log.info("=== FULL PIPELINE ===")
                 log.info(f"Output prefix: {paths['doc'].stem}")
                 if resume:
                     log.info("  (--resume mode: skipping completed stages)")
-            run = _run_pipeline_stages(
-                pdf_path, paths, args, resume=resume,
-                watermark=watermark, telemetry=telemetry,
-                stage_scope=stage_scope)
+            try:
+                run = _run_pipeline_stages(
+                    pdf_path, paths, args, resume=resume,
+                    watermark=watermark, telemetry=telemetry,
+                    stage_scope=stage_scope)
+            except BaseException as exc:
+                state = (
+                    "cancelled"
+                    if (isinstance(exc, KeyboardInterrupt)
+                        or isinstance(exc, SystemExit) and exc.code == 130)
+                    else "failed")
+                if manifest_path is not None:
+                    try:
+                        _retention.mark_pipeline_run_state(
+                            manifest_path, state)
+                    except BaseException as marker_error:
+                        _log_cleanup_error(
+                            "Pipeline ownership-state update failed for %s",
+                            manifest_path, error=marker_error)
+                raise
+            if manifest_path is not None:
+                _retention.mark_pipeline_run_state(manifest_path, "complete")
             return paths, run
     except VectorStoreBusyError as exc:
         if telemetry is not None:
@@ -10411,6 +10495,116 @@ def _run_rag_entrypoint(
         os.environ.update(previous_environment)
     return 0
 
+
+def _render_storage_outcome(payload: dict) -> None:
+    if payload.get("mode") == "dry_run":
+        print(
+            f"DRY RUN: {payload['action']} found "
+            f"{payload['candidate_count']} owned candidate(s), "
+            f"{payload['total_bytes']} byte(s).")
+        for candidate in payload["candidates"]:
+            print(
+                f"  {candidate['relative_path']} "
+                f"({candidate['size_bytes']} bytes, "
+                f"{candidate['age_days']:.1f} days old)")
+        print("No data was deleted. Re-run with --apply to execute this plan.")
+        return
+    print(
+        f"APPLIED: {payload['action']} deleted "
+        f"{payload['deleted_count']} owned candidate(s), "
+        f"{payload['deleted_bytes']} byte(s).")
+
+
+def _apply_pipeline_deletion_with_leases(
+        args, plan: _retention.RetentionPlan) -> dict:
+    context = plan.context
+    job_scope = context["job_scope"]
+    with _pipeline_job_lock(
+            Path(job_scope), timeout=args.db_lock_timeout,
+            output_root=plan.root):
+        with ExitStack() as leases:
+            stores = sorted(
+                context["vector_stores"],
+                key=lambda record: (record["path"], record["backend"]))
+            for record in stores:
+                db_path = plan.root / Path(record["path"])
+                leases.enter_context(_vector_store_lock(
+                    db_path,
+                    backend=record["backend"],
+                    collection_name=record["collection"],
+                    operation="pipeline run retention",
+                    timeout=args.db_lock_timeout,
+                ))
+            fresh_plan = _retention.plan_pipeline_run_deletion(
+                plan.root, context["run_name"])
+            if fresh_plan.context["ownership_token"] != (
+                    context["ownership_token"]):
+                raise _retention.RetentionError(
+                    "pipeline ownership changed while acquiring leases")
+            return _retention.apply_retention_plan(fresh_plan)
+
+
+def _run_storage_command(args) -> dict[str, int]:
+    cache_root = (
+        args.llm_cache_dir
+        if args.llm_cache_dir is not None
+        else LLMRuntimeConfig().cache_dir)
+    if args.delete_run is not None:
+        plan = _retention.plan_pipeline_run_deletion(
+            args.output_root, args.delete_run)
+        payload = (
+            _apply_pipeline_deletion_with_leases(args, plan)
+            if args.apply else plan.as_dict())
+        outcomes = [payload]
+    elif args.prune_llm_cache:
+        plan = _retention.plan_llm_cache_prune(
+            cache_root, older_than_days=args.older_than_days,
+            max_total_bytes=args.max_cache_bytes)
+        payload = (
+            _retention.apply_retention_plan(plan)
+            if args.apply else plan.as_dict())
+        outcomes = [payload]
+    elif args.prune_ui_exports:
+        plan = _retention.plan_ui_export_prune(
+            args.output_root, older_than_days=args.older_than_days)
+        payload = (
+            _retention.apply_retention_plan(plan)
+            if args.apply else plan.as_dict())
+        outcomes = [payload]
+    else:
+        roots = [Path(args.output_root), Path(cache_root)]
+        unique_roots = []
+        observed = set()
+        for root in roots:
+            identity = os.path.normcase(str(root.resolve(strict=False)))
+            if identity not in observed:
+                observed.add(identity)
+                unique_roots.append(root)
+        outcomes = []
+        for root in unique_roots:
+            plan = _retention.plan_quarantine_purge(
+                root, older_than_days=args.older_than_days)
+            outcomes.append(
+                _retention.apply_quarantine_purge(plan)
+                if args.apply else plan.as_dict())
+    output_payload: dict | list[dict] = (
+        outcomes[0] if len(outcomes) == 1 else outcomes)
+    if args.output_json:
+        print(json.dumps(output_payload, indent=2, ensure_ascii=False))
+    else:
+        for outcome in outcomes:
+            _render_storage_outcome(outcome)
+    return {
+        "candidates": sum(
+            int(outcome.get("candidate_count", outcome.get(
+                "deleted_count", 0))) for outcome in outcomes),
+        "bytes": sum(
+            int(outcome.get("total_bytes", outcome.get(
+                "deleted_bytes", 0))) for outcome in outcomes),
+        "applied": bool(args.apply),
+    }
+
+
 CONTENT_TYPES = [
     "case_opinion", "notes_and_questions", "author_narrative",
     "statutory_excerpt", "chapter_introduction", "table",
@@ -10735,6 +10929,45 @@ def main(argv: list[str] | None = None):
     add_db_lock_flag(p_info)
     add_operation_timeout_flag(p_info, "info")
 
+    # storage lifecycle and retention
+    p_storage = sub.add_parser(
+        "storage",
+        help="Plan or apply ownership-checked private-data retention")
+    storage_action = p_storage.add_mutually_exclusive_group(required=True)
+    storage_action.add_argument(
+        "--delete-run", metavar="RUN_NAME",
+        help="Delete one manifest-owned pipeline run")
+    storage_action.add_argument(
+        "--prune-llm-cache", action="store_true",
+        help="Prune validated LLM response-cache entries by age")
+    storage_action.add_argument(
+        "--prune-ui-exports", action="store_true",
+        help="Prune manifest-owned UI export directories by age")
+    storage_action.add_argument(
+        "--purge-quarantine", action="store_true",
+        help="Purge validated retention quarantine directories by age")
+    p_storage.add_argument(
+        "--output-root", type=Path, default=OUTPUT_DIR,
+        help=f"Pipeline output root (default: {OUTPUT_DIR})")
+    p_storage.add_argument(
+        "--llm-cache-dir", type=Path, default=None,
+        help="LLM response-cache root (default: runtime cache directory)")
+    p_storage.add_argument(
+        "--older-than-days", type=float, default=30.0,
+        help="Minimum age for prune/purge candidates (default: 30)")
+    p_storage.add_argument(
+        "--max-cache-bytes", type=int,
+        default=_retention.DEFAULT_LLM_CACHE_MAX_BYTES,
+        help="Keep validated LLM cache entries within this total size")
+    p_storage.add_argument(
+        "--apply", action="store_true",
+        help="Execute the displayed retention plan (default: dry run)")
+    p_storage.add_argument(
+        "--json", action="store_true", dest="output_json",
+        help="Emit the retention plan or result as JSON")
+    add_db_lock_flag(p_storage)
+    add_operation_timeout_flag(p_storage, "storage")
+
     # full pipeline
     p_full = sub.add_parser("full", help="End-to-end: PDF to queryable index")
     p_full.add_argument("--pdf", type=Path, required=True)
@@ -10812,7 +11045,7 @@ def main(argv: list[str] | None = None):
 
     for command_parser in (
             p_pre, p_conv, p_chunk, p_idx, p_eq, p_genq, p_cg, p_rap,
-            p_brief, p_q, p_exp, p_info, p_full, p_batch):
+            p_brief, p_q, p_exp, p_info, p_storage, p_full, p_batch):
         add_run_telemetry_flags(command_parser)
 
     args = parser.parse_args(argv)
@@ -10991,6 +11224,9 @@ def main(argv: list[str] | None = None):
                 db_backend=db_backend,
                 lock_timeout=args.db_lock_timeout)
 
+        elif args.command == "storage":
+            operation_metrics.update(_run_storage_command(args))
+
         elif args.command == "full":
             resume = getattr(args, "resume", False)
             try:
@@ -11139,6 +11375,13 @@ def main(argv: list[str] | None = None):
         run_telemetry.terminate_active_stages("cancelled", exc)
         print("\nInterrupted.", file=sys.stderr)
         sys.exit(130)
+    except (_retention.RetentionError,
+            _storage_policy.StoragePolicyError) as exc:
+        if observed_command_stage:
+            run_telemetry.stage_failed(args.command, exc)
+        run_telemetry.terminate_active_stages("failed", exc)
+        log.error(str(exc))
+        sys.exit(1)
     except ImportError as e:
         if observed_command_stage:
             run_telemetry.stage_failed(args.command, e)

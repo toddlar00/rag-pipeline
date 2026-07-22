@@ -14,11 +14,15 @@ import math
 import os
 import re
 import secrets
-import tempfile
 import threading
 import time
 from pathlib import Path
 from uuid import uuid4
+
+from storage_policy import (
+    atomic_write_private_json,
+    atomic_write_private_jsonl,
+)
 
 
 EVENT_SCHEMA_VERSION = 1
@@ -75,66 +79,14 @@ def _validate_identifier(value: object, *, label: str) -> str:
     return value
 
 
-def _private_parent(path: Path) -> None:
-    parent = path.parent
-    existed = parent.exists()
-    parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    if not existed:
-        try:
-            os.chmod(parent, 0o700)
-        except OSError:
-            pass
-
-
 def _atomic_write_private_json(path: Path, payload: object) -> None:
-    """Atomically publish JSON and request restrictive file permissions."""
-    _private_parent(path)
-    temporary: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-                mode="w", encoding="utf-8", dir=path.parent,
-                prefix=f".{path.name}.", suffix=".tmp", delete=False) as handle:
-            temporary = Path(handle.name)
-            json.dump(payload, handle, ensure_ascii=False, sort_keys=True,
-                      indent=2)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-        try:
-            os.chmod(path, 0o600)
-        except OSError:
-            pass
-    except BaseException:
-        if temporary is not None:
-            temporary.unlink(missing_ok=True)
-        raise
+    """Atomically publish pretty JSON under the shared private policy."""
+    atomic_write_private_json(path, payload, indent=2)
 
 
 def _atomic_write_private_jsonl(path: Path, records: list[dict]) -> None:
     """Rewrite the small stage-event stream without exposing partial lines."""
-    _private_parent(path)
-    temporary: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-                mode="w", encoding="utf-8", dir=path.parent,
-                prefix=f".{path.name}.", suffix=".tmp", delete=False) as handle:
-            temporary = Path(handle.name)
-            for record in records:
-                handle.write(json.dumps(
-                    record, ensure_ascii=False, sort_keys=True,
-                    separators=(",", ":")) + "\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-        try:
-            os.chmod(path, 0o600)
-        except OSError:
-            pass
-    except BaseException:
-        if temporary is not None:
-            temporary.unlink(missing_ok=True)
-        raise
+    atomic_write_private_jsonl(path, records, compact=True)
 
 
 def _safe_metrics(metrics: dict | None) -> dict:

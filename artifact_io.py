@@ -11,10 +11,15 @@ import hashlib
 import json
 import math
 import os
-import tempfile
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+
+from storage_policy import (
+    atomic_write_private_json,
+    atomic_write_private_jsonl,
+    atomic_write_private_text,
+)
 
 
 ArtifactFingerprint = tuple[int, int, int, int, int]
@@ -127,28 +132,9 @@ def _atomic_write_text(
         path: Path, content: str, *, replace_fn: ReplaceFn | None = None,
         cleanup_error_fn: CleanupErrorFn | None = None) -> None:
     """Durably replace a text artifact without exposing partial contents."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    replace = os.replace if replace_fn is None else replace_fn
-    temporary_path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-                mode="w", encoding="utf-8", dir=path.parent,
-                prefix=f".{path.name}.", suffix=".tmp", delete=False) as handle:
-            temporary_path = Path(handle.name)
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        replace(temporary_path, path)
-    except BaseException:
-        if temporary_path is not None:
-            try:
-                temporary_path.unlink(missing_ok=True)
-            except BaseException as cleanup_error:
-                if cleanup_error_fn is not None:
-                    cleanup_error_fn(
-                        "Temporary text cleanup failed for %s", temporary_path,
-                        error=cleanup_error)
-        raise
+    atomic_write_private_text(
+        path, content, replace_fn=replace_fn,
+        cleanup_error_fn=cleanup_error_fn)
 
 
 def _artifact_parameters_sha256(parameters: dict) -> str:
@@ -239,29 +225,9 @@ def _atomic_write_json(
         path: Path, payload: object, *, replace_fn: ReplaceFn | None = None,
         cleanup_error_fn: CleanupErrorFn | None = None) -> None:
     """Write JSON by replacing a fully flushed temporary file atomically."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    replace = os.replace if replace_fn is None else replace_fn
-    temporary_path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-                mode="w", encoding="utf-8", dir=path.parent,
-                prefix=f".{path.name}.", suffix=".tmp", delete=False) as handle:
-            temporary_path = Path(handle.name)
-            json.dump(payload, handle, ensure_ascii=False, sort_keys=True,
-                      separators=(",", ":"))
-            handle.flush()
-            os.fsync(handle.fileno())
-        replace(temporary_path, path)
-    except BaseException:
-        if temporary_path is not None:
-            try:
-                temporary_path.unlink(missing_ok=True)
-            except BaseException as cleanup_error:
-                if cleanup_error_fn is not None:
-                    cleanup_error_fn(
-                        "Temporary JSON cleanup failed for %s", temporary_path,
-                        error=cleanup_error)
-        raise
+    atomic_write_private_json(
+        path, payload, replace_fn=replace_fn,
+        cleanup_error_fn=cleanup_error_fn)
 
 
 def _atomic_write_jsonl(
@@ -269,26 +235,6 @@ def _atomic_write_jsonl(
         replace_fn: ReplaceFn | None = None,
         cleanup_error_fn: CleanupErrorFn | None = None) -> None:
     """Durably replace a JSONL artifact without exposing partial contents."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    replace = os.replace if replace_fn is None else replace_fn
-    temporary_path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-                mode="w", encoding="utf-8", dir=path.parent,
-                prefix=f".{path.name}.", suffix=".tmp", delete=False) as handle:
-            temporary_path = Path(handle.name)
-            for record in records:
-                handle.write(json.dumps(record, ensure_ascii=False) + "\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        replace(temporary_path, path)
-    except BaseException:
-        if temporary_path is not None:
-            try:
-                temporary_path.unlink(missing_ok=True)
-            except BaseException as cleanup_error:
-                if cleanup_error_fn is not None:
-                    cleanup_error_fn(
-                        "Temporary JSONL cleanup failed for %s", temporary_path,
-                        error=cleanup_error)
-        raise
+    atomic_write_private_jsonl(
+        path, records, replace_fn=replace_fn,
+        cleanup_error_fn=cleanup_error_fn)

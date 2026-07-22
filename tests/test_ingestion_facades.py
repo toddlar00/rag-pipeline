@@ -1,6 +1,8 @@
 import sys
 from types import SimpleNamespace
 
+import pytest
+
 import ingestion_core
 import preprocess_pdf as preprocess_cli
 import rag
@@ -359,6 +361,33 @@ def test_standalone_stripping_uses_mixed_page_safety_and_still_reports(
     assert stats["output_written"] is True
     assert stats["text_verify_total"] == 2
     assert output.is_file()
+    saved_path = rag.Path(document.saved[0][0])
+    assert saved_path != output
+    assert not saved_path.exists()
+
+
+def test_standalone_save_failure_preserves_existing_published_pdf(
+        monkeypatch, tmp_path):
+    source = tmp_path / "book.pdf"
+    source.write_bytes(b"source-pdf")
+    output = tmp_path / "clean.pdf"
+    output.write_bytes(b"previous-pdf")
+    safe = FakePage(0, "Reliable text " * 10, [1])
+    document = FakeDocument([safe])
+
+    def fail_after_partial_save(path, **_kwargs):
+        rag.Path(path).write_bytes(b"partial-pdf")
+        raise RuntimeError("save failed")
+
+    document.save = fail_after_partial_save
+    _install_pymupdf(monkeypatch, document)
+
+    with pytest.raises(RuntimeError, match="save failed"):
+        preprocess_cli.strip_background_images(source, output)
+
+    assert output.read_bytes() == b"previous-pdf"
+    assert document.closed
+    assert not list(tmp_path.glob(".clean.pdf.*.staging"))
 
 
 def test_standalone_shared_xref_is_preserved_but_complete_output_is_saved(

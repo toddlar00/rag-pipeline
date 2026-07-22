@@ -107,3 +107,36 @@ def test_final_toc_entry_reaches_end_of_document():
 
     assert entry.page_pdf_start == 20
     assert entry.page_pdf_end == 125
+
+
+def test_process_book_atomically_publishes_private_markdown(
+        monkeypatch, tmp_path):
+    scaffold = tmp_path / 'book_scaffold.json'
+    pdf = tmp_path / 'book.pdf'
+    output = tmp_path / 'private' / 'book.md'
+    scaffold.write_text(
+        '{"title":"Private Book","toc":[],"toc_entry_count":0,'
+        '"page_offset":0,"filename":"book.pdf"}',
+        encoding='utf-8',
+    )
+    pdf.touch()
+
+    class FakeDocument:
+        page_count = 1
+
+        def __init__(self):
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    document = FakeDocument()
+    monkeypatch.setattr(scaffold_md.fitz, 'open', lambda _path: document)
+
+    result = scaffold_md.process_book(
+        str(scaffold), str(pdf), str(output))
+
+    assert result == str(output)
+    assert output.read_text(encoding='utf-8').startswith('# Private Book\n')
+    assert document.closed
+    assert not list(output.parent.glob('.book.md.*'))

@@ -13,7 +13,6 @@ import json
 import math
 import os
 import re
-import tempfile
 import threading
 import time
 from dataclasses import dataclass, field, replace
@@ -21,6 +20,11 @@ from pathlib import Path
 from typing import Any, Callable, Literal
 
 from run_telemetry import validate_distinct_output_paths
+from storage_policy import (
+    append_private_jsonl,
+    atomic_write_private,
+    ensure_private_tree,
+)
 
 
 CACHE_KEY_SCHEMA_VERSION = 1
@@ -219,65 +223,18 @@ def _estimate_tokens(text: str) -> int:
 
 
 def _atomic_write_json(path: Path, payload: object, *, indent: int | None) -> None:
-    parent_existed = path.parent.exists()
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    if not parent_existed:
-        try:
-            os.chmod(path.parent, 0o700)
-        except OSError:
-            pass
-    temporary: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-                mode="w", encoding="utf-8", dir=path.parent,
-                prefix=f".{path.name}.", suffix=".tmp", delete=False) as handle:
-            json.dump(
-                payload, handle, ensure_ascii=False, sort_keys=True,
-                indent=indent, separators=None if indent else (",", ":"))
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-            temporary = Path(handle.name)
-        os.replace(temporary, path)
-        try:
-            os.chmod(path, 0o600)
-        except OSError:
-            pass
-    except Exception:
-        if temporary is not None:
-            temporary.unlink(missing_ok=True)
-        raise
+    def write(handle) -> None:
+        json.dump(
+            payload, handle, ensure_ascii=False, sort_keys=True,
+            indent=indent, separators=None if indent else (",", ":"))
+        handle.write("\n")
+
+    atomic_write_private(path, write, text=True)
 
 
 def _append_private_jsonl(path: Path, payload: dict) -> None:
-    """Append one JSON event without following a pre-existing file symlink."""
-    parent_existed = path.parent.exists()
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    if not parent_existed:
-        try:
-            os.chmod(path.parent, 0o700)
-        except OSError:
-            pass
-    if path.is_symlink():
-        raise OSError("refusing to append LLM events through a symbolic link")
-    flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT
-    flags |= getattr(os, "O_NOFOLLOW", 0)
-    descriptor = os.open(path, flags, 0o600)
-    try:
-        with os.fdopen(descriptor, "a", encoding="utf-8") as handle:
-            descriptor = -1
-            handle.write(json.dumps(
-                payload, ensure_ascii=False, sort_keys=True,
-                separators=(",", ":")) + "\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        try:
-            os.chmod(path, 0o600)
-        except OSError:
-            pass
-    finally:
-        if descriptor >= 0:
-            os.close(descriptor)
+    """Append one event through the shared no-follow private policy."""
+    append_private_jsonl(path, payload)
 
 
 def _percentile(values: list[float], percentile: float) -> float | None:
@@ -981,6 +938,8 @@ class LLMRuntime:
         self._validate_providers(providers)
         mode = request.cache_mode or config.cache_mode
         cache_dir = request.cache_dir or config.cache_dir
+        if mode != "off" and cache_dir.exists():
+            ensure_private_tree(cache_dir)
         key = self._cache_key(request, providers)
         flight_key = self._flight_key(
             key, cache_dir=cache_dir, mode=mode)
