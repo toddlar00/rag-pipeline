@@ -11,7 +11,9 @@ contextual retrieval, RAPTOR multi-level summaries, citation graph extraction,
 and source-grounded answer generation with explicit abstention.
 
 See [`ROADMAP.md`](ROADMAP.md) for implemented hardening milestones, merge
-status, and the ordered improvement backlog.
+status, and the ordered improvement backlog. The final cross-stack findings and
+their disposition are recorded in
+[`INTEGRATION_AUDIT.md`](INTEGRATION_AUDIT.md).
 
 ## Architecture
 

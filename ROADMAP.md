@@ -52,32 +52,33 @@ separately. The index-integrity stack must be reviewed and merged in order:
 Until those PRs merge,
 implementation progress is ahead of integration progress.
 
-## Ordered next milestones
+## Implementation status and remaining integration work
 
 ### 1. Integrate the published draft stack
 
-- Review and merge the current draft stack in dependency order.
+- Review and merge the cumulative integration head after its exact-head CI,
+  dependency, and supply-chain checks pass. The individual PRs remain useful as
+  review-sized slices and preserve the implementation history.
 - Keep the expiring ChromaDB, PyMuPDF, FlagEmbedding, and CPU-wheel audit
   exceptions under active review; replace them with fixed upstream releases or
   recorded license decisions before their 2026-08-31 deadline.
-- Integrate the model-artifact policy, immutable byte lock, verified local
-  loaders, runtime provenance invalidation, and CycloneDX ML-BOM implemented in
-  draft PR #22.
 
-### 2. Reduce monolith and coupling risk
+### 2. Modularization boundary
 
-Implemented across draft PRs #15-#21; integration remains pending until the
-stack is reviewed and merged in order.
+Implemented across draft PRs #15-#21: standard-library-only domain and policy
+seams now cover retrieval, artifact I/O, chunking, index state, LLM transports,
+CLI policy, and ingestion safety while `rag.py` remains the stable runtime and
+Python compatibility facade. Integration remains pending.
 
-- Preserve the first seam: `retrieval_core.py` is a leaf module for
-  typed retrieval/grounding results and pure retrieval algorithms, while
-  `rag.py` re-exports the established Python surface.
-- Split `rag.py` into focused ingestion, chunking, indexing, retrieval, LLM,
-  artifact, and CLI modules while preserving the public command surface.
-- Replace loosely shaped dictionaries at module boundaries with typed records
-  and explicit backend/provider protocols.
-- Move shared lifecycle and transaction logic behind small tested abstractions,
-  keeping backend-specific payload and validation rules local.
+- The extracted modules own deterministic policy, typed records, and explicit
+  callback/protocol boundaries; `rag.py` re-exports the established surface.
+- Runtime orchestration, process supervision, mutable caches, and physical
+  Chroma/Qdrant backends deliberately remain in `rag.py`. Further decomposition
+  is a distinct future track, starting with process supervision and then vector
+  lifecycle, because those OS-containment and lease boundaries require their
+  own failure-injection milestones.
+- This phase is therefore a completed policy-seam extraction, not a claim that
+  `rag.py` has become a thin or fully decomposed facade.
 
 ### 3. Expand retrieval evaluation
 
@@ -89,12 +90,12 @@ The controlled suites validate the evaluation machinery; expert review and
 production dense/hybrid/reranked calibration remain necessary for each full
 private corpus before its scores become release gates.
 
-- Build corpus-pinned judged sets for additional subjects and books rather than
-  treating the Civil Procedure calibration as universal.
-- Add adversarial citation, abstention, filter, and long-context cases.
-- Run threshold and baseline-regression checks in CI and retain machine-readable
-  evaluation artifacts for comparisons.
-- Measure latency, memory, index size, and LLM/embedding cost alongside relevance.
+Delivered behavior includes corpus-pinned judged sets for multiple subjects,
+adversarial citation/abstention/filter/long-context cases, CI threshold and
+baseline-regression gates, retained machine-readable reports, and resource/cost
+metrics. Adding a new private production corpus remains a corpus-owner task: it
+requires expert judgments and representative dense/hybrid/reranked runs rather
+than treating the checked-in lexical fixtures as universal quality evidence.
 
 ### 4. Improve operations, privacy, and product surfaces
 
@@ -126,21 +127,15 @@ static OpenAPI. It also holds a singleton service-state lease, reconciles
 crash-left queued attempts into explicit-resume failures, uses verified private
 temporary storage, and adds Linux/Windows CI coverage for the live socket
 contract.
-It remains draft work until the stack is reviewed, merged in order, and all
-exact-head CI/security checks pass.
-
-- Emit structured stage/index/LLM metrics with run IDs and actionable failure
-  diagnostics.
-- Add cancellation and resumable background jobs for the UI and long-running
-  indexing/generation commands.
-- Harden cache and artifact permissions for sensitive source text and model
-  output; document retention and deletion workflows.
-- Add a stable service/API layer only after core modules and lifecycle contracts
-  are separated from the CLI.
+PR #27 head `8e74069` passed all 24 exact-head CI, compatibility, and
+supply-chain checks. These operations slices remain draft work until the
+cumulative branch—including independent PR #1—is reviewed and integrated.
 
 ## Completion rule
 
 A milestone is complete only when its behavior is implemented, failure-injected,
 covered by the full test suite and static checks, exercised against the relevant
 real optional client where practical, independently reviewed, and published as a
-mergeable draft PR. It becomes integrated only after merge into `main`.
+mergeable draft PR. Review evidence must be durable in a committed audit or PR
+review/comment rather than existing only in an ephemeral work log. A milestone
+becomes integrated only after merge into `main`.
