@@ -30,21 +30,17 @@ Status terms:
 | Chroma record reconciliation and no-op detection | Implemented (draft) | [PR #10](https://github.com/toddlar00/rag-pipeline/pull/10) |
 | Deterministic vector-client lifecycle | Implemented (draft) | [PR #11](https://github.com/toddlar00/rag-pipeline/pull/11) |
 | Cross-process vector-store concurrency | Implemented (draft) | [PR #12](https://github.com/toddlar00/rag-pipeline/pull/12) |
+| Hard operation deadlines and crash-safe publication | Implemented (draft) | [PR #13](https://github.com/toddlar00/rag-pipeline/pull/13) |
 
 PR #1 is independent of the index-integrity stack and can be reviewed or merged
 separately. The index-integrity stack must be reviewed and merged in order:
-**#2 -> #3 -> #4 -> #5 -> #6 -> #7 -> #8 -> #9 -> #10 -> #11 -> #12**.
+**#2 -> #3 -> #4 -> #5 -> #6 -> #7 -> #8 -> #9 -> #10 -> #11 -> #12 -> #13**.
 Until those PRs merge,
 implementation progress is ahead of integration progress.
 
 ## Ordered next milestones
 
-### 1. Finish cross-backend index integrity
-
-- Bound or isolate indefinitely hung vector-store calls. Python cannot safely
-  terminate a worker thread blocked forever inside a storage client.
-
-### 2. Integrate and automate quality gates
+### 1. Integrate and automate quality gates
 
 - Add GitHub Actions for Ruff, bytecode compilation, the full unit suite, and
   optional real Chroma/Qdrant local-mode smoke tests.
@@ -54,7 +50,7 @@ implementation progress is ahead of integration progress.
   version constraints or lockfiles for reproducible environments.
 - Merge the current draft stack in dependency order after review.
 
-### 3. Reduce monolith and coupling risk
+### 2. Reduce monolith and coupling risk
 
 - Split `rag.py` into focused ingestion, chunking, indexing, retrieval, LLM,
   artifact, and CLI modules while preserving the public command surface.
@@ -63,7 +59,7 @@ implementation progress is ahead of integration progress.
 - Move shared lifecycle and transaction logic behind small tested abstractions,
   keeping backend-specific payload and validation rules local.
 
-### 4. Expand retrieval evaluation
+### 3. Expand retrieval evaluation
 
 - Build corpus-pinned judged sets for additional subjects and books rather than
   treating the Civil Procedure calibration as universal.
@@ -72,7 +68,7 @@ implementation progress is ahead of integration progress.
   evaluation artifacts for comparisons.
 - Measure latency, memory, index size, and LLM/embedding cost alongside relevance.
 
-### 5. Improve operations, privacy, and product surfaces
+### 4. Improve operations, privacy, and product surfaces
 
 - Emit structured stage/index/LLM metrics with run IDs and actionable failure
   diagnostics.
