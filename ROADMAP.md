@@ -43,10 +43,11 @@ Status terms:
 | Multi-subject adversarial retrieval evaluation | Implemented (draft) | [PR #23](https://github.com/toddlar00/rag-pipeline/pull/23) |
 | Structured run telemetry and committed index outcomes | Implemented (draft) | [PR #24](https://github.com/toddlar00/rag-pipeline/pull/24) |
 | Private storage policy and lifecycle retention | Implemented (draft) | [PR #25](https://github.com/toddlar00/rag-pipeline/pull/25) |
+| Durable cancellable/resumable background jobs | Implemented (draft) | [PR #26](https://github.com/toddlar00/rag-pipeline/pull/26) |
 
 PR #1 is independent of the index-integrity stack and can be reviewed or merged
 separately. The index-integrity stack must be reviewed and merged in order:
-**#2 -> #3 -> #4 -> #5 -> #6 -> #7 -> #8 -> #9 -> #10 -> #11 -> #12 -> #13 -> #14 -> #15 -> #16 -> #17 -> #18 -> #19 -> #20 -> #21 -> #22 -> #23 -> #24 -> #25**.
+**#2 -> #3 -> #4 -> #5 -> #6 -> #7 -> #8 -> #9 -> #10 -> #11 -> #12 -> #13 -> #14 -> #15 -> #16 -> #17 -> #18 -> #19 -> #20 -> #21 -> #22 -> #23 -> #24 -> #25 -> #26**.
 Until those PRs merge,
 implementation progress is ahead of integration progress.
 
@@ -96,14 +97,17 @@ private corpus before its scores become release gates.
 
 ### 4. Improve operations, privacy, and product surfaces
 
-The first two operations slices are implemented in draft PRs #24 and #25.
+The first three operations slices are implemented in draft PRs #24-#26.
 PR #24 adds supervisor-allocated run IDs that correlate prompt-free stage,
 committed-index, and LLM metrics; confirmed killed-worker recovery; visible
 `partial` batch status; and aliased-output rejection. PR #25 adds verified
 current-user-only storage, recursive legacy migration, ownership manifests,
 post-quarantine identity validation, and dry-run-first run/cache/UI retention
-under pipeline and vector leases. Background-job cancellation/resume and the
-stable application service remain ordered follow-up slices.
+under pipeline and vector leases. PR #26 adds private immutable job specs,
+atomic attempt state, detached process-tree supervision, explicit cancellation
+and resume, exact run binding, bounded logs, conservative restart recovery, and
+a local-only Jobs UI. The stable application service remains the next ordered
+slice.
 
 - Emit structured stage/index/LLM metrics with run IDs and actionable failure
   diagnostics.
