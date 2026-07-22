@@ -31,24 +31,24 @@ Status terms:
 | Deterministic vector-client lifecycle | Implemented (draft) | [PR #11](https://github.com/toddlar00/rag-pipeline/pull/11) |
 | Cross-process vector-store concurrency | Implemented (draft) | [PR #12](https://github.com/toddlar00/rag-pipeline/pull/12) |
 | Hard operation deadlines and crash-safe publication | Implemented (draft) | [PR #13](https://github.com/toddlar00/rag-pipeline/pull/13) |
+| Reproducible CI and supply-chain gates | Implemented (draft) | [PR #14](https://github.com/toddlar00/rag-pipeline/pull/14) |
 
 PR #1 is independent of the index-integrity stack and can be reviewed or merged
 separately. The index-integrity stack must be reviewed and merged in order:
-**#2 -> #3 -> #4 -> #5 -> #6 -> #7 -> #8 -> #9 -> #10 -> #11 -> #12 -> #13**.
+**#2 -> #3 -> #4 -> #5 -> #6 -> #7 -> #8 -> #9 -> #10 -> #11 -> #12 -> #13 -> #14**.
 Until those PRs merge,
 implementation progress is ahead of integration progress.
 
 ## Ordered next milestones
 
-### 1. Integrate and automate quality gates
+### 1. Integrate the published draft stack
 
-- Add GitHub Actions for Ruff, bytecode compilation, the full unit suite, and
-  optional real Chroma/Qdrant local-mode smoke tests.
-- Test the supported Python-version matrix and both minimal/core and optional
-  dependency sets.
-- Add dependency update, vulnerability, and license checks with deliberate
-  version constraints or lockfiles for reproducible environments.
-- Merge the current draft stack in dependency order after review.
+- Review and merge the current draft stack in dependency order.
+- Keep the expiring ChromaDB, PyMuPDF, FlagEmbedding, and CPU-wheel audit
+  exceptions under active review; replace them with fixed upstream releases or
+  recorded license decisions before their 2026-08-31 deadline.
+- Extend the Python-package SBOM with a revision-, checksum-, and license-pinned
+  manifest for downloaded model artifacts and trusted remote model code.
 
 ### 2. Reduce monolith and coupling risk
 
