@@ -48,6 +48,51 @@ env:
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
 
 jobs:
+  service-profile-audit:
+    name: Service profile vulnerabilities and SBOM
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-security.lock
+      - name: Install pinned audit tooling
+        run: python -m pip install --require-hashes -r requirements-security.lock
+      - name: Audit the exact service lock
+        shell: bash
+        run: |
+          set +e
+          python -m pip_audit --requirement requirements-service.lock \
+            --disable-pip --format json \
+            --output service-vulnerability-audit.json
+          status=$?
+          set -e
+          test -s service-vulnerability-audit.json
+          python -m json.tool service-vulnerability-audit.json > /dev/null
+          if [ "$status" -ne 0 ]; then
+            exit "$status"
+          fi
+      - name: Generate service CycloneDX SBOM
+        run: >-
+          python -m pip_audit --requirement requirements-service.lock
+          --disable-pip --format cyclonedx-json
+          --output service-dependency-sbom.json
+      - name: Retain service security reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: service-supply-chain-reports
+          path: |
+            service-dependency-sbom.json
+            service-vulnerability-audit.json
+          if-no-files-found: error
+          retention-days: 30
+
   audit:
     name: Vulnerabilities, SBOM, and licenses
     runs-on: ubuntu-24.04

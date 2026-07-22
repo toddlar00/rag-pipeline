@@ -44,6 +44,7 @@ Status terms:
 | Structured run telemetry and committed index outcomes | Implemented (draft) | [PR #24](https://github.com/toddlar00/rag-pipeline/pull/24) |
 | Private storage policy and lifecycle retention | Implemented (draft) | [PR #25](https://github.com/toddlar00/rag-pipeline/pull/25) |
 | Durable cancellable/resumable background jobs | Implemented (draft) | [PR #26](https://github.com/toddlar00/rag-pipeline/pull/26) |
+| Stable authenticated local service/API | Implemented (draft) | Current stacked draft; PR publication pending |
 
 PR #1 is independent of the index-integrity stack and can be reviewed or merged
 separately. The index-integrity stack must be reviewed and merged in order:
@@ -97,7 +98,9 @@ private corpus before its scores become release gates.
 
 ### 4. Improve operations, privacy, and product surfaces
 
-The first three operations slices are implemented in draft PRs #24-#26.
+The first three operations slices are implemented in draft PRs #24-#26, and
+the stable service/API slice is implemented on the current stacked draft while
+its PR publication remains pending.
 PR #24 adds supervisor-allocated run IDs that correlate prompt-free stage,
 committed-index, and LLM metrics; confirmed killed-worker recovery; visible
 `partial` batch status; and aliased-output rejection. PR #25 adds verified
@@ -115,8 +118,17 @@ oversize persisted specs and bindings before publication, revalidates completed
 batch stages, and coordinates reconciliation, cancellation, quarantine, and
 deletion with short root plus per-job leases. Job-store schema v2 intentionally
 fails closed on the unreleased v1 prototype because its missing directory
-identities cannot be reconstructed safely. The stable application service
-remains the next ordered slice.
+identities cannot be reconstructed safely. The service draft adds a strict
+dependency-free v1 contract, an authenticated loopback-only HTTP adapter,
+static credential-free Qdrant corpus bindings, supervised search with bounded
+redacted results, reader/admin roles, deterministic reindex idempotency,
+attempt/revision ETags, confirmation-bound terminal deletion, and authenticated
+static OpenAPI. It also holds a singleton service-state lease, reconciles
+crash-left queued attempts into explicit-resume failures, uses verified private
+temporary storage, and adds Linux/Windows CI coverage for the live socket
+contract.
+It remains draft work until the branch is independently re-audited, published,
+and all exact-head CI/security checks pass.
 
 - Emit structured stage/index/LLM metrics with run IDs and actionable failure
   diagnostics.

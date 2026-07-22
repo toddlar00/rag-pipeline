@@ -24,6 +24,10 @@ def _valid_policy_tree(root: Path) -> None:
         "-r requirements-test.txt\nbackend>=1,<2\n",
     )
     _write(root / "requirements-test.txt", "pytest==9.1.1\n")
+    _write(
+        root / "requirements-service.txt",
+        "fastapi==0.139.2\nqdrant-client==1.18.0\ntqdm==4.69.0\n",
+    )
     _write(root / "requirements-audit.txt", "core==1.5\n")
     _write(root / "requirements-security.txt", "pip-audit==2.10.1\n")
     _write(root / "requirements-lock-tools.txt", "uv==0.11.31\n")
@@ -39,6 +43,12 @@ def _valid_policy_tree(root: Path) -> None:
     _write(
         root / "requirements-test.lock",
         f"pytest==9.1.1 --hash=sha256:{lock_hash}\n",
+    )
+    _write(
+        root / "requirements-service.lock",
+        f"fastapi==0.139.2 --hash=sha256:{lock_hash}\n"
+        f"qdrant-client==1.18.0 --hash=sha256:{lock_hash}\n"
+        f"tqdm==4.69.0 --hash=sha256:{lock_hash}\n",
     )
     _write(
         root / "requirements-smoke.lock",

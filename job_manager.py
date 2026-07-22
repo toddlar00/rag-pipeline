@@ -1312,8 +1312,14 @@ def reconcile_job(store: job_runtime.JobStore,
 
 
 def reconcile_all_jobs(
-        store: job_runtime.JobStore) -> list[job_runtime.JobSummary]:
-    """Snapshot jobs and reserve managerless attempts before reconciliation."""
+        store: job_runtime.JobStore, *,
+        fail_queued: bool = False) -> list[job_runtime.JobSummary]:
+    """Snapshot and reconcile managerless attempts.
+
+    ``fail_queued`` is reserved for an exclusive service startup/reconciliation
+    boundary: it converts a crash-left, managerless queued attempt to a
+    resumable failure instead of auto-launching external work.
+    """
     pending: list[tuple[int, str, job_runtime.JobLease]] = []
     try:
         with store.store_lease() as root_lease:
@@ -1322,7 +1328,7 @@ def reconcile_all_jobs(
                 if summary.terminal:
                     continue
                 if not _queued_reconciliation_needed(
-                        store, summary, fail_queued=False):
+                        store, summary, fail_queued=fail_queued):
                     continue
                 try:
                     job_lease = store.lease(
@@ -1333,7 +1339,8 @@ def reconcile_all_jobs(
         for index, job_id, job_lease in pending:
             try:
                 results[index] = reconcile_job(
-                    store, job_id, lease=job_lease)
+                    store, job_id, lease=job_lease,
+                    fail_queued=fail_queued)
             finally:
                 job_lease.release()
     finally:

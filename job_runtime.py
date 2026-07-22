@@ -378,6 +378,17 @@ def _validate_counter(value, name: str, *, minimum: int) -> int:
     return value
 
 
+def _validate_expected_counter(
+        value: int | None, name: str, *, minimum: int) -> int | None:
+    """Validate one optional caller-controlled optimistic precondition."""
+    if value is None:
+        return None
+    if (isinstance(value, bool) or not isinstance(value, int)
+            or value < minimum or value > _MAX_COUNTER):
+        raise JobValidationError(f"{name} is invalid")
+    return value
+
+
 def _validate_filesystem_identity(value: object, name: str) -> int:
     if (isinstance(value, bool) or not isinstance(value, int)
             or value < 0 or value > _MAX_FILESYSTEM_IDENTITY):
@@ -996,9 +1007,21 @@ class JobStore:
     """Private, schema-checked durable job repository."""
 
     def __init__(self, root: Path = DEFAULT_JOB_ROOT, *,
-                 clock: Callable[[], float] = time.time):
+                 clock: Callable[[], float] = time.time,
+                 permitted_root_metadata_names: frozenset[str] = frozenset()):
+        if (not isinstance(permitted_root_metadata_names, frozenset)
+                or any(
+                    not isinstance(name, str)
+                    or not name.startswith(".")
+                    or name in {_STORE_LOCK_NAME, _RETENTION_QUARANTINE_NAME}
+                    or "/" in name or "\\" in name or "\x00" in name
+                    or len(name.encode("utf-8")) > 255
+                    for name in permitted_root_metadata_names)):
+            raise JobValidationError(
+                "permitted root metadata names are invalid")
         self.root = storage_policy.ensure_private_directory(Path(root))
         self._clock = clock
+        self._permitted_root_metadata_names = permitted_root_metadata_names
         device, inode = _directory_identity(self.root, label="job root")
         self._root_identity = (device, inode)
         self._store_key = (
@@ -1214,6 +1237,17 @@ class JobStore:
             raise JobCorruptError("job root could not be enumerated") from exc
         for entry in entries:
             if entry.name == _STORE_LOCK_NAME:
+                continue
+            if entry.name in self._permitted_root_metadata_names:
+                try:
+                    metadata = os.lstat(entry.path)
+                except OSError as exc:
+                    raise JobCorruptError(
+                        "job root metadata could not be inspected") from exc
+                if (not stat.S_ISREG(metadata.st_mode)
+                        or metadata.st_nlink != 1):
+                    raise JobCorruptError(
+                        "job root metadata is not one regular file")
                 continue
             if entry.name == _RETENTION_QUARANTINE_NAME:
                 if not entry.is_dir(follow_symlinks=False):
@@ -1433,15 +1467,30 @@ class JobStore:
             return True
         return False
 
-    def request_cancel(self, job_id: str) -> JobSummary:
+    def request_cancel(self, job_id: str, *,
+                       expected_revision: int | None = None,
+                       expected_attempt_number: int | None = None
+                       ) -> JobSummary:
         """Atomically request cancellation for the currently observed attempt.
 
         The manager remains the sole state writer.  A concurrent resume can
-        therefore only turn this into a harmless stale marker.
+        therefore only turn this into a harmless stale marker. Optional
+        preconditions let remote callers reject an already-stale observation
+        before any marker is published.
         """
         job_id = _validate_job_id(job_id)
+        expected_revision = _validate_expected_counter(
+            expected_revision, "expected_revision", minimum=0)
+        expected_attempt_number = _validate_expected_counter(
+            expected_attempt_number, "expected_attempt_number", minimum=1)
         with self.store_lease():
             spec, state = self._load_record(job_id)
+            if (expected_revision is not None
+                    and state.revision != expected_revision):
+                raise JobStateError("cancel revision is stale")
+            if (expected_attempt_number is not None
+                    and state.attempt_number != expected_attempt_number):
+                raise JobStateError("cancel targets a stale attempt")
             if state.status in TERMINAL_JOB_STATUSES:
                 raise JobStateError(
                     "terminal jobs cannot accept cancellation requests")
@@ -1564,12 +1613,24 @@ class JobStore:
         return self._summary(spec, updated)
 
     def prepare_delete(self, job_id: str, *,
+                       expected_revision: int | None = None,
+                       expected_attempt_number: int | None = None,
                        lease_timeout: float = 0.0) -> JobSummary:
-        """Irreversibly make one safely terminal job non-resumable."""
+        """Irreversibly make one exact, safely terminal job non-resumable."""
         job_id = _validate_job_id(job_id)
+        expected_revision = _validate_expected_counter(
+            expected_revision, "expected_revision", minimum=0)
+        expected_attempt_number = _validate_expected_counter(
+            expected_attempt_number, "expected_attempt_number", minimum=1)
         with self.store_lease():
             with self.lease(job_id, timeout=lease_timeout) as lease:
                 execution = self.load_execution(job_id, lease=lease)
+                if (expected_revision is not None
+                        and execution.revision != expected_revision):
+                    raise JobStateError("delete revision is stale")
+                if (expected_attempt_number is not None
+                        and execution.attempt_number != expected_attempt_number):
+                    raise JobStateError("delete targets a stale attempt")
                 if execution.status == "deleting":
                     return self.get_job(job_id)
                 if execution.status not in DELETABLE_JOB_STATUSES:

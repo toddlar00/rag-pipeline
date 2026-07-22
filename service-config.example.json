@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "corpora": [
+    {
+      "corpus_id": "civil_procedure",
+      "backend": "qdrant",
+      "db_path": "../Civil_procedure/Civil_procedure_qdrant",
+      "chunks_path": "../Civil_procedure/Civil_procedure_chunks.jsonl",
+      "collection_name": "civil_procedure",
+      "embedding_model": "embo-01",
+      "search_timeout_seconds": 300.0,
+      "db_lock_timeout_seconds": 30.0,
+      "reindex_timeout_seconds": 7200.0
+    }
+  ]
+}

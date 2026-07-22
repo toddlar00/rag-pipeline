@@ -4,6 +4,7 @@ from pathlib import Path
 import json
 import math
 import os
+import signal
 import subprocess
 import sys
 import textwrap
@@ -605,6 +606,136 @@ def test_normal_worker_exit_terminates_remaining_descendants(
     stopped_value = heartbeat.read_text(encoding="utf-8")
     time.sleep(0.3)
     assert heartbeat.read_text(encoding="utf-8") == stopped_value
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX parent watchdog regression")
+def test_posix_watchdog_normal_exit_ignores_inherited_sigterm_disposition(
+        tmp_path):
+    project_root = Path(__file__).resolve().parents[1]
+    completed = tmp_path / "completed.txt"
+    worker = tmp_path / "worker.py"
+    supervisor = tmp_path / "supervisor.py"
+    worker.write_text(
+        "from pathlib import Path\n"
+        "import sys\n"
+        "Path(sys.argv[1]).write_text('done', encoding='utf-8')\n",
+        encoding="utf-8",
+    )
+    supervisor.write_text(
+        "from pathlib import Path\n"
+        "import signal\n"
+        "import sys\n"
+        "sys.path.insert(0, sys.argv[1])\n"
+        "import rag\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "raise SystemExit(rag._run_cli_with_deadline(\n"
+        "    Path(sys.argv[2]), [sys.argv[3]], operation='watchdog-normal',\n"
+        "    timeout=30))\n",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable, str(supervisor), str(project_root), str(worker),
+            str(completed),
+        ],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=5,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert completed.read_text(encoding="utf-8") == "done"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX parent watchdog regression")
+def test_posix_watchdog_kills_worker_tree_when_supervisor_is_killed(tmp_path):
+    project_root = Path(__file__).resolve().parents[1]
+    heartbeat = tmp_path / "heartbeat.txt"
+    worker_pid_path = tmp_path / "worker.pid"
+    child_pid_path = tmp_path / "child.pid"
+    worker = tmp_path / "worker.py"
+    supervisor = tmp_path / "supervisor.py"
+    child_code = (
+        "from pathlib import Path; import os, sys, time; "
+        "p=Path(sys.argv[1]); "
+        "Path(sys.argv[2]).write_text(str(os.getpid()), encoding='utf-8'); "
+        "[(p.write_text(str(i), encoding='utf-8'), time.sleep(0.05)) "
+        "for i in range(400)]"
+    )
+    worker.write_text(
+        textwrap.dedent(
+            f"""
+            from pathlib import Path
+            import os
+            import subprocess
+            import sys
+            import time
+            Path(sys.argv[2]).write_text(
+                str(os.getpid()), encoding="utf-8")
+            subprocess.Popen([
+                sys.executable, "-c", {child_code!r},
+                sys.argv[1], sys.argv[3]])
+            time.sleep(60)
+            """
+        ),
+        encoding="utf-8",
+    )
+    supervisor.write_text(
+        textwrap.dedent(
+            """
+            from pathlib import Path
+            import sys
+            sys.path.insert(0, sys.argv[1])
+            import rag
+            raise SystemExit(rag._run_cli_with_deadline(
+                Path(sys.argv[2]), sys.argv[3:],
+                operation="parent-death test", timeout=60))
+            """
+        ),
+        encoding="utf-8",
+    )
+    process = subprocess.Popen(
+        [
+            sys.executable, str(supervisor), str(project_root), str(worker),
+            str(heartbeat), str(worker_pid_path), str(child_pid_path),
+        ],
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    watchdog_verified = False
+    try:
+        deadline = time.monotonic() + 10
+        while (not all(path.exists() for path in (
+                    heartbeat, worker_pid_path, child_pid_path))
+               and time.monotonic() < deadline
+               and process.poll() is None):
+            time.sleep(0.05)
+        assert process.poll() is None
+        assert heartbeat.is_file()
+
+        process.kill()
+        process.wait(timeout=5)
+        time.sleep(0.2)
+        stopped_value = heartbeat.read_text(encoding="utf-8")
+        time.sleep(0.3)
+        assert heartbeat.read_text(encoding="utf-8") == stopped_value
+        watchdog_verified = True
+    finally:
+        if process.poll() is None:
+            process.kill()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+        if not watchdog_verified:
+            try:
+                worker_pid = int(worker_pid_path.read_text(encoding="utf-8"))
+                os.killpg(worker_pid, signal.SIGKILL)
+            except (OSError, ValueError):
+                pass
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows Job Object regression")

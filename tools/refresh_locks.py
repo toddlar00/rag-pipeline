@@ -15,6 +15,7 @@ LOCK_SPECS = (
     ("requirements.txt", "requirements-core.lock", True),
     ("requirements-all.txt", "requirements-full.lock", True),
     ("requirements-test.txt", "requirements-test.lock", False),
+    ("requirements-service.txt", "requirements-service.lock", False),
     ("requirements-smoke.txt", "requirements-smoke.lock", False),
     ("requirements-security.txt", "requirements-security.lock", False),
     ("requirements-lock-tools.txt", "requirements-lock-tools.lock", False),

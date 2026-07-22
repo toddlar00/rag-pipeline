@@ -24,6 +24,7 @@ BOUNDED_INCLUDES = {
 PINNED_FILES = (
     "requirements-audit.txt",
     "requirements-test.txt",
+    "requirements-service.txt",
     "requirements-security.txt",
     "requirements-lock-tools.txt",
 )
@@ -34,6 +35,7 @@ LOCK_FILES = {
         "requirements-optional.txt",
     ),
     "requirements-test.lock": ("requirements-test.txt",),
+    "requirements-service.lock": ("requirements-service.txt",),
     "requirements-smoke.lock": (
         "requirements-test.txt",
         "requirements-smoke.txt",

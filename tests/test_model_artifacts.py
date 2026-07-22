@@ -748,20 +748,7 @@ def test_tokenizer_loader_receives_only_verified_local_path(monkeypatch):
 def test_sentence_transformer_loader_uses_offline_verified_bundle(
         monkeypatch):
     captured = {}
-
-    class GenericEmbeddingFunction:
-        def __class_getitem__(cls, _item):
-            return cls
-
-    chromadb = ModuleType("chromadb")
-    chromadb_api = ModuleType("chromadb.api")
-    chromadb_types = ModuleType("chromadb.api.types")
-    chromadb_types.EmbeddingFunction = GenericEmbeddingFunction
-    chromadb_types.Documents = list[str]
-    chromadb_types.Embeddings = list[list[float]]
-    monkeypatch.setitem(sys.modules, "chromadb", chromadb)
-    monkeypatch.setitem(sys.modules, "chromadb.api", chromadb_api)
-    monkeypatch.setitem(sys.modules, "chromadb.api.types", chromadb_types)
+    monkeypatch.setitem(sys.modules, "chromadb", None)
     monkeypatch.setattr(
         rag, "_model_loader_source",
         lambda *_args, **_kwargs: ("verified/embedding", True))

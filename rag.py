@@ -490,7 +490,7 @@ def _validate_api_key(model_name: str) -> None:
 
 
 def _get_embedding_fn(model_name: str, *, input_type: str = "document"):
-    """Return a ChromaDB-compatible embedding function for *model_name*.
+    """Return a vector-client-compatible embedding function for *model_name*.
 
     Automatically routes to the right backend:
       - voyage-*     → Voyage AI API (requires VOYAGE_API_KEY)
@@ -505,11 +505,15 @@ def _get_embedding_fn(model_name: str, *, input_type: str = "document"):
     if input_type not in {"document", "query"}:
         raise ValueError("input_type must be 'document' or 'query'")
 
-    from chromadb.api.types import EmbeddingFunction, Documents, Embeddings
+    # These adapters are plain callables.  Chroma validates the ``__call__``
+    # signature structurally, so inheriting its optional typing protocol only
+    # coupled Qdrant/API-only deployments to the Chroma package at runtime.
+    Documents = list[str]
+    Embeddings = list[list[float]]
 
     # --- Voyage AI (voyage-law-2, voyage-3, etc.) ---
     if model_name.startswith("voyage-"):
-        class _VoyageEmbedFn(EmbeddingFunction[Documents]):
+        class _VoyageEmbedFn:
             def __init__(self, name: str, role: str):
                 self._name = name
                 self._role = role
@@ -547,7 +551,7 @@ def _get_embedding_fn(model_name: str, *, input_type: str = "document"):
 
     # --- Cohere (embed-v4.0, embed-english-v3.0, etc.) ---
     if model_name.startswith(("embed-", "cohere-")):
-        class _CohereEmbedFn(EmbeddingFunction[Documents]):
+        class _CohereEmbedFn:
             def __init__(self, name: str, role: str):
                 self._name = name.removeprefix("cohere-")
                 self._role = role
@@ -587,7 +591,7 @@ def _get_embedding_fn(model_name: str, *, input_type: str = "document"):
 
     # --- OpenAI (text-embedding-3-large, text-embedding-3-small) ---
     if model_name.startswith("text-embedding-"):
-        class _OpenAIEmbedFn(EmbeddingFunction[Documents]):
+        class _OpenAIEmbedFn:
             def __init__(self, name: str):
                 self._name = name
                 self._client = None
@@ -616,7 +620,7 @@ def _get_embedding_fn(model_name: str, *, input_type: str = "document"):
 
     # --- MiniMax (embo-01) ---
     if model_name.startswith("embo-") or model_name.startswith("minimax-emb"):
-        class _MiniMaxEmbedFn(EmbeddingFunction[Documents]):
+        class _MiniMaxEmbedFn:
             def __init__(self, name: str):
                 self._name = name
 
@@ -640,7 +644,7 @@ def _get_embedding_fn(model_name: str, *, input_type: str = "document"):
     # --- Local sentence-transformers (nomic, legal-bert, etc.) ---
     # WARNING: trust_remote_code=True allows model repos to execute arbitrary
     # Python. Only use with trusted models (HuggingFace verified publishers).
-    class _LocalEmbedFn(EmbeddingFunction[Documents]):
+    class _LocalEmbedFn:
         def __init__(self, name: str, role: str):
             self._name = name
             self._role = role
@@ -10324,7 +10328,7 @@ class _WindowsKillJob:
 
 
 class _PosixSupervisedStartGate:
-    """One-shot pipe gate inherited only by the waiting bootstrap process."""
+    """Startup gate whose open writer also proves supervisor liveness."""
 
     kind = "posix-pipe"
 
@@ -10346,7 +10350,13 @@ class _PosixSupervisedStartGate:
             raise RuntimeError("supervised worker start gate is closed")
         if os.write(self._write_descriptor, b"\x01") != 1:
             raise OSError("supervised worker start gate release was incomplete")
-        self.close()
+        # The child retains the read end after consuming this byte.  Keep the
+        # write end open until normal tree cleanup; abrupt supervisor death
+        # then delivers EOF to the child's watchdog.
+        descriptor = self._read_descriptor
+        self._read_descriptor = -1
+        if descriptor >= 0:
+            os.close(descriptor)
 
     def close(self) -> None:
         for attribute in ("_write_descriptor", "_read_descriptor"):
@@ -10675,20 +10685,31 @@ def _run_cli_with_deadline(script_path: Path, argv: list[str], *,
                 "supervised worker tree cleanup could not be confirmed"
             ) from exc
         raise
-    finally:
-        start_gate.close()
 
     previous_handlers = {}
-    if os.name != "nt" and _threading.current_thread() is _threading.main_thread():
-        def raise_supervisor_signal(received, _frame):
-            raise _SupervisorSignal(received)
+    try:
+        if (os.name != "nt"
+                and _threading.current_thread() is _threading.main_thread()):
+            def raise_supervisor_signal(received, _frame):
+                raise _SupervisorSignal(received)
 
-        for signal_name in ("SIGTERM", "SIGHUP"):
-            signum = getattr(signal, signal_name, None)
-            if signum is None:
-                continue
-            previous_handlers[signum] = signal.getsignal(signum)
-            signal.signal(signum, raise_supervisor_signal)
+            for signal_name in ("SIGTERM", "SIGHUP"):
+                signum = getattr(signal, signal_name, None)
+                if signum is None:
+                    continue
+                previous_handlers[signum] = signal.getsignal(signum)
+                signal.signal(signum, raise_supervisor_signal)
+    except BaseException as exc:
+        start_gate.close()
+        cleanup_complete = _terminate_supervised_process(
+            process, kill_job=kill_job)
+        for signum, previous in previous_handlers.items():
+            signal.signal(signum, previous)
+        if not cleanup_complete:
+            raise _SupervisorCleanupError(
+                "supervised worker tree cleanup could not be confirmed"
+            ) from exc
+        raise
     try:
         deadline = time.monotonic() + timeout
         poll_callbacks = cancel_requested is not None or heartbeat is not None
@@ -10801,6 +10822,7 @@ def _run_cli_with_deadline(script_path: Path, argv: list[str], *,
     finally:
         for signum, previous in previous_handlers.items():
             signal.signal(signum, previous)
+        start_gate.close()
         if kill_job is not None:
             kill_job.close()
 

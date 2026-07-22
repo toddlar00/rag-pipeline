@@ -320,6 +320,163 @@ externally visible
 calls that failed before their response was durably committed, so inspect
 status/logs and provider usage before choosing `jobs resume`.
 
+### Authenticated local service (draft v1)
+
+`service_api.py` exposes a stable, authenticated application boundary for one
+local OS user. It is deliberately smaller than the CLI: clients can inspect
+configured corpora, retrieve bounded Qdrant search hits, and manage durable
+reindex jobs. It does not expose conversion, arbitrary commands, filesystem
+paths, job arguments or logs, provider identities, raw exceptions, reranking,
+or LLM answer generation.
+
+Create an isolated environment and install the exact narrow service runtime.
+Contributors can add the separately locked test tools after verifying the
+runtime-only boundary, which is the same order CI uses:
+
+```bash
+python -m venv .venv
+# Activate .venv using the command for your shell, then:
+python -m pip install --require-hashes -r requirements-service.lock
+# Development/testing only:
+python -m pip install --require-hashes -r requirements-test.lock
+```
+
+Create distinct owner-only credentials. The command creates and hardens the
+parent directory and files, and reports success without printing either token:
+
+```bash
+python service_api.py init-tokens \
+  --reader-token-file output/.rag-service-private/reader.token \
+  --admin-token-file output/.rag-service-private/admin.token
+```
+
+Copy [`service-config.example.json`](service-config.example.json) to that
+private directory, edit its corpus binding, then enforce the same cross-platform
+private-file policy. The example's relative paths assume this exact destination;
+all relative config paths resolve from the config file's directory.
+
+```bash
+cp service-config.example.json output/.rag-service-private/config.json
+python -c "from pathlib import Path; import storage_policy; storage_policy.enforce_private_path(Path('output/.rag-service-private/config.json'), directory=False)"
+```
+
+The registry is credential-free, strictly shaped, Qdrant-only, and rejects
+links. Its database directory and chunks JSONL must already exist, while the
+collection name and embedding model must exactly match the indexed collection.
+The example uses MiniMax `embo-01`, which requires `MINIMAX_API_KEY` and works
+with the narrow service profile's HTTP dependencies. Change it to the model
+that built the index. Local sentence-transformer models require the full locked
+runtime; Voyage, OpenAI, and Cohere embeddings require their optional SDKs, so
+add the full locked runtime while retaining `requirements-service.lock` when
+using those backends. The service profile does not silently install those
+heavier providers.
+
+Loopback describes who can call this HTTP service; it does not prevent provider
+network egress. A cloud embedding model sends raw search query text during
+search and corpus chunk text during reindex, using credentials inherited by the
+supervised worker. Use a compatible local embedding model with the full locked
+runtime, and verify its configuration, when queries and corpus text must remain
+on the machine.
+
+Start one worker on literal loopback:
+
+```bash
+python service_api.py serve \
+  --config output/.rag-service-private/config.json \
+  --reader-token-file output/.rag-service-private/reader.token \
+  --admin-token-file output/.rag-service-private/admin.token \
+  --working-directory . \
+  --output-root output \
+  --job-root output/.rag-service-jobs \
+  --service-state-root output/.rag-service
+```
+
+The examples below assume the two token values have been loaded into
+`READER_TOKEN` and `ADMIN_TOKEN` without printing them. Health endpoints are
+unauthenticated; reader credentials can inspect the versioned contract/corpora
+and search, while admin credentials can also submit and manage jobs.
+
+```bash
+# Process and corpus readiness
+curl -i http://127.0.0.1:8765/health/live
+curl -i http://127.0.0.1:8765/health/ready
+curl -sS -H "Authorization: Bearer $READER_TOKEN" \
+  http://127.0.0.1:8765/v1/corpora
+
+# Bounded retrieval only: no reranker or generated answer
+curl -sS -X POST \
+  -H "Authorization: Bearer $READER_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data '{"query":"minimum contacts","limit":5,"mode":"auto","filters":{"chapter_num":4}}' \
+  http://127.0.0.1:8765/v1/corpora/civil_procedure/search
+
+# A new key returns 202; an exact replay returns the same job with 200
+curl -i -X POST \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Idempotency-Key: civpro-2026-07-22-v1" \
+  -H "Content-Type: application/json" \
+  --data '{"full_reindex":false}' \
+  http://127.0.0.1:8765/v1/corpora/civil_procedure/reindex
+```
+
+Every job response includes an `ETag` for its exact attempt and revision.
+Set `JOB_ID` from the response and `ETAG` to the most recently returned quoted
+value (for example, `ETAG='"rag-job-a1-r4"'`). Mutations reject stale values.
+Cancellation is active-job-only; resume is explicit and only accepts a current
+`partial`, `failed`, `cancelled`, or `interrupted` attempt. Refresh status and
+the ETag between each operation.
+
+```bash
+curl -i -H "Authorization: Bearer $ADMIN_TOKEN" \
+  "http://127.0.0.1:8765/v1/jobs/$JOB_ID"
+
+curl -i -X POST \
+  -H "Authorization: Bearer $ADMIN_TOKEN" -H "If-Match: $ETAG" \
+  "http://127.0.0.1:8765/v1/jobs/$JOB_ID/cancel"
+
+curl -i -X POST \
+  -H "Authorization: Bearer $ADMIN_TOKEN" -H "If-Match: $ETAG" \
+  "http://127.0.0.1:8765/v1/jobs/$JOB_ID/resume"
+
+# Inspect the terminal-only dry run, refresh ETAG, then confirm the exact ID
+curl -i -X POST -H "Authorization: Bearer $ADMIN_TOKEN" \
+  "http://127.0.0.1:8765/v1/jobs/$JOB_ID/deletion-plan"
+curl -i -X DELETE \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "If-Match: $ETAG" -H "X-Confirm-Job-ID: $JOB_ID" \
+  "http://127.0.0.1:8765/v1/jobs/$JOB_ID"
+```
+
+Use a new idempotency key for a different reindex intent; reusing a key with a
+different request conflicts instead of mutating the existing job. If the
+service stops between durable queueing and launch, startup terminalizes that
+stale `queued` attempt as `failed`; it never auto-launches or repeats provider
+work. An administrator must inspect it and submit an ETag-guarded resume.
+
+This is a loopback-only, single-principal boundary, not a multi-user or hosted
+API. It accepts only `127.0.0.1` or `::1`, verifies the peer, disables proxy
+headers, CORS, Swagger/ReDoc, Uvicorn access logs, and the server header, and
+serves the static OpenAPI 3.1 contract only to an authenticated reader at
+`/v1/openapi.json` (the committed snapshot is
+[`service-openapi-v1.json`](service-openapi-v1.json)). Do not place it behind a
+reverse proxy, port forward, container bridge, or TLS terminator, and do not
+reuse its two roles as tenant isolation.
+
+The service defaults to the dedicated `output/.rag-service-jobs` root; never
+share the CLI's `output/.rag-jobs` root with it. Private markers bind that job
+root bidirectionally to one stable service-state root. Startup fails closed for
+an unowned nonempty root or a mismatched owner, and the API hides and never
+reconciles or mutates jobs whose immutable execution spec is not an exact
+configured service reindex. The enforced singleton lease is on the
+service-state root; per-job leases coordinate records but do not turn the store
+into a multi-principal broker. Search queries and bounded results cross the
+supervised process boundary through private short-lived files under
+`.rag-service/search-tmp`; verified cleanup runs after each request and at
+startup. That cleanup, job deletion, and retention are logical filesystem
+deletion, not guaranteed physical erasure from SSDs, backups, snapshots, or
+cloud-sync history. Put state and job roots on suitable private storage for the
+data's sensitivity.
+
 ### Structured run telemetry
 
 Every foreground pipeline command accepts an optional correlated event stream
@@ -1693,6 +1850,11 @@ retention.py            # Ownership manifests and dry-run-first lifecycle plans
 job_runtime.py          # Durable private job schemas, bindings, transitions, leases
 job_manager.py          # Detached supervision, cancellation, and restart recovery
 supervised_worker.py    # Gated same-PID bootstrap for pre-execution containment
+service_contracts.py    # Dependency-free bounded/redacted local API contracts
+service_runtime.py      # Qdrant search isolation and durable service job facade
+service_api.py          # Authenticated loopback-only FastAPI/CLI adapter
+service-openapi-v1.json # Committed static OpenAPI 3.1 contract snapshot
+service-config.example.json # Credential-free private registry template
 model-artifact-policy.json # Reviewed models, consumers, files, code, and licenses
 model-artifacts.lock.json # Immutable revisions and per-file raw SHA-256 inventory
 preprocess_pdf.py       # Standalone PDF preprocessing CLI facade
@@ -1710,6 +1872,7 @@ requirements-optional.txt # Direct optional dependencies
 requirements-all.txt    # Aggregate core-plus-optional input
 requirements-audit.txt  # Normalized CPU versions for advisory lookup
 requirements-test.txt   # Exact CI/test tool pins
+requirements-service.txt # Exact narrow local-service direct pins
 requirements-smoke.txt  # Lightweight real-vector-store test input
 requirements-security.txt # Exact audit/reporting tool pins
 requirements-lock-tools.txt # Exact lockfile-generator pin

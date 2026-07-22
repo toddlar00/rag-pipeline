@@ -7,6 +7,7 @@ on:
       - "requirements*.lock"
       - "dependency-license-policy.json"
       - "tools/check_dependency_policy.py"
+      - "tools/refresh_locks.py"
       - ".github/workflows/dependency-compatibility.yml"
   push:
     branches: [main]
@@ -15,6 +16,7 @@ on:
       - "requirements*.lock"
       - "dependency-license-policy.json"
       - "tools/check_dependency_policy.py"
+      - "tools/refresh_locks.py"
       - ".github/workflows/dependency-compatibility.yml"
   schedule:
     - cron: "17 8 * * 3"
@@ -50,7 +52,7 @@ jobs:
       - name: Regenerate CPU lockfiles without upgrading compatible pins
         run: python tools/refresh_locks.py
       - name: Reject stale lockfiles
-        run: git diff --exit-code -- requirements-core.lock requirements-full.lock requirements-test.lock requirements-smoke.lock requirements-security.lock requirements-lock-tools.lock
+        run: git diff --exit-code -- requirements-core.lock requirements-full.lock requirements-test.lock requirements-service.lock requirements-smoke.lock requirements-security.lock requirements-lock-tools.lock
 
   resolve:
     name: Resolve ${{ matrix.dependency-set }} / Python ${{ matrix.python-version }}
@@ -63,6 +65,7 @@ jobs:
         dependency-set:
           - core
           - full
+          - service
         include:
           - dependency-set: core
             requirements: requirements.txt
@@ -70,6 +73,9 @@ jobs:
           - dependency-set: full
             requirements: requirements-all.txt
             lock: requirements-full.lock
+          - dependency-set: service
+            requirements: requirements-service.txt
+            lock: requirements-service.lock
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -81,6 +87,7 @@ jobs:
           cache-dependency-path: |
             requirements.txt
             requirements-optional.txt
+            requirements-service.txt
             requirements-test.lock
             requirements-lock-tools.lock
       - name: Install hash-locked resolver tools

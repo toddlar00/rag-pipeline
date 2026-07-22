@@ -275,6 +275,67 @@ def test_cancel_marker_is_required_and_bound_to_exact_attempt(tmp_path):
         store.prepare_resume(initial.job_id)
 
 
+def test_cancel_preconditions_bind_request_to_current_attempt(tmp_path):
+    store = JobStore(tmp_path / "jobs")
+    submitted = store.submit_job("full", ["--pdf", "Book.pdf"])
+
+    cancelled = store.request_cancel(
+        submitted.job_id,
+        expected_revision=submitted.revision,
+        expected_attempt_number=submitted.attempt_number)
+
+    assert cancelled == submitted
+    execution = store.load_execution(submitted.job_id)
+    assert store.is_cancel_requested(
+        submitted.job_id, execution.attempt_token)
+    with pytest.raises(JobStateError, match="cancel revision is stale"):
+        store.request_cancel(
+            submitted.job_id,
+            expected_revision=submitted.revision + 1,
+            expected_attempt_number=submitted.attempt_number)
+    with pytest.raises(JobStateError, match="cancel targets a stale attempt"):
+        store.request_cancel(
+            submitted.job_id,
+            expected_revision=submitted.revision,
+            expected_attempt_number=submitted.attempt_number + 1)
+
+
+def test_delayed_cancel_preconditions_cannot_cancel_resumed_attempt(tmp_path):
+    store = JobStore(tmp_path / "jobs")
+    submitted = store.submit_job("full", ["--pdf", "Book.pdf"])
+    first_token, running = _advance_to_running(store, submitted.job_id)
+    first_failed = store.transition_job(
+        submitted.job_id, "failed", attempt_token=first_token,
+        expected_revision=running.revision)
+    resumed = store.prepare_resume(
+        submitted.job_id, expected_revision=first_failed.revision)
+    second = store.load_execution(submitted.job_id)
+
+    with pytest.raises(JobStateError, match="cancel revision is stale"):
+        store.request_cancel(
+            submitted.job_id,
+            expected_revision=first_failed.revision,
+            expected_attempt_number=first_failed.attempt_number)
+    with pytest.raises(JobStateError, match="cancel targets a stale attempt"):
+        store.request_cancel(
+            submitted.job_id,
+            expected_revision=resumed.revision,
+            expected_attempt_number=first_failed.attempt_number)
+
+    job_dir = store.root / submitted.job_id
+    assert not (job_dir / "cancel.a00000000000000000002.json").exists()
+    assert not store.is_cancel_requested(
+        submitted.job_id, second.attempt_token)
+
+    current = store.request_cancel(
+        submitted.job_id,
+        expected_revision=resumed.revision,
+        expected_attempt_number=resumed.attempt_number)
+    assert current == resumed
+    assert store.is_cancel_requested(
+        submitted.job_id, second.attempt_token)
+
+
 def test_only_recoverable_terminal_states_can_prepare_resume(tmp_path):
     store = JobStore(tmp_path / "jobs")
     summary = store.submit_job("raptor", ["--chunks", "book.json"])
@@ -774,3 +835,82 @@ def test_prepare_delete_blocks_resume_and_rejects_unsafe_states(tmp_path):
     assert deleting.revision == failed.revision + 1
     with pytest.raises(JobStateError, match="not resumable"):
         store.prepare_resume(submitted.job_id)
+
+
+def test_delete_preconditions_reject_stale_attempt_and_allow_current(tmp_path):
+    store = JobStore(tmp_path / "jobs")
+    submitted = store.submit_job("export", ["--chunks", "Book.jsonl"])
+    first_token, first_running = _advance_to_running(
+        store, submitted.job_id)
+    first_failed = store.transition_job(
+        submitted.job_id, "failed", attempt_token=first_token,
+        expected_revision=first_running.revision)
+    store.prepare_resume(
+        submitted.job_id, expected_revision=first_failed.revision)
+    second_token, second_running = _advance_to_running(
+        store, submitted.job_id)
+    second_failed = store.transition_job(
+        submitted.job_id, "failed", attempt_token=second_token,
+        expected_revision=second_running.revision)
+
+    with pytest.raises(JobStateError, match="delete revision is stale"):
+        store.prepare_delete(
+            submitted.job_id,
+            expected_revision=first_failed.revision,
+            expected_attempt_number=first_failed.attempt_number)
+    assert store.get_job(submitted.job_id) == second_failed
+    with pytest.raises(JobStateError, match="delete targets a stale attempt"):
+        store.prepare_delete(
+            submitted.job_id,
+            expected_revision=second_failed.revision,
+            expected_attempt_number=first_failed.attempt_number)
+    assert store.get_job(submitted.job_id) == second_failed
+
+    deleting = store.prepare_delete(
+        submitted.job_id,
+        expected_revision=second_failed.revision,
+        expected_attempt_number=second_failed.attempt_number)
+    assert deleting.status == "deleting"
+    assert deleting.revision == second_failed.revision + 1
+    with pytest.raises(JobStateError, match="delete revision is stale"):
+        store.prepare_delete(
+            submitted.job_id,
+            expected_revision=second_failed.revision,
+            expected_attempt_number=second_failed.attempt_number)
+
+
+@pytest.mark.parametrize(("argument", "value"), [
+    ("expected_revision", True),
+    ("expected_revision", -1),
+    ("expected_revision", job_runtime._MAX_COUNTER + 1),
+    ("expected_revision", 1.0),
+    ("expected_revision", "1"),
+    ("expected_attempt_number", True),
+    ("expected_attempt_number", 0),
+    ("expected_attempt_number", -1),
+    ("expected_attempt_number", job_runtime._MAX_COUNTER + 1),
+    ("expected_attempt_number", 1.0),
+    ("expected_attempt_number", "1"),
+])
+@pytest.mark.parametrize("mutation", ["cancel", "delete"])
+def test_cancel_and_delete_validate_optimistic_preconditions(
+        tmp_path, mutation, argument, value):
+    store = JobStore(tmp_path / "jobs")
+    submitted = store.submit_job("export", ["--chunks", "Book.jsonl"])
+    if mutation == "delete":
+        token, running = _advance_to_running(store, submitted.job_id)
+        before = store.transition_job(
+            submitted.job_id, "failed", attempt_token=token,
+            expected_revision=running.revision)
+        operation = store.prepare_delete
+    else:
+        before = submitted
+        operation = store.request_cancel
+
+    with pytest.raises(JobValidationError, match=argument):
+        operation(submitted.job_id, **{argument: value})
+
+    assert store.get_job(submitted.job_id) == before
+    assert not any(
+        path.name.startswith("cancel.a")
+        for path in (store.root / submitted.job_id).iterdir())
