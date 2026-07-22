@@ -32,6 +32,7 @@ Status terms:
 | Cross-process vector-store concurrency | Implemented (draft) | [PR #12](https://github.com/toddlar00/rag-pipeline/pull/12) |
 | Hard operation deadlines and crash-safe publication | Implemented (draft) | [PR #13](https://github.com/toddlar00/rag-pipeline/pull/13) |
 | Reproducible CI and supply-chain gates | Implemented (draft) | [PR #14](https://github.com/toddlar00/rag-pipeline/pull/14) |
+| Retrieval-domain modularization | In progress | Stdlib-only retrieval models, stable identity, legal lexical analysis, rank fusion, and grounding extracted behind the `rag.py` compatibility facade |
 
 PR #1 is independent of the index-integrity stack and can be reviewed or merged
 separately. The index-integrity stack must be reviewed and merged in order:
@@ -52,6 +53,9 @@ implementation progress is ahead of integration progress.
 
 ### 2. Reduce monolith and coupling risk
 
+- Preserve the first seam: `retrieval_core.py` is a leaf module for
+  typed retrieval/grounding results and pure retrieval algorithms, while
+  `rag.py` re-exports the established Python surface.
 - Split `rag.py` into focused ingestion, chunking, indexing, retrieval, LLM,
   artifact, and CLI modules while preserving the public command surface.
 - Replace loosely shaped dictionaries at module boundaries with typed records

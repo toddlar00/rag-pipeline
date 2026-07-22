@@ -63,6 +63,13 @@ Enriched Chunks (JSONL, including raw + embedding token counts)
  +---> [citations] -----> Citation graph (cases, statutes, cross-refs)
 ```
 
+`rag.py` remains the stable command and Python compatibility facade.
+`retrieval_core.py` is its standard-library-only retrieval domain: structured
+search/grounding results, stable chunk identity, legal lexical analysis,
+rank fusion, metadata filters, grounded prompt construction, and citation
+validation. Backend clients, mutable caches, LLM calls, and CLI orchestration
+remain outside that leaf module.
+
 ## Quick Start
 
 The portable command-line and CPU dependency profiles are tested on CPython
@@ -1292,7 +1299,8 @@ needed.
 ## File Structure
 
 ```
-rag.py                  # Main pipeline (all 14 commands + interactive menu)
+rag.py                  # Stable command/API facade and pipeline orchestration
+retrieval_core.py       # Stdlib-only retrieval models and pure algorithms
 eval.py                 # Evaluation harness (success@k, MRR, type accuracy)
 eval_queries.jsonl      # Starter evaluation queries (10 CivPro)
 ui.py                   # Gradio web UI (Search, Export, Info tabs)
