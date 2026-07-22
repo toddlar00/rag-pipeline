@@ -34,10 +34,11 @@ Status terms:
 | Reproducible CI and supply-chain gates | Implemented (draft) | [PR #14](https://github.com/toddlar00/rag-pipeline/pull/14) |
 | Retrieval-domain modularization | Implemented (draft) | [PR #15](https://github.com/toddlar00/rag-pipeline/pull/15) |
 | Artifact I/O modularization | Implemented (draft) | [PR #16](https://github.com/toddlar00/rag-pipeline/pull/16) |
+| Chunking-domain modularization | Implemented (draft) | [PR #17](https://github.com/toddlar00/rag-pipeline/pull/17) |
 
 PR #1 is independent of the index-integrity stack and can be reviewed or merged
 separately. The index-integrity stack must be reviewed and merged in order:
-**#2 -> #3 -> #4 -> #5 -> #6 -> #7 -> #8 -> #9 -> #10 -> #11 -> #12 -> #13 -> #14 -> #15 -> #16**.
+**#2 -> #3 -> #4 -> #5 -> #6 -> #7 -> #8 -> #9 -> #10 -> #11 -> #12 -> #13 -> #14 -> #15 -> #16 -> #17**.
 Until those PRs merge,
 implementation progress is ahead of integration progress.
 
