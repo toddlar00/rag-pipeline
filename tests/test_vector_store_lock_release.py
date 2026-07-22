@@ -1,7 +1,6 @@
-"""Windows regressions for deterministic local vector-store lock release."""
+"""Regressions for deterministic local vector-store resource release."""
 
 import importlib.util
-import os
 from pathlib import Path
 import subprocess
 import sys
@@ -89,10 +88,6 @@ _LOCK_RELEASE_PROBE = textwrap.dedent(
 )
 
 
-@pytest.mark.skipif(
-    os.name != "nt",
-    reason="Windows file locking is required for this regression",
-)
 @pytest.mark.parametrize(
     ("backend", "dependency"),
     [

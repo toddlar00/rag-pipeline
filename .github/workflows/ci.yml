@@ -1,0 +1,141 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONUTF8: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  quality:
+    name: Quality gates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-test.lock
+      - name: Install test tools
+        run: python -m pip install --require-hashes -r requirements-test.lock
+      - name: Check dependency policy
+        run: python tools/check_dependency_policy.py
+      - name: Lint
+        run: python -m ruff check .
+      - name: Compile Python sources
+        run: >-
+          python -m py_compile
+          rag.py eval.py llm_runtime.py preprocess_pdf.py
+          scaffold_to_markdown.py inspect_chunks.py ui.py
+          tools/check_dependency_policy.py tools/check_licenses.py
+          tools/check_vulnerabilities.py tools/refresh_locks.py
+      - name: Check GPU setup shell syntax
+        run: bash -n setup_rtx5060.sh
+
+  unit-linux:
+    name: Unit tests / Python ${{ matrix.python-version }} / Linux
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements-test.lock
+      - name: Install test dependencies
+        run: python -m pip install --require-hashes -r requirements-test.lock
+      - name: Run dependency-light suite
+        run: python -m pytest -q
+
+  unit-windows:
+    name: Unit tests / Python 3.12 / Windows
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-test.lock
+      - name: Install test dependencies
+        run: python -m pip install --require-hashes -r requirements-test.lock
+      - name: Run Windows supervision regressions
+        run: python -m pytest -q
+
+  vector-store-smoke:
+    name: Real vector stores / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-smoke.lock
+      - name: Install local vector clients
+        run: python -m pip install --require-hashes -r requirements-smoke.lock
+      - name: Require both real vector clients
+        run: python -c "import chromadb, qdrant_client"
+      - name: Exercise real Chroma and Qdrant clients
+        run: >-
+          python -m pytest -q
+          tests/test_vector_store_lock_release.py tests/test_index_manifests.py
+          -k "local_vector_store_releases_lock or qdrant_update_validates_public_status_enum"
+
+  full-integration:
+    name: Full CPU environment / Python 3.12 / Linux
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements-full.lock
+            requirements-test.lock
+            requirements-lock-tools.lock
+      - name: Install hash-locked bootstrapper
+        run: python -m pip install --require-hashes -r requirements-lock-tools.lock
+      - name: Install the full locked CPU environment
+        run: >-
+          uv pip install --system --torch-backend cpu --require-hashes
+          -r requirements-full.lock -r requirements-test.lock
+      - name: Verify installed dependency consistency
+        run: python -m pip check
+      - name: Run the complete suite
+        run: python -m pytest -q

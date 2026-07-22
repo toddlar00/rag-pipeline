@@ -5225,6 +5225,10 @@ def convert_pdf(pdf_path: Path, doc_output: Path, *,
     elif backend != "auto":
         log.warning(f"Unknown backend '{backend}', using auto")
 
+    # Validate/read the source before importing Docling's heavyweight runtime.
+    # This also keeps preprocessing and page-count failures deterministic.
+    total_pages = _page_count(pdf_path)
+
     from docling.document_converter import DocumentConverter, PdfFormatOption
     from docling.datamodel.pipeline_options import (
         PdfPipelineOptions,
@@ -5236,7 +5240,6 @@ def convert_pdf(pdf_path: Path, doc_output: Path, *,
     )
     from docling.datamodel.base_models import InputFormat
 
-    total_pages = _page_count(pdf_path)
     log.info(f"Converting {pdf_path.name} ({pdf_path.stat().st_size / 1e6:.1f} MB, {total_pages} pages)")
 
     # --- GPU detection ---

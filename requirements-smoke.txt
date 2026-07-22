@@ -1,0 +1,4 @@
+# Real local vector-store smoke tests without the full ML/document stack.
+-r requirements-test.txt
+chromadb>=1.5.2,<2
+qdrant-client>=1.17,<2

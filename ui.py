@@ -18,8 +18,6 @@ import time
 from pathlib import Path
 from uuid import uuid4
 
-import gradio as gr
-
 # Import pipeline functions
 sys.path.insert(0, str(Path(__file__).parent))
 import rag
@@ -397,6 +395,13 @@ def do_info():
 # ---------------------------------------------------------------------------
 
 def build_app():
+    try:
+        import gradio as gr
+    except ImportError as exc:
+        raise RuntimeError(
+            "The web UI requires Gradio; install requirements-optional.txt"
+        ) from exc
+
     meta = _load_chunk_metadata()
     type_choices = ["All"] + meta["types"]
     ch_choices = ["All"] + [str(c) for c in meta["chapters"]]

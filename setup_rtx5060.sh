@@ -67,7 +67,7 @@ echo "[2/6] Creating Python virtual environment..."
 
 # Python 3.12+ required for Blackwell PyTorch wheels
 PYTHON_CMD=""
-for cmd in python3.13 python3.12 python3; do
+for cmd in python3.14 python3.13 python3.12 python3; do
     if command -v "$cmd" &> /dev/null; then
         PY_VER=$("$cmd" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
         PY_MINOR=$("$cmd" -c "import sys; print(sys.version_info.minor)")
@@ -94,10 +94,13 @@ source .venv/bin/activate
 echo ""
 echo "[3/6] Installing PyTorch 2.7+ with CUDA 12.8 (Blackwell support)..."
 
-# THIS IS THE CRITICAL LINE — the --index-url is what pulls cu128 wheels
-# instead of CPU-only. Without it, you get "no kernel image" errors.
-pip install --upgrade pip
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+# The --index-url is what pulls cu128 wheels instead of CPU-only wheels.
+# Without it, you get "no kernel image" errors.
+python -m pip install \
+    "torch>=2.7,<3" \
+    "torchvision>=0.22,<1" \
+    "torchaudio>=2.7,<3" \
+    --index-url https://download.pytorch.org/whl/cu128
 
 echo ""
 echo "  Verifying CUDA detection..."
@@ -125,16 +128,12 @@ else:
 # 4. Docling + dependencies
 # -------------------------------------------------------------------
 echo ""
-echo "[4/6] Installing Docling and chunking dependencies..."
+echo "[4/6] Installing bounded pipeline dependencies..."
 
-pip install docling
-pip install "docling-core[chunking]"
-
-# ChromaDB for vector indexing
-pip install "chromadb>=1.5.2"
-
-# Quality-of-life
-pip install tqdm rich
+# Keep the CUDA wheel installed above; the bounded core manifest supplies the
+# rest of the tested pipeline dependency range.
+python -m pip install -r requirements.txt
+python -m pip check
 
 # -------------------------------------------------------------------
 # 5. Verify Docling sees the GPU
@@ -178,13 +177,12 @@ echo "============================================"
 echo ""
 echo "Quick start:"
 echo "  source .venv/bin/activate"
-echo "  python civpro_pipeline.py full --pdf /path/to/Civil_Procedure_9e.pdf"
+echo "  python rag.py full --pdf /path/to/Civil_Procedure_9e.pdf"
 echo ""
 echo "Expected performance on RTX 5060 (8GB):"
 echo "  Step 1 (convert):  ~5-8 min  (GPU layout model, batch_size=8)"
 echo "  Step 2 (chunk):    ~30 sec   (CPU, token counting)"
 echo "  Step 3 (index):    ~60 sec   (ChromaDB default embeddings)"
 echo ""
-echo "If you hit OOM during conversion, reduce layout_batch_size"
-echo "in civpro_pipeline.py from 8 → 4."
+echo "If you hit OOM during conversion, rerun with --batch-size 4."
 echo ""

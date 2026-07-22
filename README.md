@@ -65,9 +65,14 @@ Enriched Chunks (JSONL, including raw + embedding token counts)
 
 ## Quick Start
 
+The portable command-line and CPU dependency profiles are tested on CPython
+3.10 through 3.14. Clean core and core-plus-optional environments are installed
+and tested on Python 3.12, with resolution checks at both ends of that range.
+The RTX 50-series/CUDA 12.8 setup below intentionally requires Python 3.12-3.14.
+
 ```bash
 # 1. Install PyTorch with CUDA (must come first for GPU support)
-pip install torch --index-url https://download.pytorch.org/whl/cu128
+pip install "torch>=2.7,<3" --index-url https://download.pytorch.org/whl/cu128
 
 # 2. Install the core dependencies
 pip install -r requirements.txt
@@ -1079,7 +1084,7 @@ Civil Procedure set; create a separate stable-ID set for any other book.
 Gradio web interface with three tabs: Search, Export, and Info.
 
 ```bash
-pip install gradio
+pip install -r requirements-optional.txt
 python ui.py \
   --chunks output/Civil_procedure/Civil_procedure_chunks.jsonl \
   --db output/Civil_procedure/Civil_procedure_chroma \
@@ -1165,6 +1170,11 @@ Fallback: scans section headers if page headers are empty.
 
 ### RTX 5060 / Blackwell
 
+This CUDA profile requires CPython 3.12-3.14 even though the portable CPU
+profile supports CPython 3.10-3.14. The committed reproducibility lockfiles are
+CPU-only; install the CUDA wheel first and then use the bounded direct
+requirements for a GPU environment.
+
 | Component | Minimum | Why |
 |-----------|---------|-----|
 | NVIDIA driver | 570+ | Blackwell hardware support |
@@ -1173,7 +1183,7 @@ Fallback: scans section headers if page headers are empty.
 | PyTorch index | `cu128` | Must use cu128 wheels |
 
 ```bash
-pip install torch --index-url https://download.pytorch.org/whl/cu128
+pip install "torch>=2.7,<3" --index-url https://download.pytorch.org/whl/cu128
 python -c "import torch; print(torch.cuda.is_available(), torch.version.cuda)"
 ```
 
@@ -1289,6 +1299,17 @@ ui.py                   # Gradio web UI (Search, Export, Info tabs)
 scaffold_to_markdown.py # Apply an existing TOC scaffold to PDF text
 requirements.txt        # Direct core dependencies
 requirements-optional.txt # Direct optional dependencies
+requirements-all.txt    # Aggregate core-plus-optional input
+requirements-audit.txt  # Normalized CPU versions for advisory lookup
+requirements-test.txt   # Exact CI/test tool pins
+requirements-smoke.txt  # Lightweight real-vector-store test input
+requirements-security.txt # Exact audit/reporting tool pins
+requirements-lock-tools.txt # Exact lockfile-generator pin
+requirements-*.lock     # Universal exact CPU locks with SHA-256 hashes
+dependency-license-policy.json # Denied licenses and reviewed exceptions
+dependency-vulnerability-policy.json # Expiring advisory exceptions and audit skips
+tools/                  # Lock refresh and dependency/license policy checks
+.github/workflows/      # CI, dependency compatibility, and security automation
 output/                 # Per-run book directories (auto-created)
 ```
 
@@ -1297,36 +1318,106 @@ output/                 # Per-run book directories (auto-created)
 ### Required (`requirements.txt`)
 
 ```
-PyMuPDF>=1.24                # PDF preprocessing and scaffold conversion
-docling>=2.31                # PDF layout detection and conversion
-docling-core[chunking]>=2.70 # HybridChunker and chunking extras
-pypdfium2>=4.30              # PDF page counting and conversion backend
-sentence-transformers>=3.0   # Local embedding models
-chromadb>=1.5.2              # Default vector database; deterministic close()
-FlagEmbedding>=1.3           # BGE cross-encoder reranker
-rank-bm25>=0.2               # BM25 keyword search
-tqdm                         # Progress bars
-requests>=2.31               # Cloud embedding and LLM HTTP calls
-numpy>=1.26                  # RAPTOR clustering
+PyMuPDF>=1.24,<2                # PDF preprocessing and scaffold conversion
+docling>=2.31,<3                # PDF layout detection and conversion
+docling-core[chunking]>=2.70,<3 # HybridChunker and chunking extras
+pypdfium2>=4.30,<6              # PDF page counting and conversion backend
+sentence-transformers>=3.0,<6   # Local embedding models
+chromadb>=1.5.2,<2              # Default vector database; deterministic close()
+FlagEmbedding>=1.3,<2           # BGE cross-encoder reranker
+rank-bm25>=0.2,<0.3             # BM25 keyword search
+tqdm>=4.66,<5                   # Progress bars
+requests>=2.31,<3               # Cloud embedding and LLM HTTP calls
+numpy>=1.26,<3                  # RAPTOR clustering
 ```
 
 ### Optional (`requirements-optional.txt`)
 
 ```
-qdrant-client>=1.17          # Qdrant vector DB backend
-voyageai>=0.2                # Voyage AI embeddings
-openai>=1.0                  # OpenAI embeddings
-cohere>=5.0                  # Cohere embeddings and reranking
-google-genai>=1.68           # Gemini fallback + timeout/retry controls
-gradio>=6.0                  # Web UI
+qdrant-client>=1.17,<2       # Qdrant vector DB backend
+voyageai>=0.2,<1             # Voyage AI embeddings
+openai>=1.0,<3               # OpenAI embeddings
+cohere>=5.0,<6               # Cohere embeddings and reranking
+google-genai>=1.68,<2        # Gemini fallback + timeout/retry controls
+gradio>=6.0,<7               # Web UI
 ```
 
 These are the project's direct declarations; transitive packages are omitted.
+Lower bounds preserve the established feature floor; upper bounds cap the
+admitted compatibility range. Dependabot proposes bounded updates weekly.
+
+For reproducible CPU installs, use the committed universal lockfiles. They pin
+the complete transitive graph, include SHA-256 artifact hashes, and carry Python
+and platform markers for the supported CPython 3.10-3.14 range:
+
+```bash
+# In an activated virtual environment
+pip install --require-hashes -r requirements-lock-tools.lock
+uv pip install --torch-backend cpu --require-hashes \
+  -r requirements-full.lock
+```
+
+Use `requirements-core.lock` instead for the core-only runtime. CUDA users
+should follow the GPU setup above; the CPU locks deliberately cannot reproduce
+a CUDA environment.
+
+### Development and supply-chain checks
+
+```bash
+pip install --require-hashes -r requirements-test.lock
+python tools/check_dependency_policy.py
+python -m ruff check .
+python -m pytest -q
+```
+
+To reproduce the full CPU development environment, install both exact locks:
+
+```bash
+pip install --require-hashes -r requirements-lock-tools.lock
+uv pip install --torch-backend cpu --require-hashes \
+  -r requirements-full.lock -r requirements-test.lock
+```
+
+Regenerate locks without changing compatible versions with
+`python tools/refresh_locks.py`. Use `python tools/refresh_locks.py --upgrade`
+for an intentional dependency refresh, then review and test the lockfile diff.
+Dependabot can propose direct-input changes but cannot regenerate these custom
+universal locks; refresh and commit the locks on each Dependabot dependency PR.
+
+GitHub Actions runs that dependency-light suite across Python 3.10-3.14 and on
+Windows, exercises real local Chroma and Qdrant clients on Linux and Windows,
+installs the full locked CPU environment for every source PR, and separately
+checks both runtime dependency sets. A scheduled
+workflow audits the active Linux/Python 3.12 full development environment with
+`pip-audit`, retains its JSON findings, a CycloneDX SBOM, and a dependency-
+license inventory, and enforces both dependency policy files. Platform- and
+Python-specific inactive branches in the universal locks are resolution-tested
+but are not represented in that single-environment SBOM.
+Downloaded Hugging Face/Docling model artifacts and any model-provided remote
+code are also outside the Python-package SBOM; treat their revision, checksum,
+and license pinning as a separate model-supply-chain requirement.
+
+As of 2026-07-21, every published ChromaDB 1.x release is affected by
+`PYSEC-2026-311`/`CVE-2026-45829`, a critical pre-authentication code-injection
+issue in Chroma's HTTP server, and no patched release exists. This pipeline uses
+only the embedded, filesystem-local `chromadb.PersistentClient`; it does not
+launch that HTTP server or accept remote collection model configuration. A
+documented exception in `dependency-vulnerability-policy.json` expires on
+2026-08-31 and makes that deployment constraint explicit. Do not expose a
+Chroma server from this environment; use Qdrant for networked deployments and
+remove the exception as soon as a fixed Chroma release is available.
+
+PyMuPDF is dual-licensed under AGPL-3.0 or a commercial Artifex license. Its
+time-bounded policy exception permits only private, filesystem-local evaluation
+through 2026-08-31; no commercial basis has been recorded. This repository also
+has no repository-wide `LICENSE` file. Distribution or hosted/network use is a
+release blocker until the owner selects and records the applicable PyMuPDF and
+repository licensing basis.
 
 ### PyTorch (install first)
 
 ```bash
-pip install torch --index-url https://download.pytorch.org/whl/cu128
+pip install "torch>=2.7,<3" --index-url https://download.pytorch.org/whl/cu128
 ```
 
 ## Full Pipeline Example

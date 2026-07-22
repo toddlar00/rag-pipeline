@@ -1225,7 +1225,7 @@ def test_qdrant_update_rejects_noncompleted_or_missing_status(result):
 
 
 def test_qdrant_update_validates_public_status_enum():
-    from qdrant_client.http import models
+    models = pytest.importorskip("qdrant_client.http.models")
 
     rag._require_qdrant_update_completed(
         models.UpdateResult(
