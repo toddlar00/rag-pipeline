@@ -307,6 +307,75 @@ def test_pipeline_job_commits_an_owned_run_manifest(monkeypatch, tmp_path):
         "chroma", "qdrant"}
 
 
+def test_pipeline_allocation_callback_is_durable_and_lease_scoped(
+        monkeypatch, tmp_path):
+    output_root = tmp_path / "output"
+    monkeypatch.setattr(rag, "OUTPUT_DIR", output_root)
+    events = []
+
+    def record_allocation(run_name):
+        assert (output_root / run_name / ".rag-run.json").is_file()
+        events.append(("allocated", run_name))
+
+    def fake_stages(_pdf, paths, _args, **_kwargs):
+        events.append(("stages", paths["doc"].parent.name))
+        return {"collection": "book", "db_dir": paths["chroma"]}
+
+    monkeypatch.setattr(rag, "_run_pipeline_stages", fake_stages)
+
+    rag._run_pipeline_job(
+        Path("Book.pdf"), _args(), resume=False, watermark=None,
+        on_run_allocated=record_allocation)
+
+    assert events == [("allocated", "Book"), ("stages", "Book")]
+
+
+def test_exact_resume_binding_does_not_drift_to_a_later_run(
+        monkeypatch, tmp_path):
+    output_root = tmp_path / "output"
+    monkeypatch.setattr(rag, "OUTPUT_DIR", output_root)
+    observed = []
+
+    def fake_stages(_pdf, paths, _args, **_kwargs):
+        observed.append(paths["doc"].parent.name)
+        return {"collection": "book", "db_dir": paths["chroma"]}
+
+    monkeypatch.setattr(rag, "_run_pipeline_stages", fake_stages)
+
+    first, _ = rag._run_pipeline_job(
+        Path("Book.pdf"), _args(), resume=False, watermark=None)
+    second, _ = rag._run_pipeline_job(
+        Path("Book.pdf"), _args(), resume=False, watermark=None)
+    resumed, _ = rag._run_pipeline_job(
+        Path("Book.pdf"), _args(), resume=True, watermark=None,
+        exact_run_name=first["doc"].parent.name)
+
+    assert first["doc"].parent.name == "Book"
+    assert second["doc"].parent.name == "Book_2"
+    assert resumed["doc"].parent.name == "Book"
+    assert observed == ["Book", "Book_2", "Book"]
+
+
+@pytest.mark.parametrize("run_name", ["Other", "Book_1", "../Book", ""])
+def test_exact_resume_binding_rejects_unrelated_or_unsafe_names(
+        monkeypatch, tmp_path, run_name):
+    monkeypatch.setattr(rag, "OUTPUT_DIR", tmp_path / "output")
+
+    with pytest.raises(ValueError, match="does not match"):
+        rag._run_pipeline_job(
+            Path("Book.pdf"), _args(), resume=True, watermark=None,
+            exact_run_name=run_name)
+
+
+def test_exact_resume_binding_requires_an_existing_run(monkeypatch, tmp_path):
+    monkeypatch.setattr(rag, "OUTPUT_DIR", tmp_path / "output")
+
+    with pytest.raises(FileNotFoundError, match="does not exist"):
+        rag._run_pipeline_job(
+            Path("Book.pdf"), _args(), resume=True, watermark=None,
+            exact_run_name="Book")
+
+
 def test_pipeline_job_marks_manifest_failed_without_masking_error(
         monkeypatch, tmp_path):
     output_root = tmp_path / "output"

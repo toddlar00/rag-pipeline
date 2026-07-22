@@ -772,6 +772,25 @@ def _derive_output_paths_existing(pdf_path: Path) -> PipelinePaths:
     return _output_paths_for_name(runs[-1][1])
 
 
+def _derive_output_paths_exact(
+        pdf_path: Path, run_name: str) -> PipelinePaths:
+    """Resolve one existing run bound to *pdf_path* without latest-run drift."""
+    if (
+        not isinstance(run_name, str)
+        or not run_name
+        or Path(run_name).name != run_name
+        or _output_run_number(run_name, Path(pdf_path).stem) is None
+    ):
+        raise ValueError("exact resume run name does not match the PDF stem")
+    paths = _output_paths_for_name(run_name)
+    run_root = paths["doc"].parent
+    if not run_root.is_dir():
+        raise FileNotFoundError(
+            f"exact resume run does not exist: {run_name}")
+    _storage_policy.assert_no_link_components(run_root)
+    return paths
+
+
 def _file_exists_nonempty(p: Path) -> bool:
     """Return True if *p* exists and is non-empty (file) or non-empty dir."""
     if not p.exists():
@@ -9962,14 +9981,22 @@ def _run_pipeline_job(pdf_path: Path, args, *, resume: bool,
                       watermark: re.Pattern | None,
                       announce: bool = False,
                       telemetry: _run_telemetry.RunTelemetry | None = None,
-                      stage_scope: str | None = None) -> tuple[PipelinePaths, dict]:
+                      stage_scope: str | None = None,
+                      exact_run_name: str | None = None,
+                      on_run_allocated: Callable[[str], None]
+                      | None = None) -> tuple[PipelinePaths, dict]:
     """Allocate and execute one run while holding its PDF-stem job lease."""
+    if exact_run_name is not None and not resume:
+        raise ValueError("an exact run binding requires resume mode")
     timeout = getattr(args, "db_lock_timeout", DEFAULT_DB_LOCK_TIMEOUT)
     try:
         with _pipeline_job_lock(pdf_path, timeout=timeout):
             paths = (
-                _derive_output_paths_existing(pdf_path)
-                if resume else _derive_output_paths(pdf_path)
+                _derive_output_paths_exact(pdf_path, exact_run_name)
+                if exact_run_name is not None
+                else _derive_output_paths_existing(pdf_path)
+                if resume
+                else _derive_output_paths(pdf_path)
             )
             collection = (
                 getattr(args, "collection", None) or paths["collection"])
@@ -10011,6 +10038,10 @@ def _run_pipeline_job(pdf_path: Path, args, *, resume: bool,
                 if resume:
                     log.info("  (--resume mode: skipping completed stages)")
             try:
+                if on_run_allocated is not None:
+                    # This callback runs after the ownership manifest is
+                    # durable and while allocation remains serialized.
+                    on_run_allocated(run_root.name)
                 run = _run_pipeline_stages(
                     pdf_path, paths, args, resume=resume,
                     watermark=watermark, telemetry=telemetry,
@@ -11057,6 +11088,9 @@ def main(argv: list[str] | None = None):
         help="Use LLM review while building and validating the TOC scaffold")
     p_full.add_argument("--resume", action="store_true",
                         help="Skip already-completed stages (resume a failed run)")
+    p_full.add_argument(
+        "--resume-run", dest="exact_run_name", default=None,
+        help=argparse.SUPPRESS)
 
     # batch (multiple PDFs)
     p_batch = sub.add_parser("batch",
@@ -11285,7 +11319,8 @@ def main(argv: list[str] | None = None):
             try:
                 paths, run = _run_pipeline_job(
                     args.pdf, args, resume=resume, watermark=wm,
-                    announce=True, telemetry=run_telemetry)
+                    announce=True, telemetry=run_telemetry,
+                    exact_run_name=getattr(args, "exact_run_name", None))
             except _PipelineStageError as exc:
                 log.error(f"Pipeline failed at stage '{exc.stage}': {exc.cause}")
                 resume_cmd = _build_resume_cmd(args.pdf, args)
