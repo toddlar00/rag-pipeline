@@ -285,6 +285,147 @@ def windows_dacl_sddl(path: Path) -> str:
         local_free(ctypes.cast(output, wintypes.HLOCAL))
 
 
+def windows_path_is_private(path: Path, *, directory: bool) -> bool:
+    """Return whether a Windows path has the required private DACL.
+
+    Windows may serialize semantically identical security descriptors with
+    additional control flags (for example, ``AI`` after ACL canonicalization).
+    Inspect the binary descriptor instead of comparing its SDDL spelling.
+    """
+    if os.name != "nt":
+        raise RuntimeError("Windows security APIs are unavailable")
+    from ctypes import wintypes
+
+    class Acl(ctypes.Structure):
+        _fields_ = [
+            ("revision", wintypes.BYTE),
+            ("reserved", wintypes.BYTE),
+            ("size", wintypes.WORD),
+            ("ace_count", wintypes.WORD),
+            ("reserved2", wintypes.WORD),
+        ]
+
+    class AceHeader(ctypes.Structure):
+        _fields_ = [
+            ("ace_type", wintypes.BYTE),
+            ("ace_flags", wintypes.BYTE),
+            ("ace_size", wintypes.WORD),
+        ]
+
+    class AccessAllowedAce(ctypes.Structure):
+        _fields_ = [
+            ("header", AceHeader),
+            ("mask", wintypes.DWORD),
+            ("sid_start", wintypes.DWORD),
+        ]
+
+    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    get_file_security = advapi32.GetFileSecurityW
+    get_file_security.argtypes = [
+        wintypes.LPCWSTR, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD)]
+    get_file_security.restype = wintypes.BOOL
+    get_control = advapi32.GetSecurityDescriptorControl
+    get_control.argtypes = [
+        ctypes.c_void_p, ctypes.POINTER(wintypes.WORD),
+        ctypes.POINTER(wintypes.DWORD)]
+    get_control.restype = wintypes.BOOL
+    get_dacl = advapi32.GetSecurityDescriptorDacl
+    get_dacl.argtypes = [
+        ctypes.c_void_p, ctypes.POINTER(wintypes.BOOL),
+        ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(wintypes.BOOL)]
+    get_dacl.restype = wintypes.BOOL
+    get_ace = advapi32.GetAce
+    get_ace.argtypes = [
+        ctypes.c_void_p, wintypes.DWORD,
+        ctypes.POINTER(ctypes.c_void_p)]
+    get_ace.restype = wintypes.BOOL
+    convert_sid = advapi32.ConvertStringSidToSidW
+    convert_sid.argtypes = [
+        wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_void_p)]
+    convert_sid.restype = wintypes.BOOL
+    equal_sid = advapi32.EqualSid
+    equal_sid.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    equal_sid.restype = wintypes.BOOL
+    is_valid_sid = advapi32.IsValidSid
+    is_valid_sid.argtypes = [ctypes.c_void_p]
+    is_valid_sid.restype = wintypes.BOOL
+    get_sid_length = advapi32.GetLengthSid
+    get_sid_length.argtypes = [ctypes.c_void_p]
+    get_sid_length.restype = wintypes.DWORD
+    local_free = kernel32.LocalFree
+    local_free.argtypes = [wintypes.HLOCAL]
+    local_free.restype = wintypes.HLOCAL
+
+    dacl_security_information = 0x00000004
+    required = wintypes.DWORD()
+    get_file_security(
+        str(path), dacl_security_information, None, 0,
+        ctypes.byref(required))
+    if not required.value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    descriptor = ctypes.create_string_buffer(required.value)
+    if not get_file_security(
+            str(path), dacl_security_information, descriptor, required,
+            ctypes.byref(required)):
+        raise ctypes.WinError(ctypes.get_last_error())
+
+    control = wintypes.WORD()
+    revision = wintypes.DWORD()
+    if not get_control(
+            descriptor, ctypes.byref(control), ctypes.byref(revision)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    se_dacl_protected = 0x1000
+    if not control.value & se_dacl_protected:
+        return False
+
+    present = wintypes.BOOL()
+    defaulted = wintypes.BOOL()
+    dacl = ctypes.c_void_p()
+    if not get_dacl(
+            descriptor, ctypes.byref(present), ctypes.byref(dacl),
+            ctypes.byref(defaulted)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    if not present.value or not dacl.value:
+        return False
+    acl = ctypes.cast(dacl, ctypes.POINTER(Acl)).contents
+    if acl.ace_count != 1:
+        return False
+
+    ace_pointer = ctypes.c_void_p()
+    if not get_ace(dacl, 0, ctypes.byref(ace_pointer)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    ace = ctypes.cast(
+        ace_pointer, ctypes.POINTER(AccessAllowedAce)).contents
+    access_allowed_ace_type = 0
+    expected_flags = 0x01 | 0x02 if directory else 0
+    file_all_access = 0x001F01FF
+    sid_offset = AccessAllowedAce.sid_start.offset
+    if (
+        ace.header.ace_type != access_allowed_ace_type
+        or ace.header.ace_flags != expected_flags
+        or ace.mask != file_all_access
+        or ace.header.ace_size < sid_offset + 8
+    ):
+        return False
+
+    actual_sid = ctypes.c_void_p(ace_pointer.value + sid_offset)
+    if not is_valid_sid(actual_sid):
+        return False
+    if ace.header.ace_size < sid_offset + get_sid_length(actual_sid):
+        return False
+
+    expected_sid = ctypes.c_void_p()
+    if not convert_sid(
+            _windows_current_user_sid(), ctypes.byref(expected_sid)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        return bool(equal_sid(actual_sid, expected_sid))
+    finally:
+        local_free(ctypes.cast(expected_sid, wintypes.HLOCAL))
+
+
 def enforce_private_path(path: Path, *, directory: bool | None = None) -> None:
     """Apply and verify the platform's private permission policy."""
     path = Path(path)
@@ -295,11 +436,7 @@ def enforce_private_path(path: Path, *, directory: bool | None = None) -> None:
         directory = path.is_dir()
     if os.name == "nt":
         _windows_apply_private_dacl(path, directory=directory)
-        sddl = windows_dacl_sddl(path)
-        sid = _windows_current_user_sid()
-        inheritance = "OICI" if directory else ""
-        expected = f"D:P(A;{inheritance};FA;;;{sid})"
-        if sddl != expected:
+        if not windows_path_is_private(path, directory=directory):
             raise StoragePolicyError(
                 "Windows path did not retain the required private DACL")
         return
@@ -377,9 +514,7 @@ def _verify_private_file(path: Path) -> None:
         raise StoragePolicyError(
             "published sensitive output is not a regular file")
     if os.name == "nt":
-        expected = (
-            f"D:P(A;;FA;;;{_windows_current_user_sid()})")
-        if windows_dacl_sddl(path) != expected:
+        if not windows_path_is_private(path, directory=False):
             raise StoragePolicyError(
                 "published output did not retain its private DACL")
     elif stat.S_IMODE(result.st_mode) != PRIVATE_FILE_MODE:

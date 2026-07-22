@@ -10,10 +10,8 @@ import storage_policy
 
 def _assert_private_permissions(path: Path, *, directory: bool) -> None:
     if os.name == "nt":
-        sid = storage_policy._windows_current_user_sid()
-        inheritance = "OICI" if directory else ""
-        assert storage_policy.windows_dacl_sddl(path) == (
-            f"D:P(A;{inheritance};FA;;;{sid})"
+        assert storage_policy.windows_path_is_private(
+            path, directory=directory
         )
         return
 
@@ -91,15 +89,24 @@ def test_atomic_writer_hardens_existing_parent_before_content_write(tmp_path):
 
     def write(handle):
         observed["parent"] = parent
-        observed["temporary"] = Path(handle.name)
         _assert_private_permissions(parent, directory=True)
-        _assert_private_permissions(Path(handle.name), directory=False)
+        if isinstance(handle.name, (str, bytes, os.PathLike)):
+            observed["temporary"] = Path(handle.name)
+            _assert_private_permissions(
+                observed["temporary"], directory=False
+            )
+        else:
+            observed["temporary"] = None
+            assert stat.S_IMODE(os.fstat(handle.fileno()).st_mode) == (
+                storage_policy.PRIVATE_FILE_MODE
+            )
         handle.write("private")
 
     storage_policy.atomic_write_private(
         parent / "artifact.txt", write, text=True)
 
-    assert observed["temporary"].parent == observed["parent"]
+    if observed["temporary"] is not None:
+        assert observed["temporary"].parent == observed["parent"]
     assert (parent / "artifact.txt").read_text(encoding="utf-8") == "private"
 
 
@@ -241,10 +248,5 @@ def test_windows_dacl_is_protected_and_grants_only_the_current_user(tmp_path):
     artifact = private / "artifact.txt"
     storage_policy.atomic_write_private_text(artifact, "private")
 
-    sid = storage_policy._windows_current_user_sid()
-    assert storage_policy.windows_dacl_sddl(private) == (
-        f"D:P(A;OICI;FA;;;{sid})"
-    )
-    assert storage_policy.windows_dacl_sddl(artifact) == (
-        f"D:P(A;;FA;;;{sid})"
-    )
+    assert storage_policy.windows_path_is_private(private, directory=True)
+    assert storage_policy.windows_path_is_private(artifact, directory=False)
