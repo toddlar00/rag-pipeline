@@ -74,6 +74,7 @@ class LLMRuntimeConfigValues(TypedDict):
     cache_dir: Path | str
     events_path: Path | str | None
     report_path: Path | str | None
+    run_id: str | None
     max_provider_calls: int | None
     max_reserved_tokens: int | None
     fallback_policy: str
@@ -239,6 +240,7 @@ def _llm_runtime_config_values_from_args(
         "cache_dir": cache_dir or default_cache_dir,
         "events_path": getattr(args, "llm_events", None),
         "report_path": getattr(args, "llm_report", None),
+        "run_id": getattr(args, "run_id", None),
         "max_provider_calls": getattr(args, "max_llm_calls", None),
         "max_reserved_tokens": getattr(
             args, "max_llm_reserved_tokens", None),
@@ -295,6 +297,45 @@ def _cli_operation_timeout(
         return normalize_timeout_fn(raw_value)
     except ValueError:
         return default
+
+
+def _cli_run_telemetry_options(argv: list[str], operation: str) -> dict:
+    """Read the last run correlation/output options after a subcommand."""
+    try:
+        command_index = argv.index(operation)
+    except ValueError:
+        return {"run_id": None, "events_path": None, "report_path": None}
+    flags = {
+        "--run-id": "run_id",
+        "--run-events": "events_path",
+        "--run-report": "report_path",
+    }
+    values = {name: None for name in flags.values()}
+    index = command_index + 1
+    while index < len(argv):
+        token = argv[index]
+        if token == "--":
+            break
+        matched = False
+        for flag, name in flags.items():
+            if token == flag:
+                candidate = argv[index + 1] if index + 1 < len(argv) else None
+                if candidate is None or candidate == "--" or candidate.startswith("-"):
+                    values[name] = None
+                    index += 1
+                else:
+                    values[name] = candidate
+                    index += 2
+                matched = True
+                break
+            if token.startswith(flag + "="):
+                values[name] = token.split("=", 1)[1]
+                index += 1
+                matched = True
+                break
+        if not matched:
+            index += 1
+    return values
 
 
 def _rag_cli_command(argv: list[str]) -> str | None:

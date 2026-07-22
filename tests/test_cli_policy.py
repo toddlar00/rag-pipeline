@@ -199,6 +199,7 @@ def test_runtime_policy_mapping_and_facade_mutation_stay_separate(
         llm_cache_dir=None,
         llm_events="events.jsonl",
         llm_report="report.json",
+        run_id="run-123",
         max_llm_calls=8,
         max_llm_reserved_tokens=900,
         llm_fallback="none",
@@ -212,6 +213,7 @@ def test_runtime_policy_mapping_and_facade_mutation_stay_separate(
         "cache_dir": Path("dynamic-cache"),
         "events_path": "events.jsonl",
         "report_path": "report.json",
+        "run_id": "run-123",
         "max_provider_calls": 8,
         "max_reserved_tokens": 900,
         "fallback_policy": "none",
@@ -245,6 +247,7 @@ def test_runtime_policy_mapping_and_facade_mutation_stay_separate(
         "cache_dir": Path("facade-default-cache"),
         "events_path": None,
         "report_path": None,
+        "run_id": None,
         "max_provider_calls": None,
         "max_reserved_tokens": None,
         "fallback_policy": "ordered",
@@ -446,3 +449,33 @@ def test_menu_secret_facade_injects_current_endpoint_policy(monkeypatch):
     assert observed["default_cloud_url"] == "dynamic-default"
     assert observed["is_deepseek_cloud_fn"] is deepseek_predicate
     assert observed["is_minimax_cloud_fn"] is minimax_predicate
+
+
+def test_run_telemetry_options_use_last_values_before_terminator():
+    assert cli_policy._cli_run_telemetry_options([
+        "full", "--pdf", "book.pdf", "--run-id", "first",
+        "--run-id=second", "--run-events", "events.jsonl",
+        "--run-report=report.json", "--", "--run-id=ignored",
+    ], "full") == {
+        "run_id": "second",
+        "events_path": "events.jsonl",
+        "report_path": "report.json",
+    }
+
+
+def test_run_telemetry_options_are_empty_without_the_command():
+    assert cli_policy._cli_run_telemetry_options(
+        ["--run-id", "wrong-scope"], "full") == {
+            "run_id": None, "events_path": None, "report_path": None,
+        }
+
+
+def test_run_telemetry_options_do_not_consume_another_flag_as_a_value():
+    assert cli_policy._cli_run_telemetry_options([
+        "index", "--run-events", "--run-report", "report.json",
+        "--run-id", "--quiet",
+    ], "index") == {
+        "run_id": None,
+        "events_path": None,
+        "report_path": "report.json",
+    }

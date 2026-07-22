@@ -12,6 +12,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import tempfile
 import threading
 import time
@@ -19,12 +20,15 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Literal
 
+from run_telemetry import validate_distinct_output_paths
+
 
 CACHE_KEY_SCHEMA_VERSION = 1
 CACHE_RECORD_SCHEMA_VERSION = 2
 EVENT_SCHEMA_VERSION = 2
 REPORT_SCHEMA_VERSION = 2
 CACHE_MAX_BYTES = 32 * 1024 * 1024
+_RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 
 PROVIDER_ERROR_CATEGORIES = frozenset({
     "missing_credentials",
@@ -180,6 +184,7 @@ class LLMRuntimeConfig:
     cache_dir: Path = field(default_factory=default_cache_dir)
     events_path: Path | None = None
     report_path: Path | None = None
+    run_id: str | None = None
     max_provider_calls: int | None = None
     max_reserved_tokens: int | None = None
     fallback_policy: FallbackPolicy = "ordered"
@@ -214,7 +219,13 @@ def _estimate_tokens(text: str) -> int:
 
 
 def _atomic_write_json(path: Path, payload: object, *, indent: int | None) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+    parent_existed = path.parent.exists()
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if not parent_existed:
+        try:
+            os.chmod(path.parent, 0o700)
+        except OSError:
+            pass
     temporary: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -236,6 +247,37 @@ def _atomic_write_json(path: Path, payload: object, *, indent: int | None) -> No
         if temporary is not None:
             temporary.unlink(missing_ok=True)
         raise
+
+
+def _append_private_jsonl(path: Path, payload: dict) -> None:
+    """Append one JSON event without following a pre-existing file symlink."""
+    parent_existed = path.parent.exists()
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if not parent_existed:
+        try:
+            os.chmod(path.parent, 0o700)
+        except OSError:
+            pass
+    if path.is_symlink():
+        raise OSError("refusing to append LLM events through a symbolic link")
+    flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags, 0o600)
+    try:
+        with os.fdopen(descriptor, "a", encoding="utf-8") as handle:
+            descriptor = -1
+            handle.write(json.dumps(
+                payload, ensure_ascii=False, sort_keys=True,
+                separators=(",", ":")) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
 
 
 def _percentile(values: list[float], percentile: float) -> float | None:
@@ -319,6 +361,15 @@ class LLMRuntime:
                 ("report_path", config.report_path)):
             if value is not None and not isinstance(value, Path):
                 raise TypeError(f"{name} must be a pathlib.Path")
+        if (config.run_id is not None
+                and (not isinstance(config.run_id, str)
+                     or not _RUN_ID.fullmatch(config.run_id))):
+            raise ValueError(
+                "run_id must be 1-128 safe identifier characters")
+        validate_distinct_output_paths({
+            "LLM events": config.events_path,
+            "LLM report": config.report_path,
+        })
 
     @staticmethod
     def _validate_request(request: LLMRequest) -> None:
@@ -884,16 +935,13 @@ class LLMRuntime:
                     self._terminal_error_categories.get(category, 0) + 1)
             self._request_latencies.append(result.latency_ms)
             events_path = self._config.events_path
+            run_id = self._config.run_id
+        if run_id is not None:
+            event["run_id"] = run_id
         if events_path is not None:
             try:
                 with self._event_lock:
-                    events_path.parent.mkdir(parents=True, exist_ok=True)
-                    with events_path.open("a", encoding="utf-8") as handle:
-                        handle.write(json.dumps(
-                            event, ensure_ascii=False, sort_keys=True,
-                            separators=(",", ":")) + "\n")
-                        handle.flush()
-                        os.fsync(handle.fileno())
+                    _append_private_jsonl(events_path, event)
             except Exception:
                 with self._lock:
                     self._counts["event_write_errors"] += 1
@@ -1009,7 +1057,7 @@ class LLMRuntime:
                 }
                 for name, metrics in self._providers.items()
             }
-            return {
+            payload = {
                 "schema_version": REPORT_SCHEMA_VERSION,
                 "started_at": self._started_at,
                 "finished_at": time.time(),
@@ -1037,6 +1085,9 @@ class LLMRuntime:
                 },
                 "providers": providers,
             }
+            if config.run_id is not None:
+                payload["run_id"] = config.run_id
+            return payload
 
     def write_report(self) -> Path | None:
         """Atomically write the configured report, if one was requested."""

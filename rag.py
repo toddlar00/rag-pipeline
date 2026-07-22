@@ -42,7 +42,9 @@ import ingestion_core as _ingestion_core
 import index_state as _index_state
 import llm_adapters as _llm_adapters
 import model_artifacts as _model_artifacts
+import operation_contracts as _operation_contracts
 import retrieval_core as _retrieval_core
+import run_telemetry as _run_telemetry
 
 from llm_runtime import (
     LLMBudgetExceeded,
@@ -82,6 +84,7 @@ DEFAULT_OPERATION_TIMEOUTS = {
 }
 ARTIFACT_COMPLETION_SCHEMA_VERSION = 1
 _SUPERVISED_CHILD_ENV = "RAG_PIPELINE_SUPERVISED_CHILD"
+_RUN_ID_ENV = "RAG_PIPELINE_RUN_ID"
 _SUPERVISED_TERMINATE_GRACE = 5.0
 
 # Embedding model max token limits (for validation)
@@ -5882,7 +5885,8 @@ def _index_chunks_chroma_impl(
         embedding_model: str = DEFAULT_EMBEDDING_MODEL,
         full_reindex: bool = False,
         _active_update_token: str | None = None,
-        _client_owner: _VectorClientOwner) -> None:
+        _client_owner: _VectorClientOwner,
+        ) -> _operation_contracts.IndexOutcome:
     """Load enriched chunks and index into a local ChromaDB collection."""
     import chromadb
     from tqdm import tqdm
@@ -5925,6 +5929,10 @@ def _index_chunks_chroma_impl(
             active_update_token=_active_update_token,
         )
     )
+    collection_existed_at_start = collection_exists
+    changed_count = source_record_count
+    unchanged_count = 0
+    removed_count = 0
     reuse_existing_collection = collection_exists and not rebuild_collection
     update_marker_path = _chroma_update_marker_path(
         chroma_dir, collection_name=collection_name)
@@ -5984,6 +5992,9 @@ def _index_chunks_chroma_impl(
         ]
         changed = [record for record, _, _ in changed_info]
         removed_ids = [k for k in old_hashes if k not in new_hashes]
+        changed_count = len(changed)
+        unchanged_count = source_record_count - changed_count
+        removed_count = len(removed_ids)
         changed_existing_ids = [
             chunk_id for _, chunk_id, _ in changed_info
             if chunk_id in old_hashes
@@ -6017,7 +6028,15 @@ def _index_chunks_chroma_impl(
                 _finish_index_update(
                     update_marker_path, owner_token=update_token,
                     backend="chroma", collection_name=collection_name)
-            return
+            disposition = "updated" if removed_count else "unchanged"
+            return _operation_contracts.IndexOutcome(
+                backend="chroma", disposition=disposition,
+                total_records=source_record_count,
+                changed_records=changed_count,
+                unchanged_records=unchanged_count,
+                removed_records=removed_count,
+                upserted_records=0, batch_count=0,
+                physical_count=source_record_count, committed=True)
         records = changed
     elif reuse_existing_collection:
         # A compatible empty manifest is safe to populate only if the physical
@@ -6135,6 +6154,18 @@ def _index_chunks_chroma_impl(
     )
     log.info(f"Embedding model: {embedding_model}")
     log.info(f"Persisted to {chroma_dir}")
+    disposition = (
+        "created" if not collection_existed_at_start else
+        "rebuilt" if rebuild_collection else
+        "updated")
+    return _operation_contracts.IndexOutcome(
+        backend="chroma", disposition=disposition,
+        total_records=source_record_count,
+        changed_records=changed_count,
+        unchanged_records=unchanged_count,
+        removed_records=removed_count,
+        upserted_records=changed_count, batch_count=len(batches),
+        physical_count=len(verified_ids), committed=True)
 
 
 def index_chunks(chunks_path: Path, chroma_dir: Path, *,
@@ -6142,7 +6173,8 @@ def index_chunks(chunks_path: Path, chroma_dir: Path, *,
                  embedding_model: str = DEFAULT_EMBEDDING_MODEL,
                  full_reindex: bool = False,
                  lock_timeout: float = DEFAULT_DB_LOCK_TIMEOUT,
-                 _active_update_token: str | None = None) -> None:
+                 _active_update_token: str | None = None,
+                 ) -> _operation_contracts.IndexOutcome:
     """Index Chroma under a path-wide, process-safe exclusive lease."""
     with _vector_store_lock(
             chroma_dir, backend="chroma",
@@ -6719,7 +6751,8 @@ def _index_chunks_qdrant_impl(
         embedding_model: str = DEFAULT_EMBEDDING_MODEL,
         full_reindex: bool = False,
         _active_update_token: str | None = None,
-        _client_owner: _VectorClientOwner) -> None:
+        _client_owner: _VectorClientOwner,
+        ) -> _operation_contracts.IndexOutcome:
     """Load enriched chunks and index into a local Qdrant collection.
 
     Uses Qdrant's local mode (on-disk, no server needed) with:
@@ -6764,6 +6797,10 @@ def _index_chunks_qdrant_impl(
             active_update_token=_active_update_token,
         )
     )
+    collection_existed_at_start = collection_exists
+    changed_count = source_record_count
+    unchanged_count = 0
+    removed_count = 0
     reuse_existing_collection = collection_exists and not rebuild_collection
     update_marker_path = _qdrant_update_marker_path(
         qdrant_dir, collection_name=collection_name)
@@ -6831,6 +6868,9 @@ def _index_chunks_qdrant_impl(
         ]
         changed = [record for record, _, _ in changed_info]
         removed_ids = [k for k in old_hashes if k not in new_hashes]
+        changed_count = len(changed)
+        unchanged_count = source_record_count - changed_count
+        removed_count = len(removed_ids)
         changed_existing_ids = [
             chunk_id for _, chunk_id, _ in changed_info
             if chunk_id in old_hashes
@@ -6877,7 +6917,15 @@ def _index_chunks_qdrant_impl(
                 _finish_index_update(
                     update_marker_path, owner_token=update_token,
                     backend="qdrant", collection_name=collection_name)
-            return
+            disposition = "updated" if removed_count else "unchanged"
+            return _operation_contracts.IndexOutcome(
+                backend="qdrant", disposition=disposition,
+                total_records=source_record_count,
+                changed_records=changed_count,
+                unchanged_records=unchanged_count,
+                removed_records=removed_count,
+                upserted_records=0, batch_count=0,
+                physical_count=source_record_count, committed=True)
         records = changed
     elif reuse_existing_collection:
         # A compatible empty manifest is safe to populate only if the physical
@@ -6972,6 +7020,18 @@ def _index_chunks_qdrant_impl(
     log.info(f"Embedding: {embedding_model} (dim={dim})")
     log.info("Sparse vectors: BM25 (built-in hybrid search)")
     log.info(f"Persisted to {qdrant_dir}")
+    disposition = (
+        "created" if not collection_existed_at_start else
+        "rebuilt" if rebuild_collection else
+        "updated")
+    return _operation_contracts.IndexOutcome(
+        backend="qdrant", disposition=disposition,
+        total_records=source_record_count,
+        changed_records=changed_count,
+        unchanged_records=unchanged_count,
+        removed_records=removed_count,
+        upserted_records=changed_count, batch_count=len(batches),
+        physical_count=verified_count, committed=True)
 
 
 def index_chunks_qdrant(chunks_path: Path, qdrant_dir: Path, *,
@@ -6979,7 +7039,8 @@ def index_chunks_qdrant(chunks_path: Path, qdrant_dir: Path, *,
                         embedding_model: str = DEFAULT_EMBEDDING_MODEL,
                         full_reindex: bool = False,
                         lock_timeout: float = DEFAULT_DB_LOCK_TIMEOUT,
-                        _active_update_token: str | None = None) -> None:
+                        _active_update_token: str | None = None,
+                        ) -> _operation_contracts.IndexOutcome:
     """Index Qdrant under a path-wide, process-safe exclusive lease."""
     with _vector_store_lock(
             qdrant_dir, backend="qdrant",
@@ -9567,10 +9628,11 @@ def _index_chunks_for_backend(chunks_path: Path, db_dir: Path, *,
                               full_reindex: bool = False,
                               lock_timeout: float = (
                                   DEFAULT_DB_LOCK_TIMEOUT),
-                              _active_update_token: str | None = None) -> None:
+                              _active_update_token: str | None = None,
+                              ) -> _operation_contracts.IndexOutcome:
     """Dispatch indexing to the configured storage backend."""
     if db_backend == "qdrant":
-        index_chunks_qdrant(
+        return index_chunks_qdrant(
             chunks_path, db_dir,
             collection_name=collection_name,
             embedding_model=embedding_model,
@@ -9579,7 +9641,7 @@ def _index_chunks_for_backend(chunks_path: Path, db_dir: Path, *,
             _active_update_token=_active_update_token,
         )
     else:
-        index_chunks(
+        return index_chunks(
             chunks_path, db_dir,
             collection_name=collection_name,
             embedding_model=embedding_model,
@@ -9600,7 +9662,9 @@ def _query_index_for_backend(query_text: str, db_dir: Path, *,
 
 
 def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
-                         resume: bool, watermark: re.Pattern | None) -> dict:
+                         resume: bool, watermark: re.Pattern | None,
+                         telemetry: _run_telemetry.RunTelemetry | None = None,
+                         stage_scope: str | None = None) -> dict:
     """Run one PDF through the shared full/batch stage sequence.
 
     The CLI namespace is accepted at this boundary so the individual pipeline
@@ -9612,8 +9676,22 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
     db_dir = paths["qdrant"] if db_backend == "qdrant" else paths["chroma"]
     llm_kwargs = _llm_kwargs_from_args(args, include_workers=True)
 
+    def observed_stage(name: str) -> str:
+        return f"{stage_scope}.{name}" if stage_scope else name
+
+    def stage_started(name: str, *, metrics: dict | None = None) -> None:
+        if telemetry is not None:
+            telemetry.stage_started(observed_stage(name), metrics=metrics)
+
+    def stage_finished(name: str, *, status: str = "completed",
+                       metrics: dict | None = None) -> None:
+        if telemetry is not None:
+            telemetry.stage_finished(
+                observed_stage(name), status=status, metrics=metrics)
+
     current_stage = "convert"
     try:
+        stage_started(current_stage)
         conversion_parameters = _conversion_parameters(
             batch_size_override=args.batch_size, backend=args.backend,
             auto_preprocess=not args.no_preprocess,
@@ -9622,6 +9700,7 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
                 pdf_path, paths["doc"], paths["converted_markdown"],
                 parameters=conversion_parameters):
             log.info(f"  [SKIP] convert (output exists: {paths['doc']})")
+            stage_finished(current_stage, status="skipped")
         else:
             convert_pdf(
                 pdf_path,
@@ -9641,15 +9720,19 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
                 raise RuntimeError(
                     "Conversion did not publish a complete artifact set")
             log.info(f"  [DONE] convert -> {paths['doc']}")
+            stage_finished(current_stage)
 
-        current_stage = "chunk/index lease"
+        current_stage = "chunk_index_lease"
         lock_timeout = getattr(
             args, "db_lock_timeout", DEFAULT_DB_LOCK_TIMEOUT)
+        stage_started(current_stage)
         with _vector_store_lock(
                 db_dir, backend=db_backend, collection_name=collection,
                 operation="pipeline chunk/index transition",
                 timeout=lock_timeout):
+            stage_finished(current_stage)
             current_stage = "chunk"
+            stage_started(current_stage)
             chunk_parameters = _chunk_parameters(
                 embedding_model=args.embedding_model,
                 max_tokens=args.max_tokens, min_words=args.min_words,
@@ -9672,6 +9755,9 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
             if resume and chunk_count is not None:
                 log.info(
                     f"  [SKIP] chunk (verified complete: {paths['chunks']})")
+                stage_finished(
+                    current_stage, status="skipped",
+                    metrics={"records": chunk_count})
             else:
                 marker_path = _index_update_marker_path(
                     db_dir, backend=db_backend,
@@ -9707,13 +9793,16 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
                         "Chunking did not publish a complete artifact set")
                 log.info(f"  [DONE] chunk -> {paths['chunks']}")
                 chunk_count = _chunk_record_count(paths["chunks"])
+                stage_finished(
+                    current_stage, metrics={"records": chunk_count})
 
             current_stage = "index"
+            stage_started(current_stage, metrics={"records": chunk_count})
             if resume:
                 log.info(
                     "  [CHECK] index manifest, model, dimension, and chunk "
                     "hashes")
-            _index_chunks_for_backend(
+            index_outcome = _index_chunks_for_backend(
                 paths["chunks"],
                 db_dir,
                 db_backend=db_backend,
@@ -9724,8 +9813,11 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
                 _active_update_token=active_update_token,
             )
             log.info(f"  [DONE] index -> {db_dir}")
+            stage_finished(
+                current_stage, metrics=index_outcome.telemetry_metrics())
 
         current_stage = "export"
+        stage_started(current_stage)
         unified_parameters = _markdown_export_parameters(
             include_types=None, exclude_types=None, chapters=None,
             split_chapters=False)
@@ -9733,6 +9825,7 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
                 paths["chunks"], paths["export"],
                 parameters=unified_parameters):
             log.info(f"  [SKIP] unified export (output exists: {paths['export']})")
+            stage_finished(current_stage, status="skipped")
         else:
             export_markdown(paths["chunks"], paths["export"], **llm_kwargs)
             if not _unified_export_complete(
@@ -9741,8 +9834,11 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
                 raise RuntimeError(
                     "Unified export did not publish a complete artifact set")
             log.info(f"  [DONE] unified export -> {paths['export']}")
+            stage_finished(current_stage)
 
         if getattr(args, "split_chapters", False):
+            current_stage = "chapter_export"
+            stage_started(current_stage)
             split_parameters = _markdown_export_parameters(
                 include_types=None, exclude_types=None, chapters=None,
                 split_chapters=True)
@@ -9751,6 +9847,7 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
                     parameters=split_parameters):
                 log.info(
                     f"  [SKIP] chapter export (output exists: {paths['chapters_dir']})")
+                stage_finished(current_stage, status="skipped")
             else:
                 export_markdown(
                     paths["chunks"],
@@ -9765,9 +9862,11 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
                     raise RuntimeError(
                         "Chapter export did not publish a complete artifact set")
                 log.info(f"  [DONE] chapter export -> {paths['chapters_dir']}")
+                stage_finished(current_stage)
 
         if getattr(args, "raptor", False):
             current_stage = "raptor"
+            stage_started(current_stage)
             raptor_out = paths["chunks"].with_name(
                 paths["chunks"].stem.replace("_chunks", "") + "_raptor.json")
             raptor_parameters = _raptor_parameters(
@@ -9783,6 +9882,7 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
                     paths["chunks"], raptor_out,
                     parameters=raptor_parameters):
                 log.info(f"  [SKIP] raptor (output exists: {raptor_out})")
+                stage_finished(current_stage, status="skipped")
             else:
                 build_raptor_tree(
                     paths["chunks"],
@@ -9796,8 +9896,24 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
                     raise RuntimeError(
                         "RAPTOR did not publish a complete tree")
                 log.info(f"  [DONE] raptor -> {raptor_out}")
+                stage_finished(current_stage)
 
-    except (Exception, SystemExit) as exc:
+    except KeyboardInterrupt as exc:
+        if telemetry is not None:
+            telemetry.stage_cancelled(observed_stage(current_stage), exc)
+        raise
+    except SystemExit as exc:
+        if telemetry is not None:
+            if exc.code == 130:
+                telemetry.stage_cancelled(observed_stage(current_stage), exc)
+            else:
+                telemetry.stage_failed(observed_stage(current_stage), exc)
+        if exc.code == 130:
+            raise
+        raise _PipelineStageError(current_stage, exc) from exc
+    except Exception as exc:
+        if telemetry is not None:
+            telemetry.stage_failed(observed_stage(current_stage), exc)
         raise _PipelineStageError(current_stage, exc) from exc
 
     return {
@@ -9805,12 +9921,15 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
         "collection": collection,
         "db_dir": db_dir,
         "db_backend": db_backend,
+        "index_outcome": index_outcome,
     }
 
 
 def _run_pipeline_job(pdf_path: Path, args, *, resume: bool,
                       watermark: re.Pattern | None,
-                      announce: bool = False) -> tuple[PipelinePaths, dict]:
+                      announce: bool = False,
+                      telemetry: _run_telemetry.RunTelemetry | None = None,
+                      stage_scope: str | None = None) -> tuple[PipelinePaths, dict]:
     """Allocate and execute one run while holding its PDF-stem job lease."""
     timeout = getattr(args, "db_lock_timeout", DEFAULT_DB_LOCK_TIMEOUT)
     try:
@@ -9826,9 +9945,15 @@ def _run_pipeline_job(pdf_path: Path, args, *, resume: bool,
                     log.info("  (--resume mode: skipping completed stages)")
             run = _run_pipeline_stages(
                 pdf_path, paths, args, resume=resume,
-                watermark=watermark)
+                watermark=watermark, telemetry=telemetry,
+                stage_scope=stage_scope)
             return paths, run
     except VectorStoreBusyError as exc:
+        if telemetry is not None:
+            stage = (
+                f"{stage_scope}.concurrency" if stage_scope
+                else "concurrency")
+            telemetry.stage_failed(stage, exc)
         raise _PipelineStageError("concurrency", exc) from exc
 
 
@@ -9966,25 +10091,25 @@ class _SupervisorSignal(BaseException):
 
 
 def _terminate_supervised_process(process, *, kill_job=None) -> bool:
-    """Terminate a supervised worker and escalate after a short grace period."""
+    """Terminate a supervised tree and confirm the direct worker was reaped."""
     if kill_job is not None:
         # Closing a KILL_ON_JOB_CLOSE job is atomic from the supervisor's point
         # of view and still works if the direct worker exited before a child.
-        terminated = kill_job.terminate()
+        kill_job.terminate()
         kill_job.close()
-        if not terminated and process.poll() is None:
-            try:
-                process.kill()
-            except OSError:
-                pass
         try:
             process.wait(timeout=_SUPERVISED_TERMINATE_GRACE)
         except subprocess.TimeoutExpired:
+            if process.poll() is None:
+                try:
+                    process.kill()
+                except OSError:
+                    pass
             try:
-                process.kill()
-            except OSError:
-                pass
-        return terminated
+                process.wait(timeout=_SUPERVISED_TERMINATE_GRACE)
+            except subprocess.TimeoutExpired:
+                return False
+        return process.poll() is not None
 
     if os.name == "nt":
         # ``Popen.terminate()`` only kills the direct Windows process. The
@@ -10026,7 +10151,7 @@ def _terminate_supervised_process(process, *, kill_job=None) -> bool:
                 process.wait(timeout=_SUPERVISED_TERMINATE_GRACE)
             except subprocess.TimeoutExpired:
                 pass
-        return taskkill_succeeded
+        return process.poll() is not None and taskkill_succeeded
 
     def send_signal(sig) -> None:
         try:
@@ -10056,18 +10181,60 @@ def _terminate_supervised_process(process, *, kill_job=None) -> bool:
         send_signal(signal.SIGKILL)
     except OSError:
         pass
-    if process.poll() is None:
+    worker_reaped = process.poll() is not None
+    if not worker_reaped:
         try:
             process.wait(timeout=_SUPERVISED_TERMINATE_GRACE)
         except subprocess.TimeoutExpired:
+            return False
+        worker_reaped = True
+    group_gone = False
+    deadline = time.monotonic() + _SUPERVISED_TERMINATE_GRACE
+    while time.monotonic() < deadline:
+        try:
+            os.killpg(process.pid, 0)
+        except ProcessLookupError:
+            group_gone = True
+            break
+        except PermissionError:
             pass
-    return True
+        time.sleep(0.05)
+    return worker_reaped and group_gone
+
+
+def _supervised_telemetry_requested(
+        run_id: str | None, run_events: Path | None,
+        run_report: Path | None) -> bool:
+    return run_id is not None and (
+        run_events is not None or run_report is not None)
+
+
+def _finalize_supervised_run_telemetry(
+        operation: str, *, run_id: str | None,
+        run_events: Path | None, run_report: Path | None,
+        status: str, exc: BaseException) -> None:
+    if not _supervised_telemetry_requested(
+            run_id, run_events, run_report):
+        return
+    try:
+        _run_telemetry.finalize_interrupted_run(
+            operation, run_id=run_id, status=status, exc=exc,
+            events_path=run_events, report_path=run_report)
+    except Exception as telemetry_exc:
+        print(
+            "Could not finalize supervised run telemetry "
+            f"({type(telemetry_exc).__name__}).",
+            file=sys.stderr,
+        )
 
 
 def _run_cli_with_deadline(script_path: Path, argv: list[str], *,
                            operation: str, timeout: float,
                            environment_overrides: dict[str, str | None]
-                           | None = None) -> int:
+                           | None = None,
+                           run_id: str | None = None,
+                           run_events: Path | None = None,
+                           run_report: Path | None = None) -> int:
     """Run one CLI operation in a killable process with a wall-clock deadline."""
     timeout = _normalize_operation_timeout(timeout)
     environment = os.environ.copy()
@@ -10077,31 +10244,43 @@ def _run_cli_with_deadline(script_path: Path, argv: list[str], *,
             environment.pop(name, None)
         else:
             environment[name] = value
+    if run_id is not None:
+        environment[_RUN_ID_ENV] = run_id
+    if _supervised_telemetry_requested(run_id, run_events, run_report):
+        _run_telemetry.RunTelemetry(
+            operation, run_id=run_id, events_path=run_events,
+            report_path=run_report).start()
     command = [sys.executable, "-u", str(Path(script_path).resolve()), *argv]
     process_options = {"env": environment}
     kill_job = None
-    if os.name == "nt":
-        process_options["creationflags"] = getattr(
-            subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-        kill_job = _WindowsKillJob()
-    else:
-        process_options["start_new_session"] = True
     try:
+        if os.name == "nt":
+            process_options["creationflags"] = getattr(
+                subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            kill_job = _WindowsKillJob()
+        else:
+            process_options["start_new_session"] = True
         process = subprocess.Popen(command, **process_options)
-    except BaseException:
+    except BaseException as exc:
         if kill_job is not None:
             kill_job.close()
+        _finalize_supervised_run_telemetry(
+            operation, run_id=run_id, run_events=run_events,
+            run_report=run_report,
+            status="cancelled" if isinstance(exc, KeyboardInterrupt)
+            else "failed",
+            exc=exc)
         raise
     if kill_job is not None:
         try:
             kill_job.assign(process)
-        except BaseException:
-            try:
-                process.kill()
-                process.wait(timeout=_SUPERVISED_TERMINATE_GRACE)
-            except (OSError, subprocess.SubprocessError):
-                pass
-            kill_job.close()
+        except BaseException as exc:
+            cleanup_complete = _terminate_supervised_process(
+                process, kill_job=kill_job)
+            if cleanup_complete:
+                _finalize_supervised_run_telemetry(
+                    operation, run_id=run_id, run_events=run_events,
+                    run_report=run_report, status="failed", exc=exc)
             raise
 
     previous_handlers = {}
@@ -10116,10 +10295,22 @@ def _run_cli_with_deadline(script_path: Path, argv: list[str], *,
             previous_handlers[signum] = signal.getsignal(signum)
             signal.signal(signum, raise_supervisor_signal)
     try:
-        return int(process.wait(timeout=timeout))
+        exit_code = int(process.wait(timeout=timeout))
+        if exit_code:
+            _finalize_supervised_run_telemetry(
+                operation, run_id=run_id, run_events=run_events,
+                run_report=run_report,
+                status="cancelled" if exit_code == 130 else "failed",
+                exc=SystemExit(exit_code))
+        return exit_code
     except subprocess.TimeoutExpired:
         cleanup_complete = _terminate_supervised_process(
             process, kill_job=kill_job)
+        if cleanup_complete:
+            _finalize_supervised_run_telemetry(
+                operation, run_id=run_id, run_events=run_events,
+                run_report=run_report, status="failed",
+                exc=TimeoutError("supervised operation deadline exceeded"))
         cleanup_status = (
             "Any operating-system vector-store lease was released; retry "
             "the command to recover an interrupted index."
@@ -10134,10 +10325,29 @@ def _run_cli_with_deadline(script_path: Path, argv: list[str], *,
         )
         return 124
     except _SupervisorSignal as exc:
-        _terminate_supervised_process(process, kill_job=kill_job)
+        cleanup_complete = _terminate_supervised_process(
+            process, kill_job=kill_job)
+        if cleanup_complete:
+            _finalize_supervised_run_telemetry(
+                operation, run_id=run_id, run_events=run_events,
+                run_report=run_report, status="cancelled",
+                exc=KeyboardInterrupt())
         return 128 + exc.signum
-    except BaseException:
-        _terminate_supervised_process(process, kill_job=kill_job)
+    except KeyboardInterrupt as exc:
+        cleanup_complete = _terminate_supervised_process(
+            process, kill_job=kill_job)
+        if cleanup_complete:
+            _finalize_supervised_run_telemetry(
+                operation, run_id=run_id, run_events=run_events,
+                run_report=run_report, status="cancelled", exc=exc)
+        return 130
+    except BaseException as exc:
+        cleanup_complete = _terminate_supervised_process(
+            process, kill_job=kill_job)
+        if cleanup_complete:
+            _finalize_supervised_run_telemetry(
+                operation, run_id=run_id, run_events=run_events,
+                run_report=run_report, status="failed", exc=exc)
         raise
     finally:
         for signum, previous in previous_handlers.items():
@@ -10147,6 +10357,7 @@ def _run_cli_with_deadline(script_path: Path, argv: list[str], *,
 
 
 _rag_cli_command = _cli_policy._rag_cli_command
+_cli_run_telemetry_options = _cli_policy._cli_run_telemetry_options
 
 
 def _run_rag_entrypoint(
@@ -10160,9 +10371,21 @@ def _run_rag_entrypoint(
         return 0
     if (command in DEFAULT_OPERATION_TIMEOUTS
             and os.environ.get(_SUPERVISED_CHILD_ENV) != "1"):
+        telemetry_options = _cli_run_telemetry_options(cli_args, command)
+        explicit_run_id = telemetry_options["run_id"]
+        run_id = (
+            explicit_run_id if explicit_run_id is not None
+            else os.environ.get(_RUN_ID_ENV) or _run_telemetry.new_run_id())
         supervisor_options = {
             "operation": command,
             "timeout": _cli_operation_timeout(cli_args, command),
+            "run_id": run_id,
+            "run_events": (
+                Path(telemetry_options["events_path"])
+                if telemetry_options["events_path"] is not None else None),
+            "run_report": (
+                Path(telemetry_options["report_path"])
+                if telemetry_options["report_path"] is not None else None),
         }
         if environment_overrides:
             supervisor_options["environment_overrides"] = environment_overrides
@@ -10246,6 +10469,17 @@ def main(argv: list[str] | None = None):
             "--operation-timeout", type=float, default=default,
             help=("Maximum wall-clock seconds for the isolated command worker "
                   f"(default: {default:g})"))
+
+    def add_run_telemetry_flags(p):
+        p.add_argument(
+            "--run-id", default=None,
+            help="Opaque correlation ID (default: generated UUID)")
+        p.add_argument(
+            "--run-events", type=Path, default=None,
+            help="Write content-free stage events as private JSONL")
+        p.add_argument(
+            "--run-report", type=Path, default=None,
+            help="Write a content-free aggregate run report as private JSON")
 
     def add_watermark_flag(p):
         p.add_argument("--watermark", type=str, default=DEFAULT_WATERMARK,
@@ -10576,6 +10810,11 @@ def main(argv: list[str] | None = None):
     p_batch.add_argument("--resume", action="store_true",
                          help="Skip already-completed stages per PDF (resume failed batch)")
 
+    for command_parser in (
+            p_pre, p_conv, p_chunk, p_idx, p_eq, p_genq, p_cg, p_rap,
+            p_brief, p_q, p_exp, p_info, p_full, p_batch):
+        add_run_telemetry_flags(command_parser)
+
     args = parser.parse_args(argv)
 
     # --- Configure logging ---
@@ -10589,34 +10828,66 @@ def main(argv: list[str] | None = None):
         force=True,
     )
     previous_llm_config = _llm_runtime.config
+    cli_run_id = getattr(args, "run_id", None)
+    try:
+        _run_telemetry.validate_distinct_output_paths({
+            "--run-events": getattr(args, "run_events", None),
+            "--run-report": getattr(args, "run_report", None),
+            "--llm-events": getattr(args, "llm_events", None),
+            "--llm-report": getattr(args, "llm_report", None),
+        })
+        run_telemetry = _run_telemetry.RunTelemetry(
+            args.command or "cli",
+            run_id=(cli_run_id if cli_run_id is not None
+                    else os.environ.get(_RUN_ID_ENV)),
+            events_path=getattr(args, "run_events", None),
+            report_path=getattr(args, "run_report", None),
+        )
+    except (TypeError, ValueError) as exc:
+        parser.error(str(exc))
+    args.run_id = run_telemetry.run_id
+    run_telemetry.start()
+    if run_telemetry.enabled:
+        log.info("Run ID: %s", run_telemetry.run_id)
 
-    # --- Compile watermark once ---
     wm = None
-    if hasattr(args, "watermark"):
-        wm = _compile_watermark(args.watermark)
-
-    # --- Resolve DB path based on backend ---
     db_backend = getattr(args, "db_backend", DEFAULT_DB_BACKEND)
-    if hasattr(args, "db") and args.db is None:
-        args.db = DEFAULT_QDRANT_DIR if db_backend == "qdrant" else DEFAULT_CHROMA_DIR
-
     full_reindex = getattr(args, "full_reindex", False)
-    if hasattr(args, "db_lock_timeout"):
-        try:
-            args.db_lock_timeout = _normalize_db_lock_timeout(
-                args.db_lock_timeout)
-        except ValueError as exc:
-            parser.error(str(exc))
-    if hasattr(args, "operation_timeout"):
-        try:
-            args.operation_timeout = _normalize_operation_timeout(
-                args.operation_timeout)
-        except ValueError as exc:
-            parser.error(str(exc))
-    llm_kwargs = _llm_kwargs_from_args(args, include_workers=True)
-    _configure_llm_runtime_from_args(args)
+    observed_command_stage = (
+        args.command is not None and args.command not in {"full", "batch"})
+    operation_metrics: dict[str, int | float | bool | None] = {}
+    run_completion_status: str | None = None
+    llm_runtime_configured = False
 
     try:
+        # --- Compile watermark once ---
+        if hasattr(args, "watermark"):
+            wm = _compile_watermark(args.watermark)
+
+        # --- Resolve DB path based on backend ---
+        if hasattr(args, "db") and args.db is None:
+            args.db = (
+                DEFAULT_QDRANT_DIR if db_backend == "qdrant"
+                else DEFAULT_CHROMA_DIR)
+
+        if hasattr(args, "db_lock_timeout"):
+            try:
+                args.db_lock_timeout = _normalize_db_lock_timeout(
+                    args.db_lock_timeout)
+            except ValueError as exc:
+                parser.error(str(exc))
+        if hasattr(args, "operation_timeout"):
+            try:
+                args.operation_timeout = _normalize_operation_timeout(
+                    args.operation_timeout)
+            except ValueError as exc:
+                parser.error(str(exc))
+        llm_kwargs = _llm_kwargs_from_args(args, include_workers=True)
+        _configure_llm_runtime_from_args(args)
+        llm_runtime_configured = True
+
+        if observed_command_stage:
+            run_telemetry.stage_started(args.command)
         # Validate API keys early (before expensive processing)
         if hasattr(args, "embedding_model"):
             _validate_api_key(args.embedding_model)
@@ -10652,7 +10923,7 @@ def main(argv: list[str] | None = None):
                            **llm_kwargs)
 
         elif args.command == "index":
-            _index_chunks_for_backend(
+            index_outcome = _index_chunks_for_backend(
                 args.chunks,
                 args.db,
                 db_backend=db_backend,
@@ -10661,6 +10932,7 @@ def main(argv: list[str] | None = None):
                 full_reindex=full_reindex,
                 lock_timeout=args.db_lock_timeout,
             )
+            operation_metrics.update(index_outcome.telemetry_metrics())
 
         elif args.command == "extract-questions":
             extract_questions(args.chunks, args.out)
@@ -10724,7 +10996,7 @@ def main(argv: list[str] | None = None):
             try:
                 paths, run = _run_pipeline_job(
                     args.pdf, args, resume=resume, watermark=wm,
-                    announce=True)
+                    announce=True, telemetry=run_telemetry)
             except _PipelineStageError as exc:
                 log.error(f"Pipeline failed at stage '{exc.stage}': {exc.cause}")
                 resume_cmd = _build_resume_cmd(args.pdf, args)
@@ -10752,6 +11024,8 @@ def main(argv: list[str] | None = None):
             resume = getattr(args, "resume", False)
             results = []
             total = len(args.pdfs)
+            run_telemetry.stage_started(
+                "batch", metrics={"total_items": total})
             for idx, pdf in enumerate(args.pdfs, 1):
                 log.info(f"\n{'='*60}")
                 log.info(f"  BATCH [{idx}/{total}]: {pdf.name}")
@@ -10759,6 +11033,10 @@ def main(argv: list[str] | None = None):
 
                 if not pdf.exists():
                     log.error(f"PDF not found: {pdf}")
+                    missing_stage = f"item_{idx}.input"
+                    run_telemetry.stage_started(missing_stage)
+                    run_telemetry.stage_failed(
+                        missing_stage, FileNotFoundError(pdf.name))
                     results.append({"pdf": str(pdf), "status": "SKIPPED",
                                     "reason": "file not found"})
                     continue
@@ -10766,7 +11044,8 @@ def main(argv: list[str] | None = None):
                 t0 = time.time()
                 try:
                     paths, run = _run_pipeline_job(
-                        pdf, args, resume=resume, watermark=wm)
+                        pdf, args, resume=resume, watermark=wm,
+                        telemetry=run_telemetry, stage_scope=f"item_{idx}")
 
                     elapsed = time.time() - t0
                     results.append({
@@ -10803,6 +11082,7 @@ def main(argv: list[str] | None = None):
             ok = sum(1 for r in results if r["status"] == "OK")
             failed = sum(1 for r in results if r["status"] == "FAILED")
             skipped = sum(1 for r in results if r["status"] == "SKIPPED")
+            remaining = total - len(results)
             log.info(f"  OK: {ok}  Failed: {failed}  Skipped: {skipped}")
             for r in results:
                 status = r["status"]
@@ -10815,6 +11095,16 @@ def main(argv: list[str] | None = None):
                     log.info(f"           Resume: {_build_resume_cmd(Path(r['pdf']), args)}")
                 else:
                     log.info(f"  [{status}] {name} — {r.get('reason', '')}")
+            run_telemetry.stage_finished("batch", metrics={
+                "total_items": total,
+                "processed_items": len(results),
+                "succeeded_items": ok,
+                "failed_items": failed,
+                "skipped_items": skipped,
+                "remaining_items": remaining,
+            })
+            if failed or skipped or remaining:
+                run_completion_status = "partial"
 
         else:
             if args.command is None:
@@ -10823,26 +11113,94 @@ def main(argv: list[str] | None = None):
                 log.error(f"Unknown command: {args.command}")
                 sys.exit(1)
 
+        if observed_command_stage:
+            run_telemetry.stage_finished(
+                args.command, metrics=operation_metrics)
+
     except VectorStoreBusyError as exc:
+        if observed_command_stage:
+            run_telemetry.stage_failed(args.command, exc)
+        run_telemetry.terminate_active_stages("failed", exc)
         log.error(str(exc))
         sys.exit(1)
-    except KeyboardInterrupt:
+    except SystemExit as exc:
+        cancelled = exc.code == 130
+        if observed_command_stage:
+            if cancelled:
+                run_telemetry.stage_cancelled(args.command, exc)
+            else:
+                run_telemetry.stage_failed(args.command, exc)
+        run_telemetry.terminate_active_stages(
+            "cancelled" if cancelled else "failed", exc)
+        raise
+    except KeyboardInterrupt as exc:
+        if observed_command_stage:
+            run_telemetry.stage_cancelled(args.command, exc)
+        run_telemetry.terminate_active_stages("cancelled", exc)
         print("\nInterrupted.", file=sys.stderr)
         sys.exit(130)
     except ImportError as e:
+        if observed_command_stage:
+            run_telemetry.stage_failed(args.command, e)
+        run_telemetry.terminate_active_stages("failed", e)
         mod = str(e).split("'")[1] if "'" in str(e) else str(e)
         log.error(f"Missing dependency: {mod}")
         log.error(f"  pip install {mod}")
         sys.exit(1)
+    except Exception as exc:
+        if observed_command_stage:
+            run_telemetry.stage_failed(args.command, exc)
+        run_telemetry.terminate_active_stages("failed", exc)
+        raise
     finally:
+        run_exception = sys.exc_info()[1]
         try:
-            report_path = _llm_runtime.write_report()
-            if report_path is not None:
-                log.info(f"LLM run report -> {report_path}")
+            if llm_runtime_configured:
+                report_path = _llm_runtime.write_report()
+                if report_path is not None:
+                    log.info(f"LLM run report -> {report_path}")
         except Exception as exc:
             log.warning(f"Could not write LLM run report: {exc}")
         finally:
-            _llm_runtime.configure(previous_llm_config)
+            try:
+                if llm_runtime_configured:
+                    llm_payload = _llm_runtime.report_payload()
+                    counts = llm_payload["counts"]
+                    if counts.get("requests", 0):
+                        latency = llm_payload["latency_ms"]
+                        run_telemetry.stage_observation("llm", metrics={
+                            "requests": counts["requests"],
+                            "succeeded": counts["succeeded"],
+                            "failed": counts["failed"],
+                            "provider_calls": counts["provider_calls"],
+                            "transport_attempts": counts[
+                                "transport_attempts"],
+                            "transport_retries": counts[
+                                "transport_retries"],
+                            "exact_prompt_tokens": counts[
+                                "exact_prompt_tokens"],
+                            "exact_completion_tokens": counts[
+                                "exact_completion_tokens"],
+                            "estimated_prompt_tokens": counts[
+                                "estimated_prompt_tokens"],
+                            "estimated_completion_tokens": counts[
+                                "estimated_completion_tokens"],
+                            "latency_p50_ms": latency["p50"],
+                            "latency_p95_ms": latency["p95"],
+                        })
+                if run_exception is None and run_completion_status is not None:
+                    run_telemetry.finish(run_completion_status)
+                else:
+                    run_telemetry.finish_from_exception(run_exception)
+                if run_telemetry.report_path is not None:
+                    log.info(
+                        "Run report -> %s", run_telemetry.report_path)
+            except Exception as exc:
+                log.warning("Could not finalize run telemetry: %s", exc)
+                if run_exception is None:
+                    raise
+            finally:
+                _llm_runtime.configure(previous_llm_config)
 
 
 def _menu_choose(prompt: str, options: list[tuple[str, str]],

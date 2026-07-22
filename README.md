@@ -110,6 +110,11 @@ and atomically publishes isolated regular-file trees for runtime loaders. It
 also assembles Docling's layout/TableFormer/RapidOCR tree and emits the
 CycloneDX ML-BOM companion to the Python-package SBOM.
 
+`operation_contracts.py` defines the dependency-free, committed
+`IndexOutcome` returned by both vector backends. `run_telemetry.py` provides the
+shared run ID, stage lifecycle, safe diagnostic, event-stream, aggregate-report,
+and interrupted-worker recovery contract used by the CLI and LLM runtime.
+
 ## Quick Start
 
 The portable command-line and CPU dependency profiles are tested on CPython
@@ -217,6 +222,53 @@ lease. `--operation-timeout` bounds the whole isolated command, including a
 storage call that never returns. Direct Python API calls remain in the caller's
 process; applications requiring a hard cancellation boundary should invoke the
 CLI or isolate those calls in their own supervised process.
+
+### Structured run telemetry
+
+Every command accepts an optional correlated event stream and aggregate report:
+
+```bash
+python rag.py full --pdf book.pdf \
+  --run-id semester-build-7 \
+  --run-events private-telemetry/full.events.jsonl \
+  --run-report private-telemetry/full.report.json
+```
+
+`--run-id` must be a 1-128 character opaque identifier containing only letters,
+digits, `.`, `_`, or `-`; omit it to generate a random ID. For supervised
+vector-store commands, the parent allocates and persists the run identity before
+starting the worker. The same ID appears in stage events, the aggregate run
+report, and any `--llm-events` or `--llm-report` output. It is correlation only:
+it does not change an LLM request ID or cache key.
+
+The schema-v1 JSONL stream records a sequence number, timestamp, operation,
+stage, status, numeric/boolean metrics, and a safe diagnostic when applicable.
+The schema-v1 JSON report summarizes run status (`succeeded`, `partial`,
+`failed`, or `cancelled`), elapsed time, event count, and per-stage counts and
+durations. Pipeline stages cover conversion, chunk/index lease acquisition,
+chunking, indexing, exports, and RAPTOR. Index metrics come from the committed
+`IndexOutcome`: disposition plus total, changed, unchanged, removed, upserted,
+batch, and physically verified record counts. LLM observations aggregate calls,
+attempts, retries, latency, and exact/estimated tokens.
+
+Each invocation replaces the supplied run-event/report files with its current
+run. Run and LLM event/report outputs must resolve to pairwise distinct files;
+lexical, case, symlink, and existing hard-link aliases are rejected. A `batch`
+that completes its best-effort loop but has failed, missing, or
+unprocessed inputs reports `partial` while preserving the command's existing
+summary behavior. After a deadline or interruption, the supervisor first
+confirms worker cleanup, then recovers the current event stream, terminates any
+unmatched stages, and writes the final failure/cancellation record. A terminal
+success already committed by the worker wins over a late cancellation.
+
+Run telemetry intentionally omits source and output paths, prompts, responses,
+credentials, endpoints, and exception messages. Its message fingerprint is a
+process-keyed opaque digest rather than a reusable plaintext hash. This does not
+sanitize normal console/file logs, which can still contain paths and operational
+details. New POSIX telemetry directories/files request modes `0700`/`0600`; on
+Windows, `chmod` is not a DACL guarantee. Store telemetry in an access-controlled
+directory on Windows until the storage-policy milestone adds explicit ACL and
+retention enforcement.
 
 ### Interactive Menu
 
@@ -1471,6 +1523,8 @@ llm_adapters.py         # Typed LLM provider transport adapters
 cli_policy.py           # Stdlib-only CLI interpretation and serialization policy
 ingestion_core.py       # Stdlib-only PDF inspection and stripping safety policy
 model_artifacts.py      # Stdlib-only model lock, byte verification, and ML-BOM
+operation_contracts.py  # Committed vector-index outcome contract
+run_telemetry.py        # Correlated stage events, reports, and recovery
 model-artifact-policy.json # Reviewed models, consumers, files, code, and licenses
 model-artifacts.lock.json # Immutable revisions and per-file raw SHA-256 inventory
 preprocess_pdf.py       # Standalone PDF preprocessing CLI facade

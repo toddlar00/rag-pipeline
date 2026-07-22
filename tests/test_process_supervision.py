@@ -1,6 +1,7 @@
 """Hard-deadline regressions for killable CLI operation workers."""
 
 from pathlib import Path
+import json
 import math
 import os
 import subprocess
@@ -82,7 +83,8 @@ def test_supervised_process_propagates_exit_and_marks_child_environment(
             "import sys",
             f"Path(sys.argv[1]).write_text(os.environ.get("
             f"'{rag._SUPERVISED_CHILD_ENV}', '') + '|' + "
-            "os.environ.get('RAG_TEST_SECRET', ''), encoding='utf-8')",
+            "os.environ.get('RAG_TEST_SECRET', '') + '|' + "
+            f"os.environ.get('{rag._RUN_ID_ENV}', ''), encoding='utf-8')",
             "raise SystemExit(7)",
         ]),
         encoding="utf-8",
@@ -90,10 +92,12 @@ def test_supervised_process_propagates_exit_and_marks_child_environment(
 
     code = rag._run_cli_with_deadline(
         script, [str(marker)], operation="test", timeout=5,
-        environment_overrides={"RAG_TEST_SECRET": "child-only"})
+        environment_overrides={"RAG_TEST_SECRET": "child-only"},
+        run_id="correlated-run")
 
     assert code == 7
-    assert marker.read_text(encoding="utf-8") == "1|child-only"
+    assert marker.read_text(encoding="utf-8") == (
+        "1|child-only|correlated-run")
 
 
 def test_supervised_timeout_kills_worker_without_logging_arguments(
@@ -111,6 +115,99 @@ def test_supervised_timeout_kills_worker_without_logging_arguments(
     error_output = capsys.readouterr().err
     assert "exceeded its 0.2s deadline" in error_output
     assert "do-not-log-this-secret" not in error_output
+
+
+def test_supervisor_synthesizes_timeout_telemetry_after_worker_exit(
+        tmp_path):
+    script = tmp_path / "hung_worker.py"
+    script.write_text("import time\ntime.sleep(60)\n", encoding="utf-8")
+    events_path = tmp_path / "run" / "events.jsonl"
+    report_path = tmp_path / "run" / "report.json"
+
+    code = rag._run_cli_with_deadline(
+        script, [], operation="index", timeout=0.2,
+        run_id="supervised-run", run_events=events_path,
+        run_report=report_path)
+
+    assert code == 124
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["run_id"] == "supervised-run"
+    assert report["status"] == "failed"
+    assert report["failure"]["category"] == "timeout"
+    assert "deadline exceeded" not in report_path.read_text(encoding="utf-8")
+
+
+def test_supervisor_classifies_keyboard_interrupt_as_cancellation(
+        monkeypatch, tmp_path):
+    report_path = tmp_path / "report.json"
+
+    class FakeProcess:
+        pid = 12345
+
+        def wait(self, timeout):
+            raise KeyboardInterrupt()
+
+        def poll(self):
+            return None
+
+    class FakeJob:
+        def assign(self, _process):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(rag, "_WindowsKillJob", FakeJob)
+    monkeypatch.setattr(
+        rag.subprocess, "Popen", lambda *_args, **_kwargs: FakeProcess())
+    monkeypatch.setattr(
+        rag, "_terminate_supervised_process",
+        lambda *_args, **_kwargs: True)
+
+    code = rag._run_cli_with_deadline(
+        tmp_path / "worker.py", [], operation="query", timeout=5,
+        run_id="ctrl-c-run", run_report=report_path)
+
+    assert code == 130
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["status"] == "cancelled"
+    assert report["failure"]["category"] == "cancelled"
+
+
+def test_supervisor_does_not_rewrite_telemetry_before_cleanup_is_confirmed(
+        monkeypatch, tmp_path):
+    report_path = tmp_path / "report.json"
+
+    class FakeProcess:
+        pid = 12346
+
+        def wait(self, timeout):
+            raise subprocess.TimeoutExpired("worker", timeout)
+
+        def poll(self):
+            return None
+
+    class FakeJob:
+        def assign(self, _process):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(rag, "_WindowsKillJob", FakeJob)
+    monkeypatch.setattr(
+        rag.subprocess, "Popen", lambda *_args, **_kwargs: FakeProcess())
+    monkeypatch.setattr(
+        rag, "_terminate_supervised_process",
+        lambda *_args, **_kwargs: False)
+
+    code = rag._run_cli_with_deadline(
+        tmp_path / "worker.py", [], operation="index", timeout=0.1,
+        run_id="still-running", run_report=report_path)
+
+    assert code == 124
+    assert json.loads(report_path.read_text(encoding="utf-8"))["status"] == (
+        "running")
 
 
 def test_supervised_timeout_terminates_worker_descendants(tmp_path):
@@ -157,22 +254,30 @@ def test_supervised_timeout_terminates_worker_descendants(tmp_path):
 def test_windows_job_kills_worker_tree_when_supervisor_is_killed(tmp_path):
     project_root = Path(__file__).resolve().parents[1]
     heartbeat = tmp_path / "heartbeat.txt"
+    worker_pid_path = tmp_path / "worker.pid"
+    child_pid_path = tmp_path / "child.pid"
     worker = tmp_path / "worker.py"
     supervisor = tmp_path / "supervisor.py"
     child_code = (
-        "from pathlib import Path; import sys, time; "
+        "from pathlib import Path; import os, sys, time; "
         "p=Path(sys.argv[1]); "
+        "Path(sys.argv[2]).write_text(str(os.getpid()), encoding='utf-8'); "
         "[(p.write_text(str(i), encoding='utf-8'), time.sleep(0.05)) "
         "for i in range(400)]"
     )
     worker.write_text(
         textwrap.dedent(
             f"""
+            from pathlib import Path
+            import os
             import subprocess
             import sys
             import time
-            subprocess.Popen([sys.executable, "-c", {child_code!r},
-                              sys.argv[1]])
+            Path(sys.argv[2]).write_text(
+                str(os.getpid()), encoding="utf-8")
+            subprocess.Popen([
+                sys.executable, "-c", {child_code!r},
+                sys.argv[1], sys.argv[3]])
             time.sleep(60)
             """
         ),
@@ -186,27 +291,59 @@ def test_windows_job_kills_worker_tree_when_supervisor_is_killed(tmp_path):
             sys.path.insert(0, sys.argv[1])
             import rag
             raise SystemExit(rag._run_cli_with_deadline(
-                Path(sys.argv[2]), [sys.argv[3]],
+                Path(sys.argv[2]), sys.argv[3:],
                 operation="parent-death test", timeout=60))
             """
         ),
         encoding="utf-8",
     )
-    process = subprocess.Popen([
-        sys.executable, str(supervisor), str(project_root), str(worker),
-        str(heartbeat),
-    ])
-    deadline = time.monotonic() + 10
-    while not heartbeat.exists() and time.monotonic() < deadline:
-        time.sleep(0.05)
-    assert heartbeat.is_file()
+    process = subprocess.Popen(
+        [
+            sys.executable, str(supervisor), str(project_root), str(worker),
+            str(heartbeat), str(worker_pid_path), str(child_pid_path),
+        ],
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    job_verified = False
+    try:
+        deadline = time.monotonic() + 10
+        while (not all(path.exists() for path in (
+                    heartbeat, worker_pid_path, child_pid_path))
+               and time.monotonic() < deadline
+               and process.poll() is None):
+            time.sleep(0.05)
+        assert process.poll() is None
+        assert heartbeat.is_file()
 
-    process.kill()
-    process.wait(timeout=5)
-    time.sleep(0.2)
-    stopped_value = heartbeat.read_text(encoding="utf-8")
-    time.sleep(0.3)
-    assert heartbeat.read_text(encoding="utf-8") == stopped_value
+        process.kill()
+        process.wait(timeout=5)
+        time.sleep(0.2)
+        stopped_value = heartbeat.read_text(encoding="utf-8")
+        time.sleep(0.3)
+        assert heartbeat.read_text(encoding="utf-8") == stopped_value
+        job_verified = True
+    finally:
+        if process.poll() is None:
+            process.kill()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+        if not job_verified:
+            for pid_path in (child_pid_path, worker_pid_path):
+                try:
+                    pid = int(pid_path.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    continue
+                try:
+                    subprocess.run(
+                        ["taskkill", "/PID", str(pid), "/T", "/F"],
+                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL, check=False, timeout=5,
+                    )
+                except (OSError, subprocess.SubprocessError):
+                    pass
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX process-group regression")
@@ -288,6 +425,9 @@ def test_killed_worker_releases_lease_and_leaves_recovery_marker(
 def test_rag_entrypoint_supervises_only_vector_commands(monkeypatch):
     calls = []
     monkeypatch.delenv(rag._SUPERVISED_CHILD_ENV, raising=False)
+    monkeypatch.delenv(rag._RUN_ID_ENV, raising=False)
+    monkeypatch.setattr(
+        rag._run_telemetry, "new_run_id", lambda: "generated-run")
     monkeypatch.setattr(
         rag, "_run_cli_with_deadline",
         lambda script, argv, **kwargs: calls.append(
@@ -301,6 +441,9 @@ def test_rag_entrypoint_supervises_only_vector_commands(monkeypatch):
     assert calls[0][2] == {
         "operation": "query",
         "timeout": rag.DEFAULT_OPERATION_TIMEOUTS["query"],
+        "run_id": "generated-run",
+        "run_events": None,
+        "run_report": None,
     }
     calls.clear()
 
@@ -315,6 +458,24 @@ def test_rag_entrypoint_supervises_only_vector_commands(monkeypatch):
 
     assert rag._run_rag_entrypoint(["--help"]) == 0
     assert calls == [("main", ["--help"])]
+
+
+def test_rag_entrypoint_propagates_explicit_run_outputs(monkeypatch):
+    captured = {}
+    monkeypatch.delenv(rag._SUPERVISED_CHILD_ENV, raising=False)
+    monkeypatch.setattr(
+        rag, "_run_cli_with_deadline",
+        lambda script, argv, **kwargs: captured.update(kwargs) or 0)
+
+    assert rag._run_rag_entrypoint([
+        "index", "--run-id", "run-42",
+        "--run-events", "private/events.jsonl",
+        "--run-report=private/report.json",
+    ]) == 0
+
+    assert captured["run_id"] == "run-42"
+    assert captured["run_events"] == Path("private/events.jsonl")
+    assert captured["run_report"] == Path("private/report.json")
 
 
 def test_supervised_child_does_not_recursively_spawn(monkeypatch):
@@ -334,6 +495,9 @@ def test_supervised_child_does_not_recursively_spawn(monkeypatch):
 def test_interactive_vector_action_uses_supervised_worker(monkeypatch):
     captured = {}
     monkeypatch.delenv(rag._SUPERVISED_CHILD_ENV, raising=False)
+    monkeypatch.delenv(rag._RUN_ID_ENV, raising=False)
+    monkeypatch.setattr(
+        rag._run_telemetry, "new_run_id", lambda: "interactive-run")
     monkeypatch.setattr(rag, "_menu_choose", lambda *_args, **_kwargs: "info")
     monkeypatch.setattr(
         rag, "_run_cli_with_deadline",
@@ -347,6 +511,9 @@ def test_interactive_vector_action_uses_supervised_worker(monkeypatch):
     assert captured["kwargs"] == {
         "operation": "info",
         "timeout": rag.DEFAULT_OPERATION_TIMEOUTS["info"],
+        "run_id": "interactive-run",
+        "run_events": None,
+        "run_report": None,
     }
 
 

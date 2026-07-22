@@ -1650,7 +1650,7 @@ def test_qdrant_removed_only_incremental_deletes_later_page_and_saves_manifest(
     fixture = _prepare_qdrant_removed_only_incremental(
         monkeypatch, tmp_path, include_removed_point=True)
 
-    rag.index_chunks_qdrant(
+    outcome = rag.index_chunks_qdrant(
         fixture.chunks_path, fixture.db_path,
         collection_name="book", embedding_model="model-a")
 
@@ -1667,6 +1667,12 @@ def test_qdrant_removed_only_incremental_deletes_later_page_and_saves_manifest(
     assert manifest["source_record_count"] == 1
     assert manifest["source_sha256"] == hashlib.sha256(
         fixture.chunks_path.read_bytes()).hexdigest()
+    assert outcome.disposition == "updated"
+    assert outcome.changed_records == 0
+    assert outcome.unchanged_records == 1
+    assert outcome.removed_records == 1
+    assert outcome.upserted_records == 0
+    assert outcome.batch_count == 0
 
 
 def test_qdrant_missing_manifest_removal_fails_without_saving_manifest(
@@ -2144,7 +2150,7 @@ def test_qdrant_changed_existing_is_deleted_then_replaced_before_manifest_save(
 
     monkeypatch.setattr(rag, "_save_index_manifest", save_after_client_close)
 
-    rag.index_chunks_qdrant(
+    outcome = rag.index_chunks_qdrant(
         fixture.chunks_path, fixture.db_path,
         collection_name="book", embedding_model="model-a")
 
@@ -2161,6 +2167,12 @@ def test_qdrant_changed_existing_is_deleted_then_replaced_before_manifest_save(
         fixture.stable_id: fixture.new_hash}
     assert manifest["source_sha256"] == hashlib.sha256(
         fixture.chunks_path.read_bytes()).hexdigest()
+    assert outcome.disposition == "updated"
+    assert outcome.changed_records == 1
+    assert outcome.unchanged_records == 0
+    assert outcome.removed_records == 0
+    assert outcome.upserted_records == 1
+    assert outcome.batch_count == 1
 
 
 def test_qdrant_client_close_failure_prevents_manifest_commit(
@@ -2748,7 +2760,7 @@ def test_chroma_changed_existing_is_deleted_then_replaced_before_manifest_save(
     monkeypatch.setattr(rag, "_save_index_manifest", save_after_reconciliation)
     monkeypatch.setattr(rag, "_finish_index_update", finish_after_manifest)
 
-    rag.index_chunks(
+    outcome = rag.index_chunks(
         fixture.chunks_path, fixture.db_path,
         collection_name="book", embedding_model="model-a")
 
@@ -2764,6 +2776,12 @@ def test_chroma_changed_existing_is_deleted_then_replaced_before_manifest_save(
     assert events[-2:] == [
         ("manifest_save", None), ("marker_cleanup", None)]
     assert fixture.state.client_close_calls == 1
+    assert outcome.disposition == "updated"
+    assert outcome.changed_records == 1
+    assert outcome.unchanged_records == 0
+    assert outcome.removed_records == 0
+    assert outcome.upserted_records == 1
+    assert outcome.batch_count == 1
 
 
 def test_chroma_client_close_failure_prevents_manifest_commit(
@@ -3229,7 +3247,7 @@ def test_chroma_removal_only_commits_before_marker_cleanup(
 
     monkeypatch.setattr(rag, "_save_index_manifest", assert_guarded_save)
     monkeypatch.setattr(rag, "_finish_index_update", assert_committed_then_finish)
-    rag.index_chunks(
+    outcome = rag.index_chunks(
         fixture.chunks_path, fixture.db_path,
         collection_name="book", embedding_model="model-a")
 
@@ -3238,6 +3256,12 @@ def test_chroma_removal_only_commits_before_marker_cleanup(
     assert set(fixture.collection.rows) == {fixture.stable_id}
     assert events == ["manifest_save", "marker_cleanup"]
     assert not fixture.marker_path.exists()
+    assert outcome.disposition == "updated"
+    assert outcome.changed_records == 0
+    assert outcome.unchanged_records == 1
+    assert outcome.removed_records == 1
+    assert outcome.upserted_records == 0
+    assert outcome.batch_count == 0
 
 
 def test_chroma_unchanged_run_never_starts_update(monkeypatch, tmp_path):
@@ -3257,7 +3281,7 @@ def test_chroma_unchanged_run_never_starts_update(monkeypatch, tmp_path):
         lambda *_args, **_kwargs: pytest.fail(
             "an unchanged Chroma run must not create an update marker"),
     )
-    rag.index_chunks(
+    outcome = rag.index_chunks(
         fixture.chunks_path, fixture.db_path,
         collection_name="book", embedding_model="model-a")
 
@@ -3266,6 +3290,10 @@ def test_chroma_unchanged_run_never_starts_update(monkeypatch, tmp_path):
     assert fixture.state.collection_deletes == []
     assert fixture.state.collection_creates == []
     assert not fixture.marker_path.exists()
+    assert outcome.disposition == "unchanged"
+    assert outcome.changed_records == 0
+    assert outcome.unchanged_records == outcome.total_records
+    assert outcome.committed is True
 
 
 def test_chroma_sequential_cleanup_precedes_manifest_commit(
@@ -3382,7 +3410,7 @@ def test_chroma_migrates_legacy_skips_compatible_and_rebuilds_model_change(
         rag, "_embed_texts",
         _fake_embeddings(embedding_calls, {"model-a": 2, "model-b": 3}))
 
-    rag.index_chunks(
+    first_outcome = rag.index_chunks(
         chunks_path, db_path, collection_name="book",
         embedding_model="model-a")
 
@@ -3392,16 +3420,20 @@ def test_chroma_migrates_legacy_skips_compatible_and_rebuilds_model_change(
     assert (db_path / "chunk_hashes.json").is_file()
     first_upsert_count = len(state.upserts)
     first_call_count = len(embedding_calls)
+    assert first_outcome.disposition == "rebuilt"
+    assert first_outcome.changed_records == 1
+    assert first_outcome.upserted_records == 1
 
-    rag.index_chunks(
+    second_outcome = rag.index_chunks(
         chunks_path, db_path, collection_name="book",
         embedding_model="model-a")
 
     assert state.deleted == ["book"]
     assert len(state.upserts) == first_upsert_count
     assert len(embedding_calls) == first_call_count + 1  # dimension probe only
+    assert second_outcome.disposition == "unchanged"
 
-    rag.index_chunks(
+    third_outcome = rag.index_chunks(
         chunks_path, db_path, collection_name="book",
         embedding_model="model-b")
 
@@ -3416,6 +3448,9 @@ def test_chroma_migrates_legacy_skips_compatible_and_rebuilds_model_change(
     assert manifest["source_sha256"] == hashlib.sha256(
         chunks_path.read_bytes()).hexdigest()
     assert manifest["source_record_count"] == 1
+    assert third_outcome.disposition == "rebuilt"
+    assert third_outcome.changed_records == 1
+    assert third_outcome.upserted_records == 1
 
 
 def test_qdrant_manifest_skip_and_model_change_preserve_sibling(
@@ -3501,27 +3536,33 @@ def test_qdrant_manifest_skip_and_model_change_preserve_sibling(
         rag, "_embed_texts",
         _fake_embeddings(embedding_calls, {"model-a": 2, "model-b": 4}))
 
-    rag.index_chunks_qdrant(
+    first_outcome = rag.index_chunks_qdrant(
         chunks_path, db_path, collection_name="book",
         embedding_model="model-a")
     assert not marker_path.exists()
     first_upsert_count = len(state.upserts)
     first_call_count = len(embedding_calls)
+    assert first_outcome.disposition == "created"
+    assert first_outcome.changed_records == 1
+    assert first_outcome.upserted_records == 1
 
     begin_update = rag._begin_qdrant_index_update
     monkeypatch.setattr(
         rag, "_begin_qdrant_index_update",
         lambda *_args, **_kwargs: pytest.fail(
             "an unchanged run must not create an update marker"))
-    rag.index_chunks_qdrant(
+    outcome = rag.index_chunks_qdrant(
         chunks_path, db_path, collection_name="book",
         embedding_model="model-a")
     monkeypatch.setattr(rag, "_begin_qdrant_index_update", begin_update)
     assert not marker_path.exists()
     assert len(state.upserts) == first_upsert_count
     assert len(embedding_calls) == first_call_count + 1  # dimension probe only
+    assert outcome.disposition == "unchanged"
+    assert outcome.changed_records == 0
+    assert outcome.physical_count == outcome.total_records
 
-    rag.index_chunks_qdrant(
+    rebuilt_outcome = rag.index_chunks_qdrant(
         chunks_path, db_path, collection_name="book",
         embedding_model="model-b")
     assert not marker_path.exists()
@@ -3537,3 +3578,6 @@ def test_qdrant_manifest_skip_and_model_change_preserve_sibling(
     assert manifest["source_sha256"] == hashlib.sha256(
         chunks_path.read_bytes()).hexdigest()
     assert manifest["source_record_count"] == 1
+    assert rebuilt_outcome.disposition == "rebuilt"
+    assert rebuilt_outcome.changed_records == 1
+    assert rebuilt_outcome.upserted_records == 1

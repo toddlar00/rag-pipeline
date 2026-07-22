@@ -7,6 +7,16 @@ import threading
 import pytest
 
 import rag
+from operation_contracts import IndexOutcome
+from run_telemetry import RunTelemetry
+
+
+def _index_outcome(backend="chroma"):
+    return IndexOutcome(
+        backend=backend, disposition="unchanged", total_records=0,
+        changed_records=0, unchanged_records=0, removed_records=0,
+        upserted_records=0, batch_count=0, physical_count=0,
+        committed=True)
 
 
 def _args(**overrides):
@@ -64,9 +74,11 @@ def test_shared_runner_passes_distinct_per_run_conversion_artifacts(
     monkeypatch.setattr(
         rag, "chunk_document",
         lambda *args, **kwargs: calls.append(("chunk", args, kwargs)))
-    monkeypatch.setattr(
-        rag, "_index_chunks_for_backend",
-        lambda *args, **kwargs: calls.append(("index", args, kwargs)))
+    def record_index(*args, **kwargs):
+        calls.append(("index", args, kwargs))
+        return _index_outcome()
+
+    monkeypatch.setattr(rag, "_index_chunks_for_backend", record_index)
     monkeypatch.setattr(
         rag, "export_markdown",
         lambda *args, **kwargs: calls.append(("export", args, kwargs)))
@@ -96,7 +108,9 @@ def test_shared_runner_honors_an_explicit_default_named_collection(
     paths = _paths(monkeypatch, tmp_path)
     monkeypatch.setattr(rag, "convert_pdf", lambda *args, **kwargs: None)
     monkeypatch.setattr(rag, "chunk_document", lambda *args, **kwargs: None)
-    monkeypatch.setattr(rag, "_index_chunks_for_backend", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        rag, "_index_chunks_for_backend",
+        lambda *args, **kwargs: _index_outcome())
     monkeypatch.setattr(rag, "export_markdown", lambda *args, **kwargs: None)
 
     result = rag._run_pipeline_stages(
@@ -113,7 +127,9 @@ def test_shared_runner_honors_split_chapters_flag(monkeypatch, tmp_path):
     exports = []
     monkeypatch.setattr(rag, "convert_pdf", lambda *args, **kwargs: None)
     monkeypatch.setattr(rag, "chunk_document", lambda *args, **kwargs: None)
-    monkeypatch.setattr(rag, "_index_chunks_for_backend", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        rag, "_index_chunks_for_backend",
+        lambda *args, **kwargs: _index_outcome())
     monkeypatch.setattr(
         rag, "export_markdown",
         lambda *args, **kwargs: exports.append((args, kwargs)))
@@ -145,9 +161,11 @@ def test_resume_revalidates_index_and_rebuilds_missing_chapter_exports(
         rag, "chunk_document",
         lambda *args, **kwargs: pytest.fail("chunk should have resumed"))
     index_calls = []
-    monkeypatch.setattr(
-        rag, "_index_chunks_for_backend",
-        lambda *args, **kwargs: index_calls.append((args, kwargs)))
+    def record_index(*args, **kwargs):
+        index_calls.append((args, kwargs))
+        return _index_outcome()
+
+    monkeypatch.setattr(rag, "_index_chunks_for_backend", record_index)
     exports = []
     monkeypatch.setattr(
         rag, "export_markdown",
@@ -190,7 +208,8 @@ def test_resume_rechunks_when_completion_is_missing(monkeypatch, tmp_path):
 
     monkeypatch.setattr(rag, "chunk_document", rechunk)
     monkeypatch.setattr(
-        rag, "_index_chunks_for_backend", lambda *args, **kwargs: None)
+        rag, "_index_chunks_for_backend",
+        lambda *args, **kwargs: _index_outcome())
     monkeypatch.setattr(rag, "export_markdown", lambda *args, **kwargs: None)
 
     rag._run_pipeline_stages(
@@ -361,7 +380,9 @@ def test_shared_runner_forwards_thinking_and_provider_to_all_llm_stages(
         "chunk_document",
         lambda *args, **kwargs: calls.setdefault("chunk", kwargs),
     )
-    monkeypatch.setattr(rag, "_index_chunks_for_backend", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        rag, "_index_chunks_for_backend",
+        lambda *args, **kwargs: _index_outcome())
     monkeypatch.setattr(
         rag,
         "export_markdown",
@@ -412,3 +433,36 @@ def test_split_export_rejects_non_markdown_formats(tmp_path):
             split_chapters=True,
             format="plaintext",
         )
+
+
+def test_pipeline_runner_emits_scoped_stage_and_index_outcomes(
+        monkeypatch, tmp_path):
+    paths = _paths(monkeypatch, tmp_path)
+    monkeypatch.setattr(rag, "convert_pdf", lambda *args, **kwargs: None)
+    monkeypatch.setattr(rag, "chunk_document", lambda *args, **kwargs: None)
+    monkeypatch.setattr(rag, "export_markdown", lambda *args, **kwargs: None)
+    outcome = IndexOutcome(
+        backend="chroma", disposition="updated", total_records=4,
+        changed_records=1, unchanged_records=3, removed_records=1,
+        upserted_records=1, batch_count=1, physical_count=4,
+        committed=True)
+    monkeypatch.setattr(
+        rag, "_index_chunks_for_backend",
+        lambda *args, **kwargs: outcome)
+    telemetry = RunTelemetry(
+        "batch", run_id="batch-run",
+        events_path=tmp_path / "events.jsonl",
+        report_path=tmp_path / "report.json")
+    telemetry.start()
+
+    result = rag._run_pipeline_stages(
+        Path("PRIVATE_BOOK.pdf"), paths, _args(), resume=False,
+        watermark=None, telemetry=telemetry, stage_scope="item_1")
+    report = telemetry.finish()
+
+    assert result["index_outcome"] == outcome
+    assert report["stages"]["item_1.convert"]["completed"] == 1
+    assert report["stages"]["item_1.index"]["completed"] == 1
+    events = (tmp_path / "events.jsonl").read_text(encoding="utf-8")
+    assert '"changed_records":1' in events
+    assert "PRIVATE_BOOK" not in events

@@ -414,7 +414,8 @@ def test_events_and_report_are_aggregate_and_secret_safe(tmp_path):
     report_path = tmp_path / "report.json"
     runtime = LLMRuntime(LLMRuntimeConfig(
         cache_mode="readwrite", cache_dir=tmp_path / "cache",
-        events_path=events_path, report_path=report_path))
+        events_path=events_path, report_path=report_path,
+        run_id="run-telemetry-123"))
 
     def primary(_request):
         raise TimeoutError("EXCEPTION_CANARY")
@@ -443,6 +444,8 @@ def test_events_and_report_are_aggregate_and_secret_safe(tmp_path):
     assert report["counts"]["requests"] == 2
     assert report["counts"]["provider_calls"] == 2
     assert report["counts"]["cache_hits"] == 1
+    assert report["run_id"] == "run-telemetry-123"
+    assert all(event["run_id"] == "run-telemetry-123" for event in events)
     for canary in (
             "PROMPT_CANARY", "RESPONSE_CANARY", "EXCEPTION_CANARY",
             "ENDPOINT_CANARY"):
@@ -463,6 +466,21 @@ def test_event_write_failure_does_not_fail_generation(tmp_path):
 
     assert result.text == "answer"
     assert runtime.report_payload()["counts"]["event_write_errors"] == 1
+
+
+def test_runtime_rejects_path_like_run_identifiers(tmp_path):
+    with pytest.raises(ValueError, match="safe identifier"):
+        LLMRuntime(LLMRuntimeConfig(
+            cache_dir=tmp_path / "cache", run_id="../private"))
+
+
+def test_runtime_rejects_aliased_event_and_report_outputs(tmp_path):
+    output = tmp_path / "llm.json"
+
+    with pytest.raises(ValueError, match="distinct files"):
+        LLMRuntime(LLMRuntimeConfig(
+            cache_dir=tmp_path / "cache", events_path=output,
+            report_path=output))
 
 
 @pytest.fixture

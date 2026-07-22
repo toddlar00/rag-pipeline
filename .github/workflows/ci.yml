@@ -44,6 +44,7 @@ jobs:
           python -m py_compile
           rag.py retrieval_core.py artifact_io.py chunking_core.py cli_policy.py
           ingestion_core.py index_state.py llm_adapters.py model_artifacts.py
+          operation_contracts.py run_telemetry.py
           eval.py evaluation_metrics.py offline_retrieval.py
           llm_runtime.py preprocess_pdf.py
           scaffold_to_markdown.py inspect_chunks.py ui.py
