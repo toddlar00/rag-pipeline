@@ -18,6 +18,14 @@ def search_fakes(monkeypatch, tmp_path):
         "bm25_calls": [],
         "rerank_calls": [],
         "qdrant_hybrid_error": None,
+        "chroma_constructor_error": None,
+        "qdrant_constructor_error": None,
+        "chroma_query_error": None,
+        "qdrant_query_error": None,
+        "chroma_close_error": None,
+        "qdrant_close_error": None,
+        "chroma_close_calls": 0,
+        "qdrant_close_calls": 0,
     }
     db_dir = tmp_path / "db"
     db_dir.mkdir()
@@ -33,6 +41,8 @@ def search_fakes(monkeypatch, tmp_path):
     class FakeCollection:
         def query(self, **kwargs):
             state["chroma_calls"].append(kwargs)
+            if state["chroma_query_error"] is not None:
+                raise state["chroma_query_error"]
             count = kwargs["n_results"]
             return {
                 "documents": [[f"dense-{index}" for index in range(count)]],
@@ -49,11 +59,18 @@ def search_fakes(monkeypatch, tmp_path):
 
     class FakeChromaClient:
         def __init__(self, path):
+            if state["chroma_constructor_error"] is not None:
+                raise state["chroma_constructor_error"]
             self.path = path
 
         def get_collection(self, name):
             state["chroma_collection"] = name
             return FakeCollection()
+
+        def close(self):
+            state["chroma_close_calls"] += 1
+            if state["chroma_close_error"] is not None:
+                raise state["chroma_close_error"]
 
     chromadb = ModuleType("chromadb")
     chromadb.PersistentClient = FakeChromaClient
@@ -91,6 +108,8 @@ def search_fakes(monkeypatch, tmp_path):
 
     class FakeQdrantClient:
         def __init__(self, path):
+            if state["qdrant_constructor_error"] is not None:
+                raise state["qdrant_constructor_error"]
             self.path = path
 
         def collection_exists(self, name):
@@ -99,6 +118,8 @@ def search_fakes(monkeypatch, tmp_path):
 
         def query_points(self, **kwargs):
             state["qdrant_calls"].append(kwargs)
+            if state["qdrant_query_error"] is not None:
+                raise state["qdrant_query_error"]
             if "prefetch" in kwargs and state["qdrant_hybrid_error"]:
                 raise RuntimeError(state["qdrant_hybrid_error"])
             count = kwargs["limit"]
@@ -117,7 +138,10 @@ def search_fakes(monkeypatch, tmp_path):
             return SimpleNamespace(points=points)
 
         def close(self):
+            state["qdrant_close_calls"] += 1
             state["qdrant_closed"] = True
+            if state["qdrant_close_error"] is not None:
+                raise state["qdrant_close_error"]
 
     qdrant_client = ModuleType("qdrant_client")
     qdrant_client.QdrantClient = FakeQdrantClient
@@ -196,6 +220,8 @@ def test_search_matrix_is_structured_and_overfetches(
             ]
         }
         assert bool(search_fakes.state["bm25_calls"]) is resolved_hybrid
+        assert search_fakes.state["chroma_close_calls"] == 1
+        assert search_fakes.state["qdrant_close_calls"] == 0
     else:
         call = search_fakes.state["qdrant_calls"][0]
         assert call["limit"] == expected_fetch
@@ -206,6 +232,8 @@ def test_search_matrix_is_structured_and_overfetches(
             "content_type", "chapter_num"
         ]
         assert search_fakes.state["qdrant_closed"] is True
+        assert search_fakes.state["qdrant_close_calls"] == 1
+        assert search_fakes.state["chroma_close_calls"] == 0
 
     if reranker_enabled:
         assert search_fakes.state["rerank_calls"][0][
@@ -213,6 +241,57 @@ def test_search_matrix_is_structured_and_overfetches(
         assert search_fakes.state["rerank_calls"][0]["top_k"] == 3
     else:
         assert search_fakes.state["rerank_calls"] == []
+
+
+@pytest.mark.parametrize("backend", ["chroma", "qdrant"])
+def test_search_propagates_client_close_failure(search_fakes, backend):
+    close_error = RuntimeError(f"{backend} client close failure")
+    search_fakes.state[f"{backend}_close_error"] = close_error
+
+    with pytest.raises(RuntimeError) as raised:
+        rag.search_index(
+            "minimum contacts", search_fakes.db_dir,
+            db_backend=backend, n_results=2,
+            embedding_model="fake-embedding", hybrid=False,
+            use_reranker=False, chunks_path=search_fakes.chunks_path)
+
+    assert raised.value is close_error
+    assert search_fakes.state[f"{backend}_close_calls"] == 1
+
+
+@pytest.mark.parametrize("backend", ["chroma", "qdrant"])
+def test_search_preserves_client_constructor_failure(search_fakes, backend):
+    constructor_error = RuntimeError(f"{backend} constructor failure")
+    search_fakes.state[f"{backend}_constructor_error"] = constructor_error
+
+    with pytest.raises(RuntimeError) as raised:
+        rag.search_index(
+            "minimum contacts", search_fakes.db_dir,
+            db_backend=backend, n_results=2,
+            embedding_model="fake-embedding", hybrid=False,
+            use_reranker=False, chunks_path=search_fakes.chunks_path)
+
+    assert raised.value is constructor_error
+    assert search_fakes.state[f"{backend}_close_calls"] == 0
+
+
+@pytest.mark.parametrize("backend", ["chroma", "qdrant"])
+def test_search_preserves_query_error_over_client_close_failure(
+        search_fakes, backend):
+    query_error = RuntimeError(f"primary {backend} query failure")
+    close_error = RuntimeError(f"secondary {backend} close failure")
+    search_fakes.state[f"{backend}_query_error"] = query_error
+    search_fakes.state[f"{backend}_close_error"] = close_error
+
+    with pytest.raises(RuntimeError) as raised:
+        rag.search_index(
+            "minimum contacts", search_fakes.db_dir,
+            db_backend=backend, n_results=2,
+            embedding_model="fake-embedding", hybrid=False,
+            use_reranker=False, chunks_path=search_fakes.chunks_path)
+
+    assert raised.value is query_error
+    assert search_fakes.state[f"{backend}_close_calls"] == 1
 
 
 def test_chroma_missing_chunks_reports_hybrid_fallback(search_fakes, tmp_path):

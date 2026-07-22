@@ -821,27 +821,42 @@ def _index_collection_count(db_dir: Path, collection_name: str,
         raise ValueError("db_backend must be 'chroma' or 'qdrant'")
     if db_backend == "qdrant":
         from qdrant_client import QdrantClient
-        client = QdrantClient(path=str(db_dir))
+        client = None
+        operation_error = None
         try:
+            client = QdrantClient(path=str(db_dir))
             if not client.collection_exists(collection_name):
                 raise LookupError(
                     f"Collection '{collection_name}' not found in {db_dir}")
             result = client.count(
                 collection_name=collection_name, exact=True)
             return int(result.count)
+        except BaseException as exc:
+            operation_error = exc
+            raise
         finally:
-            close = getattr(client, "close", None)
-            if callable(close):
-                close()
+            _finish_vector_client(
+                client, client_name="Qdrant",
+                primary_error=operation_error)
 
     import chromadb
-    client = chromadb.PersistentClient(path=str(db_dir))
+    client = None
+    operation_error = None
     try:
-        collection = client.get_collection(collection_name)
-    except Exception as exc:
-        raise LookupError(
-            f"Collection '{collection_name}' not found in {db_dir}") from exc
-    return int(collection.count())
+        client = chromadb.PersistentClient(path=str(db_dir))
+        try:
+            collection = client.get_collection(collection_name)
+        except Exception as exc:
+            raise LookupError(
+                f"Collection '{collection_name}' not found in {db_dir}") from exc
+        return int(collection.count())
+    except BaseException as exc:
+        operation_error = exc
+        raise
+    finally:
+        _finish_vector_client(
+            client, client_name="Chroma",
+            primary_error=operation_error)
 
 
 def _index_has_data(db_dir: Path, collection_name: str,
@@ -1040,6 +1055,22 @@ def _put_unless_worker_failed(work_queue: queue.Queue, item,
             continue
 
 
+def _log_cleanup_error(message: str, *args,
+                       error: BaseException) -> None:
+    """Best-effort cleanup diagnostics that cannot alter error precedence."""
+    try:
+        log.error(
+            message,
+            *args,
+            exc_info=(type(error), error, error.__traceback__),
+        )
+    except BaseException:
+        # User-installed logging handlers are allowed to raise. Cleanup
+        # diagnostics must never replace the operation/cleanup error selected
+        # by the caller's explicit precedence rules.
+        pass
+
+
 def _finish_executor_progress(executor, progress, *, operation_name: str,
                               primary_error: BaseException | None) -> None:
     """Close parallel resources without masking an operation failure.
@@ -1067,23 +1098,102 @@ def _finish_executor_progress(executor, progress, *, operation_name: str,
         for cleanup_error in cleanup_errors:
             if cleanup_error is primary_error:
                 continue
-            log.error(
+            _log_cleanup_error(
                 "%s cleanup also failed while preserving the active error",
                 operation_name,
-                exc_info=(type(cleanup_error), cleanup_error,
-                          cleanup_error.__traceback__),
+                error=cleanup_error,
             )
         return
 
     first_error, *additional_errors = cleanup_errors
     for cleanup_error in additional_errors:
-        log.error(
+        _log_cleanup_error(
             "%s cleanup encountered an additional error",
             operation_name,
-            exc_info=(type(cleanup_error), cleanup_error,
-                      cleanup_error.__traceback__),
+            error=cleanup_error,
         )
     raise first_error.with_traceback(first_error.__traceback__)
+
+
+def _finish_vector_client(client, *, client_name: str,
+                          primary_error: BaseException | None) -> None:
+    """Require vector-client closure without masking primary work."""
+    if client is None:
+        return
+    try:
+        close = getattr(client, "close", None)
+        if not callable(close):
+            raise RuntimeError(
+                f"{client_name} client does not expose required close()")
+        close()
+    except BaseException as close_error:
+        if primary_error is None:
+            raise
+        if close_error is not primary_error:
+            _log_cleanup_error(
+                "%s client cleanup also failed while preserving the "
+                "active error",
+                client_name,
+                error=close_error,
+            )
+
+
+class _VectorClientOwner:
+    """Track vector clients for explicit pre-commit and fallback cleanup."""
+
+    def __init__(self, client_name: str):
+        self.client_name = client_name
+        self._clients = []
+
+    def own(self, client):
+        if any(owned is client for owned in self._clients):
+            raise RuntimeError(f"{self.client_name} client is already owned")
+        self._clients.append(client)
+        return client
+
+    def close(self, client) -> None:
+        for index in range(len(self._clients) - 1, -1, -1):
+            if self._clients[index] is client:
+                self._clients.pop(index)
+                _finish_vector_client(
+                    client, client_name=self.client_name,
+                    primary_error=None)
+                return
+        raise RuntimeError(f"{self.client_name} client is not owned")
+
+    def finish(self, primary_error: BaseException | None) -> None:
+        cleanup_errors = []
+        while self._clients:
+            client = self._clients.pop()
+            try:
+                _finish_vector_client(
+                    client, client_name=self.client_name,
+                    primary_error=None)
+            except BaseException as exc:
+                cleanup_errors.append(exc)
+
+        if not cleanup_errors:
+            return
+        if primary_error is not None:
+            for cleanup_error in cleanup_errors:
+                if cleanup_error is primary_error:
+                    continue
+                _log_cleanup_error(
+                    "%s client cleanup also failed while preserving the "
+                    "active error",
+                    self.client_name,
+                    error=cleanup_error,
+                )
+            return
+
+        first_error, *additional_errors = cleanup_errors
+        for cleanup_error in additional_errors:
+            _log_cleanup_error(
+                "%s client cleanup encountered an additional error",
+                self.client_name,
+                error=cleanup_error,
+            )
+        raise first_error.with_traceback(first_error.__traceback__)
 
 
 def _finish_queue_worker(work_queue: queue.Queue, worker_future,
@@ -1136,21 +1246,19 @@ def _finish_queue_worker(work_queue: queue.Queue, worker_future,
         for cleanup_error in cleanup_errors:
             if cleanup_error is primary_error:
                 continue
-            log.error(
+            _log_cleanup_error(
                 "%s cleanup also failed while preserving the active error",
                 worker_name,
-                exc_info=(type(cleanup_error), cleanup_error,
-                          cleanup_error.__traceback__),
+                error=cleanup_error,
             )
         return
 
     first_error, *additional_errors = cleanup_errors
     for cleanup_error in additional_errors:
-        log.error(
+        _log_cleanup_error(
             "%s cleanup encountered an additional error",
             worker_name,
-            exc_info=(type(cleanup_error), cleanup_error,
-                      cleanup_error.__traceback__),
+            error=cleanup_error,
         )
     raise first_error.with_traceback(first_error.__traceback__)
 
@@ -5871,10 +5979,12 @@ def _require_chroma_stable_ids(
     return physical_ids
 
 
-def index_chunks(chunks_path: Path, chroma_dir: Path, *,
-                 collection_name: str = DEFAULT_COLLECTION,
-                 embedding_model: str = DEFAULT_EMBEDDING_MODEL,
-                 full_reindex: bool = False) -> None:
+def _index_chunks_chroma_impl(
+        chunks_path: Path, chroma_dir: Path, *,
+        collection_name: str = DEFAULT_COLLECTION,
+        embedding_model: str = DEFAULT_EMBEDDING_MODEL,
+        full_reindex: bool = False,
+        _client_owner: _VectorClientOwner) -> None:
     """Load enriched chunks and index into a local ChromaDB collection."""
     import chromadb
     from tqdm import tqdm
@@ -5897,7 +6007,8 @@ def index_chunks(chunks_path: Path, chroma_dir: Path, *,
     log.info(f"Loaded {len(records)} chunks")
 
     chroma_dir.mkdir(parents=True, exist_ok=True)
-    client = chromadb.PersistentClient(path=str(chroma_dir))
+    client = _client_owner.own(
+        chromadb.PersistentClient(path=str(chroma_dir)))
 
     try:
         collection = client.get_collection(collection_name)
@@ -5975,6 +6086,7 @@ def index_chunks(chunks_path: Path, chroma_dir: Path, *,
         log.info(f"Incremental: {len(changed)} changed, {unchanged} unchanged "
                  f"(skipped), {len(removed_ids)} removed")
         if not changed:
+            _client_owner.close(client)
             _save_index_manifest(
                 chroma_dir, backend="chroma",
                 collection_name=collection_name,
@@ -6084,6 +6196,7 @@ def index_chunks(chunks_path: Path, chroma_dir: Path, *,
 
     verified_ids = _require_chroma_stable_ids(
         collection, collection_name, set(new_hashes))
+    _client_owner.close(client)
     _save_index_manifest(
         chroma_dir, backend="chroma", collection_name=collection_name,
         embedding_model=embedding_model,
@@ -6092,9 +6205,35 @@ def index_chunks(chunks_path: Path, chroma_dir: Path, *,
         source_record_count=source_record_count)
     _finish_index_update(update_marker_path)
 
-    log.info(f"Collection '{collection.name}' → {len(verified_ids)} documents")
+    log.info(
+        "Collection '%s' → %d documents",
+        collection_name,
+        len(verified_ids),
+    )
     log.info(f"Embedding model: {embedding_model}")
     log.info(f"Persisted to {chroma_dir}")
+
+
+def index_chunks(chunks_path: Path, chroma_dir: Path, *,
+                 collection_name: str = DEFAULT_COLLECTION,
+                 embedding_model: str = DEFAULT_EMBEDDING_MODEL,
+                 full_reindex: bool = False) -> None:
+    """Load enriched chunks and index into a local ChromaDB collection."""
+    client_owner = _VectorClientOwner("Chroma")
+    operation_error = None
+    try:
+        return _index_chunks_chroma_impl(
+            chunks_path, chroma_dir,
+            collection_name=collection_name,
+            embedding_model=embedding_model,
+            full_reindex=full_reindex,
+            _client_owner=client_owner,
+        )
+    except BaseException as exc:
+        operation_error = exc
+        raise
+    finally:
+        client_owner.finish(operation_error)
 
 
 # ---------------------------------------------------------------------------
@@ -6743,10 +6882,12 @@ def _embed_texts(texts: list[str], model_name: str, *,
     return _embed_fn_cache[cache_key](texts)
 
 
-def index_chunks_qdrant(chunks_path: Path, qdrant_dir: Path, *,
-                        collection_name: str = DEFAULT_COLLECTION,
-                        embedding_model: str = DEFAULT_EMBEDDING_MODEL,
-                        full_reindex: bool = False) -> None:
+def _index_chunks_qdrant_impl(
+        chunks_path: Path, qdrant_dir: Path, *,
+        collection_name: str = DEFAULT_COLLECTION,
+        embedding_model: str = DEFAULT_EMBEDDING_MODEL,
+        full_reindex: bool = False,
+        _client_owner: _VectorClientOwner) -> None:
     """Load enriched chunks and index into a local Qdrant collection.
 
     Uses Qdrant's local mode (on-disk, no server needed) with:
@@ -6777,7 +6918,8 @@ def index_chunks_qdrant(chunks_path: Path, qdrant_dir: Path, *,
     log.info(f"Loaded {len(records)} chunks")
 
     qdrant_dir.mkdir(parents=True, exist_ok=True)
-    client = QdrantClient(path=str(qdrant_dir))
+    client = _client_owner.own(
+        QdrantClient(path=str(qdrant_dir)))
 
     dim = _embedding_dimension(embedding_model)
     collection_exists = client.collection_exists(collection_name)
@@ -6870,6 +7012,7 @@ def index_chunks_qdrant(chunks_path: Path, qdrant_dir: Path, *,
         log.info(f"Incremental: {len(changed)} changed, {unchanged} unchanged "
                  f"(skipped), {len(removed_ids)} removed")
         if not changed:
+            _client_owner.close(client)
             _save_index_manifest(
                 qdrant_dir, backend="qdrant",
                 collection_name=collection_name,
@@ -6958,6 +7101,7 @@ def index_chunks_qdrant(chunks_path: Path, qdrant_dir: Path, *,
 
     verified_point_ids = _require_qdrant_stable_ids(
         client, collection_name, set(new_hashes))
+    _client_owner.close(client)
     _save_index_manifest(
         qdrant_dir, backend="qdrant", collection_name=collection_name,
         embedding_model=embedding_model, embedding_dimension=dim,
@@ -6971,6 +7115,28 @@ def index_chunks_qdrant(chunks_path: Path, qdrant_dir: Path, *,
     log.info(f"Embedding: {embedding_model} (dim={dim})")
     log.info("Sparse vectors: BM25 (built-in hybrid search)")
     log.info(f"Persisted to {qdrant_dir}")
+
+
+def index_chunks_qdrant(chunks_path: Path, qdrant_dir: Path, *,
+                        collection_name: str = DEFAULT_COLLECTION,
+                        embedding_model: str = DEFAULT_EMBEDDING_MODEL,
+                        full_reindex: bool = False) -> None:
+    """Load enriched chunks and index into a local Qdrant collection."""
+    client_owner = _VectorClientOwner("Qdrant")
+    operation_error = None
+    try:
+        return _index_chunks_qdrant_impl(
+            chunks_path, qdrant_dir,
+            collection_name=collection_name,
+            embedding_model=embedding_model,
+            full_reindex=full_reindex,
+            _client_owner=client_owner,
+        )
+    except BaseException as exc:
+        operation_error = exc
+        raise
+    finally:
+        client_owner.finish(operation_error)
 
 
 def query_index_qdrant(query: str, qdrant_dir: Path, *,
@@ -7211,7 +7377,7 @@ def _unpack_chroma_results(results: dict) -> tuple[list[str], list[dict],
     return docs, metas, scores
 
 
-def _search_chroma_candidates(
+def _search_chroma_candidates_impl(
         query: str, db_dir: Path, *, n_results: int,
         content_type: str | None, chapter_num: int | None,
         collection_name: str, embedding_model: str, hybrid: bool,
@@ -7220,11 +7386,13 @@ def _search_chroma_candidates(
         dense_weight: float = DEFAULT_DENSE_RRF_WEIGHT,
         sparse_weight: float = DEFAULT_SPARSE_RRF_WEIGHT,
         expected_dimension: int | None = None,
+        _client_owner: _VectorClientOwner,
 ) -> tuple[list[str], list[dict], list[float], str]:
     """Retrieve Chroma candidates, falling back cleanly from BM25."""
     import chromadb
 
-    client = chromadb.PersistentClient(path=str(db_dir))
+    client = _client_owner.own(
+        chromadb.PersistentClient(path=str(db_dir)))
     try:
         collection = client.get_collection(collection_name)
     except Exception as exc:
@@ -7302,6 +7470,38 @@ def _search_chroma_candidates(
     )
 
 
+def _search_chroma_candidates(
+        query: str, db_dir: Path, *, n_results: int,
+        content_type: str | None, chapter_num: int | None,
+        collection_name: str, embedding_model: str, hybrid: bool,
+        chunks_path: Path, warnings: list[str],
+        rrf_k: int = DEFAULT_RRF_K,
+        dense_weight: float = DEFAULT_DENSE_RRF_WEIGHT,
+        sparse_weight: float = DEFAULT_SPARSE_RRF_WEIGHT,
+        expected_dimension: int | None = None,
+) -> tuple[list[str], list[dict], list[float], str]:
+    """Retrieve Chroma candidates and deterministically close the client."""
+    client_owner = _VectorClientOwner("Chroma")
+    operation_error = None
+    try:
+        return _search_chroma_candidates_impl(
+            query, db_dir, n_results=n_results,
+            content_type=content_type, chapter_num=chapter_num,
+            collection_name=collection_name,
+            embedding_model=embedding_model, hybrid=hybrid,
+            chunks_path=chunks_path, warnings=warnings,
+            rrf_k=rrf_k, dense_weight=dense_weight,
+            sparse_weight=sparse_weight,
+            expected_dimension=expected_dimension,
+            _client_owner=client_owner,
+        )
+    except BaseException as exc:
+        operation_error = exc
+        raise
+    finally:
+        client_owner.finish(operation_error)
+
+
 def _search_qdrant_candidates(
         query: str, db_dir: Path, *, n_results: int,
         content_type: str | None, chapter_num: int | None,
@@ -7311,8 +7511,10 @@ def _search_qdrant_candidates(
     """Retrieve Qdrant candidates with native dense/sparse fusion."""
     from qdrant_client import QdrantClient, models
 
-    client = QdrantClient(path=str(db_dir))
+    client = None
+    operation_error = None
     try:
+        client = QdrantClient(path=str(db_dir))
         if not client.collection_exists(collection_name):
             raise LookupError(
                 f"Collection '{collection_name}' not found in {db_dir}")
@@ -7386,13 +7588,13 @@ def _search_qdrant_candidates(
             metas.append(payload)
             scores.append(float(point.score))
         return docs, metas, scores, effective_mode
+    except BaseException as exc:
+        operation_error = exc
+        raise
     finally:
-        close = getattr(client, "close", None)
-        if callable(close):
-            try:
-                close()
-            except Exception as exc:
-                log.debug("Could not close Qdrant client: %s", exc)
+        _finish_vector_client(
+            client, client_name="Qdrant",
+            primary_error=operation_error)
 
 
 def _search_hit_source_id(hit: SearchHit) -> str:
@@ -9392,15 +9594,17 @@ def show_info(chroma_dir: Path, collection_name: str = DEFAULT_COLLECTION) -> No
     # ChromaDB stats
     if chroma_dir.exists():
         try:
-            import chromadb
-            client = chromadb.PersistentClient(path=str(chroma_dir))
-            coll = client.get_collection(collection_name)
+            count = _index_collection_count(
+                chroma_dir, collection_name, db_backend="chroma")
             print("\n--- ChromaDB ---")
-            print(f"  Collection: {coll.name}")
-            print(f"  Documents:  {coll.count()}")
-        except Exception:
+            print(f"  Collection: {collection_name}")
+            print(f"  Documents:  {count}")
+        except LookupError:
             print("\n--- ChromaDB ---")
             print(f"  Collection '{collection_name}' not found")
+        except Exception as exc:
+            print("\n--- ChromaDB ---")
+            print(f"  Collection status unavailable: {exc}")
 
     print()
 

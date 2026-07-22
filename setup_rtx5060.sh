@@ -131,7 +131,7 @@ pip install docling
 pip install "docling-core[chunking]"
 
 # ChromaDB for vector indexing
-pip install chromadb
+pip install "chromadb>=1.5.2"
 
 # Quality-of-life
 pip install tqdm rich

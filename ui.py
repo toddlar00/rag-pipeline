@@ -248,23 +248,18 @@ def do_info():
     if not isinstance(db_path, Path) or not collection:
         return "\n".join(lines)
     try:
-        if _config["db_backend"] == "qdrant":
-            from qdrant_client import QdrantClient
-            client = QdrantClient(path=str(db_path))
-            if client.collection_exists(collection):
-                info = client.get_collection(collection)
-                lines.append("\n### Qdrant")
-                lines.append(f"- Collection: {collection}")
-                lines.append(f"- Points: {info.points_count}")
-        else:
-            import chromadb
-            client = chromadb.PersistentClient(path=str(db_path))
-            coll = client.get_collection(collection)
-            lines.append("\n### ChromaDB")
-            lines.append(f"- Collection: {coll.name}")
-            lines.append(f"- Documents: {coll.count()}")
-    except Exception:
+        backend = _config["db_backend"]
+        count = rag._index_collection_count(
+            db_path, collection, db_backend=backend)
+        lines.append("\n### Qdrant" if backend == "qdrant"
+                     else "\n### ChromaDB")
+        lines.append(f"- Collection: {collection}")
+        lines.append(
+            f"- {'Points' if backend == 'qdrant' else 'Documents'}: {count}")
+    except LookupError:
         lines.append(f"\n### Vector DB: collection '{_config['collection']}' not found")
+    except Exception as exc:
+        lines.append(f"\n### Vector DB status unavailable: {exc}")
 
     lines.append("\n### Config")
     lines.append(f"- Embedding: `{_config['embedding_model']}`")

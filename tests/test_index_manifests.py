@@ -183,6 +183,65 @@ def _track_parallel_resources(
     return state
 
 
+def _install_counting_vector_client(
+        monkeypatch, backend, *, constructor_error=None,
+        count_error=None, close_error=None):
+    state = SimpleNamespace(close_calls=0)
+
+    class FakeCollection:
+        def count(self):
+            if count_error is not None:
+                raise count_error
+            return 3
+
+    class FakeChromaClient:
+        def __init__(self, path):
+            if constructor_error is not None:
+                raise constructor_error
+            self.path = path
+
+        def get_collection(self, name):
+            assert name == "book"
+            return FakeCollection()
+
+        def close(self):
+            state.close_calls += 1
+            if close_error is not None:
+                raise close_error
+
+    class FakeQdrantClient:
+        def __init__(self, path):
+            if constructor_error is not None:
+                raise constructor_error
+            self.path = path
+
+        def collection_exists(self, name):
+            assert name == "book"
+            return True
+
+        def count(self, *, collection_name, exact):
+            assert collection_name == "book"
+            assert exact is True
+            if count_error is not None:
+                raise count_error
+            return SimpleNamespace(count=3)
+
+        def close(self):
+            state.close_calls += 1
+            if close_error is not None:
+                raise close_error
+
+    if backend == "chroma":
+        chromadb = ModuleType("chromadb")
+        chromadb.PersistentClient = FakeChromaClient
+        monkeypatch.setitem(sys.modules, "chromadb", chromadb)
+    else:
+        qdrant_client = ModuleType("qdrant_client")
+        qdrant_client.QdrantClient = FakeQdrantClient
+        monkeypatch.setitem(sys.modules, "qdrant_client", qdrant_client)
+    return state
+
+
 def test_manifest_is_scoped_versioned_and_atomic(tmp_path):
     hashes = {"chunk_1": "abc"}
 
@@ -339,6 +398,71 @@ def test_invalid_chunks_fail_before_existing_collection_is_opened(
         rag.index_chunks(chunks, tmp_path / "db", embedding_model="model-a")
 
 
+@pytest.mark.parametrize("backend", ["chroma", "qdrant"])
+def test_index_collection_count_closes_client_on_success(
+        monkeypatch, tmp_path, backend):
+    state = _install_counting_vector_client(monkeypatch, backend)
+    db_path = tmp_path / backend
+    db_path.mkdir()
+
+    assert rag._index_collection_count(
+        db_path, "book", db_backend=backend) == 3
+    assert state.close_calls == 1
+
+
+@pytest.mark.parametrize("backend", ["chroma", "qdrant"])
+def test_index_collection_count_preserves_constructor_failure(
+        monkeypatch, tmp_path, backend):
+    constructor_error = RuntimeError(f"{backend} constructor failure")
+    state = _install_counting_vector_client(
+        monkeypatch, backend, constructor_error=constructor_error)
+    db_path = tmp_path / backend
+    db_path.mkdir()
+
+    with pytest.raises(RuntimeError) as raised:
+        rag._index_collection_count(
+            db_path, "book", db_backend=backend)
+
+    assert raised.value is constructor_error
+    assert state.close_calls == 0
+
+
+@pytest.mark.parametrize("backend", ["chroma", "qdrant"])
+def test_index_collection_count_preserves_primary_over_close_failure(
+        monkeypatch, tmp_path, backend):
+    count_error = RuntimeError(f"primary {backend} count failure")
+    close_error = RuntimeError(f"secondary {backend} close failure")
+    state = _install_counting_vector_client(
+        monkeypatch, backend, count_error=count_error,
+        close_error=close_error)
+    db_path = tmp_path / backend
+    db_path.mkdir()
+
+    with pytest.raises(RuntimeError) as raised:
+        rag._index_collection_count(
+            db_path, "book", db_backend=backend)
+
+    assert raised.value is count_error
+    assert state.close_calls == 1
+
+
+@pytest.mark.parametrize("backend", ["chroma", "qdrant"])
+def test_index_collection_count_propagates_close_only_failure(
+        monkeypatch, tmp_path, backend):
+    close_error = RuntimeError(f"{backend} close failure")
+    state = _install_counting_vector_client(
+        monkeypatch, backend, close_error=close_error)
+    db_path = tmp_path / backend
+    db_path.mkdir()
+
+    with pytest.raises(RuntimeError) as raised:
+        rag._index_collection_count(
+            db_path, "book", db_backend=backend)
+
+    assert raised.value is close_error
+    assert state.close_calls == 1
+
+
 def test_bounded_upsert_queue_surfaces_worker_failure_without_blocking():
     work_queue = queue.Queue(maxsize=1)
     work_queue.put("already full")
@@ -390,6 +514,146 @@ def test_queue_worker_cleanup_preserves_primary_traceback():
             worker_name="test worker", primary_error=primary_error)
 
         assert primary_error.__traceback__ is original_traceback
+
+
+def test_vector_client_cleanup_requires_close_and_closes_once():
+    events = []
+    client = SimpleNamespace(close=lambda: events.append("close"))
+
+    with pytest.raises(RuntimeError, match="does not expose required close"):
+        rag._finish_vector_client(
+            object(), client_name="test", primary_error=None)
+    primary_error = ValueError("primary failure")
+    rag._finish_vector_client(
+        object(), client_name="test", primary_error=primary_error)
+    rag._finish_vector_client(
+        client, client_name="test", primary_error=None)
+
+    assert events == ["close"]
+
+
+def test_vector_client_cleanup_preserves_primary_error_and_traceback():
+    close_error = RuntimeError("secondary client close failure")
+
+    class FailingClient:
+        def __init__(self):
+            self.close_calls = 0
+
+        def close(self):
+            self.close_calls += 1
+            raise close_error
+
+    client = FailingClient()
+    try:
+        raise ValueError("primary vector operation failure")
+    except ValueError as primary_error:
+        original_traceback = primary_error.__traceback__
+        rag._finish_vector_client(
+            client, client_name="test", primary_error=primary_error)
+        assert primary_error.__traceback__ is original_traceback
+
+    assert client.close_calls == 1
+
+
+def test_vector_client_cleanup_preserves_primary_when_logging_fails(
+        monkeypatch):
+    primary_error = ValueError("primary vector operation failure")
+    close_error = RuntimeError("secondary client close failure")
+
+    def fail_logging(*_args, **_kwargs):
+        raise OSError("logging handler failure")
+
+    monkeypatch.setattr(rag.log, "error", fail_logging)
+    client = SimpleNamespace(
+        close=lambda: (_ for _ in ()).throw(close_error))
+
+    try:
+        raise primary_error
+    except ValueError as active_error:
+        original_traceback = active_error.__traceback__
+        rag._finish_vector_client(
+            client, client_name="test", primary_error=active_error)
+        assert active_error is primary_error
+        assert active_error.__traceback__ is original_traceback
+
+
+def test_vector_client_cleanup_propagates_close_error_despite_outer_handler():
+    close_error = RuntimeError("client close failure")
+    client = SimpleNamespace(close=lambda: (_ for _ in ()).throw(close_error))
+
+    try:
+        raise ValueError("unrelated outer failure")
+    except ValueError:
+        with pytest.raises(RuntimeError) as raised:
+            rag._finish_vector_client(
+                client, client_name="test", primary_error=None)
+
+    assert raised.value is close_error
+
+
+def test_vector_client_cleanup_handles_raising_close_descriptor():
+    descriptor_error = RuntimeError("close descriptor failure")
+
+    class FailingDescriptorClient:
+        @property
+        def close(self):
+            raise descriptor_error
+
+    with pytest.raises(RuntimeError) as raised:
+        rag._finish_vector_client(
+            FailingDescriptorClient(), client_name="test",
+            primary_error=None)
+    assert raised.value is descriptor_error
+
+    primary_error = ValueError("primary failure")
+    rag._finish_vector_client(
+        FailingDescriptorClient(), client_name="test",
+        primary_error=primary_error)
+
+
+def test_vector_client_owner_closes_all_clients_and_preserves_primary():
+    events = []
+    first_error = RuntimeError("first close failure")
+
+    def close_first():
+        events.append("first")
+        raise first_error
+
+    owner = rag._VectorClientOwner("test")
+    owner.own(SimpleNamespace(close=close_first))
+    owner.own(SimpleNamespace(close=lambda: events.append("second")))
+
+    with pytest.raises(RuntimeError) as raised:
+        owner.finish(primary_error=None)
+    assert raised.value is first_error
+    assert events == ["second", "first"]
+
+    owner = rag._VectorClientOwner("test")
+    owner.own(SimpleNamespace(close=close_first))
+    primary_error = ValueError("primary failure")
+    owner.finish(primary_error=primary_error)
+    assert events == ["second", "first", "first"]
+
+
+def test_vector_client_owner_preserves_first_cleanup_when_logging_fails(
+        monkeypatch):
+    first_cleanup_error = RuntimeError("first cleanup failure")
+    additional_cleanup_error = RuntimeError("additional cleanup failure")
+
+    def fail_logging(*_args, **_kwargs):
+        raise OSError("logging handler failure")
+
+    monkeypatch.setattr(rag.log, "error", fail_logging)
+    owner = rag._VectorClientOwner("test")
+    owner.own(SimpleNamespace(
+        close=lambda: (_ for _ in ()).throw(additional_cleanup_error)))
+    owner.own(SimpleNamespace(
+        close=lambda: (_ for _ in ()).throw(first_cleanup_error)))
+
+    with pytest.raises(RuntimeError) as raised:
+        owner.finish(primary_error=None)
+
+    assert raised.value is first_cleanup_error
 
 
 def test_manifest_validation_rebuilds_on_schema_model_or_dimension_change(
@@ -1122,6 +1386,7 @@ def test_qdrant_marker_write_failure_prevents_collection_mutation(
     db_path = tmp_path / "qdrant"
     _write_chunks(chunks_path)
     mutations = []
+    close_calls = []
 
     class FakeQdrantClient:
         def __init__(self, path):
@@ -1138,6 +1403,9 @@ def test_qdrant_marker_write_failure_prevents_collection_mutation(
 
         def upsert(self, **kwargs):
             mutations.append("upsert")
+
+        def close(self):
+            close_calls.append(True)
 
     qdrant_client = ModuleType("qdrant_client")
     qdrant_client.QdrantClient = FakeQdrantClient
@@ -1162,6 +1430,7 @@ def test_qdrant_marker_write_failure_prevents_collection_mutation(
             collection_name="book", embedding_model="model-a")
 
     assert mutations == []
+    assert close_calls == [True]
     assert not rag._qdrant_update_marker_path(
         db_path, collection_name="book").exists()
 
@@ -1208,7 +1477,8 @@ def _prepare_qdrant_removed_only_incremental(
     removed_point = SimpleNamespace(
         id=202, payload={"stable_id": removed_stable_id})
     state = SimpleNamespace(
-        points={101: keep_point}, scroll_offsets=[], deletes=[])
+        points={101: keep_point}, scroll_offsets=[], deletes=[],
+        client_close_calls=0)
     if include_removed_point:
         state.points[202] = removed_point
 
@@ -1258,6 +1528,9 @@ def _prepare_qdrant_removed_only_incremental(
         def get_collection(self, collection_name):
             return SimpleNamespace(points_count=len(state.points))
 
+        def close(self):
+            state.client_close_calls += 1
+
     qdrant_client = ModuleType("qdrant_client")
     qdrant_client.QdrantClient = FakeQdrantClient
     qdrant_client.models = models
@@ -1293,6 +1566,7 @@ def test_qdrant_removed_only_incremental_deletes_later_page_and_saves_manifest(
     assert fixture.state.scroll_offsets == [
         None, "later-page", None, "later-page"]
     assert fixture.state.deletes == [[202]]
+    assert fixture.state.client_close_calls == 1
     assert set(fixture.state.points) == {101}
     assert not fixture.marker_path.exists()
     manifest = json.loads(
@@ -1317,6 +1591,7 @@ def test_qdrant_missing_manifest_removal_fails_without_saving_manifest(
 
     assert fixture.state.scroll_offsets == [None, "later-page"]
     assert fixture.state.deletes == []
+    assert fixture.state.client_close_calls == 1
     assert not fixture.marker_path.exists()
     assert fixture.manifest_path.read_bytes() == original_manifest
     manifest = json.loads(original_manifest)
@@ -1327,7 +1602,7 @@ def test_qdrant_missing_manifest_removal_fails_without_saving_manifest(
 def _prepare_qdrant_changed_existing_incremental(
         monkeypatch, tmp_path, *, delete_mutates=True, upsert_mutates=True,
         count_values=None, delete_status="completed",
-        upsert_status="completed"):
+        upsert_status="completed", client_close_error=None):
     chunks_path = tmp_path / "chunks.jsonl"
     db_path = tmp_path / "qdrant"
     old_record = {
@@ -1370,6 +1645,7 @@ def _prepare_qdrant_changed_existing_incremental(
         points={point_id: old_point}, deletes=[], upserts=[], scrolls=0,
         collection_exists=True, collection_rebuilds=0,
         delete_mutates=delete_mutates, upsert_mutates=upsert_mutates,
+        client_close_calls=0, lifecycle_events=[],
         count_values=(list(count_values)
                       if count_values is not None else None),
         delete_status=delete_status, upsert_status=upsert_status)
@@ -1434,6 +1710,12 @@ def _prepare_qdrant_changed_existing_incremental(
                     state.points[point.id] = point
             return SimpleNamespace(status=state.upsert_status)
 
+        def close(self):
+            state.client_close_calls += 1
+            state.lifecycle_events.append("client_close")
+            if client_close_error is not None:
+                raise client_close_error
+
     qdrant_client = ModuleType("qdrant_client")
     qdrant_client.QdrantClient = FakeQdrantClient
     qdrant_client.models = models
@@ -1467,7 +1749,9 @@ def test_qdrant_producer_failure_stops_worker_and_preserves_recovery_state(
         close_error=RuntimeError("secondary progress close failure"),
     )
     fixture = _prepare_qdrant_changed_existing_incremental(
-        monkeypatch, tmp_path)
+        monkeypatch, tmp_path,
+        client_close_error=RuntimeError(
+            "secondary Qdrant client close failure"))
     original_manifest = fixture.manifest_path.read_bytes()
 
     def fail_index_embedding(texts, _model, **_kwargs):
@@ -1500,6 +1784,7 @@ def test_qdrant_producer_failure_stops_worker_and_preserves_recovery_state(
     assert resources.bars[0].close_calls == 1
     assert resources.events == [
         "worker_exit", "executor_shutdown", "progress_close"]
+    assert fixture.state.client_close_calls == 1
 
 
 @pytest.mark.parametrize("failure_stage", ["constructor", "submit"])
@@ -1758,6 +2043,13 @@ def test_qdrant_changed_existing_is_deleted_then_replaced_before_manifest_save(
         monkeypatch, tmp_path):
     fixture = _prepare_qdrant_changed_existing_incremental(
         monkeypatch, tmp_path)
+    save_manifest = rag._save_index_manifest
+
+    def save_after_client_close(*args, **kwargs):
+        assert fixture.state.lifecycle_events == ["client_close"]
+        return save_manifest(*args, **kwargs)
+
+    monkeypatch.setattr(rag, "_save_index_manifest", save_after_client_close)
 
     rag.index_chunks_qdrant(
         fixture.chunks_path, fixture.db_path,
@@ -1766,6 +2058,7 @@ def test_qdrant_changed_existing_is_deleted_then_replaced_before_manifest_save(
     assert fixture.state.deletes == [[fixture.point_id]]
     assert len(fixture.state.upserts) == 1
     assert fixture.state.scrolls == 3
+    assert fixture.state.client_close_calls == 1
     assert not fixture.marker_path.exists()
     assert fixture.state.points[fixture.point_id].payload["context"] == (
         "Corrected classification")
@@ -1775,6 +2068,26 @@ def test_qdrant_changed_existing_is_deleted_then_replaced_before_manifest_save(
         fixture.stable_id: fixture.new_hash}
     assert manifest["source_sha256"] == hashlib.sha256(
         fixture.chunks_path.read_bytes()).hexdigest()
+
+
+def test_qdrant_client_close_failure_prevents_manifest_commit(
+        monkeypatch, tmp_path):
+    close_error = RuntimeError("injected Qdrant client close failure")
+    fixture = _prepare_qdrant_changed_existing_incremental(
+        monkeypatch, tmp_path, client_close_error=close_error)
+    original_manifest = fixture.manifest_path.read_bytes()
+
+    with pytest.raises(RuntimeError) as raised:
+        rag.index_chunks_qdrant(
+            fixture.chunks_path, fixture.db_path,
+            collection_name="book", embedding_model="model-a")
+
+    assert raised.value is close_error
+    assert fixture.state.client_close_calls == 1
+    assert fixture.state.points[fixture.point_id].payload["context"] == (
+        "Corrected classification")
+    assert fixture.marker_path.is_file()
+    assert fixture.manifest_path.read_bytes() == original_manifest
 
 
 def test_qdrant_manifest_commit_failure_stays_dirty_and_retry_rebuilds(
@@ -1845,7 +2158,8 @@ def test_qdrant_marker_cleanup_runs_after_manifest_commit(
 
 def _prepare_chroma_changed_existing_incremental(
         monkeypatch, tmp_path, *, embedding_model="model-a",
-        delete_mutates=True, upsert_mutates=True, count_values=None):
+        delete_mutates=True, upsert_mutates=True, count_values=None,
+        client_close_error=None):
     chunks_path = tmp_path / "chunks.jsonl"
     db_path = tmp_path / "chroma"
     old_record = {
@@ -1881,6 +2195,7 @@ def _prepare_chroma_changed_existing_incremental(
         upserts=[], deletes=[], collection_deletes=[], collection_creates=[],
         collections={}, gets=[], delete_mutates=delete_mutates,
         upsert_mutates=upsert_mutates,
+        client_close_calls=0, lifecycle_events=[],
         count_values=(list(count_values)
                       if count_values is not None else None))
 
@@ -1962,6 +2277,12 @@ def _prepare_chroma_changed_existing_incremental(
             assert marker_path.is_file()
             state.collection_deletes.append(name)
             state.collections.pop(name).rows.clear()
+
+        def close(self):
+            state.client_close_calls += 1
+            state.lifecycle_events.append("client_close")
+            if client_close_error is not None:
+                raise client_close_error
 
     chromadb = ModuleType("chromadb")
     chromadb.PersistentClient = FakeChromaClient
@@ -2224,6 +2545,7 @@ def test_chroma_changed_existing_is_deleted_then_replaced_before_manifest_save(
             ("reconcile", frozenset()),
             ("reconcile", frozenset({fixture.stable_id})),
         ]
+        assert fixture.state.lifecycle_events == ["client_close"]
         events.append(("manifest_save", None))
         return save_manifest(*args, **kwargs)
 
@@ -2259,6 +2581,53 @@ def test_chroma_changed_existing_is_deleted_then_replaced_before_manifest_save(
         fixture.stable_id: fixture.new_hash}
     assert events[-2:] == [
         ("manifest_save", None), ("marker_cleanup", None)]
+    assert fixture.state.client_close_calls == 1
+
+
+def test_chroma_client_close_failure_prevents_manifest_commit(
+        monkeypatch, tmp_path):
+    close_error = RuntimeError("injected Chroma client close failure")
+    fixture = _prepare_chroma_changed_existing_incremental(
+        monkeypatch, tmp_path, client_close_error=close_error)
+    original_manifest = fixture.manifest_path.read_bytes()
+
+    with pytest.raises(RuntimeError) as raised:
+        rag.index_chunks(
+            fixture.chunks_path, fixture.db_path,
+            collection_name="book", embedding_model="model-a")
+
+    assert raised.value is close_error
+    assert fixture.state.client_close_calls == 1
+    assert fixture.collection.rows[fixture.stable_id]["metadata"][
+        "context"] == "Corrected classification"
+    assert fixture.marker_path.is_file()
+    assert fixture.manifest_path.read_bytes() == original_manifest
+
+
+def test_chroma_client_close_does_not_mask_index_failure(
+        monkeypatch, tmp_path):
+    close_error = RuntimeError("secondary Chroma client close failure")
+    index_error = RuntimeError("primary Chroma embedding failure")
+    fixture = _prepare_chroma_changed_existing_incremental(
+        monkeypatch, tmp_path, client_close_error=close_error)
+    original_manifest = fixture.manifest_path.read_bytes()
+
+    def fail_index_embedding(texts, _model, **_kwargs):
+        if texts == ["RAG index embedding-dimension probe"]:
+            return [[0.0, 1.0]]
+        raise index_error
+
+    monkeypatch.setattr(rag, "_embed_texts", fail_index_embedding)
+    with pytest.raises(RuntimeError) as raised:
+        rag.index_chunks(
+            fixture.chunks_path, fixture.db_path,
+            collection_name="book", embedding_model="model-a")
+
+    assert raised.value is index_error
+    assert fixture.state.client_close_calls == 1
+    assert fixture.state.upserts == []
+    assert fixture.marker_path.is_file()
+    assert fixture.manifest_path.read_bytes() == original_manifest
 
 
 def test_chroma_deletions_respect_client_batch_limit(monkeypatch, tmp_path):
@@ -2769,7 +3138,8 @@ def test_chroma_migrates_legacy_skips_compatible_and_rebuilds_model_change(
     (db_path / "chunk_hashes.json").write_text(
         '{"chunk_stale":"stale"}', encoding="utf-8")
 
-    state = SimpleNamespace(collections={}, deleted=[], upserts=[])
+    state = SimpleNamespace(
+        collections={}, deleted=[], upserts=[], client_close_calls=0)
 
     class FakeCollection:
         def __init__(self, name):
@@ -2818,6 +3188,9 @@ def test_chroma_migrates_legacy_skips_compatible_and_rebuilds_model_change(
             state.deleted.append(name)
             del state.collections[name]
 
+        def close(self):
+            state.client_close_calls += 1
+
     chromadb = ModuleType("chromadb")
     chromadb.PersistentClient = FakeChromaClient
     monkeypatch.setitem(sys.modules, "chromadb", chromadb)
@@ -2833,6 +3206,7 @@ def test_chroma_migrates_legacy_skips_compatible_and_rebuilds_model_change(
 
     assert state.deleted == ["book"]
     assert state.collections["sibling"].rows == {"keep": "untouched"}
+    assert state.client_close_calls == 1
     assert (db_path / "chunk_hashes.json").is_file()
     first_upsert_count = len(state.upserts)
     first_call_count = len(embedding_calls)
@@ -2852,6 +3226,7 @@ def test_chroma_migrates_legacy_skips_compatible_and_rebuilds_model_change(
     assert state.deleted == ["book", "book"]
     assert len(state.upserts) == first_upsert_count + 1
     assert state.collections["sibling"].rows == {"keep": "untouched"}
+    assert state.client_close_calls == 3
     manifest = rag._load_index_manifest(
         db_path, backend="chroma", collection_name="book")
     assert manifest["embedding_model"] == "model-b"
@@ -2869,7 +3244,7 @@ def test_qdrant_manifest_skip_and_model_change_preserve_sibling(
 
     state = SimpleNamespace(
         collections={"sibling": {"keep": "untouched"}},
-        deleted=[], upserts=[])
+        deleted=[], upserts=[], client_close_calls=0)
     marker_path = rag._qdrant_update_marker_path(
         db_path, collection_name="book")
 
@@ -2931,6 +3306,9 @@ def test_qdrant_manifest_skip_and_model_change_preserve_sibling(
             return SimpleNamespace(
                 points_count=len(state.collections[collection_name]))
 
+        def close(self):
+            state.client_close_calls += 1
+
     qdrant_client = ModuleType("qdrant_client")
     qdrant_client.QdrantClient = FakeQdrantClient
     qdrant_client.models = models
@@ -2968,6 +3346,7 @@ def test_qdrant_manifest_skip_and_model_change_preserve_sibling(
 
     assert state.deleted == ["book"]
     assert state.collections["sibling"] == {"keep": "untouched"}
+    assert state.client_close_calls == 3
     assert len(state.upserts) == first_upsert_count + 1
     manifest = rag._load_index_manifest(
         db_path, backend="qdrant", collection_name="book")

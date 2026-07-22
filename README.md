@@ -710,6 +710,15 @@ parallel API-embedding path likewise shuts down its executor and closes its
 progress display before committing the manifest; an embedding or upsert error
 takes precedence over either cleanup failure.
 
+Every short-lived Chroma and Qdrant client used by indexing, search, and status
+inspection is also closed deterministically. Indexing closes the client after
+physical reconciliation but before manifest commit, so a cleanup failure keeps
+the recovery marker and old manifest instead of reporting success while a
+Windows database lock remains held. Operation errors take precedence over
+secondary close errors. Chroma 1.5.2 is the minimum supported release because
+it provides the public, reference-counted `close()` needed to release shared
+local database handles without invalidating another live client.
+
 If the model, vector dimension, or manifest schema changes—or an older shared
 `chunk_hashes.json` sidecar is encountered—the pipeline safely rebuilds only
 the requested collection. Sibling collections in the same database directory
@@ -1187,7 +1196,7 @@ docling>=2.31                # PDF layout detection and conversion
 docling-core[chunking]>=2.70 # HybridChunker and chunking extras
 pypdfium2>=4.30              # PDF page counting and conversion backend
 sentence-transformers>=3.0   # Local embedding models
-chromadb>=0.5                # Default vector database
+chromadb>=1.5.2              # Default vector database; deterministic close()
 FlagEmbedding>=1.3           # BGE cross-encoder reranker
 rank-bm25>=0.2               # BM25 keyword search
 tqdm                         # Progress bars

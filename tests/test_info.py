@@ -23,3 +23,20 @@ def test_show_info_discovers_book_scoped_artifacts(monkeypatch, tmp_path, capsys
     assert str(Path("Evidence") / "Evidence.json") in output
     assert str(Path("Evidence") / "Evidence_chunks.jsonl") in output
     assert str(Path("Evidence") / "Chapters") in output
+
+
+def test_show_info_does_not_mislabel_collection_status_failure(
+        monkeypatch, tmp_path, capsys):
+    db_path = tmp_path / "chroma"
+    db_path.mkdir()
+    close_error = RuntimeError("injected client close failure")
+    monkeypatch.setattr(
+        rag, "_index_collection_count",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(close_error),
+    )
+
+    rag.show_info(db_path, collection_name="book")
+
+    output = capsys.readouterr().out
+    assert "Collection status unavailable: injected client close failure" in output
+    assert "Collection 'book' not found" not in output
