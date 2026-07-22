@@ -38,6 +38,7 @@ from uuid import UUID, uuid4
 
 import artifact_io as _artifact_io
 import chunking_core as _chunking_core
+import index_state as _index_state
 import retrieval_core as _retrieval_core
 
 from llm_runtime import (
@@ -6509,38 +6510,31 @@ def _atomic_write_jsonl(path: Path, records: list[dict]) -> None:
         cleanup_error_fn=_log_cleanup_error)
 
 
-def _index_manifest_path(db_dir: Path, *, backend: str,
-                         collection_name: str) -> Path:
-    """Return a collision-resistant path scoped to backend and collection."""
-    if backend not in {"chroma", "qdrant"}:
-        raise ValueError("backend must be 'chroma' or 'qdrant'")
-    safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", collection_name)
-    safe_name = safe_name.strip("._")[:48] or "collection"
-    digest = hashlib.sha256(collection_name.encode("utf-8")).hexdigest()[:12]
-    return db_dir / f".rag-index-{backend}-{safe_name}-{digest}.json"
+_index_manifest_path = _index_state._index_manifest_path
 
 
 def _index_update_marker_path(db_dir: Path, *, backend: str,
                               collection_name: str) -> Path:
     """Return the collection-scoped marker for an unfinished index update."""
-    manifest_path = _index_manifest_path(
-        db_dir, backend=backend, collection_name=collection_name)
-    return manifest_path.with_name(
-        f"{manifest_path.stem}.updating.json")
+    return _index_state._index_update_marker_path(
+        db_dir, backend=backend, collection_name=collection_name,
+        manifest_path_fn=_index_manifest_path)
 
 
 def _qdrant_update_marker_path(qdrant_dir: Path, *,
                                 collection_name: str) -> Path:
     """Return the collection-scoped marker for an unfinished Qdrant update."""
-    return _index_update_marker_path(
-        qdrant_dir, backend="qdrant", collection_name=collection_name)
+    return _index_state._qdrant_update_marker_path(
+        qdrant_dir, collection_name=collection_name,
+        marker_path_fn=_index_update_marker_path)
 
 
 def _chroma_update_marker_path(chroma_dir: Path, *,
                                 collection_name: str) -> Path:
     """Return the collection-scoped marker for an unfinished Chroma update."""
-    return _index_update_marker_path(
-        chroma_dir, backend="chroma", collection_name=collection_name)
+    return _index_state._chroma_update_marker_path(
+        chroma_dir, collection_name=collection_name,
+        marker_path_fn=_index_update_marker_path)
 
 
 def _begin_index_update(
@@ -6549,22 +6543,14 @@ def _begin_index_update(
         owner_token: str | None = None,
         replace_existing: bool = False) -> Path:
     """Durably mark one backend collection dirty before physical mutation."""
-    path = _index_update_marker_path(
-        db_dir, backend=backend, collection_name=collection_name)
-    if path.exists() and not replace_existing:
-        return path
-    payload = {
-        "marker_schema_version": 1,
-        "manifest_schema_version": INDEX_MANIFEST_SCHEMA_VERSION,
-        "backend": backend,
-        "collection": collection_name,
-        "target_source_sha256": source_sha256,
-        "target_source_record_count": source_record_count,
-    }
-    if owner_token is not None:
-        payload["owner_token"] = owner_token
-    _atomic_write_json(path, payload)
-    return path
+    return _index_state._begin_index_update(
+        db_dir, backend=backend, collection_name=collection_name,
+        source_sha256=source_sha256,
+        source_record_count=source_record_count, owner_token=owner_token,
+        replace_existing=replace_existing,
+        manifest_schema_version=INDEX_MANIFEST_SCHEMA_VERSION,
+        marker_path_fn=_index_update_marker_path,
+        atomic_write_json_fn=_atomic_write_json)
 
 
 def _index_update_marker_owned_by(path: Path,
@@ -6572,29 +6558,10 @@ def _index_update_marker_owned_by(path: Path,
                                   backend: str | None = None,
                                   collection_name: str | None = None) -> bool:
     """Return whether a marker carries this run's per-update ownership token."""
-    if owner_token is None:
-        return False
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError):
-        return False
-    if not isinstance(payload, dict):
-        return False
-    if (payload.get("marker_schema_version") != 1
-            or payload.get("manifest_schema_version") != (
-                INDEX_MANIFEST_SCHEMA_VERSION)
-            or payload.get("owner_token") != owner_token
-            or not isinstance(payload.get("target_source_sha256"), str)
-            or isinstance(payload.get("target_source_record_count"), bool)
-            or not isinstance(payload.get("target_source_record_count"), int)
-            or payload["target_source_record_count"] < 0):
-        return False
-    if backend is not None and payload.get("backend") != backend:
-        return False
-    if (collection_name is not None
-            and payload.get("collection") != collection_name):
-        return False
-    return True
+    return _index_state._index_update_marker_owned_by(
+        path, owner_token, backend=backend,
+        collection_name=collection_name,
+        manifest_schema_version=INDEX_MANIFEST_SCHEMA_VERSION)
 
 
 def _begin_qdrant_index_update(
@@ -6602,11 +6569,12 @@ def _begin_qdrant_index_update(
         source_sha256: str, source_record_count: int, owner_token: str,
         replace_existing: bool = False) -> Path:
     """Durably mark Qdrant dirty before its first physical mutation."""
-    return _begin_index_update(
-        qdrant_dir, backend="qdrant", collection_name=collection_name,
+    return _index_state._begin_qdrant_index_update(
+        qdrant_dir, collection_name=collection_name,
         source_sha256=source_sha256,
         source_record_count=source_record_count, owner_token=owner_token,
-        replace_existing=replace_existing)
+        replace_existing=replace_existing,
+        begin_index_update_fn=_begin_index_update)
 
 
 def _begin_chroma_index_update(
@@ -6614,68 +6582,42 @@ def _begin_chroma_index_update(
         source_sha256: str, source_record_count: int, owner_token: str,
         replace_existing: bool = False) -> Path:
     """Durably mark Chroma dirty before its first physical mutation."""
-    return _begin_index_update(
-        chroma_dir, backend="chroma", collection_name=collection_name,
+    return _index_state._begin_chroma_index_update(
+        chroma_dir, collection_name=collection_name,
         source_sha256=source_sha256,
         source_record_count=source_record_count, owner_token=owner_token,
-        replace_existing=replace_existing)
+        replace_existing=replace_existing,
+        begin_index_update_fn=_begin_index_update)
 
 
 def _finish_index_update(marker_path: Path, *, owner_token: str,
                          backend: str | None = None,
                          collection_name: str | None = None) -> None:
     """Mark an update clean after its verified manifest has been committed."""
-    if not _index_update_marker_owned_by(
-            marker_path, owner_token, backend=backend,
-            collection_name=collection_name):
-        raise RuntimeError(
-            f"Index update marker ownership changed before commit: "
-            f"{marker_path}. The collection remains dirty and must be rebuilt."
-        )
-    marker_path.unlink()
+    _index_state._finish_index_update(
+        marker_path, owner_token=owner_token, backend=backend,
+        collection_name=collection_name,
+        marker_owned_by_fn=_index_update_marker_owned_by)
 
 
 def _load_index_manifest(db_dir: Path, *, backend: str,
                          collection_name: str) -> dict | None:
     """Load a collection-scoped manifest, returning ``None`` if unusable."""
-    path = _index_manifest_path(
-        db_dir, backend=backend, collection_name=collection_name)
-    if not path.is_file():
-        return None
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        log.warning("Index manifest is unreadable (%s); collection will be "
-                    "rebuilt safely: %s", path, exc)
-        return None
-    if not isinstance(payload, dict):
-        log.warning("Index manifest is not a JSON object (%s); collection "
-                    "will be rebuilt safely", path)
-        return None
-    return payload
+    return _index_state._load_index_manifest(
+        db_dir, backend=backend, collection_name=collection_name,
+        manifest_path_fn=_index_manifest_path,
+        warning_fn=log.warning)
 
 
 def _index_manifest_mismatch(
         manifest: dict, *, backend: str, collection_name: str,
         embedding_model: str, embedding_dimension: int) -> str | None:
     """Return why *manifest* is incompatible, or ``None`` when safe to use."""
-    expected = {
-        "schema_version": INDEX_MANIFEST_SCHEMA_VERSION,
-        "backend": backend,
-        "collection": collection_name,
-        "embedding_model": embedding_model,
-        "embedding_dimension": embedding_dimension,
-    }
-    for key, value in expected.items():
-        if manifest.get(key) != value:
-            return f"{key} changed ({manifest.get(key)!r} -> {value!r})"
-
-    hashes = manifest.get("chunk_hashes")
-    if (not isinstance(hashes, dict)
-            or not all(isinstance(key, str) and isinstance(value, str)
-                       for key, value in hashes.items())):
-        return "chunk_hashes is missing or invalid"
-    return None
+    return _index_state._index_manifest_mismatch(
+        manifest, backend=backend, collection_name=collection_name,
+        embedding_model=embedding_model,
+        embedding_dimension=embedding_dimension,
+        manifest_schema_version=INDEX_MANIFEST_SCHEMA_VERSION)
 
 
 def _resolve_incremental_index_state(
@@ -6691,35 +6633,16 @@ def _resolve_incremental_index_state(
     Rebuilding only the requested collection safely migrates it to the new
     manifest without touching sibling collections or deleting the legacy file.
     """
-    marker_path = _index_update_marker_path(
-        db_dir, backend=backend, collection_name=collection_name)
-    if (marker_path.exists()
-            and not _index_update_marker_owned_by(
-                marker_path, active_update_token, backend=backend,
-                collection_name=collection_name)):
-        return {}, collection_exists, (
-            "previous index update did not complete")
-    if full_reindex:
-        return {}, collection_exists, "full reindex requested"
-    if not collection_exists:
-        return {}, False, "collection does not exist"
-
-    manifest = _load_index_manifest(
-        db_dir, backend=backend, collection_name=collection_name)
-    if manifest is None:
-        legacy_path = db_dir / "chunk_hashes.json"
-        reason = ("legacy chunk_hashes.json lacks collection/model metadata"
-                  if legacy_path.is_file() else
-                  "collection has no compatible index manifest")
-        return {}, True, reason
-
-    mismatch = _index_manifest_mismatch(
-        manifest, backend=backend, collection_name=collection_name,
+    return _index_state._resolve_incremental_index_state(
+        db_dir, backend=backend, collection_name=collection_name,
         embedding_model=embedding_model,
-        embedding_dimension=embedding_dimension)
-    if mismatch:
-        return {}, True, mismatch
-    return dict(manifest["chunk_hashes"]), False, "manifest compatible"
+        embedding_dimension=embedding_dimension,
+        collection_exists=collection_exists, full_reindex=full_reindex,
+        active_update_token=active_update_token,
+        marker_path_fn=_index_update_marker_path,
+        marker_owned_by_fn=_index_update_marker_owned_by,
+        load_manifest_fn=_load_index_manifest,
+        manifest_mismatch_fn=_index_manifest_mismatch)
 
 
 def _save_index_manifest(
@@ -6728,20 +6651,15 @@ def _save_index_manifest(
         chunk_hashes: dict[str, str], source_sha256: str | None = None,
         source_record_count: int | None = None) -> Path:
     """Atomically persist versioned incremental state for one collection."""
-    path = _index_manifest_path(
-        db_dir, backend=backend, collection_name=collection_name)
-    payload = {
-        "schema_version": INDEX_MANIFEST_SCHEMA_VERSION,
-        "backend": backend,
-        "collection": collection_name,
-        "embedding_model": embedding_model,
-        "embedding_dimension": embedding_dimension,
-        "chunk_hashes": chunk_hashes,
-        "source_sha256": source_sha256,
-        "source_record_count": source_record_count,
-    }
-    _atomic_write_json(path, payload)
-    return path
+    return _index_state._save_index_manifest(
+        db_dir, backend=backend, collection_name=collection_name,
+        embedding_model=embedding_model,
+        embedding_dimension=embedding_dimension,
+        chunk_hashes=chunk_hashes, source_sha256=source_sha256,
+        source_record_count=source_record_count,
+        manifest_schema_version=INDEX_MANIFEST_SCHEMA_VERSION,
+        manifest_path_fn=_index_manifest_path,
+        atomic_write_json_fn=_atomic_write_json)
 
 
 def _query_manifest_dimension_impl(
@@ -6753,47 +6671,13 @@ def _query_manifest_dimension_impl(
     exists, however, querying with a different model or stale schema is refused
     rather than silently comparing vectors from incompatible embedding spaces.
     """
-    marker_path = _index_update_marker_path(
-        db_dir, backend=backend, collection_name=collection_name)
-    if marker_path.exists():
-        raise ValueError(
-            f"Index update is incomplete for {backend.title()} collection "
-            f"'{collection_name}': {marker_path}. Re-run indexing to "
-            "rebuild the collection before querying."
-        )
-    manifest_path = _index_manifest_path(
-        db_dir, backend=backend, collection_name=collection_name)
-    manifest = _load_index_manifest(
-        db_dir, backend=backend, collection_name=collection_name)
-    if manifest is None:
-        if manifest_path.exists():
-            raise ValueError(
-                f"Index manifest is unreadable: {manifest_path}. "
-                "Re-run indexing for this collection."
-            )
-        return None
-
-    expected = {
-        "schema_version": INDEX_MANIFEST_SCHEMA_VERSION,
-        "backend": backend,
-        "collection": collection_name,
-        "embedding_model": embedding_model,
-    }
-    for key, value in expected.items():
-        if manifest.get(key) != value:
-            raise ValueError(
-                f"Query/index mismatch: manifest {key} is "
-                f"{manifest.get(key)!r}, expected {value!r}. Re-run indexing "
-                "or query with the indexed embedding model."
-            )
-    dimension = manifest.get("embedding_dimension")
-    if (isinstance(dimension, bool) or not isinstance(dimension, int)
-            or dimension < 1):
-        raise ValueError(
-            f"Index manifest has an invalid embedding dimension: "
-            f"{manifest_path}. Re-run indexing for this collection."
-        )
-    return dimension
+    return _index_state._query_manifest_dimension_impl(
+        db_dir, backend=backend, collection_name=collection_name,
+        embedding_model=embedding_model,
+        manifest_schema_version=INDEX_MANIFEST_SCHEMA_VERSION,
+        marker_path_fn=_index_update_marker_path,
+        manifest_path_fn=_index_manifest_path,
+        load_manifest_fn=_load_index_manifest)
 
 
 def _query_manifest_dimension(
@@ -6847,35 +6731,15 @@ def _require_hybrid_chunks_snapshot(
         chunks_path: Path, db_dir: Path, *, backend: str,
         collection_name: str) -> str | None:
     """Validate and return the manifested lexical corpus digest, if proven."""
-    manifest = _load_index_manifest(
-        db_dir, backend=backend, collection_name=collection_name)
-    if manifest is None:
-        return None
-    expected_sha256 = manifest.get("source_sha256")
-    if not isinstance(expected_sha256, str) or not expected_sha256:
-        return None
-    actual_sha256 = _cached_artifact_sha256(chunks_path)
-    if actual_sha256 != expected_sha256:
-        raise ValueError(
-            f"Hybrid chunks artifact does not match the indexed corpus for "
-            f"{backend.title()} collection '{collection_name}': "
-            f"{chunks_path}. Re-run indexing or select the chunks file used "
-            "to build this collection."
-        )
-    return expected_sha256
+    return _index_state._require_hybrid_chunks_snapshot(
+        chunks_path, db_dir, backend=backend,
+        collection_name=collection_name,
+        load_manifest_fn=_load_index_manifest,
+        artifact_sha256_fn=_cached_artifact_sha256)
 
 
-def _validate_query_vector_dimension(vector: list[float],
-                                     expected_dimension: int | None,
-                                     embedding_model: str) -> None:
-    """Refuse a query vector that cannot belong to the manifested index."""
-    if (expected_dimension is not None
-            and len(vector) != expected_dimension):
-        raise ValueError(
-            f"Embedding model '{embedding_model}' returned a {len(vector)}-"
-            f"dimension query vector, but the index manifest requires "
-            f"{expected_dimension}. Re-run indexing before querying."
-        )
+_validate_query_vector_dimension = (
+    _index_state._validate_query_vector_dimension)
 
 
 def _embedding_dimension(model_name: str) -> int:

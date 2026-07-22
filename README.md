@@ -80,6 +80,11 @@ owns deterministic normalization, structural filtering, near-duplicate
 detection, rule-based content classification, and basic chunk metadata helpers;
 Docling, LLM enrichment, and chunk publication remain orchestrated by `rag.py`.
 
+`index_state.py` is the standard-library-only index policy layer. It owns
+collection-scoped manifest and dirty-marker rules, incremental rebuild
+decisions, and query compatibility checks; `rag.py` injects schema, logging,
+atomic publication, artifact hashing, and vector-store lease collaborators.
+
 ## Quick Start
 
 The portable command-line and CPU dependency profiles are tested on CPython
@@ -1312,7 +1317,8 @@ needed.
 rag.py                  # Stable command/API facade and pipeline orchestration
 retrieval_core.py       # Stdlib-only retrieval models and pure algorithms
 artifact_io.py          # Stdlib-only strict reads and atomic publication
-chunking_core.py         # Stdlib-only text preparation and classification
+chunking_core.py        # Stdlib-only text preparation and classification
+index_state.py          # Stdlib-only index manifests and compatibility policy
 eval.py                 # Evaluation harness (success@k, MRR, type accuracy)
 eval_queries.jsonl      # Starter evaluation queries (10 CivPro)
 ui.py                   # Gradio web UI (Search, Export, Info tabs)
