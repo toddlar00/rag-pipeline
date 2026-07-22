@@ -229,6 +229,7 @@ def test_killed_export_before_completion_commit_is_not_resumable(tmp_path):
     project_root = Path(__file__).resolve().parents[1]
     chunks = tmp_path / "chunks.jsonl"
     output = tmp_path / "book.md"
+    published = tmp_path / "published.ready"
     worker = tmp_path / "partial_export_worker.py"
     _write_chunks(chunks, [_record(0, 1, "One", "source text")])
     worker.write_text(
@@ -242,6 +243,7 @@ def test_killed_export_before_completion_commit_is_not_resumable(tmp_path):
             import rag
 
             rag._atomic_write_text(Path(sys.argv[2]), "published but uncommitted")
+            rag._atomic_write_text(Path(sys.argv[3]), "ready")
             time.sleep(60)
             """
         ),
@@ -249,13 +251,14 @@ def test_killed_export_before_completion_commit_is_not_resumable(tmp_path):
     )
 
     exit_code = rag._run_cli_with_deadline(
-        worker, [str(project_root), str(output)],
-        operation="export publication", timeout=0.5)
+        worker, [str(project_root), str(output), str(published)],
+        operation="export publication", timeout=30,
+        cancel_requested=published.is_file)
 
     parameters = rag._markdown_export_parameters(
         include_types=None, exclude_types=None, chapters=None,
         split_chapters=False)
-    assert exit_code == 124
+    assert exit_code == 130
     assert output.read_text(encoding="utf-8") == "published but uncommitted"
     assert not rag._unified_export_complete(
         chunks, output, parameters=parameters)
