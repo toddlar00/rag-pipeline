@@ -33,12 +33,12 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional, TypedDict
-from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
 import artifact_io as _artifact_io
 import chunking_core as _chunking_core
 import index_state as _index_state
+import llm_adapters as _llm_adapters
 import retrieval_core as _retrieval_core
 
 from llm_runtime import (
@@ -172,23 +172,19 @@ _CONTENT_LABELS = [
 ]
 
 
-def _provider_hostname(url: str) -> str:
-    """Return a normalized API hostname for provider-safe dispatch."""
-    try:
-        return (urlparse(url).hostname or "").lower().rstrip(".")
-    except ValueError:
-        return ""
+_provider_hostname = _llm_adapters._provider_hostname
 
 
 def _is_deepseek_cloud(url: str, model: str = "") -> bool:
     """Return whether an API URL is the official DeepSeek endpoint."""
-    del model  # Kept for compatibility with callers that also have a model.
-    return _provider_hostname(url) == "api.deepseek.com"
+    return _llm_adapters._is_deepseek_cloud(
+        url, model, provider_hostname_fn=_provider_hostname)
 
 
 def _is_minimax_cloud(url: str) -> bool:
     """Return whether an API URL is the official MiniMax endpoint."""
-    return _provider_hostname(url) == "api.minimax.io"
+    return _llm_adapters._is_minimax_cloud(
+        url, provider_hostname_fn=_provider_hostname)
 
 
 def _effective_chunk_token_limit(embedding_model: str,
@@ -3543,77 +3539,23 @@ def _page_count(pdf_path: Path) -> int:
 # ---------------------------------------------------------------------------
 
 
-def _provider_value(source: object, name: str) -> object:
-    """Read one response field from a mapping or SDK response object."""
-    if isinstance(source, dict):
-        return source.get(name)
-    return getattr(source, name, None)
+_provider_value = _llm_adapters._provider_value
 
 
 def _provider_token_count(source: object, name: str) -> int | None:
     """Read and validate an optional provider-native token count."""
-    value = _provider_value(source, name)
-    if value is None:
-        return None
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-        raise ProviderCallError("invalid_response")
-    return value
+    return _llm_adapters._provider_token_count(
+        source, name, provider_value_fn=_provider_value)
 
 
-def _provider_error_category(exc: BaseException) -> str:
-    """Map provider/transport exceptions to a fixed, secret-safe category."""
-    if isinstance(exc, ProviderCallError):
-        return exc.category
-    if isinstance(exc, requests.exceptions.Timeout):
-        return "timeout"
-    if isinstance(exc, requests.exceptions.ConnectionError):
-        return "connection_error"
-    if isinstance(exc, (
-            requests.exceptions.InvalidURL,
-            requests.exceptions.InvalidSchema,
-            requests.exceptions.MissingSchema)):
-        return "configuration_error"
-
-    response = getattr(exc, "response", None)
-    candidates = (
-        getattr(response, "status_code", None),
-        getattr(exc, "status_code", None),
-        getattr(exc, "code", None),
-    )
-    status = next(
-        (value for value in candidates
-         if isinstance(value, int) and not isinstance(value, bool)),
-        None,
-    )
-    if status in {401, 403}:
-        return "authentication_error"
-    if status == 408:
-        return "timeout"
-    if status == 429:
-        return "rate_limited"
-    if status is not None and 400 <= status < 500:
-        return "client_error"
-    if status is not None and status >= 500:
-        return "server_error"
-
-    exception_name = type(exc).__name__.casefold()
-    if "timeout" in exception_name:
-        return "timeout"
-    if "connection" in exception_name:
-        return "connection_error"
-    return "provider_error"
+_provider_error_category = _llm_adapters._provider_error_category
 
 
 def _provider_call_error(exc: BaseException, *,
                          transport_attempts: int) -> ProviderCallError:
-    if isinstance(exc, ProviderCallError):
-        if exc.transport_attempts == transport_attempts:
-            return exc
-        return ProviderCallError(
-            exc.category, transport_attempts=transport_attempts)
-    return ProviderCallError(
-        _provider_error_category(exc),
-        transport_attempts=transport_attempts)
+    return _llm_adapters._provider_call_error(
+        exc, transport_attempts=transport_attempts,
+        error_category_fn=_provider_error_category)
 
 
 def _call_ollama_result(prompt: str, *, url: str = DEFAULT_OLLAMA_URL,
@@ -3622,39 +3564,12 @@ def _call_ollama_result(prompt: str, *, url: str = DEFAULT_OLLAMA_URL,
                         max_tokens: int = 256,
                         timeout: int = 30) -> ProviderResponse:
     """Return Ollama text with its native prompt/output token counts."""
-    payload = {
-        "model": model,
-        "prompt": prompt,
-        "stream": False,
-        "think": thinking,
-        "options": {"num_predict": max_tokens},
-    }
-    try:
-        resp = requests.post(
-            f"{url.rstrip('/')}/api/generate",
-            json=payload,
-            timeout=timeout,
-        )
-        resp.raise_for_status()
-        body = resp.json()
-        if not isinstance(body, dict) or not isinstance(
-                body.get("response"), str):
-            raise ProviderCallError("invalid_response")
-        prompt_tokens = _provider_token_count(body, "prompt_eval_count")
-        completion_tokens = _provider_token_count(body, "eval_count")
-        if (prompt_tokens is None) != (completion_tokens is None):
-            raise ProviderCallError("invalid_response")
-        return ProviderResponse(
-            text=body["response"].strip(),
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-        )
-    except Exception as exc:
-        if isinstance(exc, (ValueError, TypeError, KeyError, IndexError)):
-            raise ProviderCallError(
-                "invalid_response", transport_attempts=1) from None
-        raise _provider_call_error(
-            exc, transport_attempts=1) from None
+    return _llm_adapters._call_ollama_result(
+        prompt, url=url, model=model, thinking=thinking,
+        max_tokens=max_tokens, timeout=timeout,
+        post_fn=requests.post,
+        provider_token_count_fn=_provider_token_count,
+        provider_call_error_fn=_provider_call_error)
 
 
 def _call_ollama(prompt: str, *, url: str = DEFAULT_OLLAMA_URL,
@@ -3683,35 +3598,18 @@ _gemini_client_lock = _threading.Lock()
 
 
 def _gemini_content_filtered(response: object) -> bool:
-    feedback = _provider_value(response, "prompt_feedback")
-    values = [_provider_value(feedback, "block_reason")]
-    candidates = _provider_value(response, "candidates")
-    if isinstance(candidates, list) and candidates:
-        values.append(_provider_value(candidates[0], "finish_reason"))
-    labels = {
-        str(getattr(value, "name", value)).casefold()
-        for value in values if value is not None
-    }
-    return any(any(marker in label for marker in (
-        "safety", "block", "prohibited", "recitation"))
-        for label in labels)
+    return _llm_adapters._gemini_content_filtered(
+        response, provider_value_fn=_provider_value)
 
 
-def _call_gemini_result(prompt: str, *, api_key: str = "",
-                        model: str = DEFAULT_GEMINI_MODEL,
-                        max_tokens: int = 256,
-                        timeout: int = 30) -> ProviderResponse:
-    """Return Gemini text and usage with SDK retries explicitly disabled."""
+def _load_gemini_client(api_key: str) -> tuple[object, object]:
+    """Lazily create the cached Gemini client through facade-owned state."""
     global _gemini_client_cache, _gemini_client_key
-    api_key = api_key or os.environ.get("GEMINI_API_KEY", "")
-    if not api_key:
-        raise ProviderCallError(
-            "missing_credentials", transport_attempts=0)
     try:
         from google import genai
         from google.genai import types
-        http_options_type = types.HttpOptions
-        retry_options_type = types.HttpRetryOptions
+        types.HttpOptions
+        types.HttpRetryOptions
     except (ImportError, AttributeError):
         raise ProviderCallError(
             "configuration_error", transport_attempts=0) from None
@@ -3722,70 +3620,26 @@ def _call_gemini_result(prompt: str, *, api_key: str = "",
                     or _gemini_client_key != api_key):
                 _gemini_client_cache = genai.Client(api_key=api_key)
                 _gemini_client_key = api_key
-            client = _gemini_client_cache
+            return _gemini_client_cache, types
     except Exception:
         raise ProviderCallError(
             "configuration_error", transport_attempts=0) from None
 
-    try:
-        response = client.models.generate_content(
-            model=model,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                max_output_tokens=max_tokens,
-                temperature=0.0,
-                http_options=http_options_type(
-                    timeout=timeout * 1000,
-                    retry_options=retry_options_type(attempts=1),
-                ),
-            ),
-        )
-    except Exception as exc:
-        raise _provider_call_error(
-            exc, transport_attempts=1) from None
 
-    try:
-        text = response.text
-    except Exception:
-        text = None
-    if text is None:
-        category = (
-            "content_filtered" if _gemini_content_filtered(response)
-            else "invalid_response")
-        raise ProviderCallError(category, transport_attempts=1)
-    if not isinstance(text, str):
-        raise ProviderCallError("invalid_response", transport_attempts=1)
-
-    usage = _provider_value(response, "usage_metadata")
-    prompt_tokens = _provider_token_count(usage, "prompt_token_count")
-    candidate_tokens = _provider_token_count(
-        usage, "candidates_token_count")
-    total_tokens = _provider_token_count(usage, "total_token_count")
-    cached_tokens = _provider_token_count(
-        usage, "cached_content_token_count")
-    reasoning_tokens = _provider_token_count(
-        usage, "thoughts_token_count")
-
-    completion_tokens = None
-    if prompt_tokens is not None:
-        if total_tokens is not None:
-            if total_tokens < prompt_tokens:
-                raise ProviderCallError("invalid_response")
-            completion_tokens = total_tokens - prompt_tokens
-        elif candidate_tokens is not None:
-            completion_tokens = candidate_tokens + (reasoning_tokens or 0)
-        else:
-            raise ProviderCallError("invalid_response")
-    elif any(value is not None for value in (
-            candidate_tokens, total_tokens, cached_tokens, reasoning_tokens)):
-        raise ProviderCallError("invalid_response")
-
-    return ProviderResponse(
-        text=text.strip(), prompt_tokens=prompt_tokens,
-        completion_tokens=completion_tokens,
-        cached_prompt_tokens=cached_tokens,
-        reasoning_tokens=reasoning_tokens,
-    )
+def _call_gemini_result(prompt: str, *, api_key: str = "",
+                        model: str = DEFAULT_GEMINI_MODEL,
+                        max_tokens: int = 256,
+                        timeout: int = 30) -> ProviderResponse:
+    """Return Gemini text and usage with SDK retries explicitly disabled."""
+    return _llm_adapters._call_gemini_result(
+        prompt, api_key=api_key, model=model,
+        max_tokens=max_tokens, timeout=timeout,
+        client_loader_fn=_load_gemini_client,
+        environment_get_fn=os.environ.get,
+        provider_value_fn=_provider_value,
+        provider_token_count_fn=_provider_token_count,
+        provider_call_error_fn=_provider_call_error,
+        content_filtered_fn=_gemini_content_filtered)
 
 
 def _call_gemini(prompt: str, *, api_key: str = "",
@@ -3809,99 +3663,7 @@ def _call_gemini(prompt: str, *, api_key: str = "",
 
 # --- Adaptive rate limiting for cloud API ---
 
-class _AdaptiveThrottle:
-    """Dynamically reduces concurrency when 429 (rate limit) errors occur.
-
-    Shared across all threads. When a 429 is detected, halves the effective
-    worker count (exponential decrease) and adds a cooldown delay. Recovers
-    incrementally (+1 worker after 20 consecutive successes).
-
-    Session ceiling: tracks the highest worker count that produced 429s and
-    caps recovery at (ceiling - 1) so the throttle doesn't repeatedly
-    overshoot and crash back down.
-    """
-    def __init__(self, max_workers: int = 20):
-        self._max = max(1, max_workers)
-        self._current = self._max
-        self._ceiling = self._max  # session worker ceiling — lowered on 429s
-        self._active = 0
-        self._condition = _threading.Condition()
-        self._consecutive_ok = 0
-        self._total_429s = 0
-        self._cooldown = 0.0  # seconds to wait before each call
-        self._cooldown_floor = 0.0  # learned minimum cooldown that avoids 429s
-
-    def acquire(self):
-        """Wait for a slot. Blocks if at concurrency limit."""
-        with self._condition:
-            while self._active >= self._current:
-                self._condition.wait()
-            self._active += 1
-            cooldown = self._cooldown
-        if cooldown > 0:
-            time.sleep(cooldown)
-
-    def release_ok(self):
-        """Release slot after a successful call."""
-        with self._condition:
-            self._active = max(0, self._active - 1)
-            self._consecutive_ok += 1
-            # Gradually recover: after 20 consecutive successes, add a slot back
-            # but never exceed the session ceiling
-            if self._consecutive_ok >= 20 and self._current < self._ceiling:
-                self._current += 1
-                # Reduce cooldown by 0.1s but never below the learned floor
-                self._cooldown = max(self._cooldown_floor,
-                                     self._cooldown - 0.1)
-                log.info(f"Rate limit recovery: workers -> {self._current}, "
-                         f"cooldown -> {self._cooldown:.1f}s "
-                         f"(ceiling: {self._ceiling}, "
-                         f"cooldown floor: {self._cooldown_floor:.1f}s)")
-                self._consecutive_ok = 0
-            self._condition.notify_all()
-
-    def release_429(self):
-        """Release slot after a 429 error. Reduces concurrency."""
-        with self._condition:
-            self._active = max(0, self._active - 1)
-            self._total_429s += 1
-            self._consecutive_ok = 0
-            old = self._current
-            # Lower session ceiling: the current level is too high.
-            # A caller may intentionally configure a single worker, so the
-            # throttle must never recover above that limit.
-            self._ceiling = max(1, min(self._ceiling, self._current - 1))
-            # Halve effective workers, allowing fully serial recovery.
-            new_target = max(1, self._current // 2)
-            self._current = new_target
-            # Increase cooldown and raise the floor to remember this level
-            self._cooldown = min(5.0, self._cooldown + 0.5)
-            # The floor ratchets up: once we know we need at least X cooldown,
-            # recovery won't drop below it
-            self._cooldown_floor = max(self._cooldown_floor,
-                                       self._cooldown - 0.5)
-            log.warning(f"Rate limited (429)! Workers: {old} -> {self._current}, "
-                        f"cooldown: {self._cooldown:.1f}s "
-                        f"(ceiling: {self._ceiling}, "
-                        f"cooldown floor: {self._cooldown_floor:.1f}s, "
-                        f"total 429s: {self._total_429s})")
-            self._condition.notify_all()
-
-    def release_error(self):
-        """Release slot after a non-429 error."""
-        with self._condition:
-            self._active = max(0, self._active - 1)
-            self._condition.notify_all()
-
-    @property
-    def current_workers(self) -> int:
-        with self._condition:
-            return self._current
-
-    @property
-    def total_429s(self) -> int:
-        with self._condition:
-            return self._total_429s
+_AdaptiveThrottle = _llm_adapters._AdaptiveThrottle
 
 
 # Global throttle instance — shared across all LLM calls
@@ -3912,19 +3674,13 @@ def _get_throttle(max_workers: int) -> _AdaptiveThrottle:
     """Get or create the global adaptive throttle."""
     global _api_throttle
     if _api_throttle is None or _api_throttle._max != max_workers:
-        _api_throttle = _AdaptiveThrottle(max_workers)
+        _api_throttle = _AdaptiveThrottle(
+            max_workers, sleep_fn=time.sleep,
+            info_fn=log.info, warning_fn=log.warning)
     return _api_throttle
 
 
-def _retry_after_seconds(value: object) -> float:
-    """Parse delta-seconds Retry-After safely, with a bounded default."""
-    try:
-        delay = float(value)
-    except (TypeError, ValueError):
-        return 2.0
-    if not math.isfinite(delay) or delay < 0:
-        return 2.0
-    return min(delay, 5.0)
+_retry_after_seconds = _llm_adapters._retry_after_seconds
 
 
 def _call_openai_compatible_result(
@@ -3933,121 +3689,16 @@ def _call_openai_compatible_result(
         max_workers: int = DEFAULT_LLM_WORKERS,
         timeout: int = 30) -> ProviderResponse:
     """Return OpenAI-compatible text, native usage, and retry provenance."""
-    if not api_key:
-        raise ProviderCallError(
-            "missing_credentials", transport_attempts=0)
-
-    throttle = _get_throttle(max(1, max_workers))
-    is_deepseek = _is_deepseek_cloud(base_url, model)
-    payload = {
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": max_tokens,
-    }
-    if is_deepseek:
-        payload["thinking"] = {
-            "type": "enabled" if thinking else "disabled"
-        }
-    if not (is_deepseek and thinking):
-        payload["temperature"] = 0.0
-
-    transient_errors: list[str] = []
-
-    for attempt in range(2):  # retry once on 429
-        throttle.acquire()
-        try:
-            resp = requests.post(
-                f"{base_url.rstrip('/')}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}"},
-                json=payload,
-                timeout=timeout,
-            )
-        except Exception as exc:
-            throttle.release_error()
-            raise _provider_call_error(
-                exc, transport_attempts=attempt + 1) from None
-
-        if resp.status_code == 429:
-            throttle.release_429()
-            if attempt == 0:
-                transient_errors.append("rate_limited")
-                retry_after = _retry_after_seconds(
-                    resp.headers.get("Retry-After", "2"))
-                time.sleep(retry_after)
-                continue
-            raise ProviderCallError(
-                "rate_limited", transport_attempts=attempt + 1)
-
-        try:
-            resp.raise_for_status()
-            body = resp.json()
-            if not isinstance(body, dict):
-                raise ProviderCallError("invalid_response")
-            choices = body.get("choices")
-            if not isinstance(choices, list) or not choices:
-                raise ProviderCallError("invalid_response")
-            message = choices[0].get("message")
-            if not isinstance(message, dict) or not isinstance(
-                    message.get("content"), str):
-                raise ProviderCallError("invalid_response")
-
-            usage = body.get("usage")
-            if usage is not None and not isinstance(usage, dict):
-                raise ProviderCallError("invalid_response")
-            prompt_tokens = _provider_token_count(usage, "prompt_tokens")
-            completion_tokens = _provider_token_count(
-                usage, "completion_tokens")
-            total_tokens = _provider_token_count(usage, "total_tokens")
-            if (prompt_tokens is None) != (completion_tokens is None):
-                raise ProviderCallError("invalid_response")
-            if (total_tokens is not None and prompt_tokens is not None
-                    and total_tokens != prompt_tokens + completion_tokens):
-                raise ProviderCallError("invalid_response")
-
-            cached_tokens = _provider_token_count(
-                usage, "prompt_cache_hit_tokens")
-            if cached_tokens is None:
-                prompt_details = _provider_value(
-                    usage, "prompt_tokens_details")
-                cached_tokens = _provider_token_count(
-                    prompt_details, "cached_tokens")
-            completion_details = _provider_value(
-                usage, "completion_tokens_details")
-            reasoning_tokens = _provider_token_count(
-                completion_details, "reasoning_tokens")
-            if prompt_tokens is None and (
-                    cached_tokens is not None
-                    or reasoning_tokens is not None):
-                raise ProviderCallError("invalid_response")
-            if (cached_tokens is not None and prompt_tokens is not None
-                    and cached_tokens > prompt_tokens):
-                raise ProviderCallError("invalid_response")
-            if (reasoning_tokens is not None
-                    and completion_tokens is not None
-                    and reasoning_tokens > completion_tokens):
-                raise ProviderCallError("invalid_response")
-            result = ProviderResponse(
-                text=message["content"].strip(),
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-                cached_prompt_tokens=cached_tokens,
-                reasoning_tokens=reasoning_tokens,
-                transport_attempts=attempt + 1,
-                transient_error_categories=tuple(transient_errors),
-            )
-        except Exception as exc:
-            throttle.release_error()
-            if isinstance(exc, (ValueError, TypeError, KeyError, IndexError)):
-                raise ProviderCallError(
-                    "invalid_response",
-                    transport_attempts=attempt + 1) from None
-            raise _provider_call_error(
-                exc, transport_attempts=attempt + 1) from None
-
-        throttle.release_ok()
-        return result
-
-    raise ProviderCallError("provider_error", transport_attempts=2)
+    return _llm_adapters._call_openai_compatible_result(
+        prompt, base_url=base_url, model=model, api_key=api_key,
+        thinking=thinking, max_tokens=max_tokens,
+        max_workers=max_workers, timeout=timeout,
+        post_fn=requests.post, get_throttle_fn=_get_throttle,
+        sleep_fn=time.sleep, is_deepseek_fn=_is_deepseek_cloud,
+        provider_token_count_fn=_provider_token_count,
+        provider_value_fn=_provider_value,
+        provider_call_error_fn=_provider_call_error,
+        retry_after_fn=_retry_after_seconds)
 
 
 def _call_openai_compatible(prompt: str, *, base_url: str,
@@ -4072,17 +3723,7 @@ def _call_openai_compatible(prompt: str, *, base_url: str,
         return None
 
 
-def _llm_endpoint_id(url: str) -> str:
-    """Return a credential-free endpoint identity for cache separation."""
-    parsed = urlparse(url)
-    if not parsed.hostname:
-        return url.rstrip("/")
-    try:
-        port = f":{parsed.port}" if parsed.port is not None else ""
-    except ValueError:
-        port = ""
-    path = parsed.path.rstrip("/")
-    return f"{parsed.scheme.casefold()}://{parsed.hostname.casefold()}{port}{path}"
+_llm_endpoint_id = _llm_adapters._llm_endpoint_id
 
 
 def _call_llm_result(

@@ -85,6 +85,11 @@ collection-scoped manifest and dirty-marker rules, incremental rebuild
 decisions, and query compatibility checks; `rag.py` injects schema, logging,
 atomic publication, artifact hashing, and vector-store lease collaborators.
 
+`llm_adapters.py` translates Ollama, Gemini, and OpenAI-compatible transport
+responses into the typed, provider-neutral contracts in `llm_runtime.py`.
+Gemini remains lazily imported, while `rag.py` retains provider selection,
+runtime composition, mutable caches/throttles, and the compatibility facades.
+
 ## Quick Start
 
 The portable command-line and CPU dependency profiles are tested on CPython
@@ -1319,6 +1324,7 @@ retrieval_core.py       # Stdlib-only retrieval models and pure algorithms
 artifact_io.py          # Stdlib-only strict reads and atomic publication
 chunking_core.py        # Stdlib-only text preparation and classification
 index_state.py          # Stdlib-only index manifests and compatibility policy
+llm_adapters.py         # Typed LLM provider transport adapters
 eval.py                 # Evaluation harness (success@k, MRR, type accuracy)
 eval_queries.jsonl      # Starter evaluation queries (10 CivPro)
 ui.py                   # Gradio web UI (Search, Export, Info tabs)
