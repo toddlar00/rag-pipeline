@@ -37,6 +37,7 @@ from uuid import UUID, uuid4
 
 import artifact_io as _artifact_io
 import chunking_core as _chunking_core
+import cli_policy as _cli_policy
 import index_state as _index_state
 import llm_adapters as _llm_adapters
 import retrieval_core as _retrieval_core
@@ -847,75 +848,43 @@ def _index_has_data(db_dir: Path, collection_name: str,
         return False
 
 
+def _provider_cli_defaults() -> _cli_policy.ProviderCliDefaults:
+    """Return current facade defaults for pure CLI policy helpers."""
+    return _cli_policy.ProviderCliDefaults(
+        cloud_url=DEFAULT_CLOUD_URL,
+        cloud_model=DEFAULT_CLOUD_MODEL,
+        deepseek_url=DEFAULT_DEEPSEEK_URL,
+        deepseek_model=DEFAULT_DEEPSEEK_MODEL,
+        ollama_url=DEFAULT_OLLAMA_URL,
+        ollama_model=DEFAULT_OLLAMA_MODEL,
+        llm_workers=DEFAULT_LLM_WORKERS,
+    )
+
+
+def _resume_command_defaults() -> _cli_policy.ResumeCommandDefaults:
+    """Return current facade defaults for resume-command serialization."""
+    return _cli_policy.ResumeCommandDefaults(
+        executable=sys.executable,
+        script_name="rag.py",
+        embedding_model=DEFAULT_EMBEDDING_MODEL,
+        db_backend=DEFAULT_DB_BACKEND,
+        conversion_backend="pypdfium2",
+        max_tokens=DEFAULT_MAX_TOKENS,
+        min_words=MIN_CHUNK_WORDS,
+        dedup_threshold=DEDUP_THRESHOLD,
+        db_lock_timeout=DEFAULT_DB_LOCK_TIMEOUT,
+        full_operation_timeout=DEFAULT_OPERATION_TIMEOUTS["full"],
+        llm_cache_mode="readwrite",
+        llm_fallback="ordered",
+        llm_failure_policy="best-effort",
+        provider=_provider_cli_defaults(),
+    )
+
+
 def _build_resume_cmd(pdf: Path, args, extra_flags: str = "") -> str:
     """Build a shell command string to resume a failed ``full`` pipeline."""
-    parts = [sys.executable, "rag.py", "full", "--pdf", f'"{pdf}"', "--resume"]
-    boolean_flags = {
-        "force": "--force",
-        "raptor": "--raptor",
-        "no_preprocess": "--no-preprocess",
-        "split_chapters": "--split-chapters",
-        "full_reindex": "--full-reindex",
-        "llm_classify": "--llm-classify",
-        "zeroshot_classify": "--zeroshot-classify",
-        "contextualize": "--contextualize",
-        "reconstruct_headings": "--reconstruct-headings",
-        "quality_score": "--quality-score",
-        "llm_scaffold": "--llm-scaffold",
-        "thinking": "--thinking",
-    }
-    for attr, flag in boolean_flags.items():
-        if getattr(args, attr, False):
-            parts.append(flag)
-
-    ocr = getattr(args, "ocr", None)
-    if ocr is True:
-        parts.append("--ocr")
-    elif ocr is False:
-        parts.append("--no-ocr")
-
-    emb = getattr(args, "embedding_model", DEFAULT_EMBEDDING_MODEL)
-    if emb != DEFAULT_EMBEDDING_MODEL:
-        parts.extend(["--embedding-model", emb])
-    col = getattr(args, "collection", None)
-    if col:
-        parts.extend(["--collection", col])
-    be = getattr(args, "db_backend", DEFAULT_DB_BACKEND)
-    if be != DEFAULT_DB_BACKEND:
-        parts.extend(["--db-backend", be])
-    backend = getattr(args, "backend", "pypdfium2")
-    if backend != "pypdfium2":
-        parts.extend(["--backend", backend])
-    value_flags = (
-        ("batch_size", None, "--batch-size"),
-        ("max_tokens", DEFAULT_MAX_TOKENS, "--max-tokens"),
-        ("min_words", MIN_CHUNK_WORDS, "--min-words"),
-        ("dedup_threshold", DEDUP_THRESHOLD, "--dedup-threshold"),
-        ("db_lock_timeout", DEFAULT_DB_LOCK_TIMEOUT, "--db-lock-timeout"),
-        ("operation_timeout", DEFAULT_OPERATION_TIMEOUTS["full"],
-         "--operation-timeout"),
-        ("llm_workers", DEFAULT_LLM_WORKERS, "--llm-workers"),
-        ("ollama_url", DEFAULT_OLLAMA_URL, "--ollama-url"),
-        ("ollama_model", DEFAULT_OLLAMA_MODEL, "--ollama-model"),
-        ("cloud_url", DEFAULT_CLOUD_URL, "--cloud-url"),
-        ("cloud_model", DEFAULT_CLOUD_MODEL, "--cloud-model"),
-        ("llm_cache_mode", "readwrite", "--llm-cache-mode"),
-        ("llm_cache_dir", None, "--llm-cache-dir"),
-        ("llm_events", None, "--llm-events"),
-        ("llm_report", None, "--llm-report"),
-        ("llm_fallback", "ordered", "--llm-fallback"),
-        ("llm_failure_policy", "best-effort", "--llm-failure-policy"),
-        ("max_llm_calls", None, "--max-llm-calls"),
-        ("max_llm_reserved_tokens", None,
-         "--max-llm-reserved-tokens"),
-    )
-    for attr, default, flag in value_flags:
-        value = getattr(args, attr, default)
-        if value is not None and value != default:
-            parts.extend([flag, f'"{value}"' if " " in str(value) else str(value)])
-    if extra_flags:
-        parts.append(extra_flags)
-    return " ".join(parts)
+    return _cli_policy._build_resume_cmd(
+        pdf, args, extra_flags, defaults=_resume_command_defaults())
 
 
 def _load_jsonl(path: Path) -> list[dict]:
@@ -9389,74 +9358,44 @@ class _PipelineStageError(RuntimeError):
 
 def _resolve_cloud_endpoint(args) -> tuple[str, str]:
     """Resolve URL/model shortcuts for the configured cloud provider."""
-    cloud_url = getattr(args, "cloud_url", DEFAULT_CLOUD_URL)
-    cloud_model = getattr(args, "cloud_model", DEFAULT_CLOUD_MODEL)
-    if (cloud_model or "").lower().startswith("deepseek-"):
-        if cloud_url == DEFAULT_CLOUD_URL:
-            cloud_url = DEFAULT_DEEPSEEK_URL
-    elif _is_deepseek_cloud(cloud_url):
-        if cloud_model == DEFAULT_CLOUD_MODEL:
-            cloud_model = DEFAULT_DEEPSEEK_MODEL
-    return cloud_url, cloud_model
+    return _cli_policy._resolve_cloud_endpoint(
+        args,
+        defaults=_provider_cli_defaults(),
+        is_deepseek_cloud_fn=_is_deepseek_cloud,
+    )
 
 
 def _resolve_cloud_key(args, *, cloud_url: str = "",
                        cloud_model: str = "") -> str:
     """Resolve a key without sending one provider's secret to another host."""
-    explicit_key = getattr(args, "cloud_key", "")
-    if explicit_key:
-        return explicit_key
-
-    if not cloud_url and not cloud_model:
-        cloud_url, cloud_model = _resolve_cloud_endpoint(args)
-    if _is_deepseek_cloud(cloud_url, cloud_model):
-        return (
-            os.environ.get("DEEPSEEK_API_KEY", "")
-            or os.environ.get("CLOUD_API_KEY", "")
-        )
-    if _is_minimax_cloud(cloud_url):
-        return (
-            os.environ.get("MINIMAX_API_KEY", "")
-            or os.environ.get("CLOUD_API_KEY", "")
-        )
-    return os.environ.get("CLOUD_API_KEY", "")
+    return _cli_policy._resolve_cloud_key(
+        args,
+        cloud_url=cloud_url,
+        cloud_model=cloud_model,
+        resolve_cloud_endpoint_fn=_resolve_cloud_endpoint,
+        is_deepseek_cloud_fn=_is_deepseek_cloud,
+        is_minimax_cloud_fn=_is_minimax_cloud,
+        environment_get_fn=os.environ.get,
+    )
 
 
 def _llm_kwargs_from_args(args, *, include_workers: bool = False) -> dict:
     """Collect provider options shared by LLM-backed operations."""
-    cloud_url, cloud_model = _resolve_cloud_endpoint(args)
-    kwargs = {
-        "cloud_url": cloud_url,
-        "cloud_model": cloud_model,
-        "cloud_key": _resolve_cloud_key(
-            args, cloud_url=cloud_url, cloud_model=cloud_model),
-        "ollama_url": getattr(args, "ollama_url", DEFAULT_OLLAMA_URL),
-        "ollama_model": getattr(args, "ollama_model", DEFAULT_OLLAMA_MODEL),
-        "gemini_key": getattr(args, "gemini_key", ""),
-        "thinking": getattr(args, "thinking", False),
-    }
-    if include_workers:
-        kwargs["llm_workers"] = getattr(
-            args, "llm_workers", DEFAULT_LLM_WORKERS)
-    return kwargs
+    return _cli_policy._llm_kwargs_from_args(
+        args,
+        include_workers=include_workers,
+        defaults=_provider_cli_defaults(),
+        resolve_cloud_endpoint_fn=_resolve_cloud_endpoint,
+        resolve_cloud_key_fn=_resolve_cloud_key,
+    )
 
 
 def _configure_llm_runtime_from_args(args) -> None:
     """Reset run-scoped LLM controls from a parsed CLI namespace."""
     defaults = LLMRuntimeConfig()
-    cache_dir = getattr(args, "llm_cache_dir", None)
-    _llm_runtime.configure(LLMRuntimeConfig(
-        cache_mode=getattr(args, "llm_cache_mode", "off"),
-        cache_dir=cache_dir or defaults.cache_dir,
-        events_path=getattr(args, "llm_events", None),
-        report_path=getattr(args, "llm_report", None),
-        max_provider_calls=getattr(args, "max_llm_calls", None),
-        max_reserved_tokens=getattr(
-            args, "max_llm_reserved_tokens", None),
-        fallback_policy=getattr(args, "llm_fallback", "ordered"),
-        failure_policy=getattr(
-            args, "llm_failure_policy", "best-effort"),
-    ))
+    values = _cli_policy._llm_runtime_config_values_from_args(
+        args, default_cache_dir=defaults.cache_dir)
+    _llm_runtime.configure(LLMRuntimeConfig(**values))
 
 
 def _index_chunks_for_backend(chunks_path: Path, db_dir: Path, *,
@@ -9714,49 +9653,18 @@ def _run_pipeline_job(pdf_path: Path, args, *, resume: bool,
 
 def _normalize_operation_timeout(timeout: float) -> float:
     """Validate a finite positive deadline accepted by process waiting APIs."""
-    if isinstance(timeout, bool):
-        raise ValueError(
-            "operation timeout must be a finite positive number")
-    try:
-        value = float(timeout)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(
-            "operation timeout must be a finite positive number") from exc
-    if (not math.isfinite(value) or value <= 0
-            or value > _threading.TIMEOUT_MAX):
-        raise ValueError(
-            "operation timeout must be a finite positive number no greater "
-            f"than {_threading.TIMEOUT_MAX:g} seconds")
-    return value
+    return _cli_policy._normalize_operation_timeout(
+        timeout, timeout_max=_threading.TIMEOUT_MAX)
 
 
 def _cli_operation_timeout(argv: list[str], operation: str) -> float:
     """Read the last CLI deadline without replacing argparse validation."""
-    default = DEFAULT_OPERATION_TIMEOUTS[operation]
-    raw_value = None
-    if operation == "evaluation":
-        command_index = -1
-    else:
-        try:
-            command_index = argv.index(operation)
-        except ValueError:
-            return default
-    for index in range(command_index + 1, len(argv)):
-        token = argv[index]
-        if token == "--":
-            break
-        if token == "--operation-timeout":
-            raw_value = argv[index + 1] if index + 1 < len(argv) else None
-        elif token.startswith("--operation-timeout="):
-            raw_value = token.split("=", 1)[1]
-    if raw_value is None:
-        return default
-    try:
-        return _normalize_operation_timeout(raw_value)
-    except ValueError:
-        # The child parser will produce the normal user-facing usage error. Use
-        # a safe default merely to supervise that short-lived validation run.
-        return default
+    return _cli_policy._cli_operation_timeout(
+        argv,
+        operation,
+        operation_timeouts=DEFAULT_OPERATION_TIMEOUTS,
+        normalize_timeout_fn=_normalize_operation_timeout,
+    )
 
 
 class _WindowsKillJob:
@@ -10053,14 +9961,7 @@ def _run_cli_with_deadline(script_path: Path, argv: list[str], *,
             kill_job.close()
 
 
-def _rag_cli_command(argv: list[str]) -> str | None:
-    """Return the argparse subcommand after global flag-only options."""
-    for token in argv:
-        if token in {"-v", "--verbose", "--quiet", "--"}:
-            continue
-        if not token.startswith("-"):
-            return token
-    return None
+_rag_cli_command = _cli_policy._rag_cli_command
 
 
 def _run_rag_entrypoint(
@@ -10876,24 +10777,7 @@ def _menu_file(prompt: str, extension: str = "", default: Path | None = None,
         print("  Please try again.")
 
 
-def _menu_args_use_llm(args: list[str]) -> bool:
-    """Return whether an interactive-menu command will invoke generation."""
-    if not args:
-        return False
-    action = args[0]
-    if action in {"raptor", "brief", "generate-questions"}:
-        return True
-    if action in {"chunk", "full", "batch"}:
-        feature_flags = {
-            "--llm-classify", "--contextualize", "--reconstruct-headings",
-            "--quality-score", "--llm-scaffold", "--raptor",
-        }
-        return any(flag in args for flag in feature_flags)
-    if action == "query":
-        return "--answer" in args
-    if action == "export":
-        return "--format" in args and "flashcards" in args
-    return False
+_menu_args_use_llm = _cli_policy._menu_args_use_llm
 
 
 def _menu_llm_provider_args() -> list[str]:
@@ -10972,48 +10856,18 @@ def _menu_llm_provider_args() -> list[str]:
     return provider_args
 
 
-def _redact_cli_secrets(args: list[str]) -> list[str]:
-    """Return a display-safe CLI argument list."""
-    secret_flags = {"--cloud-key", "--api-key", "--gemini-key"}
-    redacted = list(args)
-    for index, value in enumerate(redacted[:-1]):
-        if value in secret_flags:
-            redacted[index + 1] = "<redacted>"
-    return redacted
+_redact_cli_secrets = _cli_policy._redact_cli_secrets
 
 
 def _menu_secrets_to_environment(
         args: list[str]) -> tuple[list[str], dict[str, str]]:
     """Remove hidden-prompt secrets from argv and scope them to the child."""
-    cloud_url = DEFAULT_CLOUD_URL
-    for index, value in enumerate(args[:-1]):
-        if value in {"--cloud-url", "--llm-url"}:
-            cloud_url = args[index + 1]
-
-    safe_args = []
-    environment = {}
-    index = 0
-    while index < len(args):
-        flag = args[index]
-        if flag in {"--cloud-key", "--api-key", "--gemini-key"}:
-            if index + 1 >= len(args):
-                safe_args.append(flag)
-                index += 1
-                continue
-            secret = args[index + 1]
-            if flag == "--gemini-key":
-                environment["GEMINI_API_KEY"] = secret
-            elif _is_deepseek_cloud(cloud_url):
-                environment["DEEPSEEK_API_KEY"] = secret
-            elif _is_minimax_cloud(cloud_url):
-                environment["MINIMAX_API_KEY"] = secret
-            else:
-                environment["CLOUD_API_KEY"] = secret
-            index += 2
-            continue
-        safe_args.append(flag)
-        index += 1
-    return safe_args, environment
+    return _cli_policy._menu_secrets_to_environment(
+        args,
+        default_cloud_url=DEFAULT_CLOUD_URL,
+        is_deepseek_cloud_fn=_is_deepseek_cloud,
+        is_minimax_cloud_fn=_is_minimax_cloud,
+    )
 
 
 def interactive_menu():

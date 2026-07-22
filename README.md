@@ -90,6 +90,13 @@ responses into the typed, provider-neutral contracts in `llm_runtime.py`.
 Gemini remains lazily imported, while `rag.py` retains provider selection,
 runtime composition, mutable caches/throttles, and the compatibility facades.
 
+`cli_policy.py` is the standard-library-only command policy layer for timeout
+validation and scanning, resume-command serialization, provider and credential
+option mapping, menu LLM detection, and secret redaction/environment routing.
+`rag.py` injects live defaults and endpoint predicates while retaining argparse
+definitions and dispatch, process supervision, environment mutation/restoration,
+runtime mutation, pipeline execution, and output/artifact behavior.
+
 ## Quick Start
 
 The portable command-line and CPU dependency profiles are tested on CPython
@@ -1325,6 +1332,7 @@ artifact_io.py          # Stdlib-only strict reads and atomic publication
 chunking_core.py        # Stdlib-only text preparation and classification
 index_state.py          # Stdlib-only index manifests and compatibility policy
 llm_adapters.py         # Typed LLM provider transport adapters
+cli_policy.py           # Stdlib-only CLI interpretation and serialization policy
 eval.py                 # Evaluation harness (success@k, MRR, type accuracy)
 eval_queries.jsonl      # Starter evaluation queries (10 CivPro)
 ui.py                   # Gradio web UI (Search, Export, Info tabs)
