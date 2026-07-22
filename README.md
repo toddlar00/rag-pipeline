@@ -145,6 +145,7 @@ that directory:
 
 ```
 output/
+|-- .rag-jobs/                           # Private durable background-job state
 |-- Civil_procedure/
 |   |-- .rag-run.json                     # Retention ownership/state marker
 |   |-- Civil_procedure.json             # DoclingDocument
@@ -197,6 +198,8 @@ python rag.py batch Civil_procedure.pdf Torts_casebook.pdf Con_law.pdf --resume
 | `info` | Inspect output artifacts and pipeline status |
 | `full` | End-to-end: all steps in one command (with `--resume`) |
 | `batch` | Process multiple PDFs end-to-end with per-PDF resume |
+| `storage` | Dry-run-first retention for owned runs, caches, and UI exports |
+| `jobs` | Submit, inspect, cancel, and explicitly resume durable background work |
 
 Global flags: `-v` / `--verbose` (DEBUG output), `--quiet` (warnings only).
 
@@ -230,9 +233,71 @@ storage call that never returns. Direct Python API calls remain in the caller's
 process; applications requiring a hard cancellation boundary should invoke the
 CLI or isolate those calls in their own supervised process.
 
+### Durable background jobs
+
+Long-running non-interactive commands can run under a detached, durable
+manager. Submit options belong before `--`; everything after it is the normal
+pipeline command:
+
+```bash
+# Submit and return after the detached manager records its ready handshake
+python rag.py jobs submit --timeout 14400 -- \
+  full --pdf Civil_procedure.pdf --split-chapters
+
+# Redacted status surfaces never print argv, source paths, or attempt tokens
+python rag.py jobs list
+python rag.py jobs status JOB_ID --json
+
+# Cancellation is bound to the current attempt and terminates its worker tree
+python rag.py jobs cancel JOB_ID --wait --wait-timeout 30
+
+# Resume is always explicit and creates a new attempt; it is never automatic
+python rag.py jobs resume JOB_ID
+```
+
+The allowed commands are `preprocess`, `convert`, `chunk`, `index`,
+`extract-questions`, `generate-questions`, `citations`, `raptor`, `brief`,
+`export`, `full`, and `batch`. Interactive, query/status, nested `jobs`, and
+destructive `storage` commands stay foreground-only. Credential flags and
+manager-owned timeout, telemetry, and hidden resume-binding flags are rejected;
+configure provider credentials through environment/configuration instead.
+This keeps secrets out of the immutable private job spec and normal status
+responses, but environment credentials are still available to the worker
+process under the current user account.
+
+Each job uses an immutable digest-bound `spec.json`, atomic `state.json`, an
+attempt-token-bound cancellation marker, and one OS-backed manager lease under
+`output/.rag-jobs/JOB_ID/`. Attempts store private runtime metadata, a bounded
+8 MiB worker-log tail, and correlated event/report files. POSIX uses verified
+`0700`/`0600` modes; Windows uses a protected DACL for only the current SID.
+Logs can contain source paths and model output even though status and telemetry
+are redacted, so treat the entire job root as sensitive. Job records persist
+for audit and explicit resume; there is no automatic deletion.
+
+The state machine is `queued -> starting -> running -> terminal`, with
+`cancel_requested` between a running attempt and confirmed cancellation.
+Terminal states are `succeeded`, `partial`, `failed`, `cancelled`, and
+`interrupted`. The manager never claims `cancelled` until process-tree cleanup
+and matching cancellation telemetry are both confirmed. A status/list call
+reconciles a managerless attempt using PID plus process-birth identity; it will
+not signal a reused or unverifiable PID and never auto-resumes provider calls.
+Windows Job Objects kill descendants if a manager exits. POSIX recovery targets
+only the recorded process-group leader after exact birth verification; any
+uncertainty becomes `interrupted` and requires operator review.
+
+For `full` and `batch`, the worker durably binds a pathname hash and item index
+to the allocated run while holding the per-PDF lease. A resumed attempt targets
+that exact run even if another same-stem run was created later. Completed batch
+items are checkpoint-skipped; failed or untouched items resume or allocate
+exactly once. Resuming cloud/LLM work can repeat paid or externally visible
+calls that failed before their response was durably committed, so inspect
+status/logs and provider usage before choosing `jobs resume`.
+
 ### Structured run telemetry
 
-Every command accepts an optional correlated event stream and aggregate report:
+Every foreground pipeline command accepts an optional correlated event stream
+and aggregate report. The `jobs` facade reserves these flags and injects
+attempt-owned paths itself:
 
 ```bash
 python rag.py full --pdf book.pdf \
@@ -1356,7 +1421,7 @@ known adversarial cases.
 
 ## Web UI
 
-Gradio web interface with three tabs: Search, Export, and Info.
+Gradio web interface with Search, Export, Info, and local-only Jobs tabs.
 
 ```bash
 pip install -r requirements-optional.txt
@@ -1374,7 +1439,8 @@ python ui.py --db-backend qdrant \
 
 Add `--share` to either complete command to create a public Gradio link. This
 can expose private queries, retrieved passages, metadata, and exports to anyone
-who obtains the link; do not use it for a sensitive corpus.
+who obtains the link; do not use it for a sensitive corpus. The Jobs tab is not
+registered in shared mode, and its callbacks refuse to touch private job state.
 Search retrieval and Info's exact vector count execute in killable workers. Use
 `--search-timeout SECONDS`, `--info-timeout SECONDS`, and
 `--db-lock-timeout SECONDS` to tune their hard deadlines and local lease wait
@@ -1385,6 +1451,11 @@ and reranker controls (Auto/forced/disabled), formatted results with metadata.
 
 **Export tab**: single-file or split-chapter export with content type filters;
 returns one file download or a ZIP archive for split chapters.
+
+**Jobs tab (local only)**: submit a reindex of the configured corpus, poll
+redacted state, and request attempt-bound cancel/resume operations. Use
+`--job-root` and `--job-ready-timeout` to change its private store and launch
+handshake deadline.
 
 **Info tab**: pipeline status, chunk statistics, vector DB info.
 
@@ -1592,6 +1663,8 @@ operation_contracts.py  # Committed vector-index outcome contract
 run_telemetry.py        # Correlated stage events, reports, and recovery
 storage_policy.py       # Owner-only DACL/mode and atomic publication policy
 retention.py            # Ownership manifests and dry-run-first lifecycle plans
+job_runtime.py          # Durable private job schemas, bindings, transitions, leases
+job_manager.py          # Detached supervision, cancellation, and restart recovery
 model-artifact-policy.json # Reviewed models, consumers, files, code, and licenses
 model-artifacts.lock.json # Immutable revisions and per-file raw SHA-256 inventory
 preprocess_pdf.py       # Standalone PDF preprocessing CLI facade
@@ -1602,7 +1675,7 @@ evaluation/suites/      # Pinned CC0 Property and Constitutional Law fixtures
 evaluation/baselines/   # Portable offline regression baselines
 eval_queries.jsonl      # Starter evaluation queries (10 CivPro)
 eval_queries_judged.jsonl # Pinned 24-query private CivPro calibration
-ui.py                   # Gradio web UI (Search, Export, Info tabs)
+ui.py                   # Gradio web UI (Search, Export, Info, local Jobs tabs)
 scaffold_to_markdown.py # Apply an existing TOC scaffold to PDF text
 requirements.txt        # Direct core dependencies
 requirements-optional.txt # Direct optional dependencies
