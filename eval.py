@@ -26,9 +26,11 @@ import json
 import logging
 import math
 import os
+import re
 import sys
 from pathlib import Path
 
+import evaluation_metrics
 import model_artifacts
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -49,32 +51,55 @@ DEFAULT_DENSE_WEIGHT = 0.5
 DEFAULT_SPARSE_WEIGHT = 1.0
 DEFAULT_DB_LOCK_TIMEOUT = 30.0
 DEFAULT_OPERATION_TIMEOUT = 14400.0
-REPORT_SCHEMA_VERSION = 3
+REPORT_SCHEMA_VERSION = 4
 _JUDGMENT_ID_FIELDS = ("chunk_id", "source_id")
+_ALLOWED_FILTER_FIELDS = ("content_type", "chapter_num")
 _chunk_identity_cache: dict[str, tuple[tuple, str, dict]] = {}
+_query_snapshot_sha256: dict[str, str] = {}
 
 
 def load_queries(path: Path) -> list[dict]:
     """Load and validate evaluation queries from JSONL."""
+    raw = Path(path).read_bytes()
+    contents = raw.decode("utf-8-sig")
     queries = []
-    with open(path, encoding="utf-8") as handle:
-        for line_number, line in enumerate(handle, 1):
-            if not line.strip():
-                continue
-            try:
-                query = json.loads(line)
-            except json.JSONDecodeError as exc:
-                raise ValueError(
-                    f"Invalid JSON at {path}:{line_number}: {exc.msg}") from exc
-            _validate_query(query, label=f"{path}:{line_number}")
-            queries.append(query)
+    for line_number, line in enumerate(contents.splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            query = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"Invalid JSON at {path}:{line_number}: {exc.msg}") from exc
+        _validate_query(query, label=f"{path}:{line_number}")
+        queries.append(query)
     if not queries:
         raise ValueError(f"No evaluation queries found in {path}")
+    _query_snapshot_sha256[str(Path(path).resolve())] = hashlib.sha256(
+        raw).hexdigest()
     return queries
 
 
 def _validate_declared_corpus(queries: list[dict], chunks_path: Path) -> None:
     """Verify optional judged-set corpus fingerprints before scoring IDs."""
+    if not any(isinstance(query.get("corpus"), dict) for query in queries):
+        return
+    if not chunks_path.is_file():
+        raise FileNotFoundError(f"Chunks artifact not found: {chunks_path}")
+    import rag
+    raw, actual_hash, _ = rag._read_index_artifact_snapshot(chunks_path)
+    try:
+        contents = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        contents = raw.decode("latin-1")
+    actual_count = sum(1 for line in contents.splitlines() if line.strip())
+    _validate_declared_corpus_snapshot(
+        queries, actual_hash=actual_hash, actual_count=actual_count)
+
+
+def _validate_declared_corpus_snapshot(
+        queries: list[dict], *, actual_hash: str, actual_count: int) -> None:
+    """Validate declarations against one already-consumed corpus snapshot."""
     declarations = [
         query["corpus"] for query in queries
         if isinstance(query.get("corpus"), dict)
@@ -82,7 +107,8 @@ def _validate_declared_corpus(queries: list[dict], chunks_path: Path) -> None:
     if not declarations:
         return
     expected_hashes = {
-        item.get("sha256") for item in declarations if item.get("sha256")
+        item["sha256"].lower()
+        for item in declarations if item.get("sha256")
     }
     expected_counts = {
         item.get("record_count") for item in declarations
@@ -90,10 +116,6 @@ def _validate_declared_corpus(queries: list[dict], chunks_path: Path) -> None:
     }
     if len(expected_hashes) > 1 or len(expected_counts) > 1:
         raise ValueError("Evaluation queries declare inconsistent corpus snapshots")
-    if not chunks_path.is_file():
-        raise FileNotFoundError(f"Chunks artifact not found: {chunks_path}")
-    import rag
-    raw, actual_hash, _ = rag._read_index_artifact_snapshot(chunks_path)
     if expected_hashes:
         expected_hash = next(iter(expected_hashes))
         if actual_hash != expected_hash:
@@ -101,11 +123,6 @@ def _validate_declared_corpus(queries: list[dict], chunks_path: Path) -> None:
                 "Judged queries target a different chunks snapshot: "
                 f"expected SHA-256 {expected_hash}, got {actual_hash}")
     if expected_counts:
-        try:
-            contents = raw.decode("utf-8-sig")
-        except UnicodeDecodeError:
-            contents = raw.decode("latin-1")
-        actual_count = sum(1 for line in contents.splitlines() if line.strip())
         expected_count = next(iter(expected_counts))
         if actual_count != expected_count:
             raise ValueError(
@@ -113,10 +130,62 @@ def _validate_declared_corpus(queries: list[dict], chunks_path: Path) -> None:
                 f"expected {expected_count}, got {actual_count}")
 
 
+def _validate_corpus_pin_coverage(queries: list[dict], *,
+                                  required: bool = False) -> None:
+    """Require one exact SHA/count declaration for every query in a pinned set."""
+    declarations = [query.get("corpus") for query in queries]
+    if not required and not any(isinstance(item, dict)
+                                for item in declarations):
+        return
+    incomplete = [
+        index for index, item in enumerate(declarations, 1)
+        if not isinstance(item, dict)
+        or "sha256" not in item
+        or "record_count" not in item
+    ]
+    if incomplete:
+        examples = ", ".join(str(index) for index in incomplete[:3])
+        raise ValueError(
+            "Corpus-pinned evaluation requires every query to declare the "
+            "exact corpus SHA-256 and record count; incomplete query numbers: "
+            + examples)
+
+
+def _validate_judged_ids(queries: list[dict], records: list[dict],
+                         chunk_id_fn) -> None:
+    known_chunks = {chunk_id_fn(record) for record in records}
+    known_sources = {
+        str(value).strip()
+        for record in records
+        for value in (
+            record.get("metadata", {}).get("source_id"),
+            record.get("metadata", {}).get("source_file"),
+        )
+        if value not in (None, "")
+    }
+    judged_chunks = {
+        judgment["chunk_id"].strip()
+        for query in queries for judgment in query.get("judgments", [])
+        if "chunk_id" in judgment
+    }
+    judged_sources = {
+        judgment["source_id"].strip()
+        for query in queries for judgment in query.get("judgments", [])
+        if "source_id" in judgment
+    }
+    unknown = ((judged_chunks - known_chunks)
+               | (judged_sources - known_sources))
+    if unknown:
+        examples = ", ".join(sorted(unknown)[:3])
+        raise ValueError(
+            "Judged IDs are absent from the declared chunks artifact: "
+            + examples)
+
+
 def _validate_declared_index_impl(
         queries: list[dict], chunks_path: Path, db_path: Path, *,
         db_backend: str, collection: str, embedding_model: str,
-        rag_module=None,
+        rag_module=None, include_runtime_context: bool = False,
 ) -> dict | None:
     """Require an exact manifested index for corpus-pinned evaluations."""
     if not any(isinstance(query.get("corpus"), dict) for query in queries):
@@ -177,16 +246,7 @@ def _validate_declared_index_impl(
             f"{manifest.get('source_record_count')}. Re-run indexing for this "
             "collection.")
 
-    judged_ids = {
-        judgment[identifier]
-        for query in queries for judgment in query.get("judgments", [])
-        for identifier in _JUDGMENT_ID_FIELDS if identifier in judgment
-    }
-    unknown_judgments = judged_ids - set(expected_hashes)
-    if unknown_judgments:
-        examples = ", ".join(sorted(unknown_judgments)[:3])
-        raise ValueError(
-            "Judged IDs are absent from the declared chunks artifact: " + examples)
+    _validate_judged_ids(queries, records, rag_module._chunk_id)
 
     physical_count = rag_module._index_collection_count(
         db_path, collection, db_backend=db_backend)
@@ -195,7 +255,7 @@ def _validate_declared_index_impl(
             "Physical index count does not match the declared corpus: "
             f"expected {len(expected_hashes)}, got {physical_count}. "
             "Re-run indexing for this collection.")
-    return {
+    snapshot = {
         "manifest_path": str(manifest_path.resolve()),
         "schema_version": manifest["schema_version"],
         "embedding_dimension": dimension,
@@ -204,12 +264,17 @@ def _validate_declared_index_impl(
         "model_artifact_lock_sha256": manifest[
             "model_artifact_lock_sha256"],
     }
+    if include_runtime_context:
+        snapshot["_identity_lookup"] = _chunk_identity_lookup_from_records(
+            records, rag_module)
+    return snapshot
 
 
 def _validate_declared_index(
         queries: list[dict], chunks_path: Path, db_path: Path, *,
         db_backend: str, collection: str, embedding_model: str,
         rag_module=None, lock_timeout: float = DEFAULT_DB_LOCK_TIMEOUT,
+        include_runtime_context: bool = False,
 ) -> dict | None:
     """Validate one coherent manifested/physical index generation."""
     if not any(isinstance(query.get("corpus"), dict) for query in queries):
@@ -223,7 +288,8 @@ def _validate_declared_index(
         return _validate_declared_index_impl(
             queries, chunks_path, db_path,
             db_backend=db_backend, collection=collection,
-            embedding_model=embedding_model, rag_module=rag_module)
+            embedding_model=embedding_model, rag_module=rag_module,
+            include_runtime_context=include_runtime_context)
 
 
 def _normalize_judgments(query: dict) -> list[dict]:
@@ -241,11 +307,15 @@ def _normalize_judgments(query: dict) -> list[dict]:
 
 
 def _validate_query(query: dict, *, label: str = "query") -> None:
-    """Validate legacy keyword or explicit graded relevance ground truth."""
+    """Validate relevance, abstention, filter, and slice ground truth."""
     if not isinstance(query, dict):
         raise ValueError(f"{label} must be a JSON object")
     if not isinstance(query.get("query"), str) or not query["query"].strip():
         raise ValueError(f"{label} must contain a non-empty 'query' string")
+
+    expected_abstain = query.get("expected_abstain", False)
+    if not isinstance(expected_abstain, bool):
+        raise ValueError(f"{label} 'expected_abstain' must be a boolean")
 
     keywords = query.get("expected_keywords")
     if keywords is not None and (
@@ -279,9 +349,10 @@ def _validate_query(query: dict, *, label: str = "query") -> None:
             if (isinstance(relevance, bool)
                     or not isinstance(relevance, (int, float))
                     or not math.isfinite(float(relevance))
-                    or relevance < 0):
+                    or not 0 <= relevance <= 100):
                 raise ValueError(
-                    f"{judgment_label} 'relevance' must be a finite number >= 0")
+                    f"{judgment_label} 'relevance' must be a finite number "
+                    "from 0 to 100")
             has_positive = has_positive or relevance > 0
             judgment_id = (present_ids[0], judgment[present_ids[0]].strip())
             judgment_id_types.add(present_ids[0])
@@ -295,13 +366,128 @@ def _validate_query(query: dict, *, label: str = "query") -> None:
                 f"{label} judgments must use one ID type consistently; do not "
                 "mix 'chunk_id' and 'source_id' in the same query")
 
-    if keywords is None and judgments is None:
+    if keywords is not None and judgments is not None:
         raise ValueError(
-            f"{label} must contain 'expected_keywords' or graded 'judgments'")
+            f"{label} must not mix 'expected_keywords' and graded 'judgments'")
+    if expected_abstain and (keywords is not None or judgments is not None):
+        raise ValueError(
+            f"{label} expected-abstention cases cannot contain relevance ground "
+            "truth")
+    if not expected_abstain and keywords is None and judgments is None:
+        raise ValueError(
+            f"{label} must contain 'expected_keywords', graded 'judgments', or "
+            "set 'expected_abstain' to true")
 
     expected_type = query.get("expected_type", "")
     if not isinstance(expected_type, str):
         raise ValueError(f"{label} 'expected_type' must be a string")
+    if expected_abstain and expected_type:
+        raise ValueError(
+            f"{label} expected-abstention cases cannot require an expected type")
+
+    filters = query.get("filters")
+    if filters is not None:
+        if not isinstance(filters, dict) or not filters:
+            raise ValueError(f"{label} 'filters' must be a non-empty object")
+        unknown = set(filters) - set(_ALLOWED_FILTER_FIELDS)
+        if unknown:
+            raise ValueError(
+                f"{label} has unsupported filters: {', '.join(sorted(unknown))}")
+        content_type = filters.get("content_type")
+        if ("content_type" in filters
+                and (not isinstance(content_type, str)
+                     or not content_type.strip())):
+            raise ValueError(
+                f"{label} filter 'content_type' must be a non-empty string")
+        chapter_num = filters.get("chapter_num")
+        if ("chapter_num" in filters
+                and (isinstance(chapter_num, bool)
+                     or not isinstance(chapter_num, int)
+                     or chapter_num < 0)):
+            raise ValueError(
+                f"{label} filter 'chapter_num' must be an integer >= 0")
+
+    tags = query.get("tags")
+    if tags is not None:
+        if (not isinstance(tags, list) or not tags
+                or not all(isinstance(tag, str) and tag.strip()
+                           for tag in tags)):
+            raise ValueError(
+                f"{label} 'tags' must be a non-empty list of strings")
+        normalized_tags = [tag.strip() for tag in tags]
+        if len(set(normalized_tags)) != len(normalized_tags):
+            raise ValueError(f"{label} 'tags' must not contain duplicates")
+        tag_slugs = [_slice_slug(tag) for tag in normalized_tags]
+        if (not all(tag_slugs)
+                or len(set(tag_slugs)) != len(tag_slugs)):
+            raise ValueError(
+                f"{label} 'tags' must have unique ASCII metric names")
+
+    for field in ("subject", "book", "difficulty"):
+        value = query.get(field)
+        if value is not None and (
+                not isinstance(value, str) or not value.strip()):
+            raise ValueError(f"{label} '{field}' must be a non-empty string")
+        if value is not None and not _slice_slug(value):
+            raise ValueError(
+                f"{label} '{field}' must contain an ASCII letter or number")
+
+    corpus = query.get("corpus")
+    if corpus is not None:
+        if not isinstance(corpus, dict):
+            raise ValueError(f"{label} 'corpus' must be an object")
+        digest = corpus.get("sha256")
+        if digest is not None and (
+                not isinstance(digest, str) or len(digest) != 64
+                or any(char not in "0123456789abcdefABCDEF" for char in digest)):
+            raise ValueError(
+                f"{label} corpus 'sha256' must be a 64-character hex digest")
+        count = corpus.get("record_count")
+        if count is not None and (
+                isinstance(count, bool) or not isinstance(count, int)
+                or count < 1):
+            raise ValueError(
+                f"{label} corpus 'record_count' must be a positive integer")
+        if digest is None and count is None:
+            raise ValueError(
+                f"{label} corpus must declare 'sha256' or 'record_count'")
+
+    grounding_case = query.get("grounding_case")
+    if grounding_case is not None:
+        _validate_grounding_case(grounding_case, label=label)
+
+
+def _validate_grounding_case(case: dict, *, label: str) -> None:
+    if not isinstance(case, dict):
+        raise ValueError(f"{label} 'grounding_case' must be an object")
+    if not isinstance(case.get("answer"), str) or not case["answer"].strip():
+        raise ValueError(
+            f"{label} grounding case must contain a non-empty 'answer'")
+    if not isinstance(case.get("expected_abstained"), bool):
+        raise ValueError(
+            f"{label} grounding case 'expected_abstained' must be a boolean")
+    case_type = case.get("case_type")
+    if case_type is not None and (
+            not isinstance(case_type, str) or not _slice_slug(case_type)):
+        raise ValueError(
+            f"{label} grounding case 'case_type' must be a non-empty label")
+    citations = case.get("expected_citations")
+    if citations is not None and (
+            not isinstance(citations, list)
+            or not all(isinstance(value, str)
+                       and re.fullmatch(r"S[1-9]\d*", value)
+                       for value in citations)
+            or len(set(citations)) != len(citations)):
+        raise ValueError(
+            f"{label} grounding case citations must use S-number strings")
+    for field in ("warning_contains", "excerpt_contains"):
+        values = case.get(field)
+        if values is not None and (
+                not isinstance(values, list)
+                or not all(isinstance(value, str) and value
+                           for value in values)):
+            raise ValueError(
+                f"{label} grounding case '{field}' must be a list of strings")
 
 
 def keyword_hit(result_text: str, keywords: list[str]) -> bool:
@@ -324,6 +510,22 @@ def _chunk_identity_lookup(chunks_path: Path, rag_module) -> dict:
     if cached and cached[:2] == (fingerprint, source_sha256):
         return cached[2]
 
+    try:
+        contents = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        contents = raw.decode("latin-1")
+    records = [
+        json.loads(line) for line in contents.splitlines() if line.strip()
+    ]
+    lookup = _chunk_identity_lookup_from_records(records, rag_module)
+
+    _chunk_identity_cache[cache_key] = (
+        fingerprint, source_sha256, lookup)
+    return lookup
+
+
+def _chunk_identity_lookup_from_records(records: list[dict], rag_module) -> dict:
+    """Build stable-ID recovery maps from one already-validated snapshot."""
     lookup = {"source_index_text": {}, "index_text": {}, "text": {}}
 
     def add_unique(mapping: dict, key, value) -> None:
@@ -334,14 +536,7 @@ def _chunk_identity_lookup(chunks_path: Path, rag_module) -> dict:
         else:
             mapping[key] = value
 
-    try:
-        contents = raw.decode("utf-8-sig")
-    except UnicodeDecodeError:
-        contents = raw.decode("latin-1")
-    for line in contents.splitlines():
-        if not line.strip():
-            continue
-        record = json.loads(line)
+    for record in records:
         if (not isinstance(record, dict)
                 or not isinstance(record.get("text"), str)
                 or not isinstance(record.get("metadata"), dict)):
@@ -363,9 +558,6 @@ def _chunk_identity_lookup(chunks_path: Path, rag_module) -> dict:
             chunk_id,
         )
         add_unique(lookup["text"], record["text"], chunk_id)
-
-    _chunk_identity_cache[cache_key] = (
-        fingerprint, source_sha256, lookup)
     return lookup
 
 
@@ -386,9 +578,12 @@ def run_search(query: str, db_path: Path, *,
                collection: str = "civpro",
                embedding_model: str = "nomic-ai/nomic-embed-text-v2-moe",
                n_results: int = 10,
+               content_type: str | None = None,
+               chapter_num: int | None = None,
                use_reranker: bool | None = None,
                hybrid: bool | None = None,
                chunks_path: Path | None = None,
+               chunk_identity_lookup: dict | None = None,
                db_backend: str = "chroma",
                reranker_model: str = DEFAULT_RERANKER_MODEL,
                overfetch: int = DEFAULT_OVERFETCH,
@@ -404,6 +599,8 @@ def run_search(query: str, db_path: Path, *,
         "n_results": n_results,
         "collection_name": collection,
         "embedding_model": embedding_model,
+        "content_type": content_type,
+        "chapter_num": chapter_num,
         "use_reranker": use_reranker,
         "hybrid": hybrid,
         "reranker_model": reranker_model,
@@ -421,11 +618,14 @@ def run_search(query: str, db_path: Path, *,
         {"text": hit.text, "metadata": hit.metadata, "score": hit.score}
         for hit in response.hits
     ]
-    if (chunks_path is not None and chunks_path.is_file()
+    if ((chunk_identity_lookup is not None
+         or (chunks_path is not None and chunks_path.is_file()))
             and any("chunk_id" not in _result_identifiers(result)
                     for result in results)):
         try:
-            lookup = _chunk_identity_lookup(chunks_path, rag)
+            lookup = (chunk_identity_lookup
+                      if chunk_identity_lookup is not None
+                      else _chunk_identity_lookup(chunks_path, rag))
         except (OSError, UnicodeError, json.JSONDecodeError, AttributeError) as exc:
             log.warning("Could not recover stable chunk IDs from %s: %s",
                         chunks_path, exc)
@@ -514,40 +714,151 @@ def _judged_metrics(graded: list[dict], judgments: list[dict],
 
 def _result_detail(result: dict, rank: int, relevance: float,
                    matched_judgments: list[tuple[str, str]],
-                   keyword_matches: list[str] | None = None) -> dict:
+                   keyword_matches: list[str] | None = None, *,
+                   include_text: bool = False) -> dict:
     metadata = result.get("metadata") or {}
+    identifiers = _result_identifiers(result)
     detail = {
         "rank": rank,
         "score": result.get("score"),
         "relevance": round(float(relevance), 6),
-        "chunk_id": _result_identifiers(result).get("chunk_id"),
-        "source_id": _result_identifiers(result).get("source_id"),
         "content_type": metadata.get("content_type", ""),
-        "matched_judgments": [
+        "text_sha256": hashlib.sha256(
+            str(result.get("text", "")).encode("utf-8")).hexdigest(),
+    }
+    if include_text:
+        detail["chunk_id"] = identifiers.get("chunk_id")
+        detail["source_id"] = identifiers.get("source_id")
+        detail["matched_judgments"] = [
             {"id_type": id_type, "id": value}
             for id_type, value in matched_judgments
-        ],
-        "text_preview": str(result.get("text", ""))[:200],
-    }
+        ]
+        detail["text_preview"] = str(result.get("text", ""))[:200]
+    else:
+        detail["chunk_id_sha256"] = _optional_text_sha256(
+            identifiers.get("chunk_id"))
+        detail["source_id_sha256"] = _optional_text_sha256(
+            identifiers.get("source_id"))
+        detail["matched_judgments"] = [
+            {
+                "id_type": id_type,
+                "id_sha256": hashlib.sha256(value.encode("utf-8")).hexdigest(),
+            }
+            for id_type, value in matched_judgments
+        ]
     if keyword_matches is not None:
-        detail["keyword_matches"] = keyword_matches
+        if include_text:
+            detail["keyword_matches"] = keyword_matches
+        else:
+            detail["keyword_match_count"] = len(keyword_matches)
+            detail["keyword_match_sha256"] = [
+                hashlib.sha256(value.encode("utf-8")).hexdigest()
+                for value in keyword_matches
+            ]
     return detail
+
+
+def _optional_text_sha256(value: str | None) -> str | None:
+    return (hashlib.sha256(value.encode("utf-8")).hexdigest()
+            if value is not None else None)
+
+
+def _filters_match(result: dict, filters: dict) -> bool:
+    metadata = result.get("metadata") or {}
+    return all(metadata.get(key) == value for key, value in filters.items())
+
+
+def _slice_names(query: dict, *, redact_names: bool = False) -> list[str]:
+    values = []
+    for tag in query.get("tags", []):
+        values.append(f"tag/{_slice_slug(tag)}")
+    for field in ("subject", "book", "difficulty"):
+        if query.get(field):
+            label = _slice_slug(query[field])
+            if redact_names and field in {"subject", "book"}:
+                label = hashlib.sha256(
+                    query[field].encode("utf-8")).hexdigest()[:16]
+            values.append(f"{field}/{label}")
+    case_type = (query.get("grounding_case") or {}).get("case_type")
+    if case_type:
+        values.append(f"grounding_case/{_slice_slug(case_type)}")
+    return values
+
+
+def _slice_slug(value: str) -> str:
+    return re.sub(r"[^a-z0-9_-]+", "_", value.casefold()).strip("_")
+
+
+def _evaluate_grounding_case(
+        results: list[dict], query_text: str, case: dict) -> tuple[float, dict]:
+    from retrieval_core import (
+        SearchHit,
+        SearchResponse,
+        _grounded_sources,
+        _validate_grounded_answer,
+    )
+
+    hits = []
+    for result in results:
+        identifiers = _result_identifiers(result)
+        hits.append(SearchHit(
+            text=str(result.get("text", "")),
+            metadata=dict(result.get("metadata") or {}),
+            score=float(result.get("score") or 0.0),
+            source_id=identifiers.get("chunk_id")
+            or identifiers.get("source_id") or "",
+        ))
+    response = SearchResponse(
+        hits=hits, backend="evaluation", requested_mode="evaluation",
+        effective_mode="evaluation", reranker_applied=False)
+    sources = _grounded_sources(response, query_text)
+    answer = _validate_grounded_answer(case["answer"], sources)
+    checks = {
+        "abstained": answer.abstained == case["expected_abstained"],
+    }
+    if "expected_citations" in case:
+        checks["citations"] = answer.citations == case["expected_citations"]
+    if case.get("warning_contains"):
+        checks["warnings"] = all(
+            any(fragment in warning for warning in answer.warnings)
+            for fragment in case["warning_contains"])
+    if case.get("excerpt_contains"):
+        checks["excerpts"] = all(
+            any(fragment in source.excerpt for source in sources)
+            for fragment in case["excerpt_contains"])
+    return (1.0 if all(checks.values()) else 0.0), {
+        "case_type": case.get("case_type"),
+        "passed": all(checks.values()),
+        "checks": checks,
+        "actual_abstained": answer.abstained,
+        "actual_citations": answer.citations,
+        "warnings": answer.warnings,
+        "source_count": len(sources),
+    }
 
 
 def _evaluate_impl(queries: list[dict], db_path: Path, *,
                    k_values: list[int] | None = None,
                    include_details: bool = False,
+                   report_detail: str = "full",
+                   search_fn=None,
+                   collect_measurements: bool = False,
+                   embedding_requests: bool = True,
+                   embedding_cost_per_million_tokens: float | None = None,
+                   llm_usage: dict | None = None,
+                   llm_input_cost_per_million_tokens: float | None = None,
+                   llm_output_cost_per_million_tokens: float | None = None,
+                   measurement_collector=None,
                    **search_kwargs) -> dict:
-    """Evaluate retrieval; details are opt-in for API compatibility.
-
-    Success@k and MRR use explicit judgments when present, otherwise legacy
-    keyword matching. Recall@k, nDCG@k, and MAP are reported only across queries
-    with explicit finite judgment sets.
-    """
+    """Evaluate relevance, abstention, filter, and grounding behavior."""
     k_values = [5, 10] if k_values is None else sorted(set(k_values))
     if any(not isinstance(k, int) or isinstance(k, bool) or k < 1
            for k in k_values):
         raise ValueError("k_values must contain positive integers")
+    if report_detail not in {"summary", "full"}:
+        raise ValueError("report_detail must be 'summary' or 'full'")
+    for query_index, query in enumerate(queries, 1):
+        _validate_query(query, label=f"query #{query_index}")
     required_results = max(k_values, default=0)
     if required_results:
         configured_results = int(search_kwargs.get(
@@ -564,101 +875,233 @@ def _evaluate_impl(queries: list[dict], db_path: Path, *,
         **{f"ndcg@{k}": [] for k in k_values},
         "map": [],
     }
+    auxiliary_metric_values: dict[str, list[float]] = {
+        "abstention_accuracy": [],
+        "false_answer_rate": [],
+        "filter_compliance": [],
+        "grounding_accuracy": [],
+    }
+    slice_values: dict[str, dict[str, list[float]]] = {}
+    slice_counts: dict[str, int] = {}
     query_details = []
     judged_query_count = 0
+    abstention_query_count = 0
+    search_callable = search_fn or run_search
+    collector = None
+    if collect_measurements:
+        collector = measurement_collector or evaluation_metrics.MeasurementCollector()
+        collector.start()
 
-    for query_index, query in enumerate(queries, 1):
-        _validate_query(query, label=f"query #{query_index}")
-        query_text = query["query"]
-        keywords = query.get("expected_keywords", [])
-        expected_type = query.get("expected_type", "")
-        judgments = _normalize_judgments(query)
-        results = run_search(query_text, db_path, **search_kwargs)
-
-        if judgments:
-            judged_query_count += 1
-            graded = _grade_results(results, judgments)
-            relevance = [item["relevance"] for item in graded]
-            judged = _judged_metrics(graded, judgments, k_values)
-            for key, value in judged.items():
-                aggregate_key = "map" if key == "average_precision" else key
-                judged_metric_values[aggregate_key].append(value)
-            result_details = [
-                _result_detail(
-                    result, rank, grade["relevance"],
-                    grade["matched_judgments"],
-                )
-                for rank, (result, grade) in enumerate(
-                    zip(results, graded), 1)
-            ]
-            detail_metrics = judged
-            judgment_mode = "graded_ids"
-        else:
-            relevance = []
-            result_details = []
-            for rank, result in enumerate(results, 1):
-                text = str(result.get("text", ""))
-                matches = [keyword for keyword in keywords
-                           if keyword.lower() in text.lower()]
-                grade = 1.0 if matches else 0.0
-                relevance.append(grade)
-                result_details.append(_result_detail(
-                    result, rank, grade, [], keyword_matches=matches))
+    measurements = None
+    try:
+        for query_index, query in enumerate(queries, 1):
+            query_text = query["query"]
+            keywords = query.get("expected_keywords", [])
+            expected_type = query.get("expected_type", "")
+            judgments = _normalize_judgments(query)
+            expected_abstain = query.get("expected_abstain", False)
+            filters = dict(query.get("filters") or {})
+            query_search_kwargs = {**search_kwargs, **filters}
+            started_at = collector.begin_query() if collector else None
+            results = search_callable(
+                query_text, db_path, **query_search_kwargs)
+            query_latency_ms = (
+                collector.end_query(started_at) if collector else None)
             detail_metrics = {}
-            judgment_mode = "legacy_keywords"
+            grounding_detail = None
 
-        for k in k_values:
-            hit = any(grade > 0 for grade in relevance[:k])
-            value = 1.0 if hit else 0.0
-            metric_values[f"success@{k}"].append(value)
-            detail_metrics[f"success@{k}"] = value
+            if expected_abstain:
+                abstention_query_count += 1
+                abstained = not results
+                abstention_accuracy = 1.0 if abstained else 0.0
+                false_answer_rate = 0.0 if abstained else 1.0
+                auxiliary_metric_values["abstention_accuracy"].append(
+                    abstention_accuracy)
+                auxiliary_metric_values["false_answer_rate"].append(
+                    false_answer_rate)
+                detail_metrics.update({
+                    "abstention_accuracy": abstention_accuracy,
+                    "false_answer_rate": false_answer_rate,
+                })
+                relevance = []
+                result_details = [
+                    _result_detail(
+                        result, rank, 0.0, [],
+                        include_text=report_detail == "full")
+                    for rank, result in enumerate(results, 1)
+                ]
+                judgment_mode = "expected_abstention"
+            elif judgments:
+                judged_query_count += 1
+                graded = _grade_results(results, judgments)
+                relevance = [item["relevance"] for item in graded]
+                judged = _judged_metrics(graded, judgments, k_values)
+                for key, value in judged.items():
+                    aggregate_key = "map" if key == "average_precision" else key
+                    judged_metric_values[aggregate_key].append(value)
+                result_details = [
+                    _result_detail(
+                        result, rank, grade["relevance"],
+                        grade["matched_judgments"],
+                        include_text=report_detail == "full",
+                    )
+                    for rank, (result, grade) in enumerate(
+                        zip(results, graded), 1)
+                ]
+                detail_metrics.update(judged)
+                judgment_mode = "graded_ids"
+            else:
+                relevance = []
+                result_details = []
+                for rank, result in enumerate(results, 1):
+                    text = str(result.get("text", ""))
+                    matches = [keyword for keyword in keywords
+                               if keyword.lower() in text.lower()]
+                    grade = 1.0 if matches else 0.0
+                    relevance.append(grade)
+                    result_details.append(_result_detail(
+                        result, rank, grade, [], keyword_matches=matches,
+                        include_text=report_detail == "full"))
+                judgment_mode = "legacy_keywords"
 
-        reciprocal_rank = 0.0
-        for rank, grade in enumerate(relevance, 1):
-            if grade > 0:
-                reciprocal_rank = 1.0 / rank
-                break
-        metric_values["mrr"].append(reciprocal_rank)
-        detail_metrics["mrr"] = reciprocal_rank
+            if not expected_abstain:
+                for k in k_values:
+                    hit = any(grade > 0 for grade in relevance[:k])
+                    value = 1.0 if hit else 0.0
+                    metric_values[f"success@{k}"].append(value)
+                    detail_metrics[f"success@{k}"] = value
 
-        if expected_type:
-            top_type = (results[0].get("metadata", {}).get("content_type", "")
+                reciprocal_rank = 0.0
+                for rank, grade in enumerate(relevance, 1):
+                    if grade > 0:
+                        reciprocal_rank = 1.0 / rank
+                        break
+                metric_values["mrr"].append(reciprocal_rank)
+                detail_metrics["mrr"] = reciprocal_rank
+
+                if expected_type:
+                    top_type = (
+                        results[0].get("metadata", {}).get("content_type", "")
                         if results else "")
-            type_accuracy = 1.0 if top_type == expected_type else 0.0
-            metric_values["type_accuracy"].append(type_accuracy)
-            detail_metrics["type_accuracy"] = type_accuracy
+                    type_accuracy = 1.0 if top_type == expected_type else 0.0
+                    metric_values["type_accuracy"].append(type_accuracy)
+                    detail_metrics["type_accuracy"] = type_accuracy
 
-        if include_details:
-            query_details.append({
-                "query_index": query_index,
-                "query_id": query.get("query_id", query_index),
-                "query": query_text,
-                "judgment_mode": judgment_mode,
-                "metrics": {
-                    key: round(value, 6)
-                    for key, value in detail_metrics.items()
-                },
-                "results": result_details,
-            })
+            if filters:
+                compliance = 1.0 if all(
+                    _filters_match(result, filters) for result in results) else 0.0
+                auxiliary_metric_values["filter_compliance"].append(compliance)
+                detail_metrics["filter_compliance"] = compliance
+
+            if query.get("grounding_case"):
+                grounding_accuracy, grounding_detail = _evaluate_grounding_case(
+                    results, query_text, query["grounding_case"])
+                if report_detail == "summary":
+                    warnings = grounding_detail.pop("warnings", [])
+                    grounding_detail["warning_count"] = len(warnings)
+                    grounding_detail["warning_sha256"] = [
+                        hashlib.sha256(value.encode("utf-8")).hexdigest()
+                        for value in warnings
+                    ]
+                auxiliary_metric_values["grounding_accuracy"].append(
+                    grounding_accuracy)
+                detail_metrics["grounding_accuracy"] = grounding_accuracy
+
+            for slice_name in _slice_names(
+                    query, redact_names=report_detail == "summary"):
+                target = slice_values.setdefault(slice_name, {})
+                slice_counts[slice_name] = slice_counts.get(slice_name, 0) + 1
+                for key, value in detail_metrics.items():
+                    slice_metric = (
+                        "map" if key == "average_precision" else key)
+                    target.setdefault(slice_metric, []).append(float(value))
+
+            if include_details:
+                query_id = query.get("query_id", query_index)
+                detail = {
+                    "query_index": query_index,
+                    "query_sha256": hashlib.sha256(
+                        query_text.encode("utf-8")).hexdigest(),
+                    "tags": list(query.get("tags", [])),
+                    "filters": filters,
+                    "judgment_mode": judgment_mode,
+                    "metrics": {
+                        key: round(value, 6)
+                        for key, value in detail_metrics.items()
+                    },
+                    "results": result_details,
+                }
+                if report_detail == "full":
+                    detail["query_id"] = query_id
+                    detail["query"] = query_text
+                    detail["subject"] = query.get("subject")
+                    detail["book"] = query.get("book")
+                else:
+                    detail["query_id_sha256"] = hashlib.sha256(
+                        str(query_id).encode("utf-8")).hexdigest()
+                if query_latency_ms is not None:
+                    detail["latency_ms"] = round(query_latency_ms, 3)
+                if grounding_detail is not None:
+                    detail["grounding"] = grounding_detail
+                query_details.append(detail)
+    finally:
+        if collector is not None:
+            measurements = collector.finish()
 
     summary = {}
     for key, values in metric_values.items():
         if values:
             summary[key] = round(sum(values) / len(values), 3)
+    if metric_values["type_accuracy"]:
+        summary["num_type_queries"] = len(metric_values["type_accuracy"])
     if judged_query_count:
         for key, values in judged_metric_values.items():
             if values:
                 summary[key] = round(sum(values) / len(values), 3)
         summary["num_judged_queries"] = judged_query_count
+    for key, values in auxiliary_metric_values.items():
+        if values:
+            summary[key] = round(sum(values) / len(values), 3)
+    if auxiliary_metric_values["filter_compliance"]:
+        summary["num_filter_queries"] = len(
+            auxiliary_metric_values["filter_compliance"])
+    if auxiliary_metric_values["grounding_accuracy"]:
+        summary["num_grounding_queries"] = len(
+            auxiliary_metric_values["grounding_accuracy"])
+    if abstention_query_count:
+        summary["num_abstention_queries"] = abstention_query_count
+    for slice_name, metrics in sorted(slice_values.items()):
+        for metric, values in sorted(metrics.items()):
+            summary[f"slice/{slice_name}/{metric}"] = round(
+                sum(values) / len(values), 3)
+            summary[f"slice/{slice_name}/{metric}/num_queries"] = len(values)
+        summary[f"slice/{slice_name}/total_queries"] = slice_counts[slice_name]
     summary["num_queries"] = len(queries)
     if include_details:
         summary["query_details"] = query_details
+    if collect_measurements:
+        summary["measurements"] = measurements
+        summary["costs"] = evaluation_metrics.project_costs(
+            [query["query"] for query in queries],
+            embedding_rate_per_million=embedding_cost_per_million_tokens,
+            embedding_requests=embedding_requests,
+            llm_usage=llm_usage,
+            llm_input_rate_per_million=llm_input_cost_per_million_tokens,
+            llm_output_rate_per_million=llm_output_cost_per_million_tokens,
+        )
     return summary
 
 
 def evaluate(queries: list[dict], db_path: Path, *,
              k_values: list[int] | None = None,
              include_details: bool = False,
+             report_detail: str = "full",
+             collect_measurements: bool = False,
+             embedding_cost_per_million_tokens: float | None = None,
+             llm_usage: dict | None = None,
+             llm_input_cost_per_million_tokens: float | None = None,
+             llm_output_cost_per_million_tokens: float | None = None,
+             measurement_collector=None,
              **search_kwargs) -> dict:
     """Evaluate every query against one locked physical index generation."""
     import rag
@@ -672,7 +1115,39 @@ def evaluate(queries: list[dict], db_path: Path, *,
             operation="retrieval evaluation", timeout=lock_timeout):
         return _evaluate_impl(
             queries, db_path, k_values=k_values,
-            include_details=include_details, **search_kwargs)
+            include_details=include_details, report_detail=report_detail,
+            collect_measurements=collect_measurements,
+            embedding_cost_per_million_tokens=(
+                embedding_cost_per_million_tokens),
+            llm_usage=llm_usage,
+            llm_input_cost_per_million_tokens=(
+                llm_input_cost_per_million_tokens),
+            llm_output_cost_per_million_tokens=(
+                llm_output_cost_per_million_tokens),
+            measurement_collector=measurement_collector,
+            **search_kwargs)
+
+
+def evaluate_offline_bm25(queries: list[dict], index, *,
+                          k_values: list[int] | None = None,
+                          include_details: bool = False,
+                          report_detail: str = "summary",
+                          collect_measurements: bool = False,
+                          **options) -> dict:
+    """Evaluate a pinned corpus with the deterministic, model-free adapter."""
+    def offline_search(query: str, _db_path: Path, **search_options):
+        return index.search(
+            query,
+            n_results=search_options.get("n_results", 10),
+            content_type=search_options.get("content_type"),
+            chapter_num=search_options.get("chapter_num"),
+        )
+
+    return _evaluate_impl(
+        queries, Path("."), k_values=k_values, include_details=include_details,
+        report_detail=report_detail, search_fn=offline_search,
+        collect_measurements=collect_measurements, embedding_requests=False,
+        **options)
 
 
 def _parse_metric_limits(values: list[str], *, option: str) -> dict[str, float]:
@@ -706,56 +1181,136 @@ def _load_baseline_metrics(path: Path, *,
         if not isinstance(baseline_configuration, dict):
             raise ValueError(
                 "Baseline report lacks configuration provenance")
-        expected_lock = expected_configuration.get(
-            "model_artifact_lock_sha256")
-        baseline_lock = baseline_configuration.get(
-            "model_artifact_lock_sha256")
-        if expected_lock is not None and baseline_lock is None:
-            raise ValueError(
-                "Baseline configuration lacks model_artifact_lock_sha256")
-        comparable_keys = (
-            "collection", "embedding_model", "db_backend", "k_values",
-            "retrieval_depth", "queries_sha256", "use_reranker", "hybrid",
-            "reranker_model", "overfetch", "rrf_k", "dense_weight",
-            "sparse_weight", "index_snapshot",
-            "model_artifact_lock_sha256",
-        )
-        mismatches = [
-            key for key in comparable_keys
-            if baseline_configuration.get(key) is not None
-            and expected_configuration.get(key) is not None
-            and baseline_configuration[key] != expected_configuration[key]
-        ]
+        baseline_configuration = _portable_configuration(
+            baseline_configuration)
+        expected_configuration = _portable_configuration(
+            expected_configuration)
+        retriever = expected_configuration.get("retriever")
+        strict = retriever in {"index", "bm25"}
+        if strict:
+            if payload.get("schema_version") != REPORT_SCHEMA_VERSION:
+                raise ValueError(
+                    "Baseline report schema version is incompatible")
+            if payload.get("mode") != "single":
+                raise ValueError("Baseline report mode must be 'single'")
+            required_keys = {
+                "retriever", "k_values", "retrieval_depth", "queries_sha256",
+                "index_snapshot", "use_reranker", "hybrid",
+            }
+            if retriever == "index":
+                required_keys.update({
+                    "collection_sha256", "embedding_model", "db_backend",
+                    "reranker_model", "overfetch", "rrf_k", "dense_weight",
+                    "sparse_weight", "model_artifact_lock_sha256",
+                })
+            missing = sorted(required_keys - baseline_configuration.keys())
+            if missing:
+                raise ValueError(
+                    "Baseline configuration lacks required provenance: "
+                    + ", ".join(missing))
+            nullable_keys = {"use_reranker", "hybrid"}
+            incomplete_current = sorted(
+                key for key in required_keys
+                if key not in expected_configuration
+                or (key not in nullable_keys
+                    and expected_configuration[key] is None))
+            if incomplete_current:
+                raise ValueError(
+                    "Current evaluation lacks required provenance: "
+                    + ", ".join(incomplete_current))
+        else:
+            required_keys = set()
+            expected_lock = expected_configuration.get(
+                "model_artifact_lock_sha256")
+            baseline_lock = baseline_configuration.get(
+                "model_artifact_lock_sha256")
+            if expected_lock is not None and baseline_lock is None:
+                raise ValueError(
+                    "Baseline configuration lacks model_artifact_lock_sha256")
+        comparable_keys = {
+            "retriever", "collection", "embedding_model", "db_backend",
+            "k_values", "retrieval_depth", "queries_sha256", "use_reranker",
+            "hybrid", "reranker_model", "overfetch", "rrf_k",
+            "dense_weight", "sparse_weight", "index_snapshot",
+            "model_artifact_lock_sha256", "collection_sha256",
+        }
+        mismatches = []
+        for key in comparable_keys:
+            if key not in baseline_configuration and key not in required_keys:
+                continue
+            baseline_value = baseline_configuration.get(key)
+            expected_value = expected_configuration.get(key)
+            if key == "index_snapshot":
+                baseline_value = _portable_index_snapshot(baseline_value)
+                expected_value = _portable_index_snapshot(expected_value)
+            if baseline_value != expected_value:
+                mismatches.append(key)
         if mismatches:
             raise ValueError(
                 "Baseline configuration differs for: "
                 + ", ".join(mismatches))
+    numeric_metrics = {}
+    for key, value in metrics.items():
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            if not math.isfinite(float(value)):
+                raise ValueError(
+                    f"Baseline metric {key!r} must be finite: {path}")
+            numeric_metrics[key] = float(value)
+    return numeric_metrics
+
+
+def _portable_index_snapshot(snapshot):
+    """Remove host-specific paths before comparing baseline provenance."""
+    if not isinstance(snapshot, dict):
+        return snapshot
     return {
-        key: float(value) for key, value in metrics.items()
-        if isinstance(value, (int, float)) and not isinstance(value, bool)
+        key: value for key, value in snapshot.items()
+        if key not in {"manifest_path", "path"}
     }
 
 
+def _portable_configuration(configuration: dict) -> dict:
+    normalized = dict(configuration)
+    collection = normalized.pop("collection", None)
+    if collection is not None and "collection_sha256" not in normalized:
+        normalized["collection_sha256"] = hashlib.sha256(
+            str(collection).encode("utf-8")).hexdigest()
+    if "index_snapshot" in normalized:
+        normalized["index_snapshot"] = _portable_index_snapshot(
+            normalized["index_snapshot"])
+    return normalized
+
+
 def _threshold_failures(metrics: dict, minimums: dict[str, float], *,
+                        maximums: dict[str, float] | None = None,
                         baseline: dict[str, float] | None = None,
                         regressions: dict[str, float] | None = None) -> list[str]:
     failures = []
     for metric, minimum in minimums.items():
         actual = metrics.get(metric)
-        if not isinstance(actual, (int, float)) or actual < minimum:
+        if not _finite_metric(actual) or actual < minimum:
             failures.append(f"{metric}={actual!r} is below {minimum}")
+    for metric, maximum in (maximums or {}).items():
+        actual = metrics.get(metric)
+        if not _finite_metric(actual) or actual > maximum:
+            failures.append(f"{metric}={actual!r} is above {maximum}")
     for metric, tolerance in (regressions or {}).items():
         actual = metrics.get(metric)
         prior = (baseline or {}).get(metric)
-        if not isinstance(actual, (int, float)):
+        if not _finite_metric(actual):
             failures.append(f"{metric} is absent from the current report")
-        elif not isinstance(prior, (int, float)):
+        elif not _finite_metric(prior):
             failures.append(f"{metric} is absent from the baseline report")
         elif prior - actual > tolerance:
             failures.append(
                 f"{metric} regressed by {prior - actual:.3f} "
                 f"(allowed {tolerance:.3f})")
     return failures
+
+
+def _finite_metric(value) -> bool:
+    return (isinstance(value, (int, float)) and not isinstance(value, bool)
+            and math.isfinite(float(value)))
 
 
 def _write_report(path: Path, payload: dict) -> None:
@@ -769,11 +1324,15 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Evaluate RAG pipeline retrieval quality")
     parser.add_argument("--queries", type=Path, default=DEFAULT_QUERIES)
+    parser.add_argument(
+        "--retriever", choices=["index", "bm25"], default="index",
+        help=("Production vector index or deterministic offline BM25 "
+              "(default: index)"))
     parser.add_argument("--chunks", type=Path, required=True,
                         help="Book-scoped chunks JSONL from a pipeline run")
-    parser.add_argument("--db", type=Path, required=True,
+    parser.add_argument("--db", type=Path,
                         help="Book-scoped ChromaDB or Qdrant directory")
-    parser.add_argument("--collection", type=str, required=True)
+    parser.add_argument("--collection", type=str)
     parser.add_argument("--embedding-model", type=str,
                         default="nomic-ai/nomic-embed-text-v2-moe")
     parser.add_argument("--db-backend", type=str, default="chroma",
@@ -825,8 +1384,27 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--json-report", type=Path,
                         help="Write a detailed machine-readable JSON report")
     parser.add_argument(
+        "--report-detail", choices=["summary", "full"], default="summary",
+        help=("Summary redacts query/source text; full includes previews "
+              "(default: summary)"))
+    parser.add_argument(
+        "--embedding-cost-per-million-tokens", type=float,
+        help="Caller-supplied USD rate used to project query embedding cost")
+    parser.add_argument(
+        "--llm-report", type=Path,
+        help="Prompt-free LLMRuntime aggregate report to include in cost metrics")
+    parser.add_argument(
+        "--llm-input-cost-per-million-tokens", type=float,
+        help="Caller-supplied USD input-token rate for --llm-report")
+    parser.add_argument(
+        "--llm-output-cost-per-million-tokens", type=float,
+        help="Caller-supplied USD output-token rate for --llm-report")
+    parser.add_argument(
         "--fail-under", action="append", default=[], metavar="METRIC=VALUE",
         help="Exit 2 when a summary metric is below this minimum (repeatable)")
+    parser.add_argument(
+        "--fail-over", action="append", default=[], metavar="METRIC=VALUE",
+        help="Exit 2 when a summary metric exceeds this maximum (repeatable)")
     parser.add_argument("--baseline-report", type=Path,
                         help="Prior JSON report used for regression checks")
     parser.add_argument(
@@ -838,22 +1416,34 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def _report_config(args, **overrides) -> dict:
     query_path = args.queries.resolve()
-    query_digest = (
-        hashlib.sha256(args.queries.read_bytes()).hexdigest()
-        if args.queries.is_file() else None
-    )
-    return {
+    query_digest = getattr(
+        args, "queries_sha256",
+        _query_snapshot_sha256.get(str(query_path)))
+    configuration = {
+        "retriever": args.retriever,
         "collection": args.collection,
-        "embedding_model": args.embedding_model,
+        "embedding_model": (
+            args.embedding_model if args.retriever == "index" else None),
         "model_artifact_lock_sha256": (
-            model_artifacts.model_artifact_lock_sha256()),
-        "db_backend": args.db_backend,
+            model_artifacts.model_artifact_lock_sha256()
+            if args.retriever == "index" else None),
+        "db_backend": args.db_backend if args.retriever == "index" else None,
         "db_lock_timeout": args.db_lock_timeout,
         "operation_timeout": args.operation_timeout,
         "k_values": sorted(set(args.k)),
         "retrieval_depth": args.depth,
         "queries_path": str(query_path),
         "queries_sha256": query_digest,
+        "report_detail": args.report_detail,
+        "cost_rates": {
+            "source": "caller_supplied",
+            "embedding_per_million_tokens": (
+                args.embedding_cost_per_million_tokens),
+            "llm_input_per_million_tokens": (
+                args.llm_input_cost_per_million_tokens),
+            "llm_output_per_million_tokens": (
+                args.llm_output_cost_per_million_tokens),
+        },
         "reranker_model": args.reranker_model,
         "overfetch": args.overfetch,
         "rrf_k": args.rrf_k,
@@ -861,6 +1451,16 @@ def _report_config(args, **overrides) -> dict:
         "sparse_weight": args.sparse_weight,
         **overrides,
     }
+    if args.report_detail == "summary":
+        configuration.pop("queries_path", None)
+        collection = configuration.pop("collection", None)
+        if collection is not None:
+            configuration["collection_sha256"] = hashlib.sha256(
+                collection.encode("utf-8")).hexdigest()
+        if "index_snapshot" in configuration:
+            configuration["index_snapshot"] = _portable_index_snapshot(
+                configuration["index_snapshot"])
+    return configuration
 
 
 def _print_metrics(metrics: dict) -> None:
@@ -868,15 +1468,22 @@ def _print_metrics(metrics: dict) -> None:
     print(" Evaluation Results")
     print(f"{'=' * 50}")
     for key, value in metrics.items():
-        if key != "query_details":
+        if key != "query_details" and not key.startswith("slice/"):
             print(f"  {key:20s} {value}")
     print()
 
 
 def _main_with_args(args, parser: argparse.ArgumentParser) -> int:
     if args.compare and (args.fail_under or args.baseline_report
-                         or args.max_regression):
+                         or args.max_regression or args.fail_over):
         parser.error("threshold checks are supported only without --compare")
+    if args.retriever == "bm25" and args.compare:
+        parser.error("--compare is supported only with --retriever index")
+    if args.retriever == "index" and (args.db is None or not args.collection):
+        parser.error("--db and --collection are required with --retriever index")
+    if args.retriever == "bm25" and (
+            args.hybrid is not None or args.reranker is not None):
+        parser.error("hybrid and reranker flags do not apply to offline BM25")
     if args.max_regression and not args.baseline_report:
         parser.error("--max-regression requires --baseline-report")
     if args.baseline_report and not args.max_regression:
@@ -895,22 +1502,75 @@ def _main_with_args(args, parser: argparse.ArgumentParser) -> int:
     if (args.json_report and args.baseline_report
             and args.json_report.resolve() == args.baseline_report.resolve()):
         parser.error("--json-report and --baseline-report must be different files")
+    supplied_llm_rates = (
+        args.llm_input_cost_per_million_tokens is not None,
+        args.llm_output_cost_per_million_tokens is not None,
+    )
+    if supplied_llm_rates[0] != supplied_llm_rates[1]:
+        parser.error("both LLM input and output rates must be supplied together")
+    if any(supplied_llm_rates) and args.llm_report is None:
+        parser.error("LLM cost rates require --llm-report")
+    try:
+        evaluation_metrics.project_costs(
+            [],
+            embedding_rate_per_million=(
+                args.embedding_cost_per_million_tokens),
+            llm_input_rate_per_million=(
+                args.llm_input_cost_per_million_tokens),
+            llm_output_rate_per_million=(
+                args.llm_output_cost_per_million_tokens),
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
 
     try:
         minimums = _parse_metric_limits(args.fail_under, option="--fail-under")
+        maximums = _parse_metric_limits(args.fail_over, option="--fail-over")
         regressions = _parse_metric_limits(
             args.max_regression, option="--max-regression")
     except ValueError as exc:
         parser.error(str(exc))
 
+    offline_index = None
+    chunk_identity_lookup = None
+    llm_usage = None
     try:
+        query_cache_key = str(args.queries.resolve())
+        _query_snapshot_sha256.pop(query_cache_key, None)
         queries = load_queries(args.queries)
-        _validate_declared_corpus(queries, args.chunks)
-        index_snapshot = _validate_declared_index(
-            queries, args.chunks, args.db,
-            db_backend=args.db_backend, collection=args.collection,
-            embedding_model=args.embedding_model,
-            lock_timeout=args.db_lock_timeout)
+        args.queries_sha256 = _query_snapshot_sha256.get(query_cache_key)
+        _validate_corpus_pin_coverage(
+            queries,
+            required=(args.retriever == "bm25"
+                      or args.baseline_report is not None),
+        )
+        if args.retriever == "bm25":
+            from offline_retrieval import OfflineBM25Index
+            from retrieval_core import _chunk_id
+
+            offline_index = OfflineBM25Index.from_jsonl(args.chunks)
+            _validate_declared_corpus_snapshot(
+                queries,
+                actual_hash=offline_index.snapshot.source_sha256,
+                actual_count=offline_index.snapshot.source_record_count)
+            _validate_judged_ids(queries, list(offline_index.records), _chunk_id)
+            index_snapshot = offline_index.snapshot.as_report_dict()
+        else:
+            index_snapshot = _validate_declared_index(
+                queries, args.chunks, args.db,
+                db_backend=args.db_backend, collection=args.collection,
+                embedding_model=args.embedding_model,
+                lock_timeout=args.db_lock_timeout,
+                include_runtime_context=True)
+            if index_snapshot is not None:
+                chunk_identity_lookup = index_snapshot.pop("_identity_lookup")
+                _validate_declared_corpus_snapshot(
+                    queries,
+                    actual_hash=index_snapshot["source_sha256"],
+                    actual_count=index_snapshot["record_count"])
+        if args.llm_report:
+            llm_usage = evaluation_metrics.parse_llm_usage_report(
+                args.llm_report)
     except (OSError, UnicodeError, json.JSONDecodeError, LookupError,
             ValueError) as exc:
         log.error("Evaluation integrity check failed: %s", exc)
@@ -918,20 +1578,40 @@ def _main_with_args(args, parser: argparse.ArgumentParser) -> int:
     log.info(f"Loaded {len(queries)} evaluation queries from {args.queries}")
 
     common = {
-        "collection": args.collection,
-        "embedding_model": args.embedding_model,
-        "chunks_path": args.chunks,
-        "db_backend": args.db_backend,
-        "lock_timeout": args.db_lock_timeout,
         "n_results": args.depth,
-        "reranker_model": args.reranker_model,
-        "overfetch": args.overfetch,
-        "rrf_k": args.rrf_k,
-        "dense_weight": args.dense_weight,
-        "sparse_weight": args.sparse_weight,
         "k_values": args.k,
         "include_details": True,
+        "report_detail": args.report_detail,
+        "collect_measurements": True,
+        "embedding_cost_per_million_tokens": (
+            args.embedding_cost_per_million_tokens),
+        "llm_usage": llm_usage,
+        "llm_input_cost_per_million_tokens": (
+            args.llm_input_cost_per_million_tokens),
+        "llm_output_cost_per_million_tokens": (
+            args.llm_output_cost_per_million_tokens),
     }
+    if args.retriever == "index":
+        common.update({
+            "collection": args.collection,
+            "embedding_model": args.embedding_model,
+            "chunks_path": args.chunks,
+            "chunk_identity_lookup": chunk_identity_lookup,
+            "db_backend": args.db_backend,
+            "lock_timeout": args.db_lock_timeout,
+            "reranker_model": args.reranker_model,
+            "overfetch": args.overfetch,
+            "rrf_k": args.rrf_k,
+            "dense_weight": args.dense_weight,
+            "sparse_weight": args.sparse_weight,
+        })
+    storage_target = args.db if args.retriever == "index" else args.chunks
+    storage = evaluation_metrics.measure_path(storage_target)
+    storage["kind"] = (
+        "vector_index" if args.retriever == "index"
+        else "ephemeral_bm25_source_corpus")
+    if args.report_detail == "summary":
+        storage.pop("path", None)
 
     if args.compare:
         configs = [
@@ -958,11 +1638,16 @@ def _main_with_args(args, parser: argparse.ArgumentParser) -> int:
             try:
                 result = evaluate(queries, args.db, **common, **run_kwargs)
                 details = result.pop("query_details")
+                measurements = result.pop("measurements", {})
+                measurements["index_storage"] = storage
+                costs = result.pop("costs", {})
                 reports.append({
                     "label": label,
                     "configuration": _report_config(
                         args, index_snapshot=index_snapshot, **run_kwargs),
                     "metrics": result,
+                    "measurements": measurements,
+                    "costs": costs,
                     "query_details": details,
                 })
                 print(f"{label:<30s}" + "".join(
@@ -970,11 +1655,25 @@ def _main_with_args(args, parser: argparse.ArgumentParser) -> int:
                     for metric in display_metrics))
             except Exception as exc:
                 had_errors = True
-                reports.append({"label": label, "error": str(exc)})
-                print(f"{label:<30s} {'ERROR':>12s} {str(exc)[:40]}")
+                error = {
+                    "type": type(exc).__name__,
+                    "message_sha256": hashlib.sha256(
+                        str(exc).encode("utf-8")).hexdigest(),
+                }
+                if args.report_detail == "full":
+                    error["message"] = str(exc)
+                reports.append({"label": label, "error": error})
+                display_error = (
+                    str(exc)[:40] if args.report_detail == "full"
+                    else type(exc).__name__)
+                print(f"{label:<30s} {'ERROR':>12s} {display_error}")
         report = {
             "schema_version": REPORT_SCHEMA_VERSION,
             "mode": "compare",
+            "measurement_scope": (
+                "configurations ran sequentially in one warm process; latency "
+                "and memory are not cross-configuration benchmarks, and any "
+                "external LLM usage input is repeated unchanged"),
             "configurations": reports,
         }
         if args.json_report:
@@ -986,14 +1685,28 @@ def _main_with_args(args, parser: argparse.ArgumentParser) -> int:
             "use_reranker": args.reranker,
             "hybrid": args.hybrid,
         }
-        result = evaluate(queries, args.db, **common, **single_modes)
+        if args.retriever == "bm25":
+            result = evaluate_offline_bm25(
+                queries, offline_index, **common)
+            single_modes = {
+                "use_reranker": False,
+                "hybrid": False,
+            }
+        else:
+            result = evaluate(queries, args.db, **common, **single_modes)
     except (FileNotFoundError, LookupError, ValueError) as exc:
         log.error("Evaluation retrieval failed: %s", exc)
         return 1
     details = result.pop("query_details")
+    measurements = result.pop("measurements", {})
+    measurements["index_storage"] = storage
+    costs = result.pop("costs", {})
     _print_metrics(result)
     configuration = _report_config(
-        args, index_snapshot=index_snapshot, **single_modes)
+        args, index_snapshot=index_snapshot,
+        llm_report_sha256=(
+            llm_usage.get("report_sha256") if llm_usage else None),
+        **single_modes)
     try:
         baseline = _load_baseline_metrics(
             args.baseline_report,
@@ -1007,13 +1720,16 @@ def _main_with_args(args, parser: argparse.ArgumentParser) -> int:
         "mode": "single",
         "configuration": configuration,
         "metrics": result,
+        "measurements": measurements,
+        "costs": costs,
         "query_details": details,
     }
     if args.json_report:
         _write_report(args.json_report, report)
 
     failures = _threshold_failures(
-        result, minimums, baseline=baseline, regressions=regressions)
+        result, minimums, maximums=maximums,
+        baseline=baseline, regressions=regressions)
     for failure in failures:
         log.error("Evaluation threshold failed: %s", failure)
     return 2 if failures else 0
@@ -1033,6 +1749,10 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         parser.error(str(exc))
 
+    if args.retriever == "bm25":
+        return _main_with_args(args, parser)
+    if args.db is None or not args.collection:
+        return _main_with_args(args, parser)
     try:
         with rag._vector_store_lock(
                 args.db, backend=args.db_backend,

@@ -589,6 +589,7 @@ def test_evaluate_uses_success_name_fetches_max_k_and_counts_empty_type_miss(
         "success@7": 0.0,
         "mrr": 0.0,
         "type_accuracy": 0.0,
+        "num_type_queries": 1,
         "num_queries": 1,
     }
     assert observed[0]["n_results"] == 7

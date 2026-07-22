@@ -1057,15 +1057,38 @@ retrieval metrics, use explicit finite judgments keyed by stable chunk or
 source IDs stored in search results:
 
 ```json
-{"query_id":"pj-1","query":"minimum contacts test","judgments":[{"chunk_id":"chunk_0123456789abcdef","relevance":3},{"chunk_id":"chunk_fedcba9876543210","relevance":1}],"expected_type":"case_opinion"}
+{"query_id":"pj-1","query":"minimum contacts test","judgments":[{"chunk_id":"chunk_0123456789abcdef","relevance":3},{"chunk_id":"chunk_fedcba9876543210","relevance":1}],"expected_type":"case_opinion","corpus":{"sha256":"e5022230c3b28dc4fe547bf5e0d4ce88516f3f15fde7954964d76d4b530e86bd","record_count":728}}
 ```
 
-Each judgment must contain exactly one `chunk_id` or `source_id` and a finite,
-non-negative `relevance` value. Use one ID type consistently within a query.
+Each judgment must contain exactly one `chunk_id` or `source_id` and a finite
+`relevance` value from 0 through 100. Use one ID type consistently within a query.
 Zero means not relevant; larger values express stronger relevance. A judged
 query must contain at least one positive judgment.
 `stable_id` and `source_file` returned by existing indexes are accepted as
 compatibility aliases when matching results.
+
+Judged sets may also declare subject/book labels, repeatable slice tags, and
+query-specific metadata filters. An abstention case intentionally has no
+positive judgment and succeeds only when the retriever returns no evidence:
+
+```json
+{"query_id":"property-filter","query":"elements of adverse possession","subject":"Property","book":"Property Mini Corpus","tags":["filter"],"filters":{"content_type":"doctrine","chapter_num":2},"judgments":[{"chunk_id":"chunk_c0efee95e1e2bb5b","relevance":3}],"corpus":{"sha256":"177e9a2d4b9015c1bac083a2489d2f622281f623d649d9292ef67eda41a6154f","record_count":10}}
+{"query_id":"property-abstain","query":"unsupported lithium royalty percentage","subject":"Property","book":"Property Mini Corpus","tags":["abstention","adversarial"],"expected_abstain":true,"corpus":{"sha256":"177e9a2d4b9015c1bac083a2489d2f622281f623d649d9292ef67eda41a6154f","record_count":10}}
+```
+
+Allowed filters are `content_type` and `chapter_num`. Reports aggregate tagged,
+subject, book, and difficulty slices under metric names such as
+`slice/tag/citation/success@1`. Filter cases additionally report
+`filter_compliance`; abstention cases report `abstention_accuracy` and
+`false_answer_rate`.
+
+Optional `grounding_case` fixtures pass an authored candidate answer through the
+deterministic citation/quotation policy without calling an LLM. Their
+`grounding_accuracy` measures policy-fixture behavior only—not model answer
+quality. The checked-in cases cover an unknown source citation, an uncited
+answer, and an unsupported direct quotation. Every slice metric is accompanied
+by its own `/num_queries` denominator plus a slice-level `total_queries`, so a
+mixed relevance/abstention tag cannot imply that every metric used every case.
 
 ```bash
 # Single config with custom cutoffs and a detailed JSON report
@@ -1083,13 +1106,65 @@ python eval.py --compare \
   --chunks output/Civil_procedure/Civil_procedure_chunks.jsonl \
   --db output/Civil_procedure/Civil_procedure_chroma \
   --collection civil_procedure
+
+# Deterministic, network-free CI/reference suite (no vector DB or model)
+python eval.py \
+  --retriever bm25 \
+  --queries evaluation/suites/property/queries.jsonl \
+  --chunks evaluation/suites/property/chunks.jsonl \
+  --k 1 3 5 --depth 10 \
+  --json-report evaluation-reports/property.json \
+  --baseline-report evaluation/baselines/property-bm25.json \
+  --fail-under ndcg@3=0.95 \
+  --fail-under abstention_accuracy=1 \
+  --fail-over false_answer_rate=0 \
+  --max-regression ndcg@3=0
 ```
+
+`--retriever index` remains the default and exercises the real Chroma/Qdrant,
+embedding, hybrid, and reranker path. `--retriever bm25` is deliberately a
+lower-fidelity lexical adapter for deterministic, no-download regression tests;
+its scores must not be presented as dense-retrieval quality. The checked-in
+CC0 Property and Constitutional Law mini corpora are controlled calibration
+fixtures, not substitutes for expert review of a full private textbook.
+For explicit no-evidence behavior, the adapter removes a pinned stop-word set
+and requires two distinct content-term matches for queries containing more than
+two content terms; its implementation version and stop-word digest are recorded
+in every baseline snapshot.
 
 All query schemas report Success@k, MRR, and optional top-result type accuracy.
 Queries with explicit judgments additionally report Recall@k, nDCG@k, and MAP;
 those judged metrics are averaged only across judged queries. Detailed JSON
 reports contain a schema version, retrieval configuration, aggregate metrics,
-and per-query ranked-result identities and relevance matches.
+and per-query ranked-result identities and relevance matches. Schema v4 also
+records per-query plus p50/p95/max retrieval latency, sampled process RSS,
+Python `tracemalloc` peak, and bounded index/storage byte counts. RSS is sampled
+rather than a continuous peak, and `tracemalloc` excludes native allocations;
+the report records both measurement methods.
+
+Summary detail is the default: query text, source previews, raw stable/source
+IDs, local manifest paths, and storage paths are omitted or hashed so CI
+artifacts do not publish private corpus text. Use `--report-detail full` only
+for a deliberately protected local report when raw query text and 200-character
+source previews are required for diagnosis.
+
+Embedding query-token use is labeled as a characters/4 estimate. Monetary
+values are never based on a hard-coded price table and remain `null` unless the
+operator supplies the rate that applies to the run. A prompt-free aggregate
+LLM runtime report can be included with its exact/estimated usage provenance:
+
+```bash
+python eval.py ... \
+  --embedding-cost-per-million-tokens 0.10 \
+  --llm-report output/llm-runtime-report.json \
+  --llm-input-cost-per-million-tokens 1.00 \
+  --llm-output-cost-per-million-tokens 4.00
+```
+
+The example numbers are placeholders, not current provider prices. Record the
+provider/model, source, and effective date alongside a production run. The
+report binds the LLM usage input by SHA-256 and labels every projected amount as
+caller-supplied.
 
 `--depth` controls the fixed retrieval depth used for MRR and MAP and must be at
 least the largest `--k`. The included `eval_queries_judged.jsonl` contains 24
@@ -1100,7 +1175,9 @@ checks the manifest's exact stable-ID set and source fingerprint, and confirms
 the physical vector count. A partial or stale index fails before metrics are
 produced.
 
-The current depth-20 calibration on that exact snapshot is:
+The following depth-20 calibration is historical (it predates index-manifest
+schema 5 and model-artifact-lock provenance) and should be reproduced after the
+private Civil Procedure index is rebuilt before it is used as a release gate:
 
 | Configuration | MRR | Recall@10 | nDCG@10 | MAP |
 |---------------|----:|----------:|--------:|----:|
@@ -1109,10 +1186,10 @@ The current depth-20 calibration on that exact snapshot is:
 | Calibrated hybrid | **0.822** | **0.882** | **0.768** | **0.670** |
 | Calibrated hybrid + BGE | 0.751 | 0.875 | 0.706 | 0.595 |
 
-These figures justify the Chroma defaults (`dense=0.5`, `lexical=1.0`,
+These figures informed the Chroma defaults (`dense=0.5`, `lexical=1.0`,
 `rrf-k=10`) and adaptive reranking policy for this corpus; use a separate judged
-set before treating them as universal. The machine-readable run is stored at
-`output/Civil Procedure I/Civil Procedure I_retrieval_eval.json`.
+set before treating them as universal. The old machine-readable run is local
+under ignored `output/` storage and is intentionally not a committed baseline.
 
 Use repeatable thresholds to make a single-configuration evaluation fail with
 exit code 2 when quality is below a required floor:
@@ -1130,6 +1207,11 @@ python eval.py \
 
 Compare a run against a previous JSON report with repeatable regression limits:
 
+Baseline regression requires every query to declare its exact corpus SHA-256
+and record count, plus a compatible manifested index for `--retriever index`.
+An unpinned starter set can use absolute `--fail-under`/`--fail-over` gates but
+cannot be compared to a portable baseline.
+
 ```bash
 python eval.py \
   --queries my_judged_queries.jsonl \
@@ -1143,9 +1225,20 @@ python eval.py \
 ```
 
 Threshold and regression checks apply to single-configuration runs, not
-`--compare`. The repository's `eval_queries.jsonl` remains a ten-query,
-keyword-based starter set. `eval_queries_judged.jsonl` is the corpus-pinned
-Civil Procedure set; create a separate stable-ID set for any other book.
+`--compare`. `--fail-under` gates quality/safety floors, while `--fail-over`
+gates upper bounds such as `false_answer_rate`. Baseline comparisons bind the
+query digest, portable index snapshot fields, retrieval settings, and model
+lock where applicable; absolute local manifest paths are intentionally excluded
+from compatibility checks.
+
+CI runs both checked-in offline suites, enforces absolute and zero-tolerance
+baseline gates, and retains the redacted schema-v4 JSON reports for 30 days as
+the `offline-retrieval-evaluation` artifact. The repository's
+`eval_queries.jsonl` remains a ten-query keyword starter set, while
+`eval_queries_judged.jsonl` is the 24-query private Civil Procedure calibration.
+Create and expert-review a separate stable-ID set before calibrating any full
+book; the controlled mini corpora only validate the evaluation machinery and
+known adversarial cases.
 
 ## Web UI
 
@@ -1381,8 +1474,13 @@ model_artifacts.py      # Stdlib-only model lock, byte verification, and ML-BOM
 model-artifact-policy.json # Reviewed models, consumers, files, code, and licenses
 model-artifacts.lock.json # Immutable revisions and per-file raw SHA-256 inventory
 preprocess_pdf.py       # Standalone PDF preprocessing CLI facade
-eval.py                 # Evaluation harness (success@k, MRR, type accuracy)
+eval.py                 # Relevance/safety evaluation, gates, and reports
+evaluation_metrics.py   # Latency, memory, storage, usage, and cost measurements
+offline_retrieval.py    # Deterministic no-model BM25 evaluation adapter
+evaluation/suites/      # Pinned CC0 Property and Constitutional Law fixtures
+evaluation/baselines/   # Portable offline regression baselines
 eval_queries.jsonl      # Starter evaluation queries (10 CivPro)
+eval_queries_judged.jsonl # Pinned 24-query private CivPro calibration
 ui.py                   # Gradio web UI (Search, Export, Info tabs)
 scaffold_to_markdown.py # Apply an existing TOC scaffold to PDF text
 requirements.txt        # Direct core dependencies
