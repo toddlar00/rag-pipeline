@@ -1,6 +1,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 import json
+import time
 
 import pytest
 
@@ -105,3 +106,41 @@ def test_main_parses_jobs_submit_remainder_without_normal_supervision(
         "root": tmp_path / "jobs",
         "command": ["--", "full", "--pdf", "Book.pdf"],
     }
+
+
+def test_jobs_submit_runs_real_detached_export_to_terminal_success(
+        tmp_path, capsys):
+    chunks = tmp_path / "Book_chunks.jsonl"
+    output = tmp_path / "Book.md"
+    chunks.write_text(json.dumps({
+        "text": "A private legal rule.",
+        "metadata": {
+            "chunk_index": 0,
+            "content_type": "author_narrative",
+            "chapter_num": 1,
+            "chapter_title": "One",
+            "section_path": "Chapter 1 > Rule",
+        },
+    }) + "\n", encoding="utf-8")
+    job_root = tmp_path / "jobs"
+
+    rag._run_jobs_command(_args(
+        job_root, "submit", job_json=True,
+        job_command=[
+            "--", "export", "--chunks", str(chunks),
+            "--out", str(output),
+        ],
+        timeout=30, ready_timeout=10,
+    ))
+    submitted = json.loads(capsys.readouterr().out)
+    job_id = submitted["job"]["job_id"]
+    store = job_runtime.JobStore(job_root)
+    deadline = time.monotonic() + 15
+    summary = store.get_job(job_id)
+    while not summary.terminal and time.monotonic() < deadline:
+        time.sleep(0.05)
+        summary = store.get_job(job_id)
+
+    assert summary.status == "succeeded"
+    assert output.is_file()
+    assert "A private legal rule." in output.read_text(encoding="utf-8")

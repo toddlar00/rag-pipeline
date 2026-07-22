@@ -4,6 +4,8 @@ import json
 
 import pytest
 
+import job_manager
+import job_runtime
 import ui
 
 
@@ -170,3 +172,75 @@ def test_split_export_uses_unique_directory_and_returns_archive(
     assert marker["state"] == "complete"
     assert marker["ownership_token"] == export_id
     assert marker["artifacts"] == ["Chapters", "chapters.zip"]
+
+
+def test_jobs_reindex_submits_only_the_configured_corpus(
+        monkeypatch, tmp_path):
+    chunks = tmp_path / "Private_chunks.jsonl"
+    chunks.write_text("{}\n", encoding="utf-8")
+    database = tmp_path / "Private_chroma"
+    job_root = tmp_path / "jobs"
+    monkeypatch.setitem(ui._config, "share", False)
+    monkeypatch.setitem(ui._config, "chunks_path", chunks)
+    monkeypatch.setitem(ui._config, "db_path", database)
+    monkeypatch.setitem(ui._config, "db_backend", "chroma")
+    monkeypatch.setitem(ui._config, "collection", "private_book")
+    monkeypatch.setitem(ui._config, "embedding_model", "test-embedding")
+    monkeypatch.setitem(ui._config, "db_lock_timeout", 7.0)
+    monkeypatch.setitem(ui._config, "job_root", job_root)
+    monkeypatch.setitem(ui._config, "job_ready_timeout", 2.0)
+    observed = {}
+
+    def fake_launch(store, job_id, **kwargs):
+        observed.update(store=store, job_id=job_id, kwargs=kwargs)
+        return SimpleNamespace(status="starting")
+
+    monkeypatch.setattr(job_manager, "launch_detached", fake_launch)
+
+    rendered = ui.do_job_reindex(True)
+
+    execution = observed["store"].load_execution(observed["job_id"])
+    assert execution.command == "index"
+    assert execution.argv == (
+        "--chunks", str(chunks),
+        "--db", str(database),
+        "--db-backend", "chroma",
+        "--collection", "private_book",
+        "--embedding-model", "test-embedding",
+        "--db-lock-timeout", "7.0",
+        "--full-reindex",
+    )
+    assert execution.timeout_seconds == ui.rag.DEFAULT_OPERATION_TIMEOUTS[
+        "index"]
+    assert observed["kwargs"] == {"ready_timeout": 2.0}
+    assert observed["job_id"] in rendered
+    assert str(chunks) not in rendered
+
+
+def test_jobs_controls_are_disabled_without_touching_storage_when_shared(
+        monkeypatch):
+    monkeypatch.setitem(ui._config, "share", True)
+    monkeypatch.setattr(
+        ui.job_runtime, "JobStore",
+        lambda *_args, **_kwargs: pytest.fail(
+            "shared UI must not access the private job store"))
+
+    assert "disabled" in ui.do_jobs_refresh().lower()
+    assert "disabled" in ui.do_job_reindex(False).lower()
+    assert "disabled" in ui.do_job_cancel("a" * 32).lower()
+    assert "disabled" in ui.do_job_resume("a" * 32).lower()
+
+
+def test_jobs_refresh_redacts_private_arguments(monkeypatch, tmp_path):
+    store = job_runtime.JobStore(tmp_path / "jobs")
+    private_pdf = tmp_path / "Private Casebook.pdf"
+    submitted = store.submit_job("full", ["--pdf", str(private_pdf)])
+    monkeypatch.setitem(ui._config, "share", False)
+    monkeypatch.setitem(ui._config, "job_root", store.root)
+
+    rendered = ui.do_jobs_refresh()
+
+    assert submitted.job_id in rendered
+    assert "queued" in rendered
+    assert str(private_pdf) not in rendered
+    assert "--pdf" not in rendered

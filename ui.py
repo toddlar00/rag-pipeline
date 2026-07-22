@@ -21,6 +21,8 @@ from uuid import uuid4
 # Import pipeline functions
 sys.path.insert(0, str(Path(__file__).parent))
 import rag
+import job_manager
+import job_runtime
 import storage_policy
 
 
@@ -40,6 +42,9 @@ _config = {
     "db_lock_timeout": rag.DEFAULT_DB_LOCK_TIMEOUT,
     "search_timeout": rag.DEFAULT_OPERATION_TIMEOUTS["query"],
     "info_timeout": rag.DEFAULT_OPERATION_TIMEOUTS["info"],
+    "job_root": job_runtime.DEFAULT_JOB_ROOT,
+    "job_ready_timeout": 5.0,
+    "share": False,
 }
 
 _VECTOR_WORKER_FLAG = "--vector-worker"
@@ -453,6 +458,113 @@ def do_info():
 
 
 # ---------------------------------------------------------------------------
+# Durable jobs tab (local sessions only)
+# ---------------------------------------------------------------------------
+
+def _jobs_disabled() -> str | None:
+    if _config["share"]:
+        return "Background job controls are disabled while public sharing is enabled."
+    return None
+
+
+def _job_store() -> job_runtime.JobStore:
+    return job_runtime.JobStore(Path(_config["job_root"]))
+
+
+def _format_job_summaries(
+        summaries: list[job_runtime.JobSummary]) -> str:
+    lines = ["### Durable jobs", ""]
+    if not summaries:
+        return "\n".join(lines + ["No background jobs."])
+    lines.append("| Job ID | Command | Status | Attempt |")
+    lines.append("|---|---|---:|---:|")
+    for summary in summaries:
+        lines.append(
+            f"| `{summary.job_id}` | {summary.command} | "
+            f"**{summary.status}** | {summary.attempt_number} |")
+    return "\n".join(lines)
+
+
+def do_jobs_refresh():
+    disabled = _jobs_disabled()
+    if disabled is not None:
+        return disabled
+    try:
+        store = _job_store()
+        summaries = [
+            job_manager.reconcile_job(store, summary.job_id)
+            for summary in store.list_jobs()
+        ]
+        return _format_job_summaries(summaries)
+    except Exception as exc:
+        return f"Job status unavailable ({type(exc).__name__})."
+
+
+def do_job_reindex(full_reindex):
+    disabled = _jobs_disabled()
+    if disabled is not None:
+        return disabled
+    chunks_path = _config["chunks_path"]
+    db_path = _config["db_path"]
+    collection = _config["collection"]
+    if (not isinstance(chunks_path, Path) or not chunks_path.is_file()
+            or not isinstance(db_path, Path) or not collection):
+        return "Configure an existing chunks file, database, and collection first."
+    arguments = [
+        "--chunks", str(chunks_path),
+        "--db", str(db_path),
+        "--db-backend", str(_config["db_backend"]),
+        "--collection", str(collection),
+        "--embedding-model", str(_config["embedding_model"]),
+        "--db-lock-timeout", str(_config["db_lock_timeout"]),
+    ]
+    if full_reindex:
+        arguments.append("--full-reindex")
+    try:
+        store = _job_store()
+        submitted = store.submit_job(
+            "index", arguments,
+            timeout_seconds=rag.DEFAULT_OPERATION_TIMEOUTS["index"])
+        launched = job_manager.launch_detached(
+            store, submitted.job_id,
+            ready_timeout=_config["job_ready_timeout"])
+        return (
+            f"Submitted `{submitted.job_id}` ({launched.status}).\n\n"
+            f"{do_jobs_refresh()}")
+    except Exception as exc:
+        return f"Could not submit reindex job ({type(exc).__name__})."
+
+
+def do_job_cancel(job_id):
+    disabled = _jobs_disabled()
+    if disabled is not None:
+        return disabled
+    try:
+        store = _job_store()
+        store.request_cancel(str(job_id).strip())
+        return do_jobs_refresh()
+    except Exception as exc:
+        return f"Could not request cancellation ({type(exc).__name__})."
+
+
+def do_job_resume(job_id):
+    disabled = _jobs_disabled()
+    if disabled is not None:
+        return disabled
+    try:
+        store = _job_store()
+        job_id = str(job_id).strip()
+        current = job_manager.reconcile_job(store, job_id)
+        store.prepare_resume(job_id, expected_revision=current.revision)
+        job_manager.launch_detached(
+            store, job_id,
+            ready_timeout=_config["job_ready_timeout"])
+        return do_jobs_refresh()
+    except Exception as exc:
+        return f"Could not resume job ({type(exc).__name__})."
+
+
+# ---------------------------------------------------------------------------
 # Build UI
 # ---------------------------------------------------------------------------
 
@@ -528,6 +640,35 @@ def build_app():
                           inputs=[exp_types, exp_exclude, exp_chapters, exp_split],
                           outputs=[exp_result, exp_file])
 
+        if not _config["share"]:
+            with gr.Tab("Jobs"):
+                gr.Markdown(
+                    "### Durable background jobs\n"
+                    "Reindex the configured corpus without blocking this UI. "
+                    "Cancellation terminates the isolated worker tree; resume "
+                    "always creates a new explicit attempt.")
+                full_reindex = gr.Checkbox(
+                    label="Force full reindex", value=False)
+                submit_reindex = gr.Button(
+                    "Reindex current corpus", variant="primary")
+                with gr.Row():
+                    job_id = gr.Textbox(
+                        label="Job ID", placeholder="32-character job ID")
+                    cancel_job = gr.Button("Cancel")
+                    resume_job = gr.Button("Resume")
+                    refresh_jobs = gr.Button("Refresh")
+                jobs_md = gr.Markdown()
+                submit_reindex.click(
+                    do_job_reindex, inputs=full_reindex, outputs=jobs_md)
+                cancel_job.click(
+                    do_job_cancel, inputs=job_id, outputs=jobs_md)
+                resume_job.click(
+                    do_job_resume, inputs=job_id, outputs=jobs_md)
+                refresh_jobs.click(do_jobs_refresh, outputs=jobs_md)
+                jobs_timer = gr.Timer(value=2.0, active=True)
+                jobs_timer.tick(do_jobs_refresh, outputs=jobs_md)
+                app.load(do_jobs_refresh, outputs=jobs_md)
+
         with gr.Tab("Info"):
             info_md = gr.Markdown()
             refresh_btn = gr.Button("Refresh")
@@ -564,6 +705,12 @@ def main(argv: list[str] | None = None):
         "--info-timeout", type=float,
         default=rag.DEFAULT_OPERATION_TIMEOUTS["info"],
         help="Hard wall-clock deadline for each isolated status lookup")
+    parser.add_argument(
+        "--job-root", type=Path, default=job_runtime.DEFAULT_JOB_ROOT,
+        help="Private durable background-job root")
+    parser.add_argument(
+        "--job-ready-timeout", type=float, default=5.0,
+        help="Seconds to wait for a detached job-manager handshake")
     parser.add_argument("--share", action="store_true",
                         help="Create a public Gradio share link")
     args = parser.parse_args(argv)
@@ -574,6 +721,8 @@ def main(argv: list[str] | None = None):
             args.search_timeout)
         args.info_timeout = rag._normalize_operation_timeout(
             args.info_timeout)
+        args.job_ready_timeout = rag._normalize_operation_timeout(
+            args.job_ready_timeout)
     except ValueError as exc:
         parser.error(str(exc))
 
@@ -585,6 +734,9 @@ def main(argv: list[str] | None = None):
     _config["db_lock_timeout"] = args.db_lock_timeout
     _config["search_timeout"] = args.search_timeout
     _config["info_timeout"] = args.info_timeout
+    _config["job_root"] = args.job_root
+    _config["job_ready_timeout"] = args.job_ready_timeout
+    _config["share"] = args.share
 
     app = build_app()
     app.launch(server_port=args.port, share=args.share)
