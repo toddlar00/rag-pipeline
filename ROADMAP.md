@@ -27,20 +27,17 @@ Status terms:
 | Chroma worker lifecycle cleanup | Implemented (draft) | [PR #7](https://github.com/toddlar00/rag-pipeline/pull/7) |
 | Chroma interrupted-update guard | Implemented (draft) | [PR #8](https://github.com/toddlar00/rag-pipeline/pull/8) |
 | Chroma parallel/API lifecycle cleanup | Implemented (draft) | [PR #9](https://github.com/toddlar00/rag-pipeline/pull/9) |
+| Chroma record reconciliation and no-op detection | Implemented (draft) | [PR #10](https://github.com/toddlar00/rag-pipeline/pull/10) |
 
 PR #1 is independent of the index-integrity stack and can be reviewed or merged
 separately. The index-integrity stack must be reviewed and merged in order:
-**#2 -> #3 -> #4 -> #5 -> #6 -> #7 -> #8 -> #9**. Until those PRs merge,
+**#2 -> #3 -> #4 -> #5 -> #6 -> #7 -> #8 -> #9 -> #10**. Until those PRs merge,
 implementation progress is ahead of integration progress.
 
 ## Ordered next milestones
 
 ### 1. Finish cross-backend index integrity
 
-- Reconcile Chroma's physical stable-ID set with its manifest before and after
-  incremental mutations, including missing, unexpected, duplicate, and
-  untracked records.
-- Detect Chroma delete/upsert no-ops before committing a manifest.
 - Add an explicit concurrency policy; recovery markers represent crash state,
   not mutual-exclusion locks.
 - Bound or isolate indefinitely hung vector-store calls. Python cannot safely
