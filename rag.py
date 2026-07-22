@@ -38,6 +38,7 @@ from uuid import UUID, uuid4
 import artifact_io as _artifact_io
 import chunking_core as _chunking_core
 import cli_policy as _cli_policy
+import ingestion_core as _ingestion_core
 import index_state as _index_state
 import llm_adapters as _llm_adapters
 import retrieval_core as _retrieval_core
@@ -348,49 +349,31 @@ def _batch_index_records(records: list[dict], embedding_model: str, *,
     return batches
 
 
+def _pdf_ingestion_thresholds() -> _ingestion_core.PDFIngestionThresholds:
+    """Return current facade thresholds for PDF ingestion safety policy."""
+    return _ingestion_core.PDFIngestionThresholds(
+        min_usable_page_chars=_MIN_USABLE_PAGE_CHARS,
+        min_usable_text_page_ratio=_MIN_USABLE_TEXT_PAGE_RATIO,
+        min_usable_scan_text_ratio=_MIN_USABLE_SCAN_TEXT_RATIO,
+        max_replacement_char_ratio=_MAX_REPLACEMENT_CHAR_RATIO,
+        min_background_image_page_coverage=(
+            _MIN_BACKGROUND_IMAGE_PAGE_COVERAGE),
+    )
+
+
 def _pdf_page_text_is_usable(text: str) -> bool:
     """Return whether one page has enough clean extracted text to preserve."""
-    non_whitespace_chars = sum(
-        1 for character in text if not character.isspace())
-    replacement_ratio = text.count("\ufffd") / max(len(text), 1)
-    return (
-        non_whitespace_chars >= _MIN_USABLE_PAGE_CHARS
-        and replacement_ratio <= _MAX_REPLACEMENT_CHAR_RATIO
-    )
+    return _ingestion_core.pdf_page_text_is_usable(
+        text, thresholds=_pdf_ingestion_thresholds())
 
 
 def _pdf_text_layer_is_usable(stats: dict, *,
                               large_image_pages_only: bool = False) -> bool:
     """Assess whether extracted PDF text is safe to preserve without OCR."""
-    # Older cached/mocked analyses do not contain text-layer statistics.
-    # Preserve their historical behavior rather than treating unknown as bad.
-    if "pages_with_usable_text" not in stats:
-        return True
-
-    if large_image_pages_only:
-        total = int(stats.get("pages_with_large_images", 0))
-        usable = int(stats.get("large_image_pages_with_usable_text", 0))
-        minimum_ratio = _MIN_USABLE_SCAN_TEXT_RATIO
-    else:
-        total = int(stats.get("total_pages", 0))
-        usable = int(stats.get("pages_with_usable_text", 0))
-        minimum_ratio = _MIN_USABLE_TEXT_PAGE_RATIO
-
-    if total <= 0:
-        return True
-    replacement_chars = int(stats.get("replacement_chars", 0))
-    text_chars = int(stats.get("text_chars", 0))
-    replacement_ratio = replacement_chars / max(text_chars, 1)
-    scan_pages = int(stats.get("pages_with_large_images", 0))
-    usable_scan_pages = int(
-        stats.get("large_image_pages_with_usable_text", 0))
-    all_scan_pages_are_usable = (
-        scan_pages == 0 or usable_scan_pages == scan_pages
-    )
-    return (
-        usable / total >= minimum_ratio
-        and replacement_ratio <= _MAX_REPLACEMENT_CHAR_RATIO
-        and (large_image_pages_only or all_scan_pages_are_usable)
+    return _ingestion_core.pdf_text_layer_is_usable(
+        stats,
+        large_image_pages_only=large_image_pages_only,
+        thresholds=_pdf_ingestion_thresholds(),
     )
 
 # Watermark text repeated on every page of the source PDF.
@@ -4135,6 +4118,14 @@ def _deduplicate_chunks(chunks: list[dict],
 DEFAULT_PREPROCESSED_PATH = Path("output/preprocessed.pdf")
 
 
+def _inspect_page_background_images(
+        doc, page, min_dim: int
+) -> _ingestion_core.PageBackgroundInspection:
+    """Return rich background-image inspection state for safety planning."""
+    return _ingestion_core.inspect_page_background_images(
+        doc, page, min_dim, thresholds=_pdf_ingestion_thresholds())
+
+
 def _page_background_images(doc, page, min_dim: int) -> list[tuple[int, int, int]]:
     """Return large images that visibly cover most of a PDF page.
 
@@ -4142,83 +4133,34 @@ def _page_background_images(doc, page, min_dim: int) -> list[tuple[int, int, int
     figure. Placement checks fail closed: an image is removable only when its
     rendered rectangle covers at least 70% of the page.
     """
-    try:
-        page_rect = page.rect
-        page_area = abs(float(page_rect.width) * float(page_rect.height))
-        image_infos = page.get_images(full=True)
-    except Exception:
-        return []
-    if page_area <= 0:
-        return []
-
-    backgrounds = []
-    for image_info in image_infos:
-        xref = image_info[0]
-        try:
-            image = doc.extract_image(xref)
-            if (not image or image["width"] <= min_dim
-                    or image["height"] <= min_dim):
-                continue
-            rectangles = page.get_image_rects(xref)
-            coverage = max(
-                (
-                    min(
-                        abs(float(rect.width) * float(rect.height)),
-                        page_area,
-                    ) / page_area
-                    for rect in rectangles
-                ),
-                default=0.0,
-            )
-            if coverage >= _MIN_BACKGROUND_IMAGE_PAGE_COVERAGE:
-                backgrounds.append((xref, image["width"], image["height"]))
-        except Exception:
-            continue
-    return backgrounds
+    inspection = _inspect_page_background_images(doc, page, min_dim)
+    return list(inspection.candidates) if inspection.complete else []
 
 
 def _analyze_pdf_images(pdf_path: Path, min_dim: int = 1000) -> dict:
     """Scan background images and the safety of the PDF text layer."""
     import pymupdf
 
-    stats = {
-        "total_pages": 0,
-        "pages_with_large_images": 0,
-        "pages_with_usable_text": 0,
-        "large_image_pages_with_usable_text": 0,
-        "text_chars": 0,
-        "replacement_chars": 0,
-        "unique_dims": set(),
-        "image_xrefs": set(),
-    }
     with pymupdf.open(str(pdf_path)) as doc:
-        stats["total_pages"] = len(doc)
-        for page in doc:
-            try:
-                text = page.get_text("text") or ""
-            except Exception as exc:
-                log.warning(
-                    "Could not inspect the text layer on PDF page %s: %s",
-                    getattr(page, "number", "?"), exc,
-                )
-                text = ""
-            usable_text = _pdf_page_text_is_usable(text)
-            stats["text_chars"] += len(text)
-            stats["replacement_chars"] += text.count("\ufffd")
-            if usable_text:
-                stats["pages_with_usable_text"] += 1
-
-            has_large_image = False
-            background_images = _page_background_images(doc, page, min_dim)
-            if background_images:
-                has_large_image = True
-                stats["pages_with_large_images"] += 1
-                for xref, width, height in background_images:
-                    stats["unique_dims"].add(f"{width}x{height}")
-                    stats["image_xrefs"].add(xref)
-            if has_large_image and usable_text:
-                stats["large_image_pages_with_usable_text"] += 1
-    return stats
+        analysis = _ingestion_core.analyze_pdf_document(
+            doc,
+            min_dim,
+            thresholds=_pdf_ingestion_thresholds(),
+            page_text_is_usable_fn=_pdf_page_text_is_usable,
+            page_background_inspection_fn=_inspect_page_background_images,
+        )
+    for issue in analysis.issues:
+        if issue.stage == "text":
+            log.warning(
+                "Could not inspect the text layer on PDF page %s: %s",
+                issue.page_number, issue.detail,
+            )
+        else:
+            log.warning(
+                "Could not inspect images on PDF page %s: %s",
+                issue.page_number, issue.detail,
+            )
+    return analysis.stats
 
 
 def preprocess_pdf(input_path: Path, output_path: Path, *,
@@ -4260,6 +4202,13 @@ def preprocess_pdf(input_path: Path, output_path: Path, *,
             f"  Usable text layer: {stats['pages_with_usable_text']}/"
             f"{stats['total_pages']} pages ({text_ratio:.0%})"
         )
+
+    if stats.get("inspection_complete") is False:
+        log.warning(
+            "PDF inspection was incomplete; no background images can be "
+            "stripped safely."
+        )
+        return None
 
     if analyze_only:
         if ratio > 0.5:
@@ -4305,70 +4254,49 @@ def preprocess_pdf(input_path: Path, output_path: Path, *,
     doc = pymupdf.open(str(input_path))
     removed = 0
     try:
-        page_images = []
-        unsafe_xrefs = set()
-        analysis_failed = False
-        for page in doc:
-            try:
-                try:
-                    text = page.get_text("text") or ""
-                except Exception as exc:
-                    log.warning(
-                        "Could not verify text before stripping PDF page %s: %s",
-                        getattr(page, "number", "?"), exc,
-                    )
-                    text = ""
-                usable_text = _pdf_page_text_is_usable(text)
-                large_xrefs = [
-                    xref for xref, _, _
-                    in _page_background_images(doc, page, min_dim)
-                ]
-                page_images.append((page, usable_text, large_xrefs))
-                if not usable_text:
-                    unsafe_xrefs.update(large_xrefs)
-            except Exception as exc:
-                analysis_failed = True
+        plan = _ingestion_core.plan_background_image_removals(
+            doc,
+            min_dim,
+            thresholds=_pdf_ingestion_thresholds(),
+            page_text_is_usable_fn=_pdf_page_text_is_usable,
+            page_background_inspection_fn=_inspect_page_background_images,
+        )
+        for issue in plan.issues:
+            if issue.stage == "text":
+                log.warning(
+                    "Could not verify text before stripping PDF page %s: %s",
+                    issue.page_number, issue.detail,
+                )
+            else:
                 log.warning(
                     "Could not inspect images on PDF page %s: %s",
-                    getattr(page, "number", "?"), exc,
+                    issue.page_number, issue.detail,
                 )
-
-        if analysis_failed:
+        if not plan.complete:
             log.warning(
                 "Image stripping was cancelled because not every page could "
                 "be inspected safely."
             )
             return None
 
-        removable_xrefs = {
-            xref
-            for _, usable_text, xrefs in page_images if usable_text
-            for xref in xrefs
-        } - unsafe_xrefs
-        if not removable_xrefs:
+        if not plan.removable_xrefs:
             log.warning(
                 "No background image can be removed without risking scan-only "
                 "content; keeping the original PDF for OCR."
             )
             return None
 
-        deleted_xrefs = set()
-        for page, usable_text, xrefs in tqdm(
-                page_images, desc="Stripping images", unit="pg"):
-            if not usable_text:
-                continue
-            for xref in xrefs:
-                if xref not in removable_xrefs or xref in deleted_xrefs:
-                    continue
-                try:
-                    page.delete_image(xref)
-                    deleted_xrefs.add(xref)
-                    removed += 1
-                except Exception as exc:
-                    log.warning(
-                        "Could not remove background image %s safely: %s",
-                        xref, exc,
-                    )
+        outcome = _ingestion_core.apply_background_image_removals(
+            plan,
+            progress_pages_fn=lambda pages: tqdm(
+                pages, desc="Stripping images", unit="pg"),
+        )
+        for issue in outcome.deletion_issues:
+            log.warning(
+                "Could not remove background image %s safely: %s",
+                issue.xref, issue.detail,
+            )
+        removed = outcome.removed_count
 
         if not removed:
             log.warning("No background images were removed; keeping original PDF.")

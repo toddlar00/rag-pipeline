@@ -97,6 +97,12 @@ option mapping, menu LLM detection, and secret redaction/environment routing.
 definitions and dispatch, process supervision, environment mutation/restoration,
 runtime mutation, pipeline execution, and output/artifact behavior.
 
+`ingestion_core.py` is the standard-library-only PDF safety layer for text-layer
+quality, page-coverage-aware background detection, complete pre-mutation
+inspection, and mixed-page/shared-xref removal planning. `rag.py` and
+`preprocess_pdf.py` retain lazy PyMuPDF access, paths, saving, progress, logging,
+CLI reporting, OCR/Docling orchestration, and artifact publication.
+
 ## Quick Start
 
 The portable command-line and CPU dependency profiles are tested on CPython
@@ -1333,6 +1339,8 @@ chunking_core.py        # Stdlib-only text preparation and classification
 index_state.py          # Stdlib-only index manifests and compatibility policy
 llm_adapters.py         # Typed LLM provider transport adapters
 cli_policy.py           # Stdlib-only CLI interpretation and serialization policy
+ingestion_core.py       # Stdlib-only PDF inspection and stripping safety policy
+preprocess_pdf.py       # Standalone PDF preprocessing CLI facade
 eval.py                 # Evaluation harness (success@k, MRR, type accuracy)
 eval_queries.jsonl      # Starter evaluation queries (10 CivPro)
 ui.py                   # Gradio web UI (Search, Export, Info tabs)
