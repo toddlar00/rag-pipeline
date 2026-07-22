@@ -39,10 +39,11 @@ Status terms:
 | LLM-provider modularization | Implemented (draft) | [PR #19](https://github.com/toddlar00/rag-pipeline/pull/19) |
 | CLI-policy modularization | Implemented (draft) | [PR #20](https://github.com/toddlar00/rag-pipeline/pull/20) |
 | PDF-ingestion modularization | Implemented (draft) | [PR #21](https://github.com/toddlar00/rag-pipeline/pull/21) |
+| Model-artifact supply chain and ML-BOM | Implemented (draft) | [PR #22](https://github.com/toddlar00/rag-pipeline/pull/22) |
 
 PR #1 is independent of the index-integrity stack and can be reviewed or merged
 separately. The index-integrity stack must be reviewed and merged in order:
-**#2 -> #3 -> #4 -> #5 -> #6 -> #7 -> #8 -> #9 -> #10 -> #11 -> #12 -> #13 -> #14 -> #15 -> #16 -> #17 -> #18 -> #19 -> #20 -> #21**.
+**#2 -> #3 -> #4 -> #5 -> #6 -> #7 -> #8 -> #9 -> #10 -> #11 -> #12 -> #13 -> #14 -> #15 -> #16 -> #17 -> #18 -> #19 -> #20 -> #21 -> #22**.
 Until those PRs merge,
 implementation progress is ahead of integration progress.
 
@@ -54,8 +55,9 @@ implementation progress is ahead of integration progress.
 - Keep the expiring ChromaDB, PyMuPDF, FlagEmbedding, and CPU-wheel audit
   exceptions under active review; replace them with fixed upstream releases or
   recorded license decisions before their 2026-08-31 deadline.
-- Extend the Python-package SBOM with a revision-, checksum-, and license-pinned
-  manifest for downloaded model artifacts and trusted remote model code.
+- Integrate the model-artifact policy, immutable byte lock, verified local
+  loaders, runtime provenance invalidation, and CycloneDX ML-BOM implemented in
+  draft PR #22.
 
 ### 2. Reduce monolith and coupling risk
 
