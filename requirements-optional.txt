@@ -9,14 +9,14 @@
 qdrant-client>=1.17,<2
 
 # Voyage AI embeddings (legal-specific, paid)
-voyageai>=0.2,<1
+voyageai>=0.5.0,<1
 
 # OpenAI and Cohere embedding/reranking adapters
-openai>=1.0,<3
-cohere>=5.0,<6
+openai>=2.46.0,<3
+cohere>=7.0.7,<8
 
 # LLM classification + contextual retrieval
-google-genai>=1.68,<2      # Gemini fallback; per-request timeout/retry controls
+google-genai>=2.13.0,<3      # Gemini fallback; per-request timeout/retry controls
 
 # Web UI
-gradio>=6.0,<7
+gradio>=6.20.0,<7
