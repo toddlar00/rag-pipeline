@@ -137,6 +137,24 @@ def test_vector_store_lock_is_reentrant_without_relocking_os(
     assert unlocks == 1
 
 
+def test_vector_store_lock_attempts_once_after_setup_uses_timeout(
+        monkeypatch, tmp_path):
+    ticks = iter((10.0, 12.0))
+    attempts = []
+    monkeypatch.setattr(rag.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(
+        rag, "_try_vector_file_lock",
+        lambda _handle: attempts.append(True) or True)
+    monkeypatch.setattr(rag, "_unlock_vector_file", lambda _handle: None)
+
+    with rag._vector_store_lock(
+            tmp_path / "db", backend="chroma", collection_name="book",
+            operation="slow setup test", timeout=1):
+        pass
+
+    assert attempts == [True]
+
+
 def test_vector_store_lock_bounds_thread_contention_and_isolates_paths(
         tmp_path):
     held_path = tmp_path / "held"
@@ -254,7 +272,7 @@ def test_vector_store_lock_is_process_safe_and_crash_released(tmp_path):
 
         with rag._vector_store_lock(
                 other_path, backend="qdrant", collection_name="book",
-                operation="independent process test", timeout=2):
+                operation="independent process test", timeout=0.1):
             pass
 
         holder.kill()

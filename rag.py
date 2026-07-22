@@ -1336,8 +1336,14 @@ class _VectorStoreLease:
             first_attempt = True
             while True:
                 remaining = deadline - time.monotonic()
-                if (remaining <= 0
-                        and not (first_attempt and self.timeout == 0)):
+                # Opening, permission-checking, and initially syncing the
+                # private sidecar can consume a very small timeout on a slow
+                # filesystem.  The operating-system lock attempt is
+                # nonblocking, so always make exactly one attempt before
+                # treating the deadline as exhausted.  This preserves true
+                # zero-timeout try-lock semantics without turning unrelated,
+                # uncontended paths into false busy results.
+                if remaining <= 0 and not first_attempt:
                     raise self._busy_error()
                 if _try_vector_file_lock(handle):
                     os_locked = True
