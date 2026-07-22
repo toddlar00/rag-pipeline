@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "denied_license_patterns": [
+    "GNU Affero General Public License|\\bAGPL(?:v?\\d+(?:\\.\\d+)*)?\\b",
+    "GNU General Public License|(?<![AL])\\bGPL(?:v?\\d+(?:\\.\\d+)*)?\\b"
+  ],
+  "allowed_packages": {
+    "PyMuPDF": {
+      "reason": "Existing direct PDF dependency is dual-licensed under AGPL-3.0 or a commercial Artifex license; no commercial basis has been recorded.",
+      "scope": "Private, filesystem-local evaluation only. Distribution and hosted or network-accessible deployment are not approved.",
+      "owner": "repository owner",
+      "version": "1.28.0",
+      "expires": "2026-08-31",
+      "reference": "https://pymupdf.readthedocs.io/en/latest/about.html#license"
+    }
+  },
+  "allowed_unknown_packages": {
+    "FlagEmbedding": {
+      "reason": "The 1.4.0 wheel omits license metadata, while the upstream FlagOpen/FlagEmbedding repository declares the code under the MIT license.",
+      "owner": "repository owner",
+      "version": "1.4.0",
+      "expires": "2026-08-31",
+      "reference": "https://github.com/FlagOpen/FlagEmbedding/blob/7ed43d67ec03fbe5c31c0992dbfa941fb1860549/LICENSE"
+    }
+  }
+}

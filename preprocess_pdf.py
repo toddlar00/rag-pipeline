@@ -24,6 +24,9 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+import ingestion_core as _ingestion_core
+from storage_policy import atomic_publish_private_file
+
 
 def _require_positive_dimension(min_dimension: int) -> None:
     if isinstance(min_dimension, bool) or min_dimension <= 0:
@@ -44,48 +47,50 @@ def _same_path(left: Path, right: Path) -> bool:
     return left.resolve(strict=False) == right.resolve(strict=False)
 
 
+def _standalone_page_number(number: int | str) -> int | str:
+    return number + 1 if isinstance(number, int) else number
+
+
+def _page_text_is_usable(text: str) -> bool:
+    return _ingestion_core.pdf_page_text_is_usable(text)
+
+
+def _inspect_page_background_images(
+        document, page, min_dimension: int
+) -> _ingestion_core.PageBackgroundInspection:
+    return _ingestion_core.inspect_page_background_images(
+        document, page, min_dimension)
+
+
+def _legacy_analysis_stats(
+        analysis: _ingestion_core.PDFAnalysis) -> dict[str, Any]:
+    """Expose canonical safety statistics plus historical standalone keys."""
+    stats: dict[str, Any] = dict(analysis.stats)
+    stats.update({
+        "unique_image_dims": stats["unique_dims"],
+        "total_image_xrefs": stats["image_xrefs"],
+        "text_ok_pages": stats["pages_with_usable_text"],
+        "inspection_issues": analysis.issues,
+    })
+    return stats
+
+
 def analyze_pdf(input_path: Path, min_dimension: int = 1000) -> dict[str, Any]:
     """Analyze a PDF for raster images above the stripping threshold."""
     import pymupdf
 
     _require_positive_dimension(min_dimension)
     doc = pymupdf.open(str(input_path))
-    stats: dict[str, Any] = {
-        "total_pages": len(doc),
-        "pages_with_large_images": 0,
-        "unique_image_dims": set(),
-        "total_image_xrefs": set(),
-        "text_ok_pages": 0,
-    }
-
     try:
-        for page_index in range(len(doc)):
-            page = doc[page_index]
-            page_has_large_image = False
-
-            for image_info in page.get_images(full=True):
-                xref = image_info[0]
-                try:
-                    image = doc.extract_image(xref)
-                except Exception:
-                    continue
-                if not image:
-                    continue
-                width, height = image["width"], image["height"]
-                if width > min_dimension and height > min_dimension:
-                    page_has_large_image = True
-                    stats["unique_image_dims"].add(f"{width}x{height}")
-                    stats["total_image_xrefs"].add(xref)
-
-            if page_has_large_image:
-                stats["pages_with_large_images"] += 1
-
-            if len(page.get_text().strip()) > 50:
-                stats["text_ok_pages"] += 1
+        analysis = _ingestion_core.analyze_pdf_document(
+            doc,
+            min_dimension,
+            page_text_is_usable_fn=_page_text_is_usable,
+            page_background_inspection_fn=_inspect_page_background_images,
+        )
     finally:
         doc.close()
-
-    return stats
+    return _legacy_analysis_stats(analysis)
 
 
 def strip_background_images(
@@ -109,44 +114,71 @@ def strip_background_images(
     doc = pymupdf.open(str(input_path))
     total_pages = len(doc)
     removed = 0
-    failed_pages: list[tuple[int, str]] = []
+    failed_pages: list[tuple[int | str, str]] = []
+    output_written = False
 
     try:
-        for page_index in range(total_pages):
-            page = doc[page_index]
+        plan = _ingestion_core.plan_background_image_removals(
+            doc,
+            min_dimension,
+            page_text_is_usable_fn=_page_text_is_usable,
+            page_background_inspection_fn=_inspect_page_background_images,
+        )
+        failed_pages.extend(
+            (_standalone_page_number(issue.page_number), issue.detail)
+            for issue in plan.issues
+        )
+        if plan.complete:
+            removed_during_progress: set[int] = set()
 
-            try:
-                images = page.get_images(full=True)
-                for image_info in images:
-                    xref = image_info[0]
-                    try:
-                        image = doc.extract_image(xref)
-                        if not image:
-                            continue
-                        width, height = image["width"], image["height"]
-                        if width > min_dimension and height > min_dimension:
-                            page.delete_image(xref)
-                            removed += 1
-                    except Exception:
-                        # Some XObject types cannot be extracted or deleted.
-                        continue
-            except Exception as exc:
-                failed_pages.append((page_index + 1, str(exc)))
+            def delete_image(page, xref):
+                page.delete_image(xref)
+                removed_during_progress.add(xref)
 
-            if (page_index + 1) % 100 == 0:
-                elapsed = time.time() - started_at
-                print(
-                    f"  {page_index + 1}/{total_pages} pages "
-                    f"({elapsed:.0f}s, {removed} images stripped)"
-                )
+            def progress_pages(pages):
+                for page_index, assessment in enumerate(pages, 1):
+                    yield assessment
+                    if page_index % 100 == 0:
+                        elapsed = time.time() - started_at
+                        print(
+                            f"  {page_index}/{total_pages} pages "
+                            f"({elapsed:.0f}s, "
+                            f"{len(removed_during_progress)} images stripped)"
+                        )
 
-        print(f"\nSaving to {output_path} (garbage collecting)...")
-        doc.save(str(output_path), garbage=4, deflate=True, clean=True)
+            outcome = _ingestion_core.apply_background_image_removals(
+                plan,
+                delete_image_fn=delete_image,
+                progress_pages_fn=progress_pages,
+            )
+            removed = outcome.removed_count
+            failed_pages.extend(
+                (_standalone_page_number(issue.page_number), issue.detail)
+                for issue in outcome.deletion_issues
+            )
+            print(f"\nSaving to {output_path} (garbage collecting)...")
+            atomic_publish_private_file(
+                output_path,
+                lambda staging_path: doc.save(
+                    str(staging_path), garbage=4, deflate=True, clean=True),
+            )
+            output_written = True
     finally:
         doc.close()
 
     elapsed = time.time() - started_at
     original_mb = os.path.getsize(input_path) / 1e6
+    if not output_written:
+        return {
+            "elapsed_sec": elapsed,
+            "images_removed": 0,
+            "original_mb": original_mb,
+            "stripped_mb": original_mb,
+            "failed_pages": failed_pages,
+            "text_verify_passed": 0,
+            "text_verify_total": 0,
+            "output_written": False,
+        }
     stripped_mb = os.path.getsize(output_path) / 1e6
 
     print("Verifying text extraction...")
@@ -180,6 +212,7 @@ def strip_background_images(
         "failed_pages": failed_pages,
         "text_verify_passed": verify_ok,
         "text_verify_total": len(sample_pages),
+        "output_written": True,
     }
 
 
@@ -225,9 +258,27 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"  Unique image xrefs:       {len(stats['total_image_xrefs'])}")
         print(f"  Pages with readable text: {stats['text_ok_pages']}")
 
-        if stats["pages_with_large_images"] > stats["total_pages"] * 0.5:
-            print("\n  DIAGNOSIS: This PDF has full-page background scans.")
-            print("  Run without --analyze to create a text-only version.")
+        scan_pages = stats["pages_with_large_images"]
+        usable_scan_pages = stats.get("large_image_pages_with_usable_text")
+        if stats.get("inspection_complete") is False:
+            print(
+                "\n  DIAGNOSIS: PDF inspection was incomplete; no images "
+                "can be stripped safely."
+            )
+        elif scan_pages > stats["total_pages"] * 0.5:
+            if usable_scan_pages is None or usable_scan_pages == scan_pages:
+                print("\n  DIAGNOSIS: This PDF has full-page background scans.")
+                print("  Run without --analyze to create a text-only version.")
+            elif usable_scan_pages:
+                print(
+                    "\n  DIAGNOSIS: Mixed PDF; only scan pages with reliable "
+                    "text can be stripped."
+                )
+            else:
+                print(
+                    "\n  DIAGNOSIS: Scan pages lack a reliable text layer; "
+                    "keep their images and use OCR."
+                )
         else:
             print("\n  This PDF has few large images; stripping may not be needed.")
         return 0
@@ -245,6 +296,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         stats = strip_background_images(args.input, output, args.min_dim)
     except Exception as exc:
         parser.exit(1, f"ERROR: could not preprocess {args.input}: {exc}\n")
+
+    if stats.get("output_written", True) is False:
+        print(f"\n{'=' * 60}")
+        print("  No output was written because PDF inspection was incomplete.")
+        print(f"  Original size:     {stats['original_mb']:.1f} MB")
+        print(f"  Time:              {stats['elapsed_sec']:.0f}s")
+        if stats["failed_pages"]:
+            print(f"  Failed pages:      {stats['failed_pages'][:5]}")
+        print(f"{'=' * 60}")
+        return 1
 
     print(f"\n{'=' * 60}")
     print(f"  Images removed:    {stats['images_removed']}")

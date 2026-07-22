@@ -3,6 +3,17 @@ from pathlib import Path
 import rag
 
 
+def test_show_info_preserves_legacy_chroma_dir_keyword(
+        monkeypatch, tmp_path, capsys):
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    monkeypatch.setattr(rag, "OUTPUT_DIR", output_dir)
+
+    rag.show_info(chroma_dir=tmp_path / "missing-db")
+
+    assert "Pipeline Output Status" in capsys.readouterr().out
+
+
 def test_show_info_discovers_book_scoped_artifacts(monkeypatch, tmp_path, capsys):
     output_dir = tmp_path / "output"
     book_dir = output_dir / "Evidence"
@@ -23,3 +34,23 @@ def test_show_info_discovers_book_scoped_artifacts(monkeypatch, tmp_path, capsys
     assert str(Path("Evidence") / "Evidence.json") in output
     assert str(Path("Evidence") / "Evidence_chunks.jsonl") in output
     assert str(Path("Evidence") / "Chapters") in output
+
+
+def test_show_info_does_not_mislabel_collection_status_failure(
+        monkeypatch, tmp_path, capsys):
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    db_path = tmp_path / "chroma"
+    db_path.mkdir()
+    monkeypatch.setattr(rag, "OUTPUT_DIR", output_dir)
+    close_error = RuntimeError("injected client close failure")
+    monkeypatch.setattr(
+        rag, "_index_collection_count",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(close_error),
+    )
+
+    rag.show_info(db_path, collection_name="book")
+
+    output = capsys.readouterr().out
+    assert "Collection status unavailable: injected client close failure" in output
+    assert "Collection 'book' not found" not in output

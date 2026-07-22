@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "name": "property-mini",
+  "subject": "Property",
+  "book": "Property Mini Corpus",
+  "license": "CC0-1.0",
+  "source_note": "All passages and questions were written specifically for this evaluation suite. Case summaries are original paraphrases of facts and rules from public-domain United States judicial opinions; no source text is copied.",
+  "chunks": {
+    "path": "chunks.jsonl",
+    "sha256": "177e9a2d4b9015c1bac083a2489d2f622281f623d649d9292ef67eda41a6154f",
+    "record_count": 10,
+    "id_scheme": "retrieval_core._chunk_id"
+  },
+  "queries": {
+    "path": "queries.jsonl",
+    "sha256": "5ba4b59026e1b521ac4bde61e7794347c475bf653d5df6229d4b731287bf25d4",
+    "record_count": 7
+  }
+}

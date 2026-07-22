@@ -11,17 +11,19 @@ Usage:
 
 import argparse
 import json
-import shutil
 import sys
+import tempfile
 import time
+import zipfile
 from pathlib import Path
 from uuid import uuid4
-
-import gradio as gr
 
 # Import pipeline functions
 sys.path.insert(0, str(Path(__file__).parent))
 import rag
+import job_manager
+import job_runtime
+import storage_policy
 
 
 # ---------------------------------------------------------------------------
@@ -37,7 +39,137 @@ _config = {
     "db_backend": "chroma",
     "collection": None,
     "embedding_model": "nomic-ai/nomic-embed-text-v2-moe",
+    "db_lock_timeout": rag.DEFAULT_DB_LOCK_TIMEOUT,
+    "search_timeout": rag.DEFAULT_OPERATION_TIMEOUTS["query"],
+    "info_timeout": rag.DEFAULT_OPERATION_TIMEOUTS["info"],
+    "job_root": job_runtime.DEFAULT_JOB_ROOT,
+    "job_ready_timeout": 5.0,
+    "share": False,
 }
+
+_VECTOR_WORKER_FLAG = "--vector-worker"
+_UI_EXPORT_MARKER = ".rag-owned.json"
+
+
+def _write_export_marker(
+        export_root: Path, *, export_id: str, created_at: float,
+        state: str, artifacts: list[str] | None = None) -> None:
+    storage_policy.atomic_write_private_json(
+        export_root / _UI_EXPORT_MARKER,
+        {
+            "schema_version": 1,
+            "kind": "ui_export",
+            "ownership_token": export_id,
+            "created_at": created_at,
+            "updated_at": time.time(),
+            "state": state,
+            "artifacts": sorted(artifacts or []),
+        },
+        indent=2,
+    )
+
+
+class _VectorWorkerError(RuntimeError):
+    def __init__(self, error_type: str, message: str):
+        self.error_type = error_type
+        super().__init__(message)
+
+
+def _execute_vector_request(request: dict) -> dict:
+    """Execute one vector operation inside the isolated UI worker."""
+    action = request.get("action")
+    config = request["config"]
+    if action == "search":
+        options = request["options"]
+        response = rag.search_index(
+            request["query"], Path(config["db_path"]),
+            db_backend=config["db_backend"],
+            n_results=options["n_results"],
+            content_type=options["content_type"],
+            chapter_num=options["chapter_num"],
+            collection_name=config["collection"],
+            embedding_model=config["embedding_model"],
+            use_reranker=options["use_reranker"],
+            hybrid=options["hybrid"],
+            chunks_path=Path(config["chunks_path"]),
+            lock_timeout=config["db_lock_timeout"],
+        )
+        return {
+            "hits": [
+                {"text": hit.text, "metadata": hit.metadata,
+                 "score": hit.score}
+                for hit in response.hits
+            ],
+            "effective_mode": response.effective_mode,
+            "reranker_applied": response.reranker_applied,
+            "warnings": response.warnings,
+        }
+    if action == "info":
+        return {"count": rag._index_collection_count(
+            Path(config["db_path"]), config["collection"],
+            db_backend=config["db_backend"],
+            lock_timeout=config["db_lock_timeout"],
+        )}
+    raise ValueError(f"Unsupported UI vector action: {action!r}")
+
+
+def _vector_worker_main(request_path: Path, result_path: Path) -> int:
+    try:
+        request = json.loads(request_path.read_text(encoding="utf-8"))
+        result = {"ok": True, "result": _execute_vector_request(request)}
+    except Exception as exc:
+        result = {
+            "ok": False,
+            "error_type": type(exc).__name__,
+            "message": str(exc),
+        }
+    rag._atomic_write_json(result_path, result)
+    return 0
+
+
+def _supervised_vector_request(action: str, payload: dict, *,
+                               timeout: float) -> dict:
+    """Run a UI storage callback behind the CLI's hard process boundary."""
+    request = {"action": action, **payload}
+    with tempfile.TemporaryDirectory(prefix="rag-ui-vector-") as temp_dir:
+        request_path = Path(temp_dir) / "request.json"
+        result_path = Path(temp_dir) / "result.json"
+        rag._atomic_write_json(request_path, request)
+        exit_code = rag._run_cli_with_deadline(
+            Path(__file__),
+            [_VECTOR_WORKER_FLAG, str(request_path), str(result_path)],
+            operation=f"UI {action}", timeout=timeout)
+        if exit_code == 124:
+            raise TimeoutError(
+                f"UI {action} exceeded its {timeout:g}s deadline")
+        if exit_code:
+            raise RuntimeError(
+                f"UI {action} worker exited with status {exit_code}")
+        try:
+            envelope = json.loads(result_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise RuntimeError(
+                f"UI {action} worker returned no valid result") from exc
+        if not envelope.get("ok"):
+            raise _VectorWorkerError(
+                str(envelope.get("error_type", "RuntimeError")),
+                str(envelope.get("message", "Vector operation failed")),
+            )
+        result = envelope.get("result")
+        if not isinstance(result, dict):
+            raise RuntimeError(f"UI {action} worker returned an invalid result")
+        return result
+
+
+def _vector_config_payload() -> dict:
+    return {
+        "db_path": str(_config["db_path"]),
+        "chunks_path": str(_config["chunks_path"]),
+        "db_backend": _config["db_backend"],
+        "collection": _config["collection"],
+        "embedding_model": _config["embedding_model"],
+        "db_lock_timeout": _config["db_lock_timeout"],
+    }
 
 
 def _load_chunk_metadata() -> dict:
@@ -110,43 +242,44 @@ def do_search(query, content_type, chapter, n_results, hybrid, use_reranker,
         # One configured database path has one backend. Keep the optional
         # argument for callers of the old function signature, but never let a
         # UI selection reinterpret the configured path as another backend.
-        configured_backend = _config["db_backend"]
-        response = rag.search_index(
-            query,
-            db_path,
-            db_backend=configured_backend,
-            n_results=int(n_results),
-            content_type=ct,
-            chapter_num=ch,
-            collection_name=_config["collection"],
-            embedding_model=_config["embedding_model"],
-            use_reranker=use_reranker,
-            hybrid=hybrid,
-            chunks_path=chunks_path,
+        response = _supervised_vector_request(
+            "search",
+            {
+                "query": query,
+                "config": _vector_config_payload(),
+                "options": {
+                    "n_results": int(n_results),
+                    "content_type": ct,
+                    "chapter_num": ch,
+                    "use_reranker": use_reranker,
+                    "hybrid": hybrid,
+                },
+            },
+            timeout=_config["search_timeout"],
         )
 
         elapsed = time.time() - t0
-        mode = response.effective_mode
-        if response.reranker_applied:
+        mode = response["effective_mode"]
+        if response["reranker_applied"]:
             mode += " + reranked"
 
         # Format output
         lines = [
-            f"**{len(response.hits)} results** ({mode}, {elapsed:.1f}s)\n"
+            f"**{len(response['hits'])} results** ({mode}, {elapsed:.1f}s)\n"
         ]
-        for warning in response.warnings:
+        for warning in response["warnings"]:
             lines.append(f"> Warning: {warning}\n")
 
-        for i, hit in enumerate(response.hits):
-            doc = hit.text
-            meta = hit.metadata
+        for i, hit in enumerate(response["hits"]):
+            doc = hit["text"]
+            meta = hit["metadata"]
             ct_val = meta.get("content_type", "?")
             section = meta.get("section_path", "")
             case = meta.get("primary_case", "")
             pages = meta.get("page_range", "")
             ctx = meta.get("context", "")
 
-            lines.append(f"### Result {i+1} (score: {hit.score:.3f})")
+            lines.append(f"### Result {i+1} (score: {hit['score']:.3f})")
             lines.append(f"**Type:** {ct_val} | **Pages:** {pages}")
             if section:
                 lines.append(f"**Section:** {section}")
@@ -182,33 +315,75 @@ def do_export(include_types, exclude_structural, chapters_str, split):
         except ValueError:
             return "Invalid chapter numbers. Use comma-separated integers.", None
 
-    export_root = chunks_path.parent / "ui_exports" / uuid4().hex
+    export_id = uuid4().hex
+    created_at = time.time()
+    export_root = chunks_path.parent / "ui_exports" / export_id
+    storage_policy.ensure_private_directory(export_root)
+    _write_export_marker(
+        export_root, export_id=export_id, created_at=created_at,
+        state="creating")
     out_path = export_root / "textbook.md"
     chapters_dir = export_root / "Chapters"
-    rag.export_markdown(
-        chunks_path, out_path,
-        include_types=inc_types,
-        exclude_types=exclude,
-        chapters=chapters,
-        split_chapters=split,
-        chapters_dir=chapters_dir,
-    )
+    try:
+        rag.export_markdown(
+            chunks_path, out_path,
+            include_types=inc_types,
+            exclude_types=exclude,
+            chapters=chapters,
+            split_chapters=split,
+            chapters_dir=chapters_dir,
+        )
 
-    if split:
-        files = list(chapters_dir.glob("*.md"))
-        if not files:
-            return "No chapter files were produced for the selected filters.", None
-        summary = f"Exported {len(files)} chapter files to `{chapters_dir}/`:\n"
-        for f in sorted(files):
-            summary += f"- {f.name} ({f.stat().st_size / 1024:.0f} KB)\n"
-        archive = shutil.make_archive(
-            str(export_root / "chapters"), "zip", root_dir=chapters_dir)
-        return summary, archive
+        if split:
+            files = list(chapters_dir.glob("*.md"))
+            if not files:
+                _write_export_marker(
+                    export_root, export_id=export_id,
+                    created_at=created_at, state="failed")
+                return (
+                    "No chapter files were produced for the selected filters.",
+                    None,
+                )
+            summary = (
+                f"Exported {len(files)} chapter files to `{chapters_dir}/`:\n")
+            for file_path in sorted(files):
+                storage_policy.assert_no_link_components(file_path)
+                summary += (
+                    f"- {file_path.name} "
+                    f"({file_path.stat().st_size / 1024:.0f} KB)\n")
+            archive_path = export_root / "chapters.zip"
 
-    if not out_path.is_file():
-        return "No content was produced for the selected filters.", None
-    size = out_path.stat().st_size / 1024
-    return f"Exported to `{out_path}` ({size:.0f} KB)", str(out_path)
+            def write_archive(handle) -> None:
+                with zipfile.ZipFile(
+                        handle, mode="w",
+                        compression=zipfile.ZIP_DEFLATED) as archive:
+                    for file_path in sorted(files):
+                        archive.write(file_path, arcname=file_path.name)
+
+            storage_policy.atomic_write_private(
+                archive_path, write_archive, text=False)
+            _write_export_marker(
+                export_root, export_id=export_id,
+                created_at=created_at, state="complete",
+                artifacts=["Chapters", archive_path.name])
+            return summary, str(archive_path)
+
+        if not out_path.is_file():
+            _write_export_marker(
+                export_root, export_id=export_id,
+                created_at=created_at, state="failed")
+            return "No content was produced for the selected filters.", None
+        size = out_path.stat().st_size / 1024
+        _write_export_marker(
+            export_root, export_id=export_id,
+            created_at=created_at, state="complete",
+            artifacts=[out_path.name])
+        return f"Exported to `{out_path}` ({size:.0f} KB)", str(out_path)
+    except BaseException:
+        _write_export_marker(
+            export_root, export_id=export_id,
+            created_at=created_at, state="failed")
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -227,12 +402,18 @@ def do_info():
         if not isinstance(path, Path):
             lines.append(f"- **{label}**: not configured")
         elif path.exists():
-            if path.is_dir():
-                size = sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
-                lines.append(f"- **{label}**: `{path}` ({size / 1e6:.1f} MB)")
-            else:
-                lines.append(f"- **{label}**: `{path}` "
-                             f"({path.stat().st_size / 1e6:.1f} MB)")
+            try:
+                if path.is_dir():
+                    size = sum(
+                        f.stat().st_size
+                        for f in path.rglob("*") if f.is_file())
+                    lines.append(
+                        f"- **{label}**: `{path}` ({size / 1e6:.1f} MB)")
+                else:
+                    lines.append(f"- **{label}**: `{path}` "
+                                 f"({path.stat().st_size / 1e6:.1f} MB)")
+            except OSError as exc:
+                lines.append(f"- **{label}**: status unavailable ({exc})")
         else:
             lines.append(f"- **{label}**: not found")
 
@@ -248,23 +429,26 @@ def do_info():
     if not isinstance(db_path, Path) or not collection:
         return "\n".join(lines)
     try:
-        if _config["db_backend"] == "qdrant":
-            from qdrant_client import QdrantClient
-            client = QdrantClient(path=str(db_path))
-            if client.collection_exists(collection):
-                info = client.get_collection(collection)
-                lines.append("\n### Qdrant")
-                lines.append(f"- Collection: {collection}")
-                lines.append(f"- Points: {info.points_count}")
+        backend = _config["db_backend"]
+        result = _supervised_vector_request(
+            "info", {"config": _vector_config_payload()},
+            timeout=_config["info_timeout"])
+        count = result["count"]
+        lines.append("\n### Qdrant" if backend == "qdrant"
+                     else "\n### ChromaDB")
+        lines.append(f"- Collection: {collection}")
+        lines.append(
+            f"- {'Points' if backend == 'qdrant' else 'Documents'}: {count}")
+    except _VectorWorkerError as exc:
+        if exc.error_type != "LookupError":
+            lines.append(f"\n### Vector DB status unavailable: {exc}")
         else:
-            import chromadb
-            client = chromadb.PersistentClient(path=str(db_path))
-            coll = client.get_collection(collection)
-            lines.append("\n### ChromaDB")
-            lines.append(f"- Collection: {coll.name}")
-            lines.append(f"- Documents: {coll.count()}")
-    except Exception:
+            lines.append(
+                f"\n### Vector DB: collection '{_config['collection']}' not found")
+    except LookupError:
         lines.append(f"\n### Vector DB: collection '{_config['collection']}' not found")
+    except Exception as exc:
+        lines.append(f"\n### Vector DB status unavailable: {exc}")
 
     lines.append("\n### Config")
     lines.append(f"- Embedding: `{_config['embedding_model']}`")
@@ -274,10 +458,122 @@ def do_info():
 
 
 # ---------------------------------------------------------------------------
+# Durable jobs tab (local sessions only)
+# ---------------------------------------------------------------------------
+
+def _jobs_disabled() -> str | None:
+    if _config["share"]:
+        return "Background job controls are disabled while public sharing is enabled."
+    return None
+
+
+def _job_store() -> job_runtime.JobStore:
+    return job_runtime.JobStore(Path(_config["job_root"]))
+
+
+def _format_job_summaries(
+        summaries: list[job_runtime.JobSummary]) -> str:
+    lines = ["### Durable jobs", ""]
+    if not summaries:
+        return "\n".join(lines + ["No background jobs."])
+    lines.append("| Job ID | Command | Status | Attempt |")
+    lines.append("|---|---|---:|---:|")
+    for summary in summaries:
+        lines.append(
+            f"| `{summary.job_id}` | {summary.command} | "
+            f"**{summary.status}** | {summary.attempt_number} |")
+    return "\n".join(lines)
+
+
+def do_jobs_refresh():
+    disabled = _jobs_disabled()
+    if disabled is not None:
+        return disabled
+    try:
+        store = _job_store()
+        summaries = job_manager.reconcile_all_jobs(store)
+        return _format_job_summaries(summaries)
+    except Exception as exc:
+        return f"Job status unavailable ({type(exc).__name__})."
+
+
+def do_job_reindex(full_reindex):
+    disabled = _jobs_disabled()
+    if disabled is not None:
+        return disabled
+    chunks_path = _config["chunks_path"]
+    db_path = _config["db_path"]
+    collection = _config["collection"]
+    if (not isinstance(chunks_path, Path) or not chunks_path.is_file()
+            or not isinstance(db_path, Path) or not collection):
+        return "Configure an existing chunks file, database, and collection first."
+    arguments = [
+        "--chunks", str(chunks_path),
+        "--db", str(db_path),
+        "--db-backend", str(_config["db_backend"]),
+        "--collection", str(collection),
+        "--embedding-model", str(_config["embedding_model"]),
+        "--db-lock-timeout", str(_config["db_lock_timeout"]),
+    ]
+    if full_reindex:
+        arguments.append("--full-reindex")
+    try:
+        store = _job_store()
+        submitted = store.submit_job(
+            "index", arguments,
+            timeout_seconds=rag.DEFAULT_OPERATION_TIMEOUTS["index"],
+            working_directory=Path.cwd(), output_root=rag.OUTPUT_DIR)
+        launched = job_manager.launch_detached(
+            store, submitted.job_id,
+            ready_timeout=_config["job_ready_timeout"])
+        return (
+            f"Submitted `{submitted.job_id}` ({launched.status}).\n\n"
+            f"{do_jobs_refresh()}")
+    except Exception as exc:
+        return f"Could not submit reindex job ({type(exc).__name__})."
+
+
+def do_job_cancel(job_id):
+    disabled = _jobs_disabled()
+    if disabled is not None:
+        return disabled
+    try:
+        store = _job_store()
+        store.request_cancel(str(job_id).strip())
+        return do_jobs_refresh()
+    except Exception as exc:
+        return f"Could not request cancellation ({type(exc).__name__})."
+
+
+def do_job_resume(job_id):
+    disabled = _jobs_disabled()
+    if disabled is not None:
+        return disabled
+    try:
+        store = _job_store()
+        job_id = str(job_id).strip()
+        current = job_manager.reconcile_job(store, job_id)
+        store.prepare_resume(job_id, expected_revision=current.revision)
+        job_manager.launch_detached(
+            store, job_id,
+            ready_timeout=_config["job_ready_timeout"])
+        return do_jobs_refresh()
+    except Exception as exc:
+        return f"Could not resume job ({type(exc).__name__})."
+
+
+# ---------------------------------------------------------------------------
 # Build UI
 # ---------------------------------------------------------------------------
 
 def build_app():
+    try:
+        import gradio as gr
+    except ImportError as exc:
+        raise RuntimeError(
+            "The web UI requires Gradio; install requirements-optional.txt"
+        ) from exc
+
     meta = _load_chunk_metadata()
     type_choices = ["All"] + meta["types"]
     ch_choices = ["All"] + [str(c) for c in meta["chapters"]]
@@ -342,6 +638,35 @@ def build_app():
                           inputs=[exp_types, exp_exclude, exp_chapters, exp_split],
                           outputs=[exp_result, exp_file])
 
+        if not _config["share"]:
+            with gr.Tab("Jobs"):
+                gr.Markdown(
+                    "### Durable background jobs\n"
+                    "Reindex the configured corpus without blocking this UI. "
+                    "Cancellation terminates the isolated worker tree; resume "
+                    "always creates a new explicit attempt.")
+                full_reindex = gr.Checkbox(
+                    label="Force full reindex", value=False)
+                submit_reindex = gr.Button(
+                    "Reindex current corpus", variant="primary")
+                with gr.Row():
+                    job_id = gr.Textbox(
+                        label="Job ID", placeholder="32-character job ID")
+                    cancel_job = gr.Button("Cancel")
+                    resume_job = gr.Button("Resume")
+                    refresh_jobs = gr.Button("Refresh")
+                jobs_md = gr.Markdown()
+                submit_reindex.click(
+                    do_job_reindex, inputs=full_reindex, outputs=jobs_md)
+                cancel_job.click(
+                    do_job_cancel, inputs=job_id, outputs=jobs_md)
+                resume_job.click(
+                    do_job_resume, inputs=job_id, outputs=jobs_md)
+                refresh_jobs.click(do_jobs_refresh, outputs=jobs_md)
+                jobs_timer = gr.Timer(value=2.0, active=True)
+                jobs_timer.tick(do_jobs_refresh, outputs=jobs_md)
+                app.load(do_jobs_refresh, outputs=jobs_md)
+
         with gr.Tab("Info"):
             info_md = gr.Markdown()
             refresh_btn = gr.Button("Refresh")
@@ -355,7 +680,7 @@ def build_app():
 # Main
 # ---------------------------------------------------------------------------
 
-def main():
+def main(argv: list[str] | None = None):
     parser = argparse.ArgumentParser(description="RAG Pipeline Web UI")
     parser.add_argument("--port", type=int, default=7860)
     parser.add_argument("--chunks", type=Path, required=True,
@@ -367,19 +692,55 @@ def main():
     parser.add_argument("--collection", type=str, required=True)
     parser.add_argument("--embedding-model", type=str,
                         default="nomic-ai/nomic-embed-text-v2-moe")
+    parser.add_argument(
+        "--db-lock-timeout", type=float, default=rag.DEFAULT_DB_LOCK_TIMEOUT,
+        help="Seconds to wait for local vector-store access")
+    parser.add_argument(
+        "--search-timeout", type=float,
+        default=rag.DEFAULT_OPERATION_TIMEOUTS["query"],
+        help="Hard wall-clock deadline for each isolated search")
+    parser.add_argument(
+        "--info-timeout", type=float,
+        default=rag.DEFAULT_OPERATION_TIMEOUTS["info"],
+        help="Hard wall-clock deadline for each isolated status lookup")
+    parser.add_argument(
+        "--job-root", type=Path, default=job_runtime.DEFAULT_JOB_ROOT,
+        help="Private durable background-job root")
+    parser.add_argument(
+        "--job-ready-timeout", type=float, default=5.0,
+        help="Seconds to wait for a detached job-manager handshake")
     parser.add_argument("--share", action="store_true",
                         help="Create a public Gradio share link")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+    try:
+        args.db_lock_timeout = rag._normalize_db_lock_timeout(
+            args.db_lock_timeout)
+        args.search_timeout = rag._normalize_operation_timeout(
+            args.search_timeout)
+        args.info_timeout = rag._normalize_operation_timeout(
+            args.info_timeout)
+        args.job_ready_timeout = rag._normalize_operation_timeout(
+            args.job_ready_timeout)
+    except ValueError as exc:
+        parser.error(str(exc))
 
     _config["chunks_path"] = args.chunks
     _config["db_backend"] = args.db_backend
     _config["db_path"] = args.db
     _config["collection"] = args.collection
     _config["embedding_model"] = args.embedding_model
+    _config["db_lock_timeout"] = args.db_lock_timeout
+    _config["search_timeout"] = args.search_timeout
+    _config["info_timeout"] = args.info_timeout
+    _config["job_root"] = args.job_root
+    _config["job_ready_timeout"] = args.job_ready_timeout
+    _config["share"] = args.share
 
     app = build_app()
     app.launch(server_port=args.port, share=args.share)
 
 
 if __name__ == "__main__":
+    if len(sys.argv) == 4 and sys.argv[1] == _VECTOR_WORKER_FLAG:
+        sys.exit(_vector_worker_main(Path(sys.argv[2]), Path(sys.argv[3])))
     main()

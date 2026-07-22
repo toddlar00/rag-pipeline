@@ -1,0 +1,184 @@
+name: Supply-chain security
+
+on:
+  pull_request:
+    paths:
+      - "requirements*.txt"
+      - "requirements*.lock"
+      - "dependency-license-policy.json"
+      - "dependency-vulnerability-policy.json"
+      - "model-artifact-policy.json"
+      - "model-artifacts.lock.json"
+      - "model_artifacts.py"
+      - "rag.py"
+      - "tools/check_licenses.py"
+      - "tools/check_model_artifacts.py"
+      - "tools/check_vulnerabilities.py"
+      - "tools/refresh_model_artifacts.py"
+      - ".github/workflows/security.yml"
+  push:
+    branches: [main]
+    paths:
+      - "requirements*.txt"
+      - "requirements*.lock"
+      - "dependency-license-policy.json"
+      - "dependency-vulnerability-policy.json"
+      - "model-artifact-policy.json"
+      - "model-artifacts.lock.json"
+      - "model_artifacts.py"
+      - "rag.py"
+      - "tools/check_licenses.py"
+      - "tools/check_model_artifacts.py"
+      - "tools/check_vulnerabilities.py"
+      - "tools/refresh_model_artifacts.py"
+      - ".github/workflows/security.yml"
+  schedule:
+    - cron: "43 8 * * 4"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: supply-chain-security-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONUTF8: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  service-profile-audit:
+    name: Service profile vulnerabilities and SBOM
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-security.lock
+      - name: Install pinned audit tooling
+        run: python -m pip install --require-hashes -r requirements-security.lock
+      - name: Audit the exact service lock
+        shell: bash
+        run: |
+          set +e
+          python -m pip_audit --requirement requirements-service.lock \
+            --disable-pip --format json \
+            --output service-vulnerability-audit.json
+          status=$?
+          set -e
+          test -s service-vulnerability-audit.json
+          python -m json.tool service-vulnerability-audit.json > /dev/null
+          if [ "$status" -ne 0 ]; then
+            exit "$status"
+          fi
+      - name: Generate service CycloneDX SBOM
+        run: >-
+          python -m pip_audit --requirement requirements-service.lock
+          --disable-pip --format cyclonedx-json
+          --output service-dependency-sbom.json
+      - name: Retain service security reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: service-supply-chain-reports
+          path: |
+            service-dependency-sbom.json
+            service-vulnerability-audit.json
+          if-no-files-found: error
+          retention-days: 30
+
+  audit:
+    name: Vulnerabilities, SBOM, and licenses
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements-full.lock
+            requirements-test.lock
+            requirements-security.lock
+            requirements-lock-tools.lock
+      - name: Install pinned lockfile tooling
+        run: python -m pip install --require-hashes -r requirements-lock-tools.lock
+      - name: Install audited environment and reporting tools
+        run: >-
+          uv pip install --system --torch-backend cpu --require-hashes
+          -r requirements-full.lock
+          -r requirements-test.lock
+          -r requirements-security.lock
+      - name: Verify installed dependency consistency
+        run: python -m pip check
+      - name: Audit vulnerabilities as JSON
+        shell: bash
+        run: |
+          set +e
+          python -m pip_audit --local --format json --output vulnerability-audit.json
+          status=$?
+          set -e
+          if [ "$status" -gt 1 ]; then
+            exit "$status"
+          fi
+          test -s vulnerability-audit.json
+          python -m json.tool vulnerability-audit.json > /dev/null
+      - name: Enforce vulnerability policy
+        run: >-
+          python tools/check_vulnerabilities.py vulnerability-audit.json
+          --policy dependency-vulnerability-policy.json
+          --skip-audit-requirements requirements-audit.txt
+      - name: Audit normalized CPU package versions
+        run: >-
+          python -m pip_audit --requirement requirements-audit.txt
+          --no-deps --disable-pip --format json
+          --output normalized-vulnerability-audit.json
+      - name: Generate CycloneDX SBOM
+        shell: bash
+        run: |
+          set +e
+          python -m pip_audit --local --format cyclonedx-json --output dependency-sbom.json
+          status=$?
+          set -e
+          if [ "$status" -gt 1 ]; then
+            exit "$status"
+          fi
+          test -s dependency-sbom.json
+          python -m json.tool dependency-sbom.json > /dev/null
+      - name: Verify model artifacts and generate ML-BOM
+        run: >-
+          python tools/check_model_artifacts.py --verify-hub
+          --verify-installed-packages
+          --output-sbom model-artifact-sbom.json
+      - name: Generate dependency license inventory
+        if: always()
+        run: >-
+          pip-licenses --format=json --with-urls
+          --output-file=dependency-licenses.json
+      - name: Enforce dependency license policy
+        if: always()
+        run: >-
+          python tools/check_licenses.py dependency-licenses.json
+          --policy dependency-license-policy.json
+      - name: Retain security reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: supply-chain-reports
+          path: |
+            dependency-sbom.json
+            model-artifact-sbom.json
+            vulnerability-audit.json
+            normalized-vulnerability-audit.json
+            dependency-licenses.json
+          if-no-files-found: error
+          retention-days: 30

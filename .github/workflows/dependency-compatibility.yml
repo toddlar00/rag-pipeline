@@ -1,0 +1,157 @@
+name: Dependency compatibility
+
+on:
+  pull_request:
+    paths:
+      - "requirements*.txt"
+      - "requirements*.lock"
+      - "dependency-license-policy.json"
+      - "tools/check_dependency_policy.py"
+      - "tools/refresh_locks.py"
+      - ".github/workflows/dependency-compatibility.yml"
+  push:
+    branches: [main]
+    paths:
+      - "requirements*.txt"
+      - "requirements*.lock"
+      - "dependency-license-policy.json"
+      - "tools/check_dependency_policy.py"
+      - "tools/refresh_locks.py"
+      - ".github/workflows/dependency-compatibility.yml"
+  schedule:
+    - cron: "17 8 * * 3"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependency-compatibility-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONUTF8: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  lock-consistency:
+    name: Universal lockfiles are current
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-lock-tools.lock
+      - name: Install pinned lockfile generator
+        run: python -m pip install --require-hashes -r requirements-lock-tools.lock
+      - name: Regenerate CPU lockfiles without upgrading compatible pins
+        run: python tools/refresh_locks.py
+      - name: Reject stale lockfiles
+        run: git diff --exit-code -- requirements-core.lock requirements-full.lock requirements-test.lock requirements-service.lock requirements-smoke.lock requirements-security.lock requirements-lock-tools.lock
+
+  resolve:
+    name: Resolve ${{ matrix.dependency-set }} / Python ${{ matrix.python-version }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.14"]
+        dependency-set:
+          - core
+          - full
+          - service
+        include:
+          - dependency-set: core
+            requirements: requirements.txt
+            lock: requirements-core.lock
+          - dependency-set: full
+            requirements: requirements-all.txt
+            lock: requirements-full.lock
+          - dependency-set: service
+            requirements: requirements-service.txt
+            lock: requirements-service.lock
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-optional.txt
+            requirements-service.txt
+            requirements-test.lock
+            requirements-lock-tools.lock
+      - name: Install hash-locked resolver tools
+        run: |
+          python -m pip install --require-hashes -r requirements-test.lock
+          python -m pip install --require-hashes -r requirements-lock-tools.lock
+      - name: Resolve dependency set without installing it
+        run: >-
+          python -m pip install --dry-run
+          --report dependency-resolution.json
+          -r ${{ matrix.requirements }}
+      - name: Resolve the universal lock at this Python endpoint
+        run: >-
+          uv pip install --system --dry-run --torch-backend cpu --require-hashes
+          -r ${{ matrix.lock }}
+      - name: Retain resolution report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: resolution-${{ matrix.dependency-set }}-py${{ matrix.python-version }}
+          path: dependency-resolution.json
+          retention-days: 14
+
+  install-and-test:
+    name: Install and test ${{ matrix.dependency-set }} dependencies
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        dependency-set:
+          - core
+          - full
+        include:
+          - dependency-set: core
+            requirements: requirements.txt
+            lock: requirements-core.lock
+          - dependency-set: full
+            requirements: requirements-all.txt
+            lock: requirements-full.lock
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-optional.txt
+            requirements-test.txt
+            requirements-lock-tools.txt
+            requirements-lock-tools.lock
+            requirements-core.lock
+            requirements-full.lock
+            requirements-test.lock
+      - name: Install pinned lockfile tooling
+        run: python -m pip install --require-hashes -r requirements-lock-tools.lock
+      - name: Install the locked CPU dependency environment
+        run: >-
+          uv pip install --system --torch-backend cpu --require-hashes
+          -r requirements-test.lock
+          -r ${{ matrix.lock }}
+      - name: Verify installed dependency consistency
+        run: python -m pip check
+      - name: Run the full suite in the installed environment
+        run: python -m pytest -q

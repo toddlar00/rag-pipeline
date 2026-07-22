@@ -12,6 +12,9 @@ build/
 dist/
 *.egg-info/
 *.log
+model-artifact-sbom.json
+evaluation-reports/
+evaluation/*-current.json
 
 # Virtual environments and local environment files
 .venv/
@@ -32,6 +35,7 @@ output/
 markdown_output/
 .llm-cache/
 llm-cache/
+.rag-locks/
 chroma_db/
 qdrant_db/
 

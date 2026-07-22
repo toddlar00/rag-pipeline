@@ -206,9 +206,12 @@ def test_interactive_deepseek_key_is_hidden_and_argv_is_restored(
     monkeypatch.setattr(rag, "_menu_yesno", lambda *args, **kwargs: True)
     monkeypatch.setattr(rag, "getpass", lambda prompt: "menu-secret")
     monkeypatch.setattr(sys, "argv", original_argv.copy())
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "ambient-secret")
 
-    def fake_main():
+    def fake_main(argv=None):
         observed["argv"] = sys.argv.copy()
+        observed["deepseek_key"] = __import__("os").environ.get(
+            "DEEPSEEK_API_KEY")
 
     monkeypatch.setattr(rag, "main", fake_main)
 
@@ -221,7 +224,28 @@ def test_interactive_deepseek_key_is_hidden_and_argv_is_restored(
         "rag.py", "generate-questions",
         "--llm-url", rag.DEFAULT_DEEPSEEK_URL,
         "--llm-model", "deepseek-v4-pro",
-        "--api-key", "menu-secret",
         "--thinking",
     ]
+    assert observed["deepseek_key"] == "menu-secret"
+    assert __import__("os").environ["DEEPSEEK_API_KEY"] == "ambient-secret"
     assert sys.argv == original_argv
+
+
+@pytest.mark.parametrize(
+    ("args", "environment_name"),
+    [
+        (["query", "x", "--llm-url", rag.DEFAULT_DEEPSEEK_URL,
+          "--api-key", "secret"], "DEEPSEEK_API_KEY"),
+        (["query", "x", "--llm-url", rag.DEFAULT_CLOUD_URL,
+          "--api-key", "secret"], "MINIMAX_API_KEY"),
+        (["query", "x", "--llm-url", "https://example.test/v1",
+          "--api-key", "secret"], "CLOUD_API_KEY"),
+        (["query", "x", "--gemini-key", "secret"], "GEMINI_API_KEY"),
+    ],
+)
+def test_menu_secrets_are_removed_from_process_arguments(
+        args, environment_name):
+    safe_args, environment = rag._menu_secrets_to_environment(args)
+
+    assert "secret" not in safe_args
+    assert environment == {environment_name: "secret"}

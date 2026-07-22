@@ -28,6 +28,11 @@ from typing import Optional
 
 import fitz
 
+from storage_policy import (
+    atomic_write_private_text,
+    ensure_private_directory,
+)
+
 
 # ─────────────────────────────────────────────────────────────
 # Configuration
@@ -405,11 +410,7 @@ def process_book(scaffold_path: str, pdf_path: str, output_path: str = None):
     if not output_path:
         output_path = str(_default_output_path(scaffold_path, scaffold))
 
-    output_parent = Path(output_path).expanduser().parent
-    output_parent.mkdir(parents=True, exist_ok=True)
-
-    with open(output_path, 'w', encoding='utf-8') as f:
-        f.write(markdown)
+    atomic_write_private_text(Path(output_path), markdown)
 
     # Stats
     md_lines = markdown.count('\n')
@@ -543,7 +544,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     output_dir = args.out.expanduser() if args.out is not None else None
     if output_dir is not None:
-        output_dir.mkdir(parents=True, exist_ok=True)
+        ensure_private_directory(output_dir)
 
     for scaffold_path, pdf_path in pairs:
         output_path = (

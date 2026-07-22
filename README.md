@@ -10,6 +10,11 @@ hybrid search (BM25 + vector + cross-encoder reranking), LLM classification,
 contextual retrieval, RAPTOR multi-level summaries, citation graph extraction,
 and source-grounded answer generation with explicit abstention.
 
+See [`ROADMAP.md`](ROADMAP.md) for implemented hardening milestones, merge
+status, and the ordered improvement backlog. The final cross-stack findings and
+their disposition are recorded in
+[`INTEGRATION_AUDIT.md`](INTEGRATION_AUDIT.md).
+
 ## Architecture
 
 ```
@@ -60,11 +65,71 @@ Enriched Chunks (JSONL, including raw + embedding token counts)
  +---> [citations] -----> Citation graph (cases, statutes, cross-refs)
 ```
 
+`rag.py` remains the stable command and Python compatibility facade.
+`retrieval_core.py` is its standard-library-only retrieval domain: structured
+search/grounding results, stable chunk identity, legal lexical analysis,
+rank fusion, metadata filters, grounded prompt construction, and citation
+validation. Backend clients, mutable caches, LLM calls, and CLI orchestration
+remain outside that leaf module.
+
+`artifact_io.py` is a second standard-library-only leaf for fail-closed chunk
+snapshot reads, atomic file replacement, and completion-record validation.
+`rag.py` injects stable-ID, hashing, cleanup, and schema policy through its
+existing compatibility functions.
+
+`chunking_core.py` is the standard-library-only text preparation layer. It
+owns deterministic normalization, structural filtering, near-duplicate
+detection, rule-based content classification, and basic chunk metadata helpers;
+Docling, LLM enrichment, and chunk publication remain orchestrated by `rag.py`.
+
+`index_state.py` is the standard-library-only index policy layer. It owns
+collection-scoped manifest and dirty-marker rules, incremental rebuild
+decisions, and query compatibility checks; `rag.py` injects schema, logging,
+atomic publication, artifact hashing, and vector-store lease collaborators.
+
+`llm_adapters.py` translates Ollama, Gemini, and OpenAI-compatible transport
+responses into the typed, provider-neutral contracts in `llm_runtime.py`.
+Gemini remains lazily imported, while `rag.py` retains provider selection,
+runtime composition, mutable caches/throttles, and the compatibility facades.
+
+`cli_policy.py` is the standard-library-only command policy layer for timeout
+validation and scanning, resume-command serialization, provider and credential
+option mapping, menu LLM detection, and secret redaction/environment routing.
+`rag.py` injects live defaults and endpoint predicates while retaining argparse
+definitions and dispatch, process supervision, environment mutation/restoration,
+runtime mutation, pipeline execution, and output/artifact behavior.
+
+`ingestion_core.py` is the standard-library-only PDF safety layer for text-layer
+quality, page-coverage-aware background detection, complete pre-mutation
+inspection, and mixed-page/shared-xref removal planning. `rag.py` and
+`preprocess_pdf.py` retain lazy PyMuPDF access, paths, saving, progress, logging,
+CLI reporting, OCR/Docling orchestration, and artifact publication.
+
+`model_artifacts.py` is the standard-library-only local-model supply-chain
+layer. It validates the reviewed policy and resolved lock, synchronizes only
+consumer-allowlisted files at immutable commits, verifies raw SHA-256 bytes,
+and atomically publishes isolated regular-file trees for runtime loaders. It
+also assembles Docling's layout/TableFormer/RapidOCR tree and emits the
+CycloneDX ML-BOM companion to the Python-package SBOM.
+
+`operation_contracts.py` defines the dependency-free, committed
+`IndexOutcome` returned by both vector backends. `run_telemetry.py` provides the
+shared run ID, stage lifecycle, safe diagnostic, event-stream, aggregate-report,
+and interrupted-worker recovery contract used by the CLI and LLM runtime.
+`storage_policy.py` is the shared owner-only permission and link-aware atomic
+publication layer. `retention.py` validates pipeline/UI/cache ownership and
+implements dry-run-first quarantine and deletion plans.
+
 ## Quick Start
+
+The portable command-line and CPU dependency profiles are tested on CPython
+3.10 through 3.14. Clean core and core-plus-optional environments are installed
+and tested on Python 3.12, with resolution checks at both ends of that range.
+The RTX 50-series/CUDA 12.8 setup below intentionally requires Python 3.12-3.14.
 
 ```bash
 # 1. Install PyTorch with CUDA (must come first for GPU support)
-pip install torch --index-url https://download.pytorch.org/whl/cu128
+pip install "torch>=2.7,<3" --index-url https://download.pytorch.org/whl/cu128
 
 # 2. Install the core dependencies
 pip install -r requirements.txt
@@ -82,7 +147,9 @@ that directory:
 
 ```
 output/
+|-- .rag-jobs/                           # Private durable background-job state
 |-- Civil_procedure/
+|   |-- .rag-run.json                     # Retention ownership/state marker
 |   |-- Civil_procedure.json             # DoclingDocument
 |   |-- Civil_procedure_docling.md        # Raw Docling conversion markdown
 |   |-- Civil_procedure_chunks.jsonl      # Enriched chunks
@@ -100,6 +167,9 @@ A new `full` or `batch` run never reuses an existing book directory: it creates
 number. The suffix is also applied to every artifact and the collection name
 (for example, `civil_procedure_2`). `--force` does not change this allocation;
 `--resume` reuses the latest existing run and skips its completed stages.
+Runs created before ownership manifests were introduced can still resume, but
+remain deliberately ineligible for automatic deletion: retention does not infer
+ownership from a legacy filename or directory layout.
 
 ### Multiple textbooks
 
@@ -130,8 +200,387 @@ python rag.py batch Civil_procedure.pdf Torts_casebook.pdf Con_law.pdf --resume
 | `info` | Inspect output artifacts and pipeline status |
 | `full` | End-to-end: all steps in one command (with `--resume`) |
 | `batch` | Process multiple PDFs end-to-end with per-PDF resume |
+| `storage` | Dry-run-first retention for owned runs, caches, and UI exports |
+| `jobs` | Submit, inspect, cancel, resume, and safely delete durable background work |
 
 Global flags: `-v` / `--verbose` (DEBUG output), `--quiet` (warnings only).
+
+### Hard operation deadlines
+
+Commands that can open a vector store run in an isolated worker process. Use
+`--operation-timeout SECONDS` to replace the positive wall-clock deadline; a
+timeout terminates the Windows worker Job Object or the POSIX worker process
+group, releases its operating-system lease, retains any interrupted-update
+marker, prints no command arguments or secrets, and exits with status `124`.
+The target waits behind an OS start gate until containment and durable worker
+registration finish, and normal direct-worker exit also drains descendants.
+Guided-menu index, query, info, full, and batch actions use the same boundary.
+On POSIX, a descendant that deliberately starts a new session is outside the
+process-group guarantee. Defaults are:
+
+| Command | Deadline |
+|---------|----------|
+| `query` | 300 seconds |
+| `info` | 120 seconds |
+| `index` | 7,200 seconds |
+| `full` | 14,400 seconds |
+| `batch` | 43,200 seconds |
+| `eval.py` | 14,400 seconds |
+
+The Web UI applies the same isolated boundary to the vector-store work in each
+Search and Info callback; its defaults are 300 and 120 seconds. Override them
+with `--search-timeout` and `--info-timeout` when starting `ui.py`.
+
+`--db-lock-timeout` only bounds how long a worker waits to acquire the database
+lease. `--operation-timeout` bounds the whole isolated command, including a
+storage call that never returns. Direct Python API calls remain in the caller's
+process; applications requiring a hard cancellation boundary should invoke the
+CLI or isolate those calls in their own supervised process.
+
+### Durable background jobs
+
+Long-running non-interactive commands can run under a detached, durable
+manager. Submit options belong before `--`; everything after it is the normal
+pipeline command:
+
+```bash
+# Submit and return after the detached manager records its ready handshake
+python rag.py jobs submit --timeout 14400 -- \
+  full --pdf Civil_procedure.pdf --split-chapters
+
+# Redacted status surfaces never print argv, source paths, or attempt tokens
+python rag.py jobs list
+python rag.py jobs status JOB_ID --json
+
+# Cancellation is bound to the current attempt and terminates its worker tree
+python rag.py jobs cancel JOB_ID --wait --wait-timeout 30
+
+# Resume is always explicit and creates a new attempt; it is never automatic
+python rag.py jobs resume JOB_ID
+
+# Deletion is terminal-only and dry-run-first
+python rag.py jobs delete JOB_ID
+python rag.py jobs delete JOB_ID --apply
+```
+
+The allowed commands are `preprocess`, `convert`, `chunk`, `index`,
+`extract-questions`, `generate-questions`, `citations`, `raptor`, `brief`,
+`export`, `full`, and `batch`. Interactive, query/status, nested `jobs`, and
+destructive `storage` commands stay foreground-only. Credential flags and
+manager-owned timeout, telemetry, and hidden resume-binding flags are rejected;
+configure provider credentials through environment/configuration instead.
+This keeps secrets out of the immutable private job spec and normal status
+responses, but environment credentials are still available to the worker
+process under the current user account.
+
+Each job uses an immutable digest-bound `spec.json`, atomic `state.json`, a
+separate attempt-token-bound cancellation marker for every attempt, and one
+OS-backed manager lease under `output/.rag-jobs/JOB_ID/`. The spec pins the
+canonical submission working directory and private output-root filesystem
+identities, and every detached attempt runs from that directory. Attempts store
+private runtime metadata, a bounded final 8 MiB worker-log tail, and correlated
+event/report files. POSIX uses verified
+`0700`/`0600` modes; Windows uses a protected DACL for only the current SID.
+Logs can contain source paths and model output even though status and telemetry
+are redacted, so treat the entire job root as sensitive. Job records persist
+for audit and explicit resume; there is no automatic deletion. `jobs delete`
+uses ownership validation, an irreversible `deleting` state, quarantine,
+identity revalidation, and explicit `--apply` before removing a safe terminal
+job. It refuses active jobs and jobs with unconfirmed cleanup.
+
+The current on-disk job-store schema is version 2. The version-1 prototype was
+never released and is intentionally not auto-migrated: it did not persist the
+submission/output directory identities needed to authorize a resumed worker.
+Version-1 records therefore fail closed with an unsupported-schema error. Only
+archive or remove such development records after independently confirming that
+their manager and worker trees are gone.
+
+The state machine is `queued -> starting -> running -> terminal`, with
+`cancel_requested` between a running attempt and confirmed cancellation.
+Terminal states are `succeeded`, `partial`, `failed`, `cancelled`, and
+`interrupted`; `orphaned` is a terminal but deliberately non-resumable state for
+unverifiable or uncleared processes, and `deleting` is irreversible. The
+manager never claims `cancelled` until process-tree cleanup and matching
+cancellation telemetry are both confirmed. Queued cancellation terminalizes
+without launching a worker. A status/list call reconciles a managerless attempt
+using PID plus process-birth identity; it will not signal a reused or
+unverifiable PID and never auto-resumes provider calls. Windows Job Objects kill
+descendants if a manager exits. Linux recovery targets only an exact
+PID/birth-matched process-group leader. Platforms without a verifiable birth
+identity and all cleanup uncertainty become `orphaned`, blocking resume.
+On POSIX, a descendant that deliberately calls `setsid()` can escape the
+worker's process group; do not execute untrusted worker extensions under this
+local supervision boundary.
+
+For `full` and `batch`, the worker durably binds a pathname hash and item index
+to the allocated run while holding the per-PDF lease. A resumed attempt targets
+that exact run even if another same-stem run was created later. Completed batch
+items re-enter exact-run resume so source, completion manifests, and outputs are
+revalidated; valid stages then skip individually. Failed or untouched items
+resume or allocate exactly once. Resuming cloud/LLM work can repeat paid or
+externally visible
+calls that failed before their response was durably committed, so inspect
+status/logs and provider usage before choosing `jobs resume`.
+
+### Authenticated local service (draft v1)
+
+`service_api.py` exposes a stable, authenticated application boundary for one
+local OS user. It is deliberately smaller than the CLI: clients can inspect
+configured corpora, retrieve bounded Qdrant search hits, and manage durable
+reindex jobs. It does not expose conversion, arbitrary commands, filesystem
+paths, job arguments or logs, provider identities, raw exceptions, reranking,
+or LLM answer generation.
+
+Create an isolated environment and install the exact narrow service runtime.
+Contributors can add the separately locked test tools after verifying the
+runtime-only boundary, which is the same order CI uses:
+
+```bash
+python -m venv .venv
+# Activate .venv using the command for your shell, then:
+python -m pip install --require-hashes -r requirements-service.lock
+# Development/testing only:
+python -m pip install --require-hashes -r requirements-test.lock
+```
+
+Create distinct owner-only credentials. The command creates and hardens the
+parent directory and files, and reports success without printing either token:
+
+```bash
+python service_api.py init-tokens \
+  --reader-token-file output/.rag-service-private/reader.token \
+  --admin-token-file output/.rag-service-private/admin.token
+```
+
+Copy [`service-config.example.json`](service-config.example.json) to that
+private directory, edit its corpus binding, then enforce the same cross-platform
+private-file policy. The example's relative paths assume this exact destination;
+all relative config paths resolve from the config file's directory.
+
+```bash
+cp service-config.example.json output/.rag-service-private/config.json
+python -c "from pathlib import Path; import storage_policy; storage_policy.enforce_private_path(Path('output/.rag-service-private/config.json'), directory=False)"
+```
+
+The registry is credential-free, strictly shaped, Qdrant-only, and rejects
+links. Its database directory and chunks JSONL must already exist, while the
+collection name and embedding model must exactly match the indexed collection.
+The example uses MiniMax `embo-01`, which requires `MINIMAX_API_KEY` and works
+with the narrow service profile's HTTP dependencies. Change it to the model
+that built the index. Local sentence-transformer models require the full locked
+runtime; Voyage, OpenAI, and Cohere embeddings require their optional SDKs, so
+add the full locked runtime while retaining `requirements-service.lock` when
+using those backends. The service profile does not silently install those
+heavier providers.
+
+Loopback describes who can call this HTTP service; it does not prevent provider
+network egress. A cloud embedding model sends raw search query text during
+search and corpus chunk text during reindex, using credentials inherited by the
+supervised worker. Use a compatible local embedding model with the full locked
+runtime, and verify its configuration, when queries and corpus text must remain
+on the machine.
+
+Start one worker on literal loopback:
+
+```bash
+python service_api.py serve \
+  --config output/.rag-service-private/config.json \
+  --reader-token-file output/.rag-service-private/reader.token \
+  --admin-token-file output/.rag-service-private/admin.token \
+  --working-directory . \
+  --output-root output \
+  --job-root output/.rag-service-jobs \
+  --service-state-root output/.rag-service
+```
+
+The examples below assume the two token values have been loaded into
+`READER_TOKEN` and `ADMIN_TOKEN` without printing them. Health endpoints are
+unauthenticated; reader credentials can inspect the versioned contract/corpora
+and search, while admin credentials can also submit and manage jobs.
+
+```bash
+# Process and corpus readiness
+curl -i http://127.0.0.1:8765/health/live
+curl -i http://127.0.0.1:8765/health/ready
+curl -sS -H "Authorization: Bearer $READER_TOKEN" \
+  http://127.0.0.1:8765/v1/corpora
+
+# Bounded retrieval only: no reranker or generated answer
+curl -sS -X POST \
+  -H "Authorization: Bearer $READER_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data '{"query":"minimum contacts","limit":5,"mode":"auto","filters":{"chapter_num":4}}' \
+  http://127.0.0.1:8765/v1/corpora/civil_procedure/search
+
+# A new key returns 202; an exact replay returns the same job with 200
+curl -i -X POST \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Idempotency-Key: civpro-2026-07-22-v1" \
+  -H "Content-Type: application/json" \
+  --data '{"full_reindex":false}' \
+  http://127.0.0.1:8765/v1/corpora/civil_procedure/reindex
+```
+
+Every job response includes an `ETag` for its exact attempt and revision.
+Set `JOB_ID` from the response and `ETAG` to the most recently returned quoted
+value (for example, `ETAG='"rag-job-a1-r4"'`). Mutations reject stale values.
+Cancellation is active-job-only; resume is explicit and only accepts a current
+`partial`, `failed`, `cancelled`, or `interrupted` attempt. Refresh status and
+the ETag between each operation.
+
+```bash
+curl -i -H "Authorization: Bearer $ADMIN_TOKEN" \
+  "http://127.0.0.1:8765/v1/jobs/$JOB_ID"
+
+curl -i -X POST \
+  -H "Authorization: Bearer $ADMIN_TOKEN" -H "If-Match: $ETAG" \
+  "http://127.0.0.1:8765/v1/jobs/$JOB_ID/cancel"
+
+curl -i -X POST \
+  -H "Authorization: Bearer $ADMIN_TOKEN" -H "If-Match: $ETAG" \
+  "http://127.0.0.1:8765/v1/jobs/$JOB_ID/resume"
+
+# Inspect the terminal-only dry run, refresh ETAG, then confirm the exact ID
+curl -i -X POST -H "Authorization: Bearer $ADMIN_TOKEN" \
+  "http://127.0.0.1:8765/v1/jobs/$JOB_ID/deletion-plan"
+curl -i -X DELETE \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "If-Match: $ETAG" -H "X-Confirm-Job-ID: $JOB_ID" \
+  "http://127.0.0.1:8765/v1/jobs/$JOB_ID"
+```
+
+Use a new idempotency key for a different reindex intent; reusing a key with a
+different request conflicts instead of mutating the existing job. If the
+service stops between durable queueing and launch, startup terminalizes that
+stale `queued` attempt as `failed`; it never auto-launches or repeats provider
+work. An administrator must inspect it and submit an ETag-guarded resume.
+
+This is a loopback-only, single-principal boundary, not a multi-user or hosted
+API. It accepts only `127.0.0.1` or `::1`, verifies the peer, disables proxy
+headers, CORS, Swagger/ReDoc, Uvicorn access logs, and the server header, and
+serves the static OpenAPI 3.1 contract only to an authenticated reader at
+`/v1/openapi.json` (the committed snapshot is
+[`service-openapi-v1.json`](service-openapi-v1.json)). Do not place it behind a
+reverse proxy, port forward, container bridge, or TLS terminator, and do not
+reuse its two roles as tenant isolation.
+
+The service defaults to the dedicated `output/.rag-service-jobs` root; never
+share the CLI's `output/.rag-jobs` root with it. Private markers bind that job
+root bidirectionally to one stable service-state root. Startup fails closed for
+an unowned nonempty root or a mismatched owner, and the API hides and never
+reconciles or mutates jobs whose immutable execution spec is not an exact
+configured service reindex. The enforced singleton lease is on the
+service-state root; per-job leases coordinate records but do not turn the store
+into a multi-principal broker. Search queries and bounded results cross the
+supervised process boundary through private short-lived files under
+`.rag-service/search-tmp`; verified cleanup runs after each request and at
+startup. That cleanup, job deletion, and retention are logical filesystem
+deletion, not guaranteed physical erasure from SSDs, backups, snapshots, or
+cloud-sync history. Put state and job roots on suitable private storage for the
+data's sensitivity.
+
+### Structured run telemetry
+
+Every foreground pipeline command accepts an optional correlated event stream
+and aggregate report. The `jobs` facade reserves these flags and injects
+attempt-owned paths itself:
+
+```bash
+python rag.py full --pdf book.pdf \
+  --run-id semester-build-7 \
+  --run-events private-telemetry/full.events.jsonl \
+  --run-report private-telemetry/full.report.json
+```
+
+`--run-id` must be a 1-128 character opaque identifier containing only letters,
+digits, `.`, `_`, or `-`; omit it to generate a random ID. For supervised
+vector-store commands, the parent allocates and persists the run identity before
+starting the worker. The same ID appears in stage events, the aggregate run
+report, and any `--llm-events` or `--llm-report` output. It is correlation only:
+it does not change an LLM request ID or cache key.
+
+The schema-v1 JSONL stream records a sequence number, timestamp, operation,
+stage, status, numeric/boolean metrics, and a safe diagnostic when applicable.
+The schema-v1 JSON report summarizes run status (`succeeded`, `partial`,
+`failed`, or `cancelled`), elapsed time, event count, and per-stage counts and
+durations. Pipeline stages cover conversion, chunk/index lease acquisition,
+chunking, indexing, exports, and RAPTOR. Index metrics come from the committed
+`IndexOutcome`: disposition plus total, changed, unchanged, removed, upserted,
+batch, and physically verified record counts. LLM observations aggregate calls,
+attempts, retries, latency, and exact/estimated tokens.
+
+Each invocation replaces the supplied run-event/report files with its current
+run. Run and LLM event/report outputs must resolve to pairwise distinct files;
+lexical, case, symlink, and existing hard-link aliases are rejected. A `batch`
+that completes its best-effort loop but has failed, missing, or
+unprocessed inputs reports `partial` while preserving the command's existing
+summary behavior. After a deadline or interruption, the supervisor first
+confirms worker cleanup, then recovers the current event stream, terminates any
+unmatched stages, and writes the final failure/cancellation record. A terminal
+success already committed by the worker wins over a late cancellation.
+
+Run telemetry intentionally omits source and output paths, prompts, responses,
+credentials, endpoints, and exception messages. Its message fingerprint is a
+process-keyed opaque digest rather than a reusable plaintext hash. This does not
+sanitize normal console/file logs, which can still contain paths and operational
+details. Telemetry uses the same private storage policy as pipeline artifacts
+and LLM outputs: POSIX directories/files are verified at `0700`/`0600`, while
+Windows paths receive a protected DACL granting full control only to the current
+user SID.
+
+### Private storage and retention
+
+Sensitive pipeline artifacts, derived study outputs, vector-store roots, LLM
+cache/events/reports, telemetry, lock sentinels, and UI exports use one shared
+storage policy. Existing managed parent directories are hardened before content
+is staged. Atomic writers reject symbolic-link/junction components, stage and
+flush a private file, and replace the final path; append-only LLM events reject
+hard-linked files and use a no-follow Windows handle or POSIX descriptor.
+Pathname-only PDF writers publish through a private random staging path. On
+Windows, this is real ACL enforcement rather than `chmod` emulation.
+Existing cache and vector-store trees are recursively migrated before use;
+root-identity records under the private sibling `.rag-storage-policy/`
+directory avoid repeating that full scan. Legacy pipeline runs are recursively
+hardened whenever they resume.
+
+Each new `full` or `batch` run receives a private `.rag-run.json` ownership
+manifest. UI exports receive `.rag-owned.json` and become retention-eligible
+only after they reach `complete`. Cleanup is always a dry run unless `--apply`
+is present:
+
+```bash
+# Inspect, then delete one manifest-owned run under pipeline/vector leases
+python rag.py storage --delete-run Civil_procedure
+python rag.py storage --delete-run Civil_procedure --apply
+
+# Prune validated plaintext LLM responses older than 30 days and keep the
+# remaining owned cache within the default 5 GiB ceiling
+python rag.py storage --prune-llm-cache --older-than-days 30
+python rag.py storage --prune-llm-cache --older-than-days 30 --apply
+
+# Prune completed UI exports; incomplete/failed directories require review
+python rag.py storage --prune-ui-exports --older-than-days 7
+
+# Inspect recoverable leftovers from an interrupted deletion, then purge them
+python rag.py storage --purge-quarantine --older-than-days 7
+python rag.py storage --purge-quarantine --older-than-days 7 --apply
+```
+
+Use `--output-root`, `--llm-cache-dir`, `--max-cache-bytes`, and `--json` for
+custom locations, size policy, and automation. A plan deletes only data whose
+marker/schema/token or cache key validates; unowned directories, special files,
+links, junctions, and hard-linked content fail closed. Applied run deletion
+replans after acquiring the run and all existing vector-store leases, moves the
+exact owned entries into `.rag-quarantine`, and rolls back staged moves if the
+transaction cannot complete. Each moved inode/tree is fingerprinted again in
+quarantine before erasure, so a post-plan atomic replacement is preserved and
+the operation rolls back. Do not manually delete `.rag-run.json`,
+`.rag-owned.json`, storage-policy records, update markers, or lock sidecars.
+
+Deletion here is logical filesystem deletion, not a guarantee of physical
+erasure. Dropbox/cloud history, backups, snapshots, another hard-link alias,
+and SSD wear-leveling may retain bytes. Use the provider's retention controls
+and device-appropriate cryptographic erasure when those copies are in scope.
 
 ### Interactive Menu
 
@@ -140,8 +589,10 @@ through file selection, options, and command construction. All commands are
 accessible through the menu, with file path validation and sensible defaults.
 For LLM-backed operations, the menu also offers DeepSeek V4 Pro/Flash, MiniMax,
 Ollama, Gemini, and custom providers. API keys entered there use a hidden prompt
-and are redacted from the generated command shown on screen; press Enter at the
-key prompt to use the corresponding environment variable instead.
+and are redacted from the generated command shown on screen. They are removed
+from worker process arguments and supplied only through that worker's child-only
+environment; press Enter at the key prompt to use the corresponding ambient
+environment variable instead.
 
 ## Searching
 
@@ -316,8 +767,9 @@ records become misses and are repaired by the next successful call.
 The cache itself contains successful response text in plaintext. Treat its
 directory as sensitive when textbook excerpts, client facts, or other private
 material can appear in model output. Use `--llm-cache-mode off` for no disk
-cache, `readonly` to consume existing entries without writing, or a protected
-`--llm-cache-dir`. The default location is the platform user-cache directory
+cache, `readonly` to consume existing entries without writing, or a custom
+`--llm-cache-dir`. Cache paths are protected by the shared storage policy. The
+default location is the platform user-cache directory
 (`%LOCALAPPDATA%/rag-pipeline/llm-cache` on Windows when available,
 `$XDG_CACHE_HOME/rag-pipeline/llm-cache` on Linux when configured).
 
@@ -330,6 +782,7 @@ cache, `readonly` to consume existing entries without writing, or a protected
 | `--llm-fallback ordered|none` | Use the provider chain or only its first configured provider |
 | `--llm-failure-policy best-effort|strict` | Preserve feature-level fallbacks or fail when no provider returns output |
 | `--max-llm-calls N` | Hard cap on logical provider callback dispatches during the run |
+| `--max-llm-transport-attempts N` | Hard cap on physical provider transport admissions, including retries |
 | `--max-llm-reserved-tokens N` | Hard cap on conservative prompt-plus-maximum-output token reservations |
 
 ```bash
@@ -337,7 +790,8 @@ cache, `readonly` to consume existing entries without writing, or a protected
 python rag.py generate-questions \
   --chunks output/Civil_procedure/Civil_procedure_chunks.jsonl \
   --llm-report output/Civil_procedure/llm-run.json \
-  --max-llm-calls 50 --max-llm-reserved-tokens 250000
+  --max-llm-calls 50 --max-llm-transport-attempts 60 \
+  --max-llm-reserved-tokens 250000
 
 # Retry the preferred cloud provider even if a fallback result is cached
 python rag.py brief \
@@ -369,14 +823,24 @@ reasoning-token breakdowns. Legacy/custom callbacks without native counts use
 the conservative character estimate. Cache hits preserve the selected result's
 token accounting but correctly report zero live provider or transport attempts.
 
-Budget terminology is intentionally conservative. `--max-llm-calls` counts
-logical provider dispatches; the OpenAI-compatible adapter may make one extra
-HTTP attempt after a 429 within a dispatch, and the report records that retry
-separately. Gemini receives the configured timeout and has SDK retries disabled
-so its observed transport count remains explicit. Reserved tokens use a
+Budget terminology is intentionally precise. `--max-llm-calls` counts logical
+provider callback dispatches, while `--max-llm-transport-attempts` atomically
+admits each physical HTTP or SDK call, including an adapter's internal retries.
+Once the physical cap is exhausted, no additional transport begins and ordered
+fallback stops instead of dispatching another provider. Reserved tokens use a
 provider-neutral `characters / 4 + max output` estimate and accumulate for each
-fallback attempt. Cache hits and callers sharing an in-flight request consume
-no additional budget.
+fallback dispatch. Cache hits and single-flight followers consume no logical
+dispatch, token reservation, or physical transport admission.
+
+The runtime admits the initial transport before invoking a provider callback.
+Built-in adapters also use the request's `admit_transport_retry()` hook
+immediately before every additional attempt. Custom provider callbacks with
+their own hidden retry loops must do the same before each retry; otherwise the
+physical ceiling cannot stop those extra calls. When a cap is active, a
+structured callback that reports more attempts than it admitted fails closed
+and stops fallback, with the contract violation exposed in the run report.
+Gemini receives the configured timeout and has SDK retries disabled, so its
+transport count remains explicit.
 
 ### DeepSeek V4 configuration
 
@@ -608,10 +1072,28 @@ count fields is rechecked during indexing.
 | `text-embedding-3-large` | OpenAI API | $0.13/M tokens | 8191 | Best commercial general-purpose. |
 | `embed-v4.0` | Cohere API | $0.10/M tokens | - | Multilingual. |
 | `dunzhang/stella_en_400M_v5` | Local GPU | Free | 8192 | High quality (requires xformers). |
-| `nlpaueb/legal-bert-base-uncased` | Local GPU | Free | 512 | Legacy, EU legal text. |
+| `nlpaueb/legal-bert-base-uncased` | Local GPU | Free | 512 | Inventory only: legacy pickle weights are blocked. |
 
 API models require env vars: `VOYAGE_API_KEY`, `OPENAI_API_KEY`, or `COHERE_API_KEY`.
 The pipeline validates keys at startup before any heavy processing.
+
+Reviewed local models are loaded only from byte-verified local directories;
+runtime loaders never receive a Hub model ID. Nomic's external Python is copied
+from its separately pinned code repository and its `auto_map` is deterministically
+rewritten to local references before offline loading. BGE, BART, and Docling use
+only selected safe weights. LegalBERT remains in the provenance inventory, but
+its only PyTorch weight is pickle-based and therefore fails closed. An unknown
+custom model also fails closed unless the operator explicitly sets
+`RAG_ALLOW_UNPINNED_MODELS=1`; that escape hatch logs that provenance and byte
+verification are disabled.
+
+The first use synchronizes the selected files into
+`~/.cache/rag-pipeline/model-artifacts` (override with
+`RAG_MODEL_ARTIFACT_CACHE`). Subsequent loads rehash that isolated tree and run
+offline. Delete a corrupt cache entry and rerun to synchronize it again; never
+edit a published cache tree in place. Each process keeps one validated registry
+snapshot so loader records and provenance cannot cross lock generations;
+restart long-running processes after intentionally replacing the policy/lock.
 
 ### Cross-Encoder Reranker
 
@@ -671,19 +1153,111 @@ python rag.py query "jurisdiction" --db-backend qdrant --hybrid \
 The `index` command hashes each chunk's text and indexable metadata and stores
 the hashes in an atomic, versioned manifest scoped to the database backend and
 collection. The manifest also records its schema version, embedding model,
-embedding dimension, exact source JSONL SHA-256, and source record count. A
-compatible rerun embeds only changed/new chunks, removes chunks no longer
-present, and skips unchanged chunks.
+embedding dimension, validated model-artifact-lock SHA-256, exact source JSONL
+SHA-256, and source record count. A compatible rerun embeds only changed/new
+chunks, removes chunks no longer present, and skips unchanged chunks. Qdrant incremental runs scan payload-only
+stable IDs before mutation and again after writes, refusing to advance the
+manifest if points are missing, unexpected, duplicated, untracked, or returned
+through a cyclic pagination sequence. Each audit is bounded by exact point
+counts taken before and after its payload-only scroll, and rejects count drift,
+premature termination, oversized/non-progressing pages, and repeated physical
+point IDs. Use `--full-reindex` to recover from a physical collection/manifest
+mismatch. Waited point deletes and upserts must also report Qdrant's
+`completed` status before reconciliation or manifest commit can continue.
+Chroma compatible runs perform the corresponding count-sandwiched, bounded
+scan of API-visible document IDs and their `stable_id` metadata before any
+incremental mutation, after deletions, and after all upserts. Changed durable
+IDs are deleted and verified absent before replacement, so silent delete or
+upsert no-ops cannot advance the manifest. Chroma delete batches respect the
+client's advertised maximum size when available.
 
-If the model, vector dimension, or manifest schema changes—or an older shared
-`chunk_hashes.json` sidecar is encountered—the pipeline safely rebuilds only
-the requested collection. Sibling collections in the same database directory
+Before its first collection mutation, either backend creates a collection-
+scoped recovery marker. The marker is removed only after all writes finish and
+the atomic manifest replacement succeeds (including Qdrant's exact post-write
+verification). A per-update token binds marker reuse and cleanup to the run that
+created or safely replaced it, so a stale or concurrently replaced marker
+cannot be declared clean. If a run is interrupted or fails after mutation
+begins, queries, exact count inspection, and corpus-pinned evaluations fail
+closed while the marker remains; the next `index` or `full --resume` run
+rebuilds only that backend/collection and clears the marker after the recovered
+index is committed. These identity scans detect count and set drift during
+pagination; the recovery marker records crash state and is never used as a
+mutex.
+
+Every operation that opens a local vector client or relies on marker/manifest
+consistency now takes a bounded, OS-backed exclusive lease for the canonical
+database directory. The path-wide policy deliberately serializes reads as well
+as writes for both backends because Qdrant local mode permits only one process
+to open a database path. Artifact discovery and approximate directory-size
+display remain best-effort filesystem diagnostics outside the lease; exact
+collection counts are leased. The default wait is 30 seconds; use
+`--db-lock-timeout SECONDS` on `index`, `query`, `info`, `storage`, `full`, or `batch`
+(`0` means fail fast). Same-thread nested validation is reentrant, lock release
+runs after client/manifest cleanup, and a killed process releases the kernel
+lock. Persistent `.rag-locks/*.lock` sidecars are only locking inodes: their
+existence never means a process owns the lease, and they must not be manually
+deleted while operations may be active. These OS locks coordinate processes on
+one filesystem host; a Dropbox-synchronized copy on another computer is a
+separate concurrency domain. Windows extended drive/UNC spellings are
+normalized, but equivalent drive-letter, administrative-UNC, and SUBST aliases
+are not a supported way to access one live database. Use one path spelling and
+do not move or rename a database directory while any operation may be active.
+The lease timeout bounds only lock contention. The outer CLI/evaluation/menu
+operation deadline bounds filesystem hydration, sentinel setup, and
+storage-client calls. Web UI vector-client calls have their own isolated
+deadlines; its best-effort artifact-size scan remains outside that boundary.
+
+`full` and `batch` also serialize output-run allocation before choosing a book
+suffix. When they regenerate chunks, they create the collection recovery marker
+before work begins, publish the JSONL via atomic replacement, and retain the
+vector lease until the matching index commits. A crash therefore exposes
+neither partial JSONL nor an apparently clean old index paired with a new
+corpus. Chroma hybrid search independently compares the chunks SHA-256 with the
+manifest, parses and hashes one exact file-handle snapshot, and refuses
+cross-generation lexical/vector fusion until reindexing. A legacy Chroma index
+without a manifested source SHA-256 falls back to vector retrieval with a
+warning instead of fusing unproven lexical data. Reranking begins only after the
+retrieval lease and vector client are released, so model or API latency does not
+block unrelated index access.
+
+Conversion JSON/Markdown pairs, unified Markdown, chapter sets, RAPTOR trees,
+and evaluation reports are published through flushed same-directory temporary
+files. Versioned completion metadata binds resumable pipeline artifacts to the
+exact source digest, record count, credential-free parameters, and output
+hashes. Conversion and chunking parameters include the validated model-lock
+digest, and chunking also records its tokenizer/classification/provider policy
+without storing credentials. A hard kill before the final completion commit therefore leaves the
+stage fail-closed: `full --resume` regenerates it instead of accepting a
+truncated, stale, or partial artifact set. Legacy pipeline artifacts without
+completion metadata regenerate once when resumed.
+
+The sequential background-upsert paths for both backends share teardown that
+requests a worker stop, waits for completion, and attempts both executor and
+progress closure; progress advances only after a write succeeds, and a
+secondary cleanup error does not replace the original producer error. Chroma's
+parallel API-embedding path likewise shuts down its executor and closes its
+progress display before committing the manifest; an embedding or upsert error
+takes precedence over either cleanup failure.
+
+Every short-lived Chroma and Qdrant client used by indexing, search, and status
+inspection is also closed deterministically. Indexing closes the client after
+physical reconciliation but before manifest commit, so a cleanup failure keeps
+the recovery marker and old manifest instead of reporting success while a
+Windows database lock remains held. Operation errors take precedence over
+secondary close errors. Chroma 1.5.2 is the minimum supported release because
+it provides the public, reference-counted `close()` needed to release shared
+local database handles without invalidating another live client.
+
+If the model, model-artifact lock, vector dimension, or manifest schema
+changes—or an older shared `chunk_hashes.json` sidecar is encountered—the
+pipeline safely rebuilds only the requested collection. Sibling collections in the same database directory
 are not deleted. The old sidecar is left in place for compatibility while the
 rebuilt collection receives its own manifest. Manifest replacement is atomic,
 so an interrupted write cannot leave partially written incremental state.
 Chunk JSONL is parsed and schema-checked strictly before a collection can be
 changed. `full --resume` always revalidates the manifest and hashes, and queries
-refuse a model or vector dimension that conflicts with an existing manifest.
+refuse a model, model-lock generation, or vector dimension that conflicts with
+an existing manifest.
 
 ```bash
 python rag.py index \
@@ -748,12 +1322,12 @@ validating their artifacts as follows:
 
 | Stage | Checks for |
 |-------|-----------|
-| Convert | Valid, non-empty DoclingDocument JSON |
-| Chunk | Valid JSONL containing chunk records |
-| Index | Vector DB collection whose document count matches the chunks file |
-| Export | Markdown file |
-| Chapter export | Non-empty `Chapters/` directory (when requested) |
-| RAPTOR | Summary tree JSON |
+| Convert | Source/config/model-lock completion plus both output hashes |
+| Chunk | Source/config/model-lock completion, output hash, and strict JSONL schema |
+| Index | Clean compatible manifest plus physical IDs/count and chunk hashes |
+| Export | Source/config completion and output hash |
+| Chapter export | Exact manifested chapter-file set and hashes |
+| RAPTOR | Source/config-bound tree schema and statistics |
 
 ```bash
 # Start a long pipeline
@@ -860,15 +1434,38 @@ retrieval metrics, use explicit finite judgments keyed by stable chunk or
 source IDs stored in search results:
 
 ```json
-{"query_id":"pj-1","query":"minimum contacts test","judgments":[{"chunk_id":"chunk_0123456789abcdef","relevance":3},{"chunk_id":"chunk_fedcba9876543210","relevance":1}],"expected_type":"case_opinion"}
+{"query_id":"pj-1","query":"minimum contacts test","judgments":[{"chunk_id":"chunk_0123456789abcdef","relevance":3},{"chunk_id":"chunk_fedcba9876543210","relevance":1}],"expected_type":"case_opinion","corpus":{"sha256":"e5022230c3b28dc4fe547bf5e0d4ce88516f3f15fde7954964d76d4b530e86bd","record_count":728}}
 ```
 
-Each judgment must contain exactly one `chunk_id` or `source_id` and a finite,
-non-negative `relevance` value. Use one ID type consistently within a query.
+Each judgment must contain exactly one `chunk_id` or `source_id` and a finite
+`relevance` value from 0 through 100. Use one ID type consistently within a query.
 Zero means not relevant; larger values express stronger relevance. A judged
 query must contain at least one positive judgment.
 `stable_id` and `source_file` returned by existing indexes are accepted as
 compatibility aliases when matching results.
+
+Judged sets may also declare subject/book labels, repeatable slice tags, and
+query-specific metadata filters. An abstention case intentionally has no
+positive judgment and succeeds only when the retriever returns no evidence:
+
+```json
+{"query_id":"property-filter","query":"elements of adverse possession","subject":"Property","book":"Property Mini Corpus","tags":["filter"],"filters":{"content_type":"doctrine","chapter_num":2},"judgments":[{"chunk_id":"chunk_c0efee95e1e2bb5b","relevance":3}],"corpus":{"sha256":"177e9a2d4b9015c1bac083a2489d2f622281f623d649d9292ef67eda41a6154f","record_count":10}}
+{"query_id":"property-abstain","query":"unsupported lithium royalty percentage","subject":"Property","book":"Property Mini Corpus","tags":["abstention","adversarial"],"expected_abstain":true,"corpus":{"sha256":"177e9a2d4b9015c1bac083a2489d2f622281f623d649d9292ef67eda41a6154f","record_count":10}}
+```
+
+Allowed filters are `content_type` and `chapter_num`. Reports aggregate tagged,
+subject, book, and difficulty slices under metric names such as
+`slice/tag/citation/success@1`. Filter cases additionally report
+`filter_compliance`; abstention cases report `abstention_accuracy` and
+`false_answer_rate`.
+
+Optional `grounding_case` fixtures pass an authored candidate answer through the
+deterministic citation/quotation policy without calling an LLM. Their
+`grounding_accuracy` measures policy-fixture behavior only—not model answer
+quality. The checked-in cases cover an unknown source citation, an uncited
+answer, and an unsupported direct quotation. Every slice metric is accompanied
+by its own `/num_queries` denominator plus a slice-level `total_queries`, so a
+mixed relevance/abstention tag cannot imply that every metric used every case.
 
 ```bash
 # Single config with custom cutoffs and a detailed JSON report
@@ -886,13 +1483,65 @@ python eval.py --compare \
   --chunks output/Civil_procedure/Civil_procedure_chunks.jsonl \
   --db output/Civil_procedure/Civil_procedure_chroma \
   --collection civil_procedure
+
+# Deterministic, network-free CI/reference suite (no vector DB or model)
+python eval.py \
+  --retriever bm25 \
+  --queries evaluation/suites/property/queries.jsonl \
+  --chunks evaluation/suites/property/chunks.jsonl \
+  --k 1 3 5 --depth 10 \
+  --json-report evaluation-reports/property.json \
+  --baseline-report evaluation/baselines/property-bm25.json \
+  --fail-under ndcg@3=0.95 \
+  --fail-under abstention_accuracy=1 \
+  --fail-over false_answer_rate=0 \
+  --max-regression ndcg@3=0
 ```
+
+`--retriever index` remains the default and exercises the real Chroma/Qdrant,
+embedding, hybrid, and reranker path. `--retriever bm25` is deliberately a
+lower-fidelity lexical adapter for deterministic, no-download regression tests;
+its scores must not be presented as dense-retrieval quality. The checked-in
+CC0 Property and Constitutional Law mini corpora are controlled calibration
+fixtures, not substitutes for expert review of a full private textbook.
+For explicit no-evidence behavior, the adapter removes a pinned stop-word set
+and requires two distinct content-term matches for queries containing more than
+two content terms; its implementation version and stop-word digest are recorded
+in every baseline snapshot.
 
 All query schemas report Success@k, MRR, and optional top-result type accuracy.
 Queries with explicit judgments additionally report Recall@k, nDCG@k, and MAP;
 those judged metrics are averaged only across judged queries. Detailed JSON
 reports contain a schema version, retrieval configuration, aggregate metrics,
-and per-query ranked-result identities and relevance matches.
+and per-query ranked-result identities and relevance matches. Schema v4 also
+records per-query plus p50/p95/max retrieval latency, sampled process RSS,
+Python `tracemalloc` peak, and bounded index/storage byte counts. RSS is sampled
+rather than a continuous peak, and `tracemalloc` excludes native allocations;
+the report records both measurement methods.
+
+Summary detail is the default: query text, source previews, raw stable/source
+IDs, local manifest paths, and storage paths are omitted or hashed so CI
+artifacts do not publish private corpus text. Use `--report-detail full` only
+for a deliberately protected local report when raw query text and 200-character
+source previews are required for diagnosis.
+
+Embedding query-token use is labeled as a characters/4 estimate. Monetary
+values are never based on a hard-coded price table and remain `null` unless the
+operator supplies the rate that applies to the run. A prompt-free aggregate
+LLM runtime report can be included with its exact/estimated usage provenance:
+
+```bash
+python eval.py ... \
+  --embedding-cost-per-million-tokens 0.10 \
+  --llm-report output/llm-runtime-report.json \
+  --llm-input-cost-per-million-tokens 1.00 \
+  --llm-output-cost-per-million-tokens 4.00
+```
+
+The example numbers are placeholders, not current provider prices. Record the
+provider/model, source, and effective date alongside a production run. The
+report binds the LLM usage input by SHA-256 and labels every projected amount as
+caller-supplied.
 
 `--depth` controls the fixed retrieval depth used for MRR and MAP and must be at
 least the largest `--k`. The included `eval_queries_judged.jsonl` contains 24
@@ -903,7 +1552,9 @@ checks the manifest's exact stable-ID set and source fingerprint, and confirms
 the physical vector count. A partial or stale index fails before metrics are
 produced.
 
-The current depth-20 calibration on that exact snapshot is:
+The following depth-20 calibration is historical (it predates index-manifest
+schema 5 and model-artifact-lock provenance) and should be reproduced after the
+private Civil Procedure index is rebuilt before it is used as a release gate:
 
 | Configuration | MRR | Recall@10 | nDCG@10 | MAP |
 |---------------|----:|----------:|--------:|----:|
@@ -912,10 +1563,10 @@ The current depth-20 calibration on that exact snapshot is:
 | Calibrated hybrid | **0.822** | **0.882** | **0.768** | **0.670** |
 | Calibrated hybrid + BGE | 0.751 | 0.875 | 0.706 | 0.595 |
 
-These figures justify the Chroma defaults (`dense=0.5`, `lexical=1.0`,
+These figures informed the Chroma defaults (`dense=0.5`, `lexical=1.0`,
 `rrf-k=10`) and adaptive reranking policy for this corpus; use a separate judged
-set before treating them as universal. The machine-readable run is stored at
-`output/Civil Procedure I/Civil Procedure I_retrieval_eval.json`.
+set before treating them as universal. The old machine-readable run is local
+under ignored `output/` storage and is intentionally not a committed baseline.
 
 Use repeatable thresholds to make a single-configuration evaluation fail with
 exit code 2 when quality is below a required floor:
@@ -933,6 +1584,11 @@ python eval.py \
 
 Compare a run against a previous JSON report with repeatable regression limits:
 
+Baseline regression requires every query to declare its exact corpus SHA-256
+and record count, plus a compatible manifested index for `--retriever index`.
+An unpinned starter set can use absolute `--fail-under`/`--fail-over` gates but
+cannot be compared to a portable baseline.
+
 ```bash
 python eval.py \
   --queries my_judged_queries.jsonl \
@@ -946,16 +1602,27 @@ python eval.py \
 ```
 
 Threshold and regression checks apply to single-configuration runs, not
-`--compare`. The repository's `eval_queries.jsonl` remains a ten-query,
-keyword-based starter set. `eval_queries_judged.jsonl` is the corpus-pinned
-Civil Procedure set; create a separate stable-ID set for any other book.
+`--compare`. `--fail-under` gates quality/safety floors, while `--fail-over`
+gates upper bounds such as `false_answer_rate`. Baseline comparisons bind the
+query digest, portable index snapshot fields, retrieval settings, and model
+lock where applicable; absolute local manifest paths are intentionally excluded
+from compatibility checks.
+
+CI runs both checked-in offline suites, enforces absolute and zero-tolerance
+baseline gates, and retains the redacted schema-v4 JSON reports for 30 days as
+the `offline-retrieval-evaluation` artifact. The repository's
+`eval_queries.jsonl` remains a ten-query keyword starter set, while
+`eval_queries_judged.jsonl` is the 24-query private Civil Procedure calibration.
+Create and expert-review a separate stable-ID set before calibrating any full
+book; the controlled mini corpora only validate the evaluation machinery and
+known adversarial cases.
 
 ## Web UI
 
-Gradio web interface with three tabs: Search, Export, and Info.
+Gradio web interface with Search, Export, Info, and local-only Jobs tabs.
 
 ```bash
-pip install gradio
+pip install -r requirements-optional.txt
 python ui.py \
   --chunks output/Civil_procedure/Civil_procedure_chunks.jsonl \
   --db output/Civil_procedure/Civil_procedure_chroma \
@@ -968,13 +1635,25 @@ python ui.py --db-backend qdrant \
   --collection civil_procedure
 ```
 
-Add `--share` to either complete command to create a public Gradio link.
+Add `--share` to either complete command to create a public Gradio link. This
+can expose private queries, retrieved passages, metadata, and exports to anyone
+who obtains the link; do not use it for a sensitive corpus. The Jobs tab is not
+registered in shared mode, and its callbacks refuse to touch private job state.
+Search retrieval and Info's exact vector count execute in killable workers. Use
+`--search-timeout SECONDS`, `--info-timeout SECONDS`, and
+`--db-lock-timeout SECONDS` to tune their hard deadlines and local lease wait
+independently.
 
 **Search tab**: query box, content type/chapter filters, three-state retrieval
 and reranker controls (Auto/forced/disabled), formatted results with metadata.
 
 **Export tab**: single-file or split-chapter export with content type filters;
 returns one file download or a ZIP archive for split chapters.
+
+**Jobs tab (local only)**: submit a reindex of the configured corpus, poll
+redacted state, and request attempt-bound cancel/resume operations. Use
+`--job-root` and `--job-ready-timeout` to change its private store and launch
+handshake deadline.
 
 **Info tab**: pipeline status, chunk statistics, vector DB info.
 
@@ -1037,6 +1716,11 @@ Fallback: scans section headers if page headers are empty.
 
 ### RTX 5060 / Blackwell
 
+This CUDA profile requires CPython 3.12-3.14 even though the portable CPU
+profile supports CPython 3.10-3.14. The committed reproducibility lockfiles are
+CPU-only; install the CUDA wheel first and then use the bounded direct
+requirements for a GPU environment.
+
 | Component | Minimum | Why |
 |-----------|---------|-----|
 | NVIDIA driver | 570+ | Blackwell hardware support |
@@ -1045,7 +1729,7 @@ Fallback: scans section headers if page headers are empty.
 | PyTorch index | `cu128` | Must use cu128 wheels |
 
 ```bash
-pip install torch --index-url https://download.pytorch.org/whl/cu128
+pip install "torch>=2.7,<3" --index-url https://download.pytorch.org/whl/cu128
 python -c "import torch; print(torch.cuda.is_available(), torch.version.cuda)"
 ```
 
@@ -1109,36 +1793,108 @@ The pipeline normalizes encoding automatically. Run the pipeline again to
 produce a cleaned, newly numbered book directory; `--force` forces conversion
 but does not overwrite or reuse the previous run directory.
 
+### Vector store is busy
+
+Another local process is indexing, querying, evaluating, or inspecting the same
+database directory. Let it finish or raise `--db-lock-timeout`; use `0` only
+when fail-fast behavior is preferable. A `.rag-locks` sidecar left after a
+crash is harmless and should not be deleted—the operating-system lock, not the
+file's existence, determines ownership. Always access a live database through
+one stable path spelling; do not use drive/UNC/SUBST aliases or rename the
+directory while another process may have it open. The timeout applies to lock
+contention, not cloud-drive hydration or a storage call that has already begun.
+
+### Operation exceeded its deadline
+
+The supervised Windows Job Object or POSIX worker process group was terminated
+with exit status `124`. For an interrupted index/full/batch run, keep the
+recovery and artifact-completion metadata in place and rerun the same command
+(or `full --resume`); incomplete stages regenerate and the indexer rebuilds the
+affected collection before declaring it clean. Increase
+`--operation-timeout` for an expected long model or storage operation. Do not
+delete `.rag-locks` sidecars or `.updating.json` recovery markers manually.
+
 ### Stale index after re-chunking
 
 The incremental indexer uses collection-scoped content hashes and validates the
-manifest's schema, embedding model, and vector dimension. Changed chunks are
-re-embedded automatically; incompatible index state safely rebuilds only the
-requested collection. Force an unconditional rebuild with `--full-reindex` if
-needed.
+manifest's schema, embedding model, model-artifact-lock digest, and vector
+dimension. Changed chunks are re-embedded automatically; incompatible index
+state safely rebuilds only the requested collection. Force an unconditional
+rebuild with `--full-reindex` if needed.
 
 ## Security Notes
 
-- Embedding and reranker models are loaded with `trust_remote_code=True` (required
-  by some HuggingFace models). Only use trusted model names from verified publishers.
+- Built-in local models, Docling layout/TableFormer, and RapidOCR ONNX files are
+  commit/version pinned and raw-SHA-256 verified before loading. Remote Python is
+  enabled only for the reviewed Nomic and Stella local bundles; the BGE reranker
+  explicitly uses `trust_remote_code=False`. Reviewed remote Python is copied
+  through a fresh process-private Transformers module cache so stale global
+  cache entries cannot shadow the verified source tree.
+- Unknown model IDs fail closed unless `RAG_ALLOW_UNPINNED_MODELS=1` is set.
+  LegalBERT's pickle weight is inventoried but blocked; prefer safetensors.
+- Model-card and package license fields are publisher-declared evidence, not a
+  legal attestation. In particular, review LegalBERT's share-alike terms and
+  RapidOCR model-data rights before distribution.
 - API keys can come from environment variables or the interactive menu's hidden
-  prompt; menu-entered keys are redacted from the displayed command and are not
+  prompt; menu-entered keys are redacted from the displayed command, removed
+  from child process arguments, scoped to the child environment, and not
   written to a configuration file.
 - Direct CLI key flags (`--api-key`, `--cloud-key`, and `--gemini-key`) are
   supported, but their values can be visible in process listings and shell
   history. Prefer environment variables or the interactive menu.
-- All file paths are user-specified; no path validation/sandboxing is applied.
+- Input paths remain user-selected and are not a general-purpose sandbox.
+  Managed sensitive outputs use the private, link-aware storage policy above.
 
 ## File Structure
 
 ```
-rag.py                  # Main pipeline (all 14 commands + interactive menu)
-eval.py                 # Evaluation harness (success@k, MRR, type accuracy)
+rag.py                  # Stable command/API facade and pipeline orchestration
+retrieval_core.py       # Stdlib-only retrieval models and pure algorithms
+artifact_io.py          # Stdlib-only strict reads and atomic publication
+chunking_core.py        # Stdlib-only text preparation and classification
+index_state.py          # Stdlib-only index manifests and compatibility policy
+llm_adapters.py         # Typed LLM provider transport adapters
+cli_policy.py           # Stdlib-only CLI interpretation and serialization policy
+ingestion_core.py       # Stdlib-only PDF inspection and stripping safety policy
+model_artifacts.py      # Stdlib-only model lock, byte verification, and ML-BOM
+operation_contracts.py  # Committed vector-index outcome contract
+run_telemetry.py        # Correlated stage events, reports, and recovery
+storage_policy.py       # Owner-only DACL/mode and atomic publication policy
+retention.py            # Ownership manifests and dry-run-first lifecycle plans
+job_runtime.py          # Durable private job schemas, bindings, transitions, leases
+job_manager.py          # Detached supervision, cancellation, and restart recovery
+supervised_worker.py    # Gated same-PID bootstrap for pre-execution containment
+service_contracts.py    # Dependency-free bounded/redacted local API contracts
+service_runtime.py      # Qdrant search isolation and durable service job facade
+service_api.py          # Authenticated loopback-only FastAPI/CLI adapter
+service-openapi-v1.json # Committed static OpenAPI 3.1 contract snapshot
+service-config.example.json # Credential-free private registry template
+model-artifact-policy.json # Reviewed models, consumers, files, code, and licenses
+model-artifacts.lock.json # Immutable revisions and per-file raw SHA-256 inventory
+preprocess_pdf.py       # Standalone PDF preprocessing CLI facade
+eval.py                 # Relevance/safety evaluation, gates, and reports
+evaluation_metrics.py   # Latency, memory, storage, usage, and cost measurements
+offline_retrieval.py    # Deterministic no-model BM25 evaluation adapter
+evaluation/suites/      # Pinned CC0 Property and Constitutional Law fixtures
+evaluation/baselines/   # Portable offline regression baselines
 eval_queries.jsonl      # Starter evaluation queries (10 CivPro)
-ui.py                   # Gradio web UI (Search, Export, Info tabs)
+eval_queries_judged.jsonl # Pinned 24-query private CivPro calibration
+ui.py                   # Gradio web UI (Search, Export, Info, local Jobs tabs)
 scaffold_to_markdown.py # Apply an existing TOC scaffold to PDF text
 requirements.txt        # Direct core dependencies
 requirements-optional.txt # Direct optional dependencies
+requirements-all.txt    # Aggregate core-plus-optional input
+requirements-audit.txt  # Normalized CPU versions for advisory lookup
+requirements-test.txt   # Exact CI/test tool pins
+requirements-service.txt # Exact narrow local-service direct pins
+requirements-smoke.txt  # Lightweight real-vector-store test input
+requirements-security.txt # Exact audit/reporting tool pins
+requirements-lock-tools.txt # Exact lockfile-generator pin
+requirements-*.lock     # Universal exact CPU locks with SHA-256 hashes
+dependency-license-policy.json # Denied licenses and reviewed exceptions
+dependency-vulnerability-policy.json # Expiring advisory exceptions and audit skips
+tools/                  # Dependency/model lock refresh and policy checks
+.github/workflows/      # CI, dependency compatibility, and security automation
 output/                 # Per-run book directories (auto-created)
 ```
 
@@ -1147,36 +1903,126 @@ output/                 # Per-run book directories (auto-created)
 ### Required (`requirements.txt`)
 
 ```
-PyMuPDF>=1.24                # PDF preprocessing and scaffold conversion
-docling>=2.31                # PDF layout detection and conversion
-docling-core[chunking]>=2.70 # HybridChunker and chunking extras
-pypdfium2>=4.30              # PDF page counting and conversion backend
-sentence-transformers>=3.0   # Local embedding models
-chromadb>=0.5                # Default vector database
-FlagEmbedding>=1.3           # BGE cross-encoder reranker
-rank-bm25>=0.2               # BM25 keyword search
-tqdm                         # Progress bars
-requests>=2.31               # Cloud embedding and LLM HTTP calls
-numpy>=1.26                  # RAPTOR clustering
+PyMuPDF>=1.24,<2                # PDF preprocessing and scaffold conversion
+docling>=2.31,<3                # PDF layout detection and conversion
+docling-core[chunking]>=2.70,<3 # HybridChunker and chunking extras
+pypdfium2>=4.30,<6              # PDF page counting and conversion backend
+sentence-transformers>=3.0,<6   # Local embedding models
+einops>=0.7,<1                  # Reviewed Nomic model-code dependency
+chromadb>=1.5.2,<2              # Default vector database; deterministic close()
+FlagEmbedding>=1.3,<2           # BGE cross-encoder reranker
+rank-bm25>=0.2,<0.3             # BM25 keyword search
+tqdm>=4.66,<5                   # Progress bars
+requests>=2.31,<3               # Cloud embedding and LLM HTTP calls
+numpy>=1.26,<3                  # RAPTOR clustering
 ```
 
 ### Optional (`requirements-optional.txt`)
 
 ```
-qdrant-client>=1.17          # Qdrant vector DB backend
-voyageai>=0.2                # Voyage AI embeddings
-openai>=1.0                  # OpenAI embeddings
-cohere>=5.0                  # Cohere embeddings and reranking
-google-genai>=1.68           # Gemini fallback + timeout/retry controls
-gradio>=6.0                  # Web UI
+qdrant-client>=1.17,<2       # Qdrant vector DB backend
+voyageai>=0.2,<1             # Voyage AI embeddings
+openai>=1.0,<3               # OpenAI embeddings
+cohere>=5.0,<6               # Cohere embeddings and reranking
+google-genai>=1.68,<2        # Gemini fallback + timeout/retry controls
+gradio>=6.0,<7               # Web UI
 ```
 
 These are the project's direct declarations; transitive packages are omitted.
+Lower bounds preserve the established feature floor; upper bounds cap the
+admitted compatibility range. Dependabot proposes bounded updates weekly.
+
+For reproducible CPU installs, use the committed universal lockfiles. They pin
+the complete transitive graph, include SHA-256 artifact hashes, and carry Python
+and platform markers for the supported CPython 3.10-3.14 range:
+
+```bash
+# In an activated virtual environment
+pip install --require-hashes -r requirements-lock-tools.lock
+uv pip install --torch-backend cpu --require-hashes \
+  -r requirements-full.lock
+```
+
+Use `requirements-core.lock` instead for the core-only runtime. CUDA users
+should follow the GPU setup above; the CPU locks deliberately cannot reproduce
+a CUDA environment.
+
+### Development and supply-chain checks
+
+```bash
+pip install --require-hashes -r requirements-test.lock
+python tools/check_dependency_policy.py
+python tools/check_model_artifacts.py
+python -m ruff check .
+python -m pytest -q
+```
+
+To reproduce the full CPU development environment, install both exact locks:
+
+```bash
+pip install --require-hashes -r requirements-lock-tools.lock
+uv pip install --torch-backend cpu --require-hashes \
+  -r requirements-full.lock -r requirements-test.lock
+```
+
+Regenerate locks without changing compatible versions with
+`python tools/refresh_locks.py`. Use `python tools/refresh_locks.py --upgrade`
+for an intentional dependency refresh, then review and test the lockfile diff.
+Dependabot can propose direct-input changes but cannot regenerate these custom
+universal locks; refresh and commit the locks on each Dependabot dependency PR.
+
+GitHub Actions runs that dependency-light suite across Python 3.10-3.14 and on
+Windows, exercises real local Chroma and Qdrant clients on Linux and Windows,
+installs the full locked CPU environment for every source PR, and separately
+checks both runtime dependency sets. A scheduled
+workflow audits the active Linux/Python 3.12 full development environment with
+`pip-audit`, retains its JSON findings, a CycloneDX package SBOM, a CycloneDX
+ML-BOM companion, and a dependency-license inventory, and enforces both
+dependency policy files. Platform- and
+Python-specific inactive branches in the universal locks are resolution-tested
+but are not represented in that single-environment SBOM.
+
+The model companion covers selected Hugging Face/Docling runtime files,
+reviewed remote code, deterministic derived files, and RapidOCR's wheel-embedded
+ONNX payloads as byte-hashed components with dependency edges. Offline schema
+validation runs on every CI job; the scheduled security job also resolves each
+immutable Hub commit, re-downloads ordinary source files and the pinned
+RapidOCR wheel, checks installed package payloads, and retains the report.
+
+```bash
+# Fast, offline policy/lock validation
+python tools/check_model_artifacts.py
+
+# Reconfirm remote provenance and emit the companion ML-BOM
+python tools/check_model_artifacts.py --verify-hub \
+  --verify-installed-packages \
+  --output-sbom model-artifact-sbom.json
+
+# Intentional update: resolve reviewed mutable refs, hash bytes, then review diff
+python tools/refresh_model_artifacts.py
+```
+
+As of 2026-07-21, every published ChromaDB 1.x release is affected by
+`PYSEC-2026-311`/`CVE-2026-45829`, a critical pre-authentication code-injection
+issue in Chroma's HTTP server, and no patched release exists. This pipeline uses
+only the embedded, filesystem-local `chromadb.PersistentClient`; it does not
+launch that HTTP server or accept remote collection model configuration. A
+documented exception in `dependency-vulnerability-policy.json` expires on
+2026-08-31 and makes that deployment constraint explicit. Do not expose a
+Chroma server from this environment; use Qdrant for networked deployments and
+remove the exception as soon as a fixed Chroma release is available.
+
+PyMuPDF is dual-licensed under AGPL-3.0 or a commercial Artifex license. Its
+time-bounded policy exception permits only private, filesystem-local evaluation
+through 2026-08-31; no commercial basis has been recorded. This repository also
+has no repository-wide `LICENSE` file. Distribution or hosted/network use is a
+release blocker until the owner selects and records the applicable PyMuPDF and
+repository licensing basis.
 
 ### PyTorch (install first)
 
 ```bash
-pip install torch --index-url https://download.pytorch.org/whl/cu128
+pip install "torch>=2.7,<3" --index-url https://download.pytorch.org/whl/cu128
 ```
 
 ## Full Pipeline Example

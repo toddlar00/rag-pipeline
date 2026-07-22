@@ -166,6 +166,9 @@ def test_preprocess_strips_only_pages_with_safe_text(monkeypatch, tmp_path):
     scan_only_page = FakePage(1, "", 2)
 
     class FakeDocument:
+        def __len__(self):
+            return 2
+
         def __iter__(self):
             return iter([safe_page, scan_only_page])
 

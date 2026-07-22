@@ -1,0 +1,3 @@
+# Normalize official +cpu local versions for pip-audit's PyPI advisory lookup.
+torch==2.13.0
+torchvision==0.28.0
