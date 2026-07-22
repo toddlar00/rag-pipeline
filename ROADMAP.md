@@ -32,11 +32,11 @@ Status terms:
 | Cross-process vector-store concurrency | Implemented (draft) | [PR #12](https://github.com/toddlar00/rag-pipeline/pull/12) |
 | Hard operation deadlines and crash-safe publication | Implemented (draft) | [PR #13](https://github.com/toddlar00/rag-pipeline/pull/13) |
 | Reproducible CI and supply-chain gates | Implemented (draft) | [PR #14](https://github.com/toddlar00/rag-pipeline/pull/14) |
-| Retrieval-domain modularization | In progress | Stdlib-only retrieval models, stable identity, legal lexical analysis, rank fusion, and grounding extracted behind the `rag.py` compatibility facade |
+| Retrieval-domain modularization | Implemented (draft) | [PR #15](https://github.com/toddlar00/rag-pipeline/pull/15) |
 
 PR #1 is independent of the index-integrity stack and can be reviewed or merged
 separately. The index-integrity stack must be reviewed and merged in order:
-**#2 -> #3 -> #4 -> #5 -> #6 -> #7 -> #8 -> #9 -> #10 -> #11 -> #12 -> #13 -> #14**.
+**#2 -> #3 -> #4 -> #5 -> #6 -> #7 -> #8 -> #9 -> #10 -> #11 -> #12 -> #13 -> #14 -> #15**.
 Until those PRs merge,
 implementation progress is ahead of integration progress.
 
