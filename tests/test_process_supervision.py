@@ -498,6 +498,54 @@ def test_posix_escalation_kills_descendant_that_ignores_sigterm(
     assert heartbeat.read_text(encoding="utf-8") == stopped_value
 
 
+def test_external_cancel_terminates_real_worker_descendants(tmp_path):
+    script = tmp_path / "parent_worker.py"
+    started = tmp_path / "started.txt"
+    cancel = tmp_path / "cancel.txt"
+    heartbeat = tmp_path / "heartbeat.txt"
+    child_code = (
+        "from pathlib import Path; import sys, time; "
+        "p=Path(sys.argv[1]); "
+        "[(p.write_text(str(i), encoding='utf-8'), time.sleep(0.05)) "
+        "for i in range(400)]"
+    )
+    script.write_text(
+        "import subprocess, sys, time\n"
+        "from pathlib import Path\n"
+        f"subprocess.Popen([sys.executable, '-c', {child_code!r}, "
+        "sys.argv[2]])\n"
+        "Path(sys.argv[1]).write_text('ready', encoding='utf-8')\n"
+        "time.sleep(60)\n",
+        encoding="utf-8",
+    )
+
+    def request_cancel():
+        deadline = time.monotonic() + 5
+        while not started.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert started.exists()
+        time.sleep(0.2)
+        cancel.write_text("cancel", encoding="utf-8")
+
+    requester = threading.Thread(target=request_cancel)
+    requester.start()
+    code = rag._run_cli_with_deadline(
+        script, [str(started), str(heartbeat)], operation="index", timeout=10,
+        cancel_requested=cancel.exists,
+        stdout_target=subprocess.DEVNULL,
+        stderr_target=subprocess.DEVNULL,
+    )
+    requester.join(timeout=5)
+
+    assert code == 130
+    assert not requester.is_alive()
+    assert heartbeat.is_file()
+    time.sleep(0.2)
+    stopped_value = heartbeat.read_text(encoding="utf-8")
+    time.sleep(0.3)
+    assert heartbeat.read_text(encoding="utf-8") == stopped_value
+
+
 def test_killed_worker_releases_lease_and_leaves_recovery_marker(
         tmp_path, capsys):
     script = tmp_path / "locked_worker.py"
