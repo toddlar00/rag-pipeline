@@ -10,6 +10,8 @@ Status terms:
 - **Baseline** — present in the initial private-repository snapshot on `main`.
 - **Implemented (draft)** — coded, validated, pushed, and opened as a draft PR,
   but not yet merged into `main`.
+- **Integration candidate (draft)** — all implementation histories are combined
+  in one draft PR, pending exact-head validation, review, and merge.
 - **In progress** — active branch; not yet published as a PR.
 - **Planned** — scoped direction, not yet implemented.
 
@@ -45,18 +47,23 @@ Status terms:
 | Private storage policy and lifecycle retention | Implemented (draft) | [PR #25](https://github.com/toddlar00/rag-pipeline/pull/25) |
 | Durable cancellable/resumable background jobs | Implemented (draft) | [PR #26](https://github.com/toddlar00/rag-pipeline/pull/26) |
 | Stable authenticated local service/API | Implemented (draft) | [PR #27](https://github.com/toddlar00/rag-pipeline/pull/27) |
+| Cross-milestone cumulative integration | Integration candidate (draft) | [PR #28](https://github.com/toddlar00/rag-pipeline/pull/28) |
 
 PR #1 is independent of the index-integrity stack and can be reviewed or merged
 separately. The index-integrity stack must be reviewed and merged in order:
 **#2 -> #3 -> #4 -> #5 -> #6 -> #7 -> #8 -> #9 -> #10 -> #11 -> #12 -> #13 -> #14 -> #15 -> #16 -> #17 -> #18 -> #19 -> #20 -> #21 -> #22 -> #23 -> #24 -> #25 -> #26 -> #27**.
 Until those PRs merge,
 implementation progress is ahead of integration progress.
+[PR #28](https://github.com/toddlar00/rag-pipeline/pull/28) combines the
+independent PR #1 history with the complete #2 through #27 stack as the
+canonical integration candidate.
 
 ## Implementation status and remaining integration work
 
 ### 1. Integrate the published draft stack
 
-- Review and merge the cumulative integration head after its exact-head CI,
+- Review and merge [PR #28](https://github.com/toddlar00/rag-pipeline/pull/28)
+  after its exact-head CI,
   dependency, and supply-chain checks pass. The individual PRs remain useful as
   review-sized slices and preserve the implementation history.
 - Keep the expiring ChromaDB, PyMuPDF, FlagEmbedding, and CPU-wheel audit

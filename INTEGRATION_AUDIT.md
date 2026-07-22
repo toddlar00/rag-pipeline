@@ -35,9 +35,9 @@ Local combined validation after the merge:
 - focused LLM, adapter, CLI, pipeline, and publication suite: 117 passed;
 - Ruff, Python compilation, and `git diff --check`: passed.
 
-The cumulative pull request's check rollup is the authoritative exact-head CI,
-dependency-resolution, real-vector-client, vulnerability, license, and SBOM
-evidence.
+[PR #28](https://github.com/toddlar00/rag-pipeline/pull/28)'s check rollup is
+the authoritative exact-head CI, dependency-resolution, real-vector-client,
+vulnerability, license, and SBOM evidence.
 
 ### 2. Independent review evidence was ephemeral — remediated
 
