@@ -38,8 +38,11 @@ def test_show_info_discovers_book_scoped_artifacts(monkeypatch, tmp_path, capsys
 
 def test_show_info_does_not_mislabel_collection_status_failure(
         monkeypatch, tmp_path, capsys):
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
     db_path = tmp_path / "chroma"
     db_path.mkdir()
+    monkeypatch.setattr(rag, "OUTPUT_DIR", output_dir)
     close_error = RuntimeError("injected client close failure")
     monkeypatch.setattr(
         rag, "_index_collection_count",
