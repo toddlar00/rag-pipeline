@@ -37,10 +37,11 @@ Status terms:
 | Chunking-domain modularization | Implemented (draft) | [PR #17](https://github.com/toddlar00/rag-pipeline/pull/17) |
 | Index-state modularization | Implemented (draft) | [PR #18](https://github.com/toddlar00/rag-pipeline/pull/18) |
 | LLM-provider modularization | Implemented (draft) | [PR #19](https://github.com/toddlar00/rag-pipeline/pull/19) |
+| CLI-policy modularization | Implemented (draft) | [PR #20](https://github.com/toddlar00/rag-pipeline/pull/20) |
 
 PR #1 is independent of the index-integrity stack and can be reviewed or merged
 separately. The index-integrity stack must be reviewed and merged in order:
-**#2 -> #3 -> #4 -> #5 -> #6 -> #7 -> #8 -> #9 -> #10 -> #11 -> #12 -> #13 -> #14 -> #15 -> #16 -> #17 -> #18 -> #19**.
+**#2 -> #3 -> #4 -> #5 -> #6 -> #7 -> #8 -> #9 -> #10 -> #11 -> #12 -> #13 -> #14 -> #15 -> #16 -> #17 -> #18 -> #19 -> #20**.
 Until those PRs merge,
 implementation progress is ahead of integration progress.
 
