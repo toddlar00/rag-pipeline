@@ -622,6 +622,27 @@ def test_chroma_batch_embeds_context_but_stores_raw_text():
     assert metadatas[0]["chapter_num"] == -1
 
 
+def test_chroma_batch_embeds_heading_for_short_source_answer():
+    record = {
+        "text": "No.",
+        "metadata": {
+            "context": "",
+            "case_names": [],
+            "cross_references": [],
+            "headings": ["Did they bill for secretarial time?"],
+            "primary_case": None,
+            "chapter_title": "Chapter 9",
+            "chapter_num": 9,
+        },
+    }
+
+    _, embedding_inputs, documents, _ = rag._prepare_chroma_batch([record])
+
+    assert embedding_inputs == [
+        "Did they bill for secretarial time?\n\nNo."]
+    assert documents == ["No."]
+
+
 def test_chroma_result_normalizer_strips_legacy_context_prefix():
     docs, metas, scores = rag._unpack_chroma_results({
         "documents": [["Context line\n\nRaw text"]],

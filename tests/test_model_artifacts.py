@@ -722,6 +722,7 @@ def test_model_loader_source_is_verified_or_explicitly_opted_out(
 
 def test_tokenizer_loader_receives_only_verified_local_path(monkeypatch):
     captured = {}
+    encoded = []
     monkeypatch.setattr(
         rag, "_model_loader_source", lambda *_args: ("verified/tokenizer", True))
 
@@ -729,7 +730,11 @@ def test_tokenizer_loader_receives_only_verified_local_path(monkeypatch):
         @classmethod
         def from_pretrained(cls, model_name, **kwargs):
             captured.update(model_name=model_name, kwargs=kwargs)
-            return SimpleNamespace(encode=lambda *_args, **_kwargs: [1, 2])
+            return cls()
+
+        def encode(self, text, **kwargs):
+            encoded.append((text, kwargs))
+            return [1, 2]
 
     module = ModuleType("transformers")
     module.AutoTokenizer = FakeTokenizer
@@ -743,6 +748,39 @@ def test_tokenizer_loader_receives_only_verified_local_path(monkeypatch):
         "model_name": "verified/tokenizer",
         "kwargs": {"trust_remote_code": False, "local_files_only": True},
     }
+    assert encoded == [(
+        "search_document: text",
+        {"add_special_tokens": True, "truncation": False},
+    )]
+
+
+def test_generic_embedding_token_counter_does_not_add_nomic_prefix(
+        monkeypatch):
+    encoded = []
+    monkeypatch.setattr(
+        rag, "_model_loader_source", lambda *_args: ("verified/tokenizer", True))
+
+    class FakeTokenizer:
+        @classmethod
+        def from_pretrained(cls, *_args, **_kwargs):
+            return cls()
+
+        def encode(self, text, **kwargs):
+            encoded.append((text, kwargs))
+            return [1, 2, 3]
+
+    module = ModuleType("transformers")
+    module.AutoTokenizer = FakeTokenizer
+    monkeypatch.setitem(sys.modules, "transformers", module)
+
+    counts, exact = rag._count_embedding_text_tokens(
+        ["ordinary document"], "owner/generic-embedding-model")
+
+    assert (counts, exact) == ([3], True)
+    assert encoded == [(
+        "ordinary document",
+        {"add_special_tokens": True, "truncation": False},
+    )]
 
 
 def test_sentence_transformer_loader_uses_offline_verified_bundle(
@@ -775,6 +813,77 @@ def test_sentence_transformer_loader_uses_offline_verified_bundle(
             "model_kwargs": {"use_safetensors": True},
         },
     }
+
+
+def test_sentence_transformer_rejects_overstated_configured_limit(
+        monkeypatch):
+    monkeypatch.setitem(sys.modules, "chromadb", None)
+    monkeypatch.setattr(
+        rag, "_model_loader_source",
+        lambda *_args, **_kwargs: ("verified/embedding", True))
+    monkeypatch.setattr(
+        rag._model_artifacts, "model_artifact",
+        lambda *_args: SimpleNamespace(trust_remote_code=True))
+
+    class FakeSentenceTransformer:
+        max_seq_length = 256
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+    sentence_transformers = ModuleType("sentence_transformers")
+    sentence_transformers.SentenceTransformer = FakeSentenceTransformer
+    monkeypatch.setitem(
+        sys.modules, "sentence_transformers", sentence_transformers)
+
+    embedding = rag._get_embedding_fn(
+        rag.DEFAULT_EMBEDDING_MODEL_GENERAL)
+
+    with pytest.raises(RuntimeError, match="truncates at 256"):
+        embedding._load()
+
+
+def test_nomic_inference_uses_same_task_prefix_as_token_validation(
+        monkeypatch):
+    encoded = []
+    monkeypatch.setitem(sys.modules, "chromadb", None)
+    monkeypatch.setattr(
+        rag, "_model_loader_source",
+        lambda *_args, **_kwargs: ("verified/embedding", True))
+    monkeypatch.setattr(
+        rag._model_artifacts, "model_artifact",
+        lambda *_args: SimpleNamespace(trust_remote_code=True))
+
+    class Vector:
+        def tolist(self):
+            return [1.0, 2.0]
+
+    class FakeSentenceTransformer:
+        max_seq_length = 512
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def encode(self, texts, **kwargs):
+            encoded.append((texts, kwargs))
+            return [Vector() for _ in texts]
+
+    sentence_transformers = ModuleType("sentence_transformers")
+    sentence_transformers.SentenceTransformer = FakeSentenceTransformer
+    monkeypatch.setitem(
+        sys.modules, "sentence_transformers", sentence_transformers)
+
+    document_embedding = rag._get_embedding_fn(
+        rag.DEFAULT_EMBEDDING_MODEL_GENERAL, input_type="document")
+    query_embedding = rag._get_embedding_fn(
+        rag.DEFAULT_EMBEDDING_MODEL_GENERAL, input_type="query")
+
+    assert document_embedding(["body"]) == [[1.0, 2.0]]
+    assert query_embedding(["question"]) == [[1.0, 2.0]]
+    assert encoded == [
+        (["search_document: body"], {"convert_to_numpy": True}),
+        (["search_query: question"], {"convert_to_numpy": True}),
+    ]
 
 
 def test_zero_shot_and_reranker_use_verified_local_paths(monkeypatch):

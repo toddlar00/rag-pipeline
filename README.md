@@ -1057,8 +1057,11 @@ output/Civil_procedure/Chapters/
 
 Embeddings are computed at `index` time and stored. Chunking automatically caps
 `--max-tokens` to a known model input limit; when `--contextualize` is enabled,
-it also reserves room for the contextual prefix. Every new chunk records both
-its raw `token_count` and its final `embedding_token_count` (context included).
+it also reserves room for the contextual prefix. The default 500-token chunk
+budget fits Nomic v2's 512-token input after reserving its four-token
+`search_document: ` prefix and two special tokens. Every new chunk records both
+its raw `token_count` and its final `embedding_token_count` (context, retrieval
+task prefix, and special tokens included).
 Indexing recomputes final counts with the provider/model tokenizer where
 available (using a conservative fallback), rejects oversized chunks, and sizes
 API batches by aggregate tokens rather than record count. Legacy JSONL without
@@ -1066,7 +1069,7 @@ count fields is rechecked during indexing.
 
 | Model | Type | Cost | Max Tokens | Best for |
 |-------|------|------|-----------|----------|
-| `nomic-ai/nomic-embed-text-v2-moe` | Local GPU | Free | 8192 | **Default.** Best open-source. |
+| `nomic-ai/nomic-embed-text-v2-moe` | Local GPU | Free | 512 | **Default.** Best open-source; raw chunks are capped at 506 tokens. |
 | `voyage-law-2` | Voyage API | ~$0.12/M tokens | 16000 | Legal-specific. Trained on case law. |
 | `voyage-3-large` | Voyage API | ~$0.18/M tokens | 16000 | Best general Voyage model. |
 | `text-embedding-3-large` | OpenAI API | $0.13/M tokens | 8191 | Best commercial general-purpose. |
@@ -1279,6 +1282,19 @@ model to `index` automatically triggers the safe collection rebuild described
 above; `--full-reindex` remains available when an unconditional rebuild is
 desired.
 
+## Source-Preserving Chunking
+
+Chunk preparation keeps Docling source items authoritative when flattened
+chunk text would lose structure. Mixed prose/table chunks are separated;
+tables are emitted once as Markdown with captions and nested footnotes; and
+text merged across a front- or back-matter boundary is split by source page so
+substantive content cannot be discarded with structural material. When a
+Docling table cell omits text that is visibly present inside the source PDF's
+table bounding box, the pipeline restores that table from the PDF while
+ignoring information-equivalent token fusion such as `New York`/`NewYork`.
+Large tables are row-packed under the embedding limit with their header row
+repeated in each child chunk.
+
 ## TOC-Based Hierarchy Detection
 
 The pipeline extracts authoritative document structure from the Table of Contents
@@ -1410,7 +1426,7 @@ Each enriched chunk carries:
 | `headings` | list[str] | Full heading hierarchy from Docling layout model |
 | `quality_score` | int/null | LLM-rated usefulness 1-5 (with `--quality-score`) |
 | `token_count` | int | Token count of the raw chunk before any contextual prefix |
-| `embedding_token_count` | int | Token count of the exact contextualized text sent for embedding |
+| `embedding_token_count` | int | Token count of the exact contextualized, task-prefixed model input, including special tokens |
 | `chunk_index` | int | Positional index in output |
 
 ### Content Types

@@ -133,9 +133,13 @@ def _build_resume_cmd(
         args, "backend", defaults.conversion_backend)
     if conversion_backend != defaults.conversion_backend:
         parts.extend(["--backend", conversion_backend])
+    # Chunk size is an artifact-defining choice. Preserve it even when it
+    # equals today's default so a resume remains stable after future upgrades.
+    max_tokens = getattr(args, "max_tokens", None)
+    if max_tokens is not None:
+        parts.extend(["--max-tokens", str(max_tokens)])
     value_flags = (
         ("batch_size", None, "--batch-size"),
-        ("max_tokens", defaults.max_tokens, "--max-tokens"),
         ("min_words", defaults.min_words, "--min-words"),
         ("dedup_threshold", defaults.dedup_threshold, "--dedup-threshold"),
         ("db_lock_timeout", defaults.db_lock_timeout, "--db-lock-timeout"),

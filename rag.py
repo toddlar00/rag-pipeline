@@ -76,7 +76,10 @@ log = logging.getLogger(__name__)
 DEFAULT_EMBEDDING_MODEL_LEGAL = "voyage-law-2"
 DEFAULT_EMBEDDING_MODEL_GENERAL = "nomic-ai/nomic-embed-text-v2-moe"
 DEFAULT_EMBEDDING_MODEL = DEFAULT_EMBEDDING_MODEL_GENERAL  # free, local GPU, no API key needed
-DEFAULT_MAX_TOKENS = 4096
+# The default embedding model accepts 512 tokens including its retrieval-task
+# prefix and special tokens.  Five hundred leaves a small safety margin while
+# preserving ordinary sentence-boundary repair.
+DEFAULT_MAX_TOKENS = 500
 DEFAULT_COLLECTION = "civpro"
 DEFAULT_DB_LOCK_TIMEOUT = 30.0
 DEFAULT_OPERATION_TIMEOUTS = {
@@ -100,7 +103,7 @@ EMBEDDING_MAX_TOKENS = {
     "voyage-law-2": 16000,
     "voyage-3-large": 16000,
     "dunzhang/stella_en_400M_v5": 8192,
-    "nomic-ai/nomic-embed-text-v2-moe": 8192,
+    "nomic-ai/nomic-embed-text-v2-moe": 512,
     "text-embedding-3-large": 8191,
     "nlpaueb/legal-bert-base-uncased": 512,
 }
@@ -255,16 +258,56 @@ def _effective_chunk_token_limit(embedding_model: str,
     special_token_reserve = (
         0 if embedding_model.startswith(_API_EMBEDDING_MODEL_PREFIXES) else 2
     )
+    # Nomic's SentenceTransformer input includes a four-token
+    # ``search_document: `` task prefix in addition to BOS/EOS.  Chunker token
+    # counts exclude both, so reserve all six tokens before publication.
+    task_prefix_reserve = (
+        4
+        if embedding_model == "nomic-ai/nomic-embed-text-v2-moe"
+        else 0
+    )
     return min(
         requested_tokens,
-        max(1, model_limit - reserve_tokens - special_token_reserve),
+        max(
+            1,
+            model_limit - reserve_tokens - special_token_reserve
+            - task_prefix_reserve,
+        ),
     )
 
 
 def _embedding_text(record: dict) -> str:
-    context = record.get("metadata", {}).get("context", "")
+    metadata = record.get("metadata", {})
+    context = metadata.get("context", "")
     text = record.get("text", "")
-    return f"{context}\n\n{text}" if context else text
+    if context:
+        return f"{context}\n\n{text}"
+    if len(text.split()) < MIN_CHUNK_WORDS:
+        headings = metadata.get("headings") or []
+        if headings:
+            return f"{headings[-1]}\n\n{text}"
+    return text
+
+
+def _embedding_task_prefix(embedding_model: str,
+                           input_type: str) -> str:
+    """Return the exact retrieval-task prefix applied at model inference."""
+    if embedding_model.startswith("nomic-ai/nomic-embed-text"):
+        return (
+            "search_query: " if input_type == "query"
+            else "search_document: "
+        )
+    return ""
+
+
+def _prepare_embedding_inputs(texts, embedding_model: str,
+                              input_type: str) -> list[str]:
+    """Apply the same task prefix for token validation and model inference."""
+    prefix = _embedding_task_prefix(embedding_model, input_type)
+    return [
+        text if not prefix or text.startswith(prefix) else prefix + text
+        for text in texts
+    ]
 
 
 def _conservative_token_estimate(text: str) -> int:
@@ -277,6 +320,8 @@ def _conservative_token_estimate(text: str) -> int:
 def _count_embedding_text_tokens(texts: list[str],
                                  embedding_model: str) -> tuple[list[int], bool]:
     """Count model input tokens, returning ``(counts, exact_tokenizer)``."""
+    texts = _prepare_embedding_inputs(
+        texts, embedding_model, "document")
     try:
         if embedding_model.startswith("voyage-"):
             import voyageai
@@ -675,19 +720,26 @@ def _get_embedding_fn(model_name: str, *, input_type: str = "document"):
                 self._model = SentenceTransformer(
                     model_source, **loader_kwargs,
                 )
+                declared_limit = EMBEDDING_MAX_TOKENS.get(self._name)
+                runtime_limit = getattr(self._model, "max_seq_length", None)
+                if (
+                    declared_limit is not None
+                    and isinstance(runtime_limit, int)
+                    and runtime_limit > 0
+                    and declared_limit > runtime_limit
+                ):
+                    raise RuntimeError(
+                        f"Configured input limit for {self._name} is "
+                        f"{declared_limit} tokens, but the verified embedding "
+                        f"artifact truncates at {runtime_limit}."
+                    )
             return self._model
 
         def __call__(self, input: Documents) -> Embeddings:
             model = self._load()
-            texts = list(input)
-            # Nomic retrieval models require task prefixes.  Keep this scoped
-            # to the known model family; generic sentence-transformer models
-            # do not share a universal query/document prompt convention.
-            if self._name.startswith("nomic-ai/nomic-embed-text"):
-                prefix = ("search_query: " if self._role == "query"
-                          else "search_document: ")
-                texts = [text if text.startswith(prefix) else prefix + text
-                         for text in texts]
+            # Keep token validation and inference on one exact input contract.
+            texts = _prepare_embedding_inputs(
+                list(input), self._name, self._role)
             embeddings = model.encode(texts, convert_to_numpy=True)
             return [e.tolist() for e in embeddings]
 
@@ -1987,56 +2039,62 @@ class _AgentTeam:
 # ---------------------------------------------------------------------------
 
 def _identify_book_sections(doc: dict) -> dict:
-    """Identify the page ranges of Contents, Table of Contents, and Index.
+    """Identify contiguous front- and back-matter page ranges.
 
-    Scans section_header, page_header, and table items to find the
-    authoritative structural sections.  Also detects pages whose tables
-    contain TOC-like entries (chapter titles with page numbers).
-
-    Returns::
-
-        {
-            "contents": {"start": int, "end": int} | None,
-            "toc":      {"start": int, "end": int} | None,
-            "index":    {"start": int, "end": int} | None,
-        }
+    Explicit section/page headers are authoritative. Table-layout evidence is
+    used only to extend a single explicit TOC seed, or as a conservative
+    fallback when no TOC heading survived extraction. An isolated body table
+    must never widen the TOC across intervening chapters.
     """
     texts = doc.get("texts", [])
     tables = doc.get("tables", [])
 
-    # Keywords for each section type
-    # NOTE: "table of cases" is NOT an index — it appears within the
-    # front-matter TOC in many law textbooks.  The back-of-book Index
-    # is labeled "Index" or "Subject Index".
     _SECTION_KW = {
-        "contents": [
-            r"^contents$",
-            r"^brief contents$", r"^short contents$",
+        "contents": [r"contents", r"brief contents", r"short contents"],
+        "summary": [r"summary of contents"],
+        "toc": [r"table of contents", r"detailed contents"],
+        "problems": [r"table of problems"],
+        "acknowledgments": [r"acknowledgments?"],
+        "about_authors": [r"about the authors?"],
+        "table_of_cases": [r"table of cases"],
+        "table_of_rules": [
+            r"table of (?:rules|authorities|restatements|statutes|"
+            r"bar opinions|standards)(?:,.*)?",
         ],
-        "summary": [
-            r"^summary of contents$",
+        "index": [r"index", r"subject index"],
+        "editorial": [
+            r"editorial advisors?", r"(?:series |editorial )?advisory board",
         ],
-        "toc": [
-            r"^table of contents$", r"^detailed contents$",
-        ],
-        "index": [
-            r"^index$", r"^subject index$",
+        "publisher": [r"about .* publishing"],
+        "credits": [
+            r"textual material", r"images",
+            r"design \(chapter opener graphic\)",
         ],
     }
     _SECTION_RE = {
-        k: [re.compile(p, re.I) for p in pats]
+        k: [re.compile(rf"^(?:{p})$", re.I) for p in pats]
         for k, pats in _SECTION_KW.items()
     }
 
     section_pages: dict[str, list[int]] = {k: [] for k in _SECTION_RE}
 
-    # 1. Scan section_header / page_header / title items
+    def _normalized_heading(raw: str, label: str) -> str:
+        value = re.sub(r"\s+", " ", _decode_pua(raw)).strip(" \t:.-")
+        if label == "page_header":
+            # Running headers may prefix an Arabic or Roman printed page.
+            value = re.sub(
+                r"^(?:(?:[ivxlcdm]+|\d{1,4})\s+)", "", value,
+                flags=re.I,
+            )
+        return value
+
+    # Running headers define section ends without guessing from table density.
     for item in texts:
         label = item.get("label", "")
         if label not in ("section_header", "page_header", "title"):
             continue
-        raw = _decode_pua(item.get("text", "")).strip()
-        if not raw or len(raw) > 60:
+        raw = _normalized_heading(item.get("text", ""), label)
+        if not raw or len(raw) > 100:
             continue
         prov = item.get("prov", [])
         page = prov[0].get("page_no") if prov else None
@@ -2044,42 +2102,42 @@ def _identify_book_sections(doc: dict) -> dict:
             continue
 
         for sec_type, patterns in _SECTION_RE.items():
-            if any(p.match(raw) for p in patterns):
+            if any(p.fullmatch(raw) for p in patterns):
                 section_pages[sec_type].append(page)
                 break
 
-    # 2. Check page_header running headers (repeat on every page of section)
+    # Find the first observed chapter before considering table-layout
+    # evidence. This hard boundary prevents ordinary body tables from being
+    # interpreted as part of the TOC.
+    _chapter_heading_re = re.compile(
+        r"^(?:chapter\s+)?\d{1,2}\s*(?:[\xb7\u00b7\u2022\-\u2013\u2014]|\s{2,})\s*\S",
+        re.I,
+    )
+    chapter_starts: list[int] = []
     for item in texts:
-        if item.get("label") != "page_header":
+        if item.get("label") not in ("section_header", "page_header", "title"):
             continue
-        raw = _decode_pua(item.get("text", "")).strip().lower()
+        raw = re.sub(
+            r"\s+", " ", _decode_pua(item.get("text", ""))).strip()
         prov = item.get("prov", [])
         page = prov[0].get("page_no") if prov else None
-        if page is None:
-            continue
-        if raw == "contents":
-            section_pages["contents"].append(page)
-        elif raw == "summary of contents":
-            section_pages["summary"].append(page)
-        elif raw == "table of contents":
-            section_pages["toc"].append(page)
-        elif raw == "index":
-            section_pages["index"].append(page)
+        if page is not None and _chapter_heading_re.match(raw):
+            chapter_starts.append(page)
 
-    # 3. Scan tables for TOC-like content on early pages.
-    #    TOC tables typically have cells like "Chapter 1 Some Title.......3"
-    #    or "A. First Possession   5".  Detect by looking for cells with
-    #    trailing page numbers in the first ~15% of the document.
+    total_pages = len(doc.get("pages", {}))
+    first_chapter = min(chapter_starts) if chapter_starts else None
+    front_cutoff = (
+        max(1, first_chapter - 1)
+        if first_chapter is not None
+        else min(total_pages or 60, max(60, int((total_pages or 400) * 0.1)))
+    )
+
+    # Scan front-matter tables for TOC-like content.
     _toc_entry_re = re.compile(
         r"(?:chapter|part|preface|appendix|index|"
         r"acknowledgment|table of cases)\b",
         re.I)
     _trailing_num_re = re.compile(r"\b\d{1,4}\s*$")
-    total_pages = 0
-    if doc.get("pages"):
-        total_pages = len(doc["pages"])
-    front_cutoff = max(60, int(total_pages * 0.15)) if total_pages else 60
-
     toc_table_pages: list[int] = []
     for t in tables:
         prov = t.get("prov", [])
@@ -2098,15 +2156,40 @@ def _identify_book_sections(doc: dict) -> dict:
         if toc_hits >= 3:
             toc_table_pages.append(page)
 
-    if toc_table_pages:
-        # Merge table-detected pages into toc/contents
-        if not section_pages["toc"] and not section_pages["contents"]:
-            section_pages["contents"].extend(toc_table_pages)
-        elif section_pages["contents"]:
-            # Extend the existing range
-            section_pages["contents"].extend(toc_table_pages)
-        elif section_pages["toc"]:
-            section_pages["toc"].extend(toc_table_pages)
+    def _contiguous_runs(pages: list[int]) -> list[list[int]]:
+        runs: list[list[int]] = []
+        for page in sorted(set(pages)):
+            if not runs or page != runs[-1][-1] + 1:
+                runs.append([page])
+            else:
+                runs[-1].append(page)
+        return runs
+
+    table_runs = _contiguous_runs(toc_table_pages)
+    explicit_toc_pages = {
+        page
+        for section in ("summary", "contents", "toc")
+        for page in section_pages[section]
+    }
+    if explicit_toc_pages:
+        # Repeated running headers already give a complete range. A lone
+        # heading may be extended only through the contiguous run containing
+        # that page.
+        for section in ("summary", "contents", "toc"):
+            seeds = set(section_pages[section])
+            if len(seeds) != 1:
+                continue
+            for run in table_runs:
+                if seeds.intersection(run):
+                    section_pages[section].extend(run)
+                    break
+    else:
+        # With no heading evidence, require multiple consecutive table pages.
+        # Isolated tables are too common in textbook body content.
+        candidates = [run for run in table_runs if len(run) >= 2]
+        if candidates:
+            best = max(candidates, key=lambda run: (len(run), -run[0]))
+            section_pages["contents"].extend(best)
 
     # 4. Fallback: if no TOC/contents detected yet, scan plain "text" items
     #    for TOC keywords.  Some scanned PDFs produce all items as "text"
@@ -2148,7 +2231,7 @@ def _identify_book_sections(doc: dict) -> dict:
         else:
             result[sec_type] = None
 
-    # Merge toc/contents/summary into a usable set:
+    # Merge toc/contents/summary into a usable scaffold span:
     # - "summary" is the brief Summary of Contents (e.g., ConLaw p.9)
     # - "contents" is the detailed Contents listing
     # - "toc" is the "Table of Contents" header
@@ -2156,18 +2239,13 @@ def _identify_book_sections(doc: dict) -> dict:
     all_toc_types = [k for k in ("contents", "toc", "summary")
                      if result.get(k)]
     if all_toc_types:
-        # The widest range across all TOC-type sections is the full TOC
+        # ``toc`` is the canonical full scaffold span. Keep the distinct
+        # summary and detailed-contents ranges for precise filtering.
         widest_start = min(result[k]["start"] for k in all_toc_types)
         widest_end = max(result[k]["end"] for k in all_toc_types)
-        # Ensure "toc" and "contents" are set to the widest range
-        if not result.get("toc"):
-            result["toc"] = {"start": widest_start, "end": widest_end}
+        result["toc"] = {"start": widest_start, "end": widest_end}
         if not result.get("contents"):
             result["contents"] = {"start": widest_start, "end": widest_end}
-        # If there's a "summary" but also a separate "contents", keep them distinct
-        # Otherwise merge them
-        if result.get("summary") and not result.get("contents"):
-            result["contents"] = result["summary"]
 
     found = [f"{k}: pp.{v['start']}-{v['end']}"
              for k, v in result.items() if v]
@@ -2834,6 +2912,64 @@ def _llm_parse_scaffold(toc_text: str, *, layout_schema: dict = None,
     return all_entries
 
 
+def _toc_visual_subrows(cells: list[dict]) -> list[list[dict]]:
+    """Split unreliable declared table rows using vertical cell geometry.
+
+    Docling occasionally assigns the last line on a page and the next chapter
+    heading to one logical row. Cells in a real visual row overlap vertically;
+    disjoint bands are therefore safer than the declared row index alone.
+    If geometry is missing, preserve the declared row unchanged.
+    """
+    declared: dict[int, list[dict]] = {}
+    for cell in cells:
+        declared.setdefault(cell.get("start_row_offset_idx", 0), []).append(cell)
+
+    output: list[list[dict]] = []
+    for row_idx in sorted(declared):
+        row_cells = declared[row_idx]
+        if len(row_cells) < 2 or any(
+                not isinstance(cell.get("bbox"), dict)
+                or cell["bbox"].get("t") is None
+                or cell["bbox"].get("b") is None
+                for cell in row_cells):
+            output.append(row_cells)
+            continue
+
+        bands: list[dict] = []
+        positioned = []
+        for cell in row_cells:
+            bbox = cell["bbox"]
+            low = min(float(bbox["t"]), float(bbox["b"]))
+            high = max(float(bbox["t"]), float(bbox["b"]))
+            positioned.append(((low + high) / 2, low, high, cell))
+
+        for center, low, high, cell in sorted(positioned, key=lambda x: x[0]):
+            overlapping = [
+                band for band in bands
+                if low <= band["high"] + 2.0 and high >= band["low"] - 2.0
+            ]
+            if overlapping:
+                band = min(overlapping, key=lambda value: abs(
+                    center - value["center"]))
+                band["cells"].append(cell)
+                band["low"] = min(band["low"], low)
+                band["high"] = max(band["high"], high)
+                band["center"] = sum(
+                    (min(float(item["bbox"]["t"]), float(item["bbox"]["b"]))
+                     + max(float(item["bbox"]["t"]), float(item["bbox"]["b"])))
+                    / 2 for item in band["cells"]
+                ) / len(band["cells"])
+            else:
+                bands.append({
+                    "center": center, "low": low, "high": high,
+                    "cells": [cell],
+                })
+
+        for band in sorted(bands, key=lambda value: value["center"]):
+            output.append(band["cells"])
+    return output
+
+
 def _parse_toc_tables(doc: dict, toc_start: int, toc_end: int) -> list[dict]:
     """Parse TOC from DoclingDocument tables via row reconstruction.
 
@@ -2859,6 +2995,7 @@ def _parse_toc_tables(doc: dict, toc_start: int, toc_end: int) -> list[dict]:
         r"[.\u2026·\s]{2,}\s*((?:x{0,3}(?:ix|iv|v?i{0,3})|"
         r"(?:l?x{0,3})(?:ix|iv|v?i{0,3})))\s*$", re.I)
     _chapter_re = re.compile(r"^(?:Chapter|Part|Unit)\s+\d", re.I)
+    _leader_run = re.compile(r"(?:\s*[.\u2026·]\s*){2,}")
     _skip_re = re.compile(
         r"^(table of )?contents$|^summary of contents$|"
         r"^detailed contents$|^page$", re.I)
@@ -2876,24 +3013,62 @@ def _parse_toc_tables(doc: dict, toc_start: int, toc_end: int) -> list[dict]:
         if not cells:
             continue
 
-        # --- Step 1: reconstruct rows from cells -----------------------
-        rows: dict[int, dict[int, str]] = {}
-        col_spans: dict[int, dict[int, tuple[int, int]]] = {}
-        for cell in cells:
-            row_idx = cell.get("start_row_offset_idx", 0)
-            col_start = cell.get("start_col_offset_idx", 0)
-            col_end = cell.get("end_col_offset_idx", col_start + 1)
-            text = _decode_pua(cell.get("text", "")).strip()
-            if text:
-                rows.setdefault(row_idx, {})[col_start] = text
-                col_spans.setdefault(row_idx, {})[col_start] = (
-                    col_start, col_end)
+        # --- Step 1: reconstruct visual rows from cells ----------------
+        visual_rows = _toc_visual_subrows(cells)
+        row_queue = list(visual_rows)
 
-        # --- Step 2: parse each row ------------------------------------
-        for row_idx in sorted(rows):
-            row = rows[row_idx]
-            spans = col_spans.get(row_idx, {})
+        # --- Step 2: parse each visual row ------------------------------
+        while row_queue:
+            row_cells = row_queue.pop(0)
+            row: dict[int, str] = {}
+            spans: dict[int, tuple[int, int]] = {}
+            for cell in sorted(
+                    row_cells,
+                    key=lambda value: value.get("start_col_offset_idx", 0)):
+                col_start = cell.get("start_col_offset_idx", 0)
+                col_end = cell.get("end_col_offset_idx", col_start + 1)
+                text = _decode_pua(cell.get("text", "")).strip()
+                if not text:
+                    continue
+                row[col_start] = " ".join(
+                    part for part in (row.get(col_start, ""), text) if part)
+                old_span = spans.get(col_start, (col_start, col_end))
+                spans[col_start] = (
+                    min(old_span[0], col_start), max(old_span[1], col_end))
+            if not row:
+                continue
             max_col = max(row.keys()) if row else 0
+
+            # Some merged cells contain two visual lines and the page column
+            # contains the corresponding two numbers. Recover those pairs
+            # before applying the ordinary single-row parser.
+            if max_col > 0:
+                page_values = re.findall(r"\b\d{1,4}\b", row[max_col])
+                joined_title = " ".join(
+                    row[col] for col in sorted(row) if col != max_col)
+                title_segments = [
+                    segment.strip()
+                    for segment in _leader_run.split(joined_title)
+                    if segment.strip()
+                ]
+                if (len(page_values) > 1
+                        and len(title_segments) == len(page_values)):
+                    synthetic_rows = []
+                    for segment, value in zip(title_segments, page_values):
+                        synthetic_rows.append([
+                            {
+                                "text": segment,
+                                "start_col_offset_idx": 0,
+                                "end_col_offset_idx": max_col,
+                            },
+                            {
+                                "text": value,
+                                "start_col_offset_idx": max_col,
+                                "end_col_offset_idx": max_col + 1,
+                            },
+                        ])
+                    row_queue[0:0] = synthetic_rows
+                    continue
 
             # Collect all text from this row
             all_texts = [row[c] for c in sorted(row.keys())]
@@ -2988,9 +3163,22 @@ def _parse_toc_tables(doc: dict, toc_start: int, toc_end: int) -> list[dict]:
             if not title:
                 continue
 
+            # Clean the fully joined title, not merely its final cell.
+            clean = _chunking_core.clean_heading_text(title)
+            clean = re.sub(r"\s+", " ", _leader_run.sub(" ", clean)).strip()
+            if not clean:
+                continue
+
+            # A Table-of-Problems row can contain a chapter title followed by
+            # "N-1 Problem". It is not a second chapter boundary.
+            chapter_match = re.match(
+                r"^(?:Chapter|Part|Unit)\s+(\d{1,2})\b", clean, re.I)
+            if chapter_match and re.search(
+                    rf"\b{re.escape(chapter_match.group(1))}-\d+\b", clean):
+                continue
+
             # --- Infer hierarchy level ---------------------------------
             level = 3  # default: subsection
-            clean = title.strip()
             if _chapter_re.match(clean):
                 level = 1
             elif re.match(r"^[A-Z]\.\s", clean):
@@ -3076,7 +3264,19 @@ def _build_scaffold_lookup(scaffold: list[dict],
     for entry in scaffold:
         pg = entry.get("page", 0)
         if pg > 0:
-            page_map[pg] = entry
+            previous = page_map.get(pg)
+            previous_chapter = (
+                previous.get("chapter_num") if previous else None)
+            current_chapter = entry.get("chapter_num")
+            # On a shared boundary page, a new chapter must reset any
+            # preceding-chapter subsection. Within one chapter, retain the
+            # last (deepest) entry on that page.
+            if (previous is None
+                    or previous_chapter == current_chapter
+                    or (current_chapter is not None
+                        and (previous_chapter is None
+                             or current_chapter > previous_chapter))):
+                page_map[pg] = entry
 
     # Forward-fill: each page inherits the most recent scaffold entry
     lookup: dict[int, dict] = {}
@@ -3090,6 +3290,67 @@ def _build_scaffold_lookup(scaffold: list[dict],
             lookup[pg] = current
 
     return lookup
+
+
+def _canonical_chapter_titles(
+        scaffold: list[dict], chapter_map: dict[int, dict]) -> dict[int, str]:
+    """Choose one clean, stable title for every observed chapter."""
+    chapter_re = re.compile(r"^(?:Chapter|Part|Unit)\s+(\d{1,2})\b", re.I)
+    problem_re = re.compile(r"\b(\d{1,2})-\d+\b")
+    canonical: dict[int, str] = {}
+
+    indexed = list(enumerate(scaffold))
+    indexed.sort(key=lambda pair: (pair[1].get("page", 0), pair[0]))
+    for _, entry in indexed:
+        if entry.get("level") != 1:
+            continue
+        title = _chunking_core.clean_heading_text(entry.get("title", ""))
+        match = chapter_re.match(title)
+        if not match:
+            continue
+        chapter_num = int(match.group(1))
+        if entry.get("chapter_num") not in (None, chapter_num):
+            continue
+        if problem_re.search(title) or re.search(
+                r"\s+Chapter\s+\d{1,2}\b", title, re.I):
+            continue
+        canonical.setdefault(chapter_num, title)
+
+    for chapter_num, info in sorted(chapter_map.items()):
+        if chapter_num in canonical:
+            continue
+        title = _chunking_core.clean_heading_text(info.get("title", ""))
+        title = re.sub(r"^[^A-Za-z0-9]+\s*", "", title)
+        if title:
+            if chapter_re.match(title):
+                canonical[chapter_num] = title
+            else:
+                canonical[chapter_num] = f"Chapter {chapter_num}: {title}"
+    return canonical
+
+
+def _normalize_scaffold_metadata(
+        scaffold: list[dict], chapter_titles: dict[int, str]) -> list[dict]:
+    """Clean scaffold titles and rebuild canonical hierarchical paths."""
+    stack: dict[int, str] = {}
+    normalized: list[dict] = []
+    for entry in scaffold:
+        title = _chunking_core.clean_heading_text(entry.get("title", ""))
+        chapter_num = entry.get("chapter_num")
+        if entry.get("level") == 1 and chapter_num in chapter_titles:
+            title = chapter_titles[chapter_num]
+        if not title:
+            continue
+        entry = dict(entry)
+        entry["title"] = title
+        level = entry.get("level", 3)
+        for prior_level in list(stack):
+            if prior_level >= level:
+                del stack[prior_level]
+        stack[level] = title
+        entry["path"] = " > ".join(stack[key] for key in sorted(stack))
+        normalized.append(entry)
+    return normalized
 
 
 # ---------------------------------------------------------------------------
@@ -5002,6 +5263,908 @@ def enrich_chunk(chunk_text: str, headings: list[str] | None,
     }
 
 
+def _chunk_heading_key(record: dict) -> tuple[str, ...]:
+    headings = record.get("metadata", {}).get("headings") or []
+    return tuple(
+        _chunking_core.clean_heading_text(str(heading)).casefold()
+        for heading in headings
+        if _chunking_core.clean_heading_text(str(heading))
+    )
+
+
+def _merge_enriched_chunk_group(
+        group: list[dict], token_counter: Callable[[str], int]) -> dict:
+    """Merge source-adjacent records and recompute all text-derived fields."""
+    merged = {
+        "text": "\n\n".join(
+            record["text"].strip() for record in group if record["text"].strip()),
+        "metadata": dict(group[0]["metadata"]),
+    }
+    metadata = merged["metadata"]
+    starts = [
+        record["metadata"].get("page_start") for record in group
+        if record["metadata"].get("page_start") is not None
+    ]
+    ends = [
+        record["metadata"].get("page_end") for record in group
+        if record["metadata"].get("page_end") is not None
+    ]
+    metadata["page_start"] = min(starts) if starts else None
+    metadata["page_end"] = max(ends) if ends else None
+    if starts and ends:
+        metadata["page_range"] = f"pp.{min(starts)}-{max(ends)}"
+    headings = metadata.get("headings") or []
+    metadata["section_path"] = build_section_path(headings)
+    metadata["content_type"] = classify_content_type(merged["text"], headings)
+    case_names = extract_case_names(merged["text"])
+    metadata["case_names"] = case_names
+    metadata["primary_case"] = case_names[0] if case_names else None
+    metadata["cross_references"] = list(dict.fromkeys(
+        reference
+        for record in group
+        for reference in record["metadata"].get("cross_references", [])
+    ))
+    sources = {
+        record["metadata"].get("content_source", "body") for record in group
+    }
+    metadata["content_source"] = (
+        next(iter(sources)) if len(sources) == 1 else "mixed")
+    metadata["token_count"] = int(token_counter(merged["text"]))
+    return merged
+
+
+def _coalesce_chunk_boundaries(
+        records: list[dict], token_counter: Callable[[str], int],
+        max_tokens: int, *, hard_max_tokens: int | None = None) -> list[dict]:
+    """Repair split sentences and alternating rule/explanation layout lanes."""
+    if len(records) < 2:
+        return records
+
+    def _pages_touch(left: dict, right: dict) -> bool:
+        left_end = left["metadata"].get("page_end")
+        right_start = right["metadata"].get("page_start")
+        if left_end is None or right_start is None:
+            return False
+        return left_end <= right_start <= left_end + 1
+
+    def _lane(record: dict) -> str | None:
+        metadata = record.get("metadata", {})
+        if (metadata.get("content_source") == "table"
+                or metadata.get("content_type") == "table"):
+            return None
+        heading = " ".join(_chunk_heading_key(record))
+        opening = record.get("text", "").lstrip()[:100]
+        if (re.search(r"\brule language\b|\bstatutory text\b", heading)
+                or re.match(r"rule language\s*\**(?:\s|$)", opening, re.I)):
+            return "rule"
+        if (re.search(r"\bauthors?['’] explanation\b", heading)
+                or re.match(
+                    r"authors?['’] explanation\s*\**(?:\s|$)",
+                    opening,
+                    re.I,
+                )):
+            return "explanation"
+        return None
+
+    def _pack(group: list[dict]) -> list[dict]:
+        packed: list[dict] = []
+        current: list[dict] = []
+        for record in group:
+            candidate = current + [record]
+            combined_text = "\n\n".join(item["text"] for item in candidate)
+            if current and token_counter(combined_text) > max_tokens:
+                packed.append(_merge_enriched_chunk_group(current, token_counter))
+                current = [record]
+            else:
+                current = candidate
+        if current:
+            packed.append(_merge_enriched_chunk_group(current, token_counter))
+        return packed
+
+    # Reconstruct alternating two-column source layout as two coherent lanes.
+    lane_repaired: list[dict] = []
+    index = 0
+    while index < len(records):
+        if _lane(records[index]) is None:
+            lane_repaired.append(records[index])
+            index += 1
+            continue
+        end = index + 1
+        while (end < len(records)
+               and _lane(records[end]) is not None
+               and _pages_touch(records[end - 1], records[end])):
+            end += 1
+        run = records[index:end]
+        keys = list(dict.fromkeys(
+            (_lane(record), _chunk_heading_key(record)) for record in run))
+        # Source columns may be extracted in either visual order. Publish the
+        # complete rule lane before its explanation consistently.
+        keys.sort(key=lambda item: 0 if item[0] == "rule" else 1)
+        if len(run) >= 3 and len(keys) >= 2:
+            for lane, key in keys:
+                lane_repaired.extend(_pack([
+                    record for record in run
+                    if (_lane(record), _chunk_heading_key(record)) == (lane, key)
+                ]))
+        else:
+            lane_repaired.extend(run)
+        index = end
+
+    def _edge_footnotes(text: str, *, leading: bool) -> tuple[str, list[str]]:
+        lines = text.splitlines()
+        footnotes: list[str] = []
+        if leading:
+            while lines and _FOOTNOTE_NUM_RE.match(lines[0]):
+                footnotes.append(lines.pop(0))
+        else:
+            while lines and _FOOTNOTE_NUM_RE.match(lines[-1]):
+                footnotes.insert(0, lines.pop())
+        return "\n".join(lines).strip(), footnotes
+
+    def _continues_sentence(left: str, right: str) -> bool:
+        left_core = left.rstrip().rstrip('"\'\u2019\u201d)]}')
+        right_core = right.lstrip()
+        if not left_core or not right_core:
+            return False
+        if left_core.endswith((".", "?", "!")):
+            return False
+        return (right_core[0].islower()
+                or right_core[0] in ",.;:)]}'\"’”"
+                or left_core.endswith(("-", "–", "—", ",", ";", ":")))
+
+    # Merge ordinary same-heading chunks only when the boundary is visibly a
+    # sentence continuation and the configured token cap remains satisfied.
+    repaired: list[dict] = []
+    for record in lane_repaired:
+        if not repaired:
+            repaired.append(record)
+            continue
+        previous = repaired[-1]
+        same_heading = _chunk_heading_key(previous) == _chunk_heading_key(record)
+        non_table = all(
+            item["metadata"].get("content_type") != "table"
+            for item in (previous, record)
+        )
+        left_body, trailing_footnotes = _edge_footnotes(
+            previous["text"], leading=False)
+        right_body, leading_footnotes = _edge_footnotes(
+            record["text"], leading=True)
+        reordered_text = f"{left_body.rstrip()} {right_body.lstrip()}".strip()
+        boundary_footnotes = trailing_footnotes + leading_footnotes
+        if boundary_footnotes:
+            reordered_text += "\n\n" + "\n".join(boundary_footnotes)
+        combined_limit = max_tokens + max(128, max_tokens // 4)
+        if hard_max_tokens is not None:
+            combined_limit = min(combined_limit, hard_max_tokens)
+        if (same_heading and non_table and _pages_touch(previous, record)
+                and _continues_sentence(left_body, right_body)
+                and token_counter(reordered_text) <= combined_limit):
+            previous_copy = {
+                "text": reordered_text,
+                "metadata": dict(previous["metadata"]),
+            }
+            record_copy = {
+                "text": "",
+                "metadata": dict(record["metadata"]),
+            }
+            repaired[-1] = _merge_enriched_chunk_group(
+                [previous_copy, record_copy], token_counter)
+        else:
+            repaired.append(record)
+    return repaired
+
+
+def _validate_chunk_structure_for_publication(
+        records: list[dict], *, scaffold: list[dict],
+        book_sections: dict, chapter_map: dict[int, dict],
+        chapter_titles: dict[int, str]) -> None:
+    """Reject a corpus with leaked structural pages or corrupt hierarchy."""
+    structural_names = (
+        "summary", "contents", "toc", "problems", "acknowledgments",
+        "about_authors", "table_of_cases", "table_of_rules", "index",
+        "editorial", "publisher", "credits",
+    )
+    structural_ranges = {
+        (value["start"], value["end"])
+        for name in structural_names
+        if (value := book_sections.get(name)) is not None
+    }
+
+    starts: dict[int, int] = {}
+    for entry in scaffold:
+        chapter_num = entry.get("chapter_num")
+        page = entry.get("page")
+        if entry.get("level") == 1 and chapter_num is not None and page:
+            starts.setdefault(chapter_num, page)
+    for chapter_num, info in chapter_map.items():
+        page = info.get("min_page")
+        if page:
+            starts[chapter_num] = min(starts.get(chapter_num, page), page)
+
+    ordered_starts = sorted((page, chapter) for chapter, page in starts.items())
+    bounds: dict[int, tuple[int, int]] = {}
+    first_backmatter = min(
+        (start for start, _ in structural_ranges
+         if not ordered_starts or start > ordered_starts[-1][0]),
+        default=0,
+    )
+    for index, (start, chapter_num) in enumerate(ordered_starts):
+        if index + 1 < len(ordered_starts):
+            end = ordered_starts[index + 1][0] - 1
+        else:
+            observed_end = chapter_map.get(chapter_num, {}).get("max_page", start)
+            end = first_backmatter - 1 if first_backmatter else observed_end
+        bounds[chapter_num] = (start, end)
+
+    issues: list[str] = []
+    for index, record in enumerate(records):
+        metadata = record.get("metadata", {})
+        text = record.get("text", "")
+        page_start = metadata.get("page_start")
+        page_end = metadata.get("page_end")
+        if page_start is not None and page_end is not None and any(
+                start <= page_start and page_end <= end
+                for start, end in structural_ranges):
+            issues.append(
+                f"chunk {index} retains structural pp.{page_start}-{page_end}")
+
+        if re.search(r"(?<=[A-Za-z0-9])-\s+(?=[A-Za-z0-9])", text):
+            issues.append(f"chunk {index} retains a split-hyphen artifact")
+        if re.search(
+                r"https?://\s|\bwww\s+\.|\bperma\.cc/\s", text, re.I):
+            issues.append(f"chunk {index} retains a split URL")
+        if "This and other authors' explanations draw" in text:
+            issues.append(f"chunk {index} retains editorial boilerplate")
+        if re.search(
+                r"\b(?:clientlawyer|lawyerclient|plaintiffdefendant|"
+                r"threejudge|Aconcluding)\b", text, re.I):
+            issues.append(f"chunk {index} retains a known fused term")
+
+        headings_text = " ".join(metadata.get("headings") or [])
+        content_type = metadata.get("content_type")
+        if re.search(
+                r"(?:\s*[.\u2026·]){3,}",
+                metadata.get("section_path", "")):
+            issues.append(f"chunk {index} section path contains TOC leaders")
+        content_source = metadata.get("content_source")
+        source_is_table = content_source == "table"
+        source_is_nonprose = content_source in {"table", "footnote"}
+        explicit_rule_lane = (
+            bool(re.search(r"\brule language\b", headings_text, re.I))
+            or bool(re.match(
+                r"\s*rule language\s*\**(?:\s|$)", text, re.I)))
+        explicit_explanation_lane = (
+            bool(re.search(
+                r"\bauthors?['’] explanation\b", headings_text, re.I))
+            or bool(re.match(
+                r"\s*authors?['’] explanation\s*\**(?:\s|$)",
+                text,
+                re.I,
+            )))
+        if (explicit_rule_lane
+                and content_type != "statutory_excerpt"
+                and not source_is_nonprose):
+            issues.append(f"chunk {index} misclassifies explicit rule language")
+        if (explicit_explanation_lane
+                and content_type != "author_narrative"
+                and not source_is_nonprose):
+            issues.append(f"chunk {index} misclassifies author explanation")
+        if (content_type == "footnote"
+                and content_source != "footnote"
+                and not _FOOTNOTE_NUM_RE.match(text)
+                ):
+            issues.append(f"chunk {index} footnote does not open as a footnote")
+        if source_is_table:
+            if content_type != "table":
+                issues.append(f"chunk {index} source table is not classified as table")
+            if not any(line.lstrip().startswith("|") for line in text.splitlines()):
+                issues.append(f"chunk {index} source table lost its Markdown header")
+        for case_name in metadata.get("case_names", []):
+            if (len(case_name) > 160
+                    or not (" v. " in case_name
+                            or case_name.startswith(("In re ", "Ex parte ")))):
+                issues.append(f"chunk {index} has an invalid case entity")
+
+        chapter_num = metadata.get("chapter_num")
+        if chapter_num is None:
+            continue
+        expected_title = chapter_titles.get(chapter_num)
+        actual_title = metadata.get("chapter_title")
+        if not expected_title or actual_title != expected_title:
+            issues.append(
+                f"chunk {index} chapter {chapter_num} has noncanonical title")
+        if actual_title and (
+                re.search(r"(?:\s*[.\u2026·]){3,}", actual_title)
+                or re.search(rf"\b{chapter_num}-\d+\b", actual_title)):
+            issues.append(f"chunk {index} chapter title contains TOC artifacts")
+        section_path = metadata.get("section_path", "")
+        if expected_title and not section_path.startswith(expected_title):
+            issues.append(
+                f"chunk {index} section path does not start with chapter title")
+        if (page_start is not None and page_end is not None
+                and chapter_num in bounds):
+            lower, upper = bounds[chapter_num]
+            if page_start < lower or page_end > upper:
+                issues.append(
+                    f"chunk {index} chapter {chapter_num} lies outside "
+                    f"pp.{lower}-{upper}: pp.{page_start}-{page_end}")
+
+    if issues:
+        preview = "; ".join(issues[:10])
+        suffix = f"; and {len(issues) - 10} more" if len(issues) > 10 else ""
+        raise RuntimeError(
+            f"Structural metadata quality gate failed: {preview}{suffix}")
+
+
+def _split_markdown_table_by_rows(
+        markdown: str, token_counter: Callable[[str], int],
+        max_tokens: int) -> list[str]:
+    """Pack source table rows into independently valid Markdown tables.
+
+    Docling's hybrid chunker sizes a flattened table representation. Restoring
+    the richer source Markdown can therefore exceed the embedding limit even
+    when the original raw chunk fit. Repeat the header and separator for each
+    row group so every published child remains understandable and retrievable.
+    A single row that cannot fit is left intact for the exact model-input gate
+    to reject rather than being silently truncated or converted to prose.
+    """
+    markdown = markdown.strip()
+    if not markdown or token_counter(markdown) <= max_tokens:
+        return [markdown] if markdown else []
+    lines = [line.rstrip() for line in markdown.splitlines() if line.strip()]
+    table_start = next(
+        (index for index, line in enumerate(lines)
+         if line.lstrip().startswith("|")
+         and index + 1 < len(lines)
+         and lines[index + 1].lstrip().startswith("|")),
+        None,
+    )
+    if (
+        table_start is None
+        or len(lines) - table_start < 3
+        or not all(
+            line.lstrip().startswith("|")
+            for line in lines[table_start + 2:]
+        )
+    ):
+        return [markdown]
+
+    preamble = lines[:table_start]
+    header = lines[table_start:table_start + 2]
+    groups: list[list[str]] = []
+    current_rows: list[str] = []
+    for row in lines[table_start + 2:]:
+        candidate = "\n".join(preamble + header + current_rows + [row])
+        if current_rows and token_counter(candidate) > max_tokens:
+            groups.append(current_rows)
+            current_rows = [row]
+        else:
+            current_rows.append(row)
+    if current_rows:
+        groups.append(current_rows)
+    return ["\n".join(preamble + header + rows) for rows in groups]
+
+
+def _doc_item_label(item) -> str:
+    """Return a stable lowercase Docling item label."""
+    label = getattr(item, "label", "")
+    return str(getattr(label, "value", label)).lower()
+
+
+def _find_docling_source_pdf(doc_path: Path, doc_dict: dict) -> Path | None:
+    """Find the source PDF named in a Docling document, without broad search."""
+    filename = str((doc_dict.get("origin") or {}).get("filename") or "")
+    if not filename or Path(filename).name != filename:
+        return None
+    candidates = [Path(filename), doc_path.parent / filename]
+    candidates.extend(parent / filename for parent in doc_path.parents)
+    for candidate in candidates:
+        try:
+            if candidate.is_file():
+                return candidate.resolve()
+        except OSError:
+            continue
+    return None
+
+
+def _markdown_table_cell(text: str, *, preserve_lines: bool = False) -> str:
+    """Normalize extracted PDF text for one safe Markdown table cell."""
+    text = text.replace("\u200b", "").replace("|", "\\|").strip()
+    if preserve_lines:
+        lines = [re.sub(r"[^\S\n]+", " ", line).strip()
+                 for line in text.splitlines()]
+        return "<br>".join(line for line in lines if line)
+    paragraphs = [
+        re.sub(r"\s+", " ", paragraph).strip()
+        for paragraph in re.split(r"\n\s*\n", text)
+    ]
+    return "<br><br>".join(paragraph for paragraph in paragraphs if paragraph)
+
+
+def _source_table_needs_recovery(pdf_text: str, cell_text: str) -> bool:
+    """Return whether source PDF text contains a real table-cell omission.
+
+    Token-boundary differences such as ``New York`` versus ``NewYork`` do not
+    lose information and should retain Docling's richer table structure.  In
+    addition to large proportional omissions, recover a table when the missing
+    token text contains at least eight more alphanumeric characters than the
+    apparent replacement text.  That catches short but meaningful truncations
+    such as a dropped final word or clause.
+    """
+    from collections import Counter
+
+    def tokens(text: str) -> Counter:
+        return Counter(re.findall(
+            r"[a-z0-9]+", text.replace("\u200b", "").lower()))
+
+    pdf_tokens = tokens(pdf_text)
+    cell_tokens = tokens(cell_text)
+    missing_tokens = pdf_tokens - cell_tokens
+    missing_count = sum(missing_tokens.values())
+    if not missing_count:
+        return False
+    extra_tokens = cell_tokens - pdf_tokens
+    missing_characters = sum(
+        len(token) * count for token, count in missing_tokens.items())
+    extra_characters = sum(
+        len(token) * count for token, count in extra_tokens.items())
+    unexplained_missing_characters = max(
+        0, missing_characters - extra_characters)
+    if not unexplained_missing_characters:
+        return False
+    missing_ratio = missing_count / max(1, sum(pdf_tokens.values()))
+    return (
+        (missing_count >= 4 and missing_ratio > 0.10)
+        or unexplained_missing_characters >= 8
+    )
+
+
+def _prepend_source_table_captions(
+        markdown: str, table, text_by_ref: dict[str, object]) -> str:
+    """Preserve Docling caption text when a table body comes from the PDF."""
+    captions = []
+    for reference in (getattr(table, "captions", None) or []):
+        item = text_by_ref.get(str(getattr(reference, "cref", "")))
+        caption = (
+            getattr(item, "text", "") or getattr(item, "orig", "")
+            if item is not None else ""
+        )
+        if caption and caption.strip():
+            captions.append(caption.strip())
+    if not captions:
+        return markdown
+    return "\n\n".join([*captions, markdown])
+
+
+def _recover_incomplete_table_markdown(
+        dl_doc, pdf_path: Path) -> dict[str, str]:
+    """Recover tables whose Docling cells omit text present in the source PDF.
+
+    The recovery is deliberately narrow: compare token multisets inside each
+    table's source bounding box and replace tables with either a large
+    proportional omission or a smaller omission that cannot be explained by
+    token fusion.  Ordinary tables continue to use Docling's richer row/column
+    model.
+    """
+    import pymupdf
+    recovered: dict[str, str] = {}
+    text_by_ref = {
+        str(getattr(item, "self_ref", "")): item
+        for item in (getattr(dl_doc, "texts", None) or [])
+        if getattr(item, "self_ref", "")
+    }
+    with pymupdf.open(str(pdf_path)) as pdf:
+        for table in getattr(dl_doc, "tables", []) or []:
+            if _doc_item_label(table) != "table" or not table.prov:
+                continue
+            provenance = table.prov[0]
+            page_number = int(provenance.page_no)
+            if not 1 <= page_number <= len(pdf):
+                continue
+            page = pdf[page_number - 1]
+            bbox = provenance.bbox
+            origin = str(getattr(bbox.coord_origin, "value", bbox.coord_origin))
+            if origin.upper() == "BOTTOMLEFT":
+                rectangle = pymupdf.Rect(
+                    bbox.l, page.rect.height - bbox.t,
+                    bbox.r, page.rect.height - bbox.b)
+            else:
+                rectangle = pymupdf.Rect(bbox.l, bbox.t, bbox.r, bbox.b)
+            pdf_text = page.get_text("text", clip=rectangle, sort=True).strip()
+            cells = list(getattr(table.data, "table_cells", []) or [])
+            cell_text = " ".join(str(getattr(cell, "text", ""))
+                                 for cell in cells)
+            if not _source_table_needs_recovery(pdf_text, cell_text):
+                continue
+
+            first_row = sorted(
+                (cell for cell in cells
+                 if int(cell.start_row_offset_idx) == 0),
+                key=lambda cell: int(cell.start_col_offset_idx),
+            )
+            is_case_layout = bool(
+                first_row and re.match(
+                    r"\s*case\s+\d+\s*:", first_row[0].text, re.I))
+            if (int(getattr(table.data, "num_cols", 0)) == 2
+                    and len(first_row) >= 2 and not is_case_layout):
+                left_cells = [cell for cell in cells
+                              if int(cell.start_col_offset_idx) == 0]
+                right_cells = [cell for cell in cells
+                               if int(cell.start_col_offset_idx) == 1]
+                boundary = (
+                    max(cell.bbox.r for cell in left_cells)
+                    + min(cell.bbox.l for cell in right_cells)
+                ) / 2
+                body_top = max(cell.bbox.b for cell in first_row) + 1
+                def column_text(column_rectangle) -> str:
+                    blocks = page.get_text(
+                        "blocks", clip=column_rectangle, sort=True)
+                    return "\n\n".join(
+                        str(block[4]).strip() for block in blocks
+                        if str(block[4]).strip()
+                    )
+
+                left_text = column_text(pymupdf.Rect(
+                    rectangle.x0, body_top, boundary, rectangle.y1))
+                right_text = column_text(pymupdf.Rect(
+                    boundary, body_top, rectangle.x1, rectangle.y1))
+                left_header = _markdown_table_cell(first_row[0].text)
+                right_header = _markdown_table_cell(first_row[1].text)
+                markdown = (
+                    f"| {left_header} | {right_header} |\n"
+                    "|---|---|\n"
+                    f"| {_markdown_table_cell(left_text)} | "
+                    f"{_markdown_table_cell(right_text)} |"
+                )
+            else:
+                markdown = (
+                    "| Source table layout |\n|---|\n"
+                    f"| {_markdown_table_cell(pdf_text, preserve_lines=True)} |"
+                )
+            recovered[str(table.self_ref)] = _prepend_source_table_captions(
+                markdown, table, text_by_ref)
+    return recovered
+
+
+def _prepare_source_preserving_chunks(
+        raw_chunks: list, dl_doc, token_counter: Callable[[str], int],
+        max_tokens: int, *,
+        table_markdown_overrides: dict[str, str] | None = None,
+        structural_ranges: set[tuple[int, int]] | None = None,
+        ) -> list[tuple[str, list | None, list | None, bool]]:
+    """Separate mixed Docling tables from prose without duplicating either.
+
+    HybridChunker serializes a table as flattened ``key = value`` prose when
+    it shares a chunk with surrounding text.  Rebuild those mixed chunks from
+    their source DocItems, emit each table once as Markdown, and retain every
+    adjacent text item in source order.  The final boolean marks source-bound
+    fragments that must survive the generic minimum-word filter.
+    """
+    item_by_ref: dict[str, object] = {}
+    for collection_name in (
+            "texts", "pictures", "tables", "key_value_items", "form_items"):
+        for item in getattr(dl_doc, collection_name, []) or []:
+            ref = str(getattr(item, "self_ref", ""))
+            if ref:
+                item_by_ref[ref] = item
+
+    table_markdown_by_ref: dict[str, str] = {}
+    table_caption_refs: set[str] = set()
+    for table_index, table in enumerate(getattr(dl_doc, "tables", []) or []):
+        if _doc_item_label(table) != "table":
+            continue
+        try:
+            markdown = table.export_to_markdown(doc=dl_doc)
+        except Exception:
+            continue
+        if not markdown or not markdown.strip():
+            continue
+        ref = str(getattr(table, "self_ref", f"#/tables/{table_index}"))
+        table_markdown_by_ref[ref] = (
+            (table_markdown_overrides or {}).get(ref, markdown).strip())
+        table_markdown_by_ref.setdefault(
+            f"#/tables/{table_index}", markdown.strip())
+        table_caption_refs.update(
+            str(getattr(caption, "cref", ""))
+            for caption in (getattr(table, "captions", []) or [])
+            if getattr(caption, "cref", "")
+        )
+
+    nested_footnotes_by_parent: dict[str, list[object]] = {}
+    for parent in list(getattr(dl_doc, "tables", []) or []) + list(
+            getattr(dl_doc, "pictures", []) or []):
+        parent_ref = str(getattr(parent, "self_ref", ""))
+        footnotes = [
+            item_by_ref.get(str(getattr(reference, "cref", "")))
+            for reference in (getattr(parent, "footnotes", []) or [])
+        ]
+        footnotes = [
+            footnote for footnote in footnotes
+            if footnote is not None
+            and "This and other authors' explanations draw" not in (
+                getattr(footnote, "text", "")
+                or getattr(footnote, "orig", "")
+            )
+        ]
+        if parent_ref and footnotes:
+            nested_footnotes_by_parent[parent_ref] = footnotes
+
+    nested_footnote_refs = {
+        str(getattr(footnote, "self_ref", ""))
+        for footnotes in nested_footnotes_by_parent.values()
+        for footnote in footnotes
+    }
+
+    prepared: list[tuple[str, list | None, list | None, bool]] = []
+    emitted_tables: set[str] = set()
+    emitted_nested_footnotes: set[str] = set()
+
+    page_headers: dict[int, list[tuple[float, str]]] = {}
+
+    def source_position(item) -> tuple[int, float] | None:
+        provenance = list(getattr(item, "prov", None) or [])
+        if not provenance:
+            return None
+        first = provenance[0]
+        bbox = getattr(first, "bbox", None)
+        if bbox is None:
+            return None
+        origin = str(getattr(bbox.coord_origin, "value", bbox.coord_origin))
+        vertical = (
+            -float(bbox.t) if origin.upper() == "BOTTOMLEFT"
+            else float(bbox.t)
+        )
+        return int(first.page_no), vertical
+
+    for item in getattr(dl_doc, "texts", []) or []:
+        if _doc_item_label(item) != "section_header":
+            continue
+        if (position := source_position(item)) is None:
+            continue
+        header_text = (
+            getattr(item, "text", "") or getattr(item, "orig", ""))
+        if header_text and header_text.strip():
+            page_headers.setdefault(position[0], []).append(
+                (position[1], header_text.strip()))
+    for headers in page_headers.values():
+        headers.sort()
+
+    def source_pages(item) -> list[int]:
+        return [
+            int(provenance.page_no)
+            for provenance in (getattr(item, "prov", None) or [])
+            if getattr(provenance, "page_no", None) is not None
+        ]
+
+    def fully_inside_structural_range(item) -> bool | None:
+        pages = source_pages(item)
+        if not pages:
+            return None
+        return all(
+            any(start <= page <= end for start, end in structural_ranges or ())
+            for page in pages
+        )
+
+    source_heading_by_ref: dict[str, str] = {}
+    for ref, item in item_by_ref.items():
+        if _doc_item_label(item) == "section_header":
+            continue
+        if (position := source_position(item)) is None:
+            continue
+        preceding = [
+            (vertical, heading) for vertical, heading
+            in page_headers.get(position[0], [])
+            if vertical < position[1]
+        ]
+        if preceding:
+            source_heading_by_ref[ref] = preceding[-1][1]
+
+    def missing_nested_footnote_entry(
+            parent_ref: str, headings: list | None):
+        missing_footnotes = []
+        missing_texts = []
+        for footnote in nested_footnotes_by_parent.get(parent_ref, []):
+            footnote_ref = str(getattr(footnote, "self_ref", ""))
+            if footnote_ref in emitted_nested_footnotes:
+                continue
+            footnote_text = (
+                getattr(footnote, "text", "")
+                or getattr(footnote, "orig", "")
+            )
+            if not footnote_text or not footnote_text.strip():
+                raise RuntimeError(
+                    f"Nested footnote {footnote_ref} has no source text")
+            missing_footnotes.append(footnote)
+            missing_texts.append(footnote_text.strip())
+            emitted_nested_footnotes.add(footnote_ref)
+        if not missing_footnotes:
+            return None
+        return (
+            "\n".join(missing_texts), headings, missing_footnotes, True,
+        )
+
+    def append_missing_nested_footnotes(
+            parent_ref: str, headings: list | None) -> None:
+        entry = missing_nested_footnote_entry(parent_ref, headings)
+        if entry is not None:
+            prepared.append(entry)
+
+    for chunk in raw_chunks:
+        items = list(
+            getattr(getattr(chunk, "meta", None), "doc_items", None) or [])
+        headings = getattr(getattr(chunk, "meta", None), "headings", None)
+        mapped_headings = [
+            source_heading_by_ref.get(
+                str(getattr(item, "self_ref", "")))
+            for item in items
+        ]
+        distinct_mapped_headings = list(dict.fromkeys(
+            heading for heading in mapped_headings if heading))
+        known_table_refs = {
+            str(getattr(item, "self_ref", ""))
+            for item in items
+            if _doc_item_label(item) == "table"
+            and str(getattr(item, "self_ref", "")) in table_markdown_by_ref
+        }
+        structural_flags = {
+            flag for item in items
+            if (flag := fully_inside_structural_range(item)) is not None
+        }
+        crosses_structural_boundary = structural_flags == {False, True}
+        if ((len(distinct_mapped_headings) > 1
+             or crosses_structural_boundary)
+                and not known_table_refs):
+            for item, mapped_heading in zip(items, mapped_headings):
+                ref = str(getattr(item, "self_ref", ""))
+                if ref in nested_footnote_refs:
+                    continue
+                source_item = item_by_ref.get(ref, item)
+                source_text = (
+                    getattr(source_item, "text", "")
+                    or getattr(source_item, "orig", "")
+                )
+                item_headings = (
+                    [mapped_heading] if mapped_heading else headings)
+                if source_text and source_text.strip():
+                    prepared.append((
+                        source_text.strip(), item_headings,
+                        [source_item], True,
+                    ))
+                append_missing_nested_footnotes(
+                    str(getattr(source_item, "self_ref", "")),
+                    item_headings)
+            continue
+        if not known_table_refs:
+            has_nested_footnotes = any(
+                str(getattr(item, "self_ref", "")) in nested_footnote_refs
+                for item in items
+            )
+            if has_nested_footnotes:
+                retained_items = [
+                    item_by_ref.get(
+                        str(getattr(item, "self_ref", "")), item)
+                    for item in items
+                    if str(getattr(item, "self_ref", ""))
+                    not in nested_footnote_refs
+                ]
+                retained_text = [
+                    (getattr(item, "text", "")
+                     or getattr(item, "orig", "")).strip()
+                    for item in retained_items
+                    if (getattr(item, "text", "")
+                        or getattr(item, "orig", "")).strip()
+                ]
+                if retained_text:
+                    prepared.append((
+                        "\n\n".join(retained_text), headings,
+                        retained_items, True,
+                    ))
+            else:
+                prepared.append((chunk.text, headings, items, False))
+            for item in items:
+                append_missing_nested_footnotes(
+                    str(getattr(item, "self_ref", "")), headings)
+            continue
+
+        pending_text: list[str] = []
+        pending_items: list[object] = []
+
+        def flush_text_items() -> None:
+            if not pending_text:
+                return
+            prepared.append((
+                "\n\n".join(pending_text), headings,
+                list(pending_items), True,
+            ))
+            pending_text.clear()
+            pending_items.clear()
+
+        for item in items:
+            ref = str(getattr(item, "self_ref", ""))
+            source_item = item_by_ref.get(ref, item)
+            if ref in nested_footnote_refs:
+                continue
+            if _doc_item_label(source_item) == "table" and ref in known_table_refs:
+                flush_text_items()
+                if ref in emitted_tables:
+                    continue
+                for table_part in _split_markdown_table_by_rows(
+                        table_markdown_by_ref[ref], token_counter, max_tokens):
+                    prepared.append((table_part, headings, [source_item], True))
+                emitted_tables.add(ref)
+                append_missing_nested_footnotes(ref, headings)
+                continue
+            if ref in nested_footnotes_by_parent:
+                flush_text_items()
+                append_missing_nested_footnotes(ref, headings)
+                continue
+            if ref in table_caption_refs:
+                # Docling includes a table's caption in export_to_markdown().
+                continue
+            source_text = (
+                getattr(source_item, "text", "")
+                or getattr(source_item, "orig", "")
+            )
+            if source_text and source_text.strip():
+                pending_text.append(source_text.strip())
+                pending_items.append(source_item)
+        flush_text_items()
+
+    def item_page(item) -> int | None:
+        pages = [
+            int(provenance.page_no)
+            for provenance in (getattr(item, "prov", None) or [])
+            if getattr(provenance, "page_no", None) is not None
+        ]
+        return min(pages) if pages else None
+
+    def prepared_page(entry) -> int | None:
+        pages = [
+            page
+            for item in (entry[2] or [])
+            if (page := item_page(item)) is not None
+        ]
+        return min(pages) if pages else None
+
+    orphaned_parents = [
+        (parent_ref, footnotes)
+        for parent_ref, footnotes in nested_footnotes_by_parent.items()
+        if any(
+            str(getattr(footnote, "self_ref", ""))
+            not in emitted_nested_footnotes
+            for footnote in footnotes
+        )
+    ]
+    orphaned_parents.sort(key=lambda pair: min(
+        (item_page(footnote) for footnote in pair[1]
+         if item_page(footnote) is not None),
+        default=sys.maxsize,
+    ))
+    for parent_ref, footnotes in orphaned_parents:
+        page = min(
+            (item_page(footnote) for footnote in footnotes
+             if item_page(footnote) is not None),
+            default=None,
+        )
+        if page is None:
+            raise RuntimeError(
+                f"Cannot place nested footnotes for {parent_ref}: "
+                "missing source page")
+        insert_at = 0
+        for index, entry in enumerate(prepared):
+            entry_page = prepared_page(entry)
+            if entry_page is not None and entry_page <= page:
+                insert_at = index + 1
+        inherited_headings = (
+            prepared[insert_at - 1][1] if insert_at else None)
+        entry = missing_nested_footnote_entry(
+            parent_ref, inherited_headings)
+        if entry is not None:
+            prepared.insert(insert_at, entry)
+
+    return prepared
+
+
 _HEADING_PROMPT = """This text is from Chapter {chapter_num}: {chapter_title} of a law textbook.
 The current section heading is "{heading}" which lacks context.
 Based on the text content, what is the full hierarchical section path?
@@ -5057,7 +6220,7 @@ def _chunk_parameters(*, embedding_model: str, max_tokens: int,
         gemini_key or os.environ.get("GEMINI_API_KEY", ""))
     llm_config = _llm_runtime.config
     return {
-        "chunking_policy_version": 1,
+        "chunking_policy_version": 17,
         "classification_prompt_version": 1,
         "embedding_model": embedding_model,
         "max_tokens": max_tokens,
@@ -5194,6 +6357,43 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
     if total_pages == 0:
         total_pages = 1  # prevent division by zero in fallback estimator
 
+    # Structural ranges must be known before enrichment so TOC/back-matter
+    # chunks cannot enter classification or inherit chapter metadata.
+    try:
+        doc_dict = json.loads(doc_path.read_bytes())
+    except Exception:
+        log.error(f"Cannot parse DoclingDocument JSON: {doc_path}")
+        sys.exit(1)
+    chapter_map = _build_chapter_map(doc_path)
+    book_sections = _identify_book_sections(doc_dict)
+    has_toc = any(
+        book_sections.get(name) is not None
+        for name in ("toc", "contents", "summary")
+    )
+    if not has_toc:
+        log.error("FATAL: No Table of Contents or Contents section found.")
+        log.error("  Every book must have a TOC/Contents. Cannot proceed.")
+        log.error(f"  Document: {doc_path}")
+        sys.exit(1)
+
+    structural_section_names = (
+        "summary", "contents", "toc", "problems", "acknowledgments",
+        "about_authors", "table_of_cases", "table_of_rules", "index",
+        "editorial", "publisher", "credits",
+    )
+    structural_ranges = {
+        (section["start"], section["end"])
+        for name in structural_section_names
+        if (section := book_sections.get(name)) is not None
+    }
+    opening_section_starts = [
+        section["start"]
+        for name in ("summary", "contents", "toc")
+        if (section := book_sections.get(name)) is not None
+    ]
+    if opening_section_starts and min(opening_section_starts) > 1:
+        structural_ranges.add((1, min(opening_section_starts) - 1))
+
     # The chunker tokenizer is for token counting only — it doesn't need to
     # match the embedding model exactly. API models (voyage-*, text-embedding-*,
     # cohere-*) aren't on HuggingFace, so use a local tokenizer as fallback.
@@ -5217,8 +6417,34 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
     log.info(f"Chunking with model={embedding_model}, max_tokens={max_tokens}")
     raw_chunks = list(tqdm(chunker.chunk(dl_doc), desc="Chunking", unit="chunk"))
     log.info(f"HybridChunker produced {len(raw_chunks)} raw chunks")
+
+    table_markdown_overrides: dict[str, str] = {}
+    if source_pdf := _find_docling_source_pdf(doc_path, doc_dict):
+        try:
+            table_markdown_overrides = _recover_incomplete_table_markdown(
+                dl_doc, source_pdf)
+        except Exception as exc:
+            log.warning(
+                "Could not verify Docling tables against source PDF %s: %s",
+                source_pdf, exc)
+        else:
+            if table_markdown_overrides:
+                log.info(
+                    "Recovered %s incomplete tables from source PDF text",
+                    len(table_markdown_overrides))
+    prepared_chunks = _prepare_source_preserving_chunks(
+        raw_chunks, dl_doc,
+        lambda value: int(tokenizer.count_tokens(value)), max_tokens,
+        table_markdown_overrides=table_markdown_overrides,
+        structural_ranges=structural_ranges)
+
+    if len(prepared_chunks) != len(raw_chunks):
+        log.info(
+            f"Prepared {len(prepared_chunks)} source-preserving chunks from "
+            f"{len(raw_chunks)} raw chunks")
     raw_token_counts = [
-        int(tokenizer.count_tokens(chunk.text)) for chunk in raw_chunks
+        int(tokenizer.count_tokens(text))
+        for text, _, _, _ in prepared_chunks
     ]
 
     enriched = []
@@ -5230,14 +6456,41 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
     import multiprocessing
 
     source_file = doc_path.stem
+    def _fully_inside_structural_range(metadata: dict) -> bool:
+        page_start = metadata.get("page_start")
+        page_end = metadata.get("page_end")
+        if page_start is None or page_end is None:
+            return False
+        return any(
+            range_start <= page_start and page_end <= range_end
+            for range_start, range_end in structural_ranges
+        )
+
+    def _content_source_from_items(doc_items: list | None) -> str | None:
+        labels = {
+            _doc_item_label(item) for item in (doc_items or [])
+            if _doc_item_label(item)
+        }
+        if labels == {"table"}:
+            return "table"
+        if "footnote" in labels:
+            return "footnote" if labels == {"footnote"} else "mixed"
+        return "body" if labels else None
 
     def _enrich_one(args):
         """Pure function: clean + enrich a single chunk. No shared state."""
-        (i, chunk_text, headings, doc_items, total_c, total_p, wm_pattern,
-         src_file, token_count) = args
+        (i, chunk_text, headings, doc_items, preserve_short, total_c, total_p,
+         wm_pattern, src_file, token_count) = args
         clean = _normalize_text(
             strip_watermark(chunk_text, _compile_watermark(wm_pattern) if wm_pattern else None))
-        if len(clean.split()) < min_words:
+        content_source = _content_source_from_items(doc_items)
+        substantive_labels = {
+            _doc_item_label(item) for item in (doc_items or [])
+        } & {"text", "list_item", "footnote", "caption", "section_header",
+             }
+        if (len(clean.split()) < min_words
+                and content_source != "table" and not preserve_short
+                and not substantive_labels):
             return None, "tiny"
         record = enrich_chunk(
             chunk_text=clean, headings=headings,
@@ -5245,8 +6498,13 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
             total_pages=total_p, doc_items=doc_items,
             source_file=src_file,
         )
-        if record["metadata"]["content_type"] == "structural":
+        if (_fully_inside_structural_range(record["metadata"])
+                or record["metadata"]["content_type"] == "structural"):
             return None, "structural"
+        if content_source:
+            record["metadata"]["content_source"] = content_source
+        if content_source == "footnote":
+            record["metadata"]["content_type"] = "footnote"
         record["metadata"]["token_count"] = token_count
         return record, "ok"
 
@@ -5254,17 +6512,18 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
     wm_str = watermark.pattern if watermark else ""
     enrich_args = [
         (i,
-         chunk.text,
-         chunk.meta.headings if hasattr(chunk.meta, "headings") else None,
-         chunk.meta.doc_items if hasattr(chunk.meta, "doc_items") else None,
-         len(raw_chunks), total_pages, wm_str, source_file)
+         chunk_text,
+         headings,
+         doc_items, preserve_short,
+         len(prepared_chunks), total_pages, wm_str, source_file)
         + (raw_token_counts[i],)
-        for i, chunk in enumerate(raw_chunks)
+        for i, (chunk_text, headings, doc_items, preserve_short)
+        in enumerate(prepared_chunks)
     ]
 
     # Use threads (not processes) to avoid pickling issues with doc_items
-    n_workers = min(multiprocessing.cpu_count(), 8, len(raw_chunks))
-    if n_workers > 1 and len(raw_chunks) > 200:
+    n_workers = min(multiprocessing.cpu_count(), 8, len(prepared_chunks))
+    if n_workers > 1 and len(prepared_chunks) > 200:
         with ThreadPoolExecutor(max_workers=n_workers) as pool:
             results = list(tqdm(pool.map(_enrich_one, enrich_args),
                                 total=len(enrich_args),
@@ -5285,6 +6544,25 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
         log.info(f"Filtered: {filtered_structural} structural (TOC/index), "
                  f"{filtered_tiny} tiny (<{min_words} words)")
 
+    before_coalescing = len(enriched)
+    enriched = _coalesce_chunk_boundaries(
+        enriched,
+        lambda value: int(tokenizer.count_tokens(value)),
+        max_tokens,
+        hard_max_tokens=max(
+            max_tokens,
+            _effective_chunk_token_limit(
+                embedding_model,
+                EMBEDDING_MAX_TOKENS.get(embedding_model, max_tokens),
+                reserve_tokens=reserve_tokens,
+            ),
+        ),
+    )
+    if len(enriched) != before_coalescing:
+        log.info(
+            f"Boundary repair coalesced {before_coalescing - len(enriched)} "
+            "split chunks")
+
     # --- Pass 2: Chapter assignment (team-orchestrated) ---
     # Uses the 4-tier agent team hierarchy:
     #   Director (I) → Manager (II) → QC (III) → Expert(s) (IV)
@@ -5294,24 +6572,6 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
                       cloud_key=cloud_key, ollama_url=ollama_url,
                       ollama_model=ollama_model, gemini_key=gemini_key,
                       llm_workers=llm_workers, thinking=thinking)
-
-    # Load raw doc dict for scaffold functions
-    try:
-        doc_dict = json.loads(doc_path.read_bytes())
-    except Exception:
-        log.error(f"Cannot parse DoclingDocument JSON: {doc_path}")
-        sys.exit(1)
-
-    chapter_map = _build_chapter_map(doc_path)
-    book_sections = _identify_book_sections(doc_dict)
-    has_toc = (book_sections.get("toc") is not None
-               or book_sections.get("contents") is not None
-               or book_sections.get("summary") is not None)
-    if not has_toc:
-        log.error("FATAL: No Table of Contents or Contents section found.")
-        log.error("  Every book must have a TOC/Contents. Cannot proceed.")
-        log.error(f"  Document: {doc_path}")
-        sys.exit(1)
 
     # ── Team 1: Scaffold Construction ──
     # (orchestrated inside _build_scaffold via its own _AgentTeam)
@@ -5326,19 +6586,33 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
         log.error(f"  Document: {doc_path}")
         sys.exit(1)
 
-    scaffold_lookup = _build_scaffold_lookup(scaffold, max_page=total_pages + 50)
+    _scaffold_ch_titles = _canonical_chapter_titles(scaffold, chapter_map)
+    scaffold = _normalize_scaffold_metadata(scaffold, _scaffold_ch_titles)
+    observed_chapter_end = max(
+        (info.get("max_page", 0) for info in chapter_map.values()),
+        default=max((entry.get("page", 0) for entry in scaffold), default=0),
+    )
+    scaffold_lookup = _build_scaffold_lookup(
+        scaffold, max_page=observed_chapter_end)
     log.info(f"Scaffold: {len(scaffold)} entries, "
              f"lookup covers {len(scaffold_lookup)} pages")
-
-    # Build chapter_num → chapter_title map from scaffold level-1 entries
-    _scaffold_ch_titles = {}
-    for e in scaffold:
-        if e.get("level") == 1 and e.get("chapter_num") is not None:
-            _scaffold_ch_titles[e["chapter_num"]] = e.get("title", "")
 
     def _apply_scaffold_to_chunks(chunks, s_lookup, ch_map, ch_titles):
         """Assign chapter/section metadata from scaffold lookup."""
         assigned = 0
+
+        def _canonical_path(path: str, chapter_num: int | None) -> str:
+            chapter_title = ch_titles.get(chapter_num) if chapter_num else None
+            if not chapter_title:
+                return path
+            parts = [part.strip() for part in path.split(" > ") if part.strip()]
+            if parts and re.match(
+                    r"^(?:Chapter|Part|Unit)\s+\d+\b", parts[0], re.I):
+                parts[0] = chapter_title
+            elif not parts or parts[0] != chapter_title:
+                parts.insert(0, chapter_title)
+            return " > ".join(parts)
+
         for rec in chunks:
             page = rec["metadata"].get("page_start")
             if page is None:
@@ -5355,12 +6629,16 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
                         ch_num, entry.get("title", ""))
                     assigned += 1
                 if entry.get("path"):
-                    rec["metadata"]["section_path"] = entry["path"]
+                    rec["metadata"]["section_path"] = _canonical_path(
+                        entry["path"], ch_num)
             elif page and ch_map:
                 ch_num, ch_title = _assign_chapter_by_page(page, ch_map)
                 if ch_num is not None:
                     rec["metadata"]["chapter_num"] = ch_num
-                    rec["metadata"]["chapter_title"] = ch_title
+                    rec["metadata"]["chapter_title"] = ch_titles.get(
+                        ch_num, ch_title)
+                    rec["metadata"]["section_path"] = _canonical_path(
+                        rec["metadata"].get("section_path", ""), ch_num)
                     assigned += 1
         return assigned
 
@@ -5392,7 +6670,7 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
                     ch, ct = _assign_chapter_by_page(pg, ch_map)
                     if ch is not None:
                         rec["metadata"]["chapter_num"] = ch
-                        rec["metadata"]["chapter_title"] = ct
+                        rec["metadata"]["chapter_title"] = ch_titles.get(ch, ct)
                         fixed += 1
         return fixed
 
@@ -5731,6 +7009,14 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
     for i, rec in enumerate(enriched):
         rec["metadata"]["chunk_index"] = i
 
+    _validate_chunk_structure_for_publication(
+        enriched,
+        scaffold=scaffold,
+        book_sections=book_sections,
+        chapter_map=chapter_map,
+        chapter_titles=_scaffold_ch_titles,
+    )
+
     # Record the final embedding payload size with the provider/model tokenizer
     # where available, including special tokens and contextual prefixes.
     if embedding_model in EMBEDDING_MAX_TOKENS:
@@ -5794,9 +7080,7 @@ def _prepare_chroma_batch(
         "page_start", "page_end", "chapter_num", "table_rows", "table_cols",
     }
     for record, document, stable_id in zip(batch, documents, ids):
-        context = record["metadata"].get("context", "")
-        embedding_inputs.append(
-            f"{context}\n\n{document}" if context else document)
+        embedding_inputs.append(_embedding_text(record))
 
         metadata = record["metadata"].copy()
         # Chroma uses this value as the document ID but does not return IDs in
@@ -6133,7 +7417,7 @@ def _index_chunks_chroma_impl(
                        for p in ("voyage-", "text-embedding-", "embed-", "cohere-",
                                  "embo-", "minimax-emb"))
     # API models have per-batch token limits (Voyage: 120K tokens).
-    # With 4096-token chunks, 25 chunks × 4096 ≈ 100K tokens (safely under 120K).
+    # The configured default leaves ample room under API batch-token limits.
     # Local models can handle larger batches since there's no API limit.
     BATCH_SIZE = 25 if is_api_model else 100
     embed_workers = 4 if is_api_model else 1
@@ -7044,9 +8328,7 @@ def _index_chunks_qdrant_impl(
             # Prepare texts
             texts = []
             for r in batch:
-                ctx = r["metadata"].get("context", "")
-                text = r["text"]
-                texts.append(f"{ctx}\n\n{text}" if ctx else text)
+                texts.append(_embedding_text(r))
 
             # GPU: embed this batch (while previous batch upserts in background)
             dense_vectors = _embed_texts(texts, embedding_model)
@@ -12349,18 +13631,28 @@ def interactive_menu():
         emb = _menu_choose("Embedding model:", [
             (DEFAULT_EMBEDDING_MODEL_LEGAL, "Voyage Law 2 — best for legal text (paid, needs VOYAGE_API_KEY)"),
             (DEFAULT_EMBEDDING_MODEL_GENERAL, "Nomic Embed v2 MoE — best free option (local GPU)"),
-            ("nomic-ai/nomic-embed-text-v2-moe", "Nomic Embed v2 MoE — good free alternative"),
             ("text-embedding-3-large", "OpenAI text-embedding-3-large (paid, needs OPENAI_API_KEY)"),
         ])
         args.extend(["--embedding-model", emb])
 
         # Chunk size
-        tokens = _menu_choose("Chunk size (tokens):", [
-            ("4096", "4096 — balanced (default, fits nomic/stella/voyage)"),
-            ("8192", "8192 — large sections (max for nomic/stella)"),
-            ("16000", "16000 — very large (max for voyage-law-2 only)"),
-            ("1024", "1024 — small, precise chunks (legacy)"),
-        ])
+        token_choices = (
+            [
+                (str(DEFAULT_MAX_TOKENS),
+                 f"{DEFAULT_MAX_TOKENS} — default; fits Nomic's 512-token input"),
+                ("256", "256 — smaller, more precise chunks"),
+                ("506", "506 — maximum safe raw Nomic chunk"),
+            ]
+            if emb == DEFAULT_EMBEDDING_MODEL_GENERAL else
+            [
+                (str(DEFAULT_MAX_TOKENS),
+                 f"{DEFAULT_MAX_TOKENS} — default retrieval chunks"),
+                ("1024", "1024 — larger sections"),
+                ("4096", "4096 — large sections"),
+                ("16000", "16000 — Voyage model maximum"),
+            ]
+        )
+        tokens = _menu_choose("Chunk size (tokens):", token_choices)
         args.extend(["--max-tokens", tokens])
 
         # Vector DB backend
@@ -12568,9 +13860,10 @@ def interactive_menu():
             args.extend(["--doc", doc])
 
         tokens = _menu_choose("Chunk size:", [
-            ("4096", "4096 tokens (default)"),
-            ("8192", "8192 tokens (large)"),
-            ("1024", "1024 tokens (small, legacy)"),
+            (str(DEFAULT_MAX_TOKENS),
+             f"{DEFAULT_MAX_TOKENS} tokens (default; fits Nomic)"),
+            ("256", "256 tokens (smaller, more precise)"),
+            ("506", "506 tokens (maximum safe raw Nomic chunk)"),
         ])
         args.extend(["--max-tokens", tokens])
 

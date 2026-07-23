@@ -13,6 +13,8 @@ Status terms:
 - **Integration candidate (draft)** — all implementation histories are combined
   in one draft PR, pending exact-head validation, review, and merge.
 - **Integrated** — present on `main` through the cumulative integration PR.
+- **Validated locally** — implemented and exercised against the relevant real
+  artifact, but not yet committed, reviewed, or merged.
 - **In progress** — active branch; not yet published as a PR.
 - **Planned** — scoped direction, not yet implemented.
 
@@ -21,6 +23,7 @@ Status terms:
 | Milestone | Status | Durable result |
 |---|---|---|
 | Foundation | Baseline | End-to-end PDF ingestion, enriched chunking, shared LLM runtime, grounded answers, hybrid retrieval/reranking, evaluation harness, Chroma/Qdrant indexing, CLI, UI, docs, and tests |
+| Ethics corpus coherence and publication quality | Validated locally | Canonical scaffold reconstruction, source-item boundary repair, complete tables and nested footnotes, exact embedding budgets, publication gates, regenerated exports, and an exactly reconciled 1,707-record Chroma index |
 | Exact LLM transport budget | Integrated | [PR #1](https://github.com/toddlar00/rag-pipeline/pull/1) |
 | Qdrant manifest reconciliation | Integrated | [PR #2](https://github.com/toddlar00/rag-pipeline/pull/2) |
 | Qdrant interrupted-update guard | Integrated | [PR #3](https://github.com/toddlar00/rag-pipeline/pull/3) |
@@ -134,6 +137,50 @@ contract.
 PR #27 head `8e74069` passed all 24 exact-head checks before combination. PR #28
 head `80b7463` then passed all 24 CI, compatibility, and supply-chain checks with
 independent PR #1 included before merging into `main`.
+
+## Ethics corpus coherence milestone
+
+The local 2026-07-22 remediation makes publication fail closed when chunks
+contain known structural leaks, malformed canonical paths, damaged URLs or
+hyphenation, repeated editorial disclaimers, invalid explicit content lanes,
+unpreserved tables, or invalid extracted case entities. Source preparation now
+separates substantive items that Docling merges across structural boundaries,
+keeps nested table/picture footnotes together, preserves table captions, and
+uses source-PDF bounding boxes to repair real cell omissions without treating
+harmless token fusion as lost content.
+
+The final `Ethics.pdf` regeneration produced 1,707 chunks across 14 canonical
+chapters plus 36 substantive front-matter chunks. It retains 35 substantive
+source tables as 39 row-bounded Markdown chunks; six tables on PDF pages 391,
+469, 510, 542, 637, and 706 required source-PDF recovery. All 6,585 audited
+non-heading source items are covered, except six intentionally omitted
+“All emphasis added” boilerplate markers. There are no structural leaks or
+exact/canonical duplicate chunks. The Nomic embedding contract is exact for all
+records: raw chunk counts top out at 506 tokens, final task-prefixed inputs top
+out at the model's 512-token limit, and no input is truncated.
+
+The unified export contains 342,826 words; the 15 chapter/front-matter files
+contain 343,590 words. Six hybrid retrieval probes recovered the intended
+pages at ranks 1, 1, 1, 1, 1, and 2. The Chroma collection, stable IDs,
+documents, metadata, hashes, and manifests exactly match the 1,707-record
+JSONL. Evidence is recorded in `output/Ethics_3/COHERENCE_AUDIT.md`.
+
+Local validation for the implementation is 1,065 passed and 7 skipped in the
+full suite, successful Python compilation, and a clean `git diff --check`.
+This milestone remains “validated locally” until its working-tree changes
+receive the repository's normal commit, review, CI, and merge evidence.
+
+## Next improvement milestones
+
+| Priority | Milestone | Acceptance evidence |
+|---|---|---|
+| P0 | Synced-folder publication resilience | Bounded, identity-safe retries tolerate transient Dropbox/Windows marker and atomic-replace interference; injected race tests prove no partial publication, ownership confusion, or weakened retention checks |
+| P1 | Machine-readable corpus quality reports | Every chunk/export run emits a schema-versioned report with structure, normalization, token, table, classification, entity, and hash metrics; resume validates the report against the current artifact |
+| P1 | Ethics retrieval calibration | A corpus-owner-reviewed judged set covers rule text, author explanation, cases, tables, cross-page continuations, filters, and abstention; dense, hybrid, and reranked modes receive explicit release thresholds |
+| P2 | Configurable document-structure profiles | Front/back-matter labels, chapter patterns, and canonical-title rules move behind tested profiles, with fixtures from multiple publishers and safe unknown-layout behavior |
+| P2 | Context-aware retrieval assembly | Stable adjacency/parent identifiers allow query-time neighboring-chunk stitching without duplicate text, chapter leakage, or citation ambiguity |
+| P2 | Table-specific retrieval | Large tables gain optional row-level child records linked to their preserved parent table, with header propagation and table-focused relevance tests |
+| P3 | Runtime decomposition | Process supervision and vector lifecycle move out of `rag.py` in separate failure-injected milestones while the compatibility facade remains stable |
 
 ## Completion rule
 
