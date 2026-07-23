@@ -622,6 +622,28 @@ def test_chroma_batch_embeds_context_but_stores_raw_text():
     assert metadatas[0]["chapter_num"] == -1
 
 
+def test_chunk_id_distinguishes_same_page_source_occurrences():
+    def record(ref):
+        return {
+            "text": "The same rule appears twice on this page.",
+            "metadata": {
+                "source_file": "book",
+                "page_start": 10,
+                "page_end": 10,
+                "page_range": "pp.10-10",
+                "source_items": [{"ref": ref}],
+            },
+        }
+
+    first = record("#/texts/1")
+    second = record("#/texts/2")
+
+    assert rag._chunk_id(first) != rag._chunk_id(second)
+    del first["metadata"]["source_items"]
+    del second["metadata"]["source_items"]
+    assert rag._chunk_id(first) == rag._chunk_id(second)
+
+
 def test_chroma_batch_embeds_heading_for_short_source_answer():
     record = {
         "text": "No.",

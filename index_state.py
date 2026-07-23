@@ -191,7 +191,8 @@ def _index_manifest_mismatch(
         manifest: dict, *, backend: str, collection_name: str,
         embedding_model: str, embedding_dimension: int,
         model_artifact_lock_sha256: str,
-        manifest_schema_version: int) -> str | None:
+        manifest_schema_version: int,
+        quality_report_schema_version: int) -> str | None:
     """Return why *manifest* is incompatible, or ``None`` when safe to use."""
     expected = {
         "schema_version": manifest_schema_version,
@@ -205,11 +206,37 @@ def _index_manifest_mismatch(
         if manifest.get(key) != value:
             return f"{key} changed ({manifest.get(key)!r} -> {value!r})"
 
+    quality_mismatch = _quality_report_binding_mismatch(
+        manifest, quality_report_schema_version=quality_report_schema_version)
+    if quality_mismatch:
+        return quality_mismatch
+
     hashes = manifest.get("chunk_hashes")
     if (not isinstance(hashes, dict)
             or not all(isinstance(key, str) and isinstance(value, str)
                        for key, value in hashes.items())):
         return "chunk_hashes is missing or invalid"
+    return None
+
+
+def _quality_report_binding_mismatch(
+        manifest: dict, *, quality_report_schema_version: int,
+) -> str | None:
+    """Validate the all-null or exact schema/SHA quality binding pair."""
+    schema_key = "quality_report_schema_version"
+    sha_key = "quality_report_sha256"
+    if schema_key not in manifest or sha_key not in manifest:
+        return "quality report binding is missing"
+    schema = manifest[schema_key]
+    report_sha256 = manifest[sha_key]
+    if schema is None and report_sha256 is None:
+        return None
+    if (isinstance(schema, bool) or not isinstance(schema, int)
+            or schema != quality_report_schema_version):
+        return "quality report schema is missing, invalid, or unsupported"
+    if (not isinstance(report_sha256, str)
+            or re.fullmatch(r"[0-9a-f]{64}", report_sha256) is None):
+        return "quality report SHA-256 is missing or invalid"
     return None
 
 
@@ -265,13 +292,25 @@ def _save_index_manifest(
         embedding_model: str, embedding_dimension: int,
         model_artifact_lock_sha256: str,
         chunk_hashes: dict[str, str], manifest_schema_version: int,
+        quality_report_policy_schema_version: int,
         manifest_path_fn: PathFn,
         atomic_write_json_fn: AtomicJsonWriterFn,
         source_sha256: str | None = None,
-        source_record_count: int | None = None) -> Path:
+        source_record_count: int | None = None,
+        quality_report_schema_version: int | None = None,
+        quality_report_sha256: str | None = None) -> Path:
     """Atomically persist versioned incremental state for one collection."""
     path = manifest_path_fn(
         db_dir, backend=backend, collection_name=collection_name)
+    quality_binding = {
+        "quality_report_schema_version": quality_report_schema_version,
+        "quality_report_sha256": quality_report_sha256,
+    }
+    quality_mismatch = _quality_report_binding_mismatch(
+        quality_binding,
+        quality_report_schema_version=quality_report_policy_schema_version)
+    if quality_mismatch:
+        raise ValueError(f"Invalid index quality binding: {quality_mismatch}")
     payload = {
         "schema_version": manifest_schema_version,
         "backend": backend,
@@ -282,6 +321,7 @@ def _save_index_manifest(
         "chunk_hashes": chunk_hashes,
         "source_sha256": source_sha256,
         "source_record_count": source_record_count,
+        **quality_binding,
     }
     atomic_write_json_fn(path, payload)
     return path
@@ -291,6 +331,7 @@ def _query_manifest_dimension_impl(
         db_dir: Path, *, backend: str, collection_name: str,
         embedding_model: str, model_artifact_lock_sha256: str,
         manifest_schema_version: int,
+        quality_report_schema_version: int,
         marker_path_fn: PathFn,
         manifest_path_fn: PathFn,
         load_manifest_fn: ManifestLoaderFn) -> int | None:
@@ -334,6 +375,14 @@ def _query_manifest_dimension_impl(
                 f"{manifest.get(key)!r}, expected {value!r}. Re-run indexing "
                 "or query with the indexed embedding model."
             )
+    quality_mismatch = _quality_report_binding_mismatch(
+        manifest, quality_report_schema_version=quality_report_schema_version)
+    if quality_mismatch:
+        raise ValueError(
+            f"Index manifest has an invalid quality binding "
+            f"({quality_mismatch}): {manifest_path}. Re-run indexing for "
+            "this collection."
+        )
     dimension = manifest.get("embedding_dimension")
     if (isinstance(dimension, bool) or not isinstance(dimension, int)
             or dimension < 1):
@@ -348,7 +397,8 @@ def _require_hybrid_chunks_snapshot(
         chunks_path: Path, db_dir: Path, *, backend: str,
         collection_name: str,
         load_manifest_fn: ManifestLoaderFn,
-        artifact_sha256_fn: ArtifactHashFn) -> str | None:
+        artifact_sha256_fn: ArtifactHashFn,
+        quality_report_path_fn: Callable[[Path], Path]) -> str | None:
     """Validate and return the manifested lexical corpus digest, if proven."""
     manifest = load_manifest_fn(
         db_dir, backend=backend, collection_name=collection_name)
@@ -365,6 +415,22 @@ def _require_hybrid_chunks_snapshot(
             f"{chunks_path}. Re-run indexing or select the chunks file used "
             "to build this collection."
         )
+    expected_report_sha256 = manifest.get("quality_report_sha256")
+    if expected_report_sha256 is not None:
+        report_path = quality_report_path_fn(chunks_path)
+        try:
+            actual_report_sha256 = artifact_sha256_fn(report_path)
+        except OSError as exc:
+            raise ValueError(
+                f"Hybrid quality report is missing for {chunks_path}"
+            ) from exc
+        if actual_report_sha256 != expected_report_sha256:
+            raise ValueError(
+                f"Hybrid quality report does not match the indexed corpus "
+                f"for {backend.title()} collection '{collection_name}': "
+                f"{report_path}. Re-run indexing or restore the report used "
+                "to build this collection."
+            )
     return expected_sha256
 
 

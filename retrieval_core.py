@@ -241,6 +241,20 @@ def _chunk_id(rec: dict) -> str:
         "page_end": metadata.get("page_end"),
         "page_range": metadata.get("page_range", ""),
     }
+    source_items = metadata.get("source_items")
+    if isinstance(source_items, list):
+        source_refs = sorted({
+            item.get("ref")
+            for item in source_items
+            if (isinstance(item, dict)
+                and isinstance(item.get("ref"), str)
+                and item.get("ref"))
+        })
+        if source_refs:
+            # Exact source refs distinguish legitimate repeated text on the
+            # same page.  Legacy records without lineage retain their former
+            # stable-ID contract.
+            identity["source_refs"] = source_refs
     content = json.dumps(
         identity,
         ensure_ascii=False,

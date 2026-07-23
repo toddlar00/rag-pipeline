@@ -103,7 +103,44 @@ def test_dedup_uses_current_rag_helpers_and_logger(monkeypatch):
     assert rag._deduplicate_chunks(chunks) == chunks[:1]
     assert fingerprint_calls == ["first", "second"]
     assert trigram_calls == ["same-fingerprint", "same-fingerprint"]
-    assert messages == ["Deduplication: removed 1 near-duplicate chunks"]
+    assert messages == [
+        "Deduplication: removed 1 source-overlapping near-duplicate chunks"]
+
+
+def test_dedup_preserves_repeated_text_at_distinct_source_identities():
+    def record(index, ref):
+        return {
+            "text": "The same substantive rule appears here.",
+            "metadata": {
+                "chunk_index": index,
+                "source_items": [{"ref": ref}],
+            },
+        }
+
+    distinct = [record(0, "#/texts/1"), record(1, "#/texts/2")]
+    overlapping = [record(0, "#/texts/1"), record(1, "#/texts/1")]
+
+    assert rag._deduplicate_chunks(distinct) == distinct
+    assert rag._deduplicate_chunks(overlapping) == overlapping[:1]
+
+
+def test_dedup_preserves_similar_distinct_holdings_from_same_source():
+    common = (
+        "The court considered the complete record and the parties' arguments "
+        "before announcing its final disposition. "
+    )
+    chunks = [
+        {
+            "text": common + "The judgment is affirmed.",
+            "metadata": {"source_items": [{"ref": "#/texts/1"}]},
+        },
+        {
+            "text": common + "The judgment is reversed.",
+            "metadata": {"source_items": [{"ref": "#/texts/1"}]},
+        },
+    ]
+
+    assert rag._deduplicate_chunks(chunks, threshold=0.8) == chunks
 
 
 @pytest.mark.parametrize(

@@ -345,7 +345,9 @@ def _deduplicate_chunks(
         chunks: list[dict], threshold: float = DEDUP_THRESHOLD, *,
         text_fingerprint_fn: FingerprintFn | None = None,
         make_trigrams_fn: TrigramFn | None = None,
-        removed_callback: RemovedCallback | None = None) -> list[dict]:
+        removed_callback: RemovedCallback | None = None,
+        can_deduplicate_fn: Callable[[dict, dict], bool] | None = None,
+        ) -> list[dict]:
     """Remove near-duplicate chunks based on trigram Jaccard similarity."""
     if not chunks:
         return chunks
@@ -356,7 +358,7 @@ def _deduplicate_chunks(
     )
     trigrams_fn = _make_trigrams if make_trigrams_fn is None else make_trigrams_fn
     kept: list[dict] = []
-    seen: list[tuple[int, frozenset[str]]] = []
+    seen: list[tuple[int, frozenset[str], dict]] = []
     for chunk in chunks:
         fingerprint = fingerprint_fn(chunk["text"])
         fingerprint_length = len(fingerprint)
@@ -366,20 +368,22 @@ def _deduplicate_chunks(
             continue
 
         is_duplicate = False
-        for seen_length, trigrams_b in seen:
+        for seen_length, trigrams_b, seen_chunk in seen:
             if (abs(fingerprint_length - seen_length)
                     / max(fingerprint_length, seen_length) > 0.2):
                 continue
             if not trigrams_b:
                 continue
             jaccard = len(trigrams_a & trigrams_b) / len(trigrams_a | trigrams_b)
-            if jaccard >= threshold:
+            if (jaccard >= threshold
+                    and (can_deduplicate_fn is None
+                         or can_deduplicate_fn(seen_chunk, chunk))):
                 is_duplicate = True
                 break
 
         if not is_duplicate:
             kept.append(chunk)
-            seen.append((fingerprint_length, trigrams_a))
+            seen.append((fingerprint_length, trigrams_a, chunk))
 
     removed = len(chunks) - len(kept)
     if removed > 0 and removed_callback is not None:

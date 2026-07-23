@@ -1,6 +1,7 @@
 """Atomic publication and fail-closed resume validation regressions."""
 
 import hashlib
+import json
 from pathlib import Path
 import textwrap
 
@@ -24,6 +25,48 @@ def _record(index: int, chapter: int, title: str, text: str) -> dict:
 
 def _write_chunks(path: Path, records: list[dict]) -> None:
     rag._atomic_write_jsonl(path, records)
+
+
+def _lineaged_record() -> dict:
+    return {
+        "text": "A source-backed discussion of professional responsibility.",
+        "metadata": {
+            "chunk_index": 0,
+            "source_file": "book",
+            "source_lineage_schema_version": 1,
+            "source_items": [{
+                "ref": "#/texts/0",
+                "label": "text",
+                "parent_refs": [],
+                "spans": [{"page": 1}],
+            }],
+            "page_start": 1,
+            "page_end": 1,
+            "page_range": "pp.1-1",
+            "chapter_num": 1,
+            "chapter_title": "One",
+            "section_path": "Chapter 1",
+            "content_type": "author_narrative",
+            "content_source": "body",
+            "token_count": 8,
+            "embedding_token_count": 10,
+            "case_names": [],
+            "primary_case": None,
+        },
+    }
+
+
+def _write_quality_source(path: Path) -> None:
+    rag._atomic_write_json(path, {
+        "pages": {"1": {}},
+        "texts": [{
+            "self_ref": "#/texts/0",
+            "label": "text",
+            "content_layer": "body",
+            "text": "A source-backed discussion of professional responsibility.",
+            "prov": [{"page_no": 1}],
+        }],
+    })
 
 
 def test_atomic_text_failure_preserves_previous_bytes(monkeypatch, tmp_path):
@@ -136,6 +179,79 @@ def test_chunk_completion_binds_source_options_model_lock_and_output(
 
     document.write_text('{"name":"changed"}', encoding="utf-8")
     assert not rag._chunks_complete(document, chunks, parameters=initial)
+
+
+def test_quality_report_is_repairable_and_required_for_lineaged_chunks(
+        tmp_path):
+    document = tmp_path / "book.json"
+    chunks = tmp_path / "book_chunks.jsonl"
+    parameters = {"embedding_model": "model-a", "chunking_policy_version": 19}
+    _write_quality_source(document)
+    _write_chunks(chunks, [_lineaged_record()])
+
+    report = rag._publish_corpus_quality_report(
+        document, chunks, parameters=parameters, structural_ranges=set())
+    report_path = rag._quality_core.quality_report_path(chunks)
+
+    assert report["status"] == "pass"
+    assert rag._quality_report_complete(
+        document, chunks, parameters=parameters)
+    assert len(rag._load_index_records_strict(chunks)) == 1
+
+    report_path.unlink()
+    assert not rag._quality_report_complete(
+        document, chunks, parameters=parameters)
+    with pytest.raises(OSError):
+        rag._load_index_records_strict(chunks)
+
+    repaired = rag._publish_corpus_quality_report(
+        document, chunks, parameters=parameters, structural_ranges=set())
+    assert repaired == report
+    assert rag._quality_report_complete(
+        document, chunks, parameters=parameters)
+
+
+def test_lineaged_chunks_refuse_stale_or_failed_quality_report(tmp_path):
+    document = tmp_path / "book.json"
+    chunks = tmp_path / "book_chunks.jsonl"
+    parameters = {"embedding_model": "model-a", "chunking_policy_version": 19}
+    _write_quality_source(document)
+    _write_chunks(chunks, [_lineaged_record()])
+    rag._publish_corpus_quality_report(
+        document, chunks, parameters=parameters, structural_ranges=set())
+    report_path = rag._quality_core.quality_report_path(chunks)
+
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+    payload["status"] = "fail"
+    rag._atomic_write_json(report_path, payload)
+    with pytest.raises(ValueError, match="did not pass"):
+        rag._load_index_records_strict(chunks)
+
+    rag._publish_corpus_quality_report(
+        document, chunks, parameters=parameters, structural_ranges=set())
+    changed = _lineaged_record()
+    changed["text"] += " Changed after attestation."
+    _write_chunks(chunks, [changed])
+    with pytest.raises(ValueError, match="does not match chunks artifact"):
+        rag._load_index_records_strict(chunks)
+
+
+@pytest.mark.parametrize("consumer_name", [
+    "extract_questions",
+    "generate_exam_questions",
+    "build_citation_graph",
+    "generate_briefs",
+])
+def test_downstream_consumers_require_quality_report(
+        consumer_name, tmp_path):
+    chunks = tmp_path / "book_chunks.jsonl"
+    output = tmp_path / f"{consumer_name}.json"
+    _write_chunks(chunks, [_lineaged_record()])
+
+    with pytest.raises(OSError):
+        getattr(rag, consumer_name)(chunks, output)
+
+    assert not output.exists()
 
 
 def test_unified_export_manifest_binds_output_to_exact_chunks(tmp_path):

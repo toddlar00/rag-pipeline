@@ -41,12 +41,16 @@ PDF
  |                  - Contextual retrieval prefixes (LLM)
  |                  - Quality scoring (LLM, 1-5 scale)
  |                  - Footnote separation
+ |                  - Exact Docling source-item lineage
  |                  - Structural filtering (TOC, index, front matter)
- |                  - Trigram Jaccard deduplication
+ |                  - Source-aware trigram Jaccard deduplication
  |                  - Chapter detection & propagation
  |
  v
-Enriched Chunks (JSONL, including raw + embedding token counts)
+Enriched Chunks + Bound Quality Report
+ |                  - Exact source/chunks/parameter hashes
+ |                  - Lineage, table, structure, normalization, entity,
+ |                    classification, duplicate, and token-budget checks
  |
  +---> [index] ---------> ChromaDB or Qdrant (manifest-validated incremental index)
  |
@@ -81,6 +85,13 @@ existing compatibility functions.
 owns deterministic normalization, structural filtering, near-duplicate
 detection, rule-based content classification, and basic chunk metadata helpers;
 Docling, LLM enrichment, and chunk publication remain orchestrated by `rag.py`.
+
+`quality_core.py` is the standard-library-only corpus-attestation layer. It
+builds and strictly validates a deterministic adjacent `*_chunks.quality.json`
+report over the exact Docling and chunks snapshots. New source-lineaged corpora
+must pass its source coverage, structure, normalization, token, table,
+classification, entity, stable-ID, and chunk-hash checks before downstream
+publication or use.
 
 `index_state.py` is the standard-library-only index policy layer. It owns
 collection-scoped manifest and dirty-marker rules, incremental rebuild
@@ -153,6 +164,7 @@ output/
 |   |-- Civil_procedure.json             # DoclingDocument
 |   |-- Civil_procedure_docling.md        # Raw Docling conversion markdown
 |   |-- Civil_procedure_chunks.jsonl      # Enriched chunks
+|   |-- Civil_procedure_chunks.quality.json # Exact quality attestation
 |   |-- Civil_procedure.md                # Final, filtered unified export
 |   |-- Civil_procedure_chroma/           # Chroma index (default backend)
 |   `-- Chapters/                         # Only with --split-chapters
@@ -1157,7 +1169,8 @@ The `index` command hashes each chunk's text and indexable metadata and stores
 the hashes in an atomic, versioned manifest scoped to the database backend and
 collection. The manifest also records its schema version, embedding model,
 embedding dimension, validated model-artifact-lock SHA-256, exact source JSONL
-SHA-256, and source record count. A compatible rerun embeds only changed/new
+SHA-256, source record count, and the exact schema-versioned quality-report
+SHA-256 pair. A compatible rerun embeds only changed/new
 chunks, removes chunks no longer present, and skips unchanged chunks. Qdrant incremental runs scan payload-only
 stable IDs before mutation and again after writes, refusing to advance the
 manifest if points are missing, unexpected, duplicated, untracked, or returned
@@ -1215,8 +1228,11 @@ suffix. When they regenerate chunks, they create the collection recovery marker
 before work begins, publish the JSONL via atomic replacement, and retain the
 vector lease until the matching index commits. A crash therefore exposes
 neither partial JSONL nor an apparently clean old index paired with a new
-corpus. Chroma hybrid search independently compares the chunks SHA-256 with the
-manifest, parses and hashes one exact file-handle snapshot, and refuses
+corpus. Before any vector-client mutation, indexing validates the adjacent
+quality report against one exact chunks snapshot; schema-v6 manifests bind the
+validated report SHA-256. Chroma hybrid search independently compares both the
+chunks and quality-report SHA-256 values with the manifest, parses and hashes
+one exact file-handle snapshot, and refuses
 cross-generation lexical/vector fusion until reindexing. A legacy Chroma index
 without a manifested source SHA-256 falls back to vector retrieval with a
 warning instead of fusing unproven lexical data. Reranking begins only after the
@@ -1233,6 +1249,14 @@ without storing credentials. A hard kill before the final completion commit ther
 stage fail-closed: `full --resume` regenerates it instead of accepting a
 truncated, stale, or partial artifact set. Legacy pipeline artifacts without
 completion metadata regenerate once when resumed.
+
+On Windows, transient synced-folder sharing/access failures (`winerror` 5, 32,
+or 33) receive a small bounded retry only around replacement of the already
+written, fsynced staging file. Every retry revalidates the parent identity,
+destination leaf, staging identity and exact bytes, link count, and private
+permissions after backoff. Owned-marker reads separately retry only
+content-identical ctime churn; any byte, inode, size, mtime, link, schema, or
+ownership change fails closed.
 
 The sequential background-upsert paths for both backends share teardown that
 requests a worker stop, waits for completion, and attempts both executor and
@@ -1340,7 +1364,8 @@ validating their artifacts as follows:
 |-------|-----------|
 | Convert | Source/config/model-lock completion plus both output hashes |
 | Chunk | Source/config/model-lock completion, output hash, and strict JSONL schema |
-| Index | Clean compatible manifest plus physical IDs/count and chunk hashes |
+| Quality | Exact Docling/chunks/parameters binding plus every required PASS check |
+| Index | Clean compatible manifest plus report binding, physical IDs/count, and chunk hashes |
 | Export | Source/config completion and output hash |
 | Chapter export | Exact manifested chapter-file set and hashes |
 | RAPTOR | Source/config-bound tree schema and statistics |
@@ -1427,6 +1452,8 @@ Each enriched chunk carries:
 | `quality_score` | int/null | LLM-rated usefulness 1-5 (with `--quality-score`) |
 | `token_count` | int | Token count of the raw chunk before any contextual prefix |
 | `embedding_token_count` | int | Token count of the exact contextualized, task-prefixed model input, including special tokens |
+| `source_lineage_schema_version` | int | Version of the exact source-item lineage contract |
+| `source_items` | list[object] | Deterministic Docling refs with labels, parent refs, pages, and optional bounding boxes |
 | `chunk_index` | int | Positional index in output |
 
 ### Content Types
@@ -1868,6 +1895,7 @@ rag.py                  # Stable command/API facade and pipeline orchestration
 retrieval_core.py       # Stdlib-only retrieval models and pure algorithms
 artifact_io.py          # Stdlib-only strict reads and atomic publication
 chunking_core.py        # Stdlib-only text preparation and classification
+quality_core.py         # Stdlib-only corpus quality reports and bindings
 index_state.py          # Stdlib-only index manifests and compatibility policy
 llm_adapters.py         # Typed LLM provider transport adapters
 cli_policy.py           # Stdlib-only CLI interpretation and serialization policy

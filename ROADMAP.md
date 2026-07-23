@@ -23,7 +23,9 @@ Status terms:
 | Milestone | Status | Durable result |
 |---|---|---|
 | Foundation | Baseline | End-to-end PDF ingestion, enriched chunking, shared LLM runtime, grounded answers, hybrid retrieval/reranking, evaluation harness, Chroma/Qdrant indexing, CLI, UI, docs, and tests |
-| Ethics corpus coherence and publication quality | Validated locally | Canonical scaffold reconstruction, source-item boundary repair, complete tables and nested footnotes, exact embedding budgets, publication gates, regenerated exports, and an exactly reconciled 1,707-record Chroma index |
+| Ethics corpus coherence and publication quality | Validated locally | Canonical scaffold reconstruction, exact source identity, complete tables and nested footnotes, exact embedding budgets, regenerated exports, and an exactly reconciled 1,715-record Chroma index |
+| Machine-readable corpus quality attestation | Validated locally | Schema-v1 report binds the exact Docling source, chunks bytes, parameters, source-lineage coverage, tables, normalization, classification, entities, token budgets, and stable/hash roots; resume, export, retrieval, and index publication fail closed on missing, stale, malformed, or mismatched evidence |
+| Synced-folder publication resilience | Validated locally | Bounded Windows sharing-violation retries republish only a pinned staging file; marker reads retry only content-identical ctime churn and fail closed on every identity, byte, link, ownership, or schema change |
 | Exact LLM transport budget | Integrated | [PR #1](https://github.com/toddlar00/rag-pipeline/pull/1) |
 | Qdrant manifest reconciliation | Integrated | [PR #2](https://github.com/toddlar00/rag-pipeline/pull/2) |
 | Qdrant interrupted-update guard | Integrated | [PR #3](https://github.com/toddlar00/rag-pipeline/pull/3) |
@@ -149,24 +151,47 @@ keeps nested table/picture footnotes together, preserves table captions, and
 uses source-PDF bounding boxes to repair real cell omissions without treating
 harmless token fusion as lost content.
 
-The final `Ethics.pdf` regeneration produced 1,707 chunks across 14 canonical
+The final `Ethics.pdf` regeneration produced 1,715 chunks across 14 canonical
 chapters plus 36 substantive front-matter chunks. It retains 35 substantive
 source tables as 39 row-bounded Markdown chunks; six tables on PDF pages 391,
-469, 510, 542, 637, and 706 required source-PDF recovery. All 6,585 audited
-non-heading source items are covered, except six intentionally omitted
-“All emphasis added” boilerplate markers. There are no structural leaks or
-exact/canonical duplicate chunks. The Nomic embedding contract is exact for all
-records: raw chunk counts top out at 506 tokens, final task-prefixed inputs top
-out at the model's 512-token limit, and no input is truncated.
+469, 510, 542, 637, and 706 required source-PDF recovery. Exact source lineage
+covers all 6,755 eligible Docling items, including the formerly orphaned page
+682 `Theophylline` picture caption. There are no structural, normalization,
+classification, entity, table, lineage, or token-budget failures. Two
+canonical-text duplicate groups are retained intentionally because they are
+distinct source occurrences rather than deduplication artifacts. The Nomic
+embedding contract is exact for all records: raw chunk counts top out at 506
+tokens, final task-prefixed inputs top out at the model's 512-token limit, and
+no input is truncated.
 
-The unified export contains 342,826 words; the 15 chapter/front-matter files
-contain 343,590 words. Six hybrid retrieval probes recovered the intended
-pages at ranks 1, 1, 1, 1, 1, and 2. The Chroma collection, stable IDs,
-documents, metadata, hashes, and manifests exactly match the 1,707-record
-JSONL. Evidence is recorded in `output/Ethics_3/COHERENCE_AUDIT.md`.
+The unified export contains 342,886 words; the 15 chapter/front-matter files
+contain 343,650 words. Six current hybrid retrieval probes recover the intended
+pages at ranks 1, 1, 1, 1, 1, and 3. The last result is the page 542 rule table,
+behind closely related explanatory material, and remains a table-retrieval
+calibration target. The Chroma collection, stable IDs, documents, metadata,
+hashes, report binding, and manifests exactly match the 1,715-record JSONL. A
+second no-op resume preserved all three artifact hashes and reported 0 changed,
+1,715 unchanged, and 0 removed records. Evidence is recorded in
+`output/Ethics_3/COHERENCE_AUDIT.md`.
 
-Local validation for the implementation is 1,065 passed and 7 skipped in the
-full suite, successful Python compilation, and a clean `git diff --check`.
+The adjacent `Ethics_3_chunks.quality.json` is a deterministic PASS report over
+all 1,715 records and all 6,755 eligible source identities. Its exact SHA-256
+is committed into the schema-v6 index manifest. New lineaged corpora cannot be
+indexed, exported, queried through the hybrid path, or accepted by resume when
+that report is absent, stale, malformed, oversized, or hash-mismatched; legacy
+unlineaged corpora retain an explicit compatibility path.
+
+The same real run exposed transient Dropbox marker and Windows atomic-replace
+interference. Publication now retries only `winerror` 5/32/33, only around the
+already-written staging-file replace, with bounded backoff and fresh parent,
+leaf, staging identity, link, and privacy checks immediately before every
+retry. Retention marker reads retry only a ctime-only race while pinning device,
+inode, size, mtime, link count, and the exact bytes hash across attempts.
+
+Local validation for the implementation is 1,118 passed and 7 skipped in the
+full suite, 436 passed and 1 skipped in the independent blocker-focused audit,
+successful Python compilation, six live hybrid probes, two real resume runs,
+and a clean `git diff --check`.
 This milestone remains “validated locally” until its working-tree changes
 receive the repository's normal commit, review, CI, and merge evidence.
 
@@ -174,8 +199,6 @@ receive the repository's normal commit, review, CI, and merge evidence.
 
 | Priority | Milestone | Acceptance evidence |
 |---|---|---|
-| P0 | Synced-folder publication resilience | Bounded, identity-safe retries tolerate transient Dropbox/Windows marker and atomic-replace interference; injected race tests prove no partial publication, ownership confusion, or weakened retention checks |
-| P1 | Machine-readable corpus quality reports | Every chunk/export run emits a schema-versioned report with structure, normalization, token, table, classification, entity, and hash metrics; resume validates the report against the current artifact |
 | P1 | Ethics retrieval calibration | A corpus-owner-reviewed judged set covers rule text, author explanation, cases, tables, cross-page continuations, filters, and abstention; dense, hybrid, and reranked modes receive explicit release thresholds |
 | P2 | Configurable document-structure profiles | Front/back-matter labels, chapter patterns, and canonical-title rules move behind tested profiles, with fixtures from multiple publishers and safe unknown-layout behavior |
 | P2 | Context-aware retrieval assembly | Stable adjacency/parent identifiers allow query-time neighboring-chunk stitching without duplicate text, chapter leakage, or citation ambiguity |
@@ -191,4 +214,5 @@ mergeable draft PR. Review evidence must be durable in a committed audit or PR
 review/comment rather than existing only in an ephemeral work log. A milestone
 becomes integrated only after merge into `main`.
 
-Every milestone in the current-status table has reached that integrated state.
+Rows marked “Validated locally” still require commit, review, CI, and merge;
+the earlier merged milestones have reached the integrated state.

@@ -1,3 +1,4 @@
+import errno
 import json
 import os
 import stat
@@ -6,6 +7,12 @@ from pathlib import Path
 import pytest
 
 import storage_policy
+
+
+def _synced_folder_lock_error():
+    error = PermissionError(errno.EACCES, "temporarily locked")
+    error.winerror = 32
+    return error
 
 
 def _assert_private_permissions(path: Path, *, directory: bool) -> None:
@@ -111,6 +118,148 @@ def test_atomic_replace_failure_preserves_target_and_removes_temporary_file(
     assert observed["destination"] == target
     assert target.read_text(encoding="utf-8") == "old"
     assert not observed["source"].exists()
+    assert list(private.iterdir()) == [target]
+
+
+def test_atomic_replace_retries_transient_synced_folder_interference(
+        monkeypatch, tmp_path):
+    private = storage_policy.ensure_private_directory(tmp_path / "private")
+    target = private / "artifact.json"
+    storage_policy.atomic_write_private_text(target, "old")
+    attempts = []
+    delays = []
+    writer_calls = 0
+
+    def flaky_replace(source, destination):
+        attempts.append((Path(source), Path(destination)))
+        if len(attempts) < 3:
+            raise _synced_folder_lock_error()
+        os.replace(source, destination)
+
+    def write_once(handle):
+        nonlocal writer_calls
+        writer_calls += 1
+        handle.write("new")
+
+    monkeypatch.setattr(storage_policy.time, "sleep", delays.append)
+    storage_policy.atomic_write_private(
+        target, write_once, text=True, replace_fn=flaky_replace)
+
+    assert target.read_text(encoding="utf-8") == "new"
+    assert writer_calls == 1
+    assert len(attempts) == 3
+    assert delays == list(storage_policy._SYNCED_FOLDER_RETRY_DELAYS[:2])
+    assert list(private.iterdir()) == [target]
+
+
+def test_atomic_replace_exhausts_bounded_transient_retries(
+        monkeypatch, tmp_path):
+    private = storage_policy.ensure_private_directory(tmp_path / "private")
+    target = private / "artifact.json"
+    storage_policy.atomic_write_private_text(target, "old")
+    attempts = 0
+    delays = []
+
+    def always_locked(*_args):
+        nonlocal attempts
+        attempts += 1
+        raise _synced_folder_lock_error()
+
+    monkeypatch.setattr(storage_policy.time, "sleep", delays.append)
+    with pytest.raises(PermissionError, match="temporarily locked"):
+        storage_policy.atomic_write_private_text(
+            target, "new", replace_fn=always_locked)
+
+    assert attempts == len(storage_policy._SYNCED_FOLDER_RETRY_DELAYS) + 1
+    assert delays == list(storage_policy._SYNCED_FOLDER_RETRY_DELAYS)
+    assert target.read_text(encoding="utf-8") == "old"
+    assert list(private.iterdir()) == [target]
+
+
+def test_path_producer_runs_once_across_transient_replace_retry(
+        monkeypatch, tmp_path):
+    private = storage_policy.ensure_private_directory(tmp_path / "private")
+    target = private / "artifact.pdf"
+    attempts = 0
+    producer_calls = 0
+
+    def produce(path):
+        nonlocal producer_calls
+        producer_calls += 1
+        path.write_bytes(b"private artifact")
+
+    def flaky_replace(source, destination):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise _synced_folder_lock_error()
+        os.replace(source, destination)
+
+    monkeypatch.setattr(storage_policy.time, "sleep", lambda _delay: None)
+    storage_policy.atomic_publish_private_file(
+        target, produce, replace_fn=flaky_replace)
+
+    assert producer_calls == 1
+    assert attempts == 2
+    assert target.read_bytes() == b"private artifact"
+    assert list(private.iterdir()) == [target]
+
+
+def test_atomic_replace_retry_fails_closed_if_temporary_changes(tmp_path):
+    private = storage_policy.ensure_private_directory(tmp_path / "private")
+    target = private / "artifact.json"
+    storage_policy.atomic_write_private_text(target, "old")
+    attempts = 0
+
+    def tamper_then_fail(source, _destination):
+        nonlocal attempts
+        attempts += 1
+        source = Path(source)
+        original = source.stat()
+        source.write_text("evil", encoding="utf-8")
+        os.utime(source, ns=(original.st_atime_ns, original.st_mtime_ns))
+        raise _synced_folder_lock_error()
+
+    with pytest.raises(
+            storage_policy.StoragePolicyError,
+            match="temporary file changed"):
+        storage_policy.atomic_write_private_text(
+            target, "good", replace_fn=tamper_then_fail)
+
+    assert attempts == 1
+    assert target.read_text(encoding="utf-8") == "old"
+    assert list(private.iterdir()) == [target]
+
+
+def test_atomic_replace_retry_fails_closed_if_parent_identity_changes(
+        monkeypatch, tmp_path):
+    private = storage_policy.ensure_private_directory(tmp_path / "private")
+    target = private / "artifact.json"
+    storage_policy.atomic_write_private_text(target, "old")
+    real_parent_identity = storage_policy._parent_identity
+    parent_changed = False
+
+    def changing_parent(path):
+        identity = real_parent_identity(path)
+        return (identity[0], identity[1] + 1) if parent_changed else identity
+
+    def change_parent_during_backoff(_delay):
+        nonlocal parent_changed
+        parent_changed = True
+
+    monkeypatch.setattr(storage_policy, "_parent_identity", changing_parent)
+    monkeypatch.setattr(
+        storage_policy.time, "sleep", change_parent_during_backoff)
+
+    with pytest.raises(
+            storage_policy.StoragePolicyError,
+            match="parent changed during publication retry"):
+        storage_policy.atomic_write_private_text(
+            target, "new",
+            replace_fn=lambda *_args: (_ for _ in ()).throw(
+                _synced_folder_lock_error()))
+
+    assert target.read_text(encoding="utf-8") == "old"
     assert list(private.iterdir()) == [target]
 
 

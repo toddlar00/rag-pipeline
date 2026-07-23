@@ -58,6 +58,8 @@ def _paths(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(rag, "OUTPUT_DIR", tmp_path / "output")
     monkeypatch.setattr(rag, "_converted_outputs_complete", lambda *a, **k: True)
     monkeypatch.setattr(rag, "_chunks_complete", lambda *a, **k: True)
+    monkeypatch.setattr(
+        rag, "_quality_report_complete", lambda *a, **k: True)
     monkeypatch.setattr(rag, "_unified_export_complete", lambda *a, **k: True)
     monkeypatch.setattr(rag, "_split_export_complete", lambda *a, **k: True)
     monkeypatch.setattr(rag, "_raptor_output_complete", lambda *a, **k: True)
@@ -218,6 +220,35 @@ def test_resume_rechunks_when_completion_is_missing(monkeypatch, tmp_path):
 
     assert state["calls"] == 1
     assert "fresh" in paths["chunks"].read_text(encoding="utf-8")
+
+
+def test_resume_repairs_missing_quality_report_without_rechunking(
+        monkeypatch, tmp_path):
+    paths = _paths(monkeypatch, tmp_path)
+    checks = iter([False, True])
+    publications = []
+    monkeypatch.setattr(rag, "_chunk_record_count", lambda _path: 4)
+    monkeypatch.setattr(
+        rag, "_quality_report_complete",
+        lambda *args, **kwargs: next(checks))
+    monkeypatch.setattr(
+        rag, "_publish_corpus_quality_report",
+        lambda *args, **kwargs: (
+            publications.append((args, kwargs)) or {"status": "pass"}))
+    monkeypatch.setattr(
+        rag, "chunk_document",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("quality repair must not rechunk")))
+    monkeypatch.setattr(
+        rag, "_index_chunks_for_backend",
+        lambda *args, **kwargs: _index_outcome())
+
+    result = rag._run_pipeline_stages(
+        Path("Book.pdf"), paths, _args(), resume=True, watermark=None)
+
+    assert result["paths"] == paths
+    assert len(publications) == 1
+    assert publications[0][0] == (paths["doc"], paths["chunks"])
 
 
 def test_pipeline_chunk_failure_leaves_dirty_marker(monkeypatch, tmp_path):

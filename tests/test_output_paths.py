@@ -20,6 +20,7 @@ def test_new_run_uses_book_scoped_paths(monkeypatch, tmp_path):
         "doc": book_dir / "Civil Procedure.json",
         "converted_markdown": book_dir / "Civil Procedure_docling.md",
         "chunks": book_dir / "Civil Procedure_chunks.jsonl",
+        "quality_report": book_dir / "Civil Procedure_chunks.quality.json",
         "export": book_dir / "Civil Procedure.md",
         "chapters_dir": book_dir / "Chapters",
         "chroma": book_dir / "Civil Procedure_chroma",

@@ -46,6 +46,7 @@ import job_runtime as _job_runtime
 import llm_adapters as _llm_adapters
 import model_artifacts as _model_artifacts
 import operation_contracts as _operation_contracts
+import quality_core as _quality_core
 import retention as _retention
 import retrieval_core as _retrieval_core
 import run_telemetry as _run_telemetry
@@ -168,6 +169,7 @@ class PipelinePaths(TypedDict):
     doc: Path
     converted_markdown: Path
     chunks: Path
+    quality_report: Path
     export: Path
     chapters_dir: Path
     chroma: Path
@@ -220,7 +222,7 @@ _CONTEXT_TOKEN_RESERVE = 192
 
 # Incremental vector-index metadata. Bump this whenever the indexed payload or
 # vector layout changes in a way that requires rebuilding existing collections.
-INDEX_MANIFEST_SCHEMA_VERSION = 5
+INDEX_MANIFEST_SCHEMA_VERSION = 6
 
 # Content type labels for LLM classification prompt
 _CONTENT_LABELS = [
@@ -749,10 +751,12 @@ def _get_embedding_fn(model_name: str, *, input_type: str = "document"):
 def _output_paths_for_name(name: str) -> PipelinePaths:
     """Build the artifact paths for one named pipeline run."""
     book_dir = OUTPUT_DIR / name
+    chunks = book_dir / f"{name}_chunks.jsonl"
     return {
         "doc":          book_dir / f"{name}.json",
         "converted_markdown": book_dir / f"{name}_docling.md",
-        "chunks":       book_dir / f"{name}_chunks.jsonl",
+        "chunks":       chunks,
+        "quality_report": _quality_core.quality_report_path(chunks),
         "export":       book_dir / f"{name}.md",
         "chapters_dir": book_dir / "Chapters",
         "chroma":       book_dir / f"{name}_chroma",
@@ -1061,12 +1065,75 @@ def _parse_index_records_strict(raw: bytes, path: Path) -> list[dict]:
         raw, path, chunk_id_fn=_chunk_id)
 
 
+def _quality_report_required(chunks_path: Path, records: list[dict]) -> bool:
+    """Return whether this corpus participates in the quality contract."""
+    return (
+        _quality_core.quality_report_path(chunks_path).is_file()
+        or any(
+            "source_lineage_schema_version" in record.get("metadata", {})
+            for record in records
+        )
+    )
+
+
+def _validated_quality_report_binding(
+        chunks_path: Path, records: list[dict], chunks_sha256: str,
+        chunks_size: int, *, source_name: str | None = None,
+        source_sha256: str | None = None,
+        parameters_sha256: str | None = None,
+        embedding_model: str | None = None,
+        embedding_limit: int | None = None,
+) -> tuple[int | None, str | None, dict | None]:
+    """Validate one exact adjacent report snapshot and return its binding."""
+    chunks_path = Path(chunks_path)
+    if not _quality_report_required(chunks_path, records):
+        return None, None, None
+    report_path = _quality_core.quality_report_path(chunks_path)
+    report_raw, report_sha256, _ = _read_index_artifact_snapshot(report_path)
+    stable_ids = [_retrieval_core._chunk_id(record) for record in records]
+    chunk_hashes = [_retrieval_core._chunk_hash(record) for record in records]
+    payload = _quality_core.parse_quality_report_bytes(
+        report_raw,
+        chunks_name=chunks_path.name,
+        chunks_sha256=chunks_sha256,
+        chunks_size=chunks_size,
+        record_count=len(records),
+        stable_ids=stable_ids,
+        chunk_hashes=chunk_hashes,
+        source_name=source_name,
+        source_sha256=source_sha256,
+        parameters_sha256=parameters_sha256,
+        embedding_model=embedding_model,
+        embedding_limit=embedding_limit,
+    )
+    return _quality_core.QUALITY_REPORT_SCHEMA_VERSION, report_sha256, payload
+
+
+def _load_index_snapshot_with_quality(
+        path: Path,
+) -> tuple[
+        list[dict], str, tuple[int, int, int, int, int],
+        tuple[int | None, str | None],
+]:
+    """Load one exact chunks snapshot plus its validated quality binding."""
+    path = Path(path)
+    raw, source_sha256, fingerprint = _read_index_artifact_snapshot(path)
+    records = _parse_index_records_strict(raw, path)
+    schema_version, report_sha256, _ = _validated_quality_report_binding(
+        path, records, source_sha256, len(raw))
+    return (
+        records, source_sha256, fingerprint,
+        (schema_version, report_sha256),
+    )
+
+
 def _load_index_snapshot_strict(
         path: Path,
 ) -> tuple[list[dict], str, tuple[int, int, int, int, int]]:
     """Load records, SHA-256, and identity from one exact byte snapshot."""
-    raw, source_sha256, fingerprint = _read_index_artifact_snapshot(path)
-    return _parse_index_records_strict(raw, Path(path)), source_sha256, fingerprint
+    records, source_sha256, fingerprint, _ = (
+        _load_index_snapshot_with_quality(path))
+    return records, source_sha256, fingerprint
 
 
 def _load_index_records_strict(path: Path) -> list[dict]:
@@ -4514,14 +4581,42 @@ _make_trigrams = _chunking_core._make_trigrams
 
 def _deduplicate_chunks(chunks: list[dict],
                         threshold: float = DEDUP_THRESHOLD) -> list[dict]:
-    """Deduplicate through the facade's current helpers and logger."""
+    """Deduplicate only when doing so cannot orphan source identities."""
+
+    def source_refs(record: dict) -> set[str] | None:
+        values = record.get("metadata", {}).get("source_items")
+        if values is None:
+            return None
+        return {
+            item["ref"] for item in values
+            if isinstance(item, dict) and isinstance(item.get("ref"), str)
+        }
+
+    def can_deduplicate(kept: dict, candidate: dict) -> bool:
+        kept_refs = source_refs(kept)
+        candidate_refs = source_refs(candidate)
+        if kept_refs is None and candidate_refs is None:
+            return True
+        if not kept_refs or not candidate_refs:
+            return False
+        # Similarity alone is not proof that two fragments from the same
+        # source item carry the same proposition.  For source-lineaged data,
+        # remove only byte-identical text whose identities are already fully
+        # represented by the retained record.
+        return (
+            candidate_refs.issubset(kept_refs)
+            and candidate.get("text") == kept.get("text")
+        )
+
     return _chunking_core._deduplicate_chunks(
         chunks,
         threshold,
         text_fingerprint_fn=_text_fingerprint,
         make_trigrams_fn=_make_trigrams,
+        can_deduplicate_fn=can_deduplicate,
         removed_callback=lambda removed: log.info(
-            f"Deduplication: removed {removed} near-duplicate chunks"),
+            "Deduplication: removed "
+            f"{removed} source-overlapping near-duplicate chunks"),
     )
 
 
@@ -5145,7 +5240,8 @@ def enrich_chunk(chunk_text: str, headings: list[str] | None,
                  chunk_index: int, total_chunks: int,
                  total_pages: int,
                  doc_items: list | None = None,
-                 source_file: str = "") -> dict:
+                 source_file: str = "",
+                 source_items: list[dict] | None = None) -> dict:
     """Build an enriched chunk record with legal-textbook metadata."""
     content_type = classify_content_type(chunk_text, headings)
     case_names = extract_case_names(chunk_text)
@@ -5253,6 +5349,10 @@ def enrich_chunk(chunk_text: str, headings: list[str] | None,
         "chunk_index": chunk_index,
         "context": "",
     }
+    if source_items is not None:
+        metadata["source_lineage_schema_version"] = (
+            _quality_core.SOURCE_LINEAGE_SCHEMA_VERSION)
+        metadata["source_items"] = source_items
     if content_type == "table":
         metadata["table_rows"] = table_rows
         metadata["table_cols"] = table_cols
@@ -5304,6 +5404,20 @@ def _merge_enriched_chunk_group(
         for record in group
         for reference in record["metadata"].get("cross_references", [])
     ))
+    source_items: list[dict] = []
+    seen_source_items: set[str] = set()
+    for record in group:
+        for source_item in record["metadata"].get("source_items", []):
+            key = json.dumps(
+                source_item, ensure_ascii=False, sort_keys=True,
+                separators=(",", ":"))
+            if key not in seen_source_items:
+                seen_source_items.add(key)
+                source_items.append(source_item)
+    if source_items:
+        metadata["source_lineage_schema_version"] = (
+            _quality_core.SOURCE_LINEAGE_SCHEMA_VERSION)
+        metadata["source_items"] = source_items
     sources = {
         record["metadata"].get("content_source", "body") for record in group
     }
@@ -5651,6 +5765,103 @@ def _doc_item_label(item) -> str:
     return str(getattr(label, "value", label)).lower()
 
 
+def _docling_lineage_catalog(
+        dl_doc,
+) -> tuple[dict[str, object], dict[str, set[str]], dict[str, list[str]]]:
+    """Index Docling items and their source-level parent relationships."""
+    item_by_ref: dict[str, object] = {}
+    for collection_name in (
+            "texts", "pictures", "tables", "key_value_items", "form_items"):
+        for item in getattr(dl_doc, collection_name, []) or []:
+            ref = str(getattr(item, "self_ref", ""))
+            if ref:
+                item_by_ref[ref] = item
+
+    parent_refs_by_child: dict[str, set[str]] = {}
+    caption_refs_by_parent: dict[str, list[str]] = {}
+    for parent_ref, item in item_by_ref.items():
+        direct_parent = str(getattr(
+            getattr(item, "parent", None), "cref", ""))
+        if direct_parent in item_by_ref:
+            parent_refs_by_child.setdefault(parent_ref, set()).add(
+                direct_parent)
+        for relationship in ("captions", "footnotes", "children"):
+            child_refs = [
+                str(getattr(reference, "cref", ""))
+                for reference in (getattr(item, relationship, None) or [])
+            ]
+            child_refs = [ref for ref in child_refs if ref in item_by_ref]
+            for child_ref in child_refs:
+                parent_refs_by_child.setdefault(child_ref, set()).add(
+                    parent_ref)
+            if relationship == "captions" and child_refs:
+                caption_refs_by_parent[parent_ref] = list(dict.fromkeys(
+                    child_refs))
+    return item_by_ref, parent_refs_by_child, caption_refs_by_parent
+
+
+def _finite_source_coordinate(value: object) -> float | None:
+    try:
+        coordinate = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(coordinate):
+        return None
+    return round(coordinate, 3)
+
+
+def _source_lineage_for_items(
+        doc_items: list | None, *, item_by_ref: dict[str, object],
+        parent_refs_by_child: dict[str, set[str]],
+        caption_refs_by_parent: dict[str, list[str]],
+) -> list[dict]:
+    """Serialize deterministic source identities and page/geometry spans."""
+    refs = [
+        str(getattr(item, "self_ref", ""))
+        for item in (doc_items or [])
+        if getattr(item, "self_ref", "")
+    ]
+    for parent_ref in list(refs):
+        refs.extend(caption_refs_by_parent.get(parent_ref, []))
+    refs = list(dict.fromkeys(refs))
+
+    source_items = []
+    for ref in refs:
+        item = item_by_ref.get(ref)
+        if item is None:
+            continue
+        spans = []
+        for provenance in getattr(item, "prov", None) or []:
+            page = getattr(provenance, "page_no", None)
+            if (not isinstance(page, int) or isinstance(page, bool)
+                    or page < 1):
+                continue
+            span: dict[str, object] = {"page": page}
+            bbox = getattr(provenance, "bbox", None)
+            if bbox is not None:
+                coordinates = [
+                    _finite_source_coordinate(getattr(bbox, name, None))
+                    for name in ("l", "t", "r", "b")
+                ]
+                if all(value is not None for value in coordinates):
+                    span["bbox"] = coordinates
+                    origin = str(getattr(
+                        getattr(bbox, "coord_origin", ""), "value",
+                        getattr(bbox, "coord_origin", "")))
+                    if origin:
+                        span["origin"] = origin.upper()
+            spans.append(span)
+        spans.sort(key=lambda value: (
+            value["page"], value.get("bbox", []), value.get("origin", "")))
+        source_items.append({
+            "ref": ref,
+            "label": _doc_item_label(item),
+            "parent_refs": sorted(parent_refs_by_child.get(ref, set())),
+            "spans": spans,
+        })
+    return source_items
+
+
 def _find_docling_source_pdf(doc_path: Path, doc_dict: dict) -> Path | None:
     """Find the source PDF named in a Docling document, without broad search."""
     filename = str((doc_dict.get("origin") or {}).get("filename") or "")
@@ -5840,13 +6051,7 @@ def _prepare_source_preserving_chunks(
     adjacent text item in source order.  The final boolean marks source-bound
     fragments that must survive the generic minimum-word filter.
     """
-    item_by_ref: dict[str, object] = {}
-    for collection_name in (
-            "texts", "pictures", "tables", "key_value_items", "form_items"):
-        for item in getattr(dl_doc, collection_name, []) or []:
-            ref = str(getattr(item, "self_ref", ""))
-            if ref:
-                item_by_ref[ref] = item
+    item_by_ref, _, _ = _docling_lineage_catalog(dl_doc)
 
     table_markdown_by_ref: dict[str, str] = {}
     table_caption_refs: set[str] = set()
@@ -6162,6 +6367,87 @@ def _prepare_source_preserving_chunks(
         if entry is not None:
             prepared.insert(insert_at, entry)
 
+    # HybridChunker can omit a small source item while retaining the same
+    # words in a neighboring mixed-layout chunk (for example, a one-word
+    # figure caption beside wrapped prose). Attach that source identity to the
+    # exact matching text; if its words are genuinely absent, publish a
+    # source-positioned fragment instead of silently losing the item.
+    represented_refs = {
+        str(getattr(item, "self_ref", ""))
+        for entry in prepared
+        for item in (entry[2] or [])
+        if getattr(item, "self_ref", "")
+    }
+    recovered_matching_items = 0
+    recovered_standalone_items = 0
+    eligible_labels = {
+        "text", "list_item", "footnote", "caption", "code", "table",
+    }
+    for ref, item in item_by_ref.items():
+        if ref in represented_refs or ref in table_caption_refs:
+            continue
+        label = _doc_item_label(item)
+        if label not in eligible_labels:
+            continue
+        content_layer = str(getattr(item, "content_layer", "")).lower()
+        if "furniture" in content_layer:
+            continue
+        if fully_inside_structural_range(item) is not False:
+            continue
+        source_text = (
+            getattr(item, "text", "") or getattr(item, "orig", ""))
+        source_text = source_text.strip()
+        if (label != "table" and not source_text
+                or re.fullmatch(
+                    r"\**\s*all\s+emphasis\s+added\.?\s*\**",
+                    source_text, re.I)
+                or "This and other authors' explanations draw" in source_text):
+            continue
+        page = item_page(item)
+        source_fingerprint = _text_fingerprint(source_text)
+        matching_index = next((
+            index for index, entry in enumerate(prepared)
+            if page is not None and prepared_page(entry) == page
+            and len(source_fingerprint) >= 5
+            and source_fingerprint in _text_fingerprint(entry[0])
+        ), None)
+        if matching_index is not None:
+            text, headings, items, preserve_short = prepared[matching_index]
+            prepared[matching_index] = (
+                text, headings, [*(items or []), item], True)
+            represented_refs.add(ref)
+            recovered_matching_items += 1
+            continue
+
+        if label == "table" and ref in table_markdown_by_ref:
+            orphan_parts = _split_markdown_table_by_rows(
+                table_markdown_by_ref[ref], token_counter, max_tokens)
+        else:
+            orphan_parts = [source_text] if source_text else []
+        if not orphan_parts or page is None:
+            continue
+        insert_at = 0
+        for index, entry in enumerate(prepared):
+            entry_page = prepared_page(entry)
+            if entry_page is not None and entry_page <= page:
+                insert_at = index + 1
+        inherited_headings = (
+            [source_heading_by_ref[ref]]
+            if ref in source_heading_by_ref else
+            prepared[insert_at - 1][1] if insert_at else None)
+        for part in orphan_parts:
+            prepared.insert(
+                insert_at, (part, inherited_headings, [item], True))
+            insert_at += 1
+        represented_refs.add(ref)
+        recovered_standalone_items += 1
+
+    if recovered_matching_items or recovered_standalone_items:
+        log.info(
+            "Recovered %s omitted source identities from matching chunks; "
+            "%s required standalone source fragments",
+            recovered_matching_items, recovered_standalone_items)
+
     return prepared
 
 
@@ -6220,7 +6506,7 @@ def _chunk_parameters(*, embedding_model: str, max_tokens: int,
         gemini_key or os.environ.get("GEMINI_API_KEY", ""))
     llm_config = _llm_runtime.config
     return {
-        "chunking_policy_version": 17,
+        "chunking_policy_version": 19,
         "classification_prompt_version": 1,
         "embedding_model": embedding_model,
         "max_tokens": max_tokens,
@@ -6254,6 +6540,30 @@ def _chunk_parameters(*, embedding_model: str, max_tokens: int,
     }
 
 
+_STRUCTURAL_SECTION_NAMES = (
+    "summary", "contents", "toc", "problems", "acknowledgments",
+    "about_authors", "table_of_cases", "table_of_rules", "index",
+    "editorial", "publisher", "credits",
+)
+
+
+def _book_structural_ranges(book_sections: dict) -> set[tuple[int, int]]:
+    """Return the exact source-page ranges excluded from publication."""
+    ranges = {
+        (section["start"], section["end"])
+        for name in _STRUCTURAL_SECTION_NAMES
+        if (section := book_sections.get(name)) is not None
+    }
+    opening_starts = [
+        section["start"]
+        for name in ("summary", "contents", "toc")
+        if (section := book_sections.get(name)) is not None
+    ]
+    if opening_starts and min(opening_starts) > 1:
+        ranges.add((1, min(opening_starts) - 1))
+    return ranges
+
+
 def _chunks_complete(doc_path: Path, chunks_output: Path, *,
                      parameters: dict) -> bool:
     """Validate a chunk artifact and its source/configuration completion."""
@@ -6268,6 +6578,122 @@ def _chunks_complete(doc_path: Path, chunks_output: Path, *,
             outputs={"chunks_jsonl": chunks_output}):
         return False
     return _chunk_record_count(chunks_output) is not None
+
+
+def _quality_report_complete(doc_path: Path, chunks_output: Path, *,
+                             parameters: dict) -> bool:
+    """Validate the report against exact source, chunks, and parameters."""
+    try:
+        source_raw, source_sha256, _ = _read_index_artifact_snapshot(doc_path)
+        if not isinstance(json.loads(source_raw), dict):
+            return False
+        chunks_raw, chunks_sha256, _ = _read_index_artifact_snapshot(
+            chunks_output)
+        records = _parse_index_records_strict(chunks_raw, chunks_output)
+        schema_version, report_sha256, _ = _validated_quality_report_binding(
+            chunks_output,
+            records,
+            chunks_sha256,
+            len(chunks_raw),
+            source_name=Path(doc_path).name,
+            source_sha256=source_sha256,
+            parameters_sha256=_artifact_io._artifact_parameters_sha256(
+                parameters),
+            embedding_model=parameters.get("embedding_model"),
+            embedding_limit=EMBEDDING_MAX_TOKENS.get(
+                parameters.get("embedding_model")),
+        )
+        return (
+            schema_version == _quality_core.QUALITY_REPORT_SCHEMA_VERSION
+            and isinstance(report_sha256, str)
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError,
+            RuntimeError):
+        return False
+
+
+def _recovered_table_refs_from_records(records: list[dict]) -> set[str]:
+    refs = set()
+    for record in records:
+        metadata = record.get("metadata", {})
+        if not metadata.get("table_recovered_from_pdf"):
+            continue
+        for source_item in metadata.get("source_items", []):
+            if (isinstance(source_item, dict)
+                    and source_item.get("label") == "table"
+                    and isinstance(source_item.get("ref"), str)):
+                refs.add(source_item["ref"])
+    return refs
+
+
+def _publish_corpus_quality_report(
+        doc_path: Path, chunks_output: Path, *, parameters: dict,
+        structural_ranges: set[tuple[int, int]] | None = None,
+) -> dict:
+    """Build and atomically publish a report over exact artifact snapshots."""
+    doc_path = Path(doc_path)
+    chunks_output = Path(chunks_output)
+    source_raw, source_sha256, _ = _read_index_artifact_snapshot(doc_path)
+    try:
+        document = json.loads(source_raw)
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Invalid Docling source JSON: {doc_path}") from exc
+    if not isinstance(document, dict):
+        raise ValueError(f"Docling source must be a JSON object: {doc_path}")
+
+    chunks_raw, chunks_sha256, _ = _read_index_artifact_snapshot(
+        chunks_output)
+    records = _parse_index_records_strict(chunks_raw, chunks_output)
+    if structural_ranges is None:
+        structural_ranges = _book_structural_ranges(
+            _identify_book_sections(document))
+    stable_ids = [_retrieval_core._chunk_id(record) for record in records]
+    chunk_hashes = [_retrieval_core._chunk_hash(record) for record in records]
+    embedding_model = str(parameters.get("embedding_model") or "")
+    report = _quality_core.build_quality_report(
+        records=records,
+        stable_ids=stable_ids,
+        chunk_hashes=chunk_hashes,
+        document=document,
+        structural_ranges=structural_ranges,
+        recovered_table_refs=_recovered_table_refs_from_records(records),
+        source_name=doc_path.name,
+        source_sha256=source_sha256,
+        chunks_name=chunks_output.name,
+        chunks_sha256=chunks_sha256,
+        chunks_size=len(chunks_raw),
+        parameters_sha256=_artifact_io._artifact_parameters_sha256(
+            parameters),
+        embedding_model=embedding_model,
+        embedding_limit=EMBEDDING_MAX_TOKENS.get(embedding_model),
+    )
+    report_path = _quality_core.quality_report_path(chunks_output)
+    _atomic_write_json(report_path, report)
+    if report["status"] != "pass":
+        failed = [
+            check["name"] for check in report["checks"]
+            if check["status"] == "fail"
+        ]
+        raise RuntimeError(
+            "Corpus quality gate failed: " + ", ".join(failed))
+
+    _validated_quality_report_binding(
+        chunks_output,
+        records,
+        chunks_sha256,
+        len(chunks_raw),
+        source_name=doc_path.name,
+        source_sha256=source_sha256,
+        parameters_sha256=_artifact_io._artifact_parameters_sha256(
+            parameters),
+        embedding_model=embedding_model,
+        embedding_limit=EMBEDDING_MAX_TOKENS.get(embedding_model),
+    )
+    if (_cached_artifact_sha256(doc_path) != source_sha256
+            or _cached_artifact_sha256(chunks_output) != chunks_sha256):
+        raise RuntimeError(
+            "Source or chunks changed while publishing the quality report")
+    return report
 
 
 def chunk_document(doc_path: Path, chunks_output: Path, *,
@@ -6376,23 +6802,7 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
         log.error(f"  Document: {doc_path}")
         sys.exit(1)
 
-    structural_section_names = (
-        "summary", "contents", "toc", "problems", "acknowledgments",
-        "about_authors", "table_of_cases", "table_of_rules", "index",
-        "editorial", "publisher", "credits",
-    )
-    structural_ranges = {
-        (section["start"], section["end"])
-        for name in structural_section_names
-        if (section := book_sections.get(name)) is not None
-    }
-    opening_section_starts = [
-        section["start"]
-        for name in ("summary", "contents", "toc")
-        if (section := book_sections.get(name)) is not None
-    ]
-    if opening_section_starts and min(opening_section_starts) > 1:
-        structural_ranges.add((1, min(opening_section_starts) - 1))
+    structural_ranges = _book_structural_ranges(book_sections)
 
     # The chunker tokenizer is for token counting only — it doesn't need to
     # match the embedding model exactly. API models (voyage-*, text-embedding-*,
@@ -6437,6 +6847,8 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
         lambda value: int(tokenizer.count_tokens(value)), max_tokens,
         table_markdown_overrides=table_markdown_overrides,
         structural_ranges=structural_ranges)
+    (lineage_item_by_ref, lineage_parent_refs,
+     lineage_caption_refs) = _docling_lineage_catalog(dl_doc)
 
     if len(prepared_chunks) != len(raw_chunks):
         log.info(
@@ -6497,6 +6909,12 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
             chunk_index=i, total_chunks=total_c,
             total_pages=total_p, doc_items=doc_items,
             source_file=src_file,
+            source_items=_source_lineage_for_items(
+                doc_items,
+                item_by_ref=lineage_item_by_ref,
+                parent_refs_by_child=lineage_parent_refs,
+                caption_refs_by_parent=lineage_caption_refs,
+            ),
         )
         if (_fully_inside_structural_range(record["metadata"])
                 or record["metadata"]["content_type"] == "structural"):
@@ -6505,6 +6923,12 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
             record["metadata"]["content_source"] = content_source
         if content_source == "footnote":
             record["metadata"]["content_type"] = "footnote"
+        item_refs = {
+            str(getattr(item, "self_ref", ""))
+            for item in (doc_items or [])
+        }
+        if item_refs & set(table_markdown_overrides):
+            record["metadata"]["table_recovered_from_pdf"] = True
         record["metadata"]["token_count"] = token_count
         return record, "ok"
 
@@ -7040,6 +7464,12 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
         stage="chunking", source_sha256=source_sha256,
         source_record_count=None, parameters=completion_parameters,
         outputs={"chunks_jsonl": chunks_output})
+    quality_report = _publish_corpus_quality_report(
+        doc_path,
+        chunks_output,
+        parameters=completion_parameters,
+        structural_ranges=structural_ranges,
+    )
 
     # Stats
     type_counts: dict[str, int] = {}
@@ -7051,6 +7481,11 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
     avg_wc = sum(word_counts) / len(word_counts) if word_counts else 0
 
     log.info(f"Wrote {len(enriched)} enriched chunks → {chunks_output}")
+    log.info(
+        "Corpus quality: %s → %s",
+        quality_report["status"].upper(),
+        _quality_core.quality_report_path(chunks_output),
+    )
     log.info(f"Content types: {json.dumps(type_counts, indent=2)}")
     if word_counts:
         log.info(f"Word counts — min: {min(word_counts)}, "
@@ -7259,7 +7694,9 @@ def _index_chunks_chroma_impl(
     _require_file(chunks_path, "Chunks JSONL")
 
     log.info(f"Loading chunks from {chunks_path}")
-    records, source_sha256, _ = _load_index_snapshot_strict(chunks_path)
+    (records, source_sha256, _,
+     quality_binding) = _load_index_snapshot_with_quality(chunks_path)
+    quality_schema_version, quality_report_sha256 = quality_binding
     source_record_count = len(records)
     _validate_embedding_token_counts(
         records, embedding_model, recompute=True)
@@ -7388,7 +7825,9 @@ def _index_chunks_chroma_impl(
                 embedding_model=embedding_model,
                 embedding_dimension=embedding_dimension,
                 chunk_hashes=new_hashes, source_sha256=source_sha256,
-                source_record_count=source_record_count)
+                source_record_count=source_record_count,
+                quality_report_schema_version=quality_schema_version,
+                quality_report_sha256=quality_report_sha256)
             if update_guarded:
                 _finish_index_update(
                     update_marker_path, owner_token=update_token,
@@ -7507,7 +7946,9 @@ def _index_chunks_chroma_impl(
         embedding_model=embedding_model,
         embedding_dimension=embedding_dimension,
         chunk_hashes=new_hashes, source_sha256=source_sha256,
-        source_record_count=source_record_count)
+        source_record_count=source_record_count,
+        quality_report_schema_version=quality_schema_version,
+        quality_report_sha256=quality_report_sha256)
     _finish_index_update(
         update_marker_path, owner_token=update_token, backend="chroma",
         collection_name=collection_name)
@@ -7785,7 +8226,9 @@ def _index_manifest_mismatch(
         embedding_model=embedding_model,
         embedding_dimension=embedding_dimension,
         model_artifact_lock_sha256=_model_artifact_lock_sha256(),
-        manifest_schema_version=INDEX_MANIFEST_SCHEMA_VERSION)
+        manifest_schema_version=INDEX_MANIFEST_SCHEMA_VERSION,
+        quality_report_schema_version=(
+            _quality_core.QUALITY_REPORT_SCHEMA_VERSION))
 
 
 def _resolve_incremental_index_state(
@@ -7817,7 +8260,9 @@ def _save_index_manifest(
         db_dir: Path, *, backend: str, collection_name: str,
         embedding_model: str, embedding_dimension: int,
         chunk_hashes: dict[str, str], source_sha256: str | None = None,
-        source_record_count: int | None = None) -> Path:
+        source_record_count: int | None = None,
+        quality_report_schema_version: int | None = None,
+        quality_report_sha256: str | None = None) -> Path:
     """Atomically persist versioned incremental state for one collection."""
     return _index_state._save_index_manifest(
         db_dir, backend=backend, collection_name=collection_name,
@@ -7826,7 +8271,11 @@ def _save_index_manifest(
         model_artifact_lock_sha256=_model_artifact_lock_sha256(),
         chunk_hashes=chunk_hashes, source_sha256=source_sha256,
         source_record_count=source_record_count,
+        quality_report_schema_version=quality_report_schema_version,
+        quality_report_sha256=quality_report_sha256,
         manifest_schema_version=INDEX_MANIFEST_SCHEMA_VERSION,
+        quality_report_policy_schema_version=(
+            _quality_core.QUALITY_REPORT_SCHEMA_VERSION),
         manifest_path_fn=_index_manifest_path,
         atomic_write_json_fn=_atomic_write_json)
 
@@ -7845,6 +8294,8 @@ def _query_manifest_dimension_impl(
         embedding_model=embedding_model,
         model_artifact_lock_sha256=_model_artifact_lock_sha256(),
         manifest_schema_version=INDEX_MANIFEST_SCHEMA_VERSION,
+        quality_report_schema_version=(
+            _quality_core.QUALITY_REPORT_SCHEMA_VERSION),
         marker_path_fn=_index_update_marker_path,
         manifest_path_fn=_index_manifest_path,
         load_manifest_fn=_load_index_manifest)
@@ -7905,7 +8356,8 @@ def _require_hybrid_chunks_snapshot(
         chunks_path, db_dir, backend=backend,
         collection_name=collection_name,
         load_manifest_fn=_load_index_manifest,
-        artifact_sha256_fn=_cached_artifact_sha256)
+        artifact_sha256_fn=_cached_artifact_sha256,
+        quality_report_path_fn=_quality_core.quality_report_path)
 
 
 _validate_query_vector_dimension = (
@@ -8131,7 +8583,9 @@ def _index_chunks_qdrant_impl(
     _require_file(chunks_path, "Chunks JSONL")
 
     log.info(f"Loading chunks from {chunks_path}")
-    records, source_sha256, _ = _load_index_snapshot_strict(chunks_path)
+    (records, source_sha256, _,
+     quality_binding) = _load_index_snapshot_with_quality(chunks_path)
+    quality_schema_version, quality_report_sha256 = quality_binding
     source_record_count = len(records)
     _validate_embedding_token_counts(
         records, embedding_model, recompute=True)
@@ -8277,7 +8731,9 @@ def _index_chunks_qdrant_impl(
                 embedding_model=embedding_model,
                 embedding_dimension=dim,
                 chunk_hashes=new_hashes, source_sha256=source_sha256,
-                source_record_count=source_record_count)
+                source_record_count=source_record_count,
+                quality_report_schema_version=quality_schema_version,
+                quality_report_sha256=quality_report_sha256)
             if update_guarded:
                 _finish_index_update(
                     update_marker_path, owner_token=update_token,
@@ -8372,7 +8828,9 @@ def _index_chunks_qdrant_impl(
         qdrant_dir, backend="qdrant", collection_name=collection_name,
         embedding_model=embedding_model, embedding_dimension=dim,
         chunk_hashes=new_hashes, source_sha256=source_sha256,
-        source_record_count=source_record_count)
+        source_record_count=source_record_count,
+        quality_report_schema_version=quality_schema_version,
+        quality_report_sha256=quality_report_sha256)
     _finish_index_update(
         update_marker_path, owner_token=update_token, backend="qdrant",
         collection_name=collection_name)
@@ -9346,8 +9804,9 @@ def _load_and_filter_chunks(chunks_path: Path, *,
                             chapters: list[int] | None = None) -> list[dict]:
     """Load chunks JSONL and apply filters."""
     _require_file(chunks_path, "Chunks JSONL")
+    records, _, _ = _load_index_snapshot_strict(chunks_path)
     return _filter_chunk_records(
-        _load_jsonl(chunks_path), include_types=include_types,
+        records, include_types=include_types,
         exclude_types=exclude_types, chapters=chapters)
 
 
@@ -9759,7 +10218,7 @@ def extract_questions(chunks_path: Path, output_path: Path) -> None:
     flashcard generation, fine-tuning, or evaluation harnesses.
     """
     _require_file(chunks_path, "Chunks JSONL")
-    all_chunks = _load_jsonl(chunks_path)
+    all_chunks, _, _ = _load_index_snapshot_strict(chunks_path)
     chunk_by_idx = {r["metadata"]["chunk_index"]: r for r in all_chunks}
 
     # Filter to notes_and_questions
@@ -9862,7 +10321,7 @@ def generate_exam_questions(chunks_path: Path, output_path: Path, *,
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     _require_file(chunks_path, "Chunks JSONL")
-    all_chunks = _load_jsonl(chunks_path)
+    all_chunks, _, _ = _load_index_snapshot_strict(chunks_path)
 
     by_chapter: dict[int, list[dict]] = {}
     for rec in all_chunks:
@@ -10152,7 +10611,7 @@ def generate_briefs(chunks_path: Path, output_path: Path, *,
     from tqdm import tqdm
 
     _require_file(chunks_path, "Chunks JSONL")
-    records = _load_jsonl(chunks_path)
+    records, _, _ = _load_index_snapshot_strict(chunks_path)
 
     # Filter to case opinions only
     case_chunks = [r for r in records
@@ -10800,6 +11259,7 @@ def show_info(chroma_dir: Path, collection_name: str = DEFAULT_COLLECTION, *,
         and "citation" not in p.stem.lower()
     )
     chunks = sorted(out.rglob("*_chunks.jsonl"))
+    quality_reports = sorted(out.rglob("*_chunks.quality.json"))
     questions_jsonls = sorted(out.rglob("*questions*.jsonl"))
     citations_jsons = sorted(out.rglob("*citations*.json"))
     markdowns = sorted(out.rglob("*.md"))
@@ -10828,6 +11288,23 @@ def show_info(chroma_dir: Path, collection_name: str = DEFAULT_COLLECTION, *,
         print("  Chunk files:")
         for p in chunks:
             _show_file("", p)
+
+    if quality_reports:
+        print("  Corpus quality reports:")
+        for report_path in quality_reports:
+            chunks_path = report_path.with_name(
+                report_path.name.removesuffix(".quality.json") + ".jsonl")
+            try:
+                records, _, _ = _load_index_snapshot_strict(chunks_path)
+                payload = json.loads(report_path.read_text(encoding="utf-8"))
+                label = (
+                    f"PASS v{payload.get('schema_version')} "
+                    f"({len(records)} chunks)"
+                )
+            except (OSError, UnicodeError, json.JSONDecodeError, ValueError,
+                    RuntimeError):
+                label = "FAIL"
+            _show_file(label, report_path)
 
     if questions_jsonls:
         print("  Questions files:")
@@ -11089,6 +11566,8 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
     db_backend = getattr(args, "db_backend", DEFAULT_DB_BACKEND)
     collection = getattr(args, "collection", None) or paths["collection"]
     db_dir = paths["qdrant"] if db_backend == "qdrant" else paths["chroma"]
+    quality_report_path = paths.get(
+        "quality_report", _quality_core.quality_report_path(paths["chunks"]))
     llm_kwargs = _llm_kwargs_from_args(args, include_workers=True)
 
     def observed_stage(name: str) -> str:
@@ -11168,12 +11647,14 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
             )
             active_update_token = None
             if resume and chunk_count is not None:
+                chunk_was_skipped = True
                 log.info(
                     f"  [SKIP] chunk (verified complete: {paths['chunks']})")
                 stage_finished(
                     current_stage, status="skipped",
                     metrics={"records": chunk_count})
             else:
+                chunk_was_skipped = False
                 marker_path = _index_update_marker_path(
                     db_dir, backend=db_backend,
                     collection_name=collection)
@@ -11210,6 +11691,38 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
                 chunk_count = _chunk_record_count(paths["chunks"])
                 stage_finished(
                     current_stage, metrics={"records": chunk_count})
+
+            current_stage = "quality"
+            stage_started(current_stage, metrics={"records": chunk_count})
+            if _quality_report_complete(
+                    paths["doc"], paths["chunks"],
+                    parameters=chunk_parameters):
+                log.info(
+                    "  [CHECK] corpus quality PASS -> %s",
+                    quality_report_path,
+                )
+                stage_finished(
+                    current_stage,
+                    status="skipped" if chunk_was_skipped else "completed",
+                    metrics={"records": chunk_count, "passed": True},
+                )
+            else:
+                report = _publish_corpus_quality_report(
+                    paths["doc"], paths["chunks"],
+                    parameters=chunk_parameters)
+                if not _quality_report_complete(
+                        paths["doc"], paths["chunks"],
+                        parameters=chunk_parameters):
+                    raise RuntimeError(
+                        "Corpus quality report publication did not verify")
+                log.info(
+                    "  [DONE] quality %s -> %s",
+                    report["status"].upper(), quality_report_path,
+                )
+                stage_finished(
+                    current_stage,
+                    metrics={"records": chunk_count, "passed": True},
+                )
 
             current_stage = "index"
             stage_started(current_stage, metrics={"records": chunk_count})
@@ -13166,6 +13679,7 @@ def main(argv: list[str] | None = None):
             log.info(f"  DoclingDocument: {paths['doc']}")
             log.info(f"  Docling Markdown:{paths['converted_markdown']}")
             log.info(f"  Chunks JSONL:    {paths['chunks']}")
+            log.info(f"  Quality report:  {paths['quality_report']}")
             log.info(f"  Unified MD:      {paths['export']}")
             if args.split_chapters:
                 log.info(f"  Chapters:        {paths['chapters_dir']}/")

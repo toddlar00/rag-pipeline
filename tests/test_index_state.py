@@ -235,6 +235,8 @@ def test_query_manifest_impl_uses_current_rag_collaborators(
         "embedding_model": "model",
         "embedding_dimension": 5,
         "model_artifact_lock_sha256": rag._model_artifact_lock_sha256(),
+        "quality_report_schema_version": None,
+        "quality_report_sha256": None,
     }
 
     monkeypatch.setattr(rag, "INDEX_MANIFEST_SCHEMA_VERSION", 91)
@@ -270,6 +272,71 @@ def test_hybrid_snapshot_uses_current_manifest_and_hash_hooks(
         chunks_path, tmp_path, backend="qdrant",
         collection_name="cases") == "expected"
     assert calls[-1] == ("hash", chunks_path)
+
+
+def test_manifest_persists_and_validates_quality_report_binding(tmp_path):
+    report_sha256 = "a" * 64
+    manifest_path = rag._save_index_manifest(
+        tmp_path, backend="chroma", collection_name="cases",
+        embedding_model="model", embedding_dimension=5,
+        chunk_hashes={"stable": "hash"}, source_sha256="b" * 64,
+        source_record_count=1,
+        quality_report_schema_version=(
+            rag._quality_core.QUALITY_REPORT_SCHEMA_VERSION),
+        quality_report_sha256=report_sha256)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    assert manifest["quality_report_schema_version"] == 1
+    assert manifest["quality_report_sha256"] == report_sha256
+    assert rag._index_manifest_mismatch(
+        manifest, backend="chroma", collection_name="cases",
+        embedding_model="model", embedding_dimension=5) is None
+    assert rag._query_manifest_dimension_impl(
+        tmp_path, backend="chroma", collection_name="cases",
+        embedding_model="model") == 5
+
+
+@pytest.mark.parametrize(("schema", "report_sha256"), [
+    (None, "a" * 64),
+    (1, None),
+    (True, "a" * 64),
+    (2, "a" * 64),
+    (1, "short"),
+    (1, "A" * 64),
+])
+def test_manifest_rejects_invalid_quality_report_binding(
+        tmp_path, schema, report_sha256):
+    with pytest.raises(ValueError, match="quality binding"):
+        rag._save_index_manifest(
+            tmp_path, backend="qdrant", collection_name="cases",
+            embedding_model="model", embedding_dimension=3,
+            chunk_hashes={}, quality_report_schema_version=schema,
+            quality_report_sha256=report_sha256)
+
+
+def test_hybrid_snapshot_binds_adjacent_quality_report(tmp_path):
+    chunks_path = tmp_path / "book_chunks.jsonl"
+    report_path = rag._quality_core.quality_report_path(chunks_path)
+    chunks_path.write_bytes(b'{"text":"source"}\n')
+    report_path.write_bytes(b'{"status":"pass"}')
+    rag._save_index_manifest(
+        tmp_path, backend="chroma", collection_name="cases",
+        embedding_model="model", embedding_dimension=3,
+        chunk_hashes={},
+        source_sha256=rag._cached_artifact_sha256(chunks_path),
+        source_record_count=1,
+        quality_report_schema_version=1,
+        quality_report_sha256=rag._cached_artifact_sha256(report_path))
+
+    assert rag._require_hybrid_chunks_snapshot(
+        chunks_path, tmp_path, backend="chroma",
+        collection_name="cases") == rag._cached_artifact_sha256(chunks_path)
+
+    report_path.write_bytes(b'{"status":"tampered"}')
+    with pytest.raises(ValueError, match="quality report does not match"):
+        rag._require_hybrid_chunks_snapshot(
+            chunks_path, tmp_path, backend="chroma",
+            collection_name="cases")
 
 
 def test_marker_ownership_uses_current_manifest_schema(monkeypatch, tmp_path):

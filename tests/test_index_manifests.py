@@ -268,6 +268,8 @@ def test_manifest_is_scoped_versioned_and_atomic(tmp_path):
         "chunk_hashes": hashes,
         "source_sha256": None,
         "source_record_count": None,
+        "quality_report_schema_version": None,
+        "quality_report_sha256": None,
     }
     assert not list(tmp_path.glob("*.tmp"))
 

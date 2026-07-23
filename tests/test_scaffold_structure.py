@@ -414,6 +414,73 @@ def test_source_table_recovery_preserves_referenced_caption():
         "Rule 3.3 Candor Toward the Tribunal\n\n| Rule | Explanation |")
 
 
+def test_source_lineage_expands_table_caption_and_geometry():
+    origin = SimpleNamespace(value="BOTTOMLEFT")
+    provenance = SimpleNamespace(
+        page_no=7,
+        bbox=SimpleNamespace(
+            l=1.23456, t=8.76543, r=9.0, b=2.0,
+            coord_origin=origin),
+    )
+    caption = SimpleNamespace(
+        self_ref="#/texts/2", label="caption", prov=[provenance])
+    table = SimpleNamespace(
+        self_ref="#/tables/0", label="table", prov=[provenance],
+        captions=[SimpleNamespace(cref=caption.self_ref)],
+        footnotes=[], children=[])
+    document = SimpleNamespace(
+        texts=[caption], pictures=[], tables=[table],
+        key_value_items=[], form_items=[])
+    item_by_ref, parents, captions = rag._docling_lineage_catalog(document)
+
+    lineage = rag._source_lineage_for_items(
+        [table], item_by_ref=item_by_ref,
+        parent_refs_by_child=parents,
+        caption_refs_by_parent=captions)
+
+    assert [item["ref"] for item in lineage] == [
+        "#/tables/0", "#/texts/2"]
+    assert lineage[1]["parent_refs"] == ["#/tables/0"]
+    assert lineage[0]["spans"] == [{
+        "page": 7,
+        "bbox": [1.235, 8.765, 9.0, 2.0],
+        "origin": "BOTTOMLEFT",
+    }]
+
+
+def test_source_preparation_recovers_omitted_caption_identity_from_exact_text():
+    origin = SimpleNamespace(value="BOTTOMLEFT")
+    def provenance(top):
+        return SimpleNamespace(
+            page_no=7,
+            bbox=SimpleNamespace(
+                l=1.0, t=top, r=10.0, b=top - 1,
+                coord_origin=origin))
+
+    body = SimpleNamespace(
+        self_ref="#/texts/1", label="text", content_layer="body",
+        text="Theophylline is discussed in this paragraph.",
+        prov=[provenance(20)])
+    caption = SimpleNamespace(
+        self_ref="#/texts/2", label="caption", content_layer="body",
+        text="Theophylline", prov=[provenance(10)])
+    document = SimpleNamespace(
+        texts=[body, caption], pictures=[], tables=[],
+        key_value_items=[], form_items=[])
+    raw = SimpleNamespace(
+        text=body.text,
+        meta=SimpleNamespace(headings=["Problem"], doc_items=[body]))
+
+    prepared = rag._prepare_source_preserving_chunks(
+        [raw], document, lambda text: len(text.split()), 100,
+        structural_ranges=set())
+
+    assert len(prepared) == 1
+    assert prepared[0][0] == body.text
+    assert prepared[0][2] == [body, caption]
+    assert prepared[0][3] is True
+
+
 def test_mixed_table_chunk_preserves_prose_and_emits_table_once():
     before = SimpleNamespace(
         self_ref="#/texts/1", label="text", text="Before the table.")

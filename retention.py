@@ -30,6 +30,7 @@ RUN_MANIFEST_SCHEMA_VERSION = 1
 QUARANTINE_SCHEMA_VERSION = 1
 _MAX_MARKER_BYTES = 256 * 1024
 _CACHE_RECORD_MAX_BYTES = 32 * 1024 * 1024
+_SYNCED_FOLDER_READ_RETRY_DELAYS = (0.01, 0.05, 0.15)
 DEFAULT_LLM_CACHE_MAX_BYTES = 5 * 1024 * 1024 * 1024
 _TOKEN = re.compile(r"^[0-9a-f]{32}$")
 _CACHE_KEY = re.compile(r"^[0-9a-f]{64}$")
@@ -40,6 +41,14 @@ _UI_STATES = frozenset({"creating", "complete", "failed"})
 
 class RetentionError(RuntimeError):
     """Raised when ownership or safe-deletion checks fail closed."""
+
+
+class _MarkerCtimeChanged(RuntimeError):
+    """Internal signal for a content-identical marker metadata race."""
+
+    def __init__(self, snapshot: tuple[int, int, int, int, int, bytes]):
+        super().__init__("owned marker ctime changed while reading")
+        self.snapshot = snapshot
 
 
 @dataclass(frozen=True)
@@ -141,9 +150,10 @@ def _normalize_size_limit(value: int | None) -> int | None:
     return value
 
 
-def _read_json_object(path: Path, *, max_bytes: int = _MAX_MARKER_BYTES) -> dict:
-    path = Path(path)
-    assert_no_link_components(path)
+def _read_json_object_once(
+        path: Path, *, max_bytes: int,
+        expected_snapshot: tuple[int, int, int, int, int, bytes] | None,
+        ) -> dict:
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     flags |= getattr(os, "O_BINARY", 0)
     try:
@@ -168,20 +178,45 @@ def _read_json_object(path: Path, *, max_bytes: int = _MAX_MARKER_BYTES) -> dict
         raise RetentionError(f"invalid owned marker: {path}") from exc
     finally:
         os.close(descriptor)
-    def identity(result) -> tuple[int, int, int, int, int, int]:
+    def identity(result) -> tuple[int, int, int, int, int]:
         return (
             int(result.st_dev), int(result.st_ino), int(result.st_size),
-            int(result.st_mtime_ns), int(result.st_ctime_ns),
-            int(result.st_nlink))
+            int(result.st_mtime_ns), int(result.st_nlink))
     if remaining or identity(before) != identity(after):
         raise RetentionError(f"owned marker changed while reading: {path}")
+    raw = b"".join(chunks)
     try:
-        payload = json.loads(b"".join(chunks).decode("utf-8"))
+        payload = json.loads(raw.decode("utf-8"))
     except (UnicodeError, json.JSONDecodeError) as exc:
         raise RetentionError(f"invalid owned marker: {path}") from exc
     if not isinstance(payload, dict):
         raise RetentionError(f"invalid owned marker: {path}")
+    snapshot = identity(before) + (hashlib.sha256(raw).digest(),)
+    if expected_snapshot is not None and snapshot != expected_snapshot:
+        raise RetentionError(f"owned marker changed while reading: {path}")
+    if int(before.st_ctime_ns) != int(after.st_ctime_ns):
+        raise _MarkerCtimeChanged(snapshot)
     return payload
+
+
+def _read_json_object(path: Path, *, max_bytes: int = _MAX_MARKER_BYTES) -> dict:
+    path = Path(path)
+    expected_snapshot = None
+    for attempt in range(len(_SYNCED_FOLDER_READ_RETRY_DELAYS) + 1):
+        if attempt:
+            time.sleep(_SYNCED_FOLDER_READ_RETRY_DELAYS[attempt - 1])
+        assert_no_link_components(path)
+        try:
+            return _read_json_object_once(
+                path, max_bytes=max_bytes,
+                expected_snapshot=expected_snapshot)
+        except _MarkerCtimeChanged as exc:
+            if expected_snapshot is None:
+                expected_snapshot = exc.snapshot
+            if attempt == len(_SYNCED_FOLDER_READ_RETRY_DELAYS):
+                raise RetentionError(
+                    f"owned marker changed while reading: {path}") from exc
+    raise AssertionError("unreachable marker read retry state")
 
 
 def _validate_run_manifest(payload: dict, *, run_name: str) -> dict:

@@ -16,6 +16,7 @@ import secrets
 import stat
 import tempfile
 import threading
+import time
 from collections.abc import Callable, Iterable
 from contextlib import contextmanager
 from functools import lru_cache
@@ -30,6 +31,8 @@ PRIVATE_TREE_POLICY_DIRECTORY_NAME = ".rag-storage-policy"
 _WINDOWS_SYMLINK_TAG = 0xA000000C
 _WINDOWS_MOUNT_POINT_TAG = 0xA0000003
 _PRIVATE_TREE_POLICY_GUARD = threading.RLock()
+_SYNCED_FOLDER_RETRY_DELAYS = (0.01, 0.05, 0.15)
+_TRANSIENT_WINDOWS_REPLACE_ERRORS = {5, 32, 33}
 
 CleanupErrorFn = Callable[..., None]
 ReplaceFn = Callable[[Any, Any], Any]
@@ -509,6 +512,87 @@ def _validate_output_leaf(path: Path) -> None:
             "sensitive output must be a regular file path")
 
 
+def _temporary_identity(path: Path) -> tuple[int, int, int, int, bytes]:
+    """Snapshot staging identity and exact bytes through one pinned handle."""
+    linked = os.lstat(path)
+    if not stat.S_ISREG(linked.st_mode) or linked.st_nlink != 1:
+        raise StoragePolicyError(
+            "private temporary file changed before publication")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    flags |= getattr(os, "O_BINARY", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise StoragePolicyError(
+            "private temporary file changed before publication") from exc
+    try:
+        before = os.fstat(descriptor)
+        if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1
+                or (before.st_dev, before.st_ino) !=
+                (linked.st_dev, linked.st_ino)):
+            raise StoragePolicyError(
+                "private temporary file changed before publication")
+        digest = hashlib.sha256()
+        remaining = int(before.st_size)
+        while remaining:
+            chunk = os.read(descriptor, min(remaining, 1024 * 1024))
+            if not chunk:
+                break
+            digest.update(chunk)
+            remaining -= len(chunk)
+        after = os.fstat(descriptor)
+    except OSError as exc:
+        raise StoragePolicyError(
+            "private temporary file changed before publication") from exc
+    finally:
+        os.close(descriptor)
+
+    def identity(result) -> tuple[int, int, int, int, int]:
+        return (
+            int(result.st_dev), int(result.st_ino), int(result.st_size),
+            int(result.st_mtime_ns), int(result.st_nlink))
+
+    if remaining or identity(before) != identity(after):
+        raise StoragePolicyError(
+            "private temporary file changed before publication")
+    return identity(before)[:-1] + (digest.digest(),)
+
+
+def _transient_replace_error(error: OSError) -> bool:
+    return getattr(
+        error, "winerror", None) in _TRANSIENT_WINDOWS_REPLACE_ERRORS
+
+
+def _replace_with_revalidated_retry(
+        source: Path, destination: Path, *, replace: ReplaceFn,
+        parent_identity: tuple[int, int],
+        source_identity: tuple[int, int, int, int, bytes]) -> None:
+    """Retry transient synced-folder interference without relaxing identity."""
+    retry_error: OSError | None = None
+    for attempt in range(len(_SYNCED_FOLDER_RETRY_DELAYS) + 1):
+        if attempt:
+            time.sleep(_SYNCED_FOLDER_RETRY_DELAYS[attempt - 1])
+            assert_no_link_components(destination.parent)
+            if _parent_identity(destination.parent) != parent_identity:
+                raise StoragePolicyError(
+                    "sensitive output parent changed during publication retry"
+                ) from retry_error
+            _validate_output_leaf(destination)
+            if _temporary_identity(source) != source_identity:
+                raise StoragePolicyError(
+                    "private temporary file changed during publication retry"
+                ) from retry_error
+            _verify_private_file(source)
+        try:
+            replace(source, destination)
+            return
+        except OSError as exc:
+            if (not _transient_replace_error(exc)
+                    or attempt == len(_SYNCED_FOLDER_RETRY_DELAYS)):
+                raise
+            retry_error = exc
+
+
 def _verify_private_file(path: Path) -> None:
     result = os.lstat(path)
     if not stat.S_ISREG(result.st_mode):
@@ -646,12 +730,16 @@ def _atomic_write_private_by_path(
             writer(handle)
             handle.flush()
             os.fsync(handle.fileno())
+        temporary_identity = _temporary_identity(temporary)
         assert_no_link_components(path.parent)
         if _parent_identity(path.parent) != parent_identity:
             raise StoragePolicyError(
                 "sensitive output parent changed before publication")
         _validate_output_leaf(path)
-        replace(temporary, path)
+        _replace_with_revalidated_retry(
+            temporary, path, replace=replace,
+            parent_identity=parent_identity,
+            source_identity=temporary_identity)
         temporary = None
         _verify_private_file(path)
         _fsync_parent_directory(path)
@@ -726,12 +814,16 @@ def atomic_publish_private_file(
             os.fsync(descriptor)
         finally:
             os.close(descriptor)
+        temporary_identity = _temporary_identity(temporary)
         assert_no_link_components(path.parent)
         if _parent_identity(path.parent) != parent_identity:
             raise StoragePolicyError(
                 "sensitive output parent changed before publication")
         _validate_output_leaf(path)
-        replace(temporary, path)
+        _replace_with_revalidated_retry(
+            temporary, path, replace=replace,
+            parent_identity=parent_identity,
+            source_identity=temporary_identity)
         published = True
         _verify_private_file(path)
         _fsync_parent_directory(path)
