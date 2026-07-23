@@ -23,9 +23,9 @@ Status terms:
 | Milestone | Status | Durable result |
 |---|---|---|
 | Foundation | Baseline | End-to-end PDF ingestion, enriched chunking, shared LLM runtime, grounded answers, hybrid retrieval/reranking, evaluation harness, Chroma/Qdrant indexing, CLI, UI, docs, and tests |
-| Ethics corpus coherence and publication quality | Validated locally | Canonical scaffold reconstruction, exact source identity, complete tables and nested footnotes, exact embedding budgets, regenerated exports, and an exactly reconciled 1,715-record Chroma index |
-| Machine-readable corpus quality attestation | Validated locally | Schema-v1 report binds the exact Docling source, chunks bytes, parameters, source-lineage coverage, tables, normalization, classification, entities, token budgets, and stable/hash roots; resume, export, retrieval, and index publication fail closed on missing, stale, malformed, or mismatched evidence |
-| Synced-folder publication resilience | Validated locally | Bounded Windows sharing-violation retries republish only a pinned staging file; marker reads retry only content-identical ctime churn and fail closed on every identity, byte, link, ownership, or schema change |
+| Ethics corpus coherence and publication quality | Implemented (draft) | [PR #31](https://github.com/toddlar00/rag-pipeline/pull/31): canonical scaffold reconstruction, exact source identity, complete tables and nested footnotes, exact embedding budgets, regenerated exports, and an exactly reconciled 1,715-record Chroma index |
+| Machine-readable corpus quality attestation | Implemented (draft) | [PR #31](https://github.com/toddlar00/rag-pipeline/pull/31): schema-v1 report binds the exact Docling source, chunks bytes, parameters, source-lineage coverage, tables, normalization, classification, entities, token budgets, and stable/hash roots; resume, export, retrieval, and index publication fail closed on missing, stale, malformed, or mismatched evidence |
+| Synced-folder publication resilience | Implemented (draft) | [PR #31](https://github.com/toddlar00/rag-pipeline/pull/31): bounded Windows sharing-violation retries republish only a pinned staging file; marker reads retry only content-identical ctime churn and fail closed on every identity, byte, link, ownership, or schema change |
 | Exact LLM transport budget | Integrated | [PR #1](https://github.com/toddlar00/rag-pipeline/pull/1) |
 | Qdrant manifest reconciliation | Integrated | [PR #2](https://github.com/toddlar00/rag-pipeline/pull/2) |
 | Qdrant interrupted-update guard | Integrated | [PR #3](https://github.com/toddlar00/rag-pipeline/pull/3) |
@@ -192,8 +192,9 @@ Local validation for the implementation is 1,118 passed and 7 skipped in the
 full suite, 436 passed and 1 skipped in the independent blocker-focused audit,
 successful Python compilation, six live hybrid probes, two real resume runs,
 and a clean `git diff --check`.
-This milestone remains “validated locally” until its working-tree changes
-receive the repository's normal commit, review, CI, and merge evidence.
+This milestone is published in draft [PR
+#31](https://github.com/toddlar00/rag-pipeline/pull/31) with all 15 head checks
+passing. It remains “Implemented (draft)” pending review and merge evidence.
 
 ## Next improvement milestones
 
@@ -214,5 +215,5 @@ mergeable draft PR. Review evidence must be durable in a committed audit or PR
 review/comment rather than existing only in an ephemeral work log. A milestone
 becomes integrated only after merge into `main`.
 
-Rows marked “Validated locally” still require commit, review, CI, and merge;
-the earlier merged milestones have reached the integrated state.
+Rows marked “Implemented (draft)” still require review and merge; the earlier
+merged milestones have reached the integrated state.
