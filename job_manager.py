@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 from uuid import uuid4
 
+import attempt_reporting
 import job_runtime
 import rag
 import run_telemetry
@@ -43,6 +44,7 @@ _READY_NAME = "ready.json"
 _LOG_NAME = "worker.log"
 _EVENTS_NAME = "run.events.jsonl"
 _REPORT_NAME = "run.report.json"
+_ATTEMPT_REPORT_NAME = "attempt.report.json"
 _MAX_MANAGER_JSON_BYTES = 64 * 1024
 _MAX_RUN_REPORT_BYTES = 8 * 1024 * 1024
 _MAX_WORKER_LOG_BYTES = 8 * 1024 * 1024
@@ -123,6 +125,7 @@ class _AttemptPaths:
     log: Path = field(repr=False)
     events: Path = field(repr=False)
     report: Path = field(repr=False)
+    attempt_report: Path = field(repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,6 +170,7 @@ def _attempt_paths(store: job_runtime.JobStore, job_id: str,
         log=directory / _LOG_NAME,
         events=directory / _EVENTS_NAME,
         report=directory / _REPORT_NAME,
+        attempt_report=directory / _ATTEMPT_REPORT_NAME,
     )
 
 
@@ -193,6 +197,36 @@ def _runtime_payload(metadata: RuntimeMetadata) -> dict:
 
 def _write_runtime(path: Path, metadata: RuntimeMetadata) -> None:
     storage_policy.atomic_write_private_json(path, _runtime_payload(metadata))
+
+
+def _attempt_run_id(execution: job_runtime.JobExecution) -> str:
+    return f"{execution.job_id}.a{execution.attempt_number}"
+
+
+def _write_attempt_report(
+        path: Path, report: attempt_reporting.AttemptReport) -> None:
+    attempt_reporting.publish(path, report)
+
+
+def _load_attempt_report(
+        paths: _AttemptPaths, *, execution: job_runtime.JobExecution,
+        missing_ok: bool = False) -> attempt_reporting.AttemptReport | None:
+    payload = _read_private_json(
+        paths.attempt_report, missing_ok=missing_ok,
+        maximum_bytes=attempt_reporting.MAX_REPORT_BYTES)
+    if payload is None:
+        return None
+    try:
+        return attempt_reporting.parse_report(
+            payload,
+            expected_job_id=execution.job_id,
+            expected_attempt_number=execution.attempt_number,
+            expected_run_id=_attempt_run_id(execution),
+            expected_operation=execution.command,
+        )
+    except (TypeError, ValueError) as exc:
+        raise JobManagerCorruptError(
+            "attempt outcome report is invalid") from exc
 
 
 def _cap_open_worker_log(handle) -> None:
@@ -333,7 +367,8 @@ def _read_private_json(
 
 def _valid_timestamp(value: Any, name: str) -> float:
     if (isinstance(value, bool) or not isinstance(value, (int, float))
-            or not math.isfinite(float(value)) or float(value) < 0):
+            or not math.isfinite(float(value)) or float(value) < 0
+            or float(value) > attempt_reporting.MAX_TIMESTAMP):
         raise JobManagerCorruptError(f"runtime {name} is invalid")
     return float(value)
 
@@ -850,19 +885,44 @@ def run_job(
         if execution.status != "queued":
             raise job_runtime.JobStateError(
                 "only a queued job can start a manager attempt")
-        try:
-            job_runtime.validate_execution_directories(execution)
-        except job_runtime.JobRuntimeError:
-            store.transition_job(
-                job_id, "failed", attempt_token=execution.attempt_token,
-                expected_revision=execution.revision, lease=lease)
-            raise
+        initial = store.get_job(job_id)
         paths = _attempt_paths(
             store, job_id, execution.attempt_number, create=True)
-        run_id = f"{job_id}.a{execution.attempt_number}"
+        run_id = _attempt_run_id(execution)
         now = time.time()
         manager_pid = os.getpid()
         manager_birth = process_birth_identity(manager_pid)
+        attempt_report = attempt_reporting.new_report(
+            job_id=job_id,
+            attempt_number=execution.attempt_number,
+            run_id=run_id,
+            operation=execution.command,
+            status="queued",
+            submitted_at=initial.updated_at,
+            observed_at=now,
+            manager_started_at=now,
+        )
+        _write_attempt_report(paths.attempt_report, attempt_report)
+        try:
+            job_runtime.validate_execution_directories(execution)
+        except job_runtime.JobRuntimeError:
+            current = store.transition_job(
+                job_id, "failed", attempt_token=execution.attempt_token,
+                expected_revision=execution.revision, lease=lease)
+            finished = max(time.time(), attempt_report.updated_at)
+            attempt_report = attempt_reporting.advance(
+                attempt_report,
+                observed_at=finished,
+                status=current.status,
+                trigger="manager_error",
+                cleanup_confirmed=True,
+                cleanup_confirmed_at=finished,
+                finished_at=finished,
+                terminal_reason="execution_validation_failed",
+                manager_error=True,
+            )
+            _write_attempt_report(paths.attempt_report, attempt_report)
+            raise
         runtime = RuntimeMetadata(
             job_id=job_id,
             attempt_number=execution.attempt_number,
@@ -886,24 +946,58 @@ def run_job(
         runtime = replace(
             runtime, job_status=current.status, updated_at=time.time())
         _write_runtime(paths.runtime, runtime)
+        attempt_report = attempt_reporting.advance(
+            attempt_report,
+            observed_at=max(time.time(), attempt_report.updated_at),
+            status=current.status,
+        )
+        _write_attempt_report(paths.attempt_report, attempt_report)
 
         # Cancellation requested before launch never creates a worker.
         if store.is_cancel_requested(job_id, execution.attempt_token):
+            cancel_requested_at = store.cancel_requested_at(
+                job_id, execution.attempt_token)
+            assert cancel_requested_at is not None
+            cancel_observed_at = max(
+                time.time(), attempt_report.updated_at, cancel_requested_at)
             current = store.transition_job(
                 job_id, "cancel_requested",
                 attempt_token=execution.attempt_token,
                 expected_revision=current.revision, lease=lease)
+            attempt_report = attempt_reporting.advance(
+                attempt_report,
+                observed_at=cancel_observed_at,
+                status=current.status,
+                trigger="cancel",
+                cancel_requested=True,
+                cancel_requested_at=cancel_requested_at,
+                cancel_observed=True,
+                cancel_observed_at=cancel_observed_at,
+            )
+            _write_attempt_report(paths.attempt_report, attempt_report)
             _write_ready(
                 paths, execution=execution, nonce=ready_nonce,
                 manager_pid=manager_pid, manager_birth=manager_birth)
             current = store.transition_job(
                 job_id, "cancelled", attempt_token=execution.attempt_token,
                 expected_revision=current.revision, lease=lease)
+            finished = max(time.time(), attempt_report.updated_at)
             runtime = replace(
                 runtime, phase="terminal", job_status=current.status,
                 cleanup_confirmed=True, exit_code=130,
-                heartbeat_at=time.time(), updated_at=time.time())
+                heartbeat_at=finished, updated_at=finished)
             _write_runtime(paths.runtime, runtime)
+            attempt_report = attempt_reporting.advance(
+                attempt_report,
+                observed_at=finished,
+                status=current.status,
+                cleanup_confirmed=True,
+                cleanup_confirmed_at=finished,
+                finished_at=finished,
+                terminal_reason="cancelled",
+                exit_code=130,
+            )
+            _write_attempt_report(paths.attempt_report, attempt_report)
             return ManagerResult(
                 job_id=job_id, status="cancelled",
                 attempt_number=execution.attempt_number, exit_code=130,
@@ -919,30 +1013,45 @@ def run_job(
         active_log_handle = None
 
         def child_started(process) -> None:
-            nonlocal worker, worker_birth, runtime, current
+            nonlocal worker, worker_birth, runtime, current, attempt_report
             worker = process
             worker_birth = process_birth_identity(int(process.pid))
+            worker_started_at = max(time.time(), attempt_report.updated_at)
             runtime = replace(
                 runtime, worker_pid=int(process.pid),
-                worker_birth=worker_birth, heartbeat_at=time.time(),
-                updated_at=time.time())
+                worker_birth=worker_birth, heartbeat_at=worker_started_at,
+                updated_at=worker_started_at)
             _write_runtime(paths.runtime, runtime)
             current = store.transition_job(
                 job_id, "running", attempt_token=execution.attempt_token,
                 expected_revision=current.revision, lease=lease)
             runtime = replace(
                 runtime, phase="running", job_status=current.status,
-                updated_at=time.time())
+                updated_at=worker_started_at)
             _write_runtime(paths.runtime, runtime)
+            attempt_report = attempt_reporting.advance(
+                attempt_report,
+                observed_at=worker_started_at,
+                status=current.status,
+                worker_started=True,
+                worker_started_at=worker_started_at,
+            )
+            _write_attempt_report(paths.attempt_report, attempt_report)
             _write_ready(
                 paths, execution=execution, nonce=ready_nonce,
                 manager_pid=manager_pid, manager_birth=manager_birth)
 
         def cancellation_requested() -> bool:
-            nonlocal cancel_observed, current, runtime
+            nonlocal cancel_observed, current, runtime, attempt_report
             requested = store.is_cancel_requested(
                 job_id, execution.attempt_token)
             if requested and not cancel_observed:
+                cancel_requested_at = store.cancel_requested_at(
+                    job_id, execution.attempt_token)
+                assert cancel_requested_at is not None
+                cancel_observed_at = max(
+                    time.time(), attempt_report.updated_at,
+                    cancel_requested_at)
                 cancel_observed = True
                 current = store.transition_job(
                     job_id, "cancel_requested",
@@ -950,8 +1059,20 @@ def run_job(
                     expected_revision=current.revision, lease=lease)
                 runtime = replace(
                     runtime, job_status=current.status,
-                    heartbeat_at=time.time(), updated_at=time.time())
+                    heartbeat_at=cancel_observed_at,
+                    updated_at=cancel_observed_at)
                 _write_runtime(paths.runtime, runtime)
+                attempt_report = attempt_reporting.advance(
+                    attempt_report,
+                    observed_at=cancel_observed_at,
+                    status=current.status,
+                    trigger="cancel",
+                    cancel_requested=True,
+                    cancel_requested_at=cancel_requested_at,
+                    cancel_observed=True,
+                    cancel_observed_at=cancel_observed_at,
+                )
+                _write_attempt_report(paths.attempt_report, attempt_report)
             return requested
 
         def heartbeat(_process) -> None:
@@ -1029,20 +1150,54 @@ def run_job(
             manager_error=manager_error,
         )
         current = _transition_terminal(store, execution, terminal, lease)
-        finished = time.time()
+        finished = max(time.time(), attempt_report.updated_at)
         runtime = replace(
             runtime, phase="terminal", job_status=current.status,
             heartbeat_at=finished, cleanup_confirmed=cleanup_confirmed,
             exit_code=exit_code, updated_at=finished)
         _write_runtime(paths.runtime, runtime)
+        reason = _result_reason(
+            current.status, exit_code, cancel_observed)
+        if cancel_observed:
+            trigger = "cancel"
+        elif exit_code == 124:
+            trigger = "timeout"
+        elif manager_error:
+            trigger = "manager_error"
+        else:
+            trigger = "normal"
+        final_cancel_requested_at = store.cancel_requested_at(
+            job_id, execution.attempt_token)
+        finished = max(finished, final_cancel_requested_at or 0.0)
+        cancel_requested = (
+            attempt_report.cancel_requested
+            or final_cancel_requested_at is not None)
+        attempt_report = attempt_reporting.advance(
+            attempt_report,
+            observed_at=finished,
+            status=current.status,
+            trigger=trigger,
+            cancel_requested=cancel_requested,
+            cancel_requested_at=(
+                attempt_report.cancel_requested_at
+                if attempt_report.cancel_requested_at is not None
+                else final_cancel_requested_at),
+            cleanup_confirmed=cleanup_confirmed,
+            cleanup_confirmed_at=(finished if cleanup_confirmed else None),
+            finished_at=finished,
+            worker_telemetry_status=telemetry_status,
+            terminal_reason=reason,
+            exit_code=exit_code,
+            manager_error=manager_error,
+        )
+        _write_attempt_report(paths.attempt_report, attempt_report)
         return ManagerResult(
             job_id=job_id,
             status=current.status,
             attempt_number=execution.attempt_number,
             exit_code=exit_code,
             cleanup_confirmed=cleanup_confirmed,
-            reason=_result_reason(
-                current.status, exit_code, cancel_observed),
+            reason=reason,
         )
 
 
@@ -1172,73 +1327,733 @@ def launch_detached(
         f"(job status {current.status})")
 
 
+def _reconstructed_attempt_report(
+        execution: job_runtime.JobExecution,
+        summary: job_runtime.JobSummary,
+        runtime: RuntimeMetadata | None, *,
+        cancel_requested_at: float | None,
+        observed_at: float) -> attempt_reporting.AttemptReport:
+    """Build an explicitly marked fallback after report loss/corruption."""
+    candidates = [summary.updated_at, observed_at]
+    if execution.attempt_number == 1:
+        candidates.append(summary.created_at)
+    if runtime is not None:
+        candidates.append(runtime.updated_at)
+    if cancel_requested_at is not None:
+        candidates.append(cancel_requested_at)
+    submitted_at = min(candidates)
+    status = execution.status
+    needs_worker = bool(
+        runtime is not None and runtime.worker_pid is not None)
+    needs_worker = needs_worker or status in {
+        "running", "succeeded", "partial",
+    }
+    needs_manager = (
+        runtime is not None or needs_worker
+        or status in {"starting", "running", "interrupted"}
+    )
+    manager_started_at = submitted_at if needs_manager else None
+    report = attempt_reporting.new_report(
+        job_id=execution.job_id,
+        attempt_number=execution.attempt_number,
+        run_id=_attempt_run_id(execution),
+        operation=execution.command,
+        status="queued",
+        submitted_at=submitted_at,
+        observed_at=observed_at,
+        manager_started_at=manager_started_at,
+    )
+    if needs_manager:
+        report = attempt_reporting.advance(
+            report, observed_at=observed_at, status="starting")
+    if needs_worker:
+        if report.status == "queued":
+            report = attempt_reporting.advance(
+                report,
+                observed_at=observed_at,
+                status="starting",
+                manager_started_at=submitted_at,
+            )
+        report = attempt_reporting.advance(
+            report,
+            observed_at=observed_at,
+            status="running",
+            worker_started=True,
+            worker_started_at=report.manager_started_at,
+        )
+    cancel_observed = status in {"cancel_requested", "cancelled"}
+    if cancel_requested_at is not None:
+        cancel_observed_at = None
+        if cancel_observed:
+            cancel_observed_at = max(
+                cancel_requested_at,
+                report.worker_started_at
+                or report.manager_started_at
+                or report.submitted_at,
+            )
+        report = attempt_reporting.advance(
+            report,
+            observed_at=observed_at,
+            status=("cancel_requested" if cancel_observed
+                    else report.status),
+            trigger=("cancel" if cancel_observed else report.trigger),
+            cancel_requested=True,
+            cancel_requested_at=cancel_requested_at,
+            cancel_observed=cancel_observed,
+            cancel_observed_at=cancel_observed_at,
+        )
+    return report
+
+
+def _align_attempt_report(
+        report: attempt_reporting.AttemptReport,
+        execution: job_runtime.JobExecution,
+        runtime: RuntimeMetadata | None, *,
+        cancel_requested_at: float | None,
+        observed_at: float) -> attempt_reporting.AttemptReport:
+    """Advance a valid snapshot to the authoritative active job state."""
+    if report.status in job_runtime.TERMINAL_JOB_STATUSES:
+        raise ValueError("terminal report conflicts with active job state")
+    if report.cancel_requested and cancel_requested_at is None:
+        raise ValueError("attempt report references a missing cancel marker")
+    if (report.cancel_requested_at is not None
+            and report.cancel_requested_at != cancel_requested_at):
+        raise ValueError("attempt report cancel time conflicts with its marker")
+    if cancel_requested_at is not None and not report.cancel_requested:
+        report = attempt_reporting.advance(
+            report,
+            observed_at=observed_at,
+            cancel_requested=True,
+            cancel_requested_at=cancel_requested_at,
+        )
+
+    desired = execution.status
+    if desired == "queued":
+        if report.status != "queued":
+            raise ValueError("attempt report is ahead of queued state")
+        return report
+
+    manager_started_at = report.manager_started_at or observed_at
+    if report.status == "queued" and desired in {"starting", "running"}:
+        report = attempt_reporting.advance(
+            report,
+            observed_at=observed_at,
+            status="starting",
+            manager_started_at=manager_started_at,
+        )
+    worker_expected = (
+        runtime is not None and runtime.worker_pid is not None)
+    if desired == "starting" and not worker_expected:
+        if report.status != "starting":
+            raise ValueError("attempt report conflicts with starting state")
+        return report
+
+    if desired == "running" or worker_expected:
+        if report.status == "starting":
+            worker_started_at = max(
+                report.manager_started_at or report.submitted_at,
+                min(observed_at, runtime.updated_at)
+                if runtime is not None else observed_at,
+            )
+            report = attempt_reporting.advance(
+                report,
+                observed_at=observed_at,
+                status="running",
+                worker_started=True,
+                worker_started_at=worker_started_at,
+            )
+        elif report.status == "cancel_requested" and not report.worker_started:
+            worker_started_at = (
+                report.manager_started_at or report.submitted_at)
+            report = attempt_reporting.advance(
+                report,
+                observed_at=observed_at,
+                worker_started=True,
+                worker_started_at=worker_started_at,
+            )
+    if desired == "starting":
+        return report
+    if desired == "running":
+        if report.status != "running":
+            raise ValueError("attempt report conflicts with running state")
+        return report
+
+    if desired != "cancel_requested":
+        raise ValueError("attempt report cannot align to this job state")
+    if cancel_requested_at is None:
+        raise ValueError("cancel-requested state lacks a marker")
+    if report.status != "cancel_requested":
+        cancel_observed_at = max(
+            cancel_requested_at,
+            report.worker_started_at
+            or report.manager_started_at
+            or report.submitted_at,
+        )
+        if report.recovery_started_at is not None:
+            cancel_observed_at = report.recovery_started_at
+        report = attempt_reporting.advance(
+            report,
+            observed_at=observed_at,
+            status="cancel_requested",
+            trigger=("cancel" if report.trigger == "normal"
+                     else report.trigger),
+            cancel_requested=True,
+            cancel_requested_at=cancel_requested_at,
+            cancel_observed=True,
+            cancel_observed_at=cancel_observed_at,
+        )
+    return report
+
+
+def _recovery_cancel_evidence(
+        store: job_runtime.JobStore,
+        execution: job_runtime.JobExecution) -> tuple[float | None, bool]:
+    """Read cancellation evidence without making it a cleanup dependency."""
+    try:
+        return (
+            store.cancel_requested_at(
+                execution.job_id, execution.attempt_token),
+            False,
+        )
+    except job_runtime.JobCorruptError:
+        return None, True
+
+
+def _merge_unobserved_cancel_marker(
+        store: job_runtime.JobStore,
+        execution: job_runtime.JobExecution,
+        report: attempt_reporting.AttemptReport,
+        ) -> tuple[attempt_reporting.AttemptReport, bool]:
+    """Merge a newly durable request without claiming it was observed."""
+    cancel_requested_at, corrupt = _recovery_cancel_evidence(
+        store, execution)
+    if corrupt:
+        if not report.report_repaired or not report.timing_reconstructed:
+            report = attempt_reporting.advance(
+                report,
+                observed_at=max(time.time(), report.updated_at),
+                report_repaired=True,
+                timing_reconstructed=True,
+            )
+        return report, True
+    if cancel_requested_at is None:
+        return report, False
+    if report.cancel_requested_at is not None:
+        if report.cancel_requested_at != cancel_requested_at:
+            raise JobManagerCorruptError(
+                "attempt report conflicts with its cancel marker")
+        return report, False
+    try:
+        return (
+            attempt_reporting.advance(
+                report,
+                observed_at=max(
+                    time.time(), report.updated_at, cancel_requested_at),
+                cancel_requested=True,
+                cancel_requested_at=cancel_requested_at,
+            ),
+            False,
+        )
+    except ValueError as exc:
+        raise JobManagerCorruptError(
+            "late cancel marker conflicts with attempt report") from exc
+
+
+def _begin_recovery_report(
+        store: job_runtime.JobStore,
+        execution: job_runtime.JobExecution,
+        summary: job_runtime.JobSummary,
+        paths: _AttemptPaths,
+        runtime: RuntimeMetadata | None, *,
+        cancel_requested_at: float | None,
+        cancel_evidence_corrupt: bool,
+        runtime_missing: bool,
+        trigger: str,
+        force_report_repaired: bool = False,
+        ) -> attempt_reporting.AttemptReport:
+    observed_at = max(
+        time.time(), summary.updated_at,
+        runtime.updated_at if runtime is not None else 0.0,
+        cancel_requested_at or 0.0,
+    )
+    report_repaired = force_report_repaired or cancel_evidence_corrupt
+    timing_reconstructed = cancel_evidence_corrupt
+    try:
+        report = _load_attempt_report(
+            paths, execution=execution, missing_ok=True)
+    except JobManagerCorruptError:
+        report = None
+        report_repaired = True
+        timing_reconstructed = True
+    if report is None:
+        report_repaired = True
+        timing_reconstructed = True
+        report = _reconstructed_attempt_report(
+            execution, summary, runtime,
+            cancel_requested_at=cancel_requested_at,
+            observed_at=observed_at,
+        )
+    else:
+        observed_at = max(observed_at, report.updated_at)
+        try:
+            if execution.status in job_runtime.TERMINAL_JOB_STATUSES:
+                if report.status in job_runtime.TERMINAL_JOB_STATUSES:
+                    raise ValueError(
+                        "terminal attempt report conflicts with job state")
+                if (report.cancel_requested
+                        and cancel_requested_at is None):
+                    raise ValueError(
+                        "attempt report references a missing cancel marker")
+                if (report.cancel_requested_at is not None
+                        and report.cancel_requested_at
+                        != cancel_requested_at):
+                    raise ValueError(
+                        "attempt report cancel time conflicts with its marker")
+                if (cancel_requested_at is not None
+                        and not report.cancel_requested):
+                    report = attempt_reporting.advance(
+                        report,
+                        observed_at=observed_at,
+                        cancel_requested=True,
+                        cancel_requested_at=cancel_requested_at,
+                    )
+                if (execution.status == "cancelled"
+                        and report.status != "cancel_requested"):
+                    if cancel_requested_at is None:
+                        raise ValueError(
+                            "cancelled attempt lacks a cancel marker")
+                    cancel_observed_at = max(
+                        cancel_requested_at,
+                        report.worker_started_at
+                        or report.manager_started_at
+                        or report.submitted_at,
+                    )
+                    report = attempt_reporting.advance(
+                        report,
+                        observed_at=observed_at,
+                        status="cancel_requested",
+                        trigger=("cancel" if report.trigger == "normal"
+                                 else report.trigger),
+                        cancel_requested=True,
+                        cancel_requested_at=cancel_requested_at,
+                        cancel_observed=True,
+                        cancel_observed_at=cancel_observed_at,
+                    )
+            else:
+                report = _align_attempt_report(
+                    report, execution, runtime,
+                    cancel_requested_at=cancel_requested_at,
+                    observed_at=observed_at,
+                )
+        except ValueError:
+            report_repaired = True
+            timing_reconstructed = True
+            report = _reconstructed_attempt_report(
+                execution, summary, runtime,
+                cancel_requested_at=cancel_requested_at,
+                observed_at=observed_at,
+            )
+
+    observed_at = max(observed_at, report.updated_at)
+
+    if report.recovery_action == "none":
+        report = attempt_reporting.advance(
+            report,
+            observed_at=observed_at,
+            trigger=(trigger if report.trigger == "normal"
+                     else report.trigger),
+            finalized_by="recovery",
+            recovery_started_at=observed_at,
+            recovery_action="pending",
+            runtime_missing=runtime_missing,
+            report_repaired=report_repaired,
+            timing_reconstructed=timing_reconstructed,
+        )
+    else:
+        report = attempt_reporting.advance(
+            report,
+            observed_at=observed_at,
+            runtime_missing=(report.runtime_missing or runtime_missing),
+            report_repaired=(report.report_repaired or report_repaired),
+            timing_reconstructed=(
+                report.timing_reconstructed or timing_reconstructed),
+        )
+    try:
+        _write_attempt_report(paths.attempt_report, report)
+    except Exception:
+        # Recovery safety and authoritative state terminalization take
+        # precedence. The final publication is retried after cleanup.
+        pass
+    return report
+
+
+def _recovery_terminal_reason(
+        status: str, *, exit_code: int | None,
+        cancel_observed: bool, runtime_missing: bool,
+        worker_started: bool) -> str:
+    if status in {"succeeded", "partial"}:
+        return "completed"
+    if status == "cancelled":
+        return "cancelled"
+    if status == "orphaned":
+        return "cleanup_unconfirmed"
+    if status == "interrupted":
+        return "outcome_unconfirmed"
+    if exit_code == 124:
+        return "timeout"
+    if cancel_observed:
+        return "cancellation_failed"
+    if runtime_missing and not worker_started:
+        return "manager_start_missing"
+    return "worker_failed"
+
+
+def _finish_recovery_report(
+        paths: _AttemptPaths,
+        report: attempt_reporting.AttemptReport, *,
+        status: str,
+        cleanup_confirmed: bool,
+        recovery_action: str,
+        telemetry_status: str | None,
+        exit_code: int | None) -> attempt_reporting.AttemptReport:
+    finished_at = max(time.time(), report.updated_at)
+    recovered_milestone_at = report.recovery_started_at or finished_at
+    if status in {"succeeded", "partial"}:
+        if report.status == "queued":
+            report = attempt_reporting.advance(
+                report,
+                observed_at=finished_at,
+                status="starting",
+                manager_started_at=recovered_milestone_at,
+            )
+        if report.status == "starting":
+            report = attempt_reporting.advance(
+                report,
+                observed_at=finished_at,
+                status="running",
+                worker_started=True,
+                worker_started_at=recovered_milestone_at,
+            )
+    elif status == "cancelled" and report.status != "cancel_requested":
+        if not report.cancel_observed:
+            raise JobManagerCorruptError(
+                "cancelled attempt lacks durable cancellation evidence")
+        report = attempt_reporting.advance(
+            report, observed_at=finished_at, status="cancel_requested")
+    elif status == "interrupted" and report.status == "queued":
+        report = attempt_reporting.advance(
+            report,
+            observed_at=finished_at,
+            status="starting",
+            manager_started_at=recovered_milestone_at,
+        )
+
+    reason = _recovery_terminal_reason(
+        status,
+        exit_code=exit_code,
+        cancel_observed=report.cancel_observed,
+        runtime_missing=report.runtime_missing,
+        worker_started=report.worker_started,
+    )
+    trigger = report.trigger
+    if reason == "timeout":
+        trigger = "timeout"
+    elif reason == "manager_start_missing" and trigger == "normal":
+        trigger = "recovery"
+    manager_error = report.manager_error or reason == "manager_start_missing"
+    report = attempt_reporting.advance(
+        report,
+        observed_at=finished_at,
+        status=status,
+        trigger=trigger,
+        cleanup_confirmed=cleanup_confirmed,
+        cleanup_confirmed_at=(finished_at if cleanup_confirmed else None),
+        finished_at=finished_at,
+        reconciled=True,
+        recovery_action=recovery_action,
+        worker_telemetry_status=telemetry_status,
+        terminal_reason=reason,
+        exit_code=exit_code,
+        manager_error=manager_error,
+    )
+    _write_attempt_report(paths.attempt_report, report)
+    return report
+
+
+def _repair_terminal_attempt_report(
+        store: job_runtime.JobStore,
+        execution: job_runtime.JobExecution, *,
+        lease: job_runtime.JobLease) -> job_runtime.JobSummary:
+    """Backfill a missing/incomplete terminal snapshot without changing state."""
+    del lease  # The caller's active lease is the serialization boundary.
+    summary = store.get_job(execution.job_id)
+    if summary.status == "deleting":
+        return summary
+    paths = _attempt_paths(
+        store, execution.job_id, execution.attempt_number, create=True)
+    try:
+        existing = _load_attempt_report(
+            paths, execution=execution, missing_ok=True)
+    except JobManagerCorruptError:
+        existing = None
+    cancel_requested_at, cancel_evidence_corrupt = (
+        _recovery_cancel_evidence(store, execution))
+    if (existing is not None and existing.status == summary.status
+            and existing.finished_at is not None):
+        if cancel_evidence_corrupt:
+            return summary
+        if existing.cancel_requested_at == cancel_requested_at:
+            return summary
+        if (existing.cancel_requested_at is None
+                and cancel_requested_at is not None):
+            try:
+                repaired = attempt_reporting.repair_terminal_cancel_request(
+                    existing,
+                    cancel_requested_at=cancel_requested_at,
+                    observed_at=max(time.time(), cancel_requested_at),
+                )
+            except ValueError as exc:
+                raise JobManagerCorruptError(
+                    "late cancel marker conflicts with terminal report") from exc
+            _write_attempt_report(paths.attempt_report, repaired)
+            return summary
+        raise JobManagerCorruptError(
+            "terminal attempt report conflicts with its cancel marker")
+    prior_recovery = (
+        existing is not None and existing.recovery_action != "none")
+
+    runtime = None
+    try:
+        runtime_payload = _read_private_json(
+            paths.runtime, missing_ok=True)
+        if runtime_payload is not None:
+            runtime = _load_runtime(paths.runtime, execution=execution)
+    except JobManagerCorruptError:
+        runtime = None
+    runtime_missing = runtime is None
+    exit_code = runtime.exit_code if runtime is not None else (
+        130 if summary.status == "cancelled" else None)
+    trigger = "normal" if (
+        summary.status == "failed" and exit_code == 124) else "recovery"
+    report = _begin_recovery_report(
+        store,
+        execution,
+        summary,
+        paths,
+        runtime,
+        cancel_requested_at=cancel_requested_at,
+        cancel_evidence_corrupt=cancel_evidence_corrupt,
+        runtime_missing=runtime_missing,
+        trigger=trigger,
+        force_report_repaired=True,
+    )
+    telemetry_status = None
+    try:
+        telemetry_status = _telemetry_status(
+            paths,
+            operation=execution.command,
+            run_id=(runtime.run_id if runtime is not None
+                    else _attempt_run_id(execution)),
+        )
+    except JobManagerCorruptError:
+        telemetry_status = None
+    if (telemetry_status in {"succeeded", "partial"}
+            and telemetry_status != summary.status):
+        telemetry_status = None
+    cleanup_confirmed = (
+        runtime.cleanup_confirmed
+        if runtime is not None and runtime.cleanup_confirmed is not None
+        else summary.status != "orphaned"
+    )
+    if report.recovery_action not in {"none", "pending"}:
+        recovery_action = report.recovery_action
+    elif prior_recovery or (
+            runtime is not None and runtime.phase == "reconciled"):
+        if not cleanup_confirmed:
+            recovery_action = "cleanup_unconfirmed"
+        elif not report.worker_started:
+            recovery_action = "unstarted_terminalized"
+        else:
+            recovery_action = "confirmed_gone"
+    else:
+        recovery_action = "not_required"
+    _finish_recovery_report(
+        paths,
+        report,
+        status=summary.status,
+        cleanup_confirmed=cleanup_confirmed,
+        recovery_action=recovery_action,
+        telemetry_status=telemetry_status,
+        exit_code=exit_code,
+    )
+    return summary
+
+
+def _terminal_report_repair_needed(
+        store: job_runtime.JobStore,
+        summary: job_runtime.JobSummary) -> bool:
+    if summary.status == "deleting":
+        return False
+    try:
+        execution = store.load_execution(summary.job_id)
+        paths = _attempt_paths(
+            store, summary.job_id, execution.attempt_number, create=False)
+        report = _load_attempt_report(
+            paths, execution=execution, missing_ok=True)
+    except (JobManagerCorruptError, job_runtime.JobRuntimeError):
+        return True
+    cancel_requested_at, cancel_evidence_corrupt = (
+        _recovery_cancel_evidence(store, execution))
+    if cancel_evidence_corrupt:
+        return report is None or report.status != summary.status
+    return (report is None or report.status != summary.status
+            or report.cancel_requested_at != cancel_requested_at)
+
+
 def _reconcile_job_with_lease(
         store: job_runtime.JobStore, job_id: str, *,
         lease: job_runtime.JobLease,
         fail_queued: bool) -> job_runtime.JobSummary:
     execution = store.load_execution(job_id, lease=lease)
     if execution.status in job_runtime.TERMINAL_JOB_STATUSES:
-        return store.get_job(job_id)
-    if (execution.status == "queued"
-            and store.is_cancel_requested(
-                job_id, execution.attempt_token)):
-        requested = store.transition_job(
-            job_id, "cancel_requested",
-            attempt_token=execution.attempt_token,
-            expected_revision=execution.revision, lease=lease)
-        return store.transition_job(
-            job_id, "cancelled",
-            attempt_token=execution.attempt_token,
-            expected_revision=requested.revision, lease=lease)
+        return _repair_terminal_attempt_report(
+            store, execution, lease=lease)
+    summary = store.get_job(job_id)
     paths = _attempt_paths(
-        store, job_id, execution.attempt_number, create=False)
-    runtime_payload = _read_private_json(
-        paths.runtime, missing_ok=True)
-    if runtime_payload is None:
+        store, job_id, execution.attempt_number, create=True)
+    try:
+        runtime_payload = _read_private_json(
+            paths.runtime, missing_ok=True)
+    except JobManagerCorruptError:
+        runtime_payload = None
+    runtime = None
+    if runtime_payload is not None:
+        try:
+            runtime = _load_runtime(paths.runtime, execution=execution)
+        except JobManagerCorruptError:
+            runtime = None
+    runtime_missing = runtime is None
+    cancel_requested_at, cancel_evidence_corrupt = (
+        _recovery_cancel_evidence(store, execution))
+    if (execution.status == "queued" and runtime is None
+            and cancel_requested_at is None and not fail_queued):
+        # The caller observed a manager-owned report without a runtime, or a
+        # corrupt runtime. Either is evidence that startup was attempted; an
+        # untouched queued job is filtered before this lease is acquired.
+        fail_queued = True
+
+    recovery_trigger = (
+        "cancel" if (execution.status == "cancel_requested"
+                     and not cancel_evidence_corrupt) else "recovery")
+    report = _begin_recovery_report(
+        store, execution, summary, paths, runtime,
+        cancel_requested_at=cancel_requested_at,
+        cancel_evidence_corrupt=cancel_evidence_corrupt,
+        runtime_missing=runtime_missing,
+        trigger=recovery_trigger,
+    )
+
+    cleanup_confirmed = False
+    recovery_action = "cleanup_unconfirmed"
+    telemetry_status = None
+    if runtime is None:
         if execution.status == "queued":
-            if not fail_queued:
-                return store.get_job(job_id)
-            target = "failed"
+            cleanup_confirmed = cancel_requested_at is not None or fail_queued
+            target = (
+                "cancelled" if cancel_requested_at is not None else "failed")
+            recovery_action = "unstarted_terminalized"
         else:
             target = "orphaned"
-        return store.transition_job(
-            job_id, target, attempt_token=execution.attempt_token,
-            expected_revision=execution.revision, lease=lease)
-    runtime = _load_runtime(paths.runtime, execution=execution)
-    if execution.status == "queued":
+    elif execution.status == "queued":
         cleanup_confirmed = runtime.worker_pid is None
-        target = "failed" if cleanup_confirmed else "orphaned"
+        if cleanup_confirmed:
+            target = (
+                "cancelled" if cancel_requested_at is not None else "failed")
+            recovery_action = "unstarted_terminalized"
+        else:
+            target = "orphaned"
+            recovery_action = "refused_identity"
     else:
-        cleanup_confirmed = False
         if runtime.worker_pid is None:
             cleanup_confirmed = execution.status in {
                 "starting", "cancel_requested"}
+            recovery_action = (
+                "unstarted_terminalized" if cleanup_confirmed
+                else "cleanup_unconfirmed")
         else:
             probe = probe_process_identity(
                 runtime.worker_pid, runtime.worker_birth)
             if probe == "match":
                 cleanup_confirmed = _terminate_recovered_worker(
                     runtime.worker_pid, runtime.worker_birth)
+                recovery_action = (
+                    "terminated_exact_worker" if cleanup_confirmed
+                    else "cleanup_unconfirmed")
             elif probe == "gone":
                 cleanup_confirmed = _confirm_worker_tree_gone(
                     runtime.worker_pid, runtime.worker_birth)
-            # mismatch/unverifiable deliberately refuse signalling.
+                recovery_action = (
+                    "confirmed_gone" if cleanup_confirmed
+                    else "cleanup_unconfirmed")
+            else:
+                recovery_action = "refused_identity"
         try:
-            observed = _telemetry_status(
+            telemetry_status = _telemetry_status(
                 paths, operation=execution.command,
                 run_id=runtime.run_id)
         except JobManagerCorruptError:
-            observed = None
+            telemetry_status = None
         if not cleanup_confirmed:
             target = "orphaned"
-        elif observed in {"succeeded", "partial", "failed"}:
-            target = observed
-        elif (observed == "cancelled"
-              and execution.status == "cancel_requested"):
+        elif telemetry_status in {"succeeded", "partial", "failed"}:
+            target = telemetry_status
+        elif (telemetry_status == "cancelled"
+              and execution.status == "cancel_requested"
+              and not cancel_evidence_corrupt):
             target = "cancelled"
         else:
             target = "interrupted"
+
+    report, late_cancel_corrupt = _merge_unobserved_cancel_marker(
+        store, execution, report)
+    cancel_evidence_corrupt = (
+        cancel_evidence_corrupt or late_cancel_corrupt)
+    if report.recovery_action not in {"none", "pending"}:
+        recovery_action = report.recovery_action
+    elif (cleanup_confirmed and recovery_action in {
+            "unstarted_terminalized", "confirmed_gone",
+            "terminated_exact_worker"}):
+        report = attempt_reporting.advance(
+            report,
+            observed_at=max(time.time(), report.updated_at),
+            recovery_action=recovery_action,
+        )
+    try:
+        _write_attempt_report(paths.attempt_report, report)
+    except Exception:
+        # The cleanup decision remains in memory for the final publication;
+        # authoritative terminalization must not be blocked by observability.
+        pass
+
     transition_revision = execution.revision
+    if (execution.status == "queued"
+            and cancel_requested_at is not None):
+        requested = store.transition_job(
+            job_id, "cancel_requested",
+            attempt_token=execution.attempt_token,
+            expected_revision=transition_revision, lease=lease)
+        transition_revision = requested.revision
+        execution = store.load_execution(job_id, lease=lease)
+        aligned_at = max(time.time(), report.updated_at, cancel_requested_at)
+        report = _align_attempt_report(
+            report, execution, runtime,
+            cancel_requested_at=cancel_requested_at,
+            observed_at=aligned_at,
+        )
+        try:
+            _write_attempt_report(paths.attempt_report, report)
+        except Exception:
+            pass
     if (execution.status == "starting"
             and target in {"succeeded", "partial"}):
         # A worker can commit telemetry after its PID was recorded but before
@@ -1248,17 +2063,53 @@ def _reconcile_job_with_lease(
             job_id, "running", attempt_token=execution.attempt_token,
             expected_revision=transition_revision, lease=lease)
         transition_revision = running.revision
+        execution = store.load_execution(job_id, lease=lease)
+        report = _align_attempt_report(
+            report, execution, runtime,
+            cancel_requested_at=cancel_requested_at,
+            observed_at=max(time.time(), report.updated_at),
+        )
     current = store.transition_job(
         job_id, target, attempt_token=execution.attempt_token,
         expected_revision=transition_revision, lease=lease)
-    now = time.time()
-    reconciled = replace(
-        runtime, phase="reconciled", job_status=current.status,
-        manager_pid=os.getpid(),
-        manager_birth=process_birth_identity(os.getpid()),
-        heartbeat_at=now, cleanup_confirmed=cleanup_confirmed,
-        updated_at=now)
-    _write_runtime(paths.runtime, reconciled)
+    exit_code = runtime.exit_code if runtime is not None else (
+        130 if current.status == "cancelled" else None)
+    if runtime is not None:
+        now = time.time()
+        reconciled = replace(
+            runtime, phase="reconciled", job_status=current.status,
+            manager_pid=os.getpid(),
+            manager_birth=process_birth_identity(os.getpid()),
+            heartbeat_at=now, cleanup_confirmed=cleanup_confirmed,
+            updated_at=now)
+        _write_runtime(paths.runtime, reconciled)
+    report, late_cancel_corrupt = _merge_unobserved_cancel_marker(
+        store, execution, report)
+    cancel_evidence_corrupt = (
+        cancel_evidence_corrupt or late_cancel_corrupt)
+    final_report = _finish_recovery_report(
+        paths,
+        report,
+        status=current.status,
+        cleanup_confirmed=cleanup_confirmed,
+        recovery_action=recovery_action,
+        telemetry_status=telemetry_status,
+        exit_code=exit_code,
+    )
+    latest_cancel_requested_at, _late_cancel_corrupt = (
+        _recovery_cancel_evidence(store, execution))
+    if (latest_cancel_requested_at is not None
+            and final_report.cancel_requested_at is None):
+        try:
+            final_report = attempt_reporting.repair_terminal_cancel_request(
+                final_report,
+                cancel_requested_at=latest_cancel_requested_at,
+                observed_at=max(time.time(), latest_cancel_requested_at),
+            )
+        except ValueError as exc:
+            raise JobManagerCorruptError(
+                "late cancel marker conflicts with terminal report") from exc
+        _write_attempt_report(paths.attempt_report, final_report)
     return current
 
 
@@ -1271,11 +2122,26 @@ def _queued_reconciliation_needed(
     execution = store.load_execution(summary.job_id)
     if execution.status != "queued":
         return True
-    if store.is_cancel_requested(summary.job_id, execution.attempt_token):
+    try:
+        if store.is_cancel_requested(
+                summary.job_id, execution.attempt_token):
+            return True
+    except job_runtime.JobCorruptError:
         return True
     paths = _attempt_paths(
         store, summary.job_id, execution.attempt_number, create=False)
-    return _read_private_json(paths.runtime, missing_ok=True) is not None
+    try:
+        if _read_private_json(paths.runtime, missing_ok=True) is not None:
+            return True
+    except JobManagerCorruptError:
+        return True
+    try:
+        os.lstat(paths.attempt_report)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    return True
 
 
 def reconcile_job(store: job_runtime.JobStore,
@@ -1294,10 +2160,12 @@ def reconcile_job(store: job_runtime.JobStore,
         if owns_lease:
             with store.store_lease():
                 initial = store.get_job(job_id)
-                if initial.terminal:
+                if (initial.terminal
+                        and not _terminal_report_repair_needed(store, initial)):
                     return initial
-                if not _queued_reconciliation_needed(
-                        store, initial, fail_queued=fail_queued):
+                if (not initial.terminal
+                        and not _queued_reconciliation_needed(
+                            store, initial, fail_queued=fail_queued)):
                     return initial
                 try:
                     lease = store.lease(job_id, timeout=0).acquire()
@@ -1325,10 +2193,12 @@ def reconcile_all_jobs(
         with store.store_lease() as root_lease:
             results = store.list_jobs(lease=root_lease)
             for index, summary in enumerate(results):
-                if summary.terminal:
+                if (summary.terminal
+                        and not _terminal_report_repair_needed(store, summary)):
                     continue
-                if not _queued_reconciliation_needed(
-                        store, summary, fail_queued=fail_queued):
+                if (not summary.terminal
+                        and not _queued_reconciliation_needed(
+                            store, summary, fail_queued=fail_queued)):
                     continue
                 try:
                     job_lease = store.lease(

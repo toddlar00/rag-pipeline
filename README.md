@@ -319,7 +319,21 @@ OS-backed manager lease under `output/.rag-jobs/JOB_ID/`. The spec pins the
 canonical submission working directory and private output-root filesystem
 identities, and every detached attempt runs from that directory. Attempts store
 private runtime metadata, a bounded final 8 MiB worker-log tail, and correlated
-event/report files. POSIX uses verified
+event/report files. Each attempt also has an atomic, manager-owned
+`attempt.report.json` schema-v1 outcome snapshot. It binds the job, attempt,
+run, and operation; records submitted/manager/worker/cancel/recovery/cleanup/
+finish times; derives dispatch, startup, worker, cancellation, recovery, and
+total durations; and records the redacted finalizer, terminal reason, cleanup,
+worker-telemetry, and process-recovery outcomes. Reconciliation explicitly
+marks unavailable runtime metadata, report repair, and reconstructed timing;
+an intact terminal report is immutable and repeated reconciliation leaves it
+byte-identical.
+
+The attempt report never contains arguments, paths, attempt tokens, process
+IDs or birth identities, logs, exception text, prompts, or model responses. It
+is strict, size-bounded, atomically replaced, and current-user-only. This makes
+it suitable as durable operational evidence, not as a substitute for the
+private worker log or the stage-level `run.report.json`. POSIX uses verified
 `0700`/`0600` modes; Windows uses a protected DACL for only the current SID.
 Logs can contain source paths and model output even though status and telemetry
 are redacted, so treat the entire job root as sensitive. Job records persist
@@ -2234,6 +2248,7 @@ ingestion_core.py       # Stdlib-only PDF inspection and stripping safety policy
 model_artifacts.py      # Stdlib-only model lock, byte verification, and ML-BOM
 operation_contracts.py  # Committed vector-index outcome contract
 run_telemetry.py        # Correlated stage events, reports, and recovery
+attempt_reporting.py    # Redacted manager-owned job-attempt outcome reports
 storage_policy.py       # Owner-only DACL/mode and atomic publication policy
 retention.py            # Ownership manifests and dry-run-first lifecycle plans
 job_runtime.py          # Durable private job schemas, bindings, transitions, leases

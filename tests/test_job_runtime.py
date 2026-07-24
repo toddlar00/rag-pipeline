@@ -74,6 +74,16 @@ def _assert_private(path: Path, *, directory: bool) -> None:
         assert stat.S_IMODE(path.stat().st_mode) == expected
 
 
+def test_job_clock_rejects_timestamps_outside_reportable_range(tmp_path):
+    store = JobStore(
+        tmp_path / "jobs",
+        clock=lambda: job_runtime._MAX_TIMESTAMP + 1.0,
+    )
+
+    with pytest.raises(job_runtime.JobRuntimeError, match="invalid timestamp"):
+        store.submit_job("export", [])
+
+
 def test_submit_get_and_list_expose_only_redacted_summaries(tmp_path):
     root = tmp_path / "jobs"
     private_pdf = tmp_path / "Private Casebook.pdf"
@@ -254,6 +264,9 @@ def test_cancel_marker_is_required_and_bound_to_exact_attempt(tmp_path):
     assert store.request_cancel(initial.job_id) == initial
     assert store.request_cancel(initial.job_id) == initial
     assert store.is_cancel_requested(initial.job_id, first.attempt_token)
+    requested_at = store.cancel_requested_at(
+        initial.job_id, first.attempt_token)
+    assert requested_at is not None
     requested = store.transition_job(
         initial.job_id, "cancel_requested",
         attempt_token=first.attempt_token)
@@ -261,6 +274,8 @@ def test_cancel_marker_is_required_and_bound_to_exact_attempt(tmp_path):
         initial.job_id, "cancelled", attempt_token=first.attempt_token,
         expected_revision=requested.revision)
     assert not store.is_cancel_requested(initial.job_id, first.attempt_token)
+    assert store.cancel_requested_at(
+        initial.job_id, first.attempt_token) == requested_at
 
     resumed = store.prepare_resume(
         initial.job_id, expected_revision=cancelled.revision)
@@ -270,6 +285,8 @@ def test_cancel_marker_is_required_and_bound_to_exact_attempt(tmp_path):
     assert second.attempt_token != first.attempt_token
     assert not store.is_cancel_requested(initial.job_id, first.attempt_token)
     assert not store.is_cancel_requested(initial.job_id, second.attempt_token)
+    assert store.cancel_requested_at(initial.job_id, first.attempt_token) is None
+    assert store.cancel_requested_at(initial.job_id, second.attempt_token) is None
     assert spec_path.read_bytes() == immutable_spec
     with pytest.raises(JobStateError, match="not resumable"):
         store.prepare_resume(initial.job_id)
@@ -715,7 +732,7 @@ def test_non_pipeline_jobs_cannot_create_exact_run_bindings(tmp_path):
             item_index=1, input_path="Book.pdf", run_name="Book")
 
 
-def test_stale_cancel_writer_cannot_overwrite_new_attempt_marker(
+def test_cancel_publication_finishes_before_a_new_attempt_can_be_created(
         monkeypatch, tmp_path):
     store = JobStore(tmp_path / "jobs")
     submitted = store.submit_job("full", ["--pdf", "Book.pdf"])
@@ -744,32 +761,35 @@ def test_stale_cancel_writer_cannot_overwrite_new_attempt_marker(
     thread = threading.Thread(target=request_first_cancel)
     thread.start()
     assert entered.wait(10)
-    failed = store.transition_job(
-        submitted.job_id, "failed", attempt_token=first,
-        expected_revision=running.revision)
-    resumed = store.prepare_resume(
-        submitted.job_id, expected_revision=failed.revision)
-    second = store.load_execution(submitted.job_id)
-    second_done = threading.Event()
+    mutation_done = threading.Event()
+    mutation_results = []
 
-    def request_second_cancel():
+    def finish_resume_and_cancel_again():
         try:
+            failed = store.transition_job(
+                submitted.job_id, "failed", attempt_token=first,
+                expected_revision=running.revision)
+            resumed = store.prepare_resume(
+                submitted.job_id, expected_revision=failed.revision)
+            second = store.load_execution(submitted.job_id)
             store.request_cancel(submitted.job_id)
+            mutation_results.append((resumed, second))
         except Exception as exc:
             errors.append(exc)
         finally:
-            second_done.set()
+            mutation_done.set()
 
-    second_thread = threading.Thread(target=request_second_cancel)
-    second_thread.start()
-    assert not second_done.wait(0.2)
+    mutation_thread = threading.Thread(target=finish_resume_and_cancel_again)
+    mutation_thread.start()
+    assert not mutation_done.wait(0.2)
     release.set()
     thread.join(timeout=10)
-    second_thread.join(timeout=10)
+    mutation_thread.join(timeout=10)
 
     assert not thread.is_alive()
-    assert not second_thread.is_alive()
+    assert not mutation_thread.is_alive()
     assert not errors
+    resumed, second = mutation_results[0]
     assert resumed.attempt_number == 2
     assert store.is_cancel_requested(
         submitted.job_id, second.attempt_token)

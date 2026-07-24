@@ -734,13 +734,13 @@ def test_cancel_request_cannot_resurrect_a_deleted_job(
     cancellation = threading.Thread(target=cancel_job)
     cancellation.start()
     assert cancellation_read.wait(5)
-    store.transition_job(
-        submitted.job_id, "failed",
-        attempt_token=execution.attempt_token,
-        expected_revision=running.revision)
 
     def delete_job():
         try:
+            store.transition_job(
+                submitted.job_id, "failed",
+                attempt_token=execution.attempt_token,
+                expected_revision=running.revision)
             store.prepare_delete(submitted.job_id)
             deletion_prepared.set()
             plan = retention.plan_background_job_deletion(
