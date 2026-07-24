@@ -188,9 +188,11 @@ def test_context_assembly_preserves_rank_and_deduplicates_overlap():
     ]
     assert response.hits[0].context_segments[0].relation == "previous"
     assert response.context_window == 2
-    assert response.context_characters == sum(
+    assert response.context_characters >= sum(
         len(segment.text) for hit in response.hits
         for segment in hit.context_segments)
+    assert response.context_characters <= (
+        retrieval_core.DEFAULT_CONTEXT_MAX_CHARACTERS)
 
 
 def test_context_assembly_enforces_filters_and_global_budget():
@@ -213,14 +215,14 @@ def test_context_assembly_enforces_filters_and_global_budget():
 
     retrieval_core._assemble_retrieval_context(
         response, records, context_window=1,
-        content_type="author_narrative", max_characters=5,
+        content_type="author_narrative", max_characters=1000,
         segment_characters=5)
 
     assert len(response.hits[0].context_segments) == 1
     segment = response.hits[0].context_segments[0]
     assert segment.relation == "next"
     assert segment.text == "incl\u2026"
-    assert response.context_characters == 5
+    assert 5 < response.context_characters <= 1000
 
 
 @pytest.mark.parametrize("tamper", ["text", "chapter"])
@@ -283,3 +285,35 @@ def test_context_assembly_renders_identical_text_once_with_all_provenance():
         "identical neighboring evidence") == 1
     assert sources[1].metadata["equivalent_sources"][0]["source_id"] == (
         records[2]["metadata"]["stable_id"])
+
+
+def test_context_metadata_is_bounded_and_charged_to_the_global_budget():
+    records = [
+        _linked_record("primary", 0),
+        _linked_record("next evidence", 1),
+    ]
+    records[1]["metadata"]["section_path"] = "x" * 100_000
+    retrieval_core._attach_retrieval_linkage(records)
+    response = retrieval_core.SearchResponse(
+        hits=[retrieval_core.SearchHit(
+            records[0]["text"], dict(records[0]["metadata"]), 0.9,
+            source_id=records[0]["metadata"]["stable_id"])],
+        backend="chroma",
+        requested_mode="vector",
+        effective_mode="vector",
+        reranker_applied=False,
+    )
+
+    retrieval_core._assemble_retrieval_context(
+        response, records, context_window=1,
+        max_characters=2_000, segment_characters=4)
+
+    segment = response.hits[0].context_segments[0]
+    assert segment.text == "nex\u2026"
+    assert len(segment.metadata["section_path"]) <= (
+        retrieval_core._METADATA_STRING_CHAR_LIMIT)
+    assert 4 < response.context_characters <= 2_000
+    prompt = retrieval_core._grounded_answer_prompt(
+        "What follows?", retrieval_core._grounded_sources(response))
+    assert "x" * 100_000 not in prompt
+    assert len(prompt) < 10_000

@@ -25,6 +25,10 @@ MAX_CONTEXT_CHARACTERS = 32_000
 MAX_CONTEXT_SEGMENT_CHARACTERS = 8_000
 DEFAULT_CONTEXT_MAX_CHARACTERS = 8_000
 DEFAULT_CONTEXT_SEGMENT_CHARACTERS = 1_600
+_CONTEXT_METADATA_CHAR_LIMIT = 1_200
+_ANSWER_SOURCE_METADATA_CHAR_LIMIT = 1_600
+_METADATA_STRING_CHAR_LIMIT = 384
+_METADATA_SEQUENCE_ITEM_LIMIT = 12
 
 
 @dataclass(frozen=True)
@@ -329,13 +333,66 @@ _CONTEXT_METADATA_FIELDS = (
 )
 
 
+def _json_character_count(value: Any) -> int:
+    """Return deterministic serialized character use for one public value."""
+    return len(json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+        default=str))
+
+
+def _truncate_metadata_string(value: str, limit: int) -> str:
+    if len(value) <= limit:
+        return value
+    if limit <= 1:
+        return "\u2026"[:limit]
+    return value[:limit - 1] + "\u2026"
+
+
+def _bounded_metadata_value(value: Any, *, depth: int = 0) -> Any:
+    """Normalize one metadata value without permitting prompt-size bypasses."""
+    if isinstance(value, str):
+        return _truncate_metadata_string(value, _METADATA_STRING_CHAR_LIMIT)
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if depth >= 2:
+        return _truncate_metadata_string(
+            str(value), _METADATA_STRING_CHAR_LIMIT)
+    if isinstance(value, dict):
+        bounded = {}
+        for key in sorted(value, key=str)[:_METADATA_SEQUENCE_ITEM_LIMIT]:
+            bounded[_truncate_metadata_string(str(key), 96)] = (
+                _bounded_metadata_value(value[key], depth=depth + 1))
+        return bounded
+    if isinstance(value, (list, tuple, set)):
+        values = sorted(value, key=str) if isinstance(value, set) else value
+        return [
+            _bounded_metadata_value(item, depth=depth + 1)
+            for item in list(values)[:_METADATA_SEQUENCE_ITEM_LIMIT]
+        ]
+    return _truncate_metadata_string(str(value), _METADATA_STRING_CHAR_LIMIT)
+
+
+def _bounded_metadata_projection(
+        metadata: dict[str, Any], fields: tuple[str, ...], *,
+        max_characters: int,
+) -> dict[str, Any]:
+    """Keep whole bounded fields within one deterministic JSON-size cap."""
+    result = {}
+    for key in fields:
+        if key not in metadata or metadata[key] in (None, "", -1, [], {}):
+            continue
+        value = _bounded_metadata_value(metadata[key])
+        candidate = {**result, key: value}
+        if _json_character_count(candidate) <= max_characters:
+            result = candidate
+    return result
+
+
 def _context_metadata_projection(metadata: dict[str, Any]) -> dict[str, Any]:
     """Keep bounded, locating metadata for supplementary evidence."""
-    return {
-        key: metadata[key]
-        for key in _CONTEXT_METADATA_FIELDS
-        if key in metadata and metadata[key] not in (None, "", -1, [], {})
-    }
+    return _bounded_metadata_projection(
+        metadata, _CONTEXT_METADATA_FIELDS,
+        max_characters=_CONTEXT_METADATA_CHAR_LIMIT)
 
 
 def _context_parent_id(metadata: dict[str, Any]) -> str:
@@ -492,6 +549,24 @@ def _context_excerpt(text: str, relation: str, limit: int) -> str:
     return text[:limit - 1] + "\u2026"
 
 
+def _context_segment_character_cost(segment: ContextSegment) -> int:
+    """Measure the serialized supplementary evidence charged to its budget."""
+    return _json_character_count({
+        "source_id": segment.source_id,
+        "relation": segment.relation,
+        "distance": segment.distance,
+        "text": segment.text,
+        "metadata": segment.metadata,
+    })
+
+
+def _context_alias_character_cost(alias: ContextSourceAlias) -> int:
+    return _json_character_count({
+        "source_id": alias.source_id,
+        "metadata": alias.metadata,
+    })
+
+
 _CONTEXT_HIT_IDENTITY_FIELDS = (
     "source_file",
     "chapter_num",
@@ -645,13 +720,19 @@ def _assemble_retrieval_context(
                     source_id=candidate_id,
                     metadata=projected_metadata,
                 )
+                alias_cost = _context_alias_character_cost(alias)
                 primary_owner = primary_text_owner.get(candidate_text)
                 if primary_owner is not None:
+                    if consumed + alias_cost > max_characters:
+                        continue
                     response.hits[primary_owner].source_aliases.append(alias)
                     selected_ids.add(candidate_id)
+                    consumed += alias_cost
                     continue
                 context_owner = selected_text_owner.get(candidate_text)
                 if context_owner is not None:
+                    if consumed + alias_cost > max_characters:
+                        continue
                     owner_hit, owner_segment = context_owner
                     existing = selected[owner_hit][owner_segment]
                     selected[owner_hit][owner_segment] = ContextSegment(
@@ -663,23 +744,26 @@ def _assemble_retrieval_context(
                         source_aliases=existing.source_aliases + (alias,),
                     )
                     selected_ids.add(candidate_id)
+                    consumed += alias_cost
                     continue
                 excerpt = _context_excerpt(
                     candidate_text, relation,
                     segment_characters)
-                if not excerpt or consumed + len(excerpt) > max_characters:
-                    continue
-                selected[hit_index].append(ContextSegment(
+                segment = ContextSegment(
                     text=excerpt,
                     metadata=projected_metadata,
                     source_id=candidate_id,
                     relation=relation,
                     distance=distance,
-                ))
+                )
+                segment_cost = _context_segment_character_cost(segment)
+                if not excerpt or consumed + segment_cost > max_characters:
+                    continue
+                selected[hit_index].append(segment)
                 selected_text_owner[candidate_text] = (
                     hit_index, len(selected[hit_index]) - 1)
                 selected_ids.add(candidate_id)
-                consumed += len(excerpt)
+                consumed += segment_cost
 
     for hit, segments in zip(response.hits, selected):
         hit.context_segments = sorted(
@@ -785,12 +869,49 @@ def _search_hit_source_id(
 
 
 def _useful_source_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
-    """Keep non-empty retrieval metadata for prompts and source mappings."""
-    return {
+    """Keep bounded retrieval metadata for prompts and source mappings."""
+    priority = (
+        "source_file", "chapter_num", "chapter_title", "page_start",
+        "page_end", "page_range", "content_type", "section_path",
+        "primary_case", "context_role", "context_distance",
+        "primary_source_id",
+    )
+    remaining = tuple(sorted(
+        key for key in metadata
+        if key not in _RETRIEVAL_LINKAGE_FIELDS
+        and key not in priority
+        and key != "equivalent_sources"
+    ))
+    result = _bounded_metadata_projection(
+        metadata, priority + remaining,
+        max_characters=_ANSWER_SOURCE_METADATA_CHAR_LIMIT)
+    aliases = metadata.get("equivalent_sources")
+    if isinstance(aliases, list):
+        normalized_aliases = []
+        for alias in aliases:
+            if not isinstance(alias, dict):
+                continue
+            source_id = alias.get("source_id")
+            if not isinstance(source_id, str) or not source_id:
+                continue
+            alias_metadata = alias.get("metadata")
+            normalized_aliases.append({
+                "source_id": _truncate_metadata_string(source_id, 128),
+                "metadata": _context_metadata_projection(
+                    alias_metadata if isinstance(alias_metadata, dict) else {}),
+            })
+        if normalized_aliases:
+            result["equivalent_sources"] = normalized_aliases
+    return result
+
+
+def _prompt_source_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Exclude provenance aliases and re-cap model-visible metadata."""
+    without_aliases = {
         key: value for key, value in metadata.items()
-        if (key not in _RETRIEVAL_LINKAGE_FIELDS
-            and value not in (None, "", -1, [], {}))
+        if key != "equivalent_sources"
     }
+    return _useful_source_metadata(without_aliases)
 
 
 def _query_centered_excerpt(text: str, query: str, *,
@@ -828,6 +949,7 @@ def _grounded_sources(
     """Build a ranked, de-duplicated source registry for answer generation."""
     sources = []
     seen_source_ids = set()
+    sources_by_text: dict[str, GroundedSource] = {}
 
     def with_aliases(
             metadata: dict[str, Any],
@@ -848,47 +970,82 @@ def _grounded_sources(
     def add_source(
             *, source_id: str, text: str, metadata: dict[str, Any],
             score: float | None, excerpt: str,
-    ) -> None:
+    ) -> GroundedSource | None:
         if source_id in seen_source_ids:
-            return
+            return None
         seen_source_ids.add(source_id)
-        sources.append(GroundedSource(
+        source = GroundedSource(
             citation_id=f"S{len(sources) + 1}",
             source_id=source_id,
             text=text,
             metadata=_useful_source_metadata(metadata),
             score=score,
             excerpt=excerpt,
-        ))
+        )
+        sources.append(source)
+        sources_by_text.setdefault(text, source)
+        return source
+
+    def add_alias(source: GroundedSource, alias: ContextSourceAlias) -> None:
+        if (alias.source_id == source.source_id
+                or alias.source_id in seen_source_ids):
+            return
+        existing = source.metadata.setdefault("equivalent_sources", [])
+        if any(item.get("source_id") == alias.source_id for item in existing):
+            return
+        seen_source_ids.add(alias.source_id)
+        existing.append({
+            "source_id": alias.source_id,
+            "metadata": _context_metadata_projection(alias.metadata),
+        })
 
     # Ranked primaries always retain the first citation slots. Supplementary
     # neighbors are added afterward under their own stable source identities.
+    registered_hits: list[tuple[SearchHit, str]] = []
     for hit in response.hits:
         source_id = source_id_fn(hit)
         hit.source_id = source_id
-        add_source(
-            source_id=source_id,
-            text=hit.text,
-            metadata=with_aliases(hit.metadata, hit.source_aliases),
-            score=hit.score,
-            excerpt=_query_centered_excerpt(hit.text, query),
-        )
+        owner = sources_by_text.get(hit.text)
+        if owner is not None:
+            add_alias(owner, ContextSourceAlias(
+                source_id=source_id,
+                metadata=_context_metadata_projection(hit.metadata),
+            ))
+            for alias in hit.source_aliases:
+                add_alias(owner, alias)
+            registered_hits.append((hit, owner.source_id))
+        else:
+            source = add_source(
+                source_id=source_id,
+                text=hit.text,
+                metadata=with_aliases(hit.metadata, hit.source_aliases),
+                score=hit.score,
+                excerpt=_query_centered_excerpt(hit.text, query),
+            )
+            if source is not None:
+                registered_hits.append((hit, source.source_id))
         if len(sources) >= _ANSWER_SOURCE_LIMIT:
             break
-    primary_source_ids = {source.source_id for source in sources}
-    context_limit = _ANSWER_SOURCE_LIMIT + _ANSWER_CONTEXT_SOURCE_LIMIT
-    for hit in response.hits:
-        if hit.source_id not in primary_source_ids:
-            continue
+    context_sources = 0
+    for hit, primary_source_id in registered_hits:
         for segment in hit.context_segments:
             metadata = {
                 **with_aliases(
                     segment.metadata, segment.source_aliases),
                 "context_role": segment.relation,
                 "context_distance": segment.distance,
-                "primary_source_id": hit.source_id,
+                "primary_source_id": primary_source_id,
             }
-            add_source(
+            owner = sources_by_text.get(segment.text)
+            if owner is not None:
+                add_alias(owner, ContextSourceAlias(
+                    source_id=segment.source_id,
+                    metadata=_context_metadata_projection(segment.metadata),
+                ))
+                for alias in segment.source_aliases:
+                    add_alias(owner, alias)
+                continue
+            source = add_source(
                 source_id=segment.source_id,
                 text=segment.text,
                 metadata=metadata,
@@ -897,7 +1054,9 @@ def _grounded_sources(
                     segment.text, segment.relation,
                     _ANSWER_SOURCE_CHAR_LIMIT),
             )
-            if len(sources) >= context_limit:
+            if source is not None:
+                context_sources += 1
+            if context_sources >= _ANSWER_CONTEXT_SOURCE_LIMIT:
                 return sources
     return sources
 
@@ -910,7 +1069,7 @@ def _grounded_answer_prompt(query: str,
         payload = {
             "citation_id": source.citation_id,
             "source_id": source.source_id,
-            "metadata": source.metadata,
+            "metadata": _prompt_source_metadata(source.metadata),
             "text": source.excerpt or source.text[:_ANSWER_SOURCE_CHAR_LIMIT],
         }
         source_blocks.append(

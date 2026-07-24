@@ -255,6 +255,61 @@ def test_neighbor_context_receives_its_own_exact_citation():
     assert mapping["score_kind"] == "supplementary_context"
 
 
+def test_identical_ranked_primaries_render_once_with_alias_provenance():
+    first = _hit("Identical ranked evidence.", page_range="1")
+    first.source_id = "chunk_primary_one"
+    second = _hit("Identical ranked evidence.", page_range="2")
+    second.source_id = "chunk_primary_two"
+    second.context_segments = [rag.ContextSegment(
+        text="Neighbor attached to the duplicate primary.",
+        metadata={"page_range": "3"},
+        source_id="chunk_neighbor",
+        relation="next",
+        distance=1,
+    )]
+
+    sources = rag._grounded_sources(_response(first, second))
+
+    assert [source.source_id for source in sources] == [
+        "chunk_primary_one", "chunk_neighbor",
+    ]
+    assert sources[0].metadata["equivalent_sources"] == [{
+        "source_id": "chunk_primary_two",
+        "metadata": {
+            "source_file": "Civil Procedure.pdf",
+            "page_range": "2",
+            "content_type": "case_opinion",
+            "section_path": "Chapter 3 > Personal Jurisdiction",
+            "primary_case": "International Shoe Co. v. Washington",
+        },
+    }]
+    assert sources[1].metadata["primary_source_id"] == "chunk_primary_one"
+
+
+def test_grounded_sources_cap_supplements_relative_to_actual_primaries():
+    hits = []
+    for primary_index in range(3):
+        hit = _hit(f"Primary {primary_index}.")
+        hit.source_id = f"chunk_primary_{primary_index}"
+        hit.context_segments = [
+            rag.ContextSegment(
+                text=f"Supplement {primary_index}-{context_index}.",
+                metadata={"page_range": str(context_index + 1)},
+                source_id=f"chunk_context_{primary_index}_{context_index}",
+                relation="next",
+                distance=context_index + 1,
+            )
+            for context_index in range(4)
+        ]
+        hits.append(hit)
+
+    sources = rag._grounded_sources(_response(*hits))
+
+    assert sum(source.score is not None for source in sources) == 3
+    assert sum(source.score is None for source in sources) == 10
+    assert len(sources) == 13
+
+
 def test_neighbor_context_is_capped_before_answer_prompting():
     hit = _hit("Ranked primary evidence.")
     hit.source_id = "chunk_primary"
