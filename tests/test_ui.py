@@ -113,6 +113,99 @@ def test_vector_worker_serializes_search_response(monkeypatch, tmp_path):
     assert result["reranker_applied"] is True
 
 
+def test_vector_worker_serializes_context_and_alias_provenance(
+        monkeypatch, tmp_path):
+    alias = ui.rag.ContextSourceAlias(
+        source_id="chunk_alias", metadata={"page_range": "9"})
+    segment = ui.rag.ContextSegment(
+        text="neighbor evidence", metadata={"page_range": "8"},
+        source_id="chunk_neighbor", relation="next", distance=1,
+        source_aliases=(alias,))
+    hit = SimpleNamespace(
+        text="primary evidence", metadata={"content_type": "case_opinion"},
+        score=0.75, source_id="chunk_primary",
+        source_aliases=[alias], context_segments=[segment])
+    monkeypatch.setattr(
+        ui.rag, "search_index",
+        lambda *args, **kwargs: SimpleNamespace(
+            hits=[hit], context_window=1, effective_mode="vector",
+            reranker_applied=False, warnings=[]),
+    )
+    request = {
+        "action": "search",
+        "query": "terms",
+        "config": {
+            "db_path": str(tmp_path / "db"),
+            "chunks_path": str(tmp_path / "chunks.jsonl"),
+            "db_backend": "chroma",
+            "collection": "book",
+            "embedding_model": "embedding",
+            "db_lock_timeout": 1,
+        },
+        "options": {
+            "n_results": 5, "content_type": None, "chapter_num": None,
+            "use_reranker": None, "hybrid": None, "context_window": 1,
+        },
+    }
+
+    result = ui._execute_vector_request(request)
+
+    assert result["hits"][0]["source_id"] == "chunk_primary"
+    assert result["hits"][0]["equivalent_sources"] == [{
+        "source_id": "chunk_alias", "metadata": {"page_range": "9"},
+    }]
+    assert result["hits"][0]["context"][0] == {
+        "text": "neighbor evidence",
+        "metadata": {"page_range": "8"},
+        "source_id": "chunk_neighbor",
+        "relation": "next",
+        "distance": 1,
+        "equivalent_sources": [{
+            "source_id": "chunk_alias", "metadata": {"page_range": "9"},
+        }],
+    }
+
+
+def test_search_ui_renders_context_and_alias_provenance(monkeypatch, tmp_path):
+    monkeypatch.setitem(ui._config, "db_path", tmp_path / "db")
+    monkeypatch.setitem(ui._config, "chunks_path", tmp_path / "chunks.jsonl")
+    monkeypatch.setitem(ui._config, "db_backend", "chroma")
+    monkeypatch.setitem(ui._config, "collection", "book")
+    monkeypatch.setattr(
+        ui, "_supervised_vector_request",
+        lambda *args, **kwargs: {
+            "hits": [{
+                "text": "primary evidence",
+                "metadata": {
+                    "content_type": "case_opinion", "page_range": "7"},
+                "score": 0.75,
+                "equivalent_sources": [{
+                    "source_id": "chunk_primary_alias", "metadata": {}},
+                ],
+                "context": [{
+                    "text": "neighbor evidence", "metadata": {},
+                    "source_id": "chunk_neighbor", "relation": "next",
+                    "distance": 1,
+                    "equivalent_sources": [{
+                        "source_id": "chunk_neighbor_alias", "metadata": {}},
+                    ],
+                }],
+            }],
+            "effective_mode": "vector",
+            "reranker_applied": False,
+            "warnings": [],
+        },
+    )
+
+    rendered = ui.do_search(
+        "terms", "All", "All", 5, False, False, 1)
+
+    assert "Next context 1" in rendered
+    assert "chunk_neighbor" in rendered
+    assert "chunk_primary_alias" in rendered
+    assert "chunk_neighbor_alias" in rendered
+
+
 def test_supervised_ui_request_keeps_query_out_of_process_arguments(
         monkeypatch):
     observed = {}

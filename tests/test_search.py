@@ -494,6 +494,111 @@ def test_search_releases_vector_lease_before_reranking(
     assert response.reranker_applied is True
 
 
+@pytest.mark.parametrize("backend", ["chroma", "qdrant"])
+def test_context_search_uses_exact_manifested_chunks_without_changing_rank(
+        search_fakes, monkeypatch, backend):
+    prefix = "dense" if backend == "chroma" else "qdrant"
+    records = [
+        {
+            "text": f"{prefix}-{index}",
+            "metadata": {
+                "chunk_index": index,
+                "source_file": "book.json",
+                "chapter_num": 2,
+                "content_type": "case_opinion",
+                "page_start": index + 1,
+                "page_end": index + 1,
+                "page_range": str(index + 1),
+            },
+        }
+        for index in range(3)
+    ]
+    rag._retrieval_core._attach_retrieval_linkage(records)
+    source_sha256 = hashlib.sha256(
+        search_fakes.chunks_path.read_bytes()).hexdigest()
+    monkeypatch.setattr(
+        rag, "_load_index_snapshot_with_quality",
+        lambda _path: (records, source_sha256, (1, 2, 3, 4, 5), (3, "f" * 64)),
+    )
+    monkeypatch.setattr(
+        rag, "_require_hybrid_chunks_snapshot",
+        lambda *_args, **_kwargs: source_sha256,
+    )
+    def source_id_for_hit(hit):
+        metadata = records[hit.metadata["chunk_index"]]["metadata"]
+        hit.metadata.update({
+            key: metadata.get(key)
+            for key in rag._retrieval_core._CONTEXT_HIT_IDENTITY_FIELDS
+        })
+        hit.metadata["stable_id"] = metadata["stable_id"]
+        return metadata["stable_id"]
+
+    monkeypatch.setattr(rag, "_search_hit_source_id", source_id_for_hit)
+
+    response = rag.search_index(
+        "minimum contacts", search_fakes.db_dir,
+        db_backend=backend, n_results=1,
+        embedding_model="fake-embedding", hybrid=False,
+        use_reranker=False, chunks_path=search_fakes.chunks_path,
+        context_window=1,
+    )
+
+    assert [hit.text for hit in response.hits] == [f"{prefix}-0"]
+    assert response.context_window == 1
+    assert [
+        segment.source_id for segment in response.hits[0].context_segments
+    ] == [records[1]["metadata"]["stable_id"]]
+
+
+@pytest.mark.parametrize("manifest_digest", [None, "f" * 64])
+def test_context_search_rejects_missing_or_mismatched_generation(
+        search_fakes, monkeypatch, manifest_digest):
+    monkeypatch.setattr(
+        rag, "_load_index_snapshot_with_quality",
+        lambda _path: ([], "a" * 64, (1, 2, 3, 4, 5), (3, "e" * 64)),
+    )
+    monkeypatch.setattr(
+        rag, "_require_hybrid_chunks_snapshot",
+        lambda *_args, **_kwargs: manifest_digest,
+    )
+
+    with pytest.raises(ValueError, match="does not match the indexed corpus"):
+        rag.search_index(
+            "minimum contacts", search_fakes.db_dir,
+            db_backend="chroma", n_results=1,
+            embedding_model="fake-embedding", hybrid=False,
+            use_reranker=False, chunks_path=search_fakes.chunks_path,
+            context_window=1,
+        )
+    assert search_fakes.state["embedding_calls"] == []
+
+
+def test_context_search_rejects_path_replacement_after_snapshot_load(
+        search_fakes, monkeypatch):
+    original_sha256 = hashlib.sha256(
+        search_fakes.chunks_path.read_bytes()).hexdigest()
+
+    def load_then_replace(_path):
+        search_fakes.chunks_path.write_text(
+            json.dumps({"text": "replacement chunk", "metadata": {}}) + "\n",
+            encoding="utf-8",
+        )
+        return [], original_sha256, (1, 2, 3, 4, 5), (3, None)
+
+    monkeypatch.setattr(
+        rag, "_load_index_snapshot_with_quality", load_then_replace)
+
+    with pytest.raises(ValueError, match="does not match the indexed corpus"):
+        rag.search_index(
+            "minimum contacts", search_fakes.db_dir,
+            db_backend="chroma", n_results=1,
+            embedding_model="fake-embedding", hybrid=False,
+            use_reranker=False, chunks_path=search_fakes.chunks_path,
+            context_window=1,
+        )
+    assert search_fakes.state["embedding_calls"] == []
+
+
 @pytest.mark.parametrize("wrapper, backend", [
     (rag.query_index, "chroma"),
     (rag.query_index_qdrant, "qdrant"),
@@ -562,6 +667,40 @@ def test_eval_delegates_hybrid_and_reranker_to_public_search(
     assert observed["kwargs"]["n_results"] == 7
     assert observed["kwargs"]["hybrid"] is True
     assert observed["kwargs"]["use_reranker"] is True
+
+
+def test_eval_preserves_context_for_grounding_without_changing_rank(
+        monkeypatch, tmp_path):
+    observed = {}
+    hit = rag.SearchHit(
+        "ranked text", {"stable_id": "chunk_primary"}, 0.8,
+        source_id="chunk_primary")
+    hit.context_segments = [rag.ContextSegment(
+        text="neighbor text",
+        metadata={"page_range": "2"},
+        source_id="chunk_neighbor",
+        relation="next",
+        distance=1,
+    )]
+    response = rag.SearchResponse(
+        hits=[hit], backend="chroma", requested_mode="vector",
+        effective_mode="vector", reranker_applied=False,
+        context_window=1)
+
+    def fake_search(*args, **kwargs):
+        observed.update(kwargs)
+        return response
+
+    monkeypatch.setattr(rag, "search_index", fake_search)
+    results = retrieval_eval.run_search(
+        "query", tmp_path, chunks_path=tmp_path / "chunks.jsonl",
+        context_window=1)
+
+    assert len(results) == 1
+    assert results[0]["text"] == "ranked text"
+    assert [item["source_id"] for item in results[0]["context"]] == [
+        "chunk_neighbor"]
+    assert observed["context_window"] == 1
 
 
 def test_evaluate_uses_success_name_fetches_max_k_and_counts_empty_type_miss(

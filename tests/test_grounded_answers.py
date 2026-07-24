@@ -228,6 +228,54 @@ def test_chroma_metadata_persists_the_stable_source_id():
     assert metadatas[0]["stable_id"] == ids[0]
 
 
+def test_neighbor_context_receives_its_own_exact_citation():
+    hit = _hit("Ranked primary evidence.")
+    hit.source_id = "chunk_primary"
+    hit.context_segments = [rag.ContextSegment(
+        text="Supplementary evidence text from the next chunk.",
+        metadata={"page_range": "8"},
+        source_id="chunk_neighbor",
+        relation="next",
+        distance=1,
+    )]
+
+    sources = rag._grounded_sources(_response(hit))
+
+    assert [(source.citation_id, source.source_id) for source in sources] == [
+        ("S1", "chunk_primary"),
+        ("S2", "chunk_neighbor"),
+    ]
+    answer = rag._validate_grounded_answer(
+        'The source states "Supplementary evidence text" [S2].', sources)
+    assert answer.abstained is False
+    assert answer.citations == ["S2"]
+    mapping = answer.source_mapping()["S2"]
+    assert mapping["source_id"] == "chunk_neighbor"
+    assert mapping["score"] is None
+    assert mapping["score_kind"] == "supplementary_context"
+
+
+def test_neighbor_context_is_capped_before_answer_prompting():
+    hit = _hit("Ranked primary evidence.")
+    hit.source_id = "chunk_primary"
+    neighbor_text = "continuation evidence " * 1000
+    hit.context_segments = [rag.ContextSegment(
+        text=neighbor_text,
+        metadata={"page_range": "8"},
+        source_id="chunk_neighbor",
+        relation="next",
+        distance=1,
+    )]
+
+    sources = rag._grounded_sources(_response(hit))
+    prompt = rag._grounded_answer_prompt("What continues?", sources)
+
+    assert len(sources[1].excerpt) <= rag._ANSWER_SOURCE_CHAR_LIMIT
+    assert sources[1].excerpt.endswith("\u2026")
+    assert neighbor_text not in prompt
+    assert sources[1].excerpt in prompt
+
+
 def test_json_output_keeps_answer_string_and_adds_grounding(capsys):
     hit = _hit("Minimum contacts are required.")
     hit.source_id = rag._search_hit_source_id(hit)

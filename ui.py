@@ -92,14 +92,45 @@ def _execute_vector_request(request: dict) -> dict:
             use_reranker=options["use_reranker"],
             hybrid=options["hybrid"],
             chunks_path=Path(config["chunks_path"]),
+            context_window=options.get("context_window", 0),
             lock_timeout=config["db_lock_timeout"],
         )
+        hits = []
+        for hit in response.hits:
+            public_hit = {
+                "text": hit.text,
+                "metadata": hit.metadata,
+                "score": hit.score,
+            }
+            if getattr(response, "context_window", 0):
+                public_hit["source_id"] = hit.source_id
+                public_hit["equivalent_sources"] = [
+                    {
+                        "source_id": alias.source_id,
+                        "metadata": alias.metadata,
+                    }
+                    for alias in hit.source_aliases
+                ]
+                public_hit["context"] = [
+                    {
+                        "text": segment.text,
+                        "metadata": segment.metadata,
+                        "source_id": segment.source_id,
+                        "relation": segment.relation,
+                        "distance": segment.distance,
+                        "equivalent_sources": [
+                            {
+                                "source_id": alias.source_id,
+                                "metadata": alias.metadata,
+                            }
+                            for alias in segment.source_aliases
+                        ],
+                    }
+                    for segment in hit.context_segments
+                ]
+            hits.append(public_hit)
         return {
-            "hits": [
-                {"text": hit.text, "metadata": hit.metadata,
-                 "score": hit.score}
-                for hit in response.hits
-            ],
+            "hits": hits,
             "effective_mode": response.effective_mode,
             "reranker_applied": response.reranker_applied,
             "warnings": response.warnings,
@@ -208,8 +239,14 @@ def _load_chunk_metadata() -> dict:
 # ---------------------------------------------------------------------------
 
 def do_search(query, content_type, chapter, n_results, hybrid, use_reranker,
-              db_backend=None):
+              context_window=0, db_backend=None):
     """Run search and return formatted results."""
+    if (isinstance(context_window, str)
+            and context_window in {"chroma", "qdrant"}
+            and db_backend is None):
+        # Compatibility with the historical optional positional backend.
+        db_backend = context_window
+        context_window = 0
     if not query.strip():
         return "Enter a search query."
 
@@ -253,6 +290,7 @@ def do_search(query, content_type, chapter, n_results, hybrid, use_reranker,
                     "chapter_num": ch,
                     "use_reranker": use_reranker,
                     "hybrid": hybrid,
+                    "context_window": int(context_window),
                 },
             },
             timeout=_config["search_timeout"],
@@ -288,6 +326,28 @@ def do_search(query, content_type, chapter, n_results, hybrid, use_reranker,
             if ctx:
                 lines.append(f"*Context: {ctx}*")
             lines.append(f"\n{doc[:500]}{'...' if len(doc) > 500 else ''}\n")
+            primary_aliases = hit.get("equivalent_sources", [])
+            if primary_aliases:
+                lines.append(
+                    "**Equivalent source occurrences:** "
+                    + ", ".join(
+                        f"`{alias['source_id']}`"
+                        for alias in primary_aliases))
+            for segment in hit.get("context", []):
+                role = segment["relation"].capitalize()
+                lines.append(
+                    f"**{role} context {segment['distance']}** "
+                    f"(`{segment['source_id']}`)")
+                context_text = segment["text"]
+                lines.append(
+                    f"\n{context_text[:500]}"
+                    f"{'...' if len(context_text) > 500 else ''}\n")
+                aliases = segment.get("equivalent_sources", [])
+                if aliases:
+                    lines.append(
+                        "**Equivalent source occurrences:** "
+                        + ", ".join(
+                            f"`{alias['source_id']}`" for alias in aliases))
             lines.append("---")
 
         return "\n".join(lines)
@@ -593,6 +653,9 @@ def build_app():
                 ch_dd = gr.Dropdown(choices=ch_choices, value="All",
                                     label="Chapter")
                 n_slider = gr.Slider(1, 20, value=5, step=1, label="Results")
+                context_slider = gr.Slider(
+                    0, rag.MAX_CONTEXT_WINDOW, value=0, step=1,
+                    label="Neighbor context")
 
             with gr.Row():
                 hybrid_cb = gr.Radio(
@@ -608,13 +671,13 @@ def build_app():
             search_btn.click(
                 do_search,
                 inputs=[query_box, type_dd, ch_dd, n_slider, hybrid_cb,
-                        rerank_cb],
+                        rerank_cb, context_slider],
                 outputs=results_md,
             )
             query_box.submit(
                 do_search,
                 inputs=[query_box, type_dd, ch_dd, n_slider, hybrid_cb,
-                        rerank_cb],
+                        rerank_cb, context_slider],
                 outputs=results_md,
             )
 

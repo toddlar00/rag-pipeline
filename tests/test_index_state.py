@@ -286,7 +286,8 @@ def test_manifest_persists_and_validates_quality_report_binding(tmp_path):
         quality_report_sha256=report_sha256)
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
-    assert manifest["quality_report_schema_version"] == 2
+    assert manifest["quality_report_schema_version"] == (
+        rag._quality_core.QUALITY_REPORT_SCHEMA_VERSION)
     assert manifest["quality_report_sha256"] == report_sha256
     assert rag._index_manifest_mismatch(
         manifest, backend="chroma", collection_name="cases",
@@ -296,11 +297,37 @@ def test_manifest_persists_and_validates_quality_report_binding(tmp_path):
         embedding_model="model") == 5
 
 
+def test_schema_v6_queries_remain_compatible_only_without_context(tmp_path):
+    manifest_path = rag._index_manifest_path(
+        tmp_path, backend="chroma", collection_name="cases")
+    rag._atomic_write_json(manifest_path, {
+        "schema_version": 6,
+        "backend": "chroma",
+        "collection": "cases",
+        "embedding_model": "model",
+        "embedding_dimension": 5,
+        "model_artifact_lock_sha256": rag._model_artifact_lock_sha256(),
+        "chunk_hashes": {},
+        "source_sha256": "b" * 64,
+        "source_record_count": 1,
+        "quality_report_schema_version": 2,
+        "quality_report_sha256": "a" * 64,
+    })
+
+    assert rag._query_manifest_dimension_impl(
+        tmp_path, backend="chroma", collection_name="cases",
+        embedding_model="model", allow_legacy=True) == 5
+    with pytest.raises(ValueError, match="schema_version"):
+        rag._query_manifest_dimension_impl(
+            tmp_path, backend="chroma", collection_name="cases",
+            embedding_model="model", allow_legacy=False)
+
+
 @pytest.mark.parametrize(("schema", "report_sha256"), [
     (None, "a" * 64),
     (1, None),
     (True, "a" * 64),
-    (3, "a" * 64),
+    (4, "a" * 64),
     (1, "short"),
     (1, "A" * 64),
 ])
@@ -325,7 +352,8 @@ def test_hybrid_snapshot_binds_adjacent_quality_report(tmp_path):
         chunk_hashes={},
         source_sha256=rag._cached_artifact_sha256(chunks_path),
         source_record_count=1,
-        quality_report_schema_version=2,
+        quality_report_schema_version=(
+            rag._quality_core.QUALITY_REPORT_SCHEMA_VERSION),
         quality_report_sha256=rag._cached_artifact_sha256(report_path))
 
     assert rag._require_hybrid_chunks_snapshot(

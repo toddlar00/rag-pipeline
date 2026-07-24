@@ -15,14 +15,16 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Iterable, Sequence
 
+import retrieval_core
 
-QUALITY_REPORT_SCHEMA_VERSION = 2
+QUALITY_REPORT_SCHEMA_VERSION = 3
 SOURCE_LINEAGE_SCHEMA_VERSION = 1
 MAX_QUALITY_REPORT_BYTES = 16 * 1024 * 1024
 _QUALITY_REPORT_FIELDS = {
     "schema_version", "kind", "status", "source", "parameters_sha256",
     "inputs", "embedding", "source_lineage", "tables", "corpus",
-    "normalization", "classification", "entities", "hashes", "checks",
+    "normalization", "classification", "entities", "retrieval", "hashes",
+    "checks",
 }
 _EMBEDDING_FIELDS = {
     "model", "limit", "raw_token_min", "raw_token_max", "raw_token_p50",
@@ -46,6 +48,10 @@ _CORPUS_FIELDS = {
     "page_metadata_issues", "page_regressions", "allowed_page_regressions",
     "unexpected_page_regressions", "structural_leaks",
     "chunk_index_issues", "canonical_duplicate_groups",
+}
+_RETRIEVAL_FIELDS = {
+    "schema_version", "context_parents", "linked_chunks",
+    "isolated_chunks", "issues",
 }
 
 _SOURCE_LABELS = {
@@ -81,6 +87,7 @@ _HARD_CHECK_NAMES = (
     "page_regressions",
     "structural_ranges_excluded",
     "contiguous_chunk_indexes",
+    "retrieval_linkage_invariants",
     "normalization_invariants",
     "raw_token_counts_present",
     "embedding_counts_present",
@@ -91,7 +98,7 @@ _HARD_CHECK_NAMES = (
     "table_invariants",
 )
 _WARNING_CHECK_NAMES = ("canonical_text_duplicates",)
-_SCHEMA_V1_CHECK_NAMES = frozenset(
+_QUALITY_CHECK_NAMES = frozenset(
     _HARD_CHECK_NAMES + _WARNING_CHECK_NAMES)
 _ZERO_COUNT_CHECK_NAMES = frozenset({
     "valid_chunk_hashes",
@@ -106,6 +113,7 @@ _ZERO_COUNT_CHECK_NAMES = frozenset({
     "page_regressions",
     "structural_ranges_excluded",
     "contiguous_chunk_indexes",
+    "retrieval_linkage_invariants",
     "normalization_invariants",
     "embedding_limit",
     "classification_invariants",
@@ -797,6 +805,10 @@ def build_quality_report(
     classification_issue_count = sum(map(len, classification_issues.values()))
     entity_issue_count = sum(map(len, entity_issues.values()))
     table_issue_count = sum(map(len, table_issues.values()))
+    retrieval = retrieval_core._retrieval_linkage_summary(
+        records, stable_ids=stable_ids)
+    retrieval_issue_count = sum(
+        len(indexes) for indexes in retrieval["issues"].values())
 
     checks = [
         _check("nonempty_corpus", failed=not records,
@@ -838,6 +850,9 @@ def build_quality_report(
                observed=len(structural_leaks), required=0),
         _check("contiguous_chunk_indexes", failed=bool(chunk_index_issues),
                observed=len(chunk_index_issues), required=0),
+        _check("retrieval_linkage_invariants",
+               failed=bool(retrieval_issue_count),
+               observed=retrieval_issue_count, required=0),
         _check("normalization_invariants",
                failed=bool(normalization_issue_count),
                observed=normalization_issue_count, required=0),
@@ -962,6 +977,7 @@ def build_quality_report(
                 if isinstance(name, str)
             }),
         },
+        "retrieval": retrieval,
         "hashes": {
             "stable_id_root_sha256": _sha256_lines(stable_ids),
             "chunk_hash_root_sha256": _sha256_lines(
@@ -1189,7 +1205,7 @@ def validate_quality_report(
                     or status != ("warn" if observed else "pass")):
                 raise ValueError(
                     "corpus quality report contains an invalid warning check")
-    if set(checks_by_name) != _SCHEMA_V1_CHECK_NAMES:
+    if set(checks_by_name) != _QUALITY_CHECK_NAMES:
         raise ValueError(
             "corpus quality report check set does not match schema")
     if len(checks_by_name) != len(checks):
@@ -1258,6 +1274,22 @@ def validate_quality_report(
                 for group in duplicate_groups)
             or warning_check.get("observed") != len(duplicate_groups)):
         raise ValueError("corpus quality report corpus details are invalid")
+    retrieval = payload.get("retrieval")
+    if (not isinstance(retrieval, dict)
+            or set(retrieval) != _RETRIEVAL_FIELDS
+            or retrieval.get("schema_version")
+            != retrieval_core.RETRIEVAL_LINKAGE_SCHEMA_VERSION
+            or not _is_nonnegative_int(retrieval.get("context_parents"))
+            or retrieval["context_parents"] > record_count
+            or not _is_nonnegative_int(retrieval.get("linked_chunks"))
+            or not _is_nonnegative_int(retrieval.get("isolated_chunks"))
+            or retrieval["linked_chunks"] + retrieval["isolated_chunks"]
+            != record_count
+            or not _valid_issue_mapping(
+                retrieval.get("issues"), record_count=record_count,
+                require_empty=True)):
+        raise ValueError(
+            "corpus quality report retrieval linkage gate is invalid")
     raw_token_count = (
         embedding.get("raw_token_count")
         if isinstance(embedding, dict) else None)
@@ -1303,6 +1335,12 @@ def validate_quality_report(
         if len(records) != record_count:
             raise ValueError(
                 "corpus quality report record summary input is misaligned")
+        expected_retrieval = retrieval_core._retrieval_linkage_summary(
+            records, stable_ids=list(stable_ids))
+        if retrieval != expected_retrieval:
+            raise ValueError(
+                "corpus quality report retrieval summary does not match "
+                "records")
         expected_types = Counter()
         expected_sources = Counter()
         expected_chapters = Counter()

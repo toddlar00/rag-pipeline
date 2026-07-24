@@ -334,7 +334,9 @@ def _query_manifest_dimension_impl(
         quality_report_schema_version: int,
         marker_path_fn: PathFn,
         manifest_path_fn: PathFn,
-        load_manifest_fn: ManifestLoaderFn) -> int | None:
+        load_manifest_fn: ManifestLoaderFn,
+        compatible_schema_bindings: tuple[tuple[int, int], ...] = (),
+) -> int | None:
     """Validate query/index compatibility and return the indexed dimension.
 
     Legacy collections without a manifest remain queryable. Once a manifest
@@ -361,8 +363,19 @@ def _query_manifest_dimension_impl(
             )
         return None
 
+    manifest_version = manifest.get("schema_version")
+    quality_policy_by_manifest = {
+        manifest_schema_version: quality_report_schema_version,
+        **dict(compatible_schema_bindings),
+    }
+    if manifest_version not in quality_policy_by_manifest:
+        raise ValueError(
+            "Query/index mismatch: manifest schema_version is "
+            f"{manifest_version!r}, expected one of "
+            f"{sorted(quality_policy_by_manifest)!r}. Re-run indexing or "
+            "query with the indexed embedding model."
+        )
     expected = {
-        "schema_version": manifest_schema_version,
         "backend": backend,
         "collection": collection_name,
         "embedding_model": embedding_model,
@@ -376,7 +389,9 @@ def _query_manifest_dimension_impl(
                 "or query with the indexed embedding model."
             )
     quality_mismatch = _quality_report_binding_mismatch(
-        manifest, quality_report_schema_version=quality_report_schema_version)
+        manifest,
+        quality_report_schema_version=(
+            quality_policy_by_manifest[manifest_version]))
     if quality_mismatch:
         raise ValueError(
             f"Index manifest has an invalid quality binding "

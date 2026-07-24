@@ -19,6 +19,36 @@ from typing import Any
 
 
 DEFAULT_RRF_K = 10
+RETRIEVAL_LINKAGE_SCHEMA_VERSION = 1
+MAX_CONTEXT_WINDOW = 2
+MAX_CONTEXT_CHARACTERS = 32_000
+MAX_CONTEXT_SEGMENT_CHARACTERS = 8_000
+DEFAULT_CONTEXT_MAX_CHARACTERS = 8_000
+DEFAULT_CONTEXT_SEGMENT_CHARACTERS = 1_600
+
+
+@dataclass(frozen=True)
+class ContextSourceAlias:
+    """Additional provenance for evidence rendered exactly once."""
+
+    source_id: str
+    metadata: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ContextSegment:
+    """One supplementary chunk attached to a ranked search hit.
+
+    A segment keeps its own stable ``source_id`` so generated answers can cite
+    it independently from the ranked hit that caused it to be assembled.
+    """
+
+    text: str
+    metadata: dict[str, Any]
+    source_id: str
+    relation: str
+    distance: int
+    source_aliases: tuple[ContextSourceAlias, ...] = ()
 
 
 @dataclass
@@ -29,6 +59,8 @@ class SearchHit:
     metadata: dict[str, Any]
     score: float
     source_id: str = ""
+    context_segments: list[ContextSegment] = field(default_factory=list)
+    source_aliases: list[ContextSourceAlias] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -44,7 +76,7 @@ class GroundedSource:
     source_id: str
     text: str
     metadata: dict[str, Any]
-    score: float
+    score: float | None
     excerpt: str = ""
 
 
@@ -61,16 +93,22 @@ class GroundedAnswer:
     def source_mapping(self, *, cited_only: bool = False) -> dict[str, dict]:
         """Return a JSON-ready mapping from ``S#`` labels to source details."""
         cited = set(self.citations)
-        return {
-            source.citation_id: {
+        result = {}
+        for source in self.sources:
+            if cited_only and source.citation_id not in cited:
+                continue
+            entry = {
                 "source_id": source.source_id,
-                "score": round(source.score, 4),
+                "score": (
+                    round(source.score, 4)
+                    if source.score is not None else None),
                 "metadata": source.metadata,
                 "excerpt": (source.excerpt or source.text)[:500],
             }
-            for source in self.sources
-            if not cited_only or source.citation_id in cited
-        }
+            if source.score is None:
+                entry["score_kind"] = "supplementary_context"
+            result[source.citation_id] = entry
+        return result
 
 
 @dataclass
@@ -90,6 +128,8 @@ class SearchResponse:
     warnings: list[str] = field(default_factory=list)
     candidate_depth: int = 0
     reranker_model: str | None = None
+    context_window: int = 0
+    context_characters: int = 0
 
 
 def _metadata_text(value: object) -> str:
@@ -265,6 +305,395 @@ def _chunk_id(rec: dict) -> str:
     return f"chunk_{digest}"
 
 
+_RETRIEVAL_LINKAGE_FIELDS = (
+    "retrieval_linkage_schema_version",
+    "stable_id",
+    "context_parent_id",
+    "previous_stable_id",
+    "next_stable_id",
+)
+_CONTEXT_METADATA_FIELDS = (
+    "source_file",
+    "content_type",
+    "content_source",
+    "chapter_num",
+    "chapter_title",
+    "section_path",
+    "primary_case",
+    "case_names",
+    "page_start",
+    "page_end",
+    "page_range",
+    "headings",
+    "cross_references",
+)
+
+
+def _context_metadata_projection(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Keep bounded, locating metadata for supplementary evidence."""
+    return {
+        key: metadata[key]
+        for key in _CONTEXT_METADATA_FIELDS
+        if key in metadata and metadata[key] not in (None, "", -1, [], {})
+    }
+
+
+def _context_parent_id(metadata: dict[str, Any]) -> str:
+    """Return the deterministic source/chapter context-group identity.
+
+    Unknown chapters are intentionally not assigned a context parent. This
+    prevents front matter or malformed records from acquiring neighbors merely
+    because they happen to be adjacent in the published JSONL order.
+    """
+    source_file = metadata.get("source_file")
+    chapter_num = metadata.get("chapter_num")
+    if (not isinstance(source_file, str) or not source_file.strip()
+            or isinstance(chapter_num, bool)
+            or not isinstance(chapter_num, int)):
+        return ""
+    payload = json.dumps(
+        {"source_file": source_file, "chapter_num": chapter_num},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+    return f"context_{digest}"
+
+
+def _attach_retrieval_linkage(
+        records: list[dict], *, stable_ids: list[str] | None = None,
+) -> list[str]:
+    """Attach exact stable adjacency after the corpus reaches final order."""
+    ids = list(stable_ids) if stable_ids is not None else [
+        _chunk_id(record) for record in records
+    ]
+    if (len(ids) != len(records)
+            or any(not isinstance(value, str) or not value for value in ids)):
+        raise ValueError("stable IDs must align one-to-one with records")
+    parents = [
+        _context_parent_id(record.get("metadata") or {})
+        for record in records
+    ]
+    for index, (record, stable_id, parent_id) in enumerate(
+            zip(records, ids, parents)):
+        metadata = record.get("metadata")
+        if not isinstance(metadata, dict):
+            raise ValueError("retrieval linkage requires object metadata")
+        previous_id = ""
+        next_id = ""
+        if index and parent_id and parents[index - 1] == parent_id:
+            previous_id = ids[index - 1]
+        if (index + 1 < len(records) and parent_id
+                and parents[index + 1] == parent_id):
+            next_id = ids[index + 1]
+        metadata.update({
+            "retrieval_linkage_schema_version": (
+                RETRIEVAL_LINKAGE_SCHEMA_VERSION),
+            "stable_id": stable_id,
+            "context_parent_id": parent_id,
+            "previous_stable_id": previous_id,
+            "next_stable_id": next_id,
+        })
+    return ids
+
+
+def _retrieval_linkage_issues(
+        records: list[dict] | tuple[dict, ...], *,
+        stable_ids: list[str] | tuple[str, ...] | None = None,
+) -> dict[str, list[int]]:
+    """Return every record whose stored linkage differs from exact order."""
+    ids = list(stable_ids) if stable_ids is not None else [
+        _chunk_id(record) for record in records
+    ]
+    if len(ids) != len(records):
+        raise ValueError("stable IDs must align one-to-one with records")
+    parents = [
+        _context_parent_id(record.get("metadata") or {})
+        for record in records
+    ]
+    issues: dict[str, list[int]] = {
+        "schema_version": [],
+        "stable_id": [],
+        "context_parent_id": [],
+        "previous_stable_id": [],
+        "next_stable_id": [],
+    }
+    for index, record in enumerate(records):
+        metadata = record.get("metadata")
+        if not isinstance(metadata, dict):
+            for indexes in issues.values():
+                indexes.append(index)
+            continue
+        expected_previous = (
+            ids[index - 1]
+            if index and parents[index] and parents[index - 1] == parents[index]
+            else ""
+        )
+        expected_next = (
+            ids[index + 1]
+            if (index + 1 < len(records) and parents[index]
+                and parents[index + 1] == parents[index])
+            else ""
+        )
+        expected = {
+            "retrieval_linkage_schema_version": (
+                RETRIEVAL_LINKAGE_SCHEMA_VERSION),
+            "stable_id": ids[index],
+            "context_parent_id": parents[index],
+            "previous_stable_id": expected_previous,
+            "next_stable_id": expected_next,
+        }
+        for link_field, issue_name in zip(
+                _RETRIEVAL_LINKAGE_FIELDS, issues, strict=True):
+            value = metadata.get(link_field)
+            if (link_field == "retrieval_linkage_schema_version"
+                    and isinstance(value, bool)):
+                issues[issue_name].append(index)
+            elif value != expected[link_field]:
+                issues[issue_name].append(index)
+    return {
+        name: indexes for name, indexes in issues.items() if indexes
+    }
+
+
+def _retrieval_linkage_summary(
+        records: list[dict] | tuple[dict, ...], *,
+        stable_ids: list[str] | tuple[str, ...] | None = None,
+) -> dict[str, Any]:
+    """Build deterministic quality evidence for adjacency metadata."""
+    parents = [
+        _context_parent_id(record.get("metadata") or {})
+        for record in records
+    ]
+    linked_chunks = sum(
+        bool((record.get("metadata") or {}).get("previous_stable_id")
+             or (record.get("metadata") or {}).get("next_stable_id"))
+        for record in records
+    )
+    return {
+        "schema_version": RETRIEVAL_LINKAGE_SCHEMA_VERSION,
+        "context_parents": len({value for value in parents if value}),
+        "linked_chunks": linked_chunks,
+        "isolated_chunks": len(records) - linked_chunks,
+        "issues": _retrieval_linkage_issues(
+            records, stable_ids=stable_ids),
+    }
+
+
+def _context_excerpt(text: str, relation: str, limit: int) -> str:
+    """Keep the continuation-facing edge of one neighboring chunk."""
+    if len(text) <= limit:
+        return text
+    if limit == 1:
+        return "\u2026"
+    if relation == "previous":
+        return "\u2026" + text[-(limit - 1):]
+    return text[:limit - 1] + "\u2026"
+
+
+_CONTEXT_HIT_IDENTITY_FIELDS = (
+    "source_file",
+    "chapter_num",
+    "content_type",
+    "page_start",
+    "page_end",
+    "page_range",
+    "section_path",
+)
+
+
+def _context_hit_matches_record(hit: SearchHit, record: dict,
+                                source_id: str) -> bool:
+    """Verify one vector payload against its exact manifested source row."""
+    if hit.text != record.get("text"):
+        return False
+    record_metadata = record.get("metadata")
+    if not isinstance(record_metadata, dict):
+        return False
+    if hit.metadata.get("stable_id") != source_id:
+        return False
+    for field_name in _CONTEXT_HIT_IDENTITY_FIELDS:
+        actual = hit.metadata.get(field_name)
+        expected = record_metadata.get(field_name)
+        if expected is None and actual in (None, "", -1):
+            continue
+        if actual != expected:
+            return False
+    return True
+
+
+def _assemble_retrieval_context(
+        response: SearchResponse, records: list[dict], *,
+        context_window: int,
+        content_type: str | None = None,
+        chapter_num: int | None = None,
+        max_characters: int = DEFAULT_CONTEXT_MAX_CHARACTERS,
+        segment_characters: int = DEFAULT_CONTEXT_SEGMENT_CHARACTERS,
+        source_id_fn: Callable[[SearchHit], str] | None = None,
+) -> SearchResponse:
+    """Attach filter-safe neighboring evidence without changing ranked hits."""
+    if (isinstance(context_window, bool) or not isinstance(context_window, int)
+            or not 0 <= context_window <= MAX_CONTEXT_WINDOW):
+        raise ValueError(
+            f"context_window must be an integer from 0 to {MAX_CONTEXT_WINDOW}")
+    if (isinstance(max_characters, bool) or not isinstance(max_characters, int)
+            or not 1 <= max_characters <= MAX_CONTEXT_CHARACTERS):
+        raise ValueError(
+            "context max characters must be an integer from 1 to "
+            f"{MAX_CONTEXT_CHARACTERS}")
+    if (isinstance(segment_characters, bool)
+            or not isinstance(segment_characters, int)
+            or not 1 <= segment_characters
+            <= MAX_CONTEXT_SEGMENT_CHARACTERS):
+        raise ValueError(
+            "context segment characters must be an integer from 1 to "
+            f"{MAX_CONTEXT_SEGMENT_CHARACTERS}")
+    response.context_window = context_window
+    response.context_characters = 0
+    for hit in response.hits:
+        hit.context_segments = []
+        hit.source_aliases = []
+    if context_window == 0 or not response.hits:
+        return response
+
+    if source_id_fn is None:
+        source_id_fn = _search_hit_source_id
+
+    issues = _retrieval_linkage_issues(records)
+    if issues:
+        raise ValueError("chunks artifact has invalid retrieval linkage")
+    records_by_id = {
+        str((record.get("metadata") or {}).get("stable_id")): record
+        for record in records
+    }
+    primary_ids = []
+    for hit in response.hits:
+        source_id = source_id_fn(hit)
+        hit.source_id = source_id
+        if source_id not in records_by_id:
+            raise ValueError(
+                "retrieved hit is not present in the exact chunks snapshot")
+        if not _context_hit_matches_record(
+                hit, records_by_id[source_id], source_id):
+            raise ValueError(
+                "retrieved hit payload does not match the exact chunks "
+                "snapshot")
+        primary_ids.append(source_id)
+    reserved_ids = set(primary_ids)
+    selected_ids: set[str] = set()
+    selected: list[list[ContextSegment]] = [
+        [] for _ in response.hits
+    ]
+    primary_text_owner: dict[str, int] = {}
+    for hit_index, source_id in enumerate(primary_ids):
+        primary_text_owner.setdefault(
+            str(records_by_id[source_id].get("text") or ""), hit_index)
+    selected_text_owner: dict[str, tuple[int, int]] = {}
+    consumed = 0
+
+    def linked_id(anchor_id: str, relation: str, distance: int) -> str:
+        current_id = anchor_id
+        field = (
+            "previous_stable_id" if relation == "previous"
+            else "next_stable_id")
+        for _ in range(distance):
+            current = records_by_id.get(current_id)
+            if current is None:
+                return ""
+            value = (current.get("metadata") or {}).get(field)
+            if not isinstance(value, str) or not value:
+                return ""
+            current_id = value
+        return current_id
+
+    # Breadth-first, rank-stable allocation prevents the first hit from
+    # consuming the entire supplementary evidence budget.
+    for distance in range(1, context_window + 1):
+        for hit_index, anchor_id in enumerate(primary_ids):
+            anchor_metadata = records_by_id[anchor_id]["metadata"]
+            for relation in ("previous", "next"):
+                candidate_id = linked_id(anchor_id, relation, distance)
+                if (not candidate_id or candidate_id in reserved_ids
+                        or candidate_id in selected_ids):
+                    continue
+                candidate = records_by_id.get(candidate_id)
+                if candidate is None:
+                    raise ValueError(
+                        "retrieval linkage references an unknown stable ID")
+                metadata = candidate.get("metadata") or {}
+                if (metadata.get("context_parent_id")
+                        != anchor_metadata.get("context_parent_id")
+                        or not metadata.get("context_parent_id")
+                        or metadata.get("source_file")
+                        != anchor_metadata.get("source_file")
+                        or metadata.get("chapter_num")
+                        != anchor_metadata.get("chapter_num")):
+                    raise ValueError(
+                        "retrieval linkage crosses a source or chapter boundary")
+                if (content_type is not None
+                        and metadata.get("content_type") != content_type):
+                    continue
+                if (chapter_num is not None
+                        and metadata.get("chapter_num") != chapter_num):
+                    continue
+                candidate_text = str(candidate.get("text") or "")
+                if not candidate_text:
+                    continue
+                projected_metadata = _context_metadata_projection(metadata)
+                alias = ContextSourceAlias(
+                    source_id=candidate_id,
+                    metadata=projected_metadata,
+                )
+                primary_owner = primary_text_owner.get(candidate_text)
+                if primary_owner is not None:
+                    response.hits[primary_owner].source_aliases.append(alias)
+                    selected_ids.add(candidate_id)
+                    continue
+                context_owner = selected_text_owner.get(candidate_text)
+                if context_owner is not None:
+                    owner_hit, owner_segment = context_owner
+                    existing = selected[owner_hit][owner_segment]
+                    selected[owner_hit][owner_segment] = ContextSegment(
+                        text=existing.text,
+                        metadata=existing.metadata,
+                        source_id=existing.source_id,
+                        relation=existing.relation,
+                        distance=existing.distance,
+                        source_aliases=existing.source_aliases + (alias,),
+                    )
+                    selected_ids.add(candidate_id)
+                    continue
+                excerpt = _context_excerpt(
+                    candidate_text, relation,
+                    segment_characters)
+                if not excerpt or consumed + len(excerpt) > max_characters:
+                    continue
+                selected[hit_index].append(ContextSegment(
+                    text=excerpt,
+                    metadata=projected_metadata,
+                    source_id=candidate_id,
+                    relation=relation,
+                    distance=distance,
+                ))
+                selected_text_owner[candidate_text] = (
+                    hit_index, len(selected[hit_index]) - 1)
+                selected_ids.add(candidate_id)
+                consumed += len(excerpt)
+
+    for hit, segments in zip(response.hits, selected):
+        hit.context_segments = sorted(
+            segments,
+            key=lambda item: (
+                0 if item.relation == "previous" else 1,
+                -item.distance if item.relation == "previous"
+                else item.distance,
+            ),
+        )
+    response.context_characters = consumed
+    return response
+
+
 def _reciprocal_rank_fusion(
         results_lists: list[list[tuple]], k: int = DEFAULT_RRF_K,
         top_n: int = 5, weights: list[float] | tuple[float, ...] | None = None,
@@ -329,6 +758,7 @@ def _build_chroma_where(content_type: str | None = None,
 
 
 _ANSWER_SOURCE_LIMIT = 5
+_ANSWER_CONTEXT_SOURCE_LIMIT = 10
 _ANSWER_SOURCE_CHAR_LIMIT = 2400
 _INSUFFICIENT_EVIDENCE_TEXT = (
     "Insufficient evidence in the retrieved sources to answer this question."
@@ -358,7 +788,8 @@ def _useful_source_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     """Keep non-empty retrieval metadata for prompts and source mappings."""
     return {
         key: value for key, value in metadata.items()
-        if value not in (None, "", -1, [], {})
+        if (key not in _RETRIEVAL_LINKAGE_FIELDS
+            and value not in (None, "", -1, [], {}))
     }
 
 
@@ -397,22 +828,77 @@ def _grounded_sources(
     """Build a ranked, de-duplicated source registry for answer generation."""
     sources = []
     seen_source_ids = set()
-    for hit in response.hits:
-        source_id = source_id_fn(hit)
-        hit.source_id = source_id
+
+    def with_aliases(
+            metadata: dict[str, Any],
+            aliases: list[ContextSourceAlias]
+            | tuple[ContextSourceAlias, ...],
+    ) -> dict[str, Any]:
+        result = dict(metadata)
+        if aliases:
+            result["equivalent_sources"] = [
+                {
+                    "source_id": alias.source_id,
+                    "metadata": alias.metadata,
+                }
+                for alias in aliases
+            ]
+        return result
+
+    def add_source(
+            *, source_id: str, text: str, metadata: dict[str, Any],
+            score: float | None, excerpt: str,
+    ) -> None:
         if source_id in seen_source_ids:
-            continue
+            return
         seen_source_ids.add(source_id)
         sources.append(GroundedSource(
             citation_id=f"S{len(sources) + 1}",
             source_id=source_id,
+            text=text,
+            metadata=_useful_source_metadata(metadata),
+            score=score,
+            excerpt=excerpt,
+        ))
+
+    # Ranked primaries always retain the first citation slots. Supplementary
+    # neighbors are added afterward under their own stable source identities.
+    for hit in response.hits:
+        source_id = source_id_fn(hit)
+        hit.source_id = source_id
+        add_source(
+            source_id=source_id,
             text=hit.text,
-            metadata=_useful_source_metadata(hit.metadata),
+            metadata=with_aliases(hit.metadata, hit.source_aliases),
             score=hit.score,
             excerpt=_query_centered_excerpt(hit.text, query),
-        ))
+        )
         if len(sources) >= _ANSWER_SOURCE_LIMIT:
             break
+    primary_source_ids = {source.source_id for source in sources}
+    context_limit = _ANSWER_SOURCE_LIMIT + _ANSWER_CONTEXT_SOURCE_LIMIT
+    for hit in response.hits:
+        if hit.source_id not in primary_source_ids:
+            continue
+        for segment in hit.context_segments:
+            metadata = {
+                **with_aliases(
+                    segment.metadata, segment.source_aliases),
+                "context_role": segment.relation,
+                "context_distance": segment.distance,
+                "primary_source_id": hit.source_id,
+            }
+            add_source(
+                source_id=segment.source_id,
+                text=segment.text,
+                metadata=metadata,
+                score=None,
+                excerpt=_context_excerpt(
+                    segment.text, segment.relation,
+                    _ANSWER_SOURCE_CHAR_LIMIT),
+            )
+            if len(sources) >= context_limit:
+                return sources
     return sources
 
 

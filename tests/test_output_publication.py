@@ -28,7 +28,7 @@ def _write_chunks(path: Path, records: list[dict]) -> None:
 
 
 def _lineaged_record() -> dict:
-    return {
+    record = {
         "text": "A source-backed discussion of professional responsibility.",
         "metadata": {
             "chunk_index": 0,
@@ -54,6 +54,8 @@ def _lineaged_record() -> dict:
             "primary_case": None,
         },
     }
+    rag._retrieval_core._attach_retrieval_linkage([record])
+    return record
 
 
 def _write_quality_source(path: Path) -> None:

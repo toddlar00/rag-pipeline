@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 import quality_core
+import retrieval_core
 
 
 def _source_item(ref: str, page: int, *, label: str = "text",
@@ -33,6 +34,7 @@ def _record(index: int, ref: str, page: int, *, text: str = "Source text",
         "page_start": page,
         "page_end": page,
         "chapter_num": 1,
+        "source_file": "book.json",
         "content_type": content_type,
         "content_source": content_source,
         "token_count": 4,
@@ -72,6 +74,11 @@ def _build(records: list[dict], document: dict, **overrides) -> dict:
         },
     }
     values.update(overrides)
+    if not all(
+            "retrieval_linkage_schema_version" in record["metadata"]
+            for record in values["records"]):
+        retrieval_core._attach_retrieval_linkage(
+            values["records"], stable_ids=values["stable_ids"])
     return quality_core.build_quality_report(**values)
 
 
@@ -197,6 +204,37 @@ def test_build_quality_report_passes_and_is_deterministic():
     assert first["hashes"]["unique_stable_ids"] == 1
     assert json.dumps(first, sort_keys=True, separators=(",", ":")) == (
         json.dumps(second, sort_keys=True, separators=(",", ":")))
+
+
+def test_retrieval_linkage_is_attested_and_fails_closed_on_tampering():
+    document = {"texts": [
+        _source_item("#/texts/0", 1),
+        _source_item("#/texts/1", 2),
+    ]}
+    records = [
+        _record(0, "#/texts/0", 1, text="First source passage"),
+        _record(1, "#/texts/1", 2, text="Second source passage"),
+    ]
+    report = _build(records, document)
+
+    assert report["status"] == "pass"
+    assert report["retrieval"] == {
+        "schema_version": 1,
+        "context_parents": 1,
+        "linked_chunks": 2,
+        "isolated_chunks": 0,
+        "issues": {},
+    }
+
+    records[0]["metadata"]["next_stable_id"] = (
+        records[0]["metadata"]["stable_id"])
+    tampered = _build(records, document)
+    assert tampered["status"] == "fail"
+    assert tampered["retrieval"]["issues"] == {"next_stable_id": [0]}
+    check = next(
+        item for item in tampered["checks"]
+        if item["name"] == "retrieval_linkage_invariants")
+    assert check["status"] == "fail"
 
 
 def test_missing_source_identity_is_a_hard_failure():

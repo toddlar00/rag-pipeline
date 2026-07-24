@@ -1106,6 +1106,7 @@ def _quality_fixture(tmp_path):
         "text": "Source-backed professional responsibility discussion.",
         "metadata": {
             "chunk_index": 0,
+            "source_file": "book",
             "source_lineage_schema_version": 1,
             "source_items": [{
                 "ref": "#/texts/0", "label": "text",
@@ -1118,6 +1119,7 @@ def _quality_fixture(tmp_path):
             "primary_case": None,
         },
     }
+    rag._retrieval_core._attach_retrieval_linkage([record])
     rag._atomic_write_jsonl(chunks, [record])
     parameters = {"embedding_model": "model-a"}
     inputs = _write_chunk_v3(document, chunks, parameters)

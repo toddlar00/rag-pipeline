@@ -32,6 +32,7 @@ from pathlib import Path
 
 import evaluation_metrics
 import model_artifacts
+import retrieval_core
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -614,6 +615,11 @@ def run_search(query: str, db_path: Path, *,
                rrf_k: int = DEFAULT_RRF_K,
                dense_weight: float = DEFAULT_DENSE_WEIGHT,
                sparse_weight: float = DEFAULT_SPARSE_WEIGHT,
+               context_window: int = 0,
+               context_max_characters: int = (
+                   retrieval_core.DEFAULT_CONTEXT_MAX_CHARACTERS),
+               context_segment_characters: int = (
+                   retrieval_core.DEFAULT_CONTEXT_SEGMENT_CHARACTERS),
                lock_timeout: float = DEFAULT_DB_LOCK_TIMEOUT) -> list[dict]:
     """Run a search and return results as plain dictionaries."""
     import rag  # lazy import to avoid loading models at import time
@@ -632,6 +638,9 @@ def run_search(query: str, db_path: Path, *,
         "rrf_k": rrf_k,
         "dense_weight": dense_weight,
         "sparse_weight": sparse_weight,
+        "context_window": context_window,
+        "context_max_characters": context_max_characters,
+        "context_segment_characters": context_segment_characters,
         "lock_timeout": lock_timeout,
     }
     if chunks_path is not None:
@@ -642,6 +651,32 @@ def run_search(query: str, db_path: Path, *,
         {"text": hit.text, "metadata": hit.metadata, "score": hit.score}
         for hit in response.hits
     ]
+    if getattr(response, "context_window", 0):
+        for result, hit in zip(results, response.hits):
+            result["equivalent_sources"] = [
+                {
+                    "source_id": alias.source_id,
+                    "metadata": alias.metadata,
+                }
+                for alias in hit.source_aliases
+            ]
+            result["context"] = [
+                {
+                    "text": segment.text,
+                    "metadata": segment.metadata,
+                    "source_id": segment.source_id,
+                    "relation": segment.relation,
+                    "distance": segment.distance,
+                    "equivalent_sources": [
+                        {
+                            "source_id": alias.source_id,
+                            "metadata": alias.metadata,
+                        }
+                        for alias in segment.source_aliases
+                    ],
+                }
+                for segment in hit.context_segments
+            ]
     if ((chunk_identity_lookup is not None
          or (chunks_path is not None and chunks_path.is_file()))
             and any("chunk_id" not in _result_identifiers(result)
@@ -816,6 +851,8 @@ def _slice_slug(value: str) -> str:
 def _evaluate_grounding_case(
         results: list[dict], query_text: str, case: dict) -> tuple[float, dict]:
     from retrieval_core import (
+        ContextSegment,
+        ContextSourceAlias,
         SearchHit,
         SearchResponse,
         _grounded_sources,
@@ -825,13 +862,36 @@ def _evaluate_grounding_case(
     hits = []
     for result in results:
         identifiers = _result_identifiers(result)
-        hits.append(SearchHit(
+        hit = SearchHit(
             text=str(result.get("text", "")),
             metadata=dict(result.get("metadata") or {}),
             score=float(result.get("score") or 0.0),
             source_id=identifiers.get("chunk_id")
             or identifiers.get("source_id") or "",
-        ))
+        )
+        for segment in result.get("context") or []:
+            hit.context_segments.append(ContextSegment(
+                text=str(segment.get("text") or ""),
+                metadata=dict(segment.get("metadata") or {}),
+                source_id=str(segment.get("source_id") or ""),
+                relation=str(segment.get("relation") or ""),
+                distance=int(segment.get("distance") or 0),
+                source_aliases=tuple(
+                    ContextSourceAlias(
+                        source_id=str(alias.get("source_id") or ""),
+                        metadata=dict(alias.get("metadata") or {}),
+                    )
+                    for alias in segment.get("equivalent_sources") or []
+                ),
+            ))
+        hit.source_aliases = [
+            ContextSourceAlias(
+                source_id=str(alias.get("source_id") or ""),
+                metadata=dict(alias.get("metadata") or {}),
+            )
+            for alias in result.get("equivalent_sources") or []
+        ]
+        hits.append(hit)
     response = SearchResponse(
         hits=hits, backend="evaluation", requested_mode="evaluation",
         effective_mode="evaluation", reranker_applied=False)
@@ -1400,6 +1460,18 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--sparse-weight", type=float, default=DEFAULT_SPARSE_WEIGHT,
         help=f"Chroma lexical-list RRF weight (default: {DEFAULT_SPARSE_WEIGHT})")
+    parser.add_argument(
+        "--context-window", type=int, default=0,
+        choices=range(retrieval_core.MAX_CONTEXT_WINDOW + 1), metavar="N",
+        help="Attach N neighboring chunks for grounding ablations")
+    parser.add_argument(
+        "--context-max-characters", type=int,
+        default=retrieval_core.DEFAULT_CONTEXT_MAX_CHARACTERS,
+        help="Total supplementary context character budget")
+    parser.add_argument(
+        "--context-segment-characters", type=int,
+        default=retrieval_core.DEFAULT_CONTEXT_SEGMENT_CHARACTERS,
+        help="Maximum characters retained from each neighbor")
     parser.add_argument("--k", type=int, nargs="+", default=[5, 10],
                         help="Cutoffs for Success, Recall, and nDCG")
     parser.add_argument(
@@ -1473,6 +1545,9 @@ def _report_config(args, **overrides) -> dict:
         "rrf_k": args.rrf_k,
         "dense_weight": args.dense_weight,
         "sparse_weight": args.sparse_weight,
+        "context_window": args.context_window,
+        "context_max_characters": args.context_max_characters,
+        "context_segment_characters": args.context_segment_characters,
         **overrides,
     }
     if args.report_detail == "summary":
@@ -1506,8 +1581,10 @@ def _main_with_args(args, parser: argparse.ArgumentParser) -> int:
     if args.retriever == "index" and (args.db is None or not args.collection):
         parser.error("--db and --collection are required with --retriever index")
     if args.retriever == "bm25" and (
-            args.hybrid is not None or args.reranker is not None):
-        parser.error("hybrid and reranker flags do not apply to offline BM25")
+            args.hybrid is not None or args.reranker is not None
+            or args.context_window):
+        parser.error(
+            "hybrid, reranker, and context flags do not apply to offline BM25")
     if args.max_regression and not args.baseline_report:
         parser.error("--max-regression requires --baseline-report")
     if args.baseline_report and not args.max_regression:
@@ -1518,6 +1595,15 @@ def _main_with_args(args, parser: argparse.ArgumentParser) -> int:
         parser.error("--overfetch must be from 1 to 20")
     if args.rrf_k < 1:
         parser.error("--rrf-k must be a positive integer")
+    if not 0 <= args.context_window <= retrieval_core.MAX_CONTEXT_WINDOW:
+        parser.error("--context-window is outside the supported range")
+    if not 1 <= args.context_max_characters <= (
+            retrieval_core.MAX_CONTEXT_CHARACTERS):
+        parser.error("--context-max-characters is outside the supported range")
+    if not 1 <= args.context_segment_characters <= (
+            retrieval_core.MAX_CONTEXT_SEGMENT_CHARACTERS):
+        parser.error(
+            "--context-segment-characters is outside the supported range")
     if (not math.isfinite(args.dense_weight)
             or not math.isfinite(args.sparse_weight)
             or args.dense_weight < 0 or args.sparse_weight < 0
@@ -1630,6 +1716,9 @@ def _main_with_args(args, parser: argparse.ArgumentParser) -> int:
             "rrf_k": args.rrf_k,
             "dense_weight": args.dense_weight,
             "sparse_weight": args.sparse_weight,
+            "context_window": args.context_window,
+            "context_max_characters": args.context_max_characters,
+            "context_segment_characters": args.context_segment_characters,
         })
     storage_target = args.db if args.retriever == "index" else args.chunks
     storage = evaluation_metrics.measure_path(storage_target)

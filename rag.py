@@ -208,6 +208,8 @@ class VectorStoreBusyError(TimeoutError):
 
 
 SearchHit = _retrieval_core.SearchHit
+ContextSourceAlias = _retrieval_core.ContextSourceAlias
+ContextSegment = _retrieval_core.ContextSegment
 GroundedSource = _retrieval_core.GroundedSource
 GroundedAnswer = _retrieval_core.GroundedAnswer
 SearchResponse = _retrieval_core.SearchResponse
@@ -232,6 +234,14 @@ RERANK_OVERFETCH = 4  # retrieve N*4 from ChromaDB, rerank to N
 DEFAULT_RRF_K = _retrieval_core.DEFAULT_RRF_K
 DEFAULT_DENSE_RRF_WEIGHT = 0.5
 DEFAULT_SPARSE_RRF_WEIGHT = 1.0
+MAX_CONTEXT_WINDOW = _retrieval_core.MAX_CONTEXT_WINDOW
+MAX_CONTEXT_CHARACTERS = _retrieval_core.MAX_CONTEXT_CHARACTERS
+MAX_CONTEXT_SEGMENT_CHARACTERS = (
+    _retrieval_core.MAX_CONTEXT_SEGMENT_CHARACTERS)
+DEFAULT_CONTEXT_MAX_CHARACTERS = (
+    _retrieval_core.DEFAULT_CONTEXT_MAX_CHARACTERS)
+DEFAULT_CONTEXT_SEGMENT_CHARACTERS = (
+    _retrieval_core.DEFAULT_CONTEXT_SEGMENT_CHARACTERS)
 
 # Direct Python callers retain the historical uncached behavior. ``main``
 # enables the persistent cache for CLI LLM workflows unless explicitly
@@ -247,7 +257,8 @@ _CONTEXT_TOKEN_RESERVE = 192
 
 # Incremental vector-index metadata. Bump this whenever the indexed payload or
 # vector layout changes in a way that requires rebuilding existing collections.
-INDEX_MANIFEST_SCHEMA_VERSION = 6
+INDEX_MANIFEST_SCHEMA_VERSION = 7
+_LEGACY_QUERY_SCHEMA_BINDINGS = ((6, 2),)
 
 # Content type labels for LLM classification prompt
 _CONTENT_LABELS = [
@@ -7373,7 +7384,7 @@ def _chunk_parameters(*, embedding_model: str, max_tokens: int,
         gemini_key or os.environ.get("GEMINI_API_KEY", ""))
     llm_config = _llm_runtime.config
     return {
-        "chunking_policy_version": 20,
+        "chunking_policy_version": 21,
         "classification_prompt_version": 1,
         "embedding_model": embedding_model,
         "max_tokens": max_tokens,
@@ -8658,6 +8669,10 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
     for i, rec in enumerate(enriched):
         rec["metadata"]["chunk_index"] = i
 
+    # Stable adjacency is meaningful only after every filter, merge, and
+    # deduplication decision has established the canonical published order.
+    _retrieval_core._attach_retrieval_linkage(enriched)
+
     _validate_chunk_structure_for_publication(
         enriched,
         scaffold=scaffold,
@@ -9537,7 +9552,8 @@ def _save_index_manifest(
 
 def _query_manifest_dimension_impl(
         db_dir: Path, *, backend: str, collection_name: str,
-        embedding_model: str) -> int | None:
+        embedding_model: str,
+        allow_legacy: bool = True) -> int | None:
     """Validate query/index compatibility and return the indexed dimension.
 
     Legacy collections without a manifest remain queryable. Once a manifest
@@ -9553,12 +9569,15 @@ def _query_manifest_dimension_impl(
             _quality_core.QUALITY_REPORT_SCHEMA_VERSION),
         marker_path_fn=_index_update_marker_path,
         manifest_path_fn=_index_manifest_path,
-        load_manifest_fn=_load_index_manifest)
+        load_manifest_fn=_load_index_manifest,
+        compatible_schema_bindings=(
+            _LEGACY_QUERY_SCHEMA_BINDINGS if allow_legacy else ()))
 
 
 def _query_manifest_dimension(
         db_dir: Path, *, backend: str, collection_name: str,
         embedding_model: str,
+        allow_legacy: bool = True,
         lock_timeout: float = DEFAULT_DB_LOCK_TIMEOUT) -> int | None:
     """Validate query/index compatibility under the database lease."""
     with _vector_store_lock(
@@ -9566,7 +9585,7 @@ def _query_manifest_dimension(
             operation="manifest inspection", timeout=lock_timeout):
         return _query_manifest_dimension_impl(
             db_dir, backend=backend, collection_name=collection_name,
-            embedding_model=embedding_model)
+            embedding_model=embedding_model, allow_legacy=allow_legacy)
 
 
 _artifact_sha256_cache: dict[
@@ -10152,11 +10171,17 @@ def query_index_qdrant(query: str, qdrant_dir: Path, *,
                        output_json: bool = False,
                        use_reranker: bool | None = None,
                        hybrid: bool | None = None,
+                       chunks_path: Path = DEFAULT_CHUNKS_PATH,
                        reranker_model: str = DEFAULT_RERANKER_MODEL,
                        overfetch: int = RERANK_OVERFETCH,
                        rrf_k: int = DEFAULT_RRF_K,
                        dense_weight: float = DEFAULT_DENSE_RRF_WEIGHT,
                        sparse_weight: float = DEFAULT_SPARSE_RRF_WEIGHT,
+                       context_window: int = 0,
+                       context_max_characters: int = (
+                           DEFAULT_CONTEXT_MAX_CHARACTERS),
+                       context_segment_characters: int = (
+                           DEFAULT_CONTEXT_SEGMENT_CHARACTERS),
                        answer: bool = False,
                        cloud_url: str = DEFAULT_CLOUD_URL,
                        cloud_model: str = DEFAULT_CLOUD_MODEL,
@@ -10174,8 +10199,12 @@ def query_index_qdrant(query: str, qdrant_dir: Path, *,
             content_type=content_type, chapter_num=chapter_num,
             collection_name=collection_name, embedding_model=embedding_model,
             use_reranker=use_reranker, hybrid=hybrid,
+            chunks_path=chunks_path,
             reranker_model=reranker_model, overfetch=overfetch, rrf_k=rrf_k,
             dense_weight=dense_weight, sparse_weight=sparse_weight,
+            context_window=context_window,
+            context_max_characters=context_max_characters,
+            context_segment_characters=context_segment_characters,
             lock_timeout=lock_timeout,
         )
     except (FileNotFoundError, LookupError) as exc:
@@ -10568,6 +10597,11 @@ def _search_index_impl(query: str, db_dir: Path, *,
                        rrf_k: int = DEFAULT_RRF_K,
                        dense_weight: float = DEFAULT_DENSE_RRF_WEIGHT,
                        sparse_weight: float = DEFAULT_SPARSE_RRF_WEIGHT,
+                       context_window: int = 0,
+                       context_max_characters: int = (
+                           DEFAULT_CONTEXT_MAX_CHARACTERS),
+                       context_segment_characters: int = (
+                           DEFAULT_CONTEXT_SEGMENT_CHARACTERS),
                        lock_timeout: float = DEFAULT_DB_LOCK_TIMEOUT,
                        ) -> SearchResponse:
     """Search either supported vector backend and return structured results.
@@ -10589,6 +10623,24 @@ def _search_index_impl(query: str, db_dir: Path, *,
         raise ValueError("overfetch must be an integer from 1 to 20")
     if isinstance(rrf_k, bool) or not isinstance(rrf_k, int) or rrf_k < 1:
         raise ValueError("rrf_k must be a positive integer")
+    if (isinstance(context_window, bool)
+            or not isinstance(context_window, int)
+            or not 0 <= context_window <= MAX_CONTEXT_WINDOW):
+        raise ValueError(
+            f"context_window must be an integer from 0 to {MAX_CONTEXT_WINDOW}")
+    if (isinstance(context_max_characters, bool)
+            or not isinstance(context_max_characters, int)
+            or not 1 <= context_max_characters <= MAX_CONTEXT_CHARACTERS):
+        raise ValueError(
+            "context_max_characters must be an integer from 1 to "
+            f"{MAX_CONTEXT_CHARACTERS}")
+    if (isinstance(context_segment_characters, bool)
+            or not isinstance(context_segment_characters, int)
+            or not 1 <= context_segment_characters
+            <= MAX_CONTEXT_SEGMENT_CHARACTERS):
+        raise ValueError(
+            "context_segment_characters must be an integer from 1 to "
+            f"{MAX_CONTEXT_SEGMENT_CHARACTERS}")
     try:
         dense_weight = float(dense_weight)
         sparse_weight = float(sparse_weight)
@@ -10608,6 +10660,14 @@ def _search_index_impl(query: str, db_dir: Path, *,
         "auto" if hybrid is None else "hybrid" if hybrid else "vector")
     warnings: list[str] = []
     chunks_file = Path(chunks_path)
+    context_records: list[dict] | None = None
+    context_source_sha256: str | None = None
+    if context_window:
+        if not chunks_file.is_file():
+            raise FileNotFoundError(
+                f"Context assembly requires chunks JSONL: {chunks_file}")
+        context_records, context_source_sha256, _, _ = (
+            _load_index_snapshot_with_quality(chunks_file))
     hybrid_enabled = (
         backend == "qdrant" or chunks_file.is_file()) if hybrid is None else hybrid
     if backend == "qdrant" and hybrid_enabled and rrf_k != DEFAULT_RRF_K:
@@ -10628,12 +10688,24 @@ def _search_index_impl(query: str, db_dir: Path, *,
         db_path = _storage_policy.ensure_private_tree(db_path)
         expected_dimension = _query_manifest_dimension(
             db_path, backend=backend, collection_name=collection_name,
-            embedding_model=embedding_model)
+            embedding_model=embedding_model,
+            allow_legacy=not bool(context_window))
         hybrid_source_sha256 = None
-        if backend == "chroma" and hybrid_enabled and chunks_file.is_file():
-            hybrid_source_sha256 = _require_hybrid_chunks_snapshot(
+        if context_records is not None:
+            manifested_source_sha256 = _require_hybrid_chunks_snapshot(
                 chunks_file, db_path, backend=backend,
                 collection_name=collection_name)
+            if (manifested_source_sha256 is None
+                    or manifested_source_sha256 != context_source_sha256):
+                raise ValueError(
+                    "Context chunks snapshot does not match the indexed corpus")
+            if backend == "chroma":
+                hybrid_source_sha256 = manifested_source_sha256
+        if backend == "chroma" and hybrid_enabled and chunks_file.is_file():
+            if hybrid_source_sha256 is None:
+                hybrid_source_sha256 = _require_hybrid_chunks_snapshot(
+                    chunks_file, db_path, backend=backend,
+                    collection_name=collection_name)
             if hybrid_source_sha256 is None:
                 _record_search_warning(
                     warnings,
@@ -10704,13 +10776,24 @@ def _search_index_impl(query: str, db_dir: Path, *,
             text=doc, metadata=dict(meta or {}), score=float(score))
         hit.source_id = _search_hit_source_id(hit)
         hits.append(hit)
-    return SearchResponse(
+    response = SearchResponse(
         hits=hits, backend=backend, requested_mode=requested_mode,
         effective_mode=effective_mode,
         reranker_applied=reranker_applied, warnings=warnings,
         candidate_depth=fetch_n,
         reranker_model=reranker_model if reranker_applied else None,
     )
+    if context_records is not None:
+        _retrieval_core._assemble_retrieval_context(
+            response, context_records,
+            context_window=context_window,
+            content_type=content_type,
+            chapter_num=chapter_num,
+            max_characters=context_max_characters,
+            segment_characters=context_segment_characters,
+            source_id_fn=_search_hit_source_id,
+        )
+    return response
 
 
 def search_index(query: str, db_dir: Path, *,
@@ -10728,6 +10811,11 @@ def search_index(query: str, db_dir: Path, *,
                  rrf_k: int = DEFAULT_RRF_K,
                  dense_weight: float = DEFAULT_DENSE_RRF_WEIGHT,
                  sparse_weight: float = DEFAULT_SPARSE_RRF_WEIGHT,
+                 context_window: int = 0,
+                 context_max_characters: int = (
+                     DEFAULT_CONTEXT_MAX_CHARACTERS),
+                 context_segment_characters: int = (
+                     DEFAULT_CONTEXT_SEGMENT_CHARACTERS),
                  lock_timeout: float = DEFAULT_DB_LOCK_TIMEOUT,
                  ) -> SearchResponse:
     """Search a coherent local index generation under its exclusive lease."""
@@ -10742,6 +10830,9 @@ def search_index(query: str, db_dir: Path, *,
             hybrid=hybrid, chunks_path=chunks_path,
             reranker_model=reranker_model, overfetch=overfetch, rrf_k=rrf_k,
             dense_weight=dense_weight, sparse_weight=sparse_weight,
+            context_window=context_window,
+            context_max_characters=context_max_characters,
+            context_segment_characters=context_segment_characters,
             lock_timeout=lock_timeout)
     db_path = Path(db_dir)
     return _search_index_impl(
@@ -10752,6 +10843,9 @@ def search_index(query: str, db_dir: Path, *,
         hybrid=hybrid, chunks_path=chunks_path,
         reranker_model=reranker_model, overfetch=overfetch, rrf_k=rrf_k,
         dense_weight=dense_weight, sparse_weight=sparse_weight,
+        context_window=context_window,
+        context_max_characters=context_max_characters,
+        context_segment_characters=context_segment_characters,
         lock_timeout=lock_timeout)
 
 
@@ -10824,16 +10918,42 @@ def _write_search_output(query: str, response: SearchResponse, *,
                          content_type: str | None,
                          chapter_num: int | None) -> None:
     """Render structured results using the existing CLI/JSON schema."""
-    output_hits = [
-        {
+    output_hits = []
+    for hit in response.hits:
+        output_hit = {
             "score": round(hit.score, 4),
             "search_mode": response.effective_mode,
             "reranked": response.reranker_applied,
             "text": hit.text,
             "metadata": hit.metadata,
         }
-        for hit in response.hits
-    ]
+        if response.context_window:
+            output_hit["source_id"] = hit.source_id
+            output_hit["equivalent_sources"] = [
+                {
+                    "source_id": alias.source_id,
+                    "metadata": alias.metadata,
+                }
+                for alias in hit.source_aliases
+            ]
+            output_hit["context"] = [
+                {
+                    "source_id": segment.source_id,
+                    "relation": segment.relation,
+                    "distance": segment.distance,
+                    "text": segment.text,
+                    "metadata": segment.metadata,
+                    "equivalent_sources": [
+                        {
+                            "source_id": alias.source_id,
+                            "metadata": alias.metadata,
+                        }
+                        for alias in segment.source_aliases
+                    ],
+                }
+                for segment in hit.context_segments
+            ]
+        output_hits.append(output_hit)
     if output_json:
         payload: object = output_hits
         if llm_answer:
@@ -10911,6 +11031,11 @@ def _write_search_output(query: str, response: SearchResponse, *,
         if context:
             print(f"  Context: {context}")
         print(f"  Text:    {hit.text[:300]}...")
+        for segment in hit.context_segments:
+            label = f"{segment.relation} {segment.distance}"
+            print(
+                f"  Neighbor ({label}, {segment.source_id}): "
+                f"{segment.text[:300]}...")
         print()
 
 
@@ -10929,6 +11054,11 @@ def query_index(query: str, chroma_dir: Path, *,
                 rrf_k: int = DEFAULT_RRF_K,
                 dense_weight: float = DEFAULT_DENSE_RRF_WEIGHT,
                 sparse_weight: float = DEFAULT_SPARSE_RRF_WEIGHT,
+                context_window: int = 0,
+                context_max_characters: int = (
+                    DEFAULT_CONTEXT_MAX_CHARACTERS),
+                context_segment_characters: int = (
+                    DEFAULT_CONTEXT_SEGMENT_CHARACTERS),
                 answer: bool = False,
                 cloud_url: str = DEFAULT_CLOUD_URL,
                 cloud_model: str = DEFAULT_CLOUD_MODEL,
@@ -10949,6 +11079,9 @@ def query_index(query: str, chroma_dir: Path, *,
             chunks_path=chunks_path,
             reranker_model=reranker_model, overfetch=overfetch, rrf_k=rrf_k,
             dense_weight=dense_weight, sparse_weight=sparse_weight,
+            context_window=context_window,
+            context_max_characters=context_max_characters,
+            context_segment_characters=context_segment_characters,
             lock_timeout=lock_timeout,
         )
     except (FileNotFoundError, LookupError) as exc:
@@ -12829,7 +12962,6 @@ def _query_index_for_backend(query_text: str, db_dir: Path, *,
                              db_backend: str, **kwargs) -> None:
     """Dispatch a CLI query while preserving the backend-specific wrappers."""
     if db_backend == "qdrant":
-        kwargs.pop("chunks_path", None)
         query_index_qdrant(query_text, db_dir, **kwargs)
     else:
         query_index(query_text, db_dir, **kwargs)
@@ -13967,7 +14099,22 @@ def main(argv: list[str] | None = None):
         "--vector-only", dest="hybrid", action="store_const", const=False,
         help="Disable lexical retrieval and use vector search only")
     p_q.add_argument("--chunks", type=Path, default=DEFAULT_CHUNKS_PATH,
-                     help="Chunks JSONL for BM25 (ChromaDB hybrid only)")
+                     help="Exact chunks JSONL for hybrid/context retrieval")
+    p_q.add_argument(
+        "--context-window", type=int, default=0,
+        choices=range(MAX_CONTEXT_WINDOW + 1), metavar="N",
+        help="Attach up to N preceding/following chunks per ranked hit "
+             f"(default: 0; maximum: {MAX_CONTEXT_WINDOW})")
+    p_q.add_argument(
+        "--context-max-characters", type=int,
+        default=DEFAULT_CONTEXT_MAX_CHARACTERS,
+        help="Total supplementary context character budget (default: "
+             f"{DEFAULT_CONTEXT_MAX_CHARACTERS})")
+    p_q.add_argument(
+        "--context-segment-characters", type=int,
+        default=DEFAULT_CONTEXT_SEGMENT_CHARACTERS,
+        help="Maximum characters retained from each neighbor (default: "
+             f"{DEFAULT_CONTEXT_SEGMENT_CHARACTERS})")
     p_q.add_argument(
         "--reranker-model", default=DEFAULT_RERANKER_MODEL,
         help=f"Cross-encoder/API reranker (default: {DEFAULT_RERANKER_MODEL})")
@@ -14383,6 +14530,10 @@ def main(argv: list[str] | None = None):
                       rrf_k=args.rrf_k,
                       dense_weight=args.dense_weight,
                       sparse_weight=args.sparse_weight,
+                      context_window=args.context_window,
+                      context_max_characters=args.context_max_characters,
+                      context_segment_characters=(
+                          args.context_segment_characters),
                       lock_timeout=args.db_lock_timeout,
                       answer=args.answer,
                       **llm_kwargs)
@@ -15066,6 +15217,14 @@ def interactive_menu():
             args.append("--rerank")
         elif reranker_mode == "off":
             args.append("--no-rerank")
+
+        context_window = _menu_choose("Neighbor context:", [
+            ("0", "Off — ranked chunks only (default)"),
+            ("1", "One preceding/following chunk"),
+            ("2", "Two preceding/following chunks"),
+        ])
+        if context_window != "0":
+            args.extend(["--context-window", context_window])
 
         if _menu_yesno("Generate answer from results?", default=False):
             args.append("--answer")
