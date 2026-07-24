@@ -52,6 +52,7 @@ import model_artifacts as _model_artifacts
 import operation_contracts as _operation_contracts
 import operational_metrics as _operational_metrics
 import process_supervision as _process_supervision
+import provider_transport as _provider_transport
 import quality_core as _quality_core
 import release_security as _release_security
 import retention as _retention
@@ -737,12 +738,17 @@ def _get_embedding_fn(
                     auth=_llm_adapters._BearerAuth(api_key),
                     json={"input": texts, "model": self._name,
                           "input_type": self._role},
-                    timeout=60, allow_redirects=False,
+                    timeout=60, allow_redirects=False, stream=True,
                 )
-                _require_no_cloud_redirect(response, "Voyage embedding")
-                response.raise_for_status()
+                payload = _read_provider_json_response(
+                    response,
+                    feature="Voyage embedding",
+                    max_bytes=(
+                        _provider_transport.EMBEDDING_RESPONSE_MAX_BYTES),
+                    deadline_seconds=60,
+                )
                 return _data_embedding_vectors(
-                    response.json(), expected_count=len(texts),
+                    payload, expected_count=len(texts),
                     provider="Voyage")
 
             def __call__(self, input: Documents) -> Embeddings:
@@ -782,11 +788,15 @@ def _get_embedding_fn(
                             "search_query" if self._role == "query"
                             else "search_document"),
                     },
-                    timeout=60, allow_redirects=False,
+                    timeout=60, allow_redirects=False, stream=True,
                 )
-                _require_no_cloud_redirect(response, "Cohere embedding")
-                response.raise_for_status()
-                payload = response.json()
+                payload = _read_provider_json_response(
+                    response,
+                    feature="Cohere embedding",
+                    max_bytes=(
+                        _provider_transport.EMBEDDING_RESPONSE_MAX_BYTES),
+                    deadline_seconds=60,
+                )
                 if not isinstance(payload, dict):
                     raise RuntimeError("Cohere returned an invalid response")
                 return _validated_embedding_vectors(
@@ -821,16 +831,23 @@ def _get_embedding_fn(
                     headers={"Accept": "application/json"},
                     auth=_llm_adapters._BearerAuth(api_key),
                     json={"model": self._name, "input": texts},
-                    timeout=60, allow_redirects=False,
+                    timeout=60, allow_redirects=False, stream=True,
                 )
-                _require_no_cloud_redirect(response, "OpenAI embedding")
-                response.raise_for_status()
+                payload = _read_provider_json_response(
+                    response,
+                    feature="OpenAI embedding",
+                    max_bytes=(
+                        _provider_transport.EMBEDDING_RESPONSE_MAX_BYTES),
+                    deadline_seconds=60,
+                )
                 return _data_embedding_vectors(
-                    response.json(), expected_count=len(texts),
+                    payload, expected_count=len(texts),
                     provider="OpenAI")
 
             def __call__(self, input: Documents) -> Embeddings:
-                BATCH = 2048  # OpenAI allows large batches
+                # Keep a legitimate 3,072-dimension response comfortably below
+                # the decoded 32 MiB provider-response ceiling.
+                BATCH = 256
                 if len(input) <= BATCH:
                     return self._embed(list(input))
                 all_embs: Embeddings = []
@@ -4465,9 +4482,18 @@ def _provider_call_error(exc: BaseException, *,
 
 def _post_loopback_without_environment(url: str, **kwargs):
     """POST to a literal loopback target without ambient proxy settings."""
-    with requests.Session() as session:
-        session.trust_env = False
-        return session.post(url, **kwargs)
+    session = requests.Session()
+    session.trust_env = False
+    kwargs.setdefault("stream", True)
+    try:
+        return _provider_transport.OwnedHttpResponse(
+            session.post(url, **kwargs), session)
+    except BaseException:
+        try:
+            session.close()
+        except Exception:
+            pass
+        raise
 
 
 _DEFAULT_RELEASE_SECURITY_POLICY = _release_security.ReleaseSecurityPolicy()
@@ -4489,15 +4515,41 @@ def _post_cloud_with_policy(
         url: str, **kwargs):
     """POST with ambient proxy/CA/netrc state disabled unless reviewed."""
     policy = _effective_security_policy(policy)
-    with requests.Session() as session:
-        session.trust_env = policy.trust_environment_network
-        return session.post(url, **kwargs)
+    session = requests.Session()
+    session.trust_env = policy.trust_environment_network
+    kwargs.setdefault("stream", True)
+    try:
+        return _provider_transport.OwnedHttpResponse(
+            session.post(url, **kwargs), session)
+    except BaseException:
+        try:
+            session.close()
+        except Exception:
+            pass
+        raise
 
 
 def _require_no_cloud_redirect(response: object, feature: str) -> None:
     status_code = getattr(response, "status_code", None)
     if isinstance(status_code, int) and 300 <= status_code < 400:
         raise RuntimeError(f"{feature} endpoint returned a redirect")
+
+
+def _read_provider_json_response(
+        response: object, *, feature: str, max_bytes: int,
+        deadline_seconds: float) -> object:
+    """Validate status then consume one owned provider response safely."""
+    try:
+        _require_no_cloud_redirect(response, feature)
+        response.raise_for_status()
+    except BaseException:
+        _provider_transport.close_http_response(response)
+        raise
+    return _provider_transport.read_bounded_json_response(
+        response,
+        max_bytes=max_bytes,
+        deadline_seconds=deadline_seconds,
+    )
 
 
 def _require_endpoint_egress(
@@ -5228,12 +5280,16 @@ def _rerank(query: str, documents: list[str], metadatas: list[dict],
             auth=_llm_adapters._BearerAuth(api_key),
             json={"model": model_id, "query": query,
                   "documents": reranker_documents, "top_n": top_k},
-            timeout=60, allow_redirects=False,
+            timeout=60, allow_redirects=False, stream=True,
         )
-        _require_no_cloud_redirect(resp, "Cohere reranker")
-        resp.raise_for_status()
+        payload = _read_provider_json_response(
+            resp,
+            feature="Cohere reranker",
+            max_bytes=_provider_transport.RERANK_RESPONSE_MAX_BYTES,
+            deadline_seconds=60,
+        )
         rows = _validated_reranker_rows(
-            resp.json(), document_count=len(documents), top_k=top_k,
+            payload, document_count=len(documents), top_k=top_k,
             provider="Cohere")
         return (
             [documents[index] for index, _ in rows],
@@ -5254,11 +5310,16 @@ def _rerank(query: str, documents: list[str], metadatas: list[dict],
                   "documents": reranker_documents, "top_n": top_k},
             timeout=60,
             allow_redirects=False,
+            stream=True,
         )
-        _require_no_cloud_redirect(resp, "Jina reranker")
-        resp.raise_for_status()
+        payload = _read_provider_json_response(
+            resp,
+            feature="Jina reranker",
+            max_bytes=_provider_transport.RERANK_RESPONSE_MAX_BYTES,
+            deadline_seconds=60,
+        )
         rows = _validated_reranker_rows(
-            resp.json(), document_count=len(documents), top_k=top_k,
+            payload, document_count=len(documents), top_k=top_k,
             provider="Jina")
         return (
             [documents[index] for index, _ in rows],

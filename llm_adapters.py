@@ -20,6 +20,7 @@ from urllib.parse import urlparse
 import requests
 
 import endpoint_policy
+import provider_transport
 from llm_runtime import LLMBudgetExceeded, ProviderCallError, ProviderResponse
 
 
@@ -31,7 +32,9 @@ class HttpResponseProtocol(Protocol):
 
     def raise_for_status(self) -> None: ...
 
-    def json(self) -> object: ...
+    def iter_content(self, *, chunk_size: int): ...
+
+    def close(self) -> None: ...
 
 
 class HttpPostFn(Protocol):
@@ -139,6 +142,14 @@ def _provider_error_category(exc: BaseException) -> str:
     """Map provider/transport exceptions to a fixed, secret-safe category."""
     if isinstance(exc, ProviderCallError):
         return exc.category
+    if isinstance(exc, (
+            provider_transport.ProviderResponseDeadlineExceeded,
+            provider_transport.ProviderResponseReadTimeout)):
+        return "timeout"
+    if isinstance(exc, provider_transport.ProviderResponseReadError):
+        return "connection_error"
+    if isinstance(exc, provider_transport.ProviderResponseRejected):
+        return "invalid_response"
     if isinstance(exc, requests.exceptions.Timeout):
         return "timeout"
     if isinstance(exc, requests.exceptions.ConnectionError):
@@ -192,6 +203,15 @@ def _provider_call_error(
         error_category_fn(exc), transport_attempts=transport_attempts)
 
 
+def _close_response_error(response: object) -> BaseException | None:
+    """Close without losing the caller's throttle/accounting path."""
+    try:
+        provider_transport.close_http_response(response)
+    except Exception as exc:
+        return exc
+    return None
+
+
 def _call_ollama_result(
         prompt: str, *, url: str, model: str,
         thinking: bool, max_tokens: int, timeout: int,
@@ -224,12 +244,26 @@ def _call_ollama_result(
             json=payload,
             timeout=timeout,
             allow_redirects=False,
+            stream=True,
         )
         if 300 <= resp.status_code < 400:
+            cleanup_error = _close_response_error(resp)
+            if cleanup_error is not None:
+                raise cleanup_error
             raise ProviderCallError(
                 "configuration_error", transport_attempts=1)
-        resp.raise_for_status()
-        body = resp.json()
+        try:
+            resp.raise_for_status()
+        except Exception:
+            cleanup_error = _close_response_error(resp)
+            if cleanup_error is not None:
+                raise cleanup_error from None
+            raise
+        body = provider_transport.read_bounded_json_response(
+            resp,
+            max_bytes=provider_transport.LLM_RESPONSE_MAX_BYTES,
+            deadline_seconds=timeout,
+        )
         if not isinstance(body, dict) or not isinstance(
                 body.get("response"), str):
             raise ProviderCallError("invalid_response")
@@ -535,6 +569,7 @@ def _call_openai_compatible_result(
                 json=payload,
                 timeout=timeout,
                 allow_redirects=False,
+                stream=True,
             )
         except LLMBudgetExceeded:
             throttle.release_error()
@@ -545,15 +580,25 @@ def _call_openai_compatible_result(
                 exc, transport_attempts=attempt + 1) from None
 
         if 300 <= resp.status_code < 400:
+            cleanup_error = _close_response_error(resp)
             throttle.release_error()
+            if cleanup_error is not None:
+                raise provider_call_error_fn(
+                    cleanup_error,
+                    transport_attempts=attempt + 1) from None
             raise ProviderCallError(
                 "configuration_error", transport_attempts=attempt + 1)
         if resp.status_code == 429:
+            retry_after_value = resp.headers.get("Retry-After", "2")
+            cleanup_error = _close_response_error(resp)
             throttle.release_429()
+            if cleanup_error is not None:
+                raise provider_call_error_fn(
+                    cleanup_error,
+                    transport_attempts=attempt + 1) from None
+            retry_after = retry_after_fn(retry_after_value)
             if attempt == 0:
                 transient_errors.append("rate_limited")
-                retry_after = retry_after_fn(
-                    resp.headers.get("Retry-After", "2"))
                 sleep_fn(retry_after)
                 continue
             raise ProviderCallError(
@@ -561,7 +606,19 @@ def _call_openai_compatible_result(
 
         try:
             resp.raise_for_status()
-            body = resp.json()
+        except Exception as exc:
+            cleanup_error = _close_response_error(resp)
+            error = cleanup_error if cleanup_error is not None else exc
+            throttle.release_error()
+            raise provider_call_error_fn(
+                error, transport_attempts=attempt + 1) from None
+
+        try:
+            body = provider_transport.read_bounded_json_response(
+                resp,
+                max_bytes=provider_transport.LLM_RESPONSE_MAX_BYTES,
+                deadline_seconds=timeout,
+            )
             if not isinstance(body, dict):
                 raise ProviderCallError("invalid_response")
             choices = body.get("choices")

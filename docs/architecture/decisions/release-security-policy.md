@@ -103,7 +103,19 @@ Requests session with:
 - finite 60-second deadlines;
 - redirects disabled and every 3xx response rejected;
 - explicit redacted bearer authentication; and
-- no implicit provider-SDK retries or ambient base-URL selection.
+- no implicit provider-SDK retries or ambient base-URL selection;
+- session-owned streaming through response close; and
+- strict JSON MIME/UTF-8/framing/depth validation before parsing, with decoded
+  ceilings of 32 MiB for embeddings and 8 MiB for reranking.
+
+OpenAI-compatible and Ollama generation use the same reader with a 16 MiB
+decoded ceiling. It permits absent `Content-Length` for legitimate chunked
+responses, but rejects malformed, oversized, ambiguous, or dishonest lengths.
+Decoded-byte accounting bounds compression expansion; duplicate fields,
+non-standard numbers, excessive nesting, invalid UTF-8, and truncated JSON fail
+with body-free diagnostics. The streaming phase has an overall operation
+deadline in addition to the Requests per-read timeout. Response and owning
+session close on success and every rejection path.
 
 Gemini explicitly selects non-Vertex mode, its reviewed
 `generativelanguage.googleapis.com` base, the current stable
@@ -112,6 +124,10 @@ matching sync/async HTTPX environment trust. Deprecated sampling parameters
 are omitted; the request's thinking flag maps to high/minimal thinking. The
 client cache is keyed by API key and transport-trust mode so trusted and
 untrusted clients cannot be reused across policy changes.
+The Google SDK materializes Gemini's typed response before this application
+adapter receives it, so this decision does not claim the Requests byte ceiling
+for Gemini. R2 must prove an equivalent SDK transport limit or replace that path
+with an owned REST transport before the all-provider ceiling is complete.
 
 The reviewed MiniMax generation default is M3. Its adapter uses
 `max_completion_tokens`, temperature zero, an explicit adaptive/disabled
@@ -226,7 +242,7 @@ documentation decision, corpus-owner evaluation approval, exact-head human
 review, external network controls, encrypted cache design, or a future
 authenticated multi-user product.
 
-R2 must re-audit these transport assumptions whenever Requests, HTTPX,
+R2 must close the Gemini response-ceiling gap and re-audit these transport assumptions whenever Requests, HTTPX,
 google-genai, Hugging Face Hub, or provider packages change. R5 must compose
 this record into the first release manifest, and R7 must keep the provider
 transport and no-network matrices as security-critical coverage targets.

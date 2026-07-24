@@ -41,7 +41,7 @@ Status terms:
 | Table-specific retrieval | Implemented (draft) | [PR #37](https://github.com/toddlar00/rag-pipeline/pull/37): optional caption/header-propagated row children, source-wide continued-table eligibility, deterministic repeated-fragment identity, exact parent/child and source-shape attestation, family-aware result collapse, independent citations, and canonical-consumer isolation. A disposable Ethics run produced 69 children and returned the exact requested demographic row first |
 | Table-family evaluation correctness | Implemented locally | Commits `e6c91c7` and `b1c7dd1` add explicit owner-selected child aliases, a sealed corpus-bound attestation API, exact-once logical-qrel scoring, exact/accepted-child match provenance, grounding isolation, packet-size preflight, schema-v6 reports/baselines, and a 10-record/6-query CC0 CLI suite with hard-negative upper and lower gates. The actual Ethics table/context ablations and owner approval remain outstanding |
 | Public UI and cloud-endpoint safety | Implemented locally | The R0A candidate removes the Gradio share path, binds `127.0.0.1` explicitly, centralizes versioned endpoint attestation before credential/cache/transport access, rejects redirects and ambiguous targets, isolates loopback proxies, prevents ambient `.netrc` credential replacement, and validates job persistence. It passes the full 1,678-test tree and an independent exploit-oriented audit |
-| Residual local/cloud trust boundary | Implemented locally | R0B adds versioned release-security policy v1 across CLI/Python/UI/service/evaluation/workers/jobs: trusted-single-user UI opt-in, local-only egress, release inline-secret rejection and cache-off default, opaque custom-gateway tenancy, cache-only model loading with explicit verified sync, pinned provider transports, policy-controlled proxy/CA trust, disabled auxiliary telemetry, and strict provenance. The exact local tree passes 1,771 tests with 7 skips |
+| Residual local/cloud trust boundary | Implemented locally | R0B adds versioned release-security policy v1 across CLI/Python/UI/service/evaluation/workers/jobs: trusted-single-user UI opt-in, local-only egress, release inline-secret rejection and cache-off default, opaque custom-gateway tenancy, cache-only model loading with explicit verified sync, pinned provider transports, bounded streamed JSON for every Requests-owned provider path, policy-controlled proxy/CA trust, disabled auxiliary telemetry, and strict provenance. The exact local tree passes 1,805 tests with 7 skips |
 | Ethics retrieval calibration | Owner review pending | [PR #43](https://github.com/toddlar00/rag-pipeline/pull/43): a current-schema clean-room rebuild preserved all 20 unique IDs behind 24 judgments in the exact 1,715-record corpus. A private owner packet now combines those judgments with 195 unique top-10 candidates across four modes, while a content-free receipt and strict four-mode release-policy contract make promotion explicit and review-bound. Actual owner decisions and final thresholds remain outstanding |
 | Process supervision extraction | Implemented (draft) | [PR #33](https://github.com/toddlar00/rag-pipeline/pull/33): deadline supervision, Windows/POSIX containment, startup gates, termination confirmation, and generic entrypoint policy moved to stdlib-only `process_supervision.py`; `rag.py` retains late-bound compatibility wrappers |
 | Vector-index lifecycle extraction | Implemented (draft) | [PR #38](https://github.com/toddlar00/rag-pipeline/pull/38): a standard-library-only policy layer owns deterministic reconciliation, dirty-marker ownership, mutation epochs, exact-ID verification, callback-reentry exclusion, legacy-hash repair, and close/manifest/marker commit ordering |
@@ -692,7 +692,7 @@ are a snapshot, not release claims:
 - The pre-R0A statement-coverage probe reported 75% over application and tool
   code when tests were omitted. That number is directional: branch coverage is
   disabled and separately launched workers are not automatically combined. CI
-  does not currently measure coverage. The current R0B tree passes 1,771 tests
+  does not currently measure coverage. The current local tree passes 1,805 tests
   with 7 platform skips. The run emits 429 dependency deprecation warnings on Python
   3.14, primarily from FastAPI/Starlette's `asyncio.iscoroutinefunction`
   compatibility path.
@@ -702,7 +702,7 @@ are a snapshot, not release claims:
   PR #43 `py_compile` list is stale, however: it omits several current modules.
   The current R0 branch replaces it with a tested, deterministic compile of all
   Git-tracked Python sources; the current exact inventory
-  contains 118 files.
+  contains 120 files.
 - Four supply-chain exceptions expire on 2026-08-31: the Chroma vulnerability
   exception, normalized Torch and Torchvision audit skips, the PyMuPDF license
   exception, and FlagEmbedding's missing wheel-license metadata allowance.
@@ -748,7 +748,7 @@ done separate; “code exists” does not imply “integrated” or “owner app
 |---|---|---|---|---|---|
 | R0 repository/privacy truth | Mechanical work local | Current full suite includes it | Not published | Private-source data classes/history/PR surfaces require owner decision | Record decision, audit tree/GitHub/artifacts, reconcile #32 |
 | R0A endpoint/exposure | Local commit `db029ce` | 1,678-test checkpoint; current full tree remains green | Not published | Exact cumulative security review absent | Include unchanged in R1 candidate |
-| R0B release security | Implemented locally | 1,771 tests; dedicated hostile transport/policy coverage | Not published | Exact cumulative security review absent | Publish with R1, replay in R2 |
+| R0B release security | Implemented locally | 1,805 tests; dedicated hostile transport/policy coverage | Not published | Exact cumulative security review absent | Publish with R1, replay in R2 |
 | R1 convergence | Not created | Prior stacked heads are green, not composable evidence | No current cumulative PR beyond #38 | Independent named review and manual merge gate required | Restore workflow-scoped auth and open one exact-head PR |
 | R2 dependencies/licenses | PR #30 is an unsuitable bulk proposal | Universal-lock check fails; four exceptions expire 2026-08-31 | Separate open PR, excluded from R1 | PyMuPDF/repository/license decisions need owner | Split by compatibility domain, relock, replay transports |
 | R3 Ethics calibration | Review/receipt machinery in #43 | Content-free receipt path is tested; private decisions absent | Draft PR #43 | Corpus owner must decide judgments/abstention/thresholds | Complete owner review without agent-fabricated approval |
@@ -764,8 +764,8 @@ done separate; “code exists” does not imply “integrated” or “owner app
 
 ## Architecture and risk map
 
-The proposed tree contains 118 Python files: 53 application/tool files
-(51,078 lines) and 65 test files (36,151 lines). Size is not itself a defect,
+The proposed tree contains 120 Python files: 54 application/tool files
+(51,494 lines) and 66 test files (36,566 lines). Size is not itself a defect,
 but it makes the remaining concentration and dependency risks measurable.
 
 | Surface | Current strength | Material remaining risk | Roadmap owner |
@@ -777,7 +777,7 @@ but it makes the remaining concentration and dependency risks measurable.
 | Jobs, service, and recovery | Integrated durable jobs/service plus PRs #41/#42 provide containment, terminal evidence, cancellation, recovery, queue metrics, and real fault drills | `job_manager` imports `rag`, while `rag` lazily imports `job_manager`; POSIX descendants can deliberately escape the process group with `setsid()`, so worker extensions remain trusted code rather than sandboxed plugins | R5, R8 |
 | UI and exposure boundary | Local Search, Export, Info, and Jobs use bounded workers/private storage; local R0A removes public sharing and R0B refuses startup without explicit trusted-single-user acknowledgement | Shared-host or remote UI remains unsupported and needs principal authentication plus origin/session controls as a separate product | R1, R12 |
 | Supply chain | Universal hash locks, model byte locks, SBOM/ML-BOM, scheduled advisory/license checks, and real-client profiles are unusually strong | PR #30 is an unreviewable 13-package jump with stale locks; four policy exceptions expire 2026-08-31; Python 3.14 emits 429 dependency warnings | R2 |
-| Static quality and architecture | Extracted leaves, direct failure injection, 1,771 passing tests, exhaustive source compilation, and a wide OS/Python matrix reduce regression risk | No branch/subprocess coverage ratchet, no type checker, minimal Ruff rules, and no enforced import DAG; `rag.main` remains too large | R7-R9 |
+| Static quality and architecture | Extracted leaves, direct failure injection, 1,805 passing tests, exhaustive source compilation, and a wide OS/Python matrix reduce regression risk | No branch/subprocess coverage ratchet, no type checker, minimal Ruff rules, and no enforced import DAG; `rag.main` remains too large | R7-R9 |
 | Release and governance | The repository is private, PR evidence is detailed, and exact-head migration rehearsals exist | Thirteen project PRs (#31-#43) remain draft: twelve are stacked implementation PRs, while #32 is a superseded standalone design; the cumulative PR stops at #38, no review is submitted, no live issues/milestones exist, and there is no tag/release/rollback manifest | R0, R1, R5 |
 | Documentation and product entry | README, `docs/README.md`, developer guide, maintained ADRs, and clearly historical Claude plans expose most operator/design knowledge | The README exceeds 2,600 lines; point-in-time evidence bloats this roadmap; vector lifecycle/table retrieval/source generation still lack ADRs; private-source policy remains unresolved | R0, R12 |
 
@@ -1010,7 +1010,10 @@ Hub request on first use.
 - Voyage, OpenAI, and Cohere embedding plus Cohere/Jina reranking data paths use
   fixed reviewed HTTPS origins, finite deadlines, explicit bearer auth, zero
   implicit SDK retries, policy-controlled Requests environment trust, redirect
-  refusal, and strict response validation. Unsupported MiniMax embedding IDs
+  refusal, and strict response validation. All five paths plus OpenAI-compatible
+  generation and Ollama now retain session ownership through bounded streaming,
+  enforce JSON MIME/UTF-8/framing/depth and decoded-byte ceilings before parsing,
+  and discard body-free failures. Unsupported MiniMax embedding IDs
   fail closed instead of calling an undocumented contract.
 - Generation defaults and payloads were reconciled with current provider
   contracts: Gemini uses live stable `gemini-3.6-flash`, omits deprecated
@@ -1036,20 +1039,23 @@ Hub request on first use.
   `docs/architecture/decisions/release-security-policy.md` and the operator
   commands in README use the new defaults.
 
-The exact local tree passes Ruff and the full suite: **1,771 passed, 7 skipped**
+The exact local tree passes Ruff and the full suite: **1,805 passed, 7 skipped**
 with the already tracked 429 dependency deprecation warnings. The dedicated
-41-test boundary suite covers all API embedding families, both cloud reranker
+43-test release-boundary suite covers all API embedding families, both cloud reranker
 families, hostile ambient endpoints/provider modes, Requests and Gemini
 environment trust, redirects, malformed/non-finite response data, installed
 google-genai transport construction, inline-secret redaction, local Ollama,
 Chroma telemetry, and local-only ambient-key behavior. The broader focused
-security/service/model/provider/search coverage is included in the full run.
+security/service/model/provider/search coverage is included in the full run;
+31 additional provider-transport tests own the MIME, framing, decoded-size,
+compression, nesting, timeout, safe-diagnostic, and cleanup matrix.
 
 **Residual release work.** R1 must publish, run cross-platform CI on, and obtain
 independent review of this exact cumulative tree. R2 must replay the transport
-matrix against upgraded dependency versions and provider schemas. Provider JSON
-responses still need explicit byte/shape ceilings before parsing so a hostile or
-misconfigured API cannot force unbounded memory use; this is tracked in R2/R7.
+matrix against upgraded dependency versions and provider schemas. The seven
+Requests-owned JSON paths now have explicit pre-parse ceilings and an adversarial
+matrix; Gemini still materializes through google-genai and needs an equivalent
+SDK ceiling or an owned REST replacement before this is an all-provider claim.
 URL and application policy do not
 attest OS DNS, routing, firewall, or a deliberately trusted interception proxy;
 deployments that require destination enforcement must supply external egress
@@ -1141,10 +1147,12 @@ dependency update.
   payload remains a reviewed source change. This prevents another retired
   default model, undocumented embedding endpoint, or stale context limit from
   surviving until a production call.
-- Bound every provider response before JSON materialization using both a
-  conservative `Content-Length` check and streamed byte ceiling, then retain
-  the existing strict shape/numeric validation. Cover absent, malformed, and
-  dishonest length headers without logging response bodies.
+- **Implemented locally for the seven Requests-owned paths:** bound responses
+  before JSON materialization using both a conservative `Content-Length` check
+  and decoded streamed-byte ceiling, while retaining strict shape/numeric
+  validation. The matrix covers absent, malformed, ambiguous, and dishonest
+  lengths without logging bodies. Prove an equivalent limit in google-genai or
+  replace Gemini with the owned transport before closing the all-provider item.
 - Treat the current Python 3.14 warning inventory as migration evidence rather
   than harmless noise. Upgrade or constrain FastAPI/Starlette/websockets and
   the SWIG-backed clients so supported versions have an owned, budgeted warning
@@ -1388,11 +1396,13 @@ a disruptive whole-repository rewrite.
   property/state-machine tests for strict JSON schemas, ownership markers,
   publication recovery, pagination, and policy parsing; do not use a high
   percentage target as a substitute for failure-injection quality.
-- Add adversarial provider-transport tests for wrong MIME types and oversized,
-  deeply nested, decompression-expanded, chunked, truncated, or slow JSON.
-  Prove the streamed response-byte ceiling fires before parsing and that
+- **Implemented locally for the seven Requests-owned paths:** adversarial tests
+  cover wrong MIME, oversized, deeply nested, decompression-expanded, chunked,
+  truncated, duplicate-field, non-standard-number, invalid-UTF-8, and slow JSON.
+  They prove the streamed decoded-byte ceiling fires before parsing and that
   diagnostics remain body- and credential-free when `Content-Length` is absent,
-  malformed, or dishonest.
+  malformed, ambiguous, or dishonest. Extend the same invariant to Gemini when
+  its R2 transport decision is made.
 - Add a narrowly configured static security scan after triaging its baseline;
   gate new high-confidence credential, URL, subprocess, unsafe-deserialization,
   and path-handling findings rather than accepting a permanent suppression

@@ -1190,12 +1190,27 @@ def test_jina_reranker_has_a_deadline_and_refuses_redirects(monkeypatch):
 
     class Response:
         status_code = 200
+        payload = {"results": [{"index": 0, "relevance_score": 0.9}]}
+        body = json.dumps(payload).encode("utf-8")
+        headers = {
+            "Content-Type": "application/json",
+            "Content-Length": str(len(body)),
+        }
 
         def raise_for_status(self):
             return None
 
         def json(self):
-            return {"results": [{"index": 0, "relevance_score": 0.9}]}
+            pytest.fail("provider path must not eagerly call response.json()")
+
+        def iter_content(self, *, chunk_size):
+            yield from (
+                self.body[offset:offset + chunk_size]
+                for offset in range(0, len(self.body), chunk_size)
+            )
+
+        def close(self):
+            return None
 
     def post(url, **kwargs):
         observed.update(url=url, **kwargs)
@@ -1219,18 +1234,23 @@ def test_jina_reranker_has_a_deadline_and_refuses_redirects(monkeypatch):
     assert observed["url"] == "https://api.jina.ai/v1/rerank"
     assert observed["timeout"] == 60
     assert observed["allow_redirects"] is False
+    assert observed["stream"] is True
     assert isinstance(observed["auth"], rag._llm_adapters._BearerAuth)
 
 
 def test_jina_reranker_rejects_redirect_response_body(monkeypatch):
     class Response:
         status_code = 308
+        headers = {}
 
         def raise_for_status(self):
             return None
 
         def json(self):
             return {"results": [{"index": 0, "relevance_score": 0.9}]}
+
+        def close(self):
+            return None
 
     monkeypatch.setenv("JINA_API_KEY", "secret")
     monkeypatch.setattr(

@@ -960,6 +960,17 @@ redirects while enforcing exact byte hashes and a credential-free request.
 Credentialed Requests calls use an explicit Bearer-auth object so ambient
 `.netrc` credentials cannot replace the provider key selected by policy.
 
+All seven Requests-based provider response paths use bounded streaming rather
+than `response.json()`. Successful responses must use `application/json` or an
+`application/*+json` media type with UTF-8 data. The reader rejects ambiguous
+or dishonest framing, duplicate fields, non-standard numbers, excessive JSON
+nesting, invalid/truncated text, and decoded bodies above 16 MiB for generation,
+8 MiB for reranking, or 32 MiB for embeddings. The decoded ceiling also bounds
+compressed and chunked responses; response and session ownership remains live
+through streaming and is released on every terminal path. Gemini currently uses
+the separately pinned Google SDK response contract and remains a distinct R2
+transport-ceiling review item.
+
 Release CLI calls default the response cache to `off`; development-profile CLI
 calls retain the persistent machine-local `readwrite` default. Direct Python
 calls inherit the process `LLMRuntimeConfig` (initially `off`) unless they pass
@@ -2524,6 +2535,10 @@ rebuild with `--full-reindex` if needed.
   variable names, never persisting, echoing, or reporting those values, and
   requires `--trust-environment-network` after review.
   This does not replace OS DNS, firewall, or egress controls.
+- Requests-based provider responses are MIME-, framing-, deadline-, depth-, and
+  decoded-byte-bounded before JSON parsing. Fixed diagnostics never include the
+  body. The Google Gemini SDK boundary is separately tracked and is not claimed
+  to inherit the Requests reader's guarantees.
 - API keys can come from environment variables or the interactive menu's hidden
   prompt; menu-entered keys are redacted from the displayed command, removed
   from child process arguments, scoped to the child environment, and not
@@ -2555,6 +2570,7 @@ index_state.py          # Stdlib-only index manifests and compatibility policy
 vector_lifecycle.py     # Stdlib-only guarded vector mutation and commit policy
 llm_adapters.py         # Typed LLM provider transport adapters
 llm_runtime.py          # Reproducible caching, fallback, budgets, and reports
+provider_transport.py   # Bounded streaming provider-response reader
 endpoint_policy.py      # Canonical cloud/loopback endpoint trust boundary
 release_security.py     # Versioned egress/UI/cache/model release policy
 cli_policy.py           # Stdlib-only CLI interpretation and serialization policy

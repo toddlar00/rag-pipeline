@@ -1,4 +1,5 @@
 import builtins
+import json
 import sys
 import threading
 from types import ModuleType, SimpleNamespace
@@ -250,12 +251,24 @@ class _CloudResponse:
     def __init__(self, payload, *, status_code=200):
         self._payload = payload
         self.status_code = status_code
+        self._body = json.dumps(payload).encode("utf-8")
+        self.headers = {
+            "Content-Type": "application/json",
+            "Content-Length": str(len(self._body)),
+        }
 
     def raise_for_status(self):
         return None
 
     def json(self):
-        return self._payload
+        pytest.fail("provider path must not eagerly call response.json()")
+
+    def iter_content(self, *, chunk_size):
+        for offset in range(0, len(self._body), chunk_size):
+            yield self._body[offset:offset + chunk_size]
+
+    def close(self):
+        return None
 
 
 def _capture_cloud_sessions(monkeypatch, response):
@@ -322,6 +335,7 @@ def test_cloud_embeddings_pin_origins_and_reviewed_environment_trust(
     assert sessions[0].posts[0][0] == expected_url
     assert sessions[0].posts[0][1]["timeout"] == 60
     assert sessions[0].posts[0][1]["allow_redirects"] is False
+    assert sessions[0].posts[0][1]["stream"] is True
     assert isinstance(
         sessions[0].posts[0][1]["auth"],
         rag._llm_adapters._BearerAuth)
@@ -333,9 +347,12 @@ def test_cloud_transport_ignores_environment_by_default(monkeypatch):
     policy = release_security.ReleaseSecurityPolicy(
         profile="development", network_policy="allow-cloud")
 
-    assert rag._post_cloud_with_policy(
-        policy, "https://provider.test/v1", timeout=1) is response
+    owned_response = rag._post_cloud_with_policy(
+        policy, "https://provider.test/v1", timeout=1)
+
+    assert owned_response.response is response
     assert sessions[0].trust_env is False
+    assert sessions[0].posts[0][1]["stream"] is True
 
 
 @pytest.mark.parametrize(
@@ -400,6 +417,36 @@ def test_cloud_rerankers_pin_origins_and_refuse_redirects(
             reranker_model=model_name, security_policy=policy)
     assert sessions[0].posts[0][0] == expected_url
     assert sessions[0].posts[0][1]["allow_redirects"] is False
+
+
+@pytest.mark.parametrize(
+    ("model_name", "key_name"),
+    [
+        ("cohere-rerank-v3.5", "COHERE_API_KEY"),
+        ("jina-reranker-v2-base-multilingual", "JINA_API_KEY"),
+    ],
+)
+def test_cloud_rerankers_use_bounded_streaming_json(
+        monkeypatch, model_name, key_name):
+    monkeypatch.setenv(key_name, "secret")
+    sessions = _capture_cloud_sessions(
+        monkeypatch,
+        _CloudResponse({
+            "results": [{"index": 0, "relevance_score": 0.9}],
+        }),
+    )
+    policy = release_security.ReleaseSecurityPolicy(
+        profile="development", network_policy="allow-cloud")
+
+    documents, metadatas, scores = rag._rerank(
+        "query", ["document"], [{"stable_id": "one"}], [0.2], 1,
+        reranker_model=model_name, security_policy=policy,
+    )
+
+    assert documents == ["document"]
+    assert metadatas == [{"stable_id": "one"}]
+    assert scores == [0.9]
+    assert sessions[0].posts[0][1]["stream"] is True
 
 
 @pytest.mark.parametrize(

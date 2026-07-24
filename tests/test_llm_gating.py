@@ -1,4 +1,5 @@
 import inspect
+import json
 
 import pytest
 
@@ -25,16 +26,27 @@ def _explicit_cloud_policy_for_provider_contracts(monkeypatch):
 
 class _FakeResponse:
     status_code = 200
-    headers = {}
 
     def __init__(self, payload):
         self._payload = payload
+        self._body = json.dumps(payload).encode("utf-8")
+        self.headers = {
+            "Content-Type": "application/json",
+            "Content-Length": str(len(self._body)),
+        }
 
     def raise_for_status(self):
         return None
 
     def json(self):
-        return self._payload
+        pytest.fail("provider path must not eagerly call response.json()")
+
+    def iter_content(self, *, chunk_size):
+        for offset in range(0, len(self._body), chunk_size):
+            yield self._body[offset:offset + chunk_size]
+
+    def close(self):
+        return None
 
 
 def test_disabled_agent_team_never_calls_an_llm(monkeypatch):

@@ -41,7 +41,16 @@ class _Response:
     def __init__(self, payload=None, *, status=200, headers=None):
         self._payload = payload
         self.status_code = status
-        self.headers = headers or {}
+        self.closed = False
+        self._body = (
+            b'{"malformed":' if isinstance(payload, BaseException)
+            else json.dumps(payload).encode("utf-8")
+        )
+        self.headers = {
+            "Content-Type": "application/json",
+            "Content-Length": str(len(self._body)),
+            **(headers or {}),
+        }
 
     def raise_for_status(self):
         if self.status_code >= 400:
@@ -51,9 +60,14 @@ class _Response:
             raise error
 
     def json(self):
-        if isinstance(self._payload, BaseException):
-            raise self._payload
-        return self._payload
+        pytest.fail("provider path must not eagerly call response.json()")
+
+    def iter_content(self, *, chunk_size):
+        for offset in range(0, len(self._body), chunk_size):
+            yield self._body[offset:offset + chunk_size]
+
+    def close(self):
+        self.closed = True
 
 
 class _CountingThrottle:
@@ -151,6 +165,7 @@ def test_openai_structured_response_parses_native_usage(monkeypatch):
     assert result.transient_error_categories == ()
     assert "private reasoning" not in result.text
     assert observed["allow_redirects"] is False
+    assert observed["stream"] is True
     assert isinstance(observed["auth"], rag._llm_adapters._BearerAuth)
 
 
@@ -191,10 +206,11 @@ def test_openai_string_facade_remains_compatible(monkeypatch):
 
 
 def test_openai_429_retry_reports_transport_attempts(monkeypatch):
-    responses = iter([
+    response_items = [
         _Response(status=429, headers={"Retry-After": "not-a-number"}),
         _Response(_openai_body()),
-    ])
+    ]
+    responses = iter(response_items)
     throttle = _CountingThrottle()
     monkeypatch.setattr(
         rag.requests, "post", lambda *_args, **_kwargs: next(responses))
@@ -211,6 +227,7 @@ def test_openai_429_retry_reports_transport_attempts(monkeypatch):
     assert throttle.rate_limited == 1
     assert throttle.ok == 1
     assert throttle.errors == 0
+    assert all(response.closed for response in response_items)
 
 
 def test_runtime_transport_budget_blocks_openai_retry_without_second_post(
@@ -287,6 +304,29 @@ def test_malformed_openai_response_releases_throttle_once(monkeypatch):
     assert throttle.errors == 1
 
 
+def test_openai_cleanup_failure_is_safe_and_releases_throttle(monkeypatch):
+    class CloseFailure(_Response):
+        def close(self):
+            raise RuntimeError("SECRET_CLOSE_CANARY")
+
+    throttle = _CountingThrottle()
+    monkeypatch.setattr(
+        rag.requests, "post",
+        lambda *_args, **_kwargs: CloseFailure(_openai_body()),
+    )
+    monkeypatch.setattr(rag, "_get_throttle", lambda _workers: throttle)
+
+    with pytest.raises(ProviderCallError) as error:
+        rag._call_openai_compatible_result(
+            "prompt", base_url="https://provider.test/v1",
+            model="model", api_key="secret")
+
+    assert error.value.category == "connection_error"
+    assert "SECRET_CLOSE_CANARY" not in str(error.value)
+    assert throttle.acquired == 1
+    assert throttle.errors == 1
+
+
 @pytest.mark.parametrize("status", [301, 302, 303, 307, 308])
 def test_openai_redirects_are_refused_as_one_transport_attempt(
         monkeypatch, status):
@@ -354,6 +394,7 @@ def test_loopback_cloud_transport_uses_proxy_free_post_hook(monkeypatch):
     assert observed["url"] == (
         "http://127.0.0.1:8000/v1/chat/completions")
     assert observed["allow_redirects"] is False
+    assert observed["stream"] is True
 
 
 @pytest.mark.parametrize(
@@ -415,6 +456,7 @@ def test_ollama_structured_response_uses_native_counts(monkeypatch):
     assert observed["json"]["think"] is True
     assert observed["json"]["options"]["num_predict"] == 99
     assert observed["timeout"] == 12
+    assert observed["stream"] is True
     assert "private reasoning" not in result.text
 
 
@@ -472,10 +514,10 @@ def test_loopback_post_disables_environment_proxy_configuration(monkeypatch):
     response = rag._post_loopback_without_environment(
         "http://127.0.0.1:11434/api/generate", timeout=5)
 
-    assert response == "response"
+    assert response.response == "response"
     assert observed == {
         "url": "http://127.0.0.1:11434/api/generate",
-        "kwargs": {"timeout": 5},
+        "kwargs": {"timeout": 5, "stream": True},
         "trust_env": False,
     }
 
