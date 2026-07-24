@@ -1,8 +1,13 @@
+import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 import rag
+
+
+_PROFILE_FIXTURES = Path(__file__).parent / "fixtures" / "structure_profiles"
 
 
 def _item(label, text, page):
@@ -131,6 +136,261 @@ def test_scaffold_lookup_prefers_new_chapter_on_shared_page_and_is_bounded():
     assert lookup[10]["chapter_num"] == 2
     assert lookup[12]["chapter_num"] == 2
     assert 13 not in lookup
+
+
+def test_default_profile_fixture_preserves_casebook_structure():
+    doc = json.loads((_PROFILE_FIXTURES / "publisher_alpha_casebook.json")
+                     .read_text(encoding="utf-8"))
+
+    sections = rag._identify_book_sections(doc)
+    entries = rag._parse_toc_tables(doc, 2, 2)
+    chapter_map = rag._build_chapter_map_from_document(doc)
+
+    assert sections["toc"] == {"start": 2, "end": 2}
+    assert sections["index"] == {"start": 19, "end": 19}
+    assert entries == [
+        {"level": 1, "title": "Chapter 1: Foundations", "page": 5},
+        {"level": 2, "title": "A. First Principles", "page": 6},
+    ]
+    assert chapter_map[1]["title"] == "Foundations"
+    assert chapter_map[1]["min_page"] == 5
+    assert chapter_map[1]["max_page"] == 6
+
+
+def test_roman_parts_profile_fixture_normalizes_ordinals_end_to_end():
+    profile = "roman-parts-book-v1"
+    doc = json.loads((_PROFILE_FIXTURES / "publisher_beta_roman_parts.json")
+                     .read_text(encoding="utf-8"))
+
+    sections = rag._identify_book_sections(
+        doc, structure_profile=profile)
+    entries = rag._parse_toc_tables(
+        doc, 3, 3, structure_profile=profile)
+    chapter_map = rag._build_chapter_map_from_document(
+        doc, structure_profile=profile)
+    scaffold = rag._build_scaffold(
+        doc, sections, structure_profile=profile)
+    titles = rag._canonical_chapter_titles(
+        scaffold, chapter_map, structure_profile=profile)
+
+    assert sections["toc"] == {"start": 3, "end": 3}
+    assert sections["bibliography"] == {"start": 35, "end": 35}
+    assert sections["index"] == {"start": 39, "end": 39}
+    assert entries == [
+        {"level": 1,
+         "title": "Part IV — Institutions and Practice", "page": 10},
+        {"level": 2, "title": "I. Institutions", "page": 11},
+    ]
+    assert chapter_map[4] == {
+        "title": "Institutions And Practice",
+        "division_kind": "Part",
+        "division_number": "IV",
+        "min_page": 10,
+        "max_page": 11,
+    }
+    assert scaffold[0]["chapter_num"] == 4
+    assert scaffold[0]["division_number"] == "IV"
+    assert titles == {4: "Part IV — Institutions and Practice"}
+
+
+def test_wrong_profile_fails_closed_instead_of_guessing_layout():
+    doc = json.loads((_PROFILE_FIXTURES / "publisher_beta_roman_parts.json")
+                     .read_text(encoding="utf-8"))
+    sections = rag._identify_book_sections(doc)
+
+    with pytest.raises(ValueError, match="does not match structure profile"):
+        rag._build_scaffold(doc, sections)
+
+
+def test_recognized_contents_with_no_primary_divisions_fails_closed():
+    doc = {
+        "texts": [
+            _item("section_header", "Contents", 1),
+            _item("text", "Publisher note without numbered divisions", 1),
+        ],
+        "tables": [],
+    }
+
+    with pytest.raises(ValueError, match="does not match structure profile"):
+        rag._build_scaffold(
+            doc, {"contents": {"start": 1, "end": 1}})
+
+
+def test_llm_scaffold_cannot_invent_profile_source_evidence(
+        monkeypatch):
+    doc = json.loads((_PROFILE_FIXTURES / "publisher_beta_roman_parts.json")
+                     .read_text(encoding="utf-8"))
+    sections = rag._identify_book_sections(doc)
+
+    class ImmediateTeam:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def run(self, *, expert_fn, **_kwargs):
+            return {"result": expert_fn(), "flagged": []}
+
+    monkeypatch.setattr(rag, "_AgentTeam", ImmediateTeam)
+    monkeypatch.setattr(rag, "_analyze_toc_layout", lambda *_a, **_k: {})
+    monkeypatch.setattr(
+        rag, "_llm_parse_scaffold",
+        lambda *_a, **_k: [{
+            "level": 1,
+            "title": "Chapter 4: Hallucinated legal layout",
+            "page": 10,
+        }],
+    )
+
+    with pytest.raises(ValueError, match="does not match structure profile"):
+        rag._build_scaffold(
+            doc, sections, use_llm=True,
+            ollama_url="http://localhost:11434")
+
+
+def test_llm_scaffold_keeps_every_deterministic_primary_title(monkeypatch):
+    doc = {
+        "texts": [],
+        "tables": [_table(3, [
+            _cell("Chapter 1: Real Source Title", 0, 0),
+            _cell("5", 0, 1),
+            _cell("Chapter 2: Second Source Title", 1, 0),
+            _cell("10", 1, 1),
+        ])],
+    }
+    generated = [{
+        "level": 1,
+        "title": "Chapter 1: Hallucinated Replacement",
+        "page": 5,
+    }, {
+        "level": 1,
+        "title": "Chapter 2: Another Hallucination",
+        "page": 10,
+    }]
+
+    class ImmediateTeam:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def run(self, *, expert_fn, **_kwargs):
+            return {"result": expert_fn(), "flagged": []}
+
+    monkeypatch.setattr(rag, "_AgentTeam", ImmediateTeam)
+    monkeypatch.setattr(rag, "_calculate_page_delta", lambda _doc: 0)
+    monkeypatch.setattr(rag, "_analyze_toc_layout", lambda *_a, **_k: {})
+    monkeypatch.setattr(
+        rag, "_llm_parse_scaffold",
+        lambda *_a, **_k: [dict(entry) for entry in generated],
+    )
+
+    scaffold = rag._build_scaffold(
+        doc, {"toc": {"start": 3, "end": 3}}, use_llm=True,
+        ollama_url="http://localhost:11434")
+
+    assert [entry["title"] for entry in scaffold] == [
+        "Chapter 1: Real Source Title",
+        "Chapter 2: Second Source Title",
+    ]
+
+    generated.pop()
+    with pytest.raises(ValueError, match="does not match structure profile"):
+        rag._build_scaffold(
+            doc, {"toc": {"start": 3, "end": 3}}, use_llm=True,
+            ollama_url="http://localhost:11434")
+
+
+def test_roman_subnumber_row_is_not_a_primary_division():
+    cells = [
+        _cell("Part IV — Institutions — IV-1 Exercise", 0, 0),
+        _cell("220", 0, 1),
+    ]
+
+    assert rag._parse_toc_tables(
+        {"tables": [_table(5, cells)]}, 5, 5,
+        structure_profile="roman-parts-book-v1") == []
+
+
+def test_roman_canonical_title_skips_subnumber_artifact():
+    scaffold = [
+        {"level": 1, "title": "Part IV — Institutions — IV-1 Exercise",
+         "page": 10, "chapter_num": 4},
+        {"level": 1, "title": "Part IV — Institutions",
+         "page": 11, "chapter_num": 4},
+    ]
+
+    assert rag._canonical_chapter_titles(
+        scaffold, {}, structure_profile="roman-parts-book-v1") == {
+            4: "Part IV — Institutions",
+        }
+
+    assert rag._canonical_chapter_titles(
+        [], {
+            4: {
+                "title": "Institutions — IV-1 Exercise",
+                "division_kind": "Part",
+                "division_number": "IV",
+            },
+        }, structure_profile="roman-parts-book-v1") == {}
+
+
+def test_publication_gate_rejects_roman_subnumber_chapter_title():
+    title = "Part IV — Institutions — IV-1 Exercise"
+    records = [{
+        "text": "Substantive prose for the selected division.",
+        "metadata": {
+            "headings": [title],
+            "section_path": title,
+            "content_type": "author_narrative",
+            "content_source": "body",
+            "page_start": 10,
+            "page_end": 10,
+            "case_names": [],
+            "chapter_num": 4,
+            "chapter_title": title,
+        },
+    }]
+
+    with pytest.raises(RuntimeError, match="chapter title contains TOC artifacts"):
+        rag._validate_chunk_structure_for_publication(
+            records,
+            scaffold=[{"level": 1, "chapter_num": 4, "page": 10}],
+            book_sections={},
+            chapter_map={4: {"min_page": 10, "max_page": 10}},
+            chapter_titles={4: title},
+            structure_profile="roman-parts-book-v1",
+        )
+
+
+def test_heading_repair_uses_profile_native_roman_fallback(monkeypatch):
+    observed = {}
+
+    def fake_call(prompt, **_kwargs):
+        observed["prompt"] = prompt
+        return "Part IV > A. Institutions"
+
+    monkeypatch.setattr(rag, "_call_llm", fake_call)
+
+    result = rag._reconstruct_heading(
+        "Substantive text", "B", 4, "",
+        structure_profile="roman-parts-book-v1")
+
+    assert result == "Part IV > A. Institutions"
+    assert 'division "Part IV"' in observed["prompt"]
+
+    monkeypatch.setattr(
+        rag, "_call_llm", lambda *_args, **_kwargs: (
+            "Unrelated > Section 4 > Details"))
+    assert rag._reconstruct_heading(
+        "Substantive text", "B", 4, "",
+        structure_profile="roman-parts-book-v1") is None
+
+    for wrong_path in (
+            "Wrong > Part IV > Details",
+            "Not Part IV at all > Details"):
+        monkeypatch.setattr(
+            rag, "_call_llm",
+            lambda *_args, _value=wrong_path, **_kwargs: _value)
+        assert rag._reconstruct_heading(
+            "Substantive text", "B", 4, "",
+            structure_profile="roman-parts-book-v1") is None
 
 
 def _record(text, heading, page, *, content_type="author_narrative"):

@@ -24,6 +24,7 @@ def _resume_defaults() -> cli_policy.ResumeCommandDefaults:
         executable="python-test",
         script_name="rag.py",
         embedding_model="embedding-default",
+        structure_profile="us-law-casebook-v1",
         db_backend="chroma",
         conversion_backend="pypdfium2",
         max_tokens=4096,
@@ -346,6 +347,7 @@ def test_resume_serializer_preserves_quoting_secrets_and_raw_extra_flags():
 
     assert command.startswith(
         'python-test rag.py full --pdf "My Book.pdf" --resume')
+    assert "--structure-profile us-law-casebook-v1" in command
     assert "--collection My Collection" in command
     assert command.endswith("--force --custom-value raw")
     assert "must-not-serialize" not in command

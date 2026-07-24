@@ -1033,7 +1033,10 @@ def test_inferred_recovery_rejects_output_alias_to_source_pdf(
     assert source.read_bytes() == b"must remain a PDF"
 
 
-def _write_chunk_v2(document: Path, chunks: Path, parameters: dict) -> dict:
+def _write_chunk_v3(document: Path, chunks: Path, parameters: dict) -> dict:
+    receipt = rag._document_profiles.profile_provenance(
+        rag._document_profiles.get_profile(rag.DEFAULT_STRUCTURE_PROFILE))
+    parameters.setdefault("structure_profile", receipt)
     document_raw = document.read_bytes()
     inputs = {
         "docling_json": {
@@ -1052,19 +1055,25 @@ def _write_chunk_v2(document: Path, chunks: Path, parameters: dict) -> dict:
         parameters=parameters,
         outputs={"chunks_jsonl": chunks},
         schema_version=rag.CHUNK_COMPLETION_SCHEMA_VERSION,
-        extra_fields={"inputs": inputs},
+        extra_fields={
+            "inputs": inputs,
+            "structure_profile": receipt,
+            "structure_profile_parameters_sha256": (
+                rag._structure_profile_parameters_binding(
+                    rag._artifact_parameters_sha256(parameters), receipt)),
+        },
     )
     return inputs
 
 
-def test_chunk_v2_rejects_tampered_inputs_and_unbound_recovery(tmp_path):
+def test_chunk_v3_rejects_tampered_inputs_and_unbound_recovery(tmp_path):
     document = tmp_path / "book.json"
     chunks = tmp_path / "book_chunks.jsonl"
     document.write_text('{"texts":[]}', encoding="utf-8")
     record = {"text": "source", "metadata": {"chunk_index": 0}}
     rag._atomic_write_jsonl(chunks, [record])
     parameters = {"embedding_model": "model-a"}
-    _write_chunk_v2(document, chunks, parameters)
+    _write_chunk_v3(document, chunks, parameters)
     assert rag._chunks_complete(document, chunks, parameters=parameters)
 
     manifest_path = rag._artifact_completion_path(chunks, stage="chunking")
@@ -1075,7 +1084,7 @@ def test_chunk_v2_rejects_tampered_inputs_and_unbound_recovery(tmp_path):
 
     record["metadata"]["table_recovered_from_pdf"] = True
     rag._atomic_write_jsonl(chunks, [record])
-    _write_chunk_v2(document, chunks, parameters)
+    _write_chunk_v3(document, chunks, parameters)
     assert not rag._chunks_complete(document, chunks, parameters=parameters)
 
 
@@ -1111,7 +1120,7 @@ def _quality_fixture(tmp_path):
     }
     rag._atomic_write_jsonl(chunks, [record])
     parameters = {"embedding_model": "model-a"}
-    inputs = _write_chunk_v2(document, chunks, parameters)
+    inputs = _write_chunk_v3(document, chunks, parameters)
     raw = document.read_bytes()
     return (
         document, chunks, parameters, inputs, mapping,
@@ -1266,7 +1275,14 @@ def test_index_quality_requires_exact_chunk_completion_inputs(tmp_path):
         parameters=parameters,
         outputs={"chunks_jsonl": chunks},
         schema_version=rag.CHUNK_COMPLETION_SCHEMA_VERSION,
-        extra_fields={"inputs": bound_inputs},
+        extra_fields={
+            "inputs": bound_inputs,
+            "structure_profile": parameters["structure_profile"],
+            "structure_profile_parameters_sha256": (
+                rag._structure_profile_parameters_binding(
+                    rag._artifact_parameters_sha256(parameters),
+                    parameters["structure_profile"])),
+        },
     )
     report = rag._publish_corpus_quality_report(
         document,

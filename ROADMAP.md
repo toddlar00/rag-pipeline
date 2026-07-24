@@ -27,6 +27,7 @@ Status terms:
 | Machine-readable corpus quality attestation | Implemented (draft) | [PR #31](https://github.com/toddlar00/rag-pipeline/pull/31): schema-v1 report binds the exact Docling source, chunks bytes, parameters, source-lineage coverage, tables, normalization, classification, entities, token budgets, and stable/hash roots; resume, export, retrieval, and index publication fail closed on missing, stale, malformed, or mismatched evidence |
 | Synced-folder publication and read resilience | Implemented (draft) | [PR #31](https://github.com/toddlar00/rag-pipeline/pull/31): bounded Windows sharing-violation retries republish only a pinned staging file; marker and exact artifact reads retry only content-identical ctime churn while failing closed on content-generation changes; exact hashes bypass unsafe stat caching on Windows |
 | Immutable source-generation provenance | Implemented (draft) | [PR #34](https://github.com/toddlar00/rag-pipeline/pull/34): conversion, preprocessing, Docling, table recovery, chunking, and schema-v2 quality reports bind one exact PDF/Docling generation; multi-output leases prevent interleaved publishers; marker-owned private scratch is self-cleaning and dry-run prunable after hard termination. A disposable 912-page Ethics run produced 1,715 records, six bound recovered-table chunks, and a warning-free PASS report |
+| Configurable document-structure profiles | Implemented (draft) | An immutable reviewed registry now drives front/back matter, primary divisions, TOC hierarchy, canonical titles, cross-references, classification, quality checks, and exports. Schema-v3 chunk receipts attest the exact profile revision and digest; unknown, mismatched, legacy, and tampered profile evidence fails closed |
 | Ethics retrieval calibration | In progress | A 14-query, 24-judgment draft is pinned to the exact 1,715-record corpus and covers rules, explanations, cases, tables, cross-page chunks, filters, abstention, outline distractors, and positive outline intents; corpus-owner review and release thresholds remain outstanding |
 | Process supervision extraction | Implemented (draft) | [PR #33](https://github.com/toddlar00/rag-pipeline/pull/33): deadline supervision, Windows/POSIX containment, startup gates, termination confirmation, and generic entrypoint policy moved to stdlib-only `process_supervision.py`; `rag.py` retains late-bound compatibility wrappers |
 | Exact LLM transport budget | Integrated | [PR #1](https://github.com/toddlar00/rag-pipeline/pull/1) |
@@ -295,12 +296,59 @@ The stacked implementation is published as draft [PR
 #34](https://github.com/toddlar00/rag-pipeline/pull/34), based on PR #33 until
 the process-supervision dependency merges.
 
+## Configurable document-structure profiles milestone
+
+`document_profiles.py` is now the immutable policy boundary for publisher
+structure. The default `us-law-casebook-v1` profile preserves the characterized
+Arabic-chapter Ethics/casebook behavior; `roman-parts-book-v1` covers a second
+family with Roman-numbered Parts plus bibliography and glossary back matter.
+Each reviewed profile owns its context-qualified division patterns,
+front/back-matter rules, TOC seeds and hierarchy, canonical-title format,
+numbering styles, and fail-closed unknown-layout policy. Callers resolve one
+profile and pass it explicitly through scaffold construction, chunk enrichment,
+classification, cross-references, publication quality, pipeline orchestration,
+resume commands, interactive menus, and exports. There is no mutable active
+profile, automatic layout guess, or arbitrary runtime JSON policy.
+
+Chunk completion advances to schema v3 and records the profile schema, name,
+revision, and canonical policy SHA-256 as a strict top-level receipt. A
+credential-free composite digest binds that receipt to the complete parameter
+digest without persisting endpoint userinfo, query credentials, or API keys.
+Old schema-v1/v2 chunk completion, a changed policy, missing fields, unknown
+names, detached receipts, and tampering all force re-chunking.
+Conversion and corpus-quality evidence remain schema v2; ordered resume keeps a
+valid conversion generation, rebuilds chunks under schema v3, republishes the
+exactly bound quality report, and only then reconciles the index. Generated
+resume commands always serialize `--structure-profile`, including the default.
+
+Adversarial tests cover registry immutability, strict profile registration,
+Arabic/Roman/word ordinal normalization, context isolation, simultaneous runs
+with different profiles, invalid CLI choices, full/chunk/batch forwarding,
+interactive serialization, migration and receipt tampering, wrong-layout
+failure before publication, two publisher fixtures, Roman display/export
+semantics, and unchanged default-profile behavior. The complete repository
+suite passes with 1,249 tests and 7 platform skips; Ruff and `git diff --check`
+are clean. A disposable profile-only chunk run over the exact 912-page Ethics
+Docling generation produced the expected 1,715 records, 447 scaffold entries,
+14 chapters, complete source-lineage coverage, zero structural leaks, and a
+schema-v3/profile-bound quality PASS. The existing user output tree remained
+byte-for-byte unchanged.
+
+An independent adversarial audit reproduced fail-open empty TOCs, profile
+substitution during quality repair, a detached top-level receipt, omitted and
+hallucinated LLM divisions, Roman-display subnumber artifacts, weak heading
+repair, spaced-word ordinal truncation, endpoint-secret persistence, and an
+endpoint-query provenance collision. Each reproducer is now a regression test.
+The final re-audit confirmed exact deterministic LLM primary titles/pages,
+complete division coverage, strict receipt/parameter binding, secret-free
+full-URL endpoint fingerprints, and exact leading division titles; it reported
+no remaining material issue.
+
 ## Next improvement milestones
 
 | Priority | Milestone | Acceptance evidence |
 |---|---|---|
 | P1 | Ethics retrieval calibration | A corpus-owner-reviewed judged set covers rule text, author explanation, cases, tables, cross-page continuations, filters, and abstention; dense, hybrid, and reranked modes receive explicit release thresholds |
-| P2 | Configurable document-structure profiles | Front/back-matter labels, chapter patterns, and canonical-title rules move behind tested profiles, with fixtures from multiple publishers and safe unknown-layout behavior |
 | P2 | Context-aware retrieval assembly | Stable adjacency/parent identifiers allow query-time neighboring-chunk stitching without duplicate text, chapter leakage, or citation ambiguity |
 | P2 | Table-specific retrieval | Large tables gain optional header-propagated cell/paragraph child records linked to their preserved parent table, with duplicate collapse and table-focused relevance tests |
 | P3 | Runtime decomposition | Vector lifecycle moves out of `rag.py` in a separate failure-injected milestone; process supervision is extracted behind the stable facade |

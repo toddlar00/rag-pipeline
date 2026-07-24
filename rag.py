@@ -36,11 +36,13 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional, TypedDict
+from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
 import artifact_io as _artifact_io
 import chunking_core as _chunking_core
 import cli_policy as _cli_policy
+import document_profiles as _document_profiles
 import ingestion_core as _ingestion_core
 import index_state as _index_state
 import job_runtime as _job_runtime
@@ -96,7 +98,7 @@ DEFAULT_OPERATION_TIMEOUTS = {
 }
 ARTIFACT_COMPLETION_SCHEMA_VERSION = 1
 CONVERSION_COMPLETION_SCHEMA_VERSION = 2
-CHUNK_COMPLETION_SCHEMA_VERSION = 2
+CHUNK_COMPLETION_SCHEMA_VERSION = 3
 _CONVERSION_CAPTURE_POLICY = "stream-copy-v1"
 _MAX_CONVERSION_MANIFEST_BYTES = 1024 * 1024
 _MAX_CHUNK_COMPLETION_BYTES = 1024 * 1024
@@ -106,6 +108,20 @@ _RUN_ID_ENV = "RAG_PIPELINE_RUN_ID"
 _SUPERVISED_TERMINATE_GRACE = 5.0
 _SUPERVISED_POLL_INTERVAL = 0.2
 _SUPERVISED_START_GATE_TIMEOUT = 60.0
+
+
+def _structure_profile_parameters_binding(
+        parameters_sha256: str, receipt: object,
+) -> str:
+    """Bind a public profile receipt to a parameter digest without secrets."""
+    if (not isinstance(parameters_sha256, str)
+            or re.fullmatch(r"[0-9a-f]{64}", parameters_sha256) is None):
+        raise ValueError("invalid chunk parameter digest")
+    profile = _document_profiles.profile_from_provenance(receipt)
+    return _artifact_io._artifact_parameters_sha256({
+        "parameters_sha256": parameters_sha256,
+        "structure_profile": _document_profiles.profile_provenance(profile),
+    })
 
 # Embedding model max token limits (for validation)
 EMBEDDING_MAX_TOKENS = {
@@ -129,6 +145,7 @@ DEFAULT_CHUNKS_PATH = Path("output/chunks.jsonl")
 DEFAULT_CHROMA_DIR = Path("output/chroma_db")
 DEFAULT_QDRANT_DIR = Path("output/qdrant_db")
 DEFAULT_DB_BACKEND = "chroma"  # "chroma" or "qdrant"
+DEFAULT_STRUCTURE_PROFILE = _document_profiles.DEFAULT_STRUCTURE_PROFILE
 DEFAULT_EXPORT_PATH = Path("output/textbook.md")
 OUTPUT_DIR = Path(os.environ.get(
     _job_runtime.OUTPUT_ROOT_ENV, "output"))
@@ -1013,6 +1030,7 @@ def _resume_command_defaults() -> _cli_policy.ResumeCommandDefaults:
         executable=sys.executable,
         script_name="rag.py",
         embedding_model=DEFAULT_EMBEDDING_MODEL,
+        structure_profile=DEFAULT_STRUCTURE_PROFILE,
         db_backend=DEFAULT_DB_BACKEND,
         conversion_backend="pypdfium2",
         max_tokens=DEFAULT_MAX_TOKENS,
@@ -1087,7 +1105,7 @@ def _quality_report_required(chunks_path: Path, records: list[dict]) -> bool:
 def _load_index_chunk_completion_inputs(
         chunks_path: Path, *, chunks_sha256: str, chunks_size: int,
         records: list[dict]) -> tuple[dict, str]:
-    """Validate the adjacent chunk-v2 completion used by index readers.
+    """Validate the adjacent chunk-v3 completion used by index readers.
 
     Indexing does not need the live Docling/PDF inputs, but it must not accept
     a quality report whose provenance was detached from the chunk completion
@@ -1101,17 +1119,18 @@ def _load_index_chunk_completion_inputs(
             manifest_path, max_bytes=_MAX_CHUNK_COMPLETION_BYTES)
     except FileNotFoundError as exc:
         raise ValueError(
-            "Quality-bound chunks require an adjacent chunk-v2 completion: "
+            "Quality-bound chunks require an adjacent chunk-v3 completion: "
             f"{manifest_path}"
         ) from exc
     payload = _strict_json_object(raw, description="chunk completion")
     if payload.get("schema_version") != CHUNK_COMPLETION_SCHEMA_VERSION:
         raise ValueError(
-            "Quality-bound chunks require a supported chunk-v2 completion")
+            "Quality-bound chunks require a supported chunk-v3 completion")
     if set(payload) != {
             "schema_version", "stage", "source_sha256",
             "source_record_count", "parameters_sha256", "outputs",
-            "inputs"}:
+            "inputs", "structure_profile",
+            "structure_profile_parameters_sha256"}:
         raise ValueError("chunk completion has an invalid field set")
 
     inputs = payload.get("inputs")
@@ -1124,6 +1143,12 @@ def _load_index_chunk_completion_inputs(
         raise ValueError("chunk completion header or inputs are invalid")
     if payload.get("source_sha256") != inputs["docling_json"]["sha256"]:
         raise ValueError("chunk completion header or inputs are invalid")
+    receipt = payload.get("structure_profile")
+    if payload.get("structure_profile_parameters_sha256") != (
+            _structure_profile_parameters_binding(
+                payload["parameters_sha256"], receipt)):
+        raise ValueError(
+            "chunk completion structure profile is detached from parameters")
 
     outputs = payload.get("outputs")
     output = (
@@ -2254,7 +2279,12 @@ class _AgentTeam:
 # Book scaffold — TOC / Contents / Index as authoritative hierarchy
 # ---------------------------------------------------------------------------
 
-def _identify_book_sections(doc: dict) -> dict:
+def _identify_book_sections(
+        doc: dict, *,
+        structure_profile: (
+            str | _document_profiles.StructureProfile
+        ) = DEFAULT_STRUCTURE_PROFILE,
+) -> dict:
     """Identify contiguous front- and back-matter page ranges.
 
     Explicit section/page headers are authoritative. Table-layout evidence is
@@ -2262,37 +2292,11 @@ def _identify_book_sections(doc: dict) -> dict:
     fallback when no TOC heading survived extraction. An isolated body table
     must never widen the TOC across intervening chapters.
     """
+    profile = _document_profiles.get_profile(structure_profile)
     texts = doc.get("texts", [])
     tables = doc.get("tables", [])
-
-    _SECTION_KW = {
-        "contents": [r"contents", r"brief contents", r"short contents"],
-        "summary": [r"summary of contents"],
-        "toc": [r"table of contents", r"detailed contents"],
-        "problems": [r"table of problems"],
-        "acknowledgments": [r"acknowledgments?"],
-        "about_authors": [r"about the authors?"],
-        "table_of_cases": [r"table of cases"],
-        "table_of_rules": [
-            r"table of (?:rules|authorities|restatements|statutes|"
-            r"bar opinions|standards)(?:,.*)?",
-        ],
-        "index": [r"index", r"subject index"],
-        "editorial": [
-            r"editorial advisors?", r"(?:series |editorial )?advisory board",
-        ],
-        "publisher": [r"about .* publishing"],
-        "credits": [
-            r"textual material", r"images",
-            r"design \(chapter opener graphic\)",
-        ],
-    }
-    _SECTION_RE = {
-        k: [re.compile(rf"^(?:{p})$", re.I) for p in pats]
-        for k, pats in _SECTION_KW.items()
-    }
-
-    section_pages: dict[str, list[int]] = {k: [] for k in _SECTION_RE}
+    section_pages: dict[str, list[int]] = {
+        rule.key: [] for rule in profile.section_rules}
 
     def _normalized_heading(raw: str, label: str) -> str:
         value = re.sub(r"\s+", " ", _decode_pua(raw)).strip(" \t:.-")
@@ -2317,18 +2321,13 @@ def _identify_book_sections(doc: dict) -> dict:
         if page is None:
             continue
 
-        for sec_type, patterns in _SECTION_RE.items():
-            if any(p.fullmatch(raw) for p in patterns):
-                section_pages[sec_type].append(page)
-                break
+        rule = _document_profiles.section_rule_for_heading(raw, profile)
+        if rule is not None:
+            section_pages[rule.key].append(page)
 
     # Find the first observed chapter before considering table-layout
     # evidence. This hard boundary prevents ordinary body tables from being
     # interpreted as part of the TOC.
-    _chapter_heading_re = re.compile(
-        r"^(?:chapter\s+)?\d{1,2}\s*(?:[\xb7\u00b7\u2022\-\u2013\u2014]|\s{2,})\s*\S",
-        re.I,
-    )
     chapter_starts: list[int] = []
     for item in texts:
         if item.get("label") not in ("section_header", "page_header", "title"):
@@ -2337,7 +2336,9 @@ def _identify_book_sections(doc: dict) -> dict:
             r"\s+", " ", _decode_pua(item.get("text", ""))).strip()
         prov = item.get("prov", [])
         page = prov[0].get("page_no") if prov else None
-        if page is not None and _chapter_heading_re.match(raw):
+        if (page is not None
+                and _document_profiles.match_division(
+                    raw, profile, "section_boundary") is not None):
             chapter_starts.append(page)
 
     total_pages = len(doc.get("pages", {}))
@@ -2349,10 +2350,6 @@ def _identify_book_sections(doc: dict) -> dict:
     )
 
     # Scan front-matter tables for TOC-like content.
-    _toc_entry_re = re.compile(
-        r"(?:chapter|part|preface|appendix|index|"
-        r"acknowledgment|table of cases)\b",
-        re.I)
     _trailing_num_re = re.compile(r"\b\d{1,4}\s*$")
     toc_table_pages: list[int] = []
     for t in tables:
@@ -2367,7 +2364,9 @@ def _identify_book_sections(doc: dict) -> dict:
             txt = _decode_pua(cell.get("text", "")).strip()
             if not txt or len(txt) < 3:
                 continue
-            if _toc_entry_re.search(txt) or _trailing_num_re.search(txt):
+            if (any(re.search(pattern, txt, re.I)
+                    for pattern in profile.toc_entry_hint_patterns)
+                    or _trailing_num_re.search(txt)):
                 toc_hits += 1
         if toc_hits >= 3:
             toc_table_pages.append(page)
@@ -2382,16 +2381,17 @@ def _identify_book_sections(doc: dict) -> dict:
         return runs
 
     table_runs = _contiguous_runs(toc_table_pages)
+    toc_seed_names = _document_profiles.toc_seed_keys(profile)
     explicit_toc_pages = {
         page
-        for section in ("summary", "contents", "toc")
+        for section in toc_seed_names
         for page in section_pages[section]
     }
     if explicit_toc_pages:
         # Repeated running headers already give a complete range. A lone
         # heading may be extended only through the contiguous run containing
         # that page.
-        for section in ("summary", "contents", "toc"):
+        for section in toc_seed_names:
             seeds = set(section_pages[section])
             if len(seeds) != 1:
                 continue
@@ -2405,12 +2405,13 @@ def _identify_book_sections(doc: dict) -> dict:
         candidates = [run for run in table_runs if len(run) >= 2]
         if candidates:
             best = max(candidates, key=lambda run: (len(run), -run[0]))
-            section_pages["contents"].extend(best)
+            fallback_toc_name = toc_seed_names[0]
+            section_pages[fallback_toc_name].extend(best)
 
     # 4. Fallback: if no TOC/contents detected yet, scan plain "text" items
     #    for TOC keywords.  Some scanned PDFs produce all items as "text"
     #    (e.g., Criminal Law) with no section_header labels.
-    has_toc = any(section_pages[k] for k in ("toc", "contents", "summary"))
+    has_toc = any(section_pages[key] for key in toc_seed_names)
     if not has_toc:
         for item in texts:
             if item.get("label") != "text":
@@ -2419,25 +2420,24 @@ def _identify_book_sections(doc: dict) -> dict:
             if not raw or len(raw) > 60:
                 continue
             # Normalize whitespace for OCR artifacts ("SUMMARY  OF CONTENTS")
-            norm = re.sub(r"\s+", " ", raw).strip().lower()
+            norm = re.sub(r"\s+", " ", raw).strip()
             prov = item.get("prov", [])
             page = prov[0].get("page_no") if prov else None
             if page is None:
                 continue
-            if norm == "summary of contents":
-                section_pages["summary"].append(page)
-            elif norm in ("table of contents", "detailed contents"):
-                section_pages["toc"].append(page)
-            elif norm in ("contents", "brief contents"):
-                section_pages["contents"].append(page)
+            rule = _document_profiles.section_rule_for_heading(norm, profile)
+            if rule is not None and rule.toc_seed:
+                section_pages[rule.key].append(page)
 
-    # Filter index pages: only accept pages in the back half of the book.
-    # "Table of Cases" appears in front matter but is not the back-of-book Index.
+    # Apply profile-declared positional constraints to back matter.  This
+    # prevents front-matter mentions from becoming publication exclusions.
     total_pages = len(doc.get("pages", {})) or 100
-    back_half_start = total_pages // 2
-    if section_pages.get("index"):
-        section_pages["index"] = [p for p in section_pages["index"]
-                                  if p >= back_half_start]
+    for rule in profile.section_rules:
+        if rule.minimum_page_fraction is None:
+            continue
+        earliest = int(total_pages * rule.minimum_page_fraction)
+        section_pages[rule.key] = [
+            page for page in section_pages[rule.key] if page >= earliest]
 
     # Build ranges
     result = {}
@@ -2452,8 +2452,7 @@ def _identify_book_sections(doc: dict) -> dict:
     # - "contents" is the detailed Contents listing
     # - "toc" is the "Table of Contents" header
     # If only one exists, alias the others.
-    all_toc_types = [k for k in ("contents", "toc", "summary")
-                     if result.get(k)]
+    all_toc_types = [key for key in toc_seed_names if result.get(key)]
     if all_toc_types:
         # ``toc`` is the canonical full scaffold span. Keep the distinct
         # summary and detailed-contents ranges for precise filtering.
@@ -2545,7 +2544,8 @@ def _calculate_page_delta(doc: dict) -> int:
     return delta
 
 
-_TOC_LAYOUT_PROMPT = """You are analyzing a Table of Contents from a law school textbook.
+_TOC_LAYOUT_PROMPT = """You are analyzing a Table of Contents from this reviewed document family:
+{profile_description}
 Your job is to identify the LAYOUT PATTERNS used to organize entries on these pages.
 Study the text carefully and answer:
 
@@ -2553,9 +2553,8 @@ Study the text carefully and answer:
    "trailing after dots/leaders", "in a separate column"). What format are they in?
    (plain digits, Roman numerals, etc.)
 
-2. CHAPTER DESIGNATION: How are chapters identified? (e.g., "Chapter 1", "CHAPTER ONE",
-   "Part I", bold/caps text, numbered without the word "Chapter"). What is the exact
-   pattern? List the chapter designations you see.
+2. PRIMARY DIVISION DESIGNATION: How are top-level divisions identified? What is the
+   exact pattern? List the designations you see without inventing absent levels.
 
 3. SECTION MARKERS: How are major sections within chapters marked?
    (e.g., "A.", "B.", "I.", "II.", bold text, indented). List examples.
@@ -2563,25 +2562,23 @@ Study the text carefully and answer:
 4. SUBSECTION MARKERS: How are sub-sections marked?
    (e.g., "1.", "2.", "a.", "b.", further indentation). List examples.
 
-5. CASE NAMES: How are case names formatted in the TOC?
-   (e.g., italicized, "v." present, indented under sections). List examples.
+5. NAMED ITEMS: How are the narrowest named items formatted and nested? List examples.
 
 6. OTHER ELEMENTS: Any other notable elements (e.g., "Notes and Questions",
    "Problems", part/unit groupings, appendices).
 
 7. HIERARCHY SUMMARY: Describe the complete nesting order from broadest to narrowest.
-   Example: "Part (Roman) > Chapter (Arabic) > Section (Letter) > Subsection (Number) > Case/Notes"
 
 Output ONLY valid JSON:
 {{
     "page_number_format": "description",
-    "chapter_pattern": "regex-friendly pattern description",
-    "chapter_examples": ["Chapter 1 ...", "Chapter 2 ..."],
+    "division_pattern": "regex-friendly pattern description",
+    "division_examples": ["first observed primary division", "second observed primary division"],
     "section_markers": ["A.", "B.", "I.", "II."],
     "subsection_markers": ["1.", "2.", "a.", "b."],
-    "case_name_format": "description",
+    "named_item_format": "description",
     "other_elements": ["Notes and Questions", "Problems"],
-    "hierarchy_order": ["Part", "Chapter", "Section", "Subsection", "Case/Notes"],
+    "hierarchy_order": ["Primary division", "Section", "Subsection", "Named item"],
     "hierarchy_levels": {{
         "1": "description of what level 1 represents",
         "2": "description of what level 2 represents",
@@ -2597,7 +2594,13 @@ Table of Contents text:
 JSON:"""
 
 
-def _analyze_toc_layout(toc_text: str, **llm_kwargs) -> dict:
+def _analyze_toc_layout(
+        toc_text: str, *,
+        structure_profile: (
+            str | _document_profiles.StructureProfile
+        ) = DEFAULT_STRUCTURE_PROFILE,
+        **llm_kwargs,
+) -> dict:
     """Ask LLM to identify the organizational patterns in the TOC.
 
     Returns a layout schema describing how chapters, sections, cases, and
@@ -2607,7 +2610,9 @@ def _analyze_toc_layout(toc_text: str, **llm_kwargs) -> dict:
     lines = toc_text.split("\n")
     sample = "\n".join(lines[:120])
 
-    prompt = _TOC_LAYOUT_PROMPT.format(toc_text=sample)
+    profile = _document_profiles.get_profile(structure_profile)
+    prompt = _TOC_LAYOUT_PROMPT.format(
+        toc_text=sample, profile_description=profile.document_description)
     result = _call_llm(
         prompt, max_tokens=1200, operation="toc.layout", **llm_kwargs)
     if not result:
@@ -2626,8 +2631,9 @@ def _analyze_toc_layout(toc_text: str, **llm_kwargs) -> dict:
         schema = json.loads(result[start:end + 1])
         log.info(f"TOC layout schema: hierarchy = "
                  f"{' > '.join(schema.get('hierarchy_order', []))}")
-        if schema.get("chapter_examples"):
-            log.info(f"  Chapter examples: {schema['chapter_examples'][:3]}")
+        if schema.get("division_examples"):
+            log.info(
+                f"  Division examples: {schema['division_examples'][:3]}")
         if schema.get("section_markers"):
             log.info(f"  Section markers: {schema['section_markers'][:6]}")
         return schema
@@ -2810,6 +2816,9 @@ def _verify_scaffold_against_pages(
 
 
 def _build_scaffold(doc: dict, book_sections: dict, *,
+                    structure_profile: (
+                        str | _document_profiles.StructureProfile
+                    ) = DEFAULT_STRUCTURE_PROFILE,
                     cloud_url: str = "", cloud_model: str = "",
                     cloud_key: str = "", ollama_url: str = "",
                     ollama_model: str = "", gemini_key: str = "",
@@ -2827,6 +2836,7 @@ def _build_scaffold(doc: dict, book_sections: dict, *,
     Returns sorted hierarchy entries with level, title, page, chapter number,
     and full hierarchical path.
     """
+    profile = _document_profiles.get_profile(structure_profile)
     llm_kwargs = dict(cloud_url=cloud_url, cloud_model=cloud_model,
                       cloud_key=cloud_key, ollama_url=ollama_url,
                       ollama_model=ollama_model, gemini_key=gemini_key,
@@ -2835,12 +2845,18 @@ def _build_scaffold(doc: dict, book_sections: dict, *,
     texts = doc.get("texts", [])
     tables = doc.get("tables", [])
 
+    def _raise_profile_layout_error(reason: str) -> None:
+        log.warning(reason)
+        raise ValueError(
+            f"TOC layout does not match structure profile "
+            f"{profile.name!r}; choose the reviewed profile for this "
+            "publisher before chunking")
+
     # Determine TOC page range (use the widest available)
     toc_range = book_sections.get("toc") or book_sections.get("contents")
     contents_range = book_sections.get("contents")
     if not toc_range:
-        log.warning("No TOC page range — scaffold will be empty")
-        return []
+        _raise_profile_layout_error("No TOC page range was recognized")
 
     # Use the widest range across toc and contents
     toc_start = toc_range["start"]
@@ -2857,10 +2873,10 @@ def _build_scaffold(doc: dict, book_sections: dict, *,
     # like "Chapter 1 The Concept of Property ....1" or "A. First Possession  5"
     # with the printed page number at the end.
     toc_lines: list[str] = []
-    _skip_header_re = re.compile(
-        r"^(table of )?contents$|^summary of contents$|"
-        r"^detailed contents$|^brief contents$",
-        re.I)
+    def _is_toc_header(value: str) -> bool:
+        return any(
+            re.fullmatch(pattern, value, re.I)
+            for pattern in profile.toc_skip_patterns)
 
     for t in tables:
         prov = t.get("prov", [])
@@ -2872,7 +2888,7 @@ def _build_scaffold(doc: dict, book_sections: dict, *,
             raw = _decode_pua(cell.get("text", "")).strip()
             if not raw or len(raw) < 3:
                 continue
-            if _skip_header_re.match(raw):
+            if _is_toc_header(raw):
                 continue
             toc_lines.append(raw)
 
@@ -2888,25 +2904,73 @@ def _build_scaffold(doc: dict, book_sections: dict, *,
         raw = _decode_pua(item.get("text", "")).strip()
         if not raw or len(raw) < 3:
             continue
-        if _skip_header_re.match(raw):
+        if _is_toc_header(raw):
             continue
         # Avoid duplicates (table cells may repeat text items)
         if raw not in toc_lines:
             toc_lines.append(raw)
 
     if not toc_lines:
-        log.warning("No TOC entries found in tables or text items")
-        return []
+        _raise_profile_layout_error(
+            "No TOC entries were found in tables or text items")
 
     toc_text = "\n".join(toc_lines)
     log.info(f"TOC: {len(toc_lines)} entries from pp.{toc_start}-{toc_end} "
              f"(page delta: +{page_delta})")
 
+    # Pin profile evidence to deterministic source parsing. LLM output may
+    # enrich hierarchy, but it cannot invent a profile-conforming division
+    # that is absent from the source TOC.
+    table_scaffold = _parse_toc_tables(
+        doc, toc_start, toc_end, structure_profile=profile)
+
+    def _division_key(title: object) -> tuple[str, int] | None:
+        division = _document_profiles.match_division(
+            str(title), profile, "toc_entry")
+        if division is None:
+            return None
+        return division.kind.casefold(), division.ordinal
+
+    table_primary = [
+        entry for entry in table_scaffold if entry.get("level") == 1
+    ]
+    source_primary: dict[tuple[str, int], dict] = {}
+    for value in table_primary or toc_lines:
+        title = value if isinstance(value, str) else value.get("title", "")
+        key = _division_key(title)
+        if key is None:
+            continue
+        source_title = _chunking_core.clean_heading_text(str(title))
+        if isinstance(value, str):
+            division = _document_profiles.match_division(
+                source_title, profile, "toc_entry")
+            if division is not None and division.title:
+                source_title = re.sub(
+                    r"(?:\s*[.\u2026·]){2,}\s*\d{1,4}\s*$", "",
+                    source_title).strip()
+                source_title = re.sub(
+                    r"\s+\d{1,4}\s*$", "", source_title).strip()
+        source_primary.setdefault(key, {
+            "title": source_title,
+            "page": (
+                value.get("page", 0) if isinstance(value, dict) else 0),
+        })
+    source_division_keys = set(source_primary)
+
+    def _division_keys(values) -> set[tuple[str, int]]:
+        return {
+            key for value in values
+            if (key := _division_key(
+                value if isinstance(value, str)
+                else value.get("title", ""))) is not None
+        }
+
     def _expert_build_scaffold():
         """Expert (IV): Layout analysis → hierarchy parsing → delta conversion."""
         # Phase 1: Layout analysis
         layout = (
-            _analyze_toc_layout(toc_text, **llm_kwargs)
+            _analyze_toc_layout(
+                toc_text, structure_profile=profile, **llm_kwargs)
             if use_llm else {}
         )
 
@@ -2914,14 +2978,27 @@ def _build_scaffold(doc: dict, book_sections: dict, *,
         s = []
         if use_llm and (cloud_key or gemini_key or ollama_url):
             s = _llm_parse_scaffold(
-                toc_text, layout_schema=layout, **llm_kwargs)
+                toc_text, layout_schema=layout,
+                structure_profile=profile, **llm_kwargs)
 
         # Table-based fallback/merge
-        ts = _parse_toc_tables(doc, toc_start, toc_end)
+        ts = [dict(entry) for entry in table_scaffold]
         if ts and not s:
             s = ts
         elif ts and s:
             _merge_page_numbers(s, ts)
+
+        # Primary display titles and pages remain deterministic source facts.
+        # The LLM may enrich only the subordinate hierarchy around them.
+        for entry in s:
+            if entry.get("level") != 1:
+                continue
+            source = source_primary.get(_division_key(entry.get("title", "")))
+            if source is None:
+                continue
+            entry["title"] = source["title"]
+            if source["page"] > 0:
+                entry["page"] = source["page"]
 
         # Phase 3: Convert printed page numbers → PDF page numbers
         # TOC entries contain printed page numbers (e.g., "Chapter 1...1")
@@ -2938,13 +3015,15 @@ def _build_scaffold(doc: dict, book_sections: dict, *,
                      f"(printed + {page_delta} = PDF page)")
 
         # Assign chapter numbers
-        ch_re = re.compile(r"(?:Chapter|Part|Unit)\s+(\d{1,2})", re.I)
         cur_ch = None
         for e in s:
             if e["level"] == 1:
-                m = ch_re.search(e["title"])
-                if m:
-                    cur_ch = int(m.group(1))
+                division = _document_profiles.match_division(
+                    e["title"], profile, "toc_entry")
+                if division is not None:
+                    cur_ch = division.ordinal
+                    e["division_kind"] = division.kind
+                    e["division_number"] = division.raw_number
             e["chapter_num"] = cur_ch
 
         # Build hierarchical paths
@@ -2994,9 +3073,22 @@ def _build_scaffold(doc: dict, book_sections: dict, *,
         return _verify_scaffold_against_pages(
             scaffold, doc, max_checks=5, **llm_kwargs)
 
+    def _require_profile_divisions(scaffold: list[dict]) -> None:
+        """Fail closed when a TOC does not match the selected profile."""
+        primary = [entry for entry in scaffold if entry.get("level") == 1]
+        generated_keys = _division_keys(primary)
+        if (not primary or len(generated_keys) != len(primary)
+                or not source_division_keys
+                or generated_keys != source_division_keys):
+            _raise_profile_layout_error(
+                "The generated scaffold does not exactly match deterministic "
+                "source evidence for the primary divisions")
+
     if not use_llm:
         log.info("Scaffold: deterministic TOC parsing (LLM review disabled)")
-        return _expert_build_scaffold()
+        deterministic = _expert_build_scaffold()
+        _require_profile_divisions(deterministic)
+        return deterministic
 
     # ── Optional LLM team review ──
     team = _AgentTeam(
@@ -3013,6 +3105,7 @@ def _build_scaffold(doc: dict, book_sections: dict, *,
     )
 
     scaffold = outcome["result"] or []
+    _require_profile_divisions(scaffold)
 
     # Write flagged issues if any
     if outcome["flagged"]:
@@ -3021,8 +3114,13 @@ def _build_scaffold(doc: dict, book_sections: dict, *,
     return scaffold
 
 
-def _llm_parse_scaffold(toc_text: str, *, layout_schema: dict = None,
-                        **llm_kwargs) -> list[dict]:
+def _llm_parse_scaffold(
+        toc_text: str, *, layout_schema: dict = None,
+        structure_profile: (
+            str | _document_profiles.StructureProfile
+        ) = DEFAULT_STRUCTURE_PROFILE,
+        **llm_kwargs,
+) -> list[dict]:
     """Send TOC text to LLM for authoritative hierarchy parsing.
 
     If *layout_schema* is provided (from ``_analyze_toc_layout``), it is
@@ -3030,25 +3128,29 @@ def _llm_parse_scaffold(toc_text: str, *, layout_schema: dict = None,
     chapters, sections, cases, and page numbers.
     """
     # Build a layout hint block from the schema
+    profile = _document_profiles.get_profile(structure_profile)
     layout_hint = ""
     if layout_schema:
         parts = []
         if layout_schema.get("hierarchy_order"):
             parts.append("Hierarchy (broadest → narrowest): "
                          + " > ".join(layout_schema["hierarchy_order"]))
-        if layout_schema.get("chapter_pattern"):
-            parts.append(f"Chapter designation: {layout_schema['chapter_pattern']}")
-        if layout_schema.get("chapter_examples"):
-            parts.append("Chapter examples: " +
-                         ", ".join(layout_schema["chapter_examples"][:4]))
+        if layout_schema.get("division_pattern"):
+            parts.append(
+                f"Primary-division designation: "
+                f"{layout_schema['division_pattern']}")
+        if layout_schema.get("division_examples"):
+            parts.append("Division examples: " +
+                         ", ".join(layout_schema["division_examples"][:4]))
         if layout_schema.get("section_markers"):
             parts.append("Section markers: " +
                          ", ".join(layout_schema["section_markers"][:6]))
         if layout_schema.get("subsection_markers"):
             parts.append("Subsection markers: " +
                          ", ".join(layout_schema["subsection_markers"][:6]))
-        if layout_schema.get("case_name_format"):
-            parts.append(f"Case names: {layout_schema['case_name_format']}")
+        if layout_schema.get("named_item_format"):
+            parts.append(
+                f"Named items: {layout_schema['named_item_format']}")
         if layout_schema.get("page_number_format"):
             parts.append(f"Page numbers: {layout_schema['page_number_format']}")
         hl = layout_schema.get("hierarchy_levels", {})
@@ -3059,14 +3161,19 @@ def _llm_parse_scaffold(toc_text: str, *, layout_schema: dict = None,
             layout_hint = ("\n\nBOOK-SPECIFIC LAYOUT (use this to assign levels "
                            "correctly):\n" + "\n".join(parts) + "\n")
 
+    hierarchy_guidance = [
+        "Level 1: a primary division matching the selected reviewed profile.",
+        *[
+            f"Level {rule.level}: a title matching /{rule.pattern}/."
+            for rule in profile.hierarchy_rules
+        ],
+    ]
     scaffold_prompt = (
-        "You are parsing a Table of Contents from a law school textbook.\n"
-        "Convert this into a structured hierarchy. For each entry, assign a heading level:\n\n"
-        "Level 1: Part or Chapter (e.g., \"Chapter 3 Personal Jurisdiction\", \"Part II\")\n"
-        "Level 2: Major section with letter or Roman numeral (e.g., \"A. The Study of Procedure\", \"II. Standing\")\n"
-        "Level 3: Numbered subsection (e.g., \"1. Trial Courts\", \"2. Appellate Courts\")\n"
-        "Level 4: Lettered sub-subsection (e.g., \"a. Introduction\", \"b. The Complete Diversity Rule\")\n"
-        "Level 5: Case name or \"Notes and Questions\" (e.g., \"International Shoe Co. v. Washington\")\n"
+        "You are parsing a Table of Contents from this reviewed document "
+        f"family: {profile.document_description}.\n"
+        "Convert it into a structured hierarchy. Assign levels only from "
+        "the following deterministic policy:\n\n"
+        + "\n".join(hierarchy_guidance) + "\n"
         + layout_hint +
         "\nExtract the page number from each line (usually the last number on the line).\n\n"
         "Output ONLY a JSON array. Each entry: {{\"level\": N, \"title\": \"...\", \"page\": N}}\n"
@@ -3186,7 +3293,12 @@ def _toc_visual_subrows(cells: list[dict]) -> list[list[dict]]:
     return output
 
 
-def _parse_toc_tables(doc: dict, toc_start: int, toc_end: int) -> list[dict]:
+def _parse_toc_tables(
+        doc: dict, toc_start: int, toc_end: int, *,
+        structure_profile: (
+            str | _document_profiles.StructureProfile
+        ) = DEFAULT_STRUCTURE_PROFILE,
+) -> list[dict]:
     """Parse TOC from DoclingDocument tables via row reconstruction.
 
     Handles three live textbook formats:
@@ -3200,6 +3312,7 @@ def _parse_toc_tables(doc: dict, toc_start: int, toc_end: int) -> list[dict]:
     from each row as a unit.  This avoids the old single-cell / multi-column
     split that produced wrong results when cells partially matched.
     """
+    profile = _document_profiles.get_profile(structure_profile)
     tables = doc.get("tables", [])
     if not tables:
         return []
@@ -3210,11 +3323,12 @@ def _parse_toc_tables(doc: dict, toc_start: int, toc_end: int) -> list[dict]:
     _trailing_roman = re.compile(
         r"[.\u2026·\s]{2,}\s*((?:x{0,3}(?:ix|iv|v?i{0,3})|"
         r"(?:l?x{0,3})(?:ix|iv|v?i{0,3})))\s*$", re.I)
-    _chapter_re = re.compile(r"^(?:Chapter|Part|Unit)\s+\d", re.I)
     _leader_run = re.compile(r"(?:\s*[.\u2026·]\s*){2,}")
-    _skip_re = re.compile(
-        r"^(table of )?contents$|^summary of contents$|"
-        r"^detailed contents$|^page$", re.I)
+
+    def _skip_row(value: str) -> bool:
+        return any(
+            re.fullmatch(pattern, value, re.I)
+            for pattern in profile.toc_skip_patterns)
 
     entries: list[dict] = []
     pending_chapter: str | None = None  # ConLaw: CHAPTER row without page
@@ -3291,7 +3405,7 @@ def _parse_toc_tables(doc: dict, toc_start: int, toc_end: int) -> list[dict]:
             full_text = " ".join(all_texts).strip()
 
             # Skip header/label rows
-            if _skip_re.match(full_text):
+            if _skip_row(full_text):
                 continue
             if len(full_text) < 3:
                 continue
@@ -3347,7 +3461,9 @@ def _parse_toc_tables(doc: dict, toc_start: int, toc_end: int) -> list[dict]:
             # Distinguish by checking if col-0 cell spans most columns
             # (full-width = self-contained header, narrow = split label).
             row_text_bare = row.get(0, "")
-            if _chapter_re.match(row_text_bare):
+            row_division = _document_profiles.match_division(
+                row_text_bare, profile, "toc_entry")
+            if row_division is not None:
                 col0_span = spans.get(0, (0, 1))
                 col0_width = col0_span[1] - col0_span[0]
                 # Two split-chapter scenarios:
@@ -3387,26 +3503,15 @@ def _parse_toc_tables(doc: dict, toc_start: int, toc_end: int) -> list[dict]:
 
             # A Table-of-Problems row can contain a chapter title followed by
             # "N-1 Problem". It is not a second chapter boundary.
-            chapter_match = re.match(
-                r"^(?:Chapter|Part|Unit)\s+(\d{1,2})\b", clean, re.I)
-            if chapter_match and re.search(
-                    rf"\b{re.escape(chapter_match.group(1))}-\d+\b", clean):
+            division_match = _document_profiles.match_division(
+                clean, profile, "toc_entry")
+            if (division_match is not None
+                    and _document_profiles.contains_division_subnumber(
+                        clean, division_match)):
                 continue
 
             # --- Infer hierarchy level ---------------------------------
-            level = 3  # default: subsection
-            if _chapter_re.match(clean):
-                level = 1
-            elif re.match(r"^[A-Z]\.\s", clean):
-                level = 2
-            elif re.match(r"^\d+\.\s", clean):
-                level = 3
-            elif re.match(r"^[a-z]\.\s", clean):
-                level = 4
-            elif re.match(r"^[ivxlc]+\.\s", clean, re.I):
-                level = 3
-            elif "v." in clean or " v " in clean:
-                level = 5  # case name
+            level = _document_profiles.hierarchy_level(clean, profile)
 
             entries.append({
                 "level": level,
@@ -3489,9 +3594,11 @@ def _build_scaffold_lookup(scaffold: list[dict],
             # last (deepest) entry on that page.
             if (previous is None
                     or previous_chapter == current_chapter
-                    or (current_chapter is not None
-                        and (previous_chapter is None
-                             or current_chapter > previous_chapter))):
+                    or ((entry.get("level") == 1
+                         or (entry.get("path")
+                             and " > " not in entry["path"]))
+                        and current_chapter is not None
+                        and current_chapter != previous_chapter)):
                 page_map[pg] = entry
 
     # Forward-fill: each page inherits the most recent scaffold entry
@@ -3509,10 +3616,13 @@ def _build_scaffold_lookup(scaffold: list[dict],
 
 
 def _canonical_chapter_titles(
-        scaffold: list[dict], chapter_map: dict[int, dict]) -> dict[int, str]:
+        scaffold: list[dict], chapter_map: dict[int, dict], *,
+        structure_profile: (
+            str | _document_profiles.StructureProfile
+        ) = DEFAULT_STRUCTURE_PROFILE,
+) -> dict[int, str]:
     """Choose one clean, stable title for every observed chapter."""
-    chapter_re = re.compile(r"^(?:Chapter|Part|Unit)\s+(\d{1,2})\b", re.I)
-    problem_re = re.compile(r"\b(\d{1,2})-\d+\b")
+    profile = _document_profiles.get_profile(structure_profile)
     canonical: dict[int, str] = {}
 
     indexed = list(enumerate(scaffold))
@@ -3521,14 +3631,17 @@ def _canonical_chapter_titles(
         if entry.get("level") != 1:
             continue
         title = _chunking_core.clean_heading_text(entry.get("title", ""))
-        match = chapter_re.match(title)
-        if not match:
+        division = _document_profiles.match_division(
+            title, profile, "canonical_title")
+        if division is None:
             continue
-        chapter_num = int(match.group(1))
+        chapter_num = division.ordinal
         if entry.get("chapter_num") not in (None, chapter_num):
             continue
-        if problem_re.search(title) or re.search(
-                r"\s+Chapter\s+\d{1,2}\b", title, re.I):
+        if _document_profiles.contains_division_subnumber(
+                title, division) or re.search(
+                r"\s+(?:Chapter|Part|Unit)\s+"
+                r"(?:\d{1,3}|[IVXLCDM]+)\b", title, re.I):
             continue
         canonical.setdefault(chapter_num, title)
 
@@ -3538,10 +3651,27 @@ def _canonical_chapter_titles(
         title = _chunking_core.clean_heading_text(info.get("title", ""))
         title = re.sub(r"^[^A-Za-z0-9]+\s*", "", title)
         if title:
-            if chapter_re.match(title):
-                canonical[chapter_num] = title
+            division = _document_profiles.match_division(
+                title, profile, "canonical_title")
+            if division is not None:
+                if not _document_profiles.contains_division_subnumber(
+                        title, division):
+                    canonical[chapter_num] = title
             else:
-                canonical[chapter_num] = f"Chapter {chapter_num}: {title}"
+                raw_number = str(info.get("division_number") or chapter_num)
+                kind = str(info.get("division_kind") or "Chapter")
+                synthesized = _document_profiles.DivisionMatch(
+                    ordinal=chapter_num,
+                    raw_number=raw_number,
+                    kind=kind,
+                    title=title,
+                    matched_text=title,
+                )
+                if not _document_profiles.contains_division_subnumber(
+                        title, synthesized):
+                    canonical[chapter_num] = (
+                        _document_profiles.canonical_division_title(
+                            synthesized, profile))
     return canonical
 
 
@@ -3681,7 +3811,12 @@ def _validate_against_scaffold(
     return result
 
 
-def _build_chapter_map(doc_path: Path) -> dict[int, dict]:
+def _build_chapter_map(
+        doc_path: Path, *,
+        structure_profile: (
+            str | _document_profiles.StructureProfile
+        ) = DEFAULT_STRUCTURE_PROFILE,
+) -> dict[int, dict]:
     """Extract chapter-to-page-range mapping from DoclingDocument page headers.
 
     Docling labels running page headers as 'page_header'. These contain chapter
@@ -3704,32 +3839,22 @@ def _build_chapter_map(doc_path: Path) -> dict[int, dict]:
         else:
             return {}
 
-    return _build_chapter_map_from_document(doc)
+    return _build_chapter_map_from_document(
+        doc, structure_profile=structure_profile)
 
 
-def _build_chapter_map_from_document(doc: dict) -> dict[int, dict]:
+def _build_chapter_map_from_document(
+        doc: dict, *,
+        structure_profile: (
+            str | _document_profiles.StructureProfile
+        ) = DEFAULT_STRUCTURE_PROFILE,
+) -> dict[int, dict]:
     """Build chapter ranges from one already-captured document mapping."""
 
+    profile = _document_profiles.get_profile(structure_profile)
     texts = doc.get("texts", [])
     if not texts:
         return {}
-
-    # Multiple regex patterns to catch different textbook formats:
-    # "3 · PERSONAL JURISDICTION", "Chapter 4  Limits on...",
-    # "CHAPTER FIVE: ...", "Part III - ...", "Unit 4: ..."
-    _WORD_TO_NUM = {
-        "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
-        "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
-        "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14,
-        "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18,
-        "nineteen": 19, "twenty": 20,
-    }
-    _ROMAN_TO_NUM = {
-        "i": 1, "ii": 2, "iii": 3, "iv": 4, "v": 5, "vi": 6,
-        "vii": 7, "viii": 8, "ix": 9, "x": 10, "xi": 11, "xii": 12,
-        "xiii": 13, "xiv": 14, "xv": 15, "xvi": 16, "xvii": 17,
-        "xviii": 18, "xix": 19, "xx": 20,
-    }
 
     # --- Private Use Area (PUA) digit decoder ---
     # Some PDFs use custom font glyphs (U+F643..U+F64C) instead of ASCII
@@ -3742,34 +3867,6 @@ def _build_chapter_map_from_document(doc: dict) -> dict[int, dict]:
         if not any(0xE000 <= ord(c) <= 0xF8FF for c in s):
             return s
         return "".join(_PUA_DIGIT_MAP.get(c, c) for c in s)
-
-    chapter_patterns = [
-        # "Chapter 4  Limits on..." or "Chapter 4: Limits on..."
-        re.compile(r"Chapter\s+(\d{1,2})\s*[:\-\xb7\u00b7\u2022\u2013\u2014]?\s+(.+)", re.I),
-        # "3 · PERSONAL JURISDICTION" (number + separator + title)
-        re.compile(r"(\d{1,2})\s*[\xb7\u00b7\u2022\-\u2013\u2014]\s+(.+)", re.I),
-        # "CHAPTER FIVE: The Federal..." (word numbers)
-        re.compile(r"Chapter\s+(\w+)\s*[:\-\xb7\u00b7\u2022\u2013\u2014]?\s+(.+)", re.I),
-        # "Part III - Due Process" (Roman numerals)
-        re.compile(r"(?:Part|Unit)\s+(\w+)\s*[:\-\xb7\u00b7\u2022\u2013\u2014]?\s+(.+)", re.I),
-    ]
-
-    def _extract_chapter_num(match_group_1: str) -> int | None:
-        """Convert matched group to integer chapter number."""
-        s = match_group_1.strip()
-        # Direct digit
-        if s.isdigit():
-            n = int(s)
-            return n if 1 <= n <= 50 else None
-        # Word number
-        n = _WORD_TO_NUM.get(s.lower())
-        if n:
-            return n
-        # Roman numeral
-        n = _ROMAN_TO_NUM.get(s.lower())
-        if n:
-            return n
-        return None
 
     chapter_pages: dict[int, dict] = {}
     for t in texts:
@@ -3788,30 +3885,24 @@ def _build_chapter_map_from_document(doc: dict) -> dict[int, dict]:
         # Decode PUA font glyphs to ASCII digits before matching
         text = _decode_pua_digits(text)
 
-        # Try each pattern
-        for pat in chapter_patterns:
-            m = pat.match(text)
-            if not m:
-                continue
-            ch_num = _extract_chapter_num(m.group(1))
-            if ch_num is None:
-                continue
-            ch_title = m.group(2).strip()
-            # Skip if title is too short (likely a false positive)
-            if len(ch_title) < 3:
-                continue
-            if ch_num not in chapter_pages:
-                chapter_pages[ch_num] = {
-                    "title": ch_title.title(),
-                    "min_page": page,
-                    "max_page": page,
-                }
-            else:
-                chapter_pages[ch_num]["min_page"] = min(
-                    chapter_pages[ch_num]["min_page"], page)
-                chapter_pages[ch_num]["max_page"] = max(
-                    chapter_pages[ch_num]["max_page"], page)
-            break  # first matching pattern wins
+        division = _document_profiles.match_division(
+            text, profile, "running_header")
+        if division is None or len(division.title) < 3:
+            continue
+        ch_num = division.ordinal
+        if ch_num not in chapter_pages:
+            chapter_pages[ch_num] = {
+                "title": division.title.title(),
+                "division_kind": division.kind,
+                "division_number": division.raw_number,
+                "min_page": page,
+                "max_page": page,
+            }
+        else:
+            chapter_pages[ch_num]["min_page"] = min(
+                chapter_pages[ch_num]["min_page"], page)
+            chapter_pages[ch_num]["max_page"] = max(
+                chapter_pages[ch_num]["max_page"], page)
 
     # --- Fallback: if page headers yielded nothing, scan section_header items ---
     if not chapter_pages:
@@ -3828,24 +3919,19 @@ def _build_chapter_map_from_document(doc: dict) -> dict[int, dict]:
             page = prov[0].get("page_no")
             if page is None:
                 continue
-            for pat in chapter_patterns:
-                m = pat.match(text)
-                if not m:
-                    continue
-                ch_num = _extract_chapter_num(m.group(1))
-                if ch_num is None:
-                    continue
-                ch_title = m.group(2).strip()
-                if len(ch_title) < 3:
-                    continue
-                if ch_num not in chapter_pages:
-                    chapter_pages[ch_num] = {
-                        "title": ch_title.title(),
-                        "min_page": page,
-                        "max_page": page,
-                    }
-                # Don't expand page ranges from section headers (less reliable)
-                break
+            division = _document_profiles.match_division(
+                text, profile, "running_header")
+            if division is None or len(division.title) < 3:
+                continue
+            ch_num = division.ordinal
+            if ch_num not in chapter_pages:
+                chapter_pages[ch_num] = {
+                    "title": division.title.title(),
+                    "division_kind": division.kind,
+                    "division_number": division.raw_number,
+                    "min_page": page,
+                    "max_page": page,
+                }
 
     if chapter_pages:
         log.info(f"Chapter map: {len(chapter_pages)} chapters from page headers")
@@ -3855,7 +3941,12 @@ def _build_chapter_map_from_document(doc: dict) -> dict[int, dict]:
     return chapter_pages
 
 
-def _build_toc_hierarchy(doc_path: Path) -> list[dict]:
+def _build_toc_hierarchy(
+        doc_path: Path, *,
+        structure_profile: (
+            str | _document_profiles.StructureProfile
+        ) = DEFAULT_STRUCTURE_PROFILE,
+) -> list[dict]:
     """Parse the Table of Contents from DoclingDocument tables.
 
     The TOC is the authoritative source for document hierarchy. It contains
@@ -3865,6 +3956,7 @@ def _build_toc_hierarchy(doc_path: Path) -> list[dict]:
     Returns a sorted list of:
       {"level": 1-4, "marker": "B.", "title": "Federalism", "page": 5}
     """
+    profile = _document_profiles.get_profile(structure_profile)
     try:
         raw = doc_path.read_bytes()
         doc = json.loads(raw)
@@ -3907,7 +3999,6 @@ def _build_toc_hierarchy(doc_path: Path) -> list[dict]:
             row = rows[row_idx]
             page_num = None
             title = ""
-            level = 0
 
             # Last column is typically the page number
             max_col = max(row.keys()) if row else 0
@@ -3918,20 +4009,19 @@ def _build_toc_hierarchy(doc_path: Path) -> list[dict]:
             # Hierarchy from column position
             if 0 in row:
                 title = row.get(1, row.get(2, ""))
-                level = 1
             elif 1 in row:
                 title = row.get(2, row[1])
-                level = 2
             elif 2 in row:
                 title = row[2]
-                level = 3
 
             if title and page_num and page_num > 0:
                 marker = row.get(0, row.get(1, ""))
+                normalized_title = _normalize_text(title)
                 toc_entries.append({
-                    "level": level,
+                    "level": _document_profiles.hierarchy_level(
+                        f"{marker} {normalized_title}".strip(), profile),
                     "marker": marker.strip(),
-                    "title": _normalize_text(title),
+                    "title": normalized_title,
                     "page": page_num,
                 })
 
@@ -3941,14 +4031,11 @@ def _build_toc_hierarchy(doc_path: Path) -> list[dict]:
     return toc_entries
 
 
-_TOC_HIERARCHY_PROMPT = """You are analyzing a Table of Contents from a law school textbook.
+_TOC_HIERARCHY_PROMPT = """You are analyzing a Table of Contents from this reviewed document family:
+{profile_description}
 Parse this TOC into a structured hierarchy. For each entry, assign a heading level:
 
-Level 1: Chapter (e.g., "Chapter 3 · Personal Jurisdiction")
-Level 2: Major section (e.g., "A. The Study of Procedure", "B. Federalism")
-Level 3: Numbered subsection (e.g., "1. Trial Courts", "2. Intermediate Appellate Courts")
-Level 4: Lettered sub-subsection (e.g., "a. Introductory Note", "b. The Complete Diversity Rule")
-Level 5: Case name or Notes and Questions (e.g., "Strawbridge v. Curtiss", "Notes and Questions")
+{hierarchy_guidance}
 
 Output ONLY a JSON array. Each entry: {{"level": N, "title": "...", "page": N}}
 No explanation, no markdown, ONLY the JSON array.
@@ -3967,13 +4054,24 @@ def _llm_parse_toc(toc_text: str, *,
                    ollama_model: str = DEFAULT_OLLAMA_MODEL,
                    gemini_key: str = "",
                    llm_workers: int = DEFAULT_LLM_WORKERS,
-                   thinking: bool = False) -> list[dict]:
+                   thinking: bool = False,
+                   structure_profile: (
+                       str | _document_profiles.StructureProfile
+                   ) = DEFAULT_STRUCTURE_PROFILE) -> list[dict]:
     """Send the raw TOC text to M2.7 and get back a structured hierarchy.
 
     The LLM understands the textbook's structure better than regex —
     it can distinguish chapters from sections from subsections from
     case names based on context and formatting patterns.
     """
+    profile = _document_profiles.get_profile(structure_profile)
+    hierarchy_guidance = "\n".join([
+        "Level 1: a primary division matching the selected profile.",
+        *[
+            f"Level {rule.level}: a title matching /{rule.pattern}/."
+            for rule in profile.hierarchy_rules
+        ],
+    ])
     # Send TOC in chunks of ~100 lines (M2.7 handles 204K context but
     # output length is the bottleneck — fewer entries = better JSON output)
     lines = toc_text.strip().split("\n")
@@ -3982,7 +4080,10 @@ def _llm_parse_toc(toc_text: str, *,
     CHUNK_SIZE = 100
     for start in range(0, len(lines), CHUNK_SIZE):
         batch = "\n".join(lines[start:start + CHUNK_SIZE])
-        prompt = _TOC_HIERARCHY_PROMPT.format(toc_text=batch)
+        prompt = _TOC_HIERARCHY_PROMPT.format(
+            toc_text=batch,
+            profile_description=profile.document_description,
+            hierarchy_guidance=hierarchy_guidance)
         result = _call_llm(
             prompt, cloud_url=cloud_url, cloud_model=cloud_model,
             cloud_key=cloud_key, ollama_url=ollama_url,
@@ -4017,8 +4118,12 @@ def _llm_parse_toc(toc_text: str, *,
     return []
 
 
-def _build_section_lookup(toc: list[dict],
-                          chapter_map: dict[int, dict]) -> dict[int, str]:
+def _build_section_lookup(
+        toc: list[dict], chapter_map: dict[int, dict], *,
+        structure_profile: (
+            str | _document_profiles.StructureProfile
+        ) = DEFAULT_STRUCTURE_PROFILE,
+) -> dict[int, str]:
     """Build a page -> section_path lookup from the TOC hierarchy.
 
     For each page in the document, determines the full hierarchical section
@@ -4027,6 +4132,7 @@ def _build_section_lookup(toc: list[dict],
 
     Returns: {page_number: "Chapter N > Section > Subsection > ..."}
     """
+    profile = _document_profiles.get_profile(structure_profile)
     if not toc:
         return {}
 
@@ -4055,7 +4161,13 @@ def _build_section_lookup(toc: list[dict],
         for ch_num in sorted(chapter_map):
             info = chapter_map[ch_num]
             if info["min_page"] <= page <= info["max_page"]:
-                ch_prefix = f"Chapter {ch_num}"
+                raw_number = str(info.get("division_number") or ch_num)
+                kind = str(info.get("division_kind") or "Chapter")
+                division = _document_profiles.DivisionMatch(
+                    ordinal=ch_num, raw_number=raw_number, kind=kind,
+                    title=str(info.get("title") or ""), matched_text="")
+                ch_prefix = _document_profiles.canonical_division_title(
+                    division, profile)
                 break
 
         # Build full path from stack
@@ -5577,10 +5689,30 @@ _FOOTNOTE_NUM_RE = _chunking_core._FOOTNOTE_NUM_RE
 _FOOTNOTE_CITE_MARKERS = _chunking_core._FOOTNOTE_CITE_MARKERS
 
 
-def classify_content_type(text: str, headings: list[str] | None) -> str:
+def classify_content_type(
+        text: str, headings: list[str] | None, *,
+        structure_profile: (
+            str | _document_profiles.StructureProfile
+        ) = DEFAULT_STRUCTURE_PROFILE,
+) -> str:
     """Classify through the facade's current structural-content helper."""
+    profile = _document_profiles.get_profile(structure_profile)
+
+    def structural_content(value: str, values: list[str] | None) -> bool:
+        if profile.name == DEFAULT_STRUCTURE_PROFILE:
+            return _is_structural_content(value, values)
+        return _chunking_core._is_structural_content(
+            value, values,
+            structural_patterns=(
+                _document_profiles.structural_heading_patterns(profile)))
+
     return _chunking_core.classify_content_type(
-        text, headings, structural_content_fn=_is_structural_content)
+        text, headings,
+        structural_content_fn=structural_content,
+        chapter_heading_fn=lambda heading: (
+            _document_profiles.match_division(
+                heading, profile, "chunk_heading") is not None),
+    )
 
 
 extract_case_names = _chunking_core.extract_case_names
@@ -5597,9 +5729,14 @@ def enrich_chunk(chunk_text: str, headings: list[str] | None,
                  total_pages: int,
                  doc_items: list | None = None,
                  source_file: str = "",
-                 source_items: list[dict] | None = None) -> dict:
+                 source_items: list[dict] | None = None, *,
+                 structure_profile: (
+                     str | _document_profiles.StructureProfile
+                 ) = DEFAULT_STRUCTURE_PROFILE) -> dict:
     """Build an enriched chunk record with legal-textbook metadata."""
-    content_type = classify_content_type(chunk_text, headings)
+    profile = _document_profiles.get_profile(structure_profile)
+    content_type = classify_content_type(
+        chunk_text, headings, structure_profile=profile)
     case_names = extract_case_names(chunk_text)
     section_path = build_section_path(headings)
 
@@ -5607,19 +5744,21 @@ def enrich_chunk(chunk_text: str, headings: list[str] | None,
     chapter_title = None
     for h in (headings or []):
         h_clean = _normalize_text(h)
-        m = CHAPTER_RE.match(h_clean) or CHAPTER_CAPS_RE.match(h_clean)
-        if m:
-            chapter_num = int(m.group(1))
-            chapter_title = m.group(2).strip().title()
+        division = _document_profiles.match_division(
+            h_clean, profile, "chunk_heading")
+        if division is not None:
+            chapter_num = division.ordinal
+            chapter_title = division.title.title()
             break
     # Fallback: scan section_path for chapter numbers
     if chapter_num is None and headings:
         sp = build_section_path(headings)
         sp_clean = _normalize_text(sp)
-        m = CHAPTER_RE.search(sp_clean) or CHAPTER_CAPS_RE.search(sp_clean)
-        if m:
-            chapter_num = int(m.group(1))
-            chapter_title = m.group(2).strip().title()
+        division = _document_profiles.match_division(
+            sp_clean, profile, "chunk_heading")
+        if division is not None:
+            chapter_num = division.ordinal
+            chapter_title = division.title.title()
 
     page_numbers = []
     if doc_items:
@@ -5634,14 +5773,16 @@ def enrich_chunk(chunk_text: str, headings: list[str] | None,
         else estimate_page_range(chunk_index, total_chunks, total_pages)
     )
 
-    xrefs = re.findall(
-        r"Chapter\s+(\d+)(?:,\s*Section\s*([A-Z](?:\.\d+)*))?",
-        chunk_text,
-    )
-    cross_refs = [
-        f"Ch.{num}" + (f".{sec}" if sec else "")
-        for num, sec in xrefs
-    ]
+    cross_refs = []
+    for division in _document_profiles.find_divisions(
+            chunk_text, profile, "cross_reference"):
+        prefix = "Ch" if division.kind.casefold() == "chapter" else division.kind
+        number = (
+            str(division.ordinal)
+            if division.kind.casefold() == "chapter" else division.raw_number)
+        cross_refs.append(
+            f"{prefix}.{number}"
+            + (f".{division.title}" if division.title else ""))
 
     content_source_map = {
         "case_opinion": "body",
@@ -5729,7 +5870,11 @@ def _chunk_heading_key(record: dict) -> tuple[str, ...]:
 
 
 def _merge_enriched_chunk_group(
-        group: list[dict], token_counter: Callable[[str], int]) -> dict:
+        group: list[dict], token_counter: Callable[[str], int], *,
+        structure_profile: (
+            str | _document_profiles.StructureProfile
+        ) = DEFAULT_STRUCTURE_PROFILE,
+) -> dict:
     """Merge source-adjacent records and recompute all text-derived fields."""
     merged = {
         "text": "\n\n".join(
@@ -5751,7 +5896,8 @@ def _merge_enriched_chunk_group(
         metadata["page_range"] = f"pp.{min(starts)}-{max(ends)}"
     headings = metadata.get("headings") or []
     metadata["section_path"] = build_section_path(headings)
-    metadata["content_type"] = classify_content_type(merged["text"], headings)
+    metadata["content_type"] = classify_content_type(
+        merged["text"], headings, structure_profile=structure_profile)
     case_names = extract_case_names(merged["text"])
     metadata["case_names"] = case_names
     metadata["primary_case"] = case_names[0] if case_names else None
@@ -5785,7 +5931,11 @@ def _merge_enriched_chunk_group(
 
 def _coalesce_chunk_boundaries(
         records: list[dict], token_counter: Callable[[str], int],
-        max_tokens: int, *, hard_max_tokens: int | None = None) -> list[dict]:
+        max_tokens: int, *, hard_max_tokens: int | None = None,
+        structure_profile: (
+            str | _document_profiles.StructureProfile
+        ) = DEFAULT_STRUCTURE_PROFILE,
+) -> list[dict]:
     """Repair split sentences and alternating rule/explanation layout lanes."""
     if len(records) < 2:
         return records
@@ -5823,12 +5973,16 @@ def _coalesce_chunk_boundaries(
             candidate = current + [record]
             combined_text = "\n\n".join(item["text"] for item in candidate)
             if current and token_counter(combined_text) > max_tokens:
-                packed.append(_merge_enriched_chunk_group(current, token_counter))
+                packed.append(_merge_enriched_chunk_group(
+                    current, token_counter,
+                    structure_profile=structure_profile))
                 current = [record]
             else:
                 current = candidate
         if current:
-            packed.append(_merge_enriched_chunk_group(current, token_counter))
+            packed.append(_merge_enriched_chunk_group(
+                current, token_counter,
+                structure_profile=structure_profile))
         return packed
 
     # Reconstruct alternating two-column source layout as two coherent lanes.
@@ -5918,7 +6072,8 @@ def _coalesce_chunk_boundaries(
                 "metadata": dict(record["metadata"]),
             }
             repaired[-1] = _merge_enriched_chunk_group(
-                [previous_copy, record_copy], token_counter)
+                [previous_copy, record_copy], token_counter,
+                structure_profile=structure_profile)
         else:
             repaired.append(record)
     return repaired
@@ -5927,13 +6082,14 @@ def _coalesce_chunk_boundaries(
 def _validate_chunk_structure_for_publication(
         records: list[dict], *, scaffold: list[dict],
         book_sections: dict, chapter_map: dict[int, dict],
-        chapter_titles: dict[int, str]) -> None:
+        chapter_titles: dict[int, str],
+        structure_profile: (
+            str | _document_profiles.StructureProfile
+        ) = DEFAULT_STRUCTURE_PROFILE,
+) -> None:
     """Reject a corpus with leaked structural pages or corrupt hierarchy."""
-    structural_names = (
-        "summary", "contents", "toc", "problems", "acknowledgments",
-        "about_authors", "table_of_cases", "table_of_rules", "index",
-        "editorial", "publisher", "credits",
-    )
+    profile = _document_profiles.get_profile(structure_profile)
+    structural_names = _document_profiles.structural_section_keys(profile)
     structural_ranges = {
         (value["start"], value["end"])
         for name in structural_names
@@ -6043,9 +6199,16 @@ def _validate_chunk_structure_for_publication(
         if not expected_title or actual_title != expected_title:
             issues.append(
                 f"chunk {index} chapter {chapter_num} has noncanonical title")
+        actual_division = (
+            _document_profiles.match_division(
+                actual_title, profile, "canonical_title")
+            if actual_title else None
+        )
         if actual_title and (
                 re.search(r"(?:\s*[.\u2026·]){3,}", actual_title)
-                or re.search(rf"\b{chapter_num}-\d+\b", actual_title)):
+                or (actual_division is not None
+                    and _document_profiles.contains_division_subnumber(
+                        actual_title, actual_division))):
             issues.append(f"chunk {index} chapter title contains TOC artifacts")
         section_path = metadata.get("section_path", "")
         if expected_title and not section_path.startswith(expected_title):
@@ -7117,10 +7280,10 @@ def _prepare_source_preserving_chunks(
     return prepared
 
 
-_HEADING_PROMPT = """This text is from Chapter {chapter_num}: {chapter_title} of a law textbook.
+_HEADING_PROMPT = """This text belongs to the document division "{division_title}".
 The current section heading is "{heading}" which lacks context.
 Based on the text content, what is the full hierarchical section path?
-Format: "Chapter {chapter_num} > [Section Letter]. [Section Name] > [Subsection]"
+Begin the path with the exact division title and separate levels with " > ".
 Reply with ONLY the path, nothing else.
 
 Text (first 400 chars):
@@ -7129,7 +7292,13 @@ Text (first 400 chars):
 Full section path:"""
 
 
-def _reconstruct_heading(text, heading, chapter_num, chapter_title, **llm_kwargs):
+def _reconstruct_heading(
+        text, heading, chapter_num, chapter_title, *,
+        structure_profile: (
+            str | _document_profiles.StructureProfile
+        ) = DEFAULT_STRUCTURE_PROFILE,
+        **llm_kwargs,
+):
     """Use LLM to reconstruct a full section path from a bare heading.
 
     Only processes headings that are < 5 characters (bare "B", "III", "2", etc.).
@@ -7137,9 +7306,11 @@ def _reconstruct_heading(text, heading, chapter_num, chapter_title, **llm_kwargs
     """
     if len(heading) >= 5:
         return None
+    profile = _document_profiles.get_profile(structure_profile)
+    division_title = chapter_title or (
+        _document_profiles.fallback_division_title(profile, chapter_num))
     prompt = _HEADING_PROMPT.format(
-        chapter_num=chapter_num,
-        chapter_title=chapter_title or f"Chapter {chapter_num}",
+        division_title=division_title,
         heading=heading,
         text=text[:400],
     )
@@ -7148,13 +7319,39 @@ def _reconstruct_heading(text, heading, chapter_num, chapter_title, **llm_kwargs
     if not result:
         return None
     result = _THINK_TAG_RE.sub("", result).strip()
-    # Sanity check: result should contain the chapter number
-    if str(chapter_num) not in result:
+    # The profile-native title is always available, so a bare normalized
+    # ordinal is not enough to keep an LLM reconstruction in this division.
+    def normalize_title(value: str) -> str:
+        return re.sub(r"\s+", " ", value).strip().casefold()
+
+    first_component = re.split(r"\s*>\s*", result, maxsplit=1)[0]
+    if normalize_title(first_component) != normalize_title(division_title):
         return None
     # Cap length — should be a section path, not a paragraph
     if len(result) > 200:
         return None
     return result
+
+
+def _endpoint_parameter_binding(url: str) -> dict:
+    """Represent an exact endpoint without retaining credential material."""
+    if not isinstance(url, str):
+        raise TypeError("endpoint URL must be a string")
+    parsed = urlparse(url)
+    origin = None
+    if parsed.scheme and parsed.hostname:
+        host = parsed.hostname.casefold()
+        if ":" in host:
+            host = f"[{host}]"
+        try:
+            port = f":{parsed.port}" if parsed.port is not None else ""
+        except ValueError:
+            port = ""
+        origin = f"{parsed.scheme.casefold()}://{host}{port}"
+    return {
+        "origin": origin,
+        "url_sha256": hashlib.sha256(url.encode("utf-8")).hexdigest(),
+    }
 
 
 def _chunk_parameters(*, embedding_model: str, max_tokens: int,
@@ -7166,13 +7363,17 @@ def _chunk_parameters(*, embedding_model: str, max_tokens: int,
                       cloud_url: str, cloud_model: str, cloud_key: str,
                       llm_workers: int, thinking: bool,
                       reconstruct_headings: bool, quality_score: bool,
-                      llm_scaffold: bool) -> dict:
+                      llm_scaffold: bool,
+                      structure_profile: (
+                          str | _document_profiles.StructureProfile
+                      ) = DEFAULT_STRUCTURE_PROFILE) -> dict:
     """Return credential-free parameters that determine chunking output."""
+    profile = _document_profiles.get_profile(structure_profile)
     gemini_enabled = bool(
         gemini_key or os.environ.get("GEMINI_API_KEY", ""))
     llm_config = _llm_runtime.config
     return {
-        "chunking_policy_version": 19,
+        "chunking_policy_version": 20,
         "classification_prompt_version": 1,
         "embedding_model": embedding_model,
         "max_tokens": max_tokens,
@@ -7185,11 +7386,11 @@ def _chunk_parameters(*, embedding_model: str, max_tokens: int,
         "zeroshot_model": (
             DEFAULT_ZEROSHOT_MODEL if zeroshot_classify else None),
         "contextualize": contextualize,
-        "ollama_url": ollama_url,
+        "ollama_url": _endpoint_parameter_binding(ollama_url),
         "ollama_model": ollama_model,
         "gemini_enabled": gemini_enabled,
         "gemini_model": DEFAULT_GEMINI_MODEL if gemini_enabled else None,
-        "cloud_url": cloud_url,
+        "cloud_url": _endpoint_parameter_binding(cloud_url),
         "cloud_model": cloud_model,
         "cloud_enabled": bool(cloud_url and cloud_key),
         "llm_workers": llm_workers,
@@ -7202,27 +7403,33 @@ def _chunk_parameters(*, embedding_model: str, max_tokens: int,
         "reconstruct_headings": reconstruct_headings,
         "quality_score": quality_score,
         "llm_scaffold": llm_scaffold,
+        "structure_profile": _document_profiles.profile_provenance(profile),
         "model_artifact_lock_sha256": _model_artifact_lock_sha256(),
     }
 
 
 _STRUCTURAL_SECTION_NAMES = (
-    "summary", "contents", "toc", "problems", "acknowledgments",
-    "about_authors", "table_of_cases", "table_of_rules", "index",
-    "editorial", "publisher", "credits",
-)
+    _document_profiles.structural_section_keys(
+        _document_profiles.get_profile(DEFAULT_STRUCTURE_PROFILE)))
 
 
-def _book_structural_ranges(book_sections: dict) -> set[tuple[int, int]]:
+def _book_structural_ranges(
+        book_sections: dict, *,
+        structure_profile: (
+            str | _document_profiles.StructureProfile
+        ) = DEFAULT_STRUCTURE_PROFILE,
+) -> set[tuple[int, int]]:
     """Return the exact source-page ranges excluded from publication."""
+    profile = _document_profiles.get_profile(structure_profile)
+    structural_names = _document_profiles.structural_section_keys(profile)
     ranges = {
         (section["start"], section["end"])
-        for name in _STRUCTURAL_SECTION_NAMES
+        for name in structural_names
         if (section := book_sections.get(name)) is not None
     }
     opening_starts = [
         section["start"]
-        for name in ("summary", "contents", "toc")
+        for name in _document_profiles.toc_seed_keys(profile)
         if (section := book_sections.get(name)) is not None
     ]
     if opening_starts and min(opening_starts) > 1:
@@ -7236,7 +7443,7 @@ def _load_chunk_completion_inputs(
         chunks_sha256: str, chunks_size: int, parameters: dict,
         records: list[dict], source_pdf_path: Path | None = None,
 ) -> dict | None:
-    """Strictly validate chunk-v2 inputs against current exact artifacts."""
+    """Strictly validate chunk-v3 inputs against current exact artifacts."""
     manifest_path = _artifact_completion_path(
         chunks_output, stage="chunking")
     try:
@@ -7250,7 +7457,8 @@ def _load_chunk_completion_inputs(
     if set(payload) != {
             "schema_version", "stage", "source_sha256",
             "source_record_count", "parameters_sha256", "outputs",
-            "inputs"}:
+            "inputs", "structure_profile",
+            "structure_profile_parameters_sha256"}:
         raise ValueError("chunk completion has an invalid field set")
     if (payload.get("stage") != "chunking"
             or payload.get("source_sha256") != document_sha256
@@ -7258,6 +7466,16 @@ def _load_chunk_completion_inputs(
             or payload.get("parameters_sha256")
             != _artifact_parameters_sha256(parameters)):
         raise ValueError("chunk completion header is invalid")
+    profile = _document_profiles.profile_from_provenance(
+        parameters.get("structure_profile"))
+    if payload.get("structure_profile") != (
+            _document_profiles.profile_provenance(profile)):
+        raise ValueError("chunk completion structure profile is invalid")
+    if payload.get("structure_profile_parameters_sha256") != (
+            _structure_profile_parameters_binding(
+                payload["parameters_sha256"], payload["structure_profile"])):
+        raise ValueError(
+            "chunk completion structure profile is detached from parameters")
 
     outputs = payload.get("outputs")
     if (not isinstance(outputs, list) or len(outputs) != 1
@@ -7460,6 +7678,9 @@ def _publish_corpus_quality_report(
         structural_ranges: set[tuple[int, int]] | None = None,
         document_snapshot: tuple[dict, str, int] | None = None,
         chunk_inputs: dict | None = None,
+        structure_profile: (
+            str | _document_profiles.StructureProfile | None
+        ) = None,
 ) -> dict:
     """Publish quality evidence under the chunk artifact-set lease."""
     with _chunk_output_lease(chunks_output):
@@ -7469,6 +7690,7 @@ def _publish_corpus_quality_report(
             structural_ranges=structural_ranges,
             document_snapshot=document_snapshot,
             chunk_inputs=chunk_inputs,
+            structure_profile=structure_profile,
         )
 
 
@@ -7477,6 +7699,9 @@ def _publish_corpus_quality_report_locked(
         structural_ranges: set[tuple[int, int]] | None = None,
         document_snapshot: tuple[dict, str, int] | None = None,
         chunk_inputs: dict | None = None,
+        structure_profile: (
+            str | _document_profiles.StructureProfile | None
+        ) = None,
 ) -> dict:
     """Build and atomically publish a report over exact artifact snapshots."""
     doc_path = Path(doc_path)
@@ -7512,14 +7737,23 @@ def _publish_corpus_quality_report_locked(
     )
     if validated_chunk_inputs is None:
         raise ValueError(
-            "Corpus quality requires a verified chunk-v2 completion")
+            "Corpus quality requires a verified chunk-v3 completion")
     if chunk_inputs is not None and chunk_inputs != validated_chunk_inputs:
         raise RuntimeError(
             "Chunk inputs changed before quality report publication")
     chunk_inputs = validated_chunk_inputs
+    profile = _document_profiles.profile_from_provenance(
+        parameters.get("structure_profile"))
+    if (structure_profile is not None
+            and _document_profiles.get_profile(structure_profile) is not profile):
+        raise ValueError(
+            "quality-report structure profile does not match the attested "
+            "chunk parameters")
     if structural_ranges is None:
         structural_ranges = _book_structural_ranges(
-            _identify_book_sections(document))
+            _identify_book_sections(
+                document, structure_profile=profile),
+            structure_profile=profile)
     stable_ids = [_retrieval_core._chunk_id(record) for record in records]
     chunk_hashes = [_retrieval_core._chunk_hash(record) for record in records]
     embedding_model = str(parameters.get("embedding_model") or "")
@@ -7616,8 +7850,12 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
                    thinking: bool = False,
                    reconstruct_headings: bool = False,
                    quality_score: bool = False,
-                   llm_scaffold: bool = False) -> None:
+                   llm_scaffold: bool = False,
+                   structure_profile: (
+                       str | _document_profiles.StructureProfile
+                   ) = DEFAULT_STRUCTURE_PROFILE) -> None:
     """Build one complete chunk artifact set under a path-wide lease."""
+    profile = _document_profiles.get_profile(structure_profile)
     chunks_output = Path(chunks_output)
     _run_telemetry.validate_distinct_output_paths({
         "Docling JSON": Path(doc_path),
@@ -7653,6 +7891,7 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
             reconstruct_headings=reconstruct_headings,
             quality_score=quality_score,
             llm_scaffold=llm_scaffold,
+            structure_profile=profile,
         )
 
 
@@ -7676,7 +7915,10 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
                    thinking: bool = False,
                    reconstruct_headings: bool = False,
                    quality_score: bool = False,
-                   llm_scaffold: bool = False) -> None:
+                   llm_scaffold: bool = False,
+                   structure_profile: (
+                       str | _document_profiles.StructureProfile
+                   ) = DEFAULT_STRUCTURE_PROFILE) -> None:
     """Load a DoclingDocument, chunk with HybridChunker, and enrich."""
     from docling_core.types import DoclingDocument
     from docling_core.transforms.chunker import HybridChunker
@@ -7685,6 +7927,7 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
     )
     from tqdm import tqdm
 
+    profile = _document_profiles.get_profile(structure_profile)
     _require_file(doc_path, "DoclingDocument JSON")
 
     completion_parameters = _chunk_parameters(
@@ -7697,7 +7940,8 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
         cloud_url=cloud_url, cloud_model=cloud_model, cloud_key=cloud_key,
         llm_workers=llm_workers, thinking=thinking,
         reconstruct_headings=reconstruct_headings,
-        quality_score=quality_score, llm_scaffold=llm_scaffold)
+        quality_score=quality_score, llm_scaffold=llm_scaffold,
+        structure_profile=profile)
     requested_max_tokens = max_tokens
     reserve_tokens = _CONTEXT_TOKEN_RESERVE if contextualize else 0
     max_tokens = _effective_chunk_token_limit(
@@ -7734,19 +7978,36 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
 
     # Structural ranges must be known before enrichment so TOC/back-matter
     # chunks cannot enter classification or inherit chapter metadata.
-    chapter_map = _build_chapter_map_from_document(doc_dict)
-    book_sections = _identify_book_sections(doc_dict)
+    chapter_map = _build_chapter_map_from_document(
+        doc_dict, structure_profile=profile)
+    book_sections = _identify_book_sections(
+        doc_dict, structure_profile=profile)
     has_toc = any(
         book_sections.get(name) is not None
-        for name in ("toc", "contents", "summary")
+        for name in _document_profiles.toc_seed_keys(profile)
     )
     if not has_toc:
         log.error("FATAL: No Table of Contents or Contents section found.")
-        log.error("  Every book must have a TOC/Contents. Cannot proceed.")
+        log.error(
+            "  The selected structure profile requires a recognized "
+            "TOC/Contents section. Cannot proceed.")
+        log.error(f"  Structure profile: {profile.name}")
         log.error(f"  Document: {doc_path}")
         sys.exit(1)
 
-    structural_ranges = _book_structural_ranges(book_sections)
+    structural_ranges = _book_structural_ranges(
+        book_sections, structure_profile=profile)
+
+    # Validate the selected publisher policy before loading tokenizers or
+    # producing raw chunks.  A wrong profile must fail without publishing or
+    # spending the bulk of a chunking run on an unrecognized hierarchy.
+    llm_kwargs = dict(cloud_url=cloud_url, cloud_model=cloud_model,
+                      cloud_key=cloud_key, ollama_url=ollama_url,
+                      ollama_model=ollama_model, gemini_key=gemini_key,
+                      llm_workers=llm_workers, thinking=thinking)
+    scaffold = _build_scaffold(
+        doc_dict, book_sections, structure_profile=profile,
+        use_llm=llm_scaffold, **llm_kwargs)
 
     # The chunker tokenizer is for token counting only — it doesn't need to
     # match the embedding model exactly. API models (voyage-*, text-embedding-*,
@@ -7889,6 +8150,7 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
                 parent_refs_by_child=lineage_parent_refs,
                 caption_refs_by_parent=lineage_caption_refs,
             ),
+            structure_profile=profile,
         )
         if (_fully_inside_structural_range(record["metadata"])
                 or record["metadata"]["content_type"] == "structural"):
@@ -7955,6 +8217,7 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
                 reserve_tokens=reserve_tokens,
             ),
         ),
+        structure_profile=profile,
     )
     if len(enriched) != before_coalescing:
         log.info(
@@ -7966,25 +8229,12 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
     #   Director (I) → Manager (II) → QC (III) → Expert(s) (IV)
     # Scaffold from TOC is the single source of truth.
 
-    llm_kwargs = dict(cloud_url=cloud_url, cloud_model=cloud_model,
-                      cloud_key=cloud_key, ollama_url=ollama_url,
-                      ollama_model=ollama_model, gemini_key=gemini_key,
-                      llm_workers=llm_workers, thinking=thinking)
-
     # ── Team 1: Scaffold Construction ──
-    # (orchestrated inside _build_scaffold via its own _AgentTeam)
-    scaffold = _build_scaffold(
-        doc_dict, book_sections, use_llm=llm_scaffold, **llm_kwargs)
-    if not scaffold:
-        log.error("FATAL: TOC/Contents found but scaffold construction failed.")
-        if llm_scaffold:
-            log.error("  The deterministic and LLM parsers could not parse the TOC.")
-        else:
-            log.error("  Retry with --llm-scaffold to enable LLM-assisted parsing.")
-        log.error(f"  Document: {doc_path}")
-        sys.exit(1)
+    # (already orchestrated before tokenizer loading so profile mismatches
+    # fail early and cannot publish a guessed hierarchy)
 
-    _scaffold_ch_titles = _canonical_chapter_titles(scaffold, chapter_map)
+    _scaffold_ch_titles = _canonical_chapter_titles(
+        scaffold, chapter_map, structure_profile=profile)
     scaffold = _normalize_scaffold_metadata(scaffold, _scaffold_ch_titles)
     observed_chapter_end = max(
         (info.get("max_page", 0) for info in chapter_map.values()),
@@ -8004,8 +8254,8 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
             if not chapter_title:
                 return path
             parts = [part.strip() for part in path.split(" > ") if part.strip()]
-            if parts and re.match(
-                    r"^(?:Chapter|Part|Unit)\s+\d+\b", parts[0], re.I):
+            if (parts and _document_profiles.match_division(
+                    parts[0], profile, "canonical_title") is not None):
                 parts[0] = chapter_title
             elif not parts or parts[0] != chapter_title:
                 parts.insert(0, chapter_title)
@@ -8201,7 +8451,8 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
             ch_title = rec["metadata"].get("chapter_title", "")
             heading = sp if sp else "(none)"
             return _reconstruct_heading(
-                rec["text"], heading, ch_num, ch_title, **llm_kwargs)
+                rec["text"], heading, ch_num, ch_title,
+                structure_profile=profile, **llm_kwargs)
 
         if workers > 1 and len(low_quality) > 0:
             with ThreadPoolExecutor(max_workers=workers) as pool:
@@ -8413,6 +8664,7 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
         book_sections=book_sections,
         chapter_map=chapter_map,
         chapter_titles=_scaffold_ch_titles,
+        structure_profile=profile,
     )
 
     # Record the final embedding payload size with the provider/model tokenizer
@@ -8439,7 +8691,14 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
         source_record_count=None, parameters=completion_parameters,
         outputs={"chunks_jsonl": chunks_output},
         schema_version=CHUNK_COMPLETION_SCHEMA_VERSION,
-        extra_fields={"inputs": chunk_input_bindings})
+        extra_fields={
+            "inputs": chunk_input_bindings,
+            "structure_profile": completion_parameters["structure_profile"],
+            "structure_profile_parameters_sha256": (
+                _structure_profile_parameters_binding(
+                    _artifact_parameters_sha256(completion_parameters),
+                    completion_parameters["structure_profile"])),
+        })
     quality_report = _publish_corpus_quality_report_locked(
         doc_path,
         chunks_output,
@@ -8447,6 +8706,7 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
         structural_ranges=structural_ranges,
         document_snapshot=(doc_dict, source_sha256, source_size),
         chunk_inputs=chunk_input_bindings,
+        structure_profile=profile,
     )
 
     # Stats
@@ -10829,6 +11089,19 @@ def _section_heading_level(part: str, depth: int) -> str:
     return "#####"
 
 
+def _display_division_title(ordinal: int, title: str) -> str:
+    """Render a normalized division without duplicating its designation."""
+    cleaned = str(title or "").strip()
+    if re.match(
+            r"^(?:Chapter|Part|Unit)\s+"
+            r"(?:\d{1,3}|[IVXLCDM]+|[A-Za-z-]+)\b",
+            cleaned, re.I):
+        return cleaned
+    if cleaned:
+        return f"Chapter {ordinal} - {cleaned}"
+    return f"Chapter {ordinal}"
+
+
 def _assemble_markdown(chunks: list[dict]) -> str:
     """Assemble filtered chunks into a single structured markdown string."""
     lines: list[str] = []
@@ -10843,7 +11116,8 @@ def _assemble_markdown(chunks: list[dict]) -> str:
         ch_title = meta.get("chapter_title", "")
         if ch and ch != current_chapter:
             current_chapter = ch
-            lines.append(f"\n\n---\n\n# Chapter {ch} - {ch_title}\n")
+            lines.append(
+                f"\n\n---\n\n# {_display_division_title(ch, ch_title)}\n")
             emitted_sections.clear()
 
         sp = meta.get("section_path", "")
@@ -10852,7 +11126,10 @@ def _assemble_markdown(chunks: list[dict]) -> str:
             # Scaffold, deterministic, and legacy paths use three separators.
             parts = re.split(r"\s+(?:\u2192|->|>)\s+", sp)
             # Skip the chapter part if it's repeated as parts[0]
-            if parts and parts[0].lower().startswith("chapter"):
+            if (parts and (
+                    parts[0].strip() == str(ch_title).strip()
+                    or re.match(
+                        r"^(?:Chapter|Part|Unit)\s+", parts[0], re.I))):
                 parts = parts[1:]
             # Emit each new level heading that hasn't been emitted yet
             for depth_idx, part in enumerate(parts):
@@ -11141,10 +11418,16 @@ def export_markdown(chunks_path: Path, export_path: Path, *,
                 xref_chapters = set()
                 for rec in ch_chunks:
                     for xref in rec["metadata"].get("cross_references", []):
-                        # Parse "Ch.12" -> 12
-                        m = re.match(r"Ch\.(\d+)", xref)
+                        # Normalize built-in profile displays (``Ch.12`` or
+                        # ``Part.IV``) back to the integer division contract.
+                        m = re.match(
+                            r"(?:Ch|Chapter|Part|Unit)\."
+                            r"([A-Za-z0-9-]+)", xref, re.I)
                         if m:
-                            ref_ch = int(m.group(1))
+                            ref_ch = _document_profiles.parse_division_ordinal(
+                                m.group(1), maximum=3999)
+                            if ref_ch is None:
+                                continue
                             if ref_ch != ch_num and ref_ch in chapter_index:
                                 xref_chapters.add(ref_ch)
 
@@ -11159,7 +11442,8 @@ def export_markdown(chunks_path: Path, export_path: Path, *,
                                 if t:
                                     ref_title = t
                                     break
-                        md += f"- [Chapter {ref_ch} - {ref_title}]({ref_file})\n"
+                        label = _display_division_title(ref_ch, ref_title)
+                        md += f"- [{label}]({ref_file})\n"
 
             filepath = out_dir / filename
             _atomic_write_text(filepath, md)
@@ -12567,6 +12851,8 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
     quality_report_path = paths.get(
         "quality_report", _quality_core.quality_report_path(paths["chunks"]))
     llm_kwargs = _llm_kwargs_from_args(args, include_workers=True)
+    structure_profile = _document_profiles.get_profile(
+        getattr(args, "structure_profile", DEFAULT_STRUCTURE_PROFILE))
 
     def observed_stage(name: str) -> str:
         return f"{stage_scope}.{name}" if stage_scope else name
@@ -12637,6 +12923,7 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
                 reconstruct_headings=args.reconstruct_headings,
                 quality_score=args.quality_score,
                 llm_scaffold=getattr(args, "llm_scaffold", False),
+                structure_profile=structure_profile,
                 **llm_kwargs)
             chunk_count = (
                 _chunk_record_count(paths["chunks"])
@@ -12682,6 +12969,7 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
                     reconstruct_headings=args.reconstruct_headings,
                     quality_score=args.quality_score,
                     llm_scaffold=getattr(args, "llm_scaffold", False),
+                    structure_profile=structure_profile,
                     **llm_kwargs,
                 )
                 if not _chunks_complete(
@@ -12712,7 +13000,8 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
             else:
                 report = _publish_corpus_quality_report(
                     paths["doc"], paths["chunks"],
-                    parameters=chunk_parameters)
+                    parameters=chunk_parameters,
+                    structure_profile=structure_profile)
                 if not _quality_report_complete(
                         paths["doc"], paths["chunks"],
                         parameters=chunk_parameters):
@@ -13439,6 +13728,15 @@ def main(argv: list[str] | None = None):
                         choices=["chroma", "qdrant"],
                         help=f"Vector DB backend (default: {DEFAULT_DB_BACKEND})")
 
+    def add_structure_profile_flag(p):
+        p.add_argument(
+            "--structure-profile",
+            choices=_document_profiles.profile_names(),
+            default=DEFAULT_STRUCTURE_PROFILE,
+            help=("Reviewed document-layout policy (default: "
+                  f"{DEFAULT_STRUCTURE_PROFILE})"),
+        )
+
     def add_db_lock_flag(p):
         p.add_argument(
             "--db-lock-timeout", type=float,
@@ -13581,6 +13879,7 @@ def main(argv: list[str] | None = None):
     p_chunk.add_argument("--dedup-threshold", type=float, default=DEDUP_THRESHOLD,
                          help=f"Dedup Jaccard threshold 0-1 (default: {DEDUP_THRESHOLD})")
     add_embedding_flags(p_chunk)
+    add_structure_profile_flag(p_chunk)
     add_watermark_flag(p_chunk)
     add_chunk_llm_flags(p_chunk)
     add_llm_provider_flags(p_chunk)
@@ -13852,6 +14151,7 @@ def main(argv: list[str] | None = None):
                         help="Also export split chapter files")
     add_collection_flag(p_full, derive_from_run=True)
     add_embedding_flags(p_full)
+    add_structure_profile_flag(p_full)
     add_watermark_flag(p_full)
     add_ocr_flag(p_full)
     add_chunk_llm_flags(p_full)
@@ -13893,6 +14193,7 @@ def main(argv: list[str] | None = None):
                          help="Also export split chapter files")
     add_collection_flag(p_batch, derive_from_run=True)
     add_embedding_flags(p_batch)
+    add_structure_profile_flag(p_batch)
     add_watermark_flag(p_batch)
     add_ocr_flag(p_batch)
     add_chunk_llm_flags(p_batch)
@@ -14029,6 +14330,7 @@ def main(argv: list[str] | None = None):
                            reconstruct_headings=args.reconstruct_headings,
                            quality_score=args.quality_score,
                            llm_scaffold=args.llm_scaffold,
+                           structure_profile=args.structure_profile,
                            **llm_kwargs)
 
         elif args.command == "index":
@@ -14577,6 +14879,14 @@ def _menu_secrets_to_environment(
     )
 
 
+def _menu_structure_profile() -> str:
+    """Choose one reviewed immutable document-layout policy."""
+    return _menu_choose("Document structure profile:", [
+        (name, _document_profiles.get_profile(name).document_description)
+        for name in _document_profiles.profile_names()
+    ], default=DEFAULT_STRUCTURE_PROFILE)
+
+
 def interactive_menu():
     """User-friendly guided pipeline menu."""
     print("\n" + "=" * 60)
@@ -14621,6 +14931,7 @@ def interactive_menu():
             ("text-embedding-3-large", "OpenAI text-embedding-3-large (paid, needs OPENAI_API_KEY)"),
         ])
         args.extend(["--embedding-model", emb])
+        args.extend(["--structure-profile", _menu_structure_profile()])
 
         # Chunk size
         token_choices = (
@@ -14704,6 +15015,7 @@ def interactive_menu():
             (DEFAULT_EMBEDDING_MODEL_GENERAL, "Nomic Embed v2 MoE (free, local)"),
         ])
         args.extend(["--embedding-model", emb])
+        args.extend(["--structure-profile", _menu_structure_profile()])
 
         backend = _menu_choose("Vector database:", [
             ("chroma", "ChromaDB (default)"),
@@ -14853,6 +15165,7 @@ def interactive_menu():
             ("506", "506 tokens (maximum safe raw Nomic chunk)"),
         ])
         args.extend(["--max-tokens", tokens])
+        args.extend(["--structure-profile", _menu_structure_profile()])
 
         if _menu_yesno("Classify chunks with an LLM?", default=False):
             args.append("--llm-classify")

@@ -1,0 +1,43 @@
+{
+  "pages": {
+    "1": {},
+    "2": {},
+    "3": {},
+    "4": {},
+    "5": {},
+    "6": {},
+    "7": {},
+    "8": {},
+    "9": {},
+    "10": {},
+    "11": {},
+    "12": {},
+    "13": {},
+    "14": {},
+    "15": {},
+    "16": {},
+    "17": {},
+    "18": {},
+    "19": {},
+    "20": {}
+  },
+  "texts": [
+    {"label": "section_header", "text": "Contents", "prov": [{"page_no": 2}]},
+    {"label": "page_header", "text": "Chapter 1 - Foundations", "prov": [{"page_no": 5}]},
+    {"label": "page_header", "text": "Chapter 1 - Foundations", "prov": [{"page_no": 6}]},
+    {"label": "section_header", "text": "Index", "prov": [{"page_no": 19}]}
+  ],
+  "tables": [
+    {
+      "prov": [{"page_no": 2}],
+      "data": {
+        "table_cells": [
+          {"text": "Chapter 1: Foundations", "start_row_offset_idx": 0, "end_row_offset_idx": 1, "start_col_offset_idx": 0, "end_col_offset_idx": 3},
+          {"text": "5", "start_row_offset_idx": 0, "end_row_offset_idx": 1, "start_col_offset_idx": 3, "end_col_offset_idx": 4},
+          {"text": "A. First Principles", "start_row_offset_idx": 1, "end_row_offset_idx": 2, "start_col_offset_idx": 0, "end_col_offset_idx": 3},
+          {"text": "6", "start_row_offset_idx": 1, "end_row_offset_idx": 2, "start_col_offset_idx": 3, "end_col_offset_idx": 4}
+        ]
+      }
+    }
+  ]
+}

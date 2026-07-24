@@ -155,6 +155,10 @@ pip install -r requirements.txt
 # 3. Full pipeline -- one command
 python rag.py full --pdf Civil_procedure.pdf --force
 
+# Select the reviewed layout policy when the book is not a U.S. law casebook
+python rag.py full --pdf Scholarly_book.pdf \
+  --structure-profile roman-parts-book-v1
+
 # 4. Interactive menu (no arguments)
 python rag.py
 ```
@@ -1341,7 +1345,14 @@ repeated in each child chunk.
 ## TOC-Based Hierarchy Detection
 
 The pipeline extracts authoritative document structure from the Table of Contents
-rather than relying solely on heading detection. It supports two methods:
+rather than relying solely on heading detection. Structure policy is selected
+explicitly with `--structure-profile`; the default is
+`us-law-casebook-v1`, and `roman-parts-book-v1` supports scholarly books whose
+primary divisions are Roman-numbered Parts. A profile controls front/back-matter
+labels, division patterns, TOC hierarchy, canonical titles, cross-references,
+classification, quality checks, and export paths as one immutable policy.
+
+The pipeline supports two TOC extraction methods:
 
 1. **Column-position parsing**: Scans first 25 pages for TOC tables, maps column
    positions to heading depth (col 0 = chapter, col 1 = section, col 2 = sub).
@@ -1352,6 +1363,24 @@ rather than relying solely on heading detection. It supports two methods:
 This produces section paths like `Chapter 3 > B. Federalism > 2. Specific Jurisdiction`
 instead of flat `B` or `III`. In testing, TOC detection raised multi-level
 section paths from 0% to 84%.
+
+```bash
+# Arabic-numbered U.S. casebooks (the default)
+python rag.py chunk --doc output/Casebook/Casebook.json \
+  --out output/Casebook/Casebook_chunks.jsonl \
+  --structure-profile us-law-casebook-v1
+
+# Roman-numbered Part-based scholarly books
+python rag.py full --pdf Scholarly_book.pdf \
+  --structure-profile roman-parts-book-v1
+```
+
+Profile selection is intentionally not guessed from document text. An unknown
+profile is rejected by the CLI, and a selected profile that recognizes no
+primary divisions fails before chunk publication. `batch` applies its one
+explicit profile to every PDF, so group documents by layout family rather than
+mixing publisher structures in one command. Profiles are reviewed code, not
+arbitrary runtime JSON, and concurrent runs do not share mutable profile state.
 
 ## Scaffold-to-Markdown CLI
 
@@ -1382,7 +1411,7 @@ validating their artifacts as follows:
 | Stage | Checks for |
 |-------|-----------|
 | Convert | Schema-v2 immutable original/effective PDF binding, config/model lock, and exact JSON/Markdown/derived-PDF output hashes |
-| Chunk | Schema-v2 exact Docling/conversion/recovery inputs, output hash, and strict JSONL schema |
+| Chunk | Schema-v3 exact Docling/conversion/recovery inputs, immutable structure-profile receipt, output hash, and strict JSONL schema |
 | Quality | Schema-v2 chunk-input provenance plus exact Docling/chunks/parameters binding and every required PASS check |
 | Index | Clean compatible manifest plus report binding, physical IDs/count, and chunk hashes |
 | Export | Source/config completion and output hash |
@@ -1402,27 +1431,34 @@ python rag.py batch *.pdf --resume
 
 On failure, the pipeline prints a ready-to-paste resume command.
 
-Conversion and chunk schema-v1 completion files remain readable as migration
-inputs but are never accepted as verified resume evidence. Schema-v1 quality
-reports and index bindings are not accepted for query, export, or indexing.
-Migrate the whole artifact chain in order, using the same processing flags and
-embedding model as the original run:
+Conversion schema-v1 and chunk schema-v1/v2 completion files remain readable as
+migration inputs but are never accepted as verified resume evidence. Schema-v1
+quality reports and index bindings are not accepted for query, export, or
+indexing. Migrate the whole artifact chain in order, using the same processing
+flags, embedding model, and explicit structure profile as the original run:
 
 ```bash
 # Rebuild conversion, chunks, and quality evidence when needed, then reconcile
 # the collection and commit its new quality-report binding.
-python rag.py full --pdf Book.pdf --resume
+python rag.py full --pdf Book.pdf --resume \
+  --structure-profile us-law-casebook-v1
 
 # Optional conservative variant: replace the named vector collection outright.
-python rag.py full --pdf Book.pdf --resume --full-reindex
+python rag.py full --pdf Book.pdf --resume --full-reindex \
+  --structure-profile us-law-casebook-v1
 ```
 
 Do not query or export the old collection until this command finishes. Resume
-rebuilds invalid conversion and chunk stages once under schema v2, regenerates
-the schema-v2 quality report from the exact chunk-completion inputs, and then
-reconciles or rebuilds an index whose prior quality binding is incompatible.
-Deleting or hand-editing only one manifest cannot migrate the chain and fails
-closed. Keep any LLM/classification/context flags from the original command;
+keeps valid schema-v2 conversion evidence, rebuilds invalid or pre-v3 chunk
+evidence under schema v3, regenerates the schema-v2 quality report from the
+exact chunk-completion inputs, and then reconciles or rebuilds an index whose
+prior quality binding is incompatible. The chunk receipt records the selected
+profile name, revision, schema, and canonical policy SHA-256 plus a
+credential-free composite binding between that receipt and the complete
+parameter digest. A changed, detached, or tampered policy forces re-chunking
+instead of silently reusing different structure semantics. Deleting or
+hand-editing only one manifest cannot migrate the chain and fails closed. Keep
+the profile and any LLM/classification/context flags from the original command;
 changing them intentionally creates a new parameter-bound generation.
 
 Conversion streams one opened PDF generation into a private,
@@ -1435,7 +1471,8 @@ name the source explicitly:
 
 ```bash
 python rag.py chunk --doc output/Book/Book.json \
-  --out output/Book/Book_chunks.jsonl --source-pdf Book.pdf
+  --out output/Book/Book_chunks.jsonl --source-pdf Book.pdf \
+  --structure-profile us-law-casebook-v1
 ```
 
 `full` and `batch` pass their exact source PDF automatically. Snapshot copies
@@ -2174,6 +2211,7 @@ pip install "torch>=2.7,<3" --index-url https://download.pytorch.org/whl/cu128
 ```bash
 # Maximum intelligence: all LLM features enabled
 python rag.py full --pdf CivPro_Casebook.pdf \
+  --structure-profile us-law-casebook-v1 \
   --llm-classify \
   --contextualize \
   --reconstruct-headings \

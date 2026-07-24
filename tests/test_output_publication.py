@@ -84,6 +84,14 @@ def _chunk_inputs(document: Path) -> dict:
 
 def _write_chunk_completion(
         document: Path, chunks: Path, parameters: dict) -> None:
+    receipt = parameters.get("structure_profile")
+    if receipt is None:
+        profile = rag._document_profiles.get_profile(
+            rag.DEFAULT_STRUCTURE_PROFILE)
+        receipt = rag._document_profiles.profile_provenance(profile)
+        parameters["structure_profile"] = receipt
+    else:
+        rag._document_profiles.profile_from_provenance(receipt)
     rag._write_artifact_completion(
         rag._artifact_completion_path(chunks, stage="chunking"),
         stage="chunking",
@@ -92,7 +100,13 @@ def _write_chunk_completion(
         parameters=parameters,
         outputs={"chunks_jsonl": chunks},
         schema_version=rag.CHUNK_COMPLETION_SCHEMA_VERSION,
-        extra_fields={"inputs": _chunk_inputs(document)},
+        extra_fields={
+            "inputs": _chunk_inputs(document),
+            "structure_profile": receipt,
+            "structure_profile_parameters_sha256": (
+                rag._structure_profile_parameters_binding(
+                    rag._artifact_parameters_sha256(parameters), receipt)),
+        },
     )
 
 
@@ -180,9 +194,13 @@ def test_chunk_completion_binds_source_options_model_lock_and_output(
             "min_words": 10, "dedup_threshold": 0.9,
             "watermark": None, "llm_classify": True,
             "zeroshot_classify": True, "contextualize": True,
-            "ollama_url": "http://localhost:11434",
+            "ollama_url": (
+                "http://ollama-user:ollama-secret@localhost:11434/"
+                "?token=ollama-query-secret"),
             "ollama_model": "local-model", "gemini_key": "secret-a",
-            "cloud_url": "https://example.test/v1",
+            "cloud_url": (
+                "https://cloud-user:cloud-secret@example.test/v1"
+                "?token=cloud-query-secret"),
             "cloud_model": "cloud-model", "cloud_key": "secret-b",
             "llm_workers": 2, "thinking": False,
             "reconstruct_headings": True, "quality_score": True,
@@ -198,8 +216,31 @@ def test_chunk_completion_binds_source_options_model_lock_and_output(
     assert rag._chunks_complete(document, chunks, parameters=initial)
     assert "secret-a" not in str(initial)
     assert "secret-b" not in str(initial)
+    assert "ollama-secret" not in str(initial)
+    assert "ollama-query-secret" not in str(initial)
+    assert "cloud-secret" not in str(initial)
+    assert "cloud-query-secret" not in str(initial)
+    completion_text = rag._artifact_completion_path(
+        chunks, stage="chunking").read_text(encoding="utf-8")
+    assert "secret" not in completion_text
+
+    version_2025 = parameters(
+        cloud_url="https://example.test/v1?api-version=2025-01-01")
+    version_2026 = parameters(
+        cloud_url="https://example.test/v1?api-version=2026-01-01")
+    assert version_2025["cloud_url"] != version_2026["cloud_url"]
+    assert "api-version" not in str(version_2025)
+    schemeless = parameters(
+        cloud_url=(
+            "cloud-user:schemeless-secret@example.test/v1"
+            "?token=schemeless-query-secret"))
+    assert "schemeless-secret" not in str(schemeless)
+    assert "schemeless-query-secret" not in str(schemeless)
     assert not rag._chunks_complete(
         document, chunks, parameters=parameters(max_tokens=256))
+    assert not rag._chunks_complete(
+        document, chunks,
+        parameters=parameters(structure_profile="roman-parts-book-v1"))
 
     rag._llm_runtime.configure(rag.LLMRuntimeConfig(
         cache_mode="off", cache_dir=tmp_path / "llm-cache",
@@ -214,6 +255,19 @@ def test_chunk_completion_binds_source_options_model_lock_and_output(
         rag, "_model_artifact_lock_sha256", lambda: "f" * 64)
     assert not rag._chunks_complete(
         document, chunks, parameters=parameters())
+
+    manifest_path = rag._artifact_completion_path(
+        chunks, stage="chunking")
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload.pop("structure_profile")
+    rag._atomic_write_json(manifest_path, payload)
+    assert not rag._chunks_complete(document, chunks, parameters=initial)
+
+    _write_chunk_completion(document, chunks, initial)
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["structure_profile"]["sha256"] = "f" * 64
+    rag._atomic_write_json(manifest_path, payload)
+    assert not rag._chunks_complete(document, chunks, parameters=initial)
 
     document.write_text('{"name":"changed"}', encoding="utf-8")
     assert not rag._chunks_complete(document, chunks, parameters=initial)
@@ -248,6 +302,74 @@ def test_quality_report_is_repairable_and_required_for_lineaged_chunks(
     assert repaired == report
     assert rag._quality_report_complete(
         document, chunks, parameters=parameters)
+
+
+def test_quality_repair_reconstructs_ranges_with_attested_profile(
+        monkeypatch, tmp_path):
+    document = tmp_path / "book.json"
+    chunks = tmp_path / "book_chunks.jsonl"
+    profile = rag._document_profiles.get_profile("roman-parts-book-v1")
+    parameters = {
+        "embedding_model": "model-a",
+        "chunking_policy_version": 20,
+        "structure_profile": rag._document_profiles.profile_provenance(
+            profile),
+    }
+    _write_quality_source(document)
+    _write_chunks(chunks, [_lineaged_record()])
+    _write_chunk_completion(document, chunks, parameters)
+    observed = {}
+    real_identify = rag._identify_book_sections
+
+    def capture(document_mapping, **kwargs):
+        observed["profile"] = kwargs["structure_profile"]
+        return real_identify(document_mapping, **kwargs)
+
+    monkeypatch.setattr(rag, "_identify_book_sections", capture)
+
+    report = rag._publish_corpus_quality_report(
+        document, chunks, parameters=parameters)
+
+    assert report["status"] == "pass"
+    assert observed["profile"] is profile
+
+
+def test_quality_repair_rejects_profile_override_against_receipt(tmp_path):
+    document = tmp_path / "book.json"
+    chunks = tmp_path / "book_chunks.jsonl"
+    parameters = {"embedding_model": "model-a", "chunking_policy_version": 20}
+    _write_quality_source(document)
+    _write_chunks(chunks, [_lineaged_record()])
+    _write_chunk_completion(document, chunks, parameters)
+
+    with pytest.raises(ValueError, match="does not match the attested"):
+        rag._publish_corpus_quality_report(
+            document,
+            chunks,
+            parameters=parameters,
+            structural_ranges=set(),
+            structure_profile="roman-parts-book-v1",
+        )
+
+
+def test_index_reader_binds_top_level_profile_to_parameter_receipt(tmp_path):
+    document = tmp_path / "book.json"
+    chunks = tmp_path / "book_chunks.jsonl"
+    parameters = {"embedding_model": "model-a", "chunking_policy_version": 20}
+    _write_quality_source(document)
+    _write_chunks(chunks, [_lineaged_record()])
+    _write_chunk_completion(document, chunks, parameters)
+    rag._publish_corpus_quality_report(
+        document, chunks, parameters=parameters, structural_ranges=set())
+
+    manifest_path = rag._artifact_completion_path(chunks, stage="chunking")
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["structure_profile"] = rag._document_profiles.profile_provenance(
+        rag._document_profiles.get_profile("roman-parts-book-v1"))
+    rag._atomic_write_json(manifest_path, payload)
+
+    with pytest.raises(ValueError, match="detached from parameters"):
+        rag._load_index_records_strict(chunks)
 
 
 def test_lineaged_chunks_refuse_stale_or_failed_quality_report(tmp_path):

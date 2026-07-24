@@ -182,6 +182,7 @@ _FUSED_TERM_RE = re.compile(
 
 TextTransformFn = Callable[[str], str]
 StructuralContentFn = Callable[[str, list[str] | None], bool]
+ChapterHeadingFn = Callable[[str], bool]
 FingerprintFn = Callable[[str], str]
 TrigramFn = Callable[[str], frozenset[str]]
 RemovedCallback = Callable[[int], None]
@@ -301,14 +302,20 @@ def _dedup_nearby_lines(text: str, window: int = 5) -> str:
     return "\n".join(out)
 
 
-def _is_structural_content(text: str, headings: list[str] | None) -> bool:
+def _is_structural_content(
+        text: str, headings: list[str] | None, *,
+        structural_patterns: list[re.Pattern] | tuple[re.Pattern, ...] | None = None,
+) -> bool:
     """Detect TOC, index, title pages, copyright — not substantive content."""
+    patterns = (
+        _STRUCTURAL_PATTERNS
+        if structural_patterns is None else structural_patterns)
     candidates = [clean_heading_text(heading) for heading in (headings or [])]
     candidates.append(text)
     if any(
             pattern.search(candidate)
             for candidate in candidates if candidate
-            for pattern in _STRUCTURAL_PATTERNS):
+            for pattern in patterns):
         return True
     if any(pattern.search(text) for pattern in _STRUCTURAL_TEXT_PATTERNS):
         return True
@@ -393,7 +400,8 @@ def _deduplicate_chunks(
 
 def classify_content_type(
         text: str, headings: list[str] | None, *,
-        structural_content_fn: StructuralContentFn | None = None) -> str:
+        structural_content_fn: StructuralContentFn | None = None,
+        chapter_heading_fn: ChapterHeadingFn | None = None) -> str:
     """Classify a chunk's content type based on text patterns and headings."""
     if not text.strip():
         return "empty"
@@ -411,7 +419,12 @@ def classify_content_type(
     ]
     if NOTES_Q_RE.search(heading_text) or NOTES_Q_RE.search(text[:200]):
         return "notes_and_questions"
-    if CHAPTER_RE.search(heading_text):
+    is_chapter_heading = (
+        bool(CHAPTER_RE.search(heading_text))
+        if chapter_heading_fn is None
+        else any(chapter_heading_fn(value) for value in heading_values)
+    )
+    if is_chapter_heading:
         if any("Introduction" in heading for heading in (headings or [])):
             return "chapter_introduction"
 

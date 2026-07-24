@@ -41,6 +41,7 @@ class ResumeCommandDefaults:
     executable: str
     script_name: str
     embedding_model: str
+    structure_profile: str
     db_backend: str
     conversion_backend: str
     max_tokens: int
@@ -94,6 +95,8 @@ def _build_resume_cmd(
     parts = [
         defaults.executable, defaults.script_name, "full",
         "--pdf", f'"{pdf}"', "--resume",
+        "--structure-profile",
+        str(getattr(args, "structure_profile", defaults.structure_profile)),
     ]
     boolean_flags = {
         "force": "--force",

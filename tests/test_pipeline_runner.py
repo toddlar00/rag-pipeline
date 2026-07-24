@@ -25,6 +25,7 @@ def _args(**overrides):
         "collection": None,
         "db_backend": "chroma",
         "embedding_model": "test-embedding",
+        "structure_profile": rag.DEFAULT_STRUCTURE_PROFILE,
         "full_reindex": False,
         "batch_size": None,
         "backend": "auto",
@@ -87,13 +88,17 @@ def test_shared_runner_passes_distinct_per_run_conversion_artifacts(
         lambda *args, **kwargs: calls.append(("export", args, kwargs)))
 
     result = rag._run_pipeline_stages(
-        Path("Book.pdf"), paths, _args(), resume=False, watermark=None)
+        Path("Book.pdf"), paths,
+        _args(structure_profile="roman-parts-book-v1"),
+        resume=False, watermark=None)
 
     convert = next(call for call in calls if call[0] == "convert")
     assert convert[2]["preprocessed_output"] == paths["preprocessed"]
     assert convert[2]["markdown_output"] == paths["converted_markdown"]
     assert paths["converted_markdown"] != paths["export"]
     assert [call[0] for call in calls] == ["convert", "chunk", "index", "export"]
+    chunk = next(call for call in calls if call[0] == "chunk")
+    assert chunk[2]["structure_profile"].name == "roman-parts-book-v1"
     active_token = next(
         call for call in calls if call[0] == "index")[2][
             "_active_update_token"]
@@ -249,6 +254,8 @@ def test_resume_repairs_missing_quality_report_without_rechunking(
     assert result["paths"] == paths
     assert len(publications) == 1
     assert publications[0][0] == (paths["doc"], paths["chunks"])
+    assert publications[0][1]["structure_profile"].name == (
+        rag.DEFAULT_STRUCTURE_PROFILE)
 
 
 def test_pipeline_chunk_failure_leaves_dirty_marker(monkeypatch, tmp_path):
@@ -596,11 +603,13 @@ def test_resume_command_preserves_pipeline_options():
         db_lock_timeout=7,
         operation_timeout=99,
         max_llm_transport_attempts=23,
+        structure_profile="roman-parts-book-v1",
     )
 
     command = rag._build_resume_cmd(Path("My Book.pdf"), args)
 
     assert '--pdf "My Book.pdf" --resume' in command
+    assert "--structure-profile roman-parts-book-v1" in command
     assert "--split-chapters" in command
     assert "--llm-scaffold" in command
     assert "--contextualize" in command
