@@ -13,10 +13,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TypedDict
 
+import endpoint_policy
+
 
 EndpointPredicateFn = Callable[..., bool]
 EndpointResolverFn = Callable[[object], tuple[str, str]]
 CloudKeyResolverFn = Callable[..., str]
+CloudEndpointValidatorFn = Callable[
+    ..., endpoint_policy.ValidatedEndpoint | None]
 EnvironmentGetFn = Callable[[str, str], str]
 NormalizeTimeoutFn = Callable[[object], float]
 
@@ -86,6 +90,10 @@ class LLMRuntimeConfigValues(TypedDict):
 _SECRET_CLI_FLAGS = frozenset({
     "--cloud-key", "--api-key", "--gemini-key",
 })
+_ENDPOINT_CLI_FLAGS = frozenset({
+    "--cloud-url", "--llm-url", "--ollama-url",
+})
+_SENSITIVE_CLI_FLAGS = _SECRET_CLI_FLAGS | _ENDPOINT_CLI_FLAGS
 
 
 def _build_resume_cmd(
@@ -170,6 +178,10 @@ def _build_resume_cmd(
     for attr, default, flag in value_flags:
         value = getattr(args, attr, default)
         if value is not None and value != default:
+            if attr in {"ollama_url", "cloud_url"}:
+                endpoint = endpoint_policy.validate_cloud_endpoint(
+                    value, allow_disabled=True)
+                value = endpoint.base_url if endpoint is not None else ""
             parts.extend([
                 flag, f'"{value}"' if " " in str(value) else str(value)])
     if extra_flags:
@@ -179,14 +191,28 @@ def _build_resume_cmd(
 
 def _resolve_cloud_endpoint(
         args: object, *, defaults: ProviderCliDefaults,
-        is_deepseek_cloud_fn: EndpointPredicateFn) -> tuple[str, str]:
+        validate_cloud_endpoint_fn: CloudEndpointValidatorFn = (
+            endpoint_policy.validate_cloud_endpoint)) -> tuple[str, str]:
     """Resolve URL/model shortcuts for the configured cloud provider."""
     cloud_url = getattr(args, "cloud_url", defaults.cloud_url)
     cloud_model = getattr(args, "cloud_model", defaults.cloud_model)
+    endpoint = validate_cloud_endpoint_fn(
+        cloud_url, allow_disabled=True)
+    if endpoint is not None:
+        cloud_url = endpoint.base_url
+    default_endpoint = validate_cloud_endpoint_fn(
+        defaults.cloud_url, allow_disabled=True)
+    canonical_default_url = (
+        default_endpoint.base_url
+        if default_endpoint is not None else defaults.cloud_url)
     if (cloud_model or "").lower().startswith("deepseek-"):
-        if cloud_url == defaults.cloud_url:
+        if cloud_url == canonical_default_url:
             cloud_url = defaults.deepseek_url
-    elif is_deepseek_cloud_fn(cloud_url):
+            endpoint = validate_cloud_endpoint_fn(
+                cloud_url, allow_disabled=True)
+            if endpoint is not None:
+                cloud_url = endpoint.base_url
+    if endpoint is not None and endpoint.provider == "deepseek":
         if cloud_model == defaults.cloud_model:
             cloud_model = defaults.deepseek_model
     return cloud_url, cloud_model
@@ -195,22 +221,28 @@ def _resolve_cloud_endpoint(
 def _resolve_cloud_key(
         args: object, *, cloud_url: str = "", cloud_model: str = "",
         resolve_cloud_endpoint_fn: EndpointResolverFn,
-        is_deepseek_cloud_fn: EndpointPredicateFn,
-        is_minimax_cloud_fn: EndpointPredicateFn,
+        validate_cloud_endpoint_fn: CloudEndpointValidatorFn = (
+            endpoint_policy.validate_cloud_endpoint),
         environment_get_fn: EnvironmentGetFn) -> str:
     """Resolve a key without sending one provider's secret to another host."""
+    if not cloud_url and not cloud_model:
+        cloud_url, cloud_model = resolve_cloud_endpoint_fn(args)
+    endpoint = validate_cloud_endpoint_fn(
+        cloud_url, allow_disabled=True)
+    if endpoint is None:
+        return ""
+
     explicit_key = getattr(args, "cloud_key", "")
     if explicit_key:
         return explicit_key
-
-    if not cloud_url and not cloud_model:
-        cloud_url, cloud_model = resolve_cloud_endpoint_fn(args)
-    if is_deepseek_cloud_fn(cloud_url, cloud_model):
+    if endpoint.provider == "loopback":
+        return ""
+    if endpoint.provider == "deepseek":
         return (
             environment_get_fn("DEEPSEEK_API_KEY", "")
             or environment_get_fn("CLOUD_API_KEY", "")
         )
-    if is_minimax_cloud_fn(cloud_url):
+    if endpoint.provider == "minimax":
         return (
             environment_get_fn("MINIMAX_API_KEY", "")
             or environment_get_fn("CLOUD_API_KEY", "")
@@ -222,23 +254,83 @@ def _llm_kwargs_from_args(
         args: object, *, include_workers: bool,
         defaults: ProviderCliDefaults,
         resolve_cloud_endpoint_fn: EndpointResolverFn,
-        resolve_cloud_key_fn: CloudKeyResolverFn) -> LLMCallOptions:
+        resolve_cloud_key_fn: CloudKeyResolverFn,
+        resolve_credentials: bool = True) -> LLMCallOptions:
     """Collect provider options shared by LLM-backed operations."""
     cloud_url, cloud_model = resolve_cloud_endpoint_fn(args)
+    ollama_endpoint = endpoint_policy.validate_cloud_endpoint(
+        getattr(args, "ollama_url", defaults.ollama_url),
+        allow_disabled=True,
+    )
     kwargs: LLMCallOptions = {
         "cloud_url": cloud_url,
         "cloud_model": cloud_model,
-        "cloud_key": resolve_cloud_key_fn(
-            args, cloud_url=cloud_url, cloud_model=cloud_model),
-        "ollama_url": getattr(args, "ollama_url", defaults.ollama_url),
+        "cloud_key": (
+            resolve_cloud_key_fn(
+                args, cloud_url=cloud_url, cloud_model=cloud_model)
+            if resolve_credentials else ""),
+        "ollama_url": (
+            ollama_endpoint.base_url if ollama_endpoint is not None else ""),
         "ollama_model": getattr(args, "ollama_model", defaults.ollama_model),
-        "gemini_key": getattr(args, "gemini_key", ""),
+        "gemini_key": (
+            getattr(args, "gemini_key", "") if resolve_credentials else ""),
         "thinking": getattr(args, "thinking", False),
     }
     if include_workers:
         kwargs["llm_workers"] = getattr(
             args, "llm_workers", defaults.llm_workers)
     return kwargs
+
+
+def _option_spelling_conflicts(
+        option: str, candidates: frozenset[str]) -> bool:
+    """Return whether a long option is a case/shape/prefix near miss."""
+    if not isinstance(option, str) or option in candidates:
+        return False
+    normalized = option.casefold().replace("_", "-")
+    if len(normalized) <= 2:
+        return False
+    return any(
+        candidate.startswith(normalized) or normalized.startswith(candidate)
+        for candidate in candidates
+    )
+
+
+def _has_ambiguous_sensitive_option(args: list[str]) -> bool:
+    """Reject sensitive option near-misses consistently across CLI scopes."""
+    for token in args:
+        if not isinstance(token, str):
+            continue
+        option = token.partition("=")[0]
+        if _option_spelling_conflicts(option, _SENSITIVE_CLI_FLAGS):
+            return True
+    return False
+
+
+def _namespace_uses_llm(args: object) -> bool:
+    """Return whether a parsed command can actually invoke an LLM."""
+    command = getattr(args, "command", None)
+    if command in {"generate-questions", "raptor", "brief"}:
+        return True
+    if command == "query":
+        return bool(getattr(args, "answer", False))
+    if command == "export":
+        return getattr(args, "format", "markdown") == "flashcards"
+    if command in {"chunk", "full", "batch"}:
+        return _pipeline_features_use_llm(args)
+    return False
+
+
+def _pipeline_features_use_llm(args: object) -> bool:
+    """Return whether chunk/full pipeline features need provider secrets."""
+    return any(bool(getattr(args, field, False)) for field in (
+        "llm_classify",
+        "contextualize",
+        "reconstruct_headings",
+        "quality_score",
+        "llm_scaffold",
+        "raptor",
+    ))
 
 
 def _llm_runtime_config_values_from_args(
@@ -384,7 +476,13 @@ def _menu_args_use_llm(args: list[str]) -> bool:
 def _redact_cli_secrets(args: list[str]) -> list[str]:
     """Return a display-safe CLI argument list."""
     redacted = list(args)
-    for index, value in enumerate(redacted[:-1]):
+    for index, value in enumerate(redacted):
+        option, separator, _inline_value = value.partition("=")
+        if separator and option in _SECRET_CLI_FLAGS:
+            redacted[index] = f"{option}=<redacted>"
+            continue
+        if index + 1 >= len(redacted):
+            continue
         if value in _SECRET_CLI_FLAGS:
             redacted[index + 1] = "<redacted>"
     return redacted
@@ -397,22 +495,35 @@ def _menu_secrets_to_environment(
 ) -> tuple[list[str], dict[str, str]]:
     """Remove hidden-prompt secrets from argv and scope them to the child."""
     cloud_url = default_cloud_url
-    for index, value in enumerate(args[:-1]):
-        if value in {"--cloud-url", "--llm-url"}:
+    for index, value in enumerate(args):
+        option, separator, inline_value = value.partition("=")
+        if separator and option in {"--cloud-url", "--llm-url"}:
+            cloud_url = inline_value
+        elif (value in {"--cloud-url", "--llm-url"}
+              and index + 1 < len(args)):
             cloud_url = args[index + 1]
+    endpoint = endpoint_policy.validate_cloud_endpoint(
+        cloud_url, allow_disabled=True)
+    cloud_url = endpoint.base_url if endpoint is not None else ""
 
     safe_args = []
     environment = {}
     index = 0
     while index < len(args):
         flag = args[index]
-        if flag in _SECRET_CLI_FLAGS:
-            if index + 1 >= len(args):
+        option, separator, inline_secret = flag.partition("=")
+        if option in _SECRET_CLI_FLAGS:
+            if separator:
+                secret = inline_secret
+                consumed = 1
+            elif index + 1 >= len(args):
                 safe_args.append(flag)
                 index += 1
                 continue
-            secret = args[index + 1]
-            if flag == "--gemini-key":
+            else:
+                secret = args[index + 1]
+                consumed = 2
+            if option == "--gemini-key":
                 environment["GEMINI_API_KEY"] = secret
             elif is_deepseek_cloud_fn(cloud_url):
                 environment["DEEPSEEK_API_KEY"] = secret
@@ -420,7 +531,7 @@ def _menu_secrets_to_environment(
                 environment["MINIMAX_API_KEY"] = secret
             else:
                 environment["CLOUD_API_KEY"] = secret
-            index += 2
+            index += consumed
             continue
         safe_args.append(flag)
         index += 1

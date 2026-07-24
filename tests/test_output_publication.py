@@ -196,13 +196,9 @@ def test_chunk_completion_binds_source_options_model_lock_and_output(
             "min_words": 10, "dedup_threshold": 0.9,
             "watermark": None, "llm_classify": True,
             "zeroshot_classify": True, "contextualize": True,
-            "ollama_url": (
-                "http://ollama-user:ollama-secret@localhost:11434/"
-                "?token=ollama-query-secret"),
+            "ollama_url": "http://127.0.0.1:11434",
             "ollama_model": "local-model", "gemini_key": "secret-a",
-            "cloud_url": (
-                "https://cloud-user:cloud-secret@example.test/v1"
-                "?token=cloud-query-secret"),
+            "cloud_url": "https://example.test/v1",
             "cloud_model": "cloud-model", "cloud_key": "secret-b",
             "llm_workers": 2, "thinking": False,
             "reconstruct_headings": True, "quality_score": True,
@@ -218,26 +214,25 @@ def test_chunk_completion_binds_source_options_model_lock_and_output(
     assert rag._chunks_complete(document, chunks, parameters=initial)
     assert "secret-a" not in str(initial)
     assert "secret-b" not in str(initial)
-    assert "ollama-secret" not in str(initial)
-    assert "ollama-query-secret" not in str(initial)
-    assert "cloud-secret" not in str(initial)
-    assert "cloud-query-secret" not in str(initial)
+    assert "127.0.0.1" not in str(initial)
+    assert "example.test" not in str(initial)
+    assert initial["cloud_url"]["policy_version"] == 1
+    assert initial["cloud_url"]["endpoint_id"].startswith(
+        "v1:custom:sha256:")
     completion_text = rag._artifact_completion_path(
         chunks, stage="chunking").read_text(encoding="utf-8")
     assert "secret" not in completion_text
 
-    version_2025 = parameters(
-        cloud_url="https://example.test/v1?api-version=2025-01-01")
-    version_2026 = parameters(
-        cloud_url="https://example.test/v1?api-version=2026-01-01")
-    assert version_2025["cloud_url"] != version_2026["cloud_url"]
-    assert "api-version" not in str(version_2025)
-    schemeless = parameters(
-        cloud_url=(
-            "cloud-user:schemeless-secret@example.test/v1"
-            "?token=schemeless-query-secret"))
-    assert "schemeless-secret" not in str(schemeless)
-    assert "schemeless-query-secret" not in str(schemeless)
+    version_one = parameters(cloud_url="https://example.test/v1")
+    version_two = parameters(cloud_url="https://example.test/v2")
+    assert version_one["cloud_url"] != version_two["cloud_url"]
+    for unsafe_url in (
+        "https://user:secret@example.test/v1",
+        "https://example.test/v1?token=secret",
+        "cloud-user:secret@example.test/v1",
+    ):
+        with pytest.raises((TypeError, ValueError)):
+            parameters(cloud_url=unsafe_url)
     assert not rag._chunks_complete(
         document, chunks, parameters=parameters(max_tokens=256))
     assert not rag._chunks_complete(
@@ -491,7 +486,7 @@ def test_raptor_validator_accepts_source_bound_degraded_tree(tmp_path):
     _, source_sha256, _ = rag._load_index_snapshot_strict(chunks)
     parameters = rag._raptor_parameters(
         embedding_model="model", cloud_url="", cloud_model="",
-        cloud_key="never-persist-this", ollama_url="http://localhost",
+        cloud_key="never-persist-this", ollama_url="http://127.0.0.1",
         ollama_model="local",
         gemini_key="", thinking=False)
     tree = {

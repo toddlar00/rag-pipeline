@@ -11,8 +11,9 @@
 > [#38](https://github.com/toddlar00/rag-pipeline/pull/38), respectively.
 > [PR #43](https://github.com/toddlar00/rag-pipeline/pull/43) implements the
 > Ethics review/release machinery, but corpus-owner decisions remain pending.
-> Repository hygiene, scoped static typing, README decomposition, and the
-> residual jobs-to-`rag` dependency seam remain candidates after re-survey.
+> Repository-hygiene mechanics are implemented locally in commit `88fd301`;
+> the private-source owner decision, publication, scoped static typing, README
+> decomposition, and the residual jobs-to-`rag` dependency seam remain open.
 > The unchecked boxes, code sketches, branch instructions, baselines, and test
 > counts below are retained as historical design context, not live execution
 > instructions. [ROADMAP.md](../../../ROADMAP.md) is the status authority.
@@ -101,7 +102,7 @@ project brainstorm was lost once already — see `ROADMAP.md` preamble).
 
 | # | Improvement | Assessment | Disposition |
 |---|---|---|---|
-| 1 | Repo hygiene: stray root scripts, untracked `CLAUDE.md`/`docs/`, unignored `tmp/`, dangling spec link | Still requires a fresh scope check; the documentation-link portion is resolved by the maintained ADR | **Open after re-survey; historical Task 1** |
+| 1 | Repo hygiene: stray root scripts, untracked `CLAUDE.md`/`docs/`, unignored `tmp/`, dangling spec link | Mechanical scope implemented and validated in local commit `88fd301`; owner privacy policy, publication, and PR disposition remain in current R0 | **Mechanics implemented locally; historical Task 1 is superseded** |
 | 2 | Configurable document-structure profiles (ROADMAP P2) | Implemented with an immutable explicit registry, strict receipts, and fail-closed layout validation rather than the mutable-active-profile sketch below | **Implemented in draft PR #35; Tasks 2–7 are superseded** |
 | 3 | Stable adjacency/parent identifiers + context-aware retrieval assembly (ROADMAP P2) | Stable linkage and bounded, independently citable context assembly are implemented; full owner-reviewed evaluation ablation remains follow-up evidence | **Implemented in draft PR #36** |
 | 4 | Table-specific retrieval (ROADMAP P2) | Caption/header-propagated row children and family collapse are implemented; family-aware judged evaluation remains a follow-up | **Implemented in draft PR #37** |

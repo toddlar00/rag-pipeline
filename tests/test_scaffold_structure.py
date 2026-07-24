@@ -243,7 +243,7 @@ def test_llm_scaffold_cannot_invent_profile_source_evidence(
     with pytest.raises(ValueError, match="does not match structure profile"):
         rag._build_scaffold(
             doc, sections, use_llm=True,
-            ollama_url="http://localhost:11434")
+            ollama_url="http://127.0.0.1:11434")
 
 
 def test_llm_scaffold_keeps_every_deterministic_primary_title(monkeypatch):
@@ -283,7 +283,7 @@ def test_llm_scaffold_keeps_every_deterministic_primary_title(monkeypatch):
 
     scaffold = rag._build_scaffold(
         doc, {"toc": {"start": 3, "end": 3}}, use_llm=True,
-        ollama_url="http://localhost:11434")
+        ollama_url="http://127.0.0.1:11434")
 
     assert [entry["title"] for entry in scaffold] == [
         "Chapter 1: Real Source Title",
@@ -294,7 +294,7 @@ def test_llm_scaffold_keeps_every_deterministic_primary_title(monkeypatch):
     with pytest.raises(ValueError, match="does not match structure profile"):
         rag._build_scaffold(
             doc, {"toc": {"start": 3, "end": 3}}, use_llm=True,
-            ollama_url="http://localhost:11434")
+            ollama_url="http://127.0.0.1:11434")
 
 
 def test_roman_subnumber_row_is_not_a_primary_division():

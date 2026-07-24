@@ -3,6 +3,8 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 import cli_policy
 import rag
 
@@ -11,9 +13,9 @@ def _provider_defaults() -> cli_policy.ProviderCliDefaults:
     return cli_policy.ProviderCliDefaults(
         cloud_url="https://default.test/v1",
         cloud_model="default-model",
-        deepseek_url="https://deepseek.test/v1",
+        deepseek_url="https://api.deepseek.com/v1",
         deepseek_model="deepseek-default",
-        ollama_url="http://ollama.test",
+        ollama_url="http://127.0.0.1:11434",
         ollama_model="local-model",
         llm_workers=4,
     )
@@ -66,12 +68,31 @@ def test_rag_reexports_context_free_cli_policy_helpers():
     assert rag._rag_cli_command is cli_policy._rag_cli_command
     assert rag._menu_args_use_llm is cli_policy._menu_args_use_llm
     assert rag._redact_cli_secrets is cli_policy._redact_cli_secrets
+    assert rag._namespace_uses_llm is cli_policy._namespace_uses_llm
+
+
+def test_namespace_llm_detection_is_operation_and_feature_specific():
+    assert not cli_policy._namespace_uses_llm(
+        SimpleNamespace(command="info"))
+    assert not cli_policy._namespace_uses_llm(
+        SimpleNamespace(command="query", answer=False))
+    assert cli_policy._namespace_uses_llm(
+        SimpleNamespace(command="query", answer=True))
+    assert not cli_policy._namespace_uses_llm(
+        SimpleNamespace(command="chunk", llm_classify=False))
+    assert cli_policy._namespace_uses_llm(
+        SimpleNamespace(command="chunk", contextualize=True))
+    assert cli_policy._namespace_uses_llm(
+        SimpleNamespace(command="export", format="flashcards"))
+    assert cli_policy._pipeline_features_use_llm(
+        SimpleNamespace(raptor=True))
+    assert not cli_policy._pipeline_features_use_llm(SimpleNamespace())
 
 
 def test_leaf_provider_options_use_injected_resolvers():
     observed = {}
     args = SimpleNamespace(
-        ollama_url="http://custom-ollama.test",
+        ollama_url="https://custom-ollama.test",
         ollama_model="custom-local",
         gemini_key="gemini-secret",
         thinking=True,
@@ -98,7 +119,7 @@ def test_leaf_provider_options_use_injected_resolvers():
         "cloud_url": "https://provider.test/v1",
         "cloud_model": "provider-model",
         "cloud_key": "provider-secret",
-        "ollama_url": "http://custom-ollama.test",
+        "ollama_url": "https://custom-ollama.test",
         "ollama_model": "custom-local",
         "gemini_key": "gemini-secret",
         "thinking": True,
@@ -109,13 +130,66 @@ def test_leaf_provider_options_use_injected_resolvers():
         args, "https://provider.test/v1", "provider-model")
 
 
+def test_inactive_provider_options_preserve_shape_without_credentials():
+    args = SimpleNamespace(
+        ollama_url="http://127.0.0.1:11434",
+        ollama_model="local-model",
+        gemini_key="explicit-gemini-secret",
+        thinking=False,
+        llm_workers=3,
+    )
+
+    options = cli_policy._llm_kwargs_from_args(
+        args,
+        include_workers=True,
+        defaults=_provider_defaults(),
+        resolve_cloud_endpoint_fn=lambda _args: (
+            "https://provider.test/v1", "provider-model"),
+        resolve_cloud_key_fn=lambda *_args, **_kwargs: pytest.fail(
+            "inactive configuration must not resolve a cloud credential"),
+        resolve_credentials=False,
+    )
+
+    assert options == {
+        "cloud_url": "https://provider.test/v1",
+        "cloud_model": "provider-model",
+        "cloud_key": "",
+        "ollama_url": "http://127.0.0.1:11434",
+        "ollama_model": "local-model",
+        "gemini_key": "",
+        "thinking": False,
+        "llm_workers": 3,
+    }
+
+
+@pytest.mark.parametrize("option", [
+    "--cloud-u", "--CLOUD-URL", "--llm-u", "--ollama-u",
+    "--cloud-k", "--API-KEY", "--gemini-k", "--cloud-urlx",
+    "--cloud_url", "--cloud-keyx",
+])
+def test_sensitive_option_ambiguity_is_detected_without_values(option):
+    assert cli_policy._has_ambiguous_sensitive_option(
+        ["generate-questions", option, "private-value"])
+
+
+def test_exact_sensitive_options_are_not_ambiguous_but_terminator_is_no_bypass():
+    assert not cli_policy._has_ambiguous_sensitive_option([
+        "generate-questions",
+        "--cloud-url", "https://gateway.example/v1",
+        "--api-key=secret",
+    ])
+    assert cli_policy._has_ambiguous_sensitive_option([
+        "query", "--", "--cloud-u", "ordinary positional text",
+    ])
+
+
 def test_provider_facades_inject_current_defaults_and_callbacks(
         monkeypatch):
     args = SimpleNamespace()
     endpoint_observed = {}
 
-    def endpoint_predicate(*_args):
-        return False
+    def endpoint_validator(*_args, **_kwargs):
+        return None
 
     def endpoint_core(namespace, **kwargs):
         endpoint_observed.update(namespace=namespace, **kwargs)
@@ -123,7 +197,7 @@ def test_provider_facades_inject_current_defaults_and_callbacks(
 
     monkeypatch.setattr(rag, "DEFAULT_CLOUD_URL", "dynamic-default-url")
     monkeypatch.setattr(rag, "DEFAULT_LLM_WORKERS", 17)
-    monkeypatch.setattr(rag, "_is_deepseek_cloud", endpoint_predicate)
+    monkeypatch.setattr(rag, "_validate_cloud_endpoint", endpoint_validator)
     monkeypatch.setattr(cli_policy, "_resolve_cloud_endpoint", endpoint_core)
 
     assert rag._resolve_cloud_endpoint(args) == (
@@ -131,18 +205,16 @@ def test_provider_facades_inject_current_defaults_and_callbacks(
     assert endpoint_observed["namespace"] is args
     assert endpoint_observed["defaults"].cloud_url == "dynamic-default-url"
     assert endpoint_observed["defaults"].llm_workers == 17
-    assert endpoint_observed["is_deepseek_cloud_fn"] is endpoint_predicate
+    assert endpoint_observed["validate_cloud_endpoint_fn"] is (
+        endpoint_validator)
 
     key_observed = {}
 
     def endpoint_resolver(_args):
         return "current-url", "current-model"
 
-    def deepseek_predicate(*_args):
-        return True
-
-    def minimax_predicate(*_args):
-        return False
+    def key_endpoint_validator(*_args, **_kwargs):
+        return None
 
     def key_core(namespace, **kwargs):
         key_observed.update(namespace=namespace, **kwargs)
@@ -150,8 +222,8 @@ def test_provider_facades_inject_current_defaults_and_callbacks(
 
     monkeypatch.setenv("CLI_POLICY_TEST_KEY", "environment-secret")
     monkeypatch.setattr(rag, "_resolve_cloud_endpoint", endpoint_resolver)
-    monkeypatch.setattr(rag, "_is_deepseek_cloud", deepseek_predicate)
-    monkeypatch.setattr(rag, "_is_minimax_cloud", minimax_predicate)
+    monkeypatch.setattr(
+        rag, "_validate_cloud_endpoint", key_endpoint_validator)
     monkeypatch.setattr(cli_policy, "_resolve_cloud_key", key_core)
 
     assert rag._resolve_cloud_key(
@@ -161,8 +233,8 @@ def test_provider_facades_inject_current_defaults_and_callbacks(
     assert key_observed["cloud_url"] == "explicit-url"
     assert key_observed["cloud_model"] == "explicit-model"
     assert key_observed["resolve_cloud_endpoint_fn"] is endpoint_resolver
-    assert key_observed["is_deepseek_cloud_fn"] is deepseek_predicate
-    assert key_observed["is_minimax_cloud_fn"] is minimax_predicate
+    assert key_observed["validate_cloud_endpoint_fn"] is (
+        key_endpoint_validator)
 
 
 def test_llm_kwargs_facade_injects_current_resolvers_and_defaults(
@@ -191,6 +263,7 @@ def test_llm_kwargs_facade_injects_current_resolvers_and_defaults(
     assert observed["defaults"].ollama_model == "dynamic-local"
     assert observed["resolve_cloud_endpoint_fn"] is endpoint_resolver
     assert observed["resolve_cloud_key_fn"] is key_resolver
+    assert observed["resolve_credentials"] is True
 
 
 def test_runtime_policy_mapping_and_facade_mutation_stay_separate(
@@ -382,7 +455,7 @@ def test_resume_facade_injects_current_executable_and_defaults(monkeypatch):
         "dynamic-cloud-model")
 
 
-def test_leaf_secret_policy_keeps_existing_separate_flag_rules():
+def test_leaf_secret_policy_removes_and_redacts_separate_and_inline_values():
     args = [
         "query",
         "terms",
@@ -410,10 +483,9 @@ def test_leaf_secret_policy_keeps_existing_separate_flag_rules():
         "https://deepseek.test/v1",
         "--cloud-url",
         "https://minimax.test/v1",
-        "--api-key=inline-secret",
         "--gemini-key",
     ]
-    assert environment == {"MINIMAX_API_KEY": "provider-secret"}
+    assert environment == {"MINIMAX_API_KEY": "inline-secret"}
     assert cli_policy._redact_cli_secrets(args) == [
         "query",
         "terms",
@@ -423,7 +495,7 @@ def test_leaf_secret_policy_keeps_existing_separate_flag_rules():
         "https://minimax.test/v1",
         "--api-key",
         "<redacted>",
-        "--api-key=inline-secret",
+        "--api-key=<redacted>",
         "--gemini-key",
     ]
 

@@ -364,3 +364,45 @@ def test_jobs_refresh_redacts_private_arguments(monkeypatch, tmp_path):
     assert "queued" in rendered
     assert str(private_pdf) not in rendered
     assert "--pdf" not in rendered
+
+
+def test_main_binds_literal_loopback_and_disables_public_sharing(
+        monkeypatch, tmp_path):
+    observed = {}
+
+    class App:
+        def launch(self, **kwargs):
+            observed.update(kwargs)
+
+    monkeypatch.setattr(ui, "build_app", lambda: App())
+
+    ui.main([
+        "--chunks", str(tmp_path / "chunks.jsonl"),
+        "--db", str(tmp_path / "db"),
+        "--collection", "book",
+        "--port", "8877",
+    ])
+
+    assert observed == {
+        "server_name": "127.0.0.1",
+        "server_port": 8877,
+        "share": False,
+    }
+    assert ui._config["share"] is False
+
+
+def test_main_rejects_removed_share_flag_before_building_app(
+        monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(
+        ui, "build_app", lambda: pytest.fail(
+            "rejected public-sharing option must not build the app"))
+
+    with pytest.raises(SystemExit):
+        ui.main([
+            "--chunks", str(tmp_path / "chunks.jsonl"),
+            "--db", str(tmp_path / "db"),
+            "--collection", "book",
+            "--share",
+        ])
+
+    assert "unrecognized arguments: --share" in capsys.readouterr().err

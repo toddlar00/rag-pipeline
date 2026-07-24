@@ -1179,6 +1179,60 @@ def test_metadata_aware_reranker_scores_enriched_text_but_returns_raw(
     assert scores == [0.9, 0.1]
 
 
+def test_jina_reranker_has_a_deadline_and_refuses_redirects(monkeypatch):
+    observed = {}
+
+    class Response:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"results": [{"index": 0, "relevance_score": 0.9}]}
+
+    def post(url, **kwargs):
+        observed.update(url=url, **kwargs)
+        return Response()
+
+    monkeypatch.setenv("JINA_API_KEY", "secret")
+    monkeypatch.setattr(rag.requests, "post", post)
+
+    documents, metadatas, scores = rag._rerank(
+        "query", ["document"], [{"stable_id": "one"}], [0.2], 1,
+        reranker_model="jina-reranker-v2-base-multilingual",
+    )
+
+    assert documents == ["document"]
+    assert metadatas == [{"stable_id": "one"}]
+    assert scores == [0.9]
+    assert observed["url"] == "https://api.jina.ai/v1/rerank"
+    assert observed["timeout"] == 60
+    assert observed["allow_redirects"] is False
+    assert isinstance(observed["auth"], rag._llm_adapters._BearerAuth)
+
+
+def test_jina_reranker_rejects_redirect_response_body(monkeypatch):
+    class Response:
+        status_code = 308
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"results": [{"index": 0, "relevance_score": 0.9}]}
+
+    monkeypatch.setenv("JINA_API_KEY", "secret")
+    monkeypatch.setattr(
+        rag.requests, "post", lambda *_args, **_kwargs: Response())
+
+    with pytest.raises(RuntimeError, match="returned a redirect"):
+        rag._rerank(
+            "query", ["document"], [{}], [0.2], 1,
+            reranker_model="jina-reranker-v2-base-multilingual",
+        )
+
+
 def test_reranker_cache_is_keyed_by_model(monkeypatch):
     loaded = []
     monkeypatch.setenv("RAG_ALLOW_UNPINNED_MODELS", "1")

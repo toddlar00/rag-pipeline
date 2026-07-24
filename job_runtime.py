@@ -28,6 +28,8 @@ from pathlib import Path
 from typing import Callable, Iterator, Mapping, Sequence
 from uuid import uuid4
 
+import cli_policy
+import endpoint_policy
 import storage_policy
 
 
@@ -63,6 +65,19 @@ SECRET_OPTIONS = frozenset({
     "--api-key",
     "--cloud-key",
     "--gemini-key",
+})
+SECRET_OPTION_TERMS = frozenset({
+    "credential",
+    "credentials",
+    "key",
+    "password",
+    "secret",
+    "token",
+})
+ENDPOINT_OPTIONS = frozenset({
+    "--cloud-url",
+    "--llm-url",
+    "--ollama-url",
 })
 RESERVED_JOB_OPTIONS = frozenset({
     "--operation-timeout",
@@ -308,11 +323,82 @@ def _validate_command(command: str) -> str:
     return command
 
 
+def _normalize_endpoint_argv(argv: Sequence[str]) -> tuple[str, ...]:
+    """Validate endpoint values before a private job spec can persist them."""
+    normalized: list[str] = []
+    index = 0
+    terminated = False
+    while index < len(argv):
+        token = argv[index]
+        if not isinstance(token, str):
+            normalized.append(token)
+            index += 1
+            continue
+        if token == "--":
+            normalized.append(token)
+            terminated = True
+            index += 1
+            continue
+
+        option, separator, inline_value = token.partition("=")
+        folded = option.casefold()
+        if folded in ENDPOINT_OPTIONS and option != folded:
+            raise JobValidationError(
+                "background endpoint options are case sensitive")
+        if cli_policy._option_spelling_conflicts(option, ENDPOINT_OPTIONS):
+            raise JobValidationError(
+                "background endpoint options must not be abbreviated")
+        if folded not in ENDPOINT_OPTIONS:
+            normalized.append(token)
+            index += 1
+            continue
+        if terminated:
+            raise JobValidationError(
+                "background endpoint options are not allowed after --")
+
+        if separator:
+            value = inline_value
+            consumed = 1
+        else:
+            if index + 1 >= len(argv) or not isinstance(argv[index + 1], str):
+                raise JobValidationError(
+                    "background endpoint option requires a URL value")
+            value = argv[index + 1]
+            consumed = 2
+        try:
+            endpoint = endpoint_policy.validate_cloud_endpoint(
+                value, allow_disabled=True)
+        except (TypeError, ValueError):
+            raise JobValidationError(
+                "background endpoint URL is not permitted") from None
+        safe_value = endpoint.base_url if endpoint is not None else ""
+        normalized.append(
+            f"{folded}={safe_value}" if separator else folded)
+        if not separator:
+            normalized.append(safe_value)
+        index += consumed
+    return tuple(normalized)
+
+
 def _validate_argv(argv: Sequence[str]) -> tuple[str, ...]:
     if isinstance(argv, (str, bytes)) or not isinstance(argv, Sequence):
         raise JobValidationError("argv must be a sequence of strings")
     if len(argv) > _MAX_ARGUMENT_COUNT:
         raise JobValidationError("background command has too many arguments")
+    for token in argv:
+        if isinstance(token, str) and "://" in token:
+            option, separator, inline_value = token.partition("=")
+            if separator and option.casefold() not in ENDPOINT_OPTIONS:
+                raise JobValidationError(
+                    "background endpoint/URL argument is not permitted")
+            candidate = inline_value if separator else token
+            try:
+                endpoint_policy.validate_cloud_endpoint(
+                    candidate, allow_disabled=True)
+            except (TypeError, ValueError):
+                raise JobValidationError(
+                    "background endpoint/URL argument is not permitted") from None
+    argv = _normalize_endpoint_argv(argv)
     normalized = []
     total_bytes = 0
     for token in argv:
@@ -326,12 +412,19 @@ def _validate_argv(argv: Sequence[str]) -> tuple[str, ...]:
             raise JobValidationError(
                 "background command arguments must be valid UTF-8 text") from exc
         option = token.split("=", 1)[0].lower()
-        # argparse accepts unambiguous long-option abbreviations by default.
-        # Reject prefixes too, otherwise ``--cloud-k VALUE`` could bypass the
-        # durable-spec credential rule and later resolve to ``--cloud-key``.
-        secret_option = option in SECRET_OPTIONS or (
-            len(option) > 2
-            and any(secret.startswith(option) for secret in SECRET_OPTIONS)
+        # Keep the durable boundary independent of current parser settings.
+        # Prefixes and shape variants must not bypass the credential rule.
+        normalized_option = option.casefold().replace("_", "-")
+        option_terms = (
+            frozenset(
+                part for part in normalized_option[2:].split("-") if part)
+            if normalized_option.startswith("--") else frozenset()
+        )
+        secret_option = (
+            option in SECRET_OPTIONS
+            or cli_policy._option_spelling_conflicts(
+                token.split("=", 1)[0], SECRET_OPTIONS)
+            or bool(option_terms & SECRET_OPTION_TERMS)
         )
         if secret_option:
             raise JobValidationError(

@@ -202,16 +202,17 @@ def test_ollama_thinking_payload_returns_only_final_response(monkeypatch):
             "response": "final response",
         })
 
-    monkeypatch.setattr(rag.requests, "post", fake_post)
+    monkeypatch.setattr(rag, "_post_loopback_without_environment", fake_post)
 
     result = rag._call_ollama(
-        "prompt", url="http://localhost:11434", model="qwen3:30b",
+        "prompt", url="http://127.0.0.1:11434", model="qwen3:30b",
         thinking=True, max_tokens=99,
     )
 
     assert result == "final response"
-    assert observed["url"] == "http://localhost:11434/api/generate"
+    assert observed["url"] == "http://127.0.0.1:11434/api/generate"
     assert observed["json"]["think"] is True
+    assert observed["allow_redirects"] is False
     assert observed["json"]["options"]["num_predict"] == 99
 
 

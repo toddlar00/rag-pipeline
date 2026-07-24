@@ -815,6 +815,52 @@ def test_sentence_transformer_loader_uses_offline_verified_bundle(
     }
 
 
+def test_minimax_embedding_refuses_redirects(monkeypatch):
+    observed = {}
+
+    class Response:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"data": [{"embedding": [1.0, 2.0]}]}
+
+    def post(url, **kwargs):
+        observed.update(url=url, **kwargs)
+        return Response()
+
+    monkeypatch.setenv("MINIMAX_API_KEY", "secret")
+    monkeypatch.setattr(rag.requests, "post", post)
+
+    embedding = rag._get_embedding_fn("embo-01")
+
+    assert embedding(["document"]) == [[1.0, 2.0]]
+    assert observed["url"] == "https://api.minimax.io/v1/embeddings"
+    assert observed["timeout"] == 60
+    assert observed["allow_redirects"] is False
+    assert isinstance(observed["auth"], rag._llm_adapters._BearerAuth)
+
+
+def test_minimax_embedding_rejects_redirect_response_body(monkeypatch):
+    class Response:
+        status_code = 307
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"data": [{"embedding": [1.0, 2.0]}]}
+
+    monkeypatch.setenv("MINIMAX_API_KEY", "secret")
+    monkeypatch.setattr(
+        rag.requests, "post", lambda *_args, **_kwargs: Response())
+
+    with pytest.raises(RuntimeError, match="returned a redirect"):
+        rag._get_embedding_fn("embo-01")(["document"])
+
+
 def test_sentence_transformer_rejects_overstated_configured_limit(
         monkeypatch):
     monkeypatch.setitem(sys.modules, "chromadb", None)

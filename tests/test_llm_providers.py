@@ -111,9 +111,13 @@ def _openai_body(text="answer", *, prompt_tokens=17,
 
 
 def test_openai_structured_response_parses_native_usage(monkeypatch):
-    monkeypatch.setattr(
-        rag.requests, "post", lambda *_args, **_kwargs: _Response(
-            _openai_body(" final answer ")))
+    observed = {}
+
+    def post(url, **kwargs):
+        observed.update(url=url, **kwargs)
+        return _Response(_openai_body(" final answer "))
+
+    monkeypatch.setattr(rag.requests, "post", post)
     monkeypatch.setattr(rag, "_api_throttle", None)
 
     result = rag._call_openai_compatible_result(
@@ -128,6 +132,30 @@ def test_openai_structured_response_parses_native_usage(monkeypatch):
     assert result.transport_attempts == 1
     assert result.transient_error_categories == ()
     assert "private reasoning" not in result.text
+    assert observed["allow_redirects"] is False
+    assert isinstance(observed["auth"], rag._llm_adapters._BearerAuth)
+
+
+def test_explicit_bearer_auth_prevents_ambient_netrc_replacement(monkeypatch):
+    netrc_calls = []
+    monkeypatch.setattr(
+        requests.sessions,
+        "get_netrc_auth",
+        lambda url: netrc_calls.append(url) or (
+            "ambient-user", "ambient-password"),
+    )
+    session = requests.Session()
+    prepared = session.prepare_request(requests.Request(
+        "POST",
+        "https://provider.test/v1/chat/completions",
+        headers={"Authorization": "Bearer stale"},
+        auth=rag._llm_adapters._BearerAuth("selected-secret"),
+    ))
+
+    assert netrc_calls == []
+    assert prepared.headers["Authorization"] == "Bearer selected-secret"
+    assert "selected-secret" not in repr(
+        rag._llm_adapters._BearerAuth("selected-secret"))
 
 
 def test_openai_string_facade_remains_compatible(monkeypatch):
@@ -241,6 +269,75 @@ def test_malformed_openai_response_releases_throttle_once(monkeypatch):
     assert throttle.errors == 1
 
 
+@pytest.mark.parametrize("status", [301, 302, 303, 307, 308])
+def test_openai_redirects_are_refused_as_one_transport_attempt(
+        monkeypatch, status):
+    calls = []
+    throttle = _CountingThrottle()
+
+    def post(url, **kwargs):
+        calls.append((url, kwargs))
+        return _Response(status=status)
+
+    monkeypatch.setattr(rag.requests, "post", post)
+    monkeypatch.setattr(rag, "_get_throttle", lambda _workers: throttle)
+
+    with pytest.raises(ProviderCallError) as error:
+        rag._call_openai_compatible_result(
+            "private prompt", base_url="https://provider.test/v1",
+            model="model", api_key="secret")
+
+    assert error.value.category == "configuration_error"
+    assert error.value.transport_attempts == 1
+    assert len(calls) == 1
+    assert calls[0][1]["allow_redirects"] is False
+    assert throttle.acquired == 1
+    assert throttle.errors == 1
+
+
+def test_invalid_direct_cloud_endpoint_never_reaches_throttle_or_transport(
+        monkeypatch):
+    monkeypatch.setattr(
+        rag.requests, "post",
+        lambda *_args, **_kwargs: pytest.fail("transport must not run"))
+    monkeypatch.setattr(
+        rag, "_get_throttle",
+        lambda *_args, **_kwargs: pytest.fail("throttle must not be acquired"))
+
+    with pytest.raises(ProviderCallError) as error:
+        rag._call_openai_compatible_result(
+            "private prompt", base_url="http://api.deepseek.com",
+            model="deepseek-v4-pro", api_key="secret")
+
+    assert error.value.category == "configuration_error"
+    assert error.value.transport_attempts == 0
+
+
+def test_loopback_cloud_transport_uses_proxy_free_post_hook(monkeypatch):
+    observed = {}
+
+    def loopback_post(url, **kwargs):
+        observed.update(url=url, **kwargs)
+        return _Response(_openai_body())
+
+    monkeypatch.setattr(
+        rag.requests, "post",
+        lambda *_args, **_kwargs: pytest.fail(
+            "loopback must not use ambient Requests transport"))
+    monkeypatch.setattr(
+        rag, "_post_loopback_without_environment", loopback_post)
+    monkeypatch.setattr(rag, "_api_throttle", None)
+
+    result = rag._call_openai_compatible_result(
+        "prompt", base_url="http://127.0.0.1:8000/v1",
+        model="local", api_key="explicit-local-key")
+
+    assert result.text == "answer"
+    assert observed["url"] == (
+        "http://127.0.0.1:8000/v1/chat/completions")
+    assert observed["allow_redirects"] is False
+
+
 @pytest.mark.parametrize(
     ("response_or_exception", "expected"),
     [
@@ -286,16 +383,17 @@ def test_ollama_structured_response_uses_native_counts(monkeypatch):
             "eval_count": 8,
         })
 
-    monkeypatch.setattr(rag.requests, "post", post)
+    monkeypatch.setattr(rag, "_post_loopback_without_environment", post)
     result = rag._call_ollama_result(
-        "prompt", url="http://localhost:11434/", model="local",
+        "prompt", url="http://127.0.0.1:11434/", model="local",
         thinking=True, max_tokens=99, timeout=12)
 
     assert result.text == "local answer"
     assert result.prompt_tokens == 23
     assert result.completion_tokens == 8
     assert result.transport_attempts == 1
-    assert observed["url"] == "http://localhost:11434/api/generate"
+    assert observed["url"] == "http://127.0.0.1:11434/api/generate"
+    assert observed["allow_redirects"] is False
     assert observed["json"]["think"] is True
     assert observed["json"]["options"]["num_predict"] == 99
     assert observed["timeout"] == 12
@@ -304,7 +402,8 @@ def test_ollama_structured_response_uses_native_counts(monkeypatch):
 
 def test_ollama_rejects_partial_usage(monkeypatch):
     monkeypatch.setattr(
-        rag.requests, "post", lambda *_args, **_kwargs: _Response({
+        rag, "_post_loopback_without_environment",
+        lambda *_args, **_kwargs: _Response({
             "response": "answer", "prompt_eval_count": 3,
         }))
 
@@ -312,6 +411,55 @@ def test_ollama_rejects_partial_usage(monkeypatch):
         rag._call_ollama_result("prompt")
 
     assert error.value.category == "invalid_response"
+
+
+def test_ollama_redirect_is_refused_without_a_second_request(monkeypatch):
+    calls = []
+
+    def post(url, **kwargs):
+        calls.append((url, kwargs))
+        return _Response(status=307)
+
+    monkeypatch.setattr(rag, "_post_loopback_without_environment", post)
+
+    with pytest.raises(ProviderCallError) as error:
+        rag._call_ollama_result(
+            "private prompt", url="http://127.0.0.1:11434")
+
+    assert error.value.category == "configuration_error"
+    assert error.value.transport_attempts == 1
+    assert len(calls) == 1
+    assert calls[0][1]["allow_redirects"] is False
+
+
+def test_loopback_post_disables_environment_proxy_configuration(monkeypatch):
+    observed = {}
+
+    class Session:
+        trust_env = True
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def post(self, url, **kwargs):
+            observed.update(
+                url=url, kwargs=kwargs, trust_env=self.trust_env)
+            return "response"
+
+    monkeypatch.setattr(rag.requests, "Session", Session)
+
+    response = rag._post_loopback_without_environment(
+        "http://127.0.0.1:11434/api/generate", timeout=5)
+
+    assert response == "response"
+    assert observed == {
+        "url": "http://127.0.0.1:11434/api/generate",
+        "kwargs": {"timeout": 5},
+        "trust_env": False,
+    }
 
 
 def _install_fake_gemini(monkeypatch, response=None, error=None):

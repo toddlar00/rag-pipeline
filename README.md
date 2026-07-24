@@ -12,8 +12,8 @@ summaries, citation graph extraction, and source-grounded answer generation
 with explicit abstention.
 
 See [`ROADMAP.md`](ROADMAP.md) for implemented hardening milestones, merge
-status, and the ordered improvement backlog. The final cross-stack findings and
-their disposition are recorded in
+status, and the ordered improvement backlog. The historical #1-#28 integration
+findings and their disposition are recorded in
 [`INTEGRATION_AUDIT.md`](INTEGRATION_AUDIT.md).
 
 ## Architecture
@@ -120,6 +120,13 @@ responses into the typed, provider-neutral contracts in `llm_runtime.py`.
 Gemini remains lazily imported, while `rag.py` retains provider selection,
 runtime composition, mutable caches/throttles, and the compatibility facades.
 
+`endpoint_policy.py` is the standard-library-only trust boundary for custom
+LLM URLs. It canonicalizes approved targets before credential lookup, cache
+lookup, job persistence, artifact binding, or transport; classifies official
+providers only from their exact reviewed HTTPS origin and base path; and emits
+opaque identities for custom and rejected targets. See the
+[endpoint and UI boundary ADR](docs/architecture/decisions/local-endpoint-boundaries.md).
+
 `cli_policy.py` is the standard-library-only command policy layer for timeout
 validation and scanning, resume-command serialization, provider and credential
 option mapping, menu LLM detection, and secret redaction/environment routing.
@@ -161,6 +168,9 @@ The portable command-line and CPU dependency profiles are tested on CPython
 3.10 through 3.14. Clean core and core-plus-optional environments are installed
 and tested on Python 3.12, with resolution checks at both ends of that range.
 The RTX 50-series/CUDA 12.8 setup below intentionally requires Python 3.12-3.14.
+It is a manually qualified development path, not yet a hash-locked release
+profile; the first versioned release must either qualify and pin it or declare
+CPU-only reproducibility.
 
 ```bash
 # 1. Install PyTorch with CUDA (must come first for GPU support)
@@ -172,7 +182,7 @@ pip install -r requirements.txt
 # 3. Full pipeline -- one command
 python rag.py full --pdf Civil_procedure.pdf --force
 
-# Select the reviewed layout policy when the book is not a U.S. law casebook
+# Experimental profile qualification; not yet production-supported
 python rag.py full --pdf Scholarly_book.pdf \
   --structure-profile roman-parts-book-v1
 
@@ -900,14 +910,28 @@ in-flight requests, and can reuse successful results across runs. Existing
 Python integrations remain compatible: `_call_llm(...)` still returns
 `str | None`, while `_call_llm_result(...)` exposes structured provenance.
 
+Endpoint configuration is fail-closed. Official DeepSeek and MiniMax targets
+must use their exact reviewed HTTPS host, port, and base path. Other public or
+custom targets require HTTPS. Plain HTTP is accepted only for a canonical
+literal loopback address such as `127.0.0.1` or `[::1]`; names such as
+`localhost`, noncanonical IP spellings, IPv4-mapped IPv6, user information,
+queries, fragments, redirects, and ambiguous path encodings are rejected.
+Loopback requests ignore ambient proxy settings, and all built-in Requests
+transports refuse redirects so one admitted transport is one HTTP request.
+Credentialed Requests calls use an explicit Bearer-auth object so ambient
+`.netrc` credentials cannot replace the provider key selected by policy.
+
 CLI calls use a persistent, machine-local response cache by default. Direct
 Python calls default to `off`, preserving the original library behavior. A
 cache key covers the exact prompt digest, operation and prompt versions,
 generation settings, timeout, fallback policy, and ordered provider/model/
 endpoint identities. Prompts, API keys, and raw endpoint URLs are not stored in
-the cache key or record. Only non-empty successful responses are cached, and
-entries use integrity hashes plus atomic replacement so truncated or tampered
-records become misses and are repaired by the next successful call.
+the cache key or record: reviewed official targets use a versioned canonical
+identity, while custom and rejected targets use opaque SHA-256 identities.
+Enabled endpoints are validated before cache lookup. Only non-empty successful
+responses are cached, and entries use integrity hashes plus atomic replacement
+so truncated or tampered records become misses and are repaired by the next
+successful call.
 
 The cache itself contains successful response text in plaintext. Treat its
 directory as sensitive when textbook excerpts, client facts, or other private
@@ -1006,12 +1030,14 @@ official DeepSeek endpoint without changing the default model selects
 mode and is also forwarded to Ollama's `think` option.
 
 Cloud API keys are resolved without reusing a provider-specific secret for an
-unrelated host:
+unrelated host. Endpoint validation always happens first:
 
-1. `--api-key` / `--cloud-key`, when supplied, always wins.
+1. `--api-key` / `--cloud-key`, when supplied, wins only for a valid endpoint.
 2. DeepSeek uses `DEEPSEEK_API_KEY`, then falls back to `CLOUD_API_KEY`.
 3. MiniMax uses `MINIMAX_API_KEY`, then falls back to `CLOUD_API_KEY`.
-4. Any other custom cloud endpoint uses only `CLOUD_API_KEY`.
+4. A custom HTTPS endpoint uses only `CLOUD_API_KEY`.
+5. A loopback endpoint never reads an ambient provider key; supply an explicit
+   key only when that local server requires one.
 
 ```bash
 # DeepSeek V4 Pro with thinking (set DEEPSEEK_API_KEY first)
@@ -1505,11 +1531,13 @@ bound to the hash-verified recovery PDF and conversion manifest.
 
 The pipeline extracts authoritative document structure from the Table of Contents
 rather than relying solely on heading detection. Structure policy is selected
-explicitly with `--structure-profile`; the default is
-`us-law-casebook-v1`, and `roman-parts-book-v1` supports scholarly books whose
-primary divisions are Roman-numbered Parts. A profile controls front/back-matter
-labels, division patterns, TOC hierarchy, canonical titles, cross-references,
-classification, quality checks, and export paths as one immutable policy.
+explicitly with `--structure-profile`; the production-qualified default is
+`us-law-casebook-v1`. The registered `roman-parts-book-v1` policy models books
+whose primary divisions are Roman-numbered Parts, but currently has synthetic
+fixture coverage only and is not yet production-qualified on an authorized real
+corpus. A profile controls front/back-matter labels, division patterns, TOC
+hierarchy, canonical titles, cross-references, classification, quality checks,
+and export paths as one immutable policy.
 
 The pipeline supports two TOC extraction methods:
 
@@ -1529,7 +1557,7 @@ python rag.py chunk --doc output/Casebook/Casebook.json \
   --out output/Casebook/Casebook_chunks.jsonl \
   --structure-profile us-law-casebook-v1
 
-# Roman-numbered Part-based scholarly books
+# Experimental qualification only; inspect results before production use
 python rag.py full --pdf Scholarly_book.pdf \
   --structure-profile roman-parts-book-v1
 ```
@@ -1615,7 +1643,7 @@ python rag.py full --pdf Book.pdf --resume --full-reindex \
 
 Do not query or export the old collection until this command finishes. Resume
 keeps valid schema-v2 conversion evidence, rebuilds invalid or pre-v3 chunk
-evidence under schema v3 and chunking policy v22, regenerates the schema-v4
+evidence under schema v3 and chunking policy v23, regenerates the schema-v4
 quality report from the exact chunk-completion inputs, and then reconciles or
 rebuilds an index whose
 prior quality binding is incompatible. The chunk receipt records the selected
@@ -2178,7 +2206,7 @@ pip install -r requirements-optional.txt
 python ui.py \
   --chunks output/Civil_procedure/Civil_procedure_chunks.jsonl \
   --db output/Civil_procedure/Civil_procedure_chroma \
-  --collection civil_procedure             # http://localhost:7860
+  --collection civil_procedure             # http://127.0.0.1:7860
 
 # Qdrant run
 python ui.py --db-backend qdrant \
@@ -2187,12 +2215,12 @@ python ui.py --db-backend qdrant \
   --collection civil_procedure
 ```
 
-Add `--share` to either complete command to create a public Gradio link. This
-can expose private queries, retrieved passages, metadata, and exports to anyone
-who obtains the link; do not use it for a sensitive corpus. The Jobs tab is not
-registered in shared mode, and its callbacks refuse to touch private job state.
-Search retrieval and Info's exact vector count execute in killable workers. Use
-`--search-timeout SECONDS`, `--info-timeout SECONDS`, and
+The UI always binds the literal loopback address `127.0.0.1` and explicitly
+disables Gradio sharing. There is no supported public-share flag. Remote access
+requires a separately reviewed deployment boundary with authentication, TLS,
+authorization, origin protections, rate isolation, audit policy, and corpus
+distribution approval. Search retrieval and Info's exact vector count execute
+in killable workers. Use `--search-timeout SECONDS`, `--info-timeout SECONDS`, and
 `--db-lock-timeout SECONDS` to tune their hard deadlines and local lease wait
 independently.
 
@@ -2414,6 +2442,7 @@ index_state.py          # Stdlib-only index manifests and compatibility policy
 vector_lifecycle.py     # Stdlib-only guarded vector mutation and commit policy
 llm_adapters.py         # Typed LLM provider transport adapters
 llm_runtime.py          # Reproducible caching, fallback, budgets, and reports
+endpoint_policy.py      # Canonical cloud/loopback endpoint trust boundary
 cli_policy.py           # Stdlib-only CLI interpretation and serialization policy
 ingestion_core.py       # Stdlib-only PDF inspection and stripping safety policy
 model_artifacts.py      # Stdlib-only model lock, byte verification, and ML-BOM

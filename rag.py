@@ -37,13 +37,13 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional, TypedDict
-from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
 import artifact_io as _artifact_io
 import chunking_core as _chunking_core
 import cli_policy as _cli_policy
 import document_profiles as _document_profiles
+import endpoint_policy as _endpoint_policy
 import ingestion_core as _ingestion_core
 import index_state as _index_state
 import job_runtime as _job_runtime
@@ -273,18 +273,19 @@ _CONTENT_LABELS = [
 
 
 _provider_hostname = _llm_adapters._provider_hostname
+_validate_cloud_endpoint = _endpoint_policy.validate_cloud_endpoint
 
 
 def _is_deepseek_cloud(url: str, model: str = "") -> bool:
     """Return whether an API URL is the official DeepSeek endpoint."""
     return _llm_adapters._is_deepseek_cloud(
-        url, model, provider_hostname_fn=_provider_hostname)
+        url, model, validate_endpoint_fn=_validate_cloud_endpoint)
 
 
 def _is_minimax_cloud(url: str) -> bool:
     """Return whether an API URL is the official MiniMax endpoint."""
     return _llm_adapters._is_minimax_cloud(
-        url, provider_hostname_fn=_provider_hostname)
+        url, validate_endpoint_fn=_validate_cloud_endpoint)
 
 
 def _effective_chunk_token_limit(embedding_model: str,
@@ -720,9 +721,14 @@ def _get_embedding_fn(model_name: str, *, input_type: str = "document"):
                 resp = requests.post(
                     f"{DEFAULT_CLOUD_URL.rstrip('/')}/embeddings",
                     headers={"Authorization": f"Bearer {api_key}"},
+                    auth=_llm_adapters._BearerAuth(api_key),
                     json={"model": self._name, "input": list(input)},
                     timeout=60,
+                    allow_redirects=False,
                 )
+                if 300 <= resp.status_code < 400:
+                    raise RuntimeError(
+                        "MiniMax embedding endpoint returned a redirect")
                 resp.raise_for_status()
                 data = resp.json()
                 return [d["embedding"] for d in data["data"]]
@@ -4326,6 +4332,13 @@ def _provider_call_error(exc: BaseException, *,
         error_category_fn=_provider_error_category)
 
 
+def _post_loopback_without_environment(url: str, **kwargs):
+    """POST to a literal loopback target without ambient proxy settings."""
+    with requests.Session() as session:
+        session.trust_env = False
+        return session.post(url, **kwargs)
+
+
 def _call_ollama_result(prompt: str, *, url: str = DEFAULT_OLLAMA_URL,
                         model: str = DEFAULT_OLLAMA_MODEL,
                         thinking: bool = False,
@@ -4336,6 +4349,8 @@ def _call_ollama_result(prompt: str, *, url: str = DEFAULT_OLLAMA_URL,
         prompt, url=url, model=model, thinking=thinking,
         max_tokens=max_tokens, timeout=timeout,
         post_fn=requests.post,
+        loopback_post_fn=_post_loopback_without_environment,
+        validate_endpoint_fn=_validate_cloud_endpoint,
         provider_token_count_fn=_provider_token_count,
         provider_call_error_fn=_provider_call_error)
 
@@ -4464,8 +4479,10 @@ def _call_openai_compatible_result(
         prompt, base_url=base_url, model=model, api_key=api_key,
         thinking=thinking, max_tokens=max_tokens,
         max_workers=max_workers, timeout=timeout,
-        post_fn=requests.post, get_throttle_fn=_get_throttle,
-        sleep_fn=time.sleep, is_deepseek_fn=_is_deepseek_cloud,
+        post_fn=requests.post,
+        loopback_post_fn=_post_loopback_without_environment,
+        get_throttle_fn=_get_throttle,
+        sleep_fn=time.sleep, validate_endpoint_fn=_validate_cloud_endpoint,
         provider_token_count_fn=_provider_token_count,
         provider_value_fn=_provider_value,
         provider_call_error_fn=_provider_call_error,
@@ -4511,6 +4528,19 @@ def _call_llm_result(
         failure_policy: str | None = None, cache_mode: str | None = None,
         cache_dir: Path | str | None = None) -> LLMResult:
     """Execute an LLM request with structured provenance and run controls."""
+    # Validate every enabled caller-supplied transport before constructing a
+    # cache key or consulting a cache.  The adapters repeat this check at the
+    # final network boundary, but that alone would let a malformed endpoint
+    # reuse a pre-existing cache entry without ever reaching the adapter.
+    if cloud_url and cloud_key:
+        cloud_endpoint = _validate_cloud_endpoint(cloud_url)
+        assert cloud_endpoint is not None
+        cloud_url = cloud_endpoint.base_url
+    if ollama_url:
+        ollama_endpoint = _validate_cloud_endpoint(ollama_url)
+        assert ollama_endpoint is not None
+        ollama_url = ollama_endpoint.base_url
+
     runtime_config = _llm_runtime.config
     request = LLMRequest(
         prompt=prompt,
@@ -4853,9 +4883,14 @@ def _rerank(query: str, documents: list[str], metadatas: list[dict],
         resp = requests.post(
             "https://api.jina.ai/v1/rerank",
             headers={"Authorization": f"Bearer {api_key}"},
+            auth=_llm_adapters._BearerAuth(api_key),
             json={"model": reranker_model, "query": query,
                   "documents": reranker_documents, "top_n": top_k},
+            timeout=60,
+            allow_redirects=False,
         )
+        if 300 <= resp.status_code < 400:
+            raise RuntimeError("Jina reranker endpoint returned a redirect")
         resp.raise_for_status()
         results = resp.json()["results"]
         ranked_docs = [documents[r["index"]] for r in results]
@@ -7416,22 +7451,13 @@ def _reconstruct_heading(
 
 def _endpoint_parameter_binding(url: str) -> dict:
     """Represent an exact endpoint without retaining credential material."""
-    if not isinstance(url, str):
-        raise TypeError("endpoint URL must be a string")
-    parsed = urlparse(url)
-    origin = None
-    if parsed.scheme and parsed.hostname:
-        host = parsed.hostname.casefold()
-        if ":" in host:
-            host = f"[{host}]"
-        try:
-            port = f":{parsed.port}" if parsed.port is not None else ""
-        except ValueError:
-            port = ""
-        origin = f"{parsed.scheme.casefold()}://{host}{port}"
+    endpoint = _validate_cloud_endpoint(url, allow_disabled=True)
     return {
-        "origin": origin,
-        "url_sha256": hashlib.sha256(url.encode("utf-8")).hexdigest(),
+        "policy_version": _endpoint_policy.ENDPOINT_POLICY_VERSION,
+        "endpoint_id": (
+            endpoint.endpoint_id if endpoint is not None
+            else _endpoint_policy.cloud_endpoint_identity("")
+        ),
     }
 
 
@@ -7451,11 +7477,19 @@ def _chunk_parameters(*, embedding_model: str, max_tokens: int,
                       ) = DEFAULT_STRUCTURE_PROFILE) -> dict:
     """Return credential-free parameters that determine chunking output."""
     profile = _document_profiles.get_profile(structure_profile)
+    llm_generation_enabled = any((
+        llm_classify,
+        contextualize,
+        reconstruct_headings,
+        quality_score,
+        llm_scaffold,
+    ))
     gemini_enabled = bool(
-        gemini_key or os.environ.get("GEMINI_API_KEY", ""))
+        llm_generation_enabled
+        and (gemini_key or os.environ.get("GEMINI_API_KEY", "")))
     llm_config = _llm_runtime.config
     return {
-        "chunking_policy_version": 22,
+        "chunking_policy_version": 23,
         "classification_prompt_version": 1,
         "embedding_model": embedding_model,
         "max_tokens": max_tokens,
@@ -7474,7 +7508,8 @@ def _chunk_parameters(*, embedding_model: str, max_tokens: int,
         "gemini_model": DEFAULT_GEMINI_MODEL if gemini_enabled else None,
         "cloud_url": _endpoint_parameter_binding(cloud_url),
         "cloud_model": cloud_model,
-        "cloud_enabled": bool(cloud_url and cloud_key),
+        "cloud_enabled": bool(
+            llm_generation_enabled and cloud_url and cloud_key),
         "llm_workers": llm_workers,
         "llm_fallback_policy": llm_config.fallback_policy,
         "llm_failure_policy": llm_config.failure_policy,
@@ -8654,8 +8689,9 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
                 desc.append(f"classifying ({ollama_model})")
         if contextualize:
             desc.append("contextualizing")
-        provider_chain = (f"Cloud ({cloud_url.split('//')[1].split('/')[0]}) -> "
-                          if cloud_url and cloud_key else "")
+        provider_chain = (
+            f"Cloud ({_llm_endpoint_id(cloud_url)}) -> "
+            if cloud_url and cloud_key else "")
 
         # Parallel when using cloud API, sequential for local Ollama
         is_cloud = bool(cloud_url and cloud_key)
@@ -12500,10 +12536,10 @@ def _raptor_parameters(*, embedding_model: str, cloud_url: str,
                        gemini_key: str, thinking: bool) -> dict:
     return {
         "embedding_model": embedding_model,
-        "cloud_url": cloud_url,
+        "cloud_url": _endpoint_parameter_binding(cloud_url),
         "cloud_model": cloud_model,
         "cloud_configured": bool(cloud_url and cloud_key),
-        "ollama_url": ollama_url,
+        "ollama_url": _endpoint_parameter_binding(ollama_url),
         "ollama_model": ollama_model,
         "gemini_configured": bool(gemini_key),
         "thinking": thinking,
@@ -13081,8 +13117,17 @@ def _resolve_cloud_endpoint(args) -> tuple[str, str]:
     return _cli_policy._resolve_cloud_endpoint(
         args,
         defaults=_provider_cli_defaults(),
-        is_deepseek_cloud_fn=_is_deepseek_cloud,
+        validate_cloud_endpoint_fn=_validate_cloud_endpoint,
     )
+
+
+def _cloud_endpoint_arg(value: str) -> str:
+    """Argparse type that canonicalizes URLs without echoing rejected text."""
+    try:
+        endpoint = _validate_cloud_endpoint(value, allow_disabled=True)
+    except (TypeError, ValueError) as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from None
+    return endpoint.base_url if endpoint is not None else ""
 
 
 def _resolve_cloud_key(args, *, cloud_url: str = "",
@@ -13093,13 +13138,14 @@ def _resolve_cloud_key(args, *, cloud_url: str = "",
         cloud_url=cloud_url,
         cloud_model=cloud_model,
         resolve_cloud_endpoint_fn=_resolve_cloud_endpoint,
-        is_deepseek_cloud_fn=_is_deepseek_cloud,
-        is_minimax_cloud_fn=_is_minimax_cloud,
+        validate_cloud_endpoint_fn=_validate_cloud_endpoint,
         environment_get_fn=os.environ.get,
     )
 
 
-def _llm_kwargs_from_args(args, *, include_workers: bool = False) -> dict:
+def _llm_kwargs_from_args(
+        args, *, include_workers: bool = False,
+        resolve_credentials: bool = True) -> dict:
     """Collect provider options shared by LLM-backed operations."""
     return _cli_policy._llm_kwargs_from_args(
         args,
@@ -13107,7 +13153,11 @@ def _llm_kwargs_from_args(args, *, include_workers: bool = False) -> dict:
         defaults=_provider_cli_defaults(),
         resolve_cloud_endpoint_fn=_resolve_cloud_endpoint,
         resolve_cloud_key_fn=_resolve_cloud_key,
+        resolve_credentials=resolve_credentials,
     )
+
+
+_namespace_uses_llm = _cli_policy._namespace_uses_llm
 
 
 def _configure_llm_runtime_from_args(args) -> None:
@@ -13179,7 +13229,11 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
     db_dir = paths["qdrant"] if db_backend == "qdrant" else paths["chroma"]
     quality_report_path = paths.get(
         "quality_report", _quality_core.quality_report_path(paths["chunks"]))
-    llm_kwargs = _llm_kwargs_from_args(args, include_workers=True)
+    llm_kwargs = _llm_kwargs_from_args(
+        args,
+        include_workers=True,
+        resolve_credentials=_cli_policy._pipeline_features_use_llm(args),
+    )
     structure_profile = _document_profiles.get_profile(
         getattr(args, "structure_profile", DEFAULT_STRUCTURE_PROFILE))
 
@@ -14035,6 +14089,19 @@ CONTENT_TYPES = [
 ]
 
 
+class _StrictArgumentParser(argparse.ArgumentParser):
+    """Reject abbreviations and never reproduce submitted values in errors."""
+
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault("allow_abbrev", False)
+        super().__init__(*args, **kwargs)
+
+    def error(self, message):
+        del message
+        super().error(
+            "invalid command line; argument values were omitted (use --help)")
+
+
 def main(argv: list[str] | None = None):
     # Ensure print() handles non-ASCII (case names, Unicode dashes) on Windows
     if sys.stdout and hasattr(sys.stdout, "reconfigure"):
@@ -14043,7 +14110,7 @@ def main(argv: list[str] | None = None):
         except Exception:
             pass
 
-    parser = argparse.ArgumentParser(
+    parser = _StrictArgumentParser(
         description="RAG Pipeline — Docling + HybridChunker + ChromaDB/Qdrant",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -14135,12 +14202,13 @@ def main(argv: list[str] | None = None):
         )
 
     def add_llm_provider_flags(p):
-        p.add_argument("--ollama-url", type=str, default=DEFAULT_OLLAMA_URL,
+        p.add_argument("--ollama-url", type=_cloud_endpoint_arg,
+                        default=DEFAULT_OLLAMA_URL,
                         help=f"Ollama API URL (default: {DEFAULT_OLLAMA_URL})")
         p.add_argument("--ollama-model", type=str, default=DEFAULT_OLLAMA_MODEL,
                         help=f"Ollama model (default: {DEFAULT_OLLAMA_MODEL})")
         p.add_argument("--cloud-url", "--llm-url", dest="cloud_url",
-                        type=str, default=DEFAULT_CLOUD_URL,
+                        type=_cloud_endpoint_arg, default=DEFAULT_CLOUD_URL,
                         help=f"OpenAI-compatible API URL (default: {DEFAULT_CLOUD_URL})")
         p.add_argument("--cloud-model", "--llm-model", dest="cloud_model",
                         type=str, default=DEFAULT_CLOUD_MODEL,
@@ -14590,7 +14658,12 @@ def main(argv: list[str] | None = None):
             p_brief, p_q, p_exp, p_info, p_storage, p_full, p_batch):
         add_run_telemetry_flags(command_parser)
 
-    args = parser.parse_args(argv)
+    parse_argv = list(sys.argv[1:] if argv is None else argv)
+    if _cli_policy._has_ambiguous_sensitive_option(parse_argv):
+        parser.error(
+            "endpoint and credential options must be written in full and "
+            "with exact case")
+    args = parser.parse_args(parse_argv)
 
     # --- Configure logging ---
     level = logging.WARNING if args.quiet else (
@@ -14661,7 +14734,10 @@ def main(argv: list[str] | None = None):
         if args.command in _job_runtime.ALLOWED_JOB_COMMANDS:
             worker_job_context = _job_runtime.load_worker_context(
                 args.command)
-        llm_kwargs = _llm_kwargs_from_args(args, include_workers=True)
+        llm_kwargs = (
+            _llm_kwargs_from_args(args, include_workers=True)
+            if _namespace_uses_llm(args) else {}
+        )
         _configure_llm_runtime_from_args(args)
         llm_runtime_configured = True
 
@@ -15210,6 +15286,9 @@ def _menu_llm_provider_args() -> list[str]:
         url = input(
             f"  Ollama URL (Enter for {DEFAULT_OLLAMA_URL}): "
         ).strip() or DEFAULT_OLLAMA_URL
+        endpoint = _validate_cloud_endpoint(url)
+        assert endpoint is not None
+        url = endpoint.base_url
         model = input(
             f"  Ollama model (Enter for {DEFAULT_OLLAMA_MODEL}): "
         ).strip() or DEFAULT_OLLAMA_MODEL
@@ -15234,6 +15313,9 @@ def _menu_llm_provider_args() -> list[str]:
         model = input("  Model name: ").strip()
         if not url or not model:
             raise ValueError("Custom provider requires both an API URL and model")
+        endpoint = _validate_cloud_endpoint(url)
+        assert endpoint is not None
+        url = endpoint.base_url
         key = getpass(
             "  API key (hidden; Enter for CLOUD_API_KEY): "
         ).strip()

@@ -19,6 +19,7 @@ from urllib.parse import urlparse
 
 import requests
 
+import endpoint_policy
 from llm_runtime import LLMBudgetExceeded, ProviderCallError, ProviderResponse
 
 
@@ -55,7 +56,7 @@ ProviderValueFn = Callable[[object, str], object]
 ProviderTokenCountFn = Callable[[object, str], int | None]
 ProviderCallErrorFn = Callable[..., ProviderCallError]
 ErrorCategoryFn = Callable[[BaseException], str]
-EndpointPredicateFn = Callable[..., bool]
+EndpointValidatorFn = Callable[..., endpoint_policy.ValidatedEndpoint | None]
 ThrottleFactoryFn = Callable[[int], ThrottleProtocol]
 RetryAfterFn = Callable[[object], float]
 SleepFn = Callable[[float], None]
@@ -65,6 +66,22 @@ EnvironmentGetFn = Callable[[str, str], str]
 
 
 _log = logging.getLogger(__name__)
+
+
+class _BearerAuth(requests.auth.AuthBase):
+    """Explicit Requests auth that prevents ambient netrc replacement."""
+
+    __slots__ = ("_token",)
+
+    def __init__(self, token: str):
+        self._token = token
+
+    def __call__(self, request):
+        request.headers["Authorization"] = f"Bearer {self._token}"
+        return request
+
+    def __repr__(self) -> str:
+        return "<_BearerAuth token=<redacted>>"
 
 
 def _provider_hostname(url: str) -> str:
@@ -77,18 +94,26 @@ def _provider_hostname(url: str) -> str:
 
 def _is_deepseek_cloud(
         url: str, model: str = "", *,
-        provider_hostname_fn: Callable[[str], str] = (
-            _provider_hostname)) -> bool:
+        validate_endpoint_fn: EndpointValidatorFn = (
+            endpoint_policy.validate_cloud_endpoint)) -> bool:
     """Return whether an API URL is the official DeepSeek endpoint."""
     del model  # Kept for compatibility with callers that also have a model.
-    return provider_hostname_fn(url) == "api.deepseek.com"
+    try:
+        endpoint = validate_endpoint_fn(url)
+    except (TypeError, ValueError):
+        return False
+    return endpoint is not None and endpoint.provider == "deepseek"
 
 
 def _is_minimax_cloud(
-        url: str, *, provider_hostname_fn: Callable[[str], str] = (
-            _provider_hostname)) -> bool:
+        url: str, *, validate_endpoint_fn: EndpointValidatorFn = (
+            endpoint_policy.validate_cloud_endpoint)) -> bool:
     """Return whether an API URL is the official MiniMax endpoint."""
-    return provider_hostname_fn(url) == "api.minimax.io"
+    try:
+        endpoint = validate_endpoint_fn(url)
+    except (TypeError, ValueError):
+        return False
+    return endpoint is not None and endpoint.provider == "minimax"
 
 
 def _provider_value(source: object, name: str) -> object:
@@ -171,9 +196,19 @@ def _call_ollama_result(
         prompt: str, *, url: str, model: str,
         thinking: bool, max_tokens: int, timeout: int,
         post_fn: HttpPostFn,
+        loopback_post_fn: HttpPostFn,
+        validate_endpoint_fn: EndpointValidatorFn,
         provider_token_count_fn: ProviderTokenCountFn,
         provider_call_error_fn: ProviderCallErrorFn) -> ProviderResponse:
     """Return Ollama text with its native prompt/output token counts."""
+    try:
+        endpoint = validate_endpoint_fn(url)
+    except (TypeError, ValueError):
+        raise ProviderCallError(
+            "configuration_error", transport_attempts=0) from None
+    if endpoint is None:
+        raise ProviderCallError(
+            "configuration_error", transport_attempts=0)
     payload = {
         "model": model,
         "prompt": prompt,
@@ -181,12 +216,18 @@ def _call_ollama_result(
         "think": thinking,
         "options": {"num_predict": max_tokens},
     }
+    selected_post_fn = (
+        loopback_post_fn if endpoint.is_loopback else post_fn)
     try:
-        resp = post_fn(
-            f"{url.rstrip('/')}/api/generate",
+        resp = selected_post_fn(
+            f"{endpoint.base_url}/api/generate",
             json=payload,
             timeout=timeout,
+            allow_redirects=False,
         )
+        if 300 <= resp.status_code < 400:
+            raise ProviderCallError(
+                "configuration_error", transport_attempts=1)
         resp.raise_for_status()
         body = resp.json()
         if not isinstance(body, dict) or not isinstance(
@@ -416,21 +457,30 @@ def _call_openai_compatible_result(
         prompt: str, *, base_url: str, model: str, api_key: str,
         thinking: bool, max_tokens: int, max_workers: int, timeout: int,
         post_fn: HttpPostFn,
+        loopback_post_fn: HttpPostFn,
         get_throttle_fn: ThrottleFactoryFn,
         sleep_fn: SleepFn,
-        is_deepseek_fn: EndpointPredicateFn,
+        validate_endpoint_fn: EndpointValidatorFn,
         provider_token_count_fn: ProviderTokenCountFn,
         provider_value_fn: ProviderValueFn,
         provider_call_error_fn: ProviderCallErrorFn,
         retry_after_fn: RetryAfterFn,
         admit_retry_fn: Callable[[], None] | None = None) -> ProviderResponse:
     """Return OpenAI-compatible text, usage, and retry provenance."""
+    try:
+        endpoint = validate_endpoint_fn(base_url)
+    except (TypeError, ValueError):
+        raise ProviderCallError(
+            "configuration_error", transport_attempts=0) from None
+    if endpoint is None:
+        raise ProviderCallError(
+            "configuration_error", transport_attempts=0)
     if not api_key:
         raise ProviderCallError(
             "missing_credentials", transport_attempts=0)
 
     throttle = get_throttle_fn(max(1, max_workers))
-    is_deepseek = is_deepseek_fn(base_url, model)
+    is_deepseek = endpoint.provider == "deepseek"
     payload = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
@@ -444,17 +494,21 @@ def _call_openai_compatible_result(
         payload["temperature"] = 0.0
 
     transient_errors: list[str] = []
+    selected_post_fn = (
+        loopback_post_fn if endpoint.is_loopback else post_fn)
 
     for attempt in range(2):
         throttle.acquire()
         try:
             if attempt > 0 and admit_retry_fn is not None:
                 admit_retry_fn()
-            resp = post_fn(
-                f"{base_url.rstrip('/')}/chat/completions",
+            resp = selected_post_fn(
+                f"{endpoint.base_url}/chat/completions",
                 headers={"Authorization": f"Bearer {api_key}"},
+                auth=_BearerAuth(api_key),
                 json=payload,
                 timeout=timeout,
+                allow_redirects=False,
             )
         except LLMBudgetExceeded:
             throttle.release_error()
@@ -464,6 +518,10 @@ def _call_openai_compatible_result(
             raise provider_call_error_fn(
                 exc, transport_attempts=attempt + 1) from None
 
+        if 300 <= resp.status_code < 400:
+            throttle.release_error()
+            raise ProviderCallError(
+                "configuration_error", transport_attempts=attempt + 1)
         if resp.status_code == 429:
             throttle.release_429()
             if attempt == 0:
@@ -549,12 +607,4 @@ def _call_openai_compatible_result(
 
 def _llm_endpoint_id(url: str) -> str:
     """Return a credential-free endpoint identity for cache separation."""
-    parsed = urlparse(url)
-    if not parsed.hostname:
-        return url.rstrip("/")
-    try:
-        port = f":{parsed.port}" if parsed.port is not None else ""
-    except ValueError:
-        port = ""
-    path = parsed.path.rstrip("/")
-    return f"{parsed.scheme.casefold()}://{parsed.hostname.casefold()}{port}{path}"
+    return endpoint_policy.cloud_endpoint_identity(url)

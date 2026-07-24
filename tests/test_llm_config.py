@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import cli_policy
 import rag
 
 
@@ -102,14 +103,171 @@ def test_deepseek_key_is_not_sent_to_a_lookalike_hostname(monkeypatch):
     monkeypatch.setenv("CLOUD_API_KEY", "generic-key")
     url = "https://api.deepseek.com.attacker.invalid/v1"
 
-    result = rag._resolve_cloud_key(
-        _cloud_args(cloud_url=url, cloud_model="deepseek-v4-pro"),
-        cloud_url=url,
-        cloud_model="deepseek-v4-pro",
+    with pytest.raises(ValueError, match="confusingly similar"):
+        rag._resolve_cloud_key(
+            _cloud_args(cloud_url=url, cloud_model="deepseek-v4-pro"),
+            cloud_url=url,
+            cloud_model="deepseek-v4-pro",
+        )
+    assert rag._is_deepseek_cloud(url) is False
+
+
+@pytest.mark.parametrize("url", [
+    "http://api.deepseek.com",
+    "http://api.minimax.io/v1",
+    "https://api.deepseek.com:444/v1",
+    "https://user:secret@api.deepseek.com/v1",
+    "https://api.deepseek.com/v1?token=secret",
+    "https://api.deepseek.com./v1",
+    "https://localhost/v1",
+    "https://127.1/v1",
+    "https://0.0.0.0/v1",
+])
+def test_invalid_endpoint_is_rejected_before_any_environment_lookup(url):
+    observed = []
+
+    with pytest.raises((TypeError, ValueError)):
+        cli_policy._resolve_cloud_key(
+            SimpleNamespace(cloud_key=""),
+            cloud_url=url,
+            cloud_model="model",
+            resolve_cloud_endpoint_fn=lambda _args: (url, "model"),
+            environment_get_fn=lambda name, default: (
+                observed.append(name) or default),
+        )
+
+    assert observed == []
+
+
+def test_explicit_key_does_not_bypass_endpoint_validation():
+    with pytest.raises((TypeError, ValueError)):
+        cli_policy._resolve_cloud_key(
+            SimpleNamespace(cloud_key="typed-secret"),
+            cloud_url="http://api.deepseek.com",
+            cloud_model="deepseek-v4-pro",
+            resolve_cloud_endpoint_fn=lambda _args: ("", ""),
+            environment_get_fn=lambda *_args: pytest.fail(
+                "invalid endpoint must not read the environment"),
+        )
+
+
+def test_loopback_endpoint_requires_an_explicit_key():
+    observed = []
+
+    def resolver(_args):
+        return "http://127.0.0.1:8000/v1", "local"
+
+    assert cli_policy._resolve_cloud_key(
+        SimpleNamespace(cloud_key=""),
+        cloud_url="http://127.0.0.1:8000/v1",
+        cloud_model="local",
+        resolve_cloud_endpoint_fn=resolver,
+        environment_get_fn=lambda name, default: (
+            observed.append(name) or "ambient-secret"),
+    ) == ""
+    assert observed == []
+    assert cli_policy._resolve_cloud_key(
+        SimpleNamespace(cloud_key="typed-local-key"),
+        cloud_url="http://127.0.0.1:8000/v1",
+        cloud_model="local",
+        resolve_cloud_endpoint_fn=resolver,
+        environment_get_fn=lambda *_args: pytest.fail(
+            "explicit loopback key must not read the environment"),
+    ) == "typed-local-key"
+
+
+@pytest.mark.parametrize("url", [
+    "http://api.deepseek.com",
+    "https://api.deepseek.com:444/v1",
+    "https://user@api.deepseek.com/v1",
+    "https://api.deepseek.com/v1?tenant=x",
+    "https://api.deepseek.com./v1",
+    "https://api.deepseek.com.attacker.invalid/v1",
+])
+def test_official_provider_predicates_require_the_full_safe_contract(url):
+    assert rag._is_deepseek_cloud(url) is False
+
+
+def test_cli_rejects_secret_bearing_endpoint_without_echoing_it(capsys):
+    canary = "CLI_URL_SECRET_CANARY_61aa"
+    unsafe = f"https://user:{canary}@gateway.example/v1?token={canary}"
+
+    with pytest.raises(SystemExit):
+        rag.main(["generate-questions", "--cloud-url", unsafe])
+
+    assert canary not in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("option", [
+    "--cloud-u", "--CLOUD-URL", "--llm-u", "--ollama-u", "--cloud-k",
+])
+def test_cli_rejects_sensitive_option_ambiguity_without_echoing_value(
+        option, capsys):
+    canary = "CLI_AMBIGUOUS_SECRET_CANARY_89bc"
+    with pytest.raises(SystemExit):
+        rag.main([
+            "generate-questions", option, canary,
+        ])
+
+    error = capsys.readouterr().err
+    assert "argument values were omitted" in error
+    assert canary not in error
+
+
+def test_strict_subparser_rejects_endpoint_abbreviation_without_preflight(
+        monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli_policy, "_has_ambiguous_sensitive_option", lambda _args: False)
+    monkeypatch.setattr(
+        rag, "generate_exam_questions",
+        lambda *_args, **_kwargs: pytest.fail(
+            "endpoint abbreviation reached command dispatch"),
     )
 
-    assert result == "generic-key"
-    assert rag._is_deepseek_cloud(url) is False
+    with pytest.raises(SystemExit):
+        rag.main([
+            "generate-questions",
+            "--cloud-u", "https://gateway.example/v1",
+        ])
+
+    assert "argument values were omitted" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("argv", [
+    ["--cloud-key", "{canary}", "generate-questions"],
+    ["info", "--cloud-key", "{canary}"],
+    ["info", "--cloud-url", "https://user:{canary}@gateway.example/v1"],
+    ["generate-questions", "--cloud-urlx",
+     "https://user:{canary}@gateway.example/v1?token={canary}"],
+    ["generate-questions", "--cloud_url",
+     "https://user:{canary}@gateway.example/v1"],
+    ["generate-questions", "--cloud-keyx", "{canary}"],
+    ["generate-questions", "--clod-key", "{canary}"],
+    ["generate-questions", "--", "--cloud-url",
+     "https://user:{canary}@gateway.example/v1"],
+])
+def test_parser_errors_never_echo_sensitive_values_from_any_scope(
+        argv, capsys):
+    canary = "PARSER_SCOPE_SECRET_CANARY_b531"
+    populated = [value.format(canary=canary) for value in argv]
+
+    with pytest.raises(SystemExit):
+        rag.main(populated)
+
+    error = capsys.readouterr().err
+    assert "argument values were omitted" in error
+    assert canary not in error
+
+
+def test_non_llm_command_never_resolves_provider_credentials(monkeypatch):
+    monkeypatch.setattr(
+        rag, "_llm_kwargs_from_args",
+        lambda *_args, **_kwargs: pytest.fail(
+            "non-LLM command must not resolve provider credentials"),
+    )
+    monkeypatch.setattr(rag, "show_info", lambda *_args, **_kwargs: None)
+
+    rag.main(["info"])
 
 
 def test_deepseek_model_and_url_shortcuts_resolve_the_matching_pair():
@@ -119,6 +277,10 @@ def test_deepseek_model_and_url_shortcuts_resolve_the_matching_pair():
     assert rag._resolve_cloud_endpoint(_cloud_args(
         cloud_url="https://api.deepseek.com/v1",
     )) == ("https://api.deepseek.com/v1", rag.DEFAULT_DEEPSEEK_MODEL)
+    assert rag._resolve_cloud_endpoint(_cloud_args(
+        cloud_url="HTTPS://API.MINIMAX.IO:443/v1/",
+        cloud_model="deepseek-v4-flash",
+    )) == (rag.DEFAULT_DEEPSEEK_URL, "deepseek-v4-flash")
 
 
 def test_deepseek_model_shortcut_resolves_endpoint_and_environment_key(

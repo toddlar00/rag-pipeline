@@ -1,6 +1,7 @@
 import subprocess
 import sys
 
+import endpoint_policy
 import llm_adapters
 import rag
 from llm_runtime import LLMRuntime, ProviderCallError, ProviderResponse
@@ -37,16 +38,24 @@ def test_rag_reexports_standalone_adapter_helpers():
     assert rag._AdaptiveThrottle is llm_adapters._AdaptiveThrottle
     assert rag._retry_after_seconds is llm_adapters._retry_after_seconds
     assert rag._llm_endpoint_id is llm_adapters._llm_endpoint_id
+    assert rag._validate_cloud_endpoint is (
+        endpoint_policy.validate_cloud_endpoint)
 
 
-def test_endpoint_predicates_use_current_rag_hostname_helper(monkeypatch):
+def test_endpoint_predicates_use_current_rag_validator(monkeypatch):
     observed = []
 
-    def fake_hostname(url):
+    def fake_validator(url):
         observed.append(url)
-        return "api.deepseek.com" if "deep" in url else "api.minimax.io"
+        provider = "deepseek" if "deep" in url else "minimax"
+        return endpoint_policy.ValidatedEndpoint(
+            base_url=f"https://{provider}.test",
+            endpoint_id=f"v1:https://{provider}.test",
+            provider=provider,
+            is_loopback=False,
+        )
 
-    monkeypatch.setattr(rag, "_provider_hostname", fake_hostname)
+    monkeypatch.setattr(rag, "_validate_cloud_endpoint", fake_validator)
 
     assert rag._is_deepseek_cloud("deep")
     assert rag._is_minimax_cloud("mini")
@@ -104,6 +113,9 @@ def test_ollama_result_facade_injects_current_rag_hooks(monkeypatch):
 
     assert result is sentinel
     assert observed["post_fn"] is fake_post
+    assert observed["loopback_post_fn"] is (
+        rag._post_loopback_without_environment)
+    assert observed["validate_endpoint_fn"] is rag._validate_cloud_endpoint
     assert observed["provider_token_count_fn"] is fake_count
     assert observed["provider_call_error_fn"] is fake_error
 
@@ -164,9 +176,10 @@ def test_openai_result_facade_injects_current_transport_hooks(monkeypatch):
 
     hooks = {
         "post_fn": lambda *args, **kwargs: None,
+        "loopback_post_fn": lambda *args, **kwargs: None,
         "get_throttle_fn": lambda workers: None,
         "sleep_fn": lambda seconds: None,
-        "is_deepseek_fn": lambda url, model="": False,
+        "validate_endpoint_fn": endpoint_policy.validate_cloud_endpoint,
         "provider_token_count_fn": lambda source, name: None,
         "provider_value_fn": lambda source, name: None,
         "provider_call_error_fn": lambda error, **kwargs: error,
@@ -176,9 +189,13 @@ def test_openai_result_facade_injects_current_transport_hooks(monkeypatch):
     monkeypatch.setattr(
         llm_adapters, "_call_openai_compatible_result", fake_core)
     monkeypatch.setattr(rag.requests, "post", hooks["post_fn"])
+    monkeypatch.setattr(
+        rag, "_post_loopback_without_environment",
+        hooks["loopback_post_fn"])
     monkeypatch.setattr(rag, "_get_throttle", hooks["get_throttle_fn"])
     monkeypatch.setattr(rag.time, "sleep", hooks["sleep_fn"])
-    monkeypatch.setattr(rag, "_is_deepseek_cloud", hooks["is_deepseek_fn"])
+    monkeypatch.setattr(
+        rag, "_validate_cloud_endpoint", hooks["validate_endpoint_fn"])
     monkeypatch.setattr(
         rag, "_provider_token_count", hooks["provider_token_count_fn"])
     monkeypatch.setattr(rag, "_provider_value", hooks["provider_value_fn"])

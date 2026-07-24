@@ -9,7 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-GPU-accelerated pipeline that converts law-school textbook PDFs into LLM-ready markdown, Chroma/Qdrant vector indexes, and study products (case briefs, exam questions, Anki flashcards), with hybrid retrieval and grounded, cited answers. `ROADMAP.md` tracks milestone status and the ordered backlog; `INTEGRATION_AUDIT.md` records cross-stack findings.
+GPU-accelerated pipeline that converts law-school textbook PDFs into LLM-ready markdown, Chroma/Qdrant vector indexes, and study products (case briefs, exam questions, Anki flashcards), with hybrid retrieval and grounded, cited answers. `ROADMAP.md` tracks current milestone status and the ordered backlog; `INTEGRATION_AUDIT.md` records the historical #1-#28 integration findings.
 
 ## Commands
 
@@ -41,6 +41,10 @@ uv pip install --torch-backend cpu --require-hashes -r requirements-full.lock -r
 # Offline retrieval regression (network-free, thresholds + baseline gates)
 python eval.py --retriever bm25 --queries evaluation/suites/property/queries.jsonl \
   --chunks evaluation/suites/property/chunks.jsonl --k 1 3 5 --depth 10
+python eval.py --retriever bm25 \
+  --queries evaluation/suites/constitutional_law/queries.jsonl \
+  --chunks evaluation/suites/constitutional_law/chunks.jsonl \
+  --k 1 3 5 --depth 10
 python eval.py --retriever bm25 \
   --queries evaluation/suites/table_family/queries.jsonl \
   --chunks evaluation/suites/table_family/chunks.jsonl --k 1 3 5 --depth 10
@@ -89,8 +93,11 @@ Current policy/runtime modules include:
   `evaluation_release` — versioned retrieval/grounding semantics, metrics, and
   review-bound evaluation promotion. See the
   [table-family evaluation ADR](docs/architecture/decisions/table-family-evaluation.md).
-- `llm_adapters`, `llm_runtime`, and `model_artifacts` — provider-neutral LLM
-  transport plus locked model-artifact verification.
+- `endpoint_policy`, `llm_adapters`, `llm_runtime`, and `model_artifacts` —
+  fail-closed URL attestation, provider-neutral LLM transport, and locked
+  model-artifact verification. Custom public endpoints require HTTPS; HTTP is
+  limited to canonical literal loopback addresses, redirects are refused, and
+  endpoint validation precedes credential and cache access.
 
 What deliberately remains inside `rag.py` includes top-level pipeline
 orchestration, compatibility wiring, mutable embedding/reranking/BM25 caches,

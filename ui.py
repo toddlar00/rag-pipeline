@@ -744,7 +744,8 @@ def build_app():
 # ---------------------------------------------------------------------------
 
 def main(argv: list[str] | None = None):
-    parser = argparse.ArgumentParser(description="RAG Pipeline Web UI")
+    parser = argparse.ArgumentParser(
+        description="RAG Pipeline Web UI", allow_abbrev=False)
     parser.add_argument("--port", type=int, default=7860)
     parser.add_argument("--chunks", type=Path, required=True,
                         help="Book-scoped chunks JSONL from a pipeline run")
@@ -772,8 +773,6 @@ def main(argv: list[str] | None = None):
     parser.add_argument(
         "--job-ready-timeout", type=float, default=5.0,
         help="Seconds to wait for a detached job-manager handshake")
-    parser.add_argument("--share", action="store_true",
-                        help="Create a public Gradio share link")
     args = parser.parse_args(argv)
     try:
         args.db_lock_timeout = rag._normalize_db_lock_timeout(
@@ -797,10 +796,14 @@ def main(argv: list[str] | None = None):
     _config["info_timeout"] = args.info_timeout
     _config["job_root"] = args.job_root
     _config["job_ready_timeout"] = args.job_ready_timeout
-    _config["share"] = args.share
+    _config["share"] = False
 
     app = build_app()
-    app.launch(server_port=args.port, share=args.share)
+    app.launch(
+        server_name="127.0.0.1",
+        server_port=args.port,
+        share=False,
+    )
 
 
 if __name__ == "__main__":

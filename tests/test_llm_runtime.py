@@ -728,7 +728,7 @@ def test_rag_structured_result_reports_actual_fallback(
 
     result = rag._call_llm_result(
         "prompt", cloud_url="https://cloud.test/v1", cloud_model="cloud-m",
-        cloud_key="secret", ollama_url="http://localhost:11434",
+        cloud_key="secret", ollama_url="http://127.0.0.1:11434",
         ollama_model="local-m", operation="test.rag_fallback")
 
     assert result.text == "local answer"
@@ -746,14 +746,79 @@ def test_rag_facade_remains_string_or_none(monkeypatch, isolated_rag_runtime):
         "prompt", cloud_url="", ollama_url="", gemini_key="") is None
 
 
-def test_endpoint_identity_strips_credentials_query_and_fragment():
-    endpoint = rag._llm_endpoint_id(
-        "HTTPS://user:password@Example.TEST:8443/v1/?token=secret#fragment")
+def test_endpoint_identity_hashes_rejected_credential_bearing_url():
+    raw = "HTTPS://user:password@Example.TEST:8443/v1/?token=secret#fragment"
 
-    assert endpoint == "https://example.test:8443/v1"
+    endpoint = rag._llm_endpoint_id(raw)
+
+    assert endpoint.startswith("v1:invalid:sha256:")
+    assert raw not in endpoint
     assert "user" not in endpoint
     assert "password" not in endpoint
     assert "secret" not in endpoint
+
+
+@pytest.mark.parametrize("provider_kwargs", [
+    {
+        "cloud_url": "http://api.deepseek.com",
+        "cloud_model": "deepseek-v4-pro",
+        "cloud_key": "secret",
+        "ollama_url": "",
+    },
+    {
+        "cloud_url": "",
+        "ollama_url": "http://localhost:11434",
+    },
+])
+def test_rag_composition_validates_enabled_endpoints_before_runtime_cache(
+        monkeypatch, isolated_rag_runtime, provider_kwargs):
+    monkeypatch.setattr(
+        isolated_rag_runtime,
+        "execute",
+        lambda *_args, **_kwargs: pytest.fail(
+            "invalid endpoint must not reach runtime or its cache"),
+    )
+
+    with pytest.raises((TypeError, ValueError)):
+        rag._call_llm_result("private prompt", **provider_kwargs)
+
+
+def test_invalid_endpoint_cannot_reuse_a_warm_runtime_cache(tmp_path):
+    cache_dir = tmp_path / "cache"
+    runtime = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="readwrite", cache_dir=cache_dir))
+    raw_url = "https://user:secret@provider.test/v1?tenant=private"
+    request = LLMRequest(
+        prompt="private prompt",
+        operation="generic",
+        prompt_version="1",
+        max_tokens=256,
+        thinking=False,
+        timeout=30,
+        fallback_policy="ordered",
+        failure_policy="best-effort",
+    )
+    poisoned_provider = ProviderSpec(
+        name="cloud",
+        model="model",
+        endpoint_id=rag._llm_endpoint_id(raw_url),
+        invoke=lambda _request: "poisoned cached answer",
+    )
+    assert runtime.execute(request, [poisoned_provider]).succeeded
+
+    original_runtime = rag._llm_runtime
+    try:
+        rag._llm_runtime = runtime
+        with pytest.raises((TypeError, ValueError)):
+            rag._call_llm_result(
+                "private prompt",
+                cloud_url=raw_url,
+                cloud_model="model",
+                cloud_key="secret",
+                ollama_url="",
+            )
+    finally:
+        rag._llm_runtime = original_runtime
 
 
 def test_toc_parser_uses_one_runtime_dispatch(monkeypatch):

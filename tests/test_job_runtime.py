@@ -161,12 +161,58 @@ def test_submit_creates_owner_only_root_job_and_documents(tmp_path):
     ["--api-key=top-secret"],
     ["--GEMINI-KEY", "top-secret"],
     ["--cloud-k", "top-secret"],
+    ["--cloud-keyx", "top-secret"],
+    ["--cloud_key", "top-secret"],
+    ["--clod-key", "top-secret"],
+    ["--access-token=top-secret"],
 ])
 def test_submit_rejects_secret_bearing_arguments(tmp_path, argv):
     store = JobStore(tmp_path / "jobs")
     with pytest.raises(JobValidationError, match="credential"):
         store.submit_job("full", argv)
     assert not any(path.name != ".store.lock" for path in store.root.iterdir())
+
+
+def test_submit_allows_sensitive_words_in_non_option_values(tmp_path):
+    store = JobStore(tmp_path / "jobs")
+    state = store.submit_job("full", ["--pdf", "draft-key.pdf"])
+
+    assert state.job_id
+
+
+@pytest.mark.parametrize("argv", [
+    ["--cloud-url", "http://api.deepseek.com"],
+    ["--cloud-url=https://user:secret@gateway.example/v1"],
+    ["--llm-url", "https://gateway.example/v1?token=secret"],
+    ["--ollama-url", "http://localhost:11434"],
+    ["--cloud-u", "https://gateway.example/v1"],
+    ["--cloud-urlx", "https://user:secret@gateway.example/v1"],
+    ["--cloud_url", "https://user:secret@gateway.example/v1"],
+    ["--", "--cloud-url", "https://user:secret@gateway.example/v1"],
+    ["--", "--llm-url=https://gateway.example/v1?token=secret"],
+    ["positional", "https://user:secret@gateway.example/v1"],
+])
+def test_submit_rejects_unsafe_endpoint_before_publishing_spec(tmp_path, argv):
+    store = JobStore(tmp_path / "jobs")
+
+    with pytest.raises(JobValidationError, match="endpoint"):
+        store.submit_job("full", argv)
+
+    assert not any(path.name != ".store.lock" for path in store.root.iterdir())
+
+
+def test_submit_canonicalizes_safe_endpoint_arguments(tmp_path):
+    store = JobStore(tmp_path / "jobs")
+
+    summary = store.submit_job("full", [
+        "--cloud-url=HTTPS://API.DEEPSEEK.COM:443/v1/",
+        "--ollama-url", "http://127.0.0.1:11434/",
+    ])
+
+    assert store.load_execution(summary.job_id).argv == (
+        "--cloud-url=https://api.deepseek.com/v1",
+        "--ollama-url", "http://127.0.0.1:11434",
+    )
 
 
 @pytest.mark.parametrize("argv", [
