@@ -484,8 +484,8 @@ The stacked implementation is published as draft [PR
 
 ## Cumulative release migration rehearsal
 
-The release candidate is a 22-commit cumulative stack over the last integrated
-`main`. Its document profiles, source-generation receipts, context assembly,
+The release candidate is a cumulative stack over the last integrated `main`.
+Its document profiles, source-generation receipts, context assembly,
 table-row retrieval, process supervision, corpus attestation, and vector
 lifecycle policies therefore need one release-shaped proof in addition to the
 focused stacked PRs. The rehearsal constructs the exact index-manifest payload
