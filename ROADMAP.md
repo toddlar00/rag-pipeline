@@ -27,7 +27,7 @@ Status terms:
 | Machine-readable corpus quality attestation | Implemented (draft) | [PR #31](https://github.com/toddlar00/rag-pipeline/pull/31): schema-v1 report binds the exact Docling source, chunks bytes, parameters, source-lineage coverage, tables, normalization, classification, entities, token budgets, and stable/hash roots; resume, export, retrieval, and index publication fail closed on missing, stale, malformed, or mismatched evidence |
 | Synced-folder publication and read resilience | Implemented (draft) | [PR #31](https://github.com/toddlar00/rag-pipeline/pull/31): bounded Windows sharing-violation retries republish only a pinned staging file; marker and exact artifact reads retry only content-identical ctime churn while failing closed on content-generation changes; exact hashes bypass unsafe stat caching on Windows |
 | Immutable source-generation provenance | Implemented (draft) | [PR #34](https://github.com/toddlar00/rag-pipeline/pull/34): conversion, preprocessing, Docling, table recovery, chunking, and schema-v2 quality reports bind one exact PDF/Docling generation; multi-output leases prevent interleaved publishers; marker-owned private scratch is self-cleaning and dry-run prunable after hard termination. A disposable 912-page Ethics run produced 1,715 records, six bound recovered-table chunks, and a warning-free PASS report |
-| Configurable document-structure profiles | Implemented (draft) | An immutable reviewed registry now drives front/back matter, primary divisions, TOC hierarchy, canonical titles, cross-references, classification, quality checks, and exports. Schema-v3 chunk receipts attest the exact profile revision and digest; unknown, mismatched, legacy, and tampered profile evidence fails closed |
+| Configurable document-structure profiles | Implemented (draft) | [PR #35](https://github.com/toddlar00/rag-pipeline/pull/35): an immutable reviewed registry now drives front/back matter, primary divisions, TOC hierarchy, canonical titles, cross-references, classification, quality checks, and exports. Schema-v3 chunk receipts attest the exact profile revision and digest; unknown, mismatched, legacy, and tampered profile evidence fails closed |
 | Ethics retrieval calibration | In progress | A 14-query, 24-judgment draft is pinned to the exact 1,715-record corpus and covers rules, explanations, cases, tables, cross-page chunks, filters, abstention, outline distractors, and positive outline intents; corpus-owner review and release thresholds remain outstanding |
 | Process supervision extraction | Implemented (draft) | [PR #33](https://github.com/toddlar00/rag-pipeline/pull/33): deadline supervision, Windows/POSIX containment, startup gates, termination confirmation, and generic entrypoint policy moved to stdlib-only `process_supervision.py`; `rag.py` retains late-bound compatibility wrappers |
 | Exact LLM transport budget | Integrated | [PR #1](https://github.com/toddlar00/rag-pipeline/pull/1) |
@@ -343,6 +343,9 @@ The final re-audit confirmed exact deterministic LLM primary titles/pages,
 complete division coverage, strict receipt/parameter binding, secret-free
 full-URL endpoint fingerprints, and exact leading division titles; it reported
 no remaining material issue.
+The stacked implementation is published as draft [PR
+#35](https://github.com/toddlar00/rag-pipeline/pull/35), based on PR #34 until
+the immutable-source dependency merges.
 
 ## Next improvement milestones
 
