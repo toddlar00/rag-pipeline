@@ -6,6 +6,7 @@ import pytest
 
 import quality_core
 import retrieval_core
+import table_retrieval_core
 
 
 def _source_item(ref: str, page: int, *, label: str = "text",
@@ -206,6 +207,45 @@ def test_build_quality_report_passes_and_is_deterministic():
         json.dumps(second, sort_keys=True, separators=(",", ":")))
 
 
+def test_legacy_v3_report_is_read_compatible_only_without_table_children():
+    document = {"texts": [_source_item("#/texts/0", 1)]}
+    records = [_record(0, "#/texts/0", 1)]
+    current = _build(records, document)
+    legacy = copy.deepcopy(current)
+    legacy["schema_version"] = 3
+    legacy.pop("table_retrieval")
+    legacy["checks"] = [
+        check for check in legacy["checks"]
+        if check["name"] != "table_retrieval_invariants"
+    ]
+    raw = json.dumps(legacy, sort_keys=True).encode("utf-8")
+    kwargs = _validation_kwargs()
+    kwargs["records"] = records
+
+    with pytest.raises(ValueError, match="invalid field set"):
+        quality_core.parse_quality_report_bytes(raw, **kwargs)
+    parsed = quality_core.parse_quality_report_bytes(
+        raw, compatible_schema_versions=(3,), **kwargs)
+
+    assert parsed == legacy
+    assert parsed["schema_version"] == 3
+
+    forged_records = copy.deepcopy(records)
+    forged_records[0]["metadata"].update({
+        "table_retrieval_schema_version": 1,
+        "retrieval_role": table_retrieval_core.TABLE_CHILD_ROLE,
+        "table_parent_stable_id": "chunk_parent",
+        "table_child_index": 0,
+        "table_child_count": 1,
+    })
+    with pytest.raises(ValueError, match="cannot attest table children"):
+        quality_core.parse_quality_report_bytes(
+            raw,
+            compatible_schema_versions=(3,),
+            **{**kwargs, "records": forged_records},
+        )
+
+
 def test_retrieval_linkage_is_attested_and_fails_closed_on_tampering():
     document = {"texts": [
         _source_item("#/texts/0", 1),
@@ -234,6 +274,83 @@ def test_retrieval_linkage_is_attested_and_fails_closed_on_tampering():
     check = next(
         item for item in tampered["checks"]
         if item["name"] == "retrieval_linkage_invariants")
+    assert check["status"] == "fail"
+
+
+def test_table_retrieval_hierarchy_is_attested_and_children_do_not_regress_pages():
+    table_text = """Fee restrictions
+| Arrangement | Safeguard |
+| --- | --- |
+| Contingent fee | Written agreement |
+| Fee division | Client consent |
+| Contingent fee | Written agreement |
+| Business transaction | Independent advice |
+"""
+    document = {
+        "tables": [_source_item(
+            "#/tables/0", 1, label="table", text=table_text)],
+        "texts": [_source_item("#/texts/0", 5, text="Later narrative")],
+    }
+    primary = [
+        _record(0, "#/tables/0", 1, text=table_text,
+                content_type="table", content_source="table"),
+        _record(1, "#/texts/0", 5, text="Later narrative"),
+    ]
+    records = table_retrieval_core.expand_table_records(
+        primary, stable_id_fn=retrieval_core._chunk_id,
+        token_count_fn=lambda value: len(value.split()),
+    )
+    for index, record in enumerate(records):
+        record["metadata"]["chunk_index"] = index
+        record["metadata"]["embedding_token_count"] = (
+            record["metadata"]["token_count"] + 1)
+    stable_ids = [retrieval_core._chunk_id(record) for record in records]
+    retrieval_core._attach_retrieval_linkage(
+        records, stable_ids=stable_ids)
+    chunk_hashes = [f"{index + 1:016x}" for index in range(len(records))]
+
+    report = _build(
+        records, document, stable_ids=stable_ids,
+        chunk_hashes=chunk_hashes)
+
+    assert report["status"] == "pass"
+    assert report["corpus"]["page_regressions"] == []
+    assert report["table_retrieval"] == {
+        "schema_version": 1,
+        "parent_tables": 1,
+        "expanded_parents": 1,
+        "child_chunks": 4,
+        "issues": {},
+    }
+    kwargs = _validation_kwargs(record_count=len(records))
+    kwargs.update(
+        stable_ids=stable_ids, chunk_hashes=chunk_hashes, records=records)
+    assert quality_core.validate_quality_report(report, **kwargs) is report
+
+    source_shape_mismatch = copy.deepcopy(document)
+    source_shape_mismatch["tables"][0]["data"] = {
+        "num_rows": 6,
+        "num_cols": 3,
+    }
+    source_attested = _build(
+        records, source_shape_mismatch, stable_ids=stable_ids,
+        chunk_hashes=chunk_hashes)
+    assert source_attested["status"] == "fail"
+    assert source_attested["table_retrieval"]["issues"][
+        "source_native_row_count_mismatch"] == [0]
+    assert source_attested["table_retrieval"]["issues"][
+        "source_native_column_count_mismatch"] == [0]
+
+    tampered_records = copy.deepcopy(records)
+    tampered_records[-1]["metadata"]["table_parent_stable_id"] = "missing"
+    tampered = _build(
+        tampered_records, document, stable_ids=stable_ids,
+        chunk_hashes=chunk_hashes)
+    assert tampered["status"] == "fail"
+    assert tampered["table_retrieval"]["issues"]
+    check = next(
+        item for item in tampered["checks"]
+        if item["name"] == "table_retrieval_invariants")
     assert check["status"] == "fail"
 
 

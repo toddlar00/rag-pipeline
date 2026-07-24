@@ -16,15 +16,17 @@ from pathlib import Path
 from typing import Iterable, Sequence
 
 import retrieval_core
+import table_retrieval_core
 
-QUALITY_REPORT_SCHEMA_VERSION = 3
+QUALITY_REPORT_SCHEMA_VERSION = 4
+LEGACY_QUALITY_REPORT_SCHEMA_VERSION = 3
 SOURCE_LINEAGE_SCHEMA_VERSION = 1
 MAX_QUALITY_REPORT_BYTES = 16 * 1024 * 1024
 _QUALITY_REPORT_FIELDS = {
     "schema_version", "kind", "status", "source", "parameters_sha256",
     "inputs", "embedding", "source_lineage", "tables", "corpus",
-    "normalization", "classification", "entities", "retrieval", "hashes",
-    "checks",
+    "normalization", "classification", "entities", "retrieval",
+    "table_retrieval", "hashes", "checks",
 }
 _EMBEDDING_FIELDS = {
     "model", "limit", "raw_token_min", "raw_token_max", "raw_token_p50",
@@ -52,6 +54,10 @@ _CORPUS_FIELDS = {
 _RETRIEVAL_FIELDS = {
     "schema_version", "context_parents", "linked_chunks",
     "isolated_chunks", "issues",
+}
+_TABLE_RETRIEVAL_FIELDS = {
+    "schema_version", "parent_tables", "expanded_parents", "child_chunks",
+    "issues",
 }
 
 _SOURCE_LABELS = {
@@ -88,6 +94,7 @@ _HARD_CHECK_NAMES = (
     "structural_ranges_excluded",
     "contiguous_chunk_indexes",
     "retrieval_linkage_invariants",
+    "table_retrieval_invariants",
     "normalization_invariants",
     "raw_token_counts_present",
     "embedding_counts_present",
@@ -114,6 +121,7 @@ _ZERO_COUNT_CHECK_NAMES = frozenset({
     "structural_ranges_excluded",
     "contiguous_chunk_indexes",
     "retrieval_linkage_invariants",
+    "table_retrieval_invariants",
     "normalization_invariants",
     "embedding_limit",
     "classification_invariants",
@@ -511,6 +519,32 @@ def source_inventory(
     )
 
 
+def _source_table_dimensions(document: dict) -> dict[str, tuple[int, int]]:
+    """Return exact Markdown data-row/column dimensions from Docling tables.
+
+    Docling's matrix row count includes the first row that its Markdown export
+    publishes as the header.  The strict retrieval parser counts only rows
+    after that header, hence the single-row subtraction here.
+    """
+    dimensions = {}
+    tables = document.get("tables") if isinstance(document, dict) else None
+    if not isinstance(tables, list):
+        return dimensions
+    for table in tables:
+        if not isinstance(table, dict):
+            continue
+        ref = table.get("self_ref")
+        data = table.get("data")
+        rows = data.get("num_rows") if isinstance(data, dict) else None
+        columns = data.get("num_cols") if isinstance(data, dict) else None
+        if (not isinstance(ref, str) or not ref
+                or not _is_nonnegative_int(rows) or rows < 1
+                or not _is_nonnegative_int(columns) or columns < 1):
+            continue
+        dimensions[ref] = (rows - 1, columns)
+    return dimensions
+
+
 def _canonical_text(text: str) -> str:
     return _CANONICAL_TEXT_RE.sub("", text.casefold())
 
@@ -667,7 +701,7 @@ def build_quality_report(
         elif any(start <= page_start and page_end <= end
                  for start, end in ranges):
             structural_leaks.append(index)
-        if valid_pages:
+        if valid_pages and not table_retrieval_core.is_table_child(metadata):
             if previous_page is not None and page_start < previous_page:
                 page_regressions.append(index)
                 evidence = {
@@ -809,6 +843,11 @@ def build_quality_report(
         records, stable_ids=stable_ids)
     retrieval_issue_count = sum(
         len(indexes) for indexes in retrieval["issues"].values())
+    table_retrieval = table_retrieval_core._table_retrieval_summary(
+        records, stable_ids=stable_ids,
+        source_table_dimensions=_source_table_dimensions(document))
+    table_retrieval_issue_count = sum(
+        len(indexes) for indexes in table_retrieval["issues"].values())
 
     checks = [
         _check("nonempty_corpus", failed=not records,
@@ -853,6 +892,9 @@ def build_quality_report(
         _check("retrieval_linkage_invariants",
                failed=bool(retrieval_issue_count),
                observed=retrieval_issue_count, required=0),
+        _check("table_retrieval_invariants",
+               failed=bool(table_retrieval_issue_count),
+               observed=table_retrieval_issue_count, required=0),
         _check("normalization_invariants",
                failed=bool(normalization_issue_count),
                observed=normalization_issue_count, required=0),
@@ -978,6 +1020,7 @@ def build_quality_report(
             }),
         },
         "retrieval": retrieval,
+        "table_retrieval": table_retrieval,
         "hashes": {
             "stable_id_root_sha256": _sha256_lines(stable_ids),
             "chunk_hash_root_sha256": _sha256_lines(
@@ -1290,6 +1333,28 @@ def validate_quality_report(
                 require_empty=True)):
         raise ValueError(
             "corpus quality report retrieval linkage gate is invalid")
+    table_retrieval = payload.get("table_retrieval")
+    if (not isinstance(table_retrieval, dict)
+            or set(table_retrieval) != _TABLE_RETRIEVAL_FIELDS
+            or table_retrieval.get("schema_version")
+            != table_retrieval_core.TABLE_RETRIEVAL_SCHEMA_VERSION
+            or not _is_nonnegative_int(
+                table_retrieval.get("parent_tables"))
+            or table_retrieval["parent_tables"] > record_count
+            or not _is_nonnegative_int(
+                table_retrieval.get("expanded_parents"))
+            or table_retrieval["expanded_parents"]
+            > table_retrieval["parent_tables"]
+            or not _is_nonnegative_int(
+                table_retrieval.get("child_chunks"))
+            or table_retrieval["child_chunks"] > record_count
+            or table_retrieval["parent_tables"]
+            + table_retrieval["child_chunks"] > record_count
+            or not _valid_issue_mapping(
+                table_retrieval.get("issues"), record_count=record_count,
+                require_empty=True)):
+        raise ValueError(
+            "corpus quality report table retrieval gate is invalid")
     raw_token_count = (
         embedding.get("raw_token_count")
         if isinstance(embedding, dict) else None)
@@ -1341,6 +1406,13 @@ def validate_quality_report(
             raise ValueError(
                 "corpus quality report retrieval summary does not match "
                 "records")
+        expected_table_retrieval = (
+            table_retrieval_core._table_retrieval_summary(
+                records, stable_ids=list(stable_ids)))
+        if table_retrieval != expected_table_retrieval:
+            raise ValueError(
+                "corpus quality report table retrieval summary does not "
+                "match records")
         expected_types = Counter()
         expected_sources = Counter()
         expected_chapters = Counter()
@@ -1446,6 +1518,7 @@ def parse_quality_report_bytes(
         recovered_table_count: int | None = None,
         recovered_table_refs: Sequence[str] | None = None,
         records: Sequence[dict] | None = None,
+        compatible_schema_versions: Sequence[int] = (),
 ) -> dict:
     """Strictly parse and validate one exact report byte snapshot."""
     if len(raw) > MAX_QUALITY_REPORT_BYTES:
@@ -1469,8 +1542,39 @@ def parse_quality_report_bytes(
             object_pairs_hook=reject_duplicate_keys)
     except (UnicodeError, json.JSONDecodeError) as exc:
         raise ValueError("cannot parse corpus quality report") from exc
-    return validate_quality_report(
-        payload, chunks_name=chunks_name, chunks_sha256=chunks_sha256,
+    validation_payload = payload
+    if (isinstance(payload, dict)
+            and payload.get("schema_version")
+            == LEGACY_QUALITY_REPORT_SCHEMA_VERSION
+            and LEGACY_QUALITY_REPORT_SCHEMA_VERSION
+            in compatible_schema_versions):
+        if records is None:
+            raise ValueError(
+                "legacy corpus quality validation requires exact records")
+        table_retrieval = table_retrieval_core._table_retrieval_summary(
+            records, stable_ids=list(stable_ids))
+        if (table_retrieval["expanded_parents"]
+                or table_retrieval["child_chunks"]
+                or table_retrieval["issues"]):
+            raise ValueError(
+                "legacy corpus quality reports cannot attest table children")
+        validation_payload = {
+            **payload,
+            "schema_version": QUALITY_REPORT_SCHEMA_VERSION,
+            "table_retrieval": table_retrieval,
+            "checks": [
+                *list(payload.get("checks") or []),
+                {
+                    "name": "table_retrieval_invariants",
+                    "status": "pass",
+                    "observed": 0,
+                    "required": 0,
+                },
+            ],
+        }
+    validated = validate_quality_report(
+        validation_payload, chunks_name=chunks_name,
+        chunks_sha256=chunks_sha256,
         chunks_size=chunks_size, record_count=record_count,
         stable_ids=stable_ids, chunk_hashes=chunk_hashes,
         source_name=source_name, source_sha256=source_sha256,
@@ -1478,5 +1582,6 @@ def parse_quality_report_bytes(
         embedding_model=embedding_model, embedding_limit=embedding_limit,
         input_bindings=input_bindings,
         recovered_table_count=recovered_table_count,
-        recovered_table_refs=recovered_table_refs,
-        records=records)
+        recovered_table_refs=recovered_table_refs, records=records)
+    # Preserve the exact persisted schema for manifest compatibility checks.
+    return payload if validation_payload is not payload else validated

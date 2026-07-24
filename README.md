@@ -7,8 +7,9 @@ or local LLM assistance.
 
 Handles scanned PDFs, structure-aware chunking, TOC-based hierarchy detection,
 hybrid search (BM25 + vector + cross-encoder reranking), LLM classification,
-contextual retrieval, RAPTOR multi-level summaries, citation graph extraction,
-and source-grounded answer generation with explicit abstention.
+contextual retrieval, optional row-level table retrieval, RAPTOR multi-level
+summaries, citation graph extraction, and source-grounded answer generation
+with explicit abstention.
 
 See [`ROADMAP.md`](ROADMAP.md) for implemented hardening milestones, merge
 status, and the ordered improvement backlog. The final cross-stack findings and
@@ -45,11 +46,12 @@ PDF
  |                  - Structural filtering (TOC, index, front matter)
  |                  - Source-aware trigram Jaccard deduplication
  |                  - Chapter detection & propagation
+ |                  - Optional header-propagated table-row retrieval children
  |
  v
 Enriched Chunks + Bound Quality Report
  |                  - Exact source/chunks/parameter hashes
- |                  - Lineage, table, structure, normalization, entity,
+ |                  - Lineage, table-family, structure, normalization, entity,
  |                    classification, duplicate, and token-budget checks
  |
  +---> [index] ---------> ChromaDB or Qdrant (manifest-validated incremental index)
@@ -92,6 +94,14 @@ report over the exact Docling and chunks snapshots. New source-lineaged corpora
 must pass its source coverage, structure, normalization, token, table,
 classification, entity, stable-ID, and chunk-hash checks before downstream
 publication or use.
+
+`table_retrieval_core.py` is the standard-library-only table retrieval policy.
+It strictly parses preserved Markdown tables, derives optional one-row children
+that repeat their caption and header, groups continued fragments by exact
+Docling table lineage, attests every parent/child family and its dimensions,
+keeps retrieval-only children out of publication consumers, and removes a
+retrieved parent only when a more specific child from that same family is also
+present.
 
 `index_state.py` is the standard-library-only index policy layer. It owns
 collection-scoped manifest and dirty-marker rules, incremental rebuild
@@ -694,16 +704,19 @@ Query --> [1] Embedding (nomic MoE) --> Vector similarity (ChromaDB/Qdrant)
       --> [2] Legal analyzer + BM25 ---> [3] weighted RRF (auto/--hybrid)
                                               |
                                               v
-                                  [4] Adaptive reranker (BGE)
+                              [4] Table-family collapse
+                                              |
+                                              v
+                                  [5] Adaptive reranker (BGE)
                                               |
                                               v
                                         Top-K results
                                               |
                                               v
-                              [5] Neighbor assembly (opt-in)
+                              [6] Neighbor assembly (opt-in)
                                               |
                                               v
-                                     [6] LLM answer (if --answer)
+                                     [7] LLM answer (if --answer)
 ```
 
 1. **Vector search** retrieves semantically similar chunks.
@@ -712,14 +725,17 @@ Query --> [1] Embedding (nomic MoE) --> Vector similarity (ChromaDB/Qdrant)
    plus bounded case, section, heading, and context metadata.
 3. **RRF fusion** combines the rankings. Chroma defaults to the judged-set
    calibration `dense=0.5`, `lexical=1.0`, `k=10`; Qdrant uses native RRF.
-4. **Adaptive reranking** reranks vector fallback automatically but preserves
+4. **Table-family collapse** suppresses a whole-table parent only when one of
+   its row children is already among the candidates. Distinct sibling rows are
+   retained so answers may draw on more than one row.
+5. **Adaptive reranking** reranks vector fallback automatically but preserves
    calibrated hybrid order. `--rerank` forces BGE reranking and `--no-rerank`
    disables it.
-5. **Neighbor assembly** (optional) resolves canonical preceding/following
+6. **Neighbor assembly** (optional) resolves canonical preceding/following
    chunks from the exact quality-attested JSONL generation. It preserves the
    ranked hits, hard filters, source/chapter boundary, and one stable ID per
    supplementary source.
-6. **Answer generation** (optional) gives each retrieved source a stable ID and
+7. **Answer generation** (optional) gives each retrieved source a stable ID and
    requires the configured LLM to cite those sources as `[S1]`, `[S2]`, and so on.
 
 Use `--vector-only` to suppress lexical retrieval. Advanced reproducibility
@@ -1226,8 +1242,8 @@ The `index` command hashes each chunk's text and indexable metadata and stores
 the hashes in an atomic, versioned manifest scoped to the database backend and
 collection. The manifest also records its schema version, embedding model,
 embedding dimension, validated model-artifact-lock SHA-256, exact source JSONL
-SHA-256, source record count, and the exact schema-versioned quality-report
-SHA-256 pair. A compatible rerun embeds only changed/new
+SHA-256, source record count, exact table-row-child count, and the exact
+schema-versioned quality-report SHA-256 pair. A compatible rerun embeds only changed/new
 chunks, removes chunks no longer present, and skips unchanged chunks. Qdrant incremental runs scan payload-only
 stable IDs before mutation and again after writes, refusing to advance the
 manifest if points are missing, unexpected, duplicated, untracked, or returned
@@ -1286,8 +1302,9 @@ before work begins, publish the JSONL via atomic replacement, and retain the
 vector lease until the matching index commits. A crash therefore exposes
 neither partial JSONL nor an apparently clean old index paired with a new
 corpus. Before any vector-client mutation, indexing validates the adjacent
-quality report against one exact chunks snapshot; schema-v7 manifests bind the
-validated schema-v3 report SHA-256. Chroma hybrid search and opt-in neighbor
+quality report against one exact chunks snapshot; schema-v8 manifests bind the
+validated schema-v4 report SHA-256 and attest the row-child count used to select
+a safe candidate depth. Chroma hybrid search and opt-in neighbor
 assembly compare both the chunks and quality-report SHA-256 values with the
 manifest, parse and hash one exact file-handle snapshot, and refuse
 cross-generation retrieval until reindexing. A legacy Chroma index
@@ -1379,7 +1396,36 @@ Docling table cell omits text that is visibly present inside the source PDF's
 table bounding box, the pipeline restores that table from the PDF while
 ignoring information-equivalent token fusion such as `New York`/`NewYork`.
 Large tables are row-packed under the embedding limit with their header row
-repeated in each child chunk.
+repeated in each preserved parent chunk. Add `--table-children` to `chunk`,
+`full`, or `batch` to derive one retrieval-only child for each data row in an
+eligible source table with at least four rows across all of its preserved
+fragments:
+
+```bash
+python rag.py full --pdf Civil_procedure.pdf --table-children
+```
+
+Every fragment of an eligible source table receives children, including a
+fragment that is itself shorter than four rows. Each child repeats that
+fragment's table caption, header, separator, and exactly one source row. The
+parent text and durable ID stay unchanged; even identical source rows receive
+distinct stable IDs and citations through their parent ID plus ordinal.
+When row packing produces two byte-identical fragments, deterministic fragment
+occurrence metadata preserves both through deduplication; occurrence zero keeps
+the original parent ID and only later occurrences extend their identity.
+Children inherit exact source/page/section provenance but have no ordinary
+previous/next context links. Search overfetches when the manifest records
+children, suppresses a parent only when a child from the same table was also
+retrieved, and retains distinct sibling rows. Markdown/plaintext/flashcard
+exports, question and brief generation, citation graphs, and RAPTOR trees use
+only canonical records, so enabling the flag cannot duplicate published or
+study material. Malformed tables fail closed and receive no children; bounded
+per-table and per-corpus caps prevent record explosion. Quality attestation
+also requires fragments from one source table to share an exact Markdown
+schema and compares their aggregate row/column dimensions with the bound
+Docling source matrix when native dimensions are available. PDF-recovered
+tables are exempt from a defective native matrix; their replacement remains
+bound to the hash-verified recovery PDF and conversion manifest.
 
 ## TOC-Based Hierarchy Detection
 
@@ -1451,8 +1497,8 @@ validating their artifacts as follows:
 |-------|-----------|
 | Convert | Schema-v2 immutable original/effective PDF binding, config/model lock, and exact JSON/Markdown/derived-PDF output hashes |
 | Chunk | Schema-v3 exact Docling/conversion/recovery inputs, immutable structure-profile receipt, output hash, and strict JSONL schema |
-| Quality | Schema-v3 chunk-input provenance plus exact Docling/chunks/parameters/retrieval-linkage binding and every required PASS check |
-| Index | Clean schema-v7 manifest plus schema-v3 report binding, physical IDs/count, and chunk hashes |
+| Quality | Schema-v4 chunk-input provenance plus exact Docling/chunks/parameters/retrieval-linkage/table-family binding and every required PASS check |
+| Index | Clean schema-v8 manifest plus schema-v4 report binding, physical IDs/count, row-child count, and chunk hashes |
 | Export | Source/config completion and output hash |
 | Chapter export | Exact manifested chapter-file set and hashes |
 | RAPTOR | Source/config-bound tree schema and statistics |
@@ -1472,12 +1518,15 @@ On failure, the pipeline prints a ready-to-paste resume command.
 
 Conversion schema-v1 and chunk schema-v1/v2 completion files remain readable as
 migration inputs but are never accepted as verified resume evidence. Schema-v1
-or schema-v2 quality reports and pre-v7 index bindings are not accepted for
-export or indexing. A narrow query-only compatibility path accepts a schema-v6
-manifest paired with its schema-v2 quality report when neighbor context is off;
-`--context-window 1` or `2` requires schema-v7/schema-v3 evidence. Migrate the
-whole artifact chain in order, using the same processing flags, embedding model,
-and explicit structure profile as the original run:
+or schema-v2 quality reports and pre-v6 index bindings are not accepted. A
+schema-v3 quality report remains read-compatible only after deterministic
+in-memory validation proves that its corpus contains no row children. A corpus
+carrying quality evidence, source lineage, or any table-family metadata requires
+a current schema-v4 report for indexing. Query-only compatibility accepts a
+schema-v6/schema-v2 index with neighbor context off and a schema-v7/schema-v3
+index with context on or off. Current indexing writes schema-v8/schema-v4
+evidence. Migrate the whole artifact chain in order, using the same processing
+flags, embedding model, and explicit structure profile as the original run:
 
 ```bash
 # Rebuild conversion, chunks, and quality evidence when needed, then reconcile
@@ -1492,7 +1541,7 @@ python rag.py full --pdf Book.pdf --resume --full-reindex \
 
 Do not query or export the old collection until this command finishes. Resume
 keeps valid schema-v2 conversion evidence, rebuilds invalid or pre-v3 chunk
-evidence under schema v3 and chunking policy v21, regenerates the schema-v3
+evidence under schema v3 and chunking policy v22, regenerates the schema-v4
 quality report from the exact chunk-completion inputs, and then reconciles or
 rebuilds an index whose
 prior quality binding is incompatible. The chunk receipt records the selected
@@ -1602,6 +1651,14 @@ Each enriched chunk carries:
 | `context_parent_id` | str | Deterministic source/chapter context group; empty when no explicit chapter is safe to link |
 | `previous_stable_id` | str | Immediate prior chunk in final published order within the same context parent, or empty |
 | `next_stable_id` | str | Immediate following chunk in final published order within the same context parent, or empty |
+| `table_retrieval_schema_version` | int | Version of the optional table parent/row-child contract |
+| `retrieval_role` | str | `table_parent` or retrieval-only `table_child` when row expansion is enabled |
+| `table_parent_stable_id` | str | Stable ID of the preserved whole-table parent |
+| `table_fragment_occurrence` | int | Zero-based disambiguator present only when row packing yields otherwise identical source-table fragments |
+| `table_child_index` | int | Zero-based source-row ordinal; present only on a row child |
+| `table_child_count` | int | Exact number of row children attested for this table family |
+| `table_source_row_count` | int | Exact row count across all preserved fragments sharing one source-table lineage |
+| `table_source_fragment_count` | int | Exact number of preserved fragments sharing one source-table lineage |
 | `chunk_index` | int | Positional index in output |
 
 ### Content Types

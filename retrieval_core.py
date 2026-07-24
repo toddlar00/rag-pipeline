@@ -17,6 +17,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+import table_retrieval_core
+
 
 DEFAULT_RRF_K = 10
 RETRIEVAL_LINKAGE_SCHEMA_VERSION = 1
@@ -299,6 +301,26 @@ def _chunk_id(rec: dict) -> str:
             # same page.  Legacy records without lineage retain their former
             # stable-ID contract.
             identity["source_refs"] = source_refs
+    fragment_occurrence = metadata.get(
+        table_retrieval_core.TABLE_FRAGMENT_OCCURRENCE_FIELD)
+    if (isinstance(fragment_occurrence, int)
+            and not isinstance(fragment_occurrence, bool)
+            and fragment_occurrence > 0):
+        # Occurrence zero retains the pre-feature parent ID.  Later otherwise
+        # identical row-packed fragments need this ordinal to remain distinct.
+        identity[table_retrieval_core.TABLE_FRAGMENT_OCCURRENCE_FIELD] = (
+            fragment_occurrence)
+    if metadata.get("retrieval_role") == table_retrieval_core.TABLE_CHILD_ROLE:
+        # A source table may contain two identical rows on the same page and
+        # therefore under the same source ref.  The explicit parent/ordinal
+        # fields distinguish those legitimate retrieval units without changing
+        # the durable identity contract for any pre-existing primary record.
+        identity.update({
+            "retrieval_role": table_retrieval_core.TABLE_CHILD_ROLE,
+            "table_parent_stable_id": metadata.get(
+                "table_parent_stable_id"),
+            "table_child_index": metadata.get("table_child_index"),
+        })
     content = json.dumps(
         identity,
         ensure_ascii=False,
@@ -402,6 +424,8 @@ def _context_parent_id(metadata: dict[str, Any]) -> str:
     prevents front matter or malformed records from acquiring neighbors merely
     because they happen to be adjacent in the published JSONL order.
     """
+    if table_retrieval_core.is_table_child(metadata):
+        return ""
     source_file = metadata.get("source_file")
     chapter_num = metadata.get("chapter_num")
     if (not isinstance(source_file, str) or not source_file.strip()
@@ -874,7 +898,8 @@ def _useful_source_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
         "source_file", "chapter_num", "chapter_title", "page_start",
         "page_end", "page_range", "content_type", "section_path",
         "primary_case", "context_role", "context_distance",
-        "primary_source_id",
+        "primary_source_id", "retrieval_role", "table_parent_stable_id",
+        "table_child_index", "table_child_count",
     )
     remaining = tuple(sorted(
         key for key in metadata

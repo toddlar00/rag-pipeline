@@ -110,6 +110,7 @@ def _build_resume_cmd(
         "reconstruct_headings": "--reconstruct-headings",
         "quality_score": "--quality-score",
         "llm_scaffold": "--llm-scaffold",
+        "table_children": "--table-children",
         "thinking": "--thinking",
     }
     for attr, flag in boolean_flags.items():

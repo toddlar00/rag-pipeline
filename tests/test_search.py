@@ -257,6 +257,81 @@ def test_search_matrix_is_structured_and_overfetches(
 
 
 @pytest.mark.parametrize("backend", ["chroma", "qdrant"])
+@pytest.mark.parametrize("use_reranker", [False, True])
+def test_table_children_force_overfetch_and_suppress_only_retrieved_parent(
+        search_fakes, monkeypatch, backend, use_reranker):
+    rag._save_index_manifest(
+        search_fakes.db_dir, backend=backend,
+        collection_name=rag.DEFAULT_COLLECTION,
+        embedding_model="fake-embedding", embedding_dimension=2,
+        chunk_hashes={}, source_record_count=4,
+        table_child_count=2,
+        quality_report_schema_version=(
+            rag._quality_core.QUALITY_REPORT_SCHEMA_VERSION),
+        quality_report_sha256="a" * 64,
+    )
+    parent = {
+        "retrieval_role": "table_parent",
+        "table_parent_stable_id": "table-parent",
+        "stable_id": "table-parent",
+    }
+    child_one = {
+        "retrieval_role": "table_child",
+        "table_parent_stable_id": "table-parent",
+        "table_child_index": 0,
+        "stable_id": "table-row-0",
+    }
+    child_two = {
+        "retrieval_role": "table_child",
+        "table_parent_stable_id": "table-parent",
+        "table_child_index": 1,
+        "stable_id": "table-row-1",
+    }
+    observed = []
+
+    def candidates(_query, _db, *, n_results, **_kwargs):
+        observed.append(n_results)
+        return (
+            ["whole table", "first row", "other", "second row"],
+            [parent, child_one, {"stable_id": "other"}, child_two],
+            [0.99, 0.95, 0.9, 0.85],
+            "vector",
+        )
+
+    monkeypatch.setattr(
+        rag,
+        "_search_chroma_candidates" if backend == "chroma"
+        else "_search_qdrant_candidates",
+        candidates,
+    )
+
+    response = rag.search_index(
+        "fee safeguards", search_fakes.db_dir, db_backend=backend,
+        n_results=3, embedding_model="fake-embedding", hybrid=False,
+        use_reranker=use_reranker, overfetch=4,
+        chunks_path=search_fakes.chunks_path,
+    )
+
+    assert observed == [12]
+    assert response.candidate_depth == 12
+    assert {hit.text for hit in response.hits} == {
+        "first row", "other", "second row"}
+    assert {hit.source_id for hit in response.hits} == {
+        "table-row-0", "other", "table-row-1"}
+    assert "whole table" not in [hit.text for hit in response.hits]
+    if use_reranker:
+        assert search_fakes.state["rerank_calls"][0][
+            "candidate_count"] == 3
+    else:
+        assert search_fakes.state["rerank_calls"] == []
+    assert response.hits[0].metadata["table_parent_stable_id"] == (
+        "table-parent")
+    grounded = rag._grounded_sources(response, "fee safeguards")
+    assert grounded[0].source_id == response.hits[0].source_id
+    assert grounded[0].metadata["table_parent_stable_id"] == "table-parent"
+
+
+@pytest.mark.parametrize("backend", ["chroma", "qdrant"])
 def test_search_propagates_client_close_failure(search_fakes, backend):
     close_error = RuntimeError(f"{backend} client close failure")
     search_fakes.state[f"{backend}_close_error"] = close_error

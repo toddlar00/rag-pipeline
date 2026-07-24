@@ -80,6 +80,29 @@ def test_grounded_answer_keeps_valid_citations_and_source_metadata(monkeypatch):
     assert '"page_range": "pp.101-102"' in observed["prompt"]
 
 
+def test_table_child_keeps_independent_citation_and_parent_trace(monkeypatch):
+    hit = _hit(
+        "| Arrangement | Safeguard |\n| --- | --- |\n"
+        "| Contingent fee | Written agreement |",
+        stable_id="table-row-2",
+        content_type="table",
+        retrieval_role="table_child",
+        table_parent_stable_id="table-parent",
+        table_child_index=2,
+        table_child_count=4,
+    )
+    response = _response(hit)
+
+    answer = _generate(
+        monkeypatch, "A written agreement is required [S1].", response)
+
+    mapping = answer.source_mapping()["S1"]
+    assert answer.citations == ["S1"]
+    assert mapping["source_id"] == "table-row-2"
+    assert mapping["metadata"]["table_parent_stable_id"] == "table-parent"
+    assert "equivalent_sources" not in mapping["metadata"]
+
+
 def test_grounded_answer_withholds_hallucinated_source_ids(monkeypatch):
     answer = _generate(
         monkeypatch,

@@ -211,6 +211,22 @@ def _index_manifest_mismatch(
     if quality_mismatch:
         return quality_mismatch
 
+    table_child_count = manifest.get("table_child_count")
+    source_record_count = manifest.get("source_record_count")
+    if (isinstance(table_child_count, bool)
+            or not isinstance(table_child_count, int)
+            or table_child_count < 0
+            or (table_child_count > 0
+                and (isinstance(source_record_count, bool)
+                     or not isinstance(source_record_count, int)))
+            or (isinstance(source_record_count, int)
+                and not isinstance(source_record_count, bool)
+                and table_child_count > source_record_count)):
+        return "table_child_count is missing or invalid"
+    if (table_child_count > 0
+            and manifest.get("quality_report_schema_version") is None):
+        return "table children require a quality report binding"
+
     hashes = manifest.get("chunk_hashes")
     if (not isinstance(hashes, dict)
             or not all(isinstance(key, str) and isinstance(value, str)
@@ -298,7 +314,8 @@ def _save_index_manifest(
         source_sha256: str | None = None,
         source_record_count: int | None = None,
         quality_report_schema_version: int | None = None,
-        quality_report_sha256: str | None = None) -> Path:
+        quality_report_sha256: str | None = None,
+        table_child_count: int = 0) -> Path:
     """Atomically persist versioned incremental state for one collection."""
     path = manifest_path_fn(
         db_dir, backend=backend, collection_name=collection_name)
@@ -311,6 +328,16 @@ def _save_index_manifest(
         quality_report_schema_version=quality_report_policy_schema_version)
     if quality_mismatch:
         raise ValueError(f"Invalid index quality binding: {quality_mismatch}")
+    if (isinstance(table_child_count, bool)
+            or not isinstance(table_child_count, int)
+            or table_child_count < 0
+            or (table_child_count > 0 and source_record_count is None)
+            or (source_record_count is not None
+                and table_child_count > source_record_count)):
+        raise ValueError("Invalid index table_child_count")
+    if table_child_count > 0 and quality_report_schema_version is None:
+        raise ValueError(
+            "Index table children require a quality report binding")
     payload = {
         "schema_version": manifest_schema_version,
         "backend": backend,
@@ -321,6 +348,7 @@ def _save_index_manifest(
         "chunk_hashes": chunk_hashes,
         "source_sha256": source_sha256,
         "source_record_count": source_record_count,
+        "table_child_count": table_child_count,
         **quality_binding,
     }
     atomic_write_json_fn(path, payload)
@@ -398,6 +426,29 @@ def _query_manifest_dimension_impl(
             f"({quality_mismatch}): {manifest_path}. Re-run indexing for "
             "this collection."
         )
+    if manifest_version == manifest_schema_version:
+        table_child_count = manifest.get("table_child_count")
+        source_record_count = manifest.get("source_record_count")
+        if (isinstance(table_child_count, bool)
+                or not isinstance(table_child_count, int)
+                or table_child_count < 0
+                or (table_child_count > 0
+                    and (isinstance(source_record_count, bool)
+                         or not isinstance(source_record_count, int)))
+                or (isinstance(source_record_count, int)
+                    and not isinstance(source_record_count, bool)
+                    and table_child_count > source_record_count)):
+            raise ValueError(
+                f"Index manifest has an invalid table child count: "
+                f"{manifest_path}. Re-run indexing for this collection."
+            )
+        if (table_child_count > 0
+                and manifest.get("quality_report_schema_version") is None):
+            raise ValueError(
+                f"Index manifest has table children without a quality report "
+                f"binding: {manifest_path}. Re-run indexing for this "
+                "collection."
+            )
     dimension = manifest.get("embedding_dimension")
     if (isinstance(dimension, bool) or not isinstance(dimension, int)
             or dimension < 1):

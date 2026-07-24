@@ -55,6 +55,7 @@ import retention as _retention
 import retrieval_core as _retrieval_core
 import run_telemetry as _run_telemetry
 import storage_policy as _storage_policy
+import table_retrieval_core as _table_retrieval_core
 
 from llm_runtime import (
     LLMBudgetExceeded,
@@ -257,8 +258,9 @@ _CONTEXT_TOKEN_RESERVE = 192
 
 # Incremental vector-index metadata. Bump this whenever the indexed payload or
 # vector layout changes in a way that requires rebuilding existing collections.
-INDEX_MANIFEST_SCHEMA_VERSION = 7
-_LEGACY_QUERY_SCHEMA_BINDINGS = ((6, 2),)
+INDEX_MANIFEST_SCHEMA_VERSION = 8
+_LEGACY_QUERY_SCHEMA_BINDINGS = ((6, 2), (7, 3))
+_CONTEXT_QUERY_SCHEMA_BINDINGS = ((7, 3),)
 
 # Content type labels for LLM classification prompt
 _CONTENT_LABELS = [
@@ -1106,6 +1108,7 @@ def _quality_report_required(chunks_path: Path, records: list[dict]) -> bool:
     """Return whether this corpus participates in the quality contract."""
     return (
         _quality_core.quality_report_path(chunks_path).is_file()
+        or _table_retrieval_core.has_table_retrieval_metadata(records)
         or any(
             "source_lineage_schema_version" in record.get("metadata", {})
             for record in records
@@ -1197,6 +1200,7 @@ def _validated_quality_report_binding(
         embedding_model: str | None = None,
         embedding_limit: int | None = None,
         input_bindings: dict | None = None,
+        allow_legacy_quality: bool = True,
 ) -> tuple[int | None, str | None, dict | None]:
     """Validate one exact adjacent report snapshot and return its binding."""
     chunks_path = Path(chunks_path)
@@ -1225,6 +1229,9 @@ def _validated_quality_report_binding(
         recovered_table_count=len(recovered_table_refs),
         recovered_table_refs=sorted(recovered_table_refs),
         records=records,
+        compatible_schema_versions=(
+            (_quality_core.LEGACY_QUALITY_REPORT_SCHEMA_VERSION,)
+            if allow_legacy_quality else ()),
     )
     if input_bindings is None:
         completion_inputs, completion_parameters_sha256 = (
@@ -1240,11 +1247,11 @@ def _validated_quality_report_binding(
             raise ValueError(
                 "corpus quality report does not match input bindings or "
                 "parameters")
-    return _quality_core.QUALITY_REPORT_SCHEMA_VERSION, report_sha256, payload
+    return payload["schema_version"], report_sha256, payload
 
 
 def _load_index_snapshot_with_quality(
-        path: Path,
+        path: Path, *, allow_legacy_quality: bool = True,
 ) -> tuple[
         list[dict], str, tuple[int, int, int, int, int],
         tuple[int | None, str | None],
@@ -1255,7 +1262,8 @@ def _load_index_snapshot_with_quality(
         raw, source_sha256, fingerprint = _read_index_artifact_snapshot(path)
         records = _parse_index_records_strict(raw, path)
         schema_version, report_sha256, _ = _validated_quality_report_binding(
-            path, records, source_sha256, len(raw))
+            path, records, source_sha256, len(raw),
+            allow_legacy_quality=allow_legacy_quality)
         return (
             records, source_sha256, fingerprint,
             (schema_version, report_sha256),
@@ -4871,6 +4879,15 @@ def _deduplicate_chunks(chunks: list[dict],
         }
 
     def can_deduplicate(kept: dict, candidate: dict) -> bool:
+        kept_metadata = kept.get("metadata", {})
+        candidate_metadata = candidate.get("metadata", {})
+        if (isinstance(kept_metadata, dict)
+                and _table_retrieval_core.TABLE_FRAGMENT_OCCURRENCE_FIELD
+                in kept_metadata
+                or isinstance(candidate_metadata, dict)
+                and _table_retrieval_core.TABLE_FRAGMENT_OCCURRENCE_FIELD
+                in candidate_metadata):
+            return False
         kept_refs = source_refs(kept)
         candidate_refs = source_refs(candidate)
         if kept_refs is None and candidate_refs is None:
@@ -6255,29 +6272,15 @@ def _split_markdown_table_by_rows(
     markdown = markdown.strip()
     if not markdown or token_counter(markdown) <= max_tokens:
         return [markdown] if markdown else []
-    lines = [line.rstrip() for line in markdown.splitlines() if line.strip()]
-    table_start = next(
-        (index for index, line in enumerate(lines)
-         if line.lstrip().startswith("|")
-         and index + 1 < len(lines)
-         and lines[index + 1].lstrip().startswith("|")),
-        None,
-    )
-    if (
-        table_start is None
-        or len(lines) - table_start < 3
-        or not all(
-            line.lstrip().startswith("|")
-            for line in lines[table_start + 2:]
-        )
-    ):
+    table = _table_retrieval_core._parse_markdown_table(markdown)
+    if table is None:
         return [markdown]
 
-    preamble = lines[:table_start]
-    header = lines[table_start:table_start + 2]
+    preamble = list(table.preamble)
+    header = [table.header, table.separator]
     groups: list[list[str]] = []
     current_rows: list[str] = []
-    for row in lines[table_start + 2:]:
+    for row in table.rows:
         candidate = "\n".join(preamble + header + current_rows + [row])
         if current_rows and token_counter(candidate) > max_tokens:
             groups.append(current_rows)
@@ -7373,9 +7376,10 @@ def _chunk_parameters(*, embedding_model: str, max_tokens: int,
                       ollama_model: str, gemini_key: str,
                       cloud_url: str, cloud_model: str, cloud_key: str,
                       llm_workers: int, thinking: bool,
-                      reconstruct_headings: bool, quality_score: bool,
-                      llm_scaffold: bool,
-                      structure_profile: (
+                       reconstruct_headings: bool, quality_score: bool,
+                       llm_scaffold: bool,
+                       table_children: bool = False,
+                       structure_profile: (
                           str | _document_profiles.StructureProfile
                       ) = DEFAULT_STRUCTURE_PROFILE) -> dict:
     """Return credential-free parameters that determine chunking output."""
@@ -7384,7 +7388,7 @@ def _chunk_parameters(*, embedding_model: str, max_tokens: int,
         gemini_key or os.environ.get("GEMINI_API_KEY", ""))
     llm_config = _llm_runtime.config
     return {
-        "chunking_policy_version": 21,
+        "chunking_policy_version": 22,
         "classification_prompt_version": 1,
         "embedding_model": embedding_model,
         "max_tokens": max_tokens,
@@ -7414,6 +7418,15 @@ def _chunk_parameters(*, embedding_model: str, max_tokens: int,
         "reconstruct_headings": reconstruct_headings,
         "quality_score": quality_score,
         "llm_scaffold": llm_scaffold,
+        "table_children": table_children,
+        "table_retrieval_schema_version": (
+            _table_retrieval_core.TABLE_RETRIEVAL_SCHEMA_VERSION),
+        "table_child_min_rows": (
+            _table_retrieval_core.DEFAULT_TABLE_CHILD_MIN_ROWS),
+        "table_child_parent_cap": (
+            _table_retrieval_core.MAX_TABLE_CHILDREN_PER_PARENT),
+        "table_child_corpus_cap": (
+            _table_retrieval_core.MAX_TABLE_CHILDREN_PER_CORPUS),
         "structure_profile": _document_profiles.profile_provenance(profile),
         "model_artifact_lock_sha256": _model_artifact_lock_sha256(),
     }
@@ -7862,6 +7875,7 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
                    reconstruct_headings: bool = False,
                    quality_score: bool = False,
                    llm_scaffold: bool = False,
+                   table_children: bool = False,
                    structure_profile: (
                        str | _document_profiles.StructureProfile
                    ) = DEFAULT_STRUCTURE_PROFILE) -> None:
@@ -7902,6 +7916,7 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
             reconstruct_headings=reconstruct_headings,
             quality_score=quality_score,
             llm_scaffold=llm_scaffold,
+            table_children=table_children,
             structure_profile=profile,
         )
 
@@ -7927,6 +7942,7 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
                    reconstruct_headings: bool = False,
                    quality_score: bool = False,
                    llm_scaffold: bool = False,
+                   table_children: bool = False,
                    structure_profile: (
                        str | _document_profiles.StructureProfile
                    ) = DEFAULT_STRUCTURE_PROFILE) -> None:
@@ -7952,6 +7968,7 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
         llm_workers=llm_workers, thinking=thinking,
         reconstruct_headings=reconstruct_headings,
         quality_score=quality_score, llm_scaffold=llm_scaffold,
+        table_children=table_children,
         structure_profile=profile)
     requested_max_tokens = max_tokens
     reserve_tokens = _CONTEXT_TOKEN_RESERVE if contextualize else 0
@@ -8662,8 +8679,33 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
             score_dist[s] = score_dist.get(s, 0) + 1
         log.info(f"Quality distribution: {dict(sorted(score_dist.items()))}")
 
+    # Preserve repeated source-table rows that row packing renders as
+    # byte-identical fragments.  The first occurrence keeps its historical ID;
+    # later occurrences receive deterministic disambiguators.
+    annotated_fragments = (
+        _table_retrieval_core.annotate_table_fragment_occurrences(
+            enriched, stable_id_fn=_chunk_id))
+    if annotated_fragments:
+        log.info(
+            "Disambiguated %s otherwise identical table fragments",
+            annotated_fragments,
+        )
+
     # Deduplicate near-identical chunks
     enriched = _deduplicate_chunks(enriched, threshold=dedup_threshold)
+
+    if table_children:
+        primary_count = len(enriched)
+        enriched = _table_retrieval_core.expand_table_records(
+            enriched,
+            stable_id_fn=_chunk_id,
+            token_count_fn=lambda value: int(tokenizer.count_tokens(value)),
+        )
+        child_count = len(enriched) - primary_count
+        log.info(
+            "Generated %s header-propagated table retrieval children",
+            child_count,
+        )
 
     # Re-index chunk_index after filtering
     for i, rec in enumerate(enriched):
@@ -8948,9 +8990,11 @@ def _index_chunks_chroma_impl(
 
     log.info(f"Loading chunks from {chunks_path}")
     (records, source_sha256, _,
-     quality_binding) = _load_index_snapshot_with_quality(chunks_path)
+     quality_binding) = _load_index_snapshot_with_quality(
+         chunks_path, allow_legacy_quality=False)
     quality_schema_version, quality_report_sha256 = quality_binding
     source_record_count = len(records)
+    table_child_count = _table_retrieval_core.table_child_count(records)
     _validate_embedding_token_counts(
         records, embedding_model, recompute=True)
     chunk_info = [(record, _chunk_id(record), _chunk_hash(record))
@@ -9079,6 +9123,7 @@ def _index_chunks_chroma_impl(
                 embedding_dimension=embedding_dimension,
                 chunk_hashes=new_hashes, source_sha256=source_sha256,
                 source_record_count=source_record_count,
+                table_child_count=table_child_count,
                 quality_report_schema_version=quality_schema_version,
                 quality_report_sha256=quality_report_sha256)
             if update_guarded:
@@ -9200,6 +9245,7 @@ def _index_chunks_chroma_impl(
         embedding_dimension=embedding_dimension,
         chunk_hashes=new_hashes, source_sha256=source_sha256,
         source_record_count=source_record_count,
+        table_child_count=table_child_count,
         quality_report_schema_version=quality_schema_version,
         quality_report_sha256=quality_report_sha256)
     _finish_index_update(
@@ -9532,7 +9578,8 @@ def _save_index_manifest(
         chunk_hashes: dict[str, str], source_sha256: str | None = None,
         source_record_count: int | None = None,
         quality_report_schema_version: int | None = None,
-        quality_report_sha256: str | None = None) -> Path:
+        quality_report_sha256: str | None = None,
+        table_child_count: int = 0) -> Path:
     """Atomically persist versioned incremental state for one collection."""
     return _index_state._save_index_manifest(
         db_dir, backend=backend, collection_name=collection_name,
@@ -9543,6 +9590,7 @@ def _save_index_manifest(
         source_record_count=source_record_count,
         quality_report_schema_version=quality_report_schema_version,
         quality_report_sha256=quality_report_sha256,
+        table_child_count=table_child_count,
         manifest_schema_version=INDEX_MANIFEST_SCHEMA_VERSION,
         quality_report_policy_schema_version=(
             _quality_core.QUALITY_REPORT_SCHEMA_VERSION),
@@ -9571,7 +9619,8 @@ def _query_manifest_dimension_impl(
         manifest_path_fn=_index_manifest_path,
         load_manifest_fn=_load_index_manifest,
         compatible_schema_bindings=(
-            _LEGACY_QUERY_SCHEMA_BINDINGS if allow_legacy else ()))
+            _LEGACY_QUERY_SCHEMA_BINDINGS
+            if allow_legacy else _CONTEXT_QUERY_SCHEMA_BINDINGS))
 
 
 def _query_manifest_dimension(
@@ -9586,6 +9635,21 @@ def _query_manifest_dimension(
         return _query_manifest_dimension_impl(
             db_dir, backend=backend, collection_name=collection_name,
             embedding_model=embedding_model, allow_legacy=allow_legacy)
+
+
+def _indexed_table_child_count(
+        db_dir: Path, *, backend: str, collection_name: str,
+) -> int:
+    """Return the manifested row-child count for a current index generation."""
+    manifest = _load_index_manifest(
+        db_dir, backend=backend, collection_name=collection_name)
+    if (manifest is None
+            or manifest.get("schema_version") != INDEX_MANIFEST_SCHEMA_VERSION):
+        return 0
+    count = manifest.get("table_child_count")
+    if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+        raise ValueError("current index manifest has an invalid table child count")
+    return count
 
 
 _artifact_sha256_cache: dict[
@@ -9861,9 +9925,11 @@ def _index_chunks_qdrant_impl(
 
     log.info(f"Loading chunks from {chunks_path}")
     (records, source_sha256, _,
-     quality_binding) = _load_index_snapshot_with_quality(chunks_path)
+     quality_binding) = _load_index_snapshot_with_quality(
+         chunks_path, allow_legacy_quality=False)
     quality_schema_version, quality_report_sha256 = quality_binding
     source_record_count = len(records)
+    table_child_count = _table_retrieval_core.table_child_count(records)
     _validate_embedding_token_counts(
         records, embedding_model, recompute=True)
     chunk_info = [(record, _chunk_id(record), _chunk_hash(record))
@@ -10009,6 +10075,7 @@ def _index_chunks_qdrant_impl(
                 embedding_dimension=dim,
                 chunk_hashes=new_hashes, source_sha256=source_sha256,
                 source_record_count=source_record_count,
+                table_child_count=table_child_count,
                 quality_report_schema_version=quality_schema_version,
                 quality_report_sha256=quality_report_sha256)
             if update_guarded:
@@ -10106,6 +10173,7 @@ def _index_chunks_qdrant_impl(
         embedding_model=embedding_model, embedding_dimension=dim,
         chunk_hashes=new_hashes, source_sha256=source_sha256,
         source_record_count=source_record_count,
+        table_child_count=table_child_count,
         quality_report_schema_version=quality_schema_version,
         quality_report_sha256=quality_report_sha256)
     _finish_index_update(
@@ -10662,6 +10730,7 @@ def _search_index_impl(query: str, db_dir: Path, *,
     chunks_file = Path(chunks_path)
     context_records: list[dict] | None = None
     context_source_sha256: str | None = None
+    indexed_table_children = 0
     if context_window:
         if not chunks_file.is_file():
             raise FileNotFoundError(
@@ -10690,6 +10759,8 @@ def _search_index_impl(query: str, db_dir: Path, *,
             db_path, backend=backend, collection_name=collection_name,
             embedding_model=embedding_model,
             allow_legacy=not bool(context_window))
+        indexed_table_children = _indexed_table_child_count(
+            db_path, backend=backend, collection_name=collection_name)
         hybrid_source_sha256 = None
         if context_records is not None:
             manifested_source_sha256 = _require_hybrid_chunks_snapshot(
@@ -10715,7 +10786,8 @@ def _search_index_impl(query: str, db_dir: Path, *,
                 hybrid_enabled = False
         fetch_n = (
             n_results * overfetch
-            if (hybrid_enabled or use_reranker is not False) else n_results)
+            if (hybrid_enabled or use_reranker is not False
+                or indexed_table_children) else n_results)
 
         if backend == "chroma":
             docs, metas, scores, effective_mode = _search_chroma_candidates(
@@ -10746,6 +10818,10 @@ def _search_index_impl(query: str, db_dir: Path, *,
             _require_hybrid_chunks_snapshot(
                 chunks_file, db_path, backend=backend,
                 collection_name=collection_name)
+
+    if indexed_table_children:
+        docs, metas, scores = _table_retrieval_core.collapse_table_families(
+            docs, metas, scores)
 
     reranker_enabled = (
         effective_mode == "vector" if use_reranker is None else use_reranker)
@@ -11175,6 +11251,8 @@ def _filter_chunk_records(records: list[dict], *,
 
     filtered = []
     for rec in records:
+        if _table_retrieval_core.is_table_child(rec.get("metadata")):
+            continue
         ct = rec["metadata"]["content_type"]
         if ct in exclude_types:
             continue
@@ -11634,6 +11712,7 @@ def extract_questions(chunks_path: Path, output_path: Path) -> None:
     """
     _require_file(chunks_path, "Chunks JSONL")
     all_chunks, _, _ = _load_index_snapshot_strict(chunks_path)
+    all_chunks = _table_retrieval_core.canonical_records(all_chunks)
     chunk_by_idx = {r["metadata"]["chunk_index"]: r for r in all_chunks}
 
     # Filter to notes_and_questions
@@ -11737,6 +11816,7 @@ def generate_exam_questions(chunks_path: Path, output_path: Path, *,
 
     _require_file(chunks_path, "Chunks JSONL")
     all_chunks, _, _ = _load_index_snapshot_strict(chunks_path)
+    all_chunks = _table_retrieval_core.canonical_records(all_chunks)
 
     by_chapter: dict[int, list[dict]] = {}
     for rec in all_chunks:
@@ -12027,6 +12107,7 @@ def generate_briefs(chunks_path: Path, output_path: Path, *,
 
     _require_file(chunks_path, "Chunks JSONL")
     records, _, _ = _load_index_snapshot_strict(chunks_path)
+    records = _table_retrieval_core.canonical_records(records)
 
     # Filter to case opinions only
     case_chunks = [r for r in records
@@ -12328,10 +12409,13 @@ def _raptor_parameters(*, embedding_model: str, cloud_url: str,
 
 def _raptor_output_complete(chunks_path: Path, output_path: Path, *,
                             parameters: dict) -> bool:
-    identity = _chunks_identity(chunks_path)
-    if identity is None:
+    try:
+        source_records, source_sha256, _ = _load_index_snapshot_strict(
+            chunks_path)
+    except (OSError, UnicodeError, ValueError, RuntimeError):
         return False
-    source_sha256, source_count = identity
+    source_count = len(
+        _table_retrieval_core.canonical_records(source_records))
     try:
         tree = json.loads(output_path.read_text(encoding="utf-8"))
         if not isinstance(tree, dict):
@@ -12414,6 +12498,7 @@ def build_raptor_tree(chunks_path: Path, output_path: Path, *,
     from tqdm import tqdm
 
     records, source_sha256, _ = _load_index_snapshot_strict(chunks_path)
+    records = _table_retrieval_core.canonical_records(records)
     source_record_count = len(records)
     parameters = _raptor_parameters(
         embedding_model=embedding_model, cloud_url=cloud_url,
@@ -13055,6 +13140,7 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
                 reconstruct_headings=args.reconstruct_headings,
                 quality_score=args.quality_score,
                 llm_scaffold=getattr(args, "llm_scaffold", False),
+                table_children=getattr(args, "table_children", False),
                 structure_profile=structure_profile,
                 **llm_kwargs)
             chunk_count = (
@@ -13101,6 +13187,7 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
                     reconstruct_headings=args.reconstruct_headings,
                     quality_score=args.quality_score,
                     llm_scaffold=getattr(args, "llm_scaffold", False),
+                    table_children=getattr(args, "table_children", False),
                     structure_profile=structure_profile,
                     **llm_kwargs,
                 )
@@ -13914,6 +14001,13 @@ def main(argv: list[str] | None = None):
         p.add_argument("--contextualize", action="store_true",
                         help="Generate contextual retrieval prefixes via LLM")
 
+    def add_table_retrieval_flag(p):
+        p.add_argument(
+            "--table-children", action="store_true",
+            help=("Index one caption/header-propagated retrieval child per row "
+                  "for eligible large Markdown tables"),
+        )
+
     def add_llm_provider_flags(p):
         p.add_argument("--ollama-url", type=str, default=DEFAULT_OLLAMA_URL,
                         help=f"Ollama API URL (default: {DEFAULT_OLLAMA_URL})")
@@ -14014,6 +14108,7 @@ def main(argv: list[str] | None = None):
     add_structure_profile_flag(p_chunk)
     add_watermark_flag(p_chunk)
     add_chunk_llm_flags(p_chunk)
+    add_table_retrieval_flag(p_chunk)
     add_llm_provider_flags(p_chunk)
     p_chunk.add_argument("--reconstruct-headings", action="store_true",
                          help="Use LLM to reconstruct low-quality section headings")
@@ -14302,6 +14397,7 @@ def main(argv: list[str] | None = None):
     add_watermark_flag(p_full)
     add_ocr_flag(p_full)
     add_chunk_llm_flags(p_full)
+    add_table_retrieval_flag(p_full)
     add_llm_provider_flags(p_full)
     add_db_backend_flag(p_full)
     add_db_lock_flag(p_full)
@@ -14344,6 +14440,7 @@ def main(argv: list[str] | None = None):
     add_watermark_flag(p_batch)
     add_ocr_flag(p_batch)
     add_chunk_llm_flags(p_batch)
+    add_table_retrieval_flag(p_batch)
     add_llm_provider_flags(p_batch)
     add_db_backend_flag(p_batch)
     add_db_lock_flag(p_batch)
@@ -14477,6 +14574,7 @@ def main(argv: list[str] | None = None):
                            reconstruct_headings=args.reconstruct_headings,
                            quality_score=args.quality_score,
                            llm_scaffold=args.llm_scaffold,
+                           table_children=args.table_children,
                            structure_profile=args.structure_profile,
                            **llm_kwargs)
 
@@ -15119,6 +15217,11 @@ def interactive_menu():
         if _menu_yesno("Generate contextual summaries per chunk? (improves retrieval)", default=False):
             args.append("--contextualize")
 
+        if _menu_yesno(
+                "Create row-level retrieval children for large tables?",
+                default=False):
+            args.append("--table-children")
+
         if _menu_yesno("Use LLM review for TOC scaffold construction?", default=False):
             args.append("--llm-scaffold")
 
@@ -15178,6 +15281,10 @@ def interactive_menu():
             args.append("--llm-classify")
         if _menu_yesno("Generate contextual summaries?", default=False):
             args.append("--contextualize")
+        if _menu_yesno(
+                "Create row-level retrieval children for large tables?",
+                default=False):
+            args.append("--table-children")
         if _menu_yesno("Use LLM review for TOC scaffolds?", default=False):
             args.append("--llm-scaffold")
         if _menu_yesno("Export separate chapter files?", default=False):
@@ -15330,6 +15437,10 @@ def interactive_menu():
             args.append("--llm-classify")
         if _menu_yesno("Generate contextual retrieval prefixes?", default=False):
             args.append("--contextualize")
+        if _menu_yesno(
+                "Create row-level retrieval children for large tables?",
+                default=False):
+            args.append("--table-children")
         if _menu_yesno("Extract an LLM document scaffold?", default=False):
             args.append("--llm-scaffold")
         if _menu_yesno("Reconstruct missing headings with an LLM?", default=False):

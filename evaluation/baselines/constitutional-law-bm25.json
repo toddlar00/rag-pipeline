@@ -13,7 +13,7 @@
       "source_record_count": 10,
       "record_count": 10,
       "id_scheme": "retrieval_core._chunk_id",
-      "retriever_implementation": "offline_retrieval.OfflineBM25Index/v1",
+      "retriever_implementation": "offline_retrieval.OfflineBM25Index/v2",
       "scoring": "BM25 Okapi with non-negative Robertson IDF",
       "minimum_content_term_matches": 2,
       "stop_words_sha256": "0ea48becd93d2fca663ea0f82865f254488b0ff9a61e91e434dc2e2565a09a6f"

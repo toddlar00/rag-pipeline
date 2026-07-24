@@ -19,6 +19,7 @@ from retrieval_core import (
     _legal_search_tokens,
     _lexical_document_text,
 )
+import table_retrieval_core
 
 
 _STOP_WORDS = frozenset({
@@ -29,7 +30,7 @@ _STOP_WORDS = frozenset({
     "was", "were", "what", "when", "where", "whether", "which", "who",
     "why", "will", "with", "would",
 })
-OFFLINE_RETRIEVER_VERSION = 1
+OFFLINE_RETRIEVER_VERSION = 2
 MIN_CONTENT_TERM_MATCHES = 2
 _STOP_WORDS_SHA256 = hashlib.sha256(
     "\n".join(sorted(_STOP_WORDS)).encode("utf-8")).hexdigest()
@@ -159,7 +160,10 @@ class OfflineBM25Index:
                 },
             ))
         ranked.sort(key=lambda item: (item[0], item[1]))
-        return [item[2] for item in ranked[:n_results]]
+        ordered = [item[2] for item in ranked]
+        keep_indexes = table_retrieval_core.table_candidate_keep_indexes(
+            [result["metadata"] for result in ordered])
+        return [ordered[index] for index in keep_indexes[:n_results]]
 
     def _score(self, index: int, query_tokens: list[str], *,
                k1: float = 1.5, b: float = 0.75) -> float:

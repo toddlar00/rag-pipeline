@@ -591,6 +591,7 @@ def test_resume_command_preserves_pipeline_options():
     args = _args(
         split_chapters=True,
         llm_scaffold=True,
+        table_children=True,
         contextualize=True,
         thinking=True,
         cloud_url="https://api.deepseek.com",
@@ -612,6 +613,7 @@ def test_resume_command_preserves_pipeline_options():
     assert "--structure-profile roman-parts-book-v1" in command
     assert "--split-chapters" in command
     assert "--llm-scaffold" in command
+    assert "--table-children" in command
     assert "--contextualize" in command
     assert "--thinking" in command
     assert "--cloud-url https://api.deepseek.com" in command
