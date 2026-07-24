@@ -36,6 +36,7 @@ Status terms:
 | Cumulative release migration rehearsal | Implemented (draft) | [PR #39](https://github.com/toddlar00/rag-pipeline/pull/39): actual Chroma and Qdrant probes recreate the integrated schema-5 manifest, rebuild one exact collection to schema 8, preserve and query a sibling collection, verify the no-op path, and require immediate lock release |
 | Evidence-grounded answer evaluation | Implemented (draft) | [PR #40](https://github.com/toddlar00/rag-pipeline/pull/40): corpus-pinned claim judgments, exact citation-entailment and unsupported-claim metrics, abstention and prompt-envelope fixtures, fail-closed named release gates, runtime source-identity hardening, and schema-v5 redacted reports |
 | Durable operational attempt evidence | Implemented (draft) | [PR #41](https://github.com/toddlar00/rag-pipeline/pull/41): strict redacted attempt reports bind lifecycle timing and terminal outcomes; successful cleanup is receipted before state publication; corrupt evidence, clock skew, cancellation races, failed final writes, and resume boundaries converge conservatively and idempotently |
+| Queue pressure and durable recovery drills | Implemented (draft) | [PR #42](https://github.com/toddlar00/rag-pipeline/pull/42): schema-v2 typed run aggregates, exact committed/attempted vector mutation and queue-pressure metrics, supervised hard-kill recovery, and synced-publication fault injection produce strict private redacted evidence |
 | Exact LLM transport budget | Integrated | [PR #1](https://github.com/toddlar00/rag-pipeline/pull/1) |
 | Qdrant manifest reconciliation | Integrated | [PR #2](https://github.com/toddlar00/rag-pipeline/pull/2) |
 | Qdrant interrupted-update guard | Integrated | [PR #3](https://github.com/toddlar00/rag-pipeline/pull/3) |
@@ -591,16 +592,48 @@ corrupt-marker, cancellation, and cross-attempt resume races and found no
 remaining P0/P1 blocker. The implementation is published against PR #40 as
 draft [PR #41](https://github.com/toddlar00/rag-pipeline/pull/41).
 
+## Queue pressure and durable recovery drill milestone
+
+Run-report schema v2 now retains typed numeric and boolean stage aggregates,
+rejects type drift and non-finite cumulative values before event publication,
+and binds recovery source counts, active-stage closures, and closure duration
+into the terminal event. Repeated interrupted finalization is exact even when
+the derived report is missing, while schema-v1 committed terminal reports
+remain readable.
+
+Successful index outcomes expose exact physical collection, record-delete, and
+upsert calls plus bounded-queue admissions, saturation events, and wait time.
+Failed index stages use separately named content-free attempt metrics and an
+explicit committed flag, preserving evidence without claiming that ambiguous
+physical work committed. Backend invariants distinguish Chroma batching,
+Qdrant's single batched deletion, and append-only Qdrant updates with no prior
+point to delete.
+
+The disposable operational drill launches a telemetry worker through the
+existing startup gate and Windows Job Object/POSIX process-group containment,
+requires confirmed process-tree cleanup before recovery, and fails closed when
+confirmation is uncertain. A second drill injects two synced-folder sharing
+violations and proves one pinned private staging payload is retried, published,
+verified, and cleaned. The strict size-bounded report contains no paths,
+process identities, exceptions, credentials, corpus text, prompts, or model
+output.
+
+The exact clean commit passed 1,466 tests with 7 platform skips, Ruff,
+compilation, dependency and model-artifact policy, and diff checks. An
+independent exploit-oriented audit reproduced containment, cleanup-confirmation,
+schema, ownership-race, queue-overflow, and physical-operation boundaries and
+found no remaining P0/P1 blocker. The implementation is published against PR
+#41 as draft [PR #42](https://github.com/toddlar00/rag-pipeline/pull/42).
+
 ## Next improvement milestones
 
-The former P2 release rehearsal, P3 grounded-answer evaluation, and P4a durable
-attempt evidence are now published as draft PRs #39 through #41. The remaining
-material priorities are:
+The former P2 release rehearsal, P3 grounded-answer evaluation, P4a durable
+attempt evidence, and P4b queue-pressure/recovery-drill work are now published
+as draft PRs #39 through #42. The remaining material priority is:
 
 | Priority | Milestone | Acceptance evidence |
 |---|---|---|
 | P1 | Ethics retrieval calibration | A corpus-owner-reviewed judged set covers rule text, author explanation, cases, tables, cross-page continuations, filters, and abstention; dense, hybrid, and reranked modes receive explicit release thresholds |
-| P4b | Queue pressure and durable recovery drills | Correlated telemetry measures queue/backpressure and physical vector mutations; disposable hard-kill and synced-folder fault drills produce bounded redacted reports that can be retained as release evidence |
 
 ## Completion rule
 
