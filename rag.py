@@ -50,6 +50,7 @@ import job_runtime as _job_runtime
 import llm_adapters as _llm_adapters
 import model_artifacts as _model_artifacts
 import operation_contracts as _operation_contracts
+import operational_metrics as _operational_metrics
 import process_supervision as _process_supervision
 import quality_core as _quality_core
 import retention as _retention
@@ -1292,19 +1293,57 @@ def _load_index_records_strict(path: Path) -> list[dict]:
     return records
 
 
-def _put_unless_worker_failed(work_queue: queue.Queue, item,
-                              worker_future) -> None:
+@dataclass
+class _IndexOperationalTracker:
+    collection_delete_calls: int = 0
+    collection_create_calls: int = 0
+    record_delete_calls: int = 0
+    upsert_calls: int = 0
+    committed: bool = False
+    queue: _operational_metrics.QueueBackpressureMetrics = field(
+        default_factory=_operational_metrics.QueueBackpressureMetrics)
+
+    def contract(self) -> _operation_contracts.IndexOperationMetrics:
+        queue_metrics = self.queue.snapshot()
+        return _operation_contracts.IndexOperationMetrics(
+            collection_delete_calls=self.collection_delete_calls,
+            collection_create_calls=self.collection_create_calls,
+            record_delete_calls=self.record_delete_calls,
+            upsert_calls=self.upsert_calls,
+            queue_put_count=int(queue_metrics["queue_put_count"]),
+            queue_saturation_events=int(
+                queue_metrics["queue_saturation_events"]),
+            queue_wait_ms=float(queue_metrics["queue_wait_ms"]),
+        )
+
+    def attempted_telemetry_metrics(self) -> dict[str, int | float | bool]:
+        """Return exact content-free attempts after an uncommitted failure."""
+        operations = self.contract()
+        return {
+            "committed": self.committed,
+            "attempted_collection_delete_calls": (
+                operations.collection_delete_calls),
+            "attempted_collection_create_calls": (
+                operations.collection_create_calls),
+            "attempted_record_delete_calls": operations.record_delete_calls,
+            "attempted_upsert_calls": operations.upsert_calls,
+            "attempted_physical_mutation_calls": (
+                operations.physical_mutation_calls),
+            "attempted_queue_put_count": operations.queue_put_count,
+            "queue_saturation_events": operations.queue_saturation_events,
+            "queue_wait_ms": operations.queue_wait_ms,
+        }
+
+
+def _put_unless_worker_failed(
+        work_queue: queue.Queue, item, worker_future, *,
+        metrics: _operational_metrics.QueueBackpressureMetrics | None = None,
+        poll_interval: float = 0.1,
+        monotonic_clock=time.monotonic) -> None:
     """Put with backpressure while surfacing a failed consumer promptly."""
-    while True:
-        if worker_future.done():
-            worker_future.result()
-            raise RuntimeError(
-                "Queue worker exited before accepting all work")
-        try:
-            work_queue.put(item, timeout=0.1)
-            return
-        except queue.Full:
-            continue
+    _operational_metrics.put_unless_worker_failed(
+        work_queue, item, worker_future, metrics=metrics,
+        poll_interval=poll_interval, monotonic_clock=monotonic_clock)
 
 
 def _log_cleanup_error(message: str, *args,
@@ -1321,6 +1360,20 @@ def _log_cleanup_error(message: str, *args,
         # diagnostics must never replace the operation/cleanup error selected
         # by the caller's explicit precedence rules.
         pass
+
+
+def _observe_failed_index_operation(
+        observer: Callable[[dict[str, int | float | bool]], None] | None,
+        tracker: _IndexOperationalTracker) -> None:
+    """Publish failure counters without changing primary-error precedence."""
+    if observer is None:
+        return
+    try:
+        observer(tracker.attempted_telemetry_metrics())
+    except BaseException:
+        _log_cleanup_error(
+            "Index failure-metric observation also failed",
+            error=RuntimeError("redacted index metric observer failure"))
 
 
 @dataclass
@@ -9051,6 +9104,7 @@ def _index_chunks_chroma_impl(
         full_reindex: bool = False,
         _active_update_token: str | None = None,
         _client_owner: _VectorClientOwner,
+        _operation_tracker: _IndexOperationalTracker,
         ) -> _operation_contracts.IndexOutcome:
     """Load enriched chunks and index into a local ChromaDB collection."""
     import chromadb
@@ -9107,15 +9161,18 @@ def _index_chunks_chroma_impl(
         source_record_count=source_record_count,
         target_ids=plan.target_ids,
         active_update_token=_active_update_token)
+    operation_tracker = _operation_tracker
 
     if rebuild_collection:
         log.info("Rebuilding Chroma collection '%s': %s",
                  collection_name, rebuild_reason)
 
     def _delete_collection() -> None:
+        operation_tracker.collection_delete_calls += 1
         client.delete_collection(collection_name)
 
     def _create_collection():
+        operation_tracker.collection_create_calls += 1
         return client.get_or_create_collection(
             name=collection_name,
             metadata={"hnsw:space": "cosine"},
@@ -9128,6 +9185,7 @@ def _index_chunks_chroma_impl(
     def _delete_stable_ids(handle, stable_ids, _verified) -> None:
         delete_batch_size = _chroma_mutation_batch_size(client)
         for start in range(0, len(stable_ids), delete_batch_size):
+            operation_tracker.record_delete_calls += 1
             handle.delete(
                 ids=list(stable_ids[start:start + delete_batch_size]))
 
@@ -9169,6 +9227,7 @@ def _index_chunks_chroma_impl(
             reconciled.receipt,
             close_client_fn=lambda: _client_owner.close(client),
             save_manifest_fn=_save_manifest)
+        operation_tracker.committed = True
         disposition = (
             "created" if not collection_existed_at_start else
             "rebuilt" if rebuild_collection else
@@ -9181,7 +9240,8 @@ def _index_chunks_chroma_impl(
             unchanged_records=plan.unchanged_count,
             removed_records=plan.removed_count,
             upserted_records=0, batch_count=0,
-            physical_count=len(verified_ids), committed=True)
+            physical_count=len(verified_ids), committed=True,
+            operations=operation_tracker.contract())
     records = list(plan.changed_records)
 
     # --- Parallel embedding + pipelined upsert ---
@@ -9210,10 +9270,13 @@ def _index_chunks_chroma_impl(
     update_lifecycle.prepare_mutation()
 
     def _upsert_prepared(ids, embeddings, documents, metadatas) -> None:
-        update_lifecycle.mutate(
-            lambda: collection.upsert(
+        def _upsert() -> None:
+            operation_tracker.upsert_calls += 1
+            collection.upsert(
                 ids=ids, embeddings=embeddings,
-                documents=documents, metadatas=metadatas))
+                documents=documents, metadatas=metadatas)
+
+        update_lifecycle.mutate(_upsert)
 
     if embed_workers > 1:
         # Parallel embedding for API models (network I/O bound)
@@ -9270,6 +9333,7 @@ def _index_chunks_chroma_impl(
                     upsert_q,
                     (ids, embeddings, documents, metadatas),
                     upsert_future,
+                    metrics=operation_tracker.queue,
                 )
         except BaseException as exc:
             pipeline_error = exc
@@ -9288,6 +9352,7 @@ def _index_chunks_chroma_impl(
         verification,
         close_client_fn=lambda: _client_owner.close(client),
         save_manifest_fn=_save_manifest)
+    operation_tracker.committed = True
 
     log.info(
         "Collection '%s' → %d documents",
@@ -9307,7 +9372,8 @@ def _index_chunks_chroma_impl(
         unchanged_records=plan.unchanged_count,
         removed_records=plan.removed_count,
         upserted_records=plan.changed_count, batch_count=len(batches),
-        physical_count=len(verified_ids), committed=True)
+        physical_count=len(verified_ids), committed=True,
+        operations=operation_tracker.contract())
 
 
 def index_chunks(chunks_path: Path, chroma_dir: Path, *,
@@ -9316,28 +9382,37 @@ def index_chunks(chunks_path: Path, chroma_dir: Path, *,
                  full_reindex: bool = False,
                  lock_timeout: float = DEFAULT_DB_LOCK_TIMEOUT,
                  _active_update_token: str | None = None,
+                 _operation_observer: Callable[
+                     [dict[str, int | float | bool]], None] | None = None,
                  ) -> _operation_contracts.IndexOutcome:
     """Index Chroma under a path-wide, process-safe exclusive lease."""
-    with _vector_store_lock(
-            chroma_dir, backend="chroma",
-            collection_name=collection_name,
-            operation="Chroma indexing", timeout=lock_timeout):
-        client_owner = _VectorClientOwner("Chroma")
-        operation_error = None
-        try:
-            return _index_chunks_chroma_impl(
-                chunks_path, chroma_dir,
+    operation_tracker = _IndexOperationalTracker()
+    try:
+        with _vector_store_lock(
+                chroma_dir, backend="chroma",
                 collection_name=collection_name,
-                embedding_model=embedding_model,
-                full_reindex=full_reindex,
-                _active_update_token=_active_update_token,
-                _client_owner=client_owner,
-            )
-        except BaseException as exc:
-            operation_error = exc
-            raise
-        finally:
-            client_owner.finish(operation_error)
+                operation="Chroma indexing", timeout=lock_timeout):
+            client_owner = _VectorClientOwner("Chroma")
+            operation_error = None
+            try:
+                return _index_chunks_chroma_impl(
+                    chunks_path, chroma_dir,
+                    collection_name=collection_name,
+                    embedding_model=embedding_model,
+                    full_reindex=full_reindex,
+                    _active_update_token=_active_update_token,
+                    _client_owner=client_owner,
+                    _operation_tracker=operation_tracker,
+                )
+            except BaseException as exc:
+                operation_error = exc
+                raise
+            finally:
+                client_owner.finish(operation_error)
+    except BaseException:
+        _observe_failed_index_operation(
+            _operation_observer, operation_tracker)
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -9947,6 +10022,7 @@ def _index_chunks_qdrant_impl(
         full_reindex: bool = False,
         _active_update_token: str | None = None,
         _client_owner: _VectorClientOwner,
+        _operation_tracker: _IndexOperationalTracker,
         ) -> _operation_contracts.IndexOutcome:
     """Load enriched chunks and index into a local Qdrant collection.
 
@@ -10005,15 +10081,18 @@ def _index_chunks_qdrant_impl(
         source_record_count=source_record_count,
         target_ids=plan.target_ids,
         active_update_token=_active_update_token)
+    operation_tracker = _operation_tracker
 
     if rebuild_collection:
         log.info("Rebuilding Qdrant collection '%s': %s",
                  collection_name, rebuild_reason)
 
     def _delete_collection() -> None:
+        operation_tracker.collection_delete_calls += 1
         client.delete_collection(collection_name)
 
     def _create_collection():
+        operation_tracker.collection_create_calls += 1
         client.create_collection(
             collection_name=collection_name,
             vectors_config=models.VectorParams(
@@ -10042,6 +10121,7 @@ def _index_chunks_qdrant_impl(
             for point_id in verified_point_ids[stable_id]
         ]
         if points_to_delete:
+            operation_tracker.record_delete_calls += 1
             delete_result = handle.delete(
                 collection_name,
                 points_selector=models.PointIdsList(
@@ -10087,6 +10167,7 @@ def _index_chunks_qdrant_impl(
             reconciled.receipt,
             close_client_fn=lambda: _client_owner.close(client),
             save_manifest_fn=_save_manifest)
+        operation_tracker.committed = True
         verified_count = sum(
             len(ids) for ids in verified_point_ids.values())
         disposition = (
@@ -10101,7 +10182,8 @@ def _index_chunks_qdrant_impl(
             unchanged_records=plan.unchanged_count,
             removed_records=plan.removed_count,
             upserted_records=0, batch_count=0,
-            physical_count=verified_count, committed=True)
+            physical_count=verified_count, committed=True,
+            operations=operation_tracker.contract())
     records = list(plan.changed_records)
 
     # Pipeline: embed batch N on GPU while upserting batch N-1 to disk
@@ -10121,6 +10203,7 @@ def _index_chunks_qdrant_impl(
                 break
 
             def _upsert_points() -> None:
+                operation_tracker.upsert_calls += 1
                 upsert_result = client.upsert(
                     collection_name=collection_name,
                     points=item,
@@ -10169,7 +10252,8 @@ def _index_chunks_qdrant_impl(
 
             # Queue for background upsert (blocks if queue full — backpressure)
             _put_unless_worker_failed(
-                upsert_queue, points, upsert_future)
+                upsert_queue, points, upsert_future,
+                metrics=operation_tracker.queue)
     except BaseException as exc:
         pipeline_error = exc
         raise
@@ -10187,6 +10271,7 @@ def _index_chunks_qdrant_impl(
         verification,
         close_client_fn=lambda: _client_owner.close(client),
         save_manifest_fn=_save_manifest)
+    operation_tracker.committed = True
 
     verified_count = sum(len(ids) for ids in verified_point_ids.values())
     log.info(
@@ -10205,7 +10290,8 @@ def _index_chunks_qdrant_impl(
         unchanged_records=plan.unchanged_count,
         removed_records=plan.removed_count,
         upserted_records=plan.changed_count, batch_count=len(batches),
-        physical_count=verified_count, committed=True)
+        physical_count=verified_count, committed=True,
+        operations=operation_tracker.contract())
 
 
 def index_chunks_qdrant(chunks_path: Path, qdrant_dir: Path, *,
@@ -10214,28 +10300,38 @@ def index_chunks_qdrant(chunks_path: Path, qdrant_dir: Path, *,
                         full_reindex: bool = False,
                         lock_timeout: float = DEFAULT_DB_LOCK_TIMEOUT,
                         _active_update_token: str | None = None,
+                        _operation_observer: Callable[
+                            [dict[str, int | float | bool]], None]
+                        | None = None,
                         ) -> _operation_contracts.IndexOutcome:
     """Index Qdrant under a path-wide, process-safe exclusive lease."""
-    with _vector_store_lock(
-            qdrant_dir, backend="qdrant",
-            collection_name=collection_name,
-            operation="Qdrant indexing", timeout=lock_timeout):
-        client_owner = _VectorClientOwner("Qdrant")
-        operation_error = None
-        try:
-            return _index_chunks_qdrant_impl(
-                chunks_path, qdrant_dir,
+    operation_tracker = _IndexOperationalTracker()
+    try:
+        with _vector_store_lock(
+                qdrant_dir, backend="qdrant",
                 collection_name=collection_name,
-                embedding_model=embedding_model,
-                full_reindex=full_reindex,
-                _active_update_token=_active_update_token,
-                _client_owner=client_owner,
-            )
-        except BaseException as exc:
-            operation_error = exc
-            raise
-        finally:
-            client_owner.finish(operation_error)
+                operation="Qdrant indexing", timeout=lock_timeout):
+            client_owner = _VectorClientOwner("Qdrant")
+            operation_error = None
+            try:
+                return _index_chunks_qdrant_impl(
+                    chunks_path, qdrant_dir,
+                    collection_name=collection_name,
+                    embedding_model=embedding_model,
+                    full_reindex=full_reindex,
+                    _active_update_token=_active_update_token,
+                    _client_owner=client_owner,
+                    _operation_tracker=operation_tracker,
+                )
+            except BaseException as exc:
+                operation_error = exc
+                raise
+            finally:
+                client_owner.finish(operation_error)
+    except BaseException:
+        _observe_failed_index_operation(
+            _operation_observer, operation_tracker)
+        raise
 
 
 def query_index_qdrant(query: str, qdrant_dir: Path, *,
@@ -13029,8 +13125,14 @@ def _index_chunks_for_backend(chunks_path: Path, db_dir: Path, *,
                               lock_timeout: float = (
                                   DEFAULT_DB_LOCK_TIMEOUT),
                               _active_update_token: str | None = None,
+                              _operation_observer: Callable[
+                                  [dict[str, int | float | bool]], None]
+                              | None = None,
                               ) -> _operation_contracts.IndexOutcome:
     """Dispatch indexing to the configured storage backend."""
+    observer_kwargs = (
+        {"_operation_observer": _operation_observer}
+        if _operation_observer is not None else {})
     if db_backend == "qdrant":
         return index_chunks_qdrant(
             chunks_path, db_dir,
@@ -13039,6 +13141,7 @@ def _index_chunks_for_backend(chunks_path: Path, db_dir: Path, *,
             full_reindex=full_reindex,
             lock_timeout=lock_timeout,
             _active_update_token=_active_update_token,
+            **observer_kwargs,
         )
     else:
         return index_chunks(
@@ -13048,6 +13151,7 @@ def _index_chunks_for_backend(chunks_path: Path, db_dir: Path, *,
             full_reindex=full_reindex,
             lock_timeout=lock_timeout,
             _active_update_token=_active_update_token,
+            **observer_kwargs,
         )
 
 
@@ -13093,6 +13197,7 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
                 observed_stage(name), status=status, metrics=metrics)
 
     current_stage = "convert"
+    index_attempt_metrics: dict[str, int | float | bool] = {}
     try:
         stage_started(current_stage)
         conversion_parameters = _conversion_parameters(
@@ -13258,6 +13363,7 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
                 full_reindex=getattr(args, "full_reindex", False),
                 lock_timeout=lock_timeout,
                 _active_update_token=active_update_token,
+                _operation_observer=index_attempt_metrics.update,
             )
             log.info(f"  [DONE] index -> {db_dir}")
             stage_finished(
@@ -13347,20 +13453,32 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
 
     except KeyboardInterrupt as exc:
         if telemetry is not None:
-            telemetry.stage_cancelled(observed_stage(current_stage), exc)
+            telemetry.stage_cancelled(
+                observed_stage(current_stage), exc,
+                metrics=(index_attempt_metrics
+                         if current_stage == "index" else None))
         raise
     except SystemExit as exc:
         if telemetry is not None:
             if exc.code == 130:
-                telemetry.stage_cancelled(observed_stage(current_stage), exc)
+                telemetry.stage_cancelled(
+                    observed_stage(current_stage), exc,
+                    metrics=(index_attempt_metrics
+                             if current_stage == "index" else None))
             else:
-                telemetry.stage_failed(observed_stage(current_stage), exc)
+                telemetry.stage_failed(
+                    observed_stage(current_stage), exc,
+                    metrics=(index_attempt_metrics
+                             if current_stage == "index" else None))
         if exc.code == 130:
             raise
         raise _PipelineStageError(current_stage, exc) from exc
     except Exception as exc:
         if telemetry is not None:
-            telemetry.stage_failed(observed_stage(current_stage), exc)
+            telemetry.stage_failed(
+                observed_stage(current_stage), exc,
+                metrics=(index_attempt_metrics
+                         if current_stage == "index" else None))
         raise _PipelineStageError(current_stage, exc) from exc
 
     return {
@@ -14595,6 +14713,7 @@ def main(argv: list[str] | None = None):
                 embedding_model=args.embedding_model,
                 full_reindex=full_reindex,
                 lock_timeout=args.db_lock_timeout,
+                _operation_observer=operation_metrics.update,
             )
             operation_metrics.update(index_outcome.telemetry_metrics())
 
@@ -14834,7 +14953,8 @@ def main(argv: list[str] | None = None):
 
     except VectorStoreBusyError as exc:
         if observed_command_stage:
-            run_telemetry.stage_failed(args.command, exc)
+            run_telemetry.stage_failed(
+                args.command, exc, metrics=operation_metrics or None)
         run_telemetry.terminate_active_stages("failed", exc)
         log.error(str(exc))
         sys.exit(1)
@@ -14842,15 +14962,18 @@ def main(argv: list[str] | None = None):
         cancelled = exc.code == 130
         if observed_command_stage:
             if cancelled:
-                run_telemetry.stage_cancelled(args.command, exc)
+                run_telemetry.stage_cancelled(
+                    args.command, exc, metrics=operation_metrics or None)
             else:
-                run_telemetry.stage_failed(args.command, exc)
+                run_telemetry.stage_failed(
+                    args.command, exc, metrics=operation_metrics or None)
         run_telemetry.terminate_active_stages(
             "cancelled" if cancelled else "failed", exc)
         raise
     except KeyboardInterrupt as exc:
         if observed_command_stage:
-            run_telemetry.stage_cancelled(args.command, exc)
+            run_telemetry.stage_cancelled(
+                args.command, exc, metrics=operation_metrics or None)
         run_telemetry.terminate_active_stages("cancelled", exc)
         print("\nInterrupted.", file=sys.stderr)
         sys.exit(130)
@@ -14858,13 +14981,15 @@ def main(argv: list[str] | None = None):
             _retention.RetentionError,
             _storage_policy.StoragePolicyError) as exc:
         if observed_command_stage:
-            run_telemetry.stage_failed(args.command, exc)
+            run_telemetry.stage_failed(
+                args.command, exc, metrics=operation_metrics or None)
         run_telemetry.terminate_active_stages("failed", exc)
         log.error(str(exc))
         sys.exit(1)
     except ImportError as e:
         if observed_command_stage:
-            run_telemetry.stage_failed(args.command, e)
+            run_telemetry.stage_failed(
+                args.command, e, metrics=operation_metrics or None)
         run_telemetry.terminate_active_stages("failed", e)
         mod = str(e).split("'")[1] if "'" in str(e) else str(e)
         log.error(f"Missing dependency: {mod}")
@@ -14872,7 +14997,8 @@ def main(argv: list[str] | None = None):
         sys.exit(1)
     except Exception as exc:
         if observed_command_stage:
-            run_telemetry.stage_failed(args.command, exc)
+            run_telemetry.stage_failed(
+                args.command, exc, metrics=operation_metrics or None)
         run_telemetry.terminate_active_stages("failed", exc)
         raise
     finally:

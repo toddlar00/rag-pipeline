@@ -26,7 +26,8 @@ from storage_policy import (
 
 
 EVENT_SCHEMA_VERSION = 1
-REPORT_SCHEMA_VERSION = 1
+REPORT_SCHEMA_VERSION = 2
+SUPPORTED_REPORT_SCHEMA_VERSIONS = frozenset({1, REPORT_SCHEMA_VERSION})
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 _TERMINAL_STATUSES = frozenset({
     "succeeded", "partial", "failed", "cancelled",
@@ -41,6 +42,11 @@ _EVENT_STATUSES = frozenset({
 _MAX_RECOVERY_BYTES = 8 * 1024 * 1024
 _MAX_RECOVERY_EVENTS = 10_000
 _DIAGNOSTIC_DIGEST_KEY = secrets.token_bytes(32)
+_RECOVERY_EVENT_METRICS = (
+    "recovery_source_event_count",
+    "recovery_active_stages_closed",
+    "recovery_stage_closure_ms",
+)
 
 
 def new_run_id() -> str:
@@ -81,11 +87,14 @@ def _validate_identifier(value: object, *, label: str) -> str:
 
 def _atomic_write_private_json(path: Path, payload: object) -> None:
     """Atomically publish pretty JSON under the shared private policy."""
+    json.dumps(payload, allow_nan=False)
     atomic_write_private_json(path, payload, indent=2)
 
 
 def _atomic_write_private_jsonl(path: Path, records: list[dict]) -> None:
     """Rewrite the small stage-event stream without exposing partial lines."""
+    for record in records:
+        json.dumps(record, allow_nan=False, separators=(",", ":"))
     atomic_write_private_jsonl(path, records, compact=True)
 
 
@@ -97,6 +106,14 @@ def _safe_metrics(metrics: dict | None) -> dict:
     normalized = {}
     for key, value in metrics.items():
         metric = _validate_identifier(key, label="metric name")
+        if metric == "duration_ms":
+            if (isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or not math.isfinite(float(value)) or value < 0):
+                raise TypeError(
+                    "run telemetry duration must be finite and non-negative")
+            normalized[metric] = round(value, 3)
+            continue
         if isinstance(value, bool) or value is None:
             normalized[metric] = value
         elif isinstance(value, int):
@@ -107,6 +124,145 @@ def _safe_metrics(metrics: dict | None) -> dict:
             raise TypeError(
                 "run telemetry values must be finite numbers, booleans, or null")
     return normalized
+
+
+def _finite_clock_value(value: object, *, label: str) -> float:
+    if (isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))):
+        raise ValueError(f"{label} must be finite")
+    return float(value)
+
+
+def _empty_stage_summary() -> dict:
+    return {
+        "started": 0, "completed": 0, "skipped": 0,
+        "failed": 0, "cancelled": 0, "duration_ms": 0.0,
+    }
+
+
+def _copy_stage_summary(summary: dict) -> dict:
+    copied = {
+        key: value for key, value in summary.items() if key != "metrics"
+    }
+    if "metrics" in summary:
+        copied["metrics"] = {
+            metric: dict(observed)
+            for metric, observed in summary["metrics"].items()
+        }
+    return copied
+
+
+def _checked_metric_sum(left: int | float, right: int | float, *,
+                        metric: str) -> int | float:
+    try:
+        total = left + right
+    except OverflowError as exc:
+        raise ValueError(
+            f"stage metric {metric!r} aggregate is not finite") from exc
+    if isinstance(total, float) and not math.isfinite(total):
+        raise ValueError(
+            f"stage metric {metric!r} aggregate is not finite")
+    return total
+
+
+def _apply_stage_event(summary: dict, event: dict) -> None:
+    """Validate and apply one non-run event to a private aggregate copy."""
+    status = event["status"]
+    if status in summary:
+        summary[status] += 1
+    duration = event["metrics"].get("duration_ms")
+    if isinstance(duration, (int, float)) and not isinstance(duration, bool):
+        summary["duration_ms"] = _checked_metric_sum(
+            summary["duration_ms"], duration, metric="duration_ms")
+    if status not in _STAGE_TERMINAL_STATUSES:
+        return
+    for metric, value in event["metrics"].items():
+        if metric == "duration_ms" or value is None:
+            continue
+        metrics = summary.setdefault("metrics", {})
+        observed = metrics.get(metric)
+        if isinstance(value, bool):
+            if observed is None:
+                observed = {
+                    "kind": "boolean", "samples": 0,
+                    "true_count": 0, "false_count": 0,
+                    "latest": value,
+                }
+                metrics[metric] = observed
+            if observed["kind"] != "boolean":
+                raise ValueError(f"stage metric {metric!r} changed type")
+            observed["samples"] += 1
+            observed["true_count" if value else "false_count"] += 1
+            observed["latest"] = value
+            continue
+        if observed is None:
+            observed = {
+                "kind": "number", "samples": 0,
+                "total": 0, "minimum": value,
+                "maximum": value, "latest": value,
+            }
+            metrics[metric] = observed
+        if observed["kind"] != "number":
+            raise ValueError(f"stage metric {metric!r} changed type")
+        observed["samples"] += 1
+        observed["total"] = _checked_metric_sum(
+            observed["total"], value, metric=metric)
+        observed["minimum"] = min(observed["minimum"], value)
+        observed["maximum"] = max(observed["maximum"], value)
+        observed["latest"] = value
+
+
+def _render_stage_summaries(summaries: dict[str, dict]) -> dict:
+    rendered = {}
+    for stage, source in sorted(summaries.items()):
+        target = _copy_stage_summary(source)
+        target["duration_ms"] = round(target["duration_ms"], 3)
+        metrics = target.get("metrics")
+        if metrics:
+            for observed in metrics.values():
+                if observed["kind"] != "number":
+                    continue
+                for field in ("total", "minimum", "maximum", "latest"):
+                    if isinstance(observed[field], float):
+                        observed[field] = round(observed[field], 3)
+            target["metrics"] = dict(sorted(metrics.items()))
+        rendered[stage] = target
+    return rendered
+
+
+def _terminal_recovery(event: dict) -> dict | None:
+    metrics = event.get("metrics", {})
+    present = [name in metrics for name in _RECOVERY_EVENT_METRICS]
+    if not any(present):
+        return None
+    if not all(present):
+        raise ValueError("terminal recovery metrics are incomplete")
+    source_count = metrics[_RECOVERY_EVENT_METRICS[0]]
+    active_count = metrics[_RECOVERY_EVENT_METRICS[1]]
+    closure_ms = metrics[_RECOVERY_EVENT_METRICS[2]]
+    for label, value in (
+            ("source event count", source_count),
+            ("active stage count", active_count)):
+        if (isinstance(value, bool) or not isinstance(value, int)
+                or value < 0):
+            raise ValueError(f"terminal recovery {label} is invalid")
+    preceding_events = event["sequence"] - 1
+    expected_preceding = source_count + active_count
+    if source_count == 0:
+        expected_preceding += 1
+    if expected_preceding != preceding_events:
+        raise ValueError("terminal recovery event counts are invalid")
+    if (isinstance(closure_ms, bool)
+            or not isinstance(closure_ms, (int, float))
+            or not math.isfinite(float(closure_ms))
+            or closure_ms < 0):
+        raise ValueError("terminal recovery stage closure is invalid")
+    return {
+        "source_event_count": source_count,
+        "active_stages_closed": active_count,
+        "stage_closure_ms": closure_ms,
+    }
 
 
 def failure_diagnostic(exc: BaseException) -> dict:
@@ -185,7 +341,9 @@ def _load_recovery_events(path: Path, *, operation: str,
         parent_run_id = event.get("parent_run_id")
         if parent_run_id is not None:
             _validate_identifier(parent_run_id, label="parent_run_id")
-        if (event.get("schema_version") != EVENT_SCHEMA_VERSION
+        if (type(event.get("schema_version")) is not int
+                or event.get("schema_version") != EVENT_SCHEMA_VERSION
+                or type(event.get("sequence")) is not int
                 or event.get("sequence") != len(events) + 1
                 or event.get("run_id") != run_id
                 or event.get("operation") != operation
@@ -259,6 +417,9 @@ class RunTelemetry:
         self._finished_monotonic: float | None = None
         self._status: str | None = None
         self._failure: dict | None = None
+        self._recovered_source_event_count: int | None = None
+        self._recovery: dict | None = None
+        self._stage_summaries: dict[str, dict] = {}
 
     @property
     def enabled(self) -> bool:
@@ -268,6 +429,11 @@ class RunTelemetry:
     def finished(self) -> bool:
         return self._status in _TERMINAL_STATUSES
 
+    @property
+    def active_stage_count(self) -> int:
+        with self._lock:
+            return sum(len(starts) for starts in self._active_stages.values())
+
     def _publish_events(self) -> None:
         if self.events_path is not None:
             _atomic_write_private_jsonl(self.events_path, self._events)
@@ -275,25 +441,32 @@ class RunTelemetry:
     @classmethod
     def recover(cls, operation: str, *, run_id: str,
                 events_path: Path | None = None,
-                report_path: Path | None = None) -> "RunTelemetry":
+                report_path: Path | None = None,
+                wall_clock=time.time,
+                monotonic_clock=time.monotonic) -> "RunTelemetry":
         """Recover a killed worker's valid event stream after it has exited."""
         telemetry = cls(
             operation, run_id=run_id, events_path=events_path,
-            report_path=report_path)
+            report_path=report_path, wall_clock=wall_clock,
+            monotonic_clock=monotonic_clock)
         if events_path is None:
+            telemetry._recovered_source_event_count = 0
             telemetry.start()
             return telemetry
         events = _load_recovery_events(
             Path(events_path), operation=telemetry.operation,
             run_id=telemetry.run_id)
+        telemetry._recovered_source_event_count = len(events)
         if not events:
             telemetry.start()
             return telemetry
         telemetry._events = events
         telemetry.parent_run_id = events[0].get("parent_run_id")
         telemetry._started_at = float(events[0]["timestamp"])
-        now_wall = telemetry._wall_clock()
-        now_monotonic = telemetry._monotonic()
+        now_wall = _finite_clock_value(
+            telemetry._wall_clock(), label="wall clock")
+        now_monotonic = _finite_clock_value(
+            telemetry._monotonic(), label="monotonic clock")
         elapsed = max(0.0, now_wall - telemetry._started_at)
         telemetry._started_monotonic = now_monotonic - elapsed
         active_stage_times: dict[str, list[float]] = {}
@@ -317,6 +490,15 @@ class RunTelemetry:
             ]
             for stage, starts in active_stage_times.items()
         }
+        for event in events:
+            stage = event["stage"]
+            if stage == "run":
+                continue
+            aggregate = _copy_stage_summary(
+                telemetry._stage_summaries.get(
+                    stage, _empty_stage_summary()))
+            _apply_stage_event(aggregate, event)
+            telemetry._stage_summaries[stage] = aggregate
         terminal = next((
             event for event in reversed(events)
             if event["stage"] == "run"
@@ -332,8 +514,10 @@ class RunTelemetry:
                 telemetry._finished_monotonic = (
                     telemetry._started_monotonic + float(duration_ms) / 1000)
             else:
-                telemetry._finished_monotonic = telemetry._monotonic()
+                telemetry._finished_monotonic = _finite_clock_value(
+                    telemetry._monotonic(), label="monotonic clock")
             telemetry._failure = terminal.get("diagnostic")
+            telemetry._recovery = _terminal_recovery(terminal)
         else:
             prior_failure = next((
                 event.get("diagnostic") for event in reversed(events)
@@ -346,36 +530,59 @@ class RunTelemetry:
     def _append(self, stage: str, status: str, *, metrics: dict | None = None,
                 diagnostic: dict | None = None) -> dict:
         stage = _validate_identifier(stage, label="stage")
+        if status not in _EVENT_STATUSES:
+            raise ValueError("invalid run event status")
         with self._lock:
             if self._started_at is None:
                 raise RuntimeError("run telemetry has not been started")
             if self.finished:
                 raise RuntimeError("run telemetry is already finished")
+            normalized_metrics = _safe_metrics(metrics)
             event = {
                 "schema_version": EVENT_SCHEMA_VERSION,
                 "sequence": len(self._events) + 1,
-                "timestamp": self._wall_clock(),
+                "timestamp": _finite_clock_value(
+                    self._wall_clock(), label="wall clock"),
                 "run_id": self.run_id,
                 "operation": self.operation,
                 "stage": stage,
                 "status": status,
-                "metrics": _safe_metrics(metrics),
+                "metrics": normalized_metrics,
             }
             if self.parent_run_id is not None:
                 event["parent_run_id"] = self.parent_run_id
             if diagnostic is not None:
                 event["diagnostic"] = dict(diagnostic)
+            aggregate = None
+            if stage != "run":
+                aggregate = _copy_stage_summary(
+                    self._stage_summaries.get(
+                        stage, _empty_stage_summary()))
+                _apply_stage_event(aggregate, event)
             self._events.append(event)
-            self._publish_events()
+            try:
+                self._publish_events()
+            except BaseException:
+                self._events.pop()
+                raise
+            if aggregate is not None:
+                self._stage_summaries[stage] = aggregate
             return dict(event)
 
     def start(self) -> str:
         with self._lock:
             if self._started_at is not None:
                 return self.run_id
-            self._started_at = self._wall_clock()
-            self._started_monotonic = self._monotonic()
-            start_event = self._append("run", "started")
+            self._started_at = _finite_clock_value(
+                self._wall_clock(), label="wall clock")
+            self._started_monotonic = _finite_clock_value(
+                self._monotonic(), label="monotonic clock")
+            try:
+                start_event = self._append("run", "started")
+            except BaseException:
+                self._started_at = None
+                self._started_monotonic = None
+                raise
             self._started_at = float(start_event["timestamp"])
             if self.report_path is not None:
                 self.persist_report()
@@ -384,8 +591,10 @@ class RunTelemetry:
     def stage_started(self, stage: str, *, metrics: dict | None = None) -> None:
         stage = _validate_identifier(stage, label="stage")
         with self._lock:
-            self._active_stages.setdefault(stage, []).append(self._monotonic())
+            started = _finite_clock_value(
+                self._monotonic(), label="monotonic clock")
             self._append(stage, "started", metrics=metrics)
+            self._active_stages.setdefault(stage, []).append(started)
 
     def stage_finished(self, stage: str, *, status: str = "completed",
                        metrics: dict | None = None) -> None:
@@ -395,13 +604,17 @@ class RunTelemetry:
         combined = dict(metrics or {})
         with self._lock:
             active = self._active_stages.get(stage, [])
-            started = active.pop() if active else None
+            started = active[-1] if active else None
+            if started is not None and "duration_ms" not in combined:
+                finished = _finite_clock_value(
+                    self._monotonic(), label="monotonic clock")
+                combined["duration_ms"] = max(
+                    0.0, (finished - started) * 1000)
+            self._append(stage, status, metrics=combined)
+            if active:
+                active.pop()
             if not active:
                 self._active_stages.pop(stage, None)
-            if started is not None and "duration_ms" not in combined:
-                combined["duration_ms"] = (
-                    self._monotonic() - started) * 1000
-            self._append(stage, status, metrics=combined)
 
     def stage_failed(self, stage: str, exc: BaseException, *,
                      metrics: dict | None = None) -> None:
@@ -420,16 +633,20 @@ class RunTelemetry:
         combined = dict(metrics or {})
         with self._lock:
             active = self._active_stages.get(stage, [])
-            started = active.pop() if active else None
-            if not active:
-                self._active_stages.pop(stage, None)
+            started = active[-1] if active else None
             if started is not None and "duration_ms" not in combined:
-                combined["duration_ms"] = (
-                    self._monotonic() - started) * 1000
+                finished = _finite_clock_value(
+                    self._monotonic(), label="monotonic clock")
+                combined["duration_ms"] = max(
+                    0.0, (finished - started) * 1000)
             diagnostic = failure_diagnostic(exc)
-            self._failure = diagnostic
             self._append(stage, status, metrics=combined,
                          diagnostic=diagnostic)
+            if active:
+                active.pop()
+            if not active:
+                self._active_stages.pop(stage, None)
+            self._failure = diagnostic
 
     def terminate_active_stages(self, status: str,
                                 exc: BaseException) -> None:
@@ -445,41 +662,46 @@ class RunTelemetry:
             for _ in range(count):
                 self._stage_terminated(stage, status, exc)
 
+    def record_recovery(self, *, active_stages_closed: int,
+                        stage_closure_ms: float) -> None:
+        """Attach one content-free interrupted-run recovery measurement."""
+        if self._recovered_source_event_count is None:
+            raise RuntimeError("telemetry was not created through recovery")
+        if (isinstance(active_stages_closed, bool)
+                or not isinstance(active_stages_closed, int)
+                or active_stages_closed < 0):
+            raise ValueError("active_stages_closed must be non-negative")
+        normalized = _safe_metrics({"stage_closure_ms": stage_closure_ms})
+        with self._lock:
+            if self._recovery is not None:
+                raise RuntimeError("run recovery was already recorded")
+            self._recovery = {
+                "source_event_count": self._recovered_source_event_count,
+                "active_stages_closed": active_stages_closed,
+                "stage_closure_ms": normalized["stage_closure_ms"],
+            }
+
     def stage_observation(self, stage: str, *,
                           metrics: dict | None = None) -> None:
         """Record aggregate component metrics gathered outside a timed span."""
         self._append(stage, "completed", metrics=metrics)
 
     def _stage_summary(self) -> dict:
-        summary: dict[str, dict] = {}
-        for event in self._events:
-            stage = event["stage"]
-            if stage == "run":
-                continue
-            target = summary.setdefault(stage, {
-                "started": 0, "completed": 0, "skipped": 0,
-                "failed": 0, "cancelled": 0, "duration_ms": 0.0,
-            })
-            status = event["status"]
-            if status in target:
-                target[status] += 1
-            duration = event["metrics"].get("duration_ms")
-            if isinstance(duration, (int, float)) and not isinstance(
-                    duration, bool):
-                target["duration_ms"] += float(duration)
-        for target in summary.values():
-            target["duration_ms"] = round(target["duration_ms"], 3)
-        return dict(sorted(summary.items()))
+        return _render_stage_summaries(self._stage_summaries)
 
     def report_payload(self) -> dict:
         with self._lock:
             elapsed_ms = None
             if self._started_monotonic is not None:
+                observed_monotonic = (
+                    self._finished_monotonic
+                    if self._finished_monotonic is not None
+                    else _finite_clock_value(
+                        self._monotonic(), label="monotonic clock"))
                 elapsed_ms = round(
-                    ((self._finished_monotonic
-                      if self._finished_monotonic is not None
-                      else self._monotonic())
-                     - self._started_monotonic) * 1000, 3)
+                    max(0.0, (
+                        observed_monotonic - self._started_monotonic) * 1000),
+                    3)
             payload = {
                 "schema_version": REPORT_SCHEMA_VERSION,
                 "run_id": self.run_id,
@@ -495,6 +717,8 @@ class RunTelemetry:
                 payload["parent_run_id"] = self.parent_run_id
             if self._failure is not None:
                 payload["failure"] = dict(self._failure)
+            if self._recovery is not None:
+                payload["recovery"] = dict(self._recovery)
             return payload
 
     def persist_report(self) -> dict:
@@ -510,29 +734,39 @@ class RunTelemetry:
             raise ValueError(f"invalid run status: {status}")
         with self._lock:
             if self.finished:
-                return self.report_payload()
+                return self.persist_report()
             diagnostic = failure_diagnostic(exc) if exc is not None else None
             if status == "succeeded":
                 diagnostic = None
-                self._failure = None
             elif self._failure is not None:
                 diagnostic = dict(self._failure)
-            elif diagnostic is not None:
-                self._failure = diagnostic
-            finished_monotonic = self._monotonic()
+            finished_monotonic = _finite_clock_value(
+                self._monotonic(), label="monotonic clock")
             elapsed_ms = None
             if self._started_monotonic is not None:
-                elapsed_ms = (
-                    finished_monotonic - self._started_monotonic) * 1000
+                elapsed_ms = max(
+                    0.0,
+                    (finished_monotonic - self._started_monotonic) * 1000)
+            terminal_metrics = (
+                {"duration_ms": elapsed_ms}
+                if elapsed_ms is not None else {})
+            if self._recovery is not None:
+                terminal_metrics.update({
+                    _RECOVERY_EVENT_METRICS[0]: self._recovery[
+                        "source_event_count"],
+                    _RECOVERY_EVENT_METRICS[1]: self._recovery[
+                        "active_stages_closed"],
+                    _RECOVERY_EVENT_METRICS[2]: self._recovery[
+                        "stage_closure_ms"],
+                })
             terminal_event = self._append(
                 "run", status,
-                metrics={
-                    "duration_ms": elapsed_ms
-                } if elapsed_ms is not None else {},
+                metrics=terminal_metrics,
                 diagnostic=diagnostic)
             self._status = status
             self._finished_at = float(terminal_event["timestamp"])
             self._finished_monotonic = finished_monotonic
+            self._failure = None if status == "succeeded" else diagnostic
             payload = self.report_payload()
             if self.report_path is not None:
                 _atomic_write_private_json(self.report_path, payload)
@@ -563,7 +797,9 @@ class RunTelemetry:
 def finalize_interrupted_run(
         operation: str, *, run_id: str, status: str, exc: BaseException,
         events_path: Path | None = None,
-        report_path: Path | None = None) -> dict:
+        report_path: Path | None = None,
+        wall_clock=time.time,
+        monotonic_clock=time.monotonic) -> dict:
     """Synthesize a terminal record after a supervised worker is gone."""
     if status not in {"failed", "cancelled"}:
         raise ValueError("interrupted run status must be failed or cancelled")
@@ -575,17 +811,30 @@ def finalize_interrupted_run(
         try:
             existing = json.loads(Path(report_path).read_text(encoding="utf-8"))
             if (isinstance(existing, dict)
-                    and existing.get("schema_version") == REPORT_SCHEMA_VERSION
+                    and type(existing.get("schema_version")) is int
+                    and existing["schema_version"]
+                    in SUPPORTED_REPORT_SCHEMA_VERSIONS
                     and existing.get("run_id") == run_id
                     and existing.get("operation") == operation
                     and existing.get("status") in _TERMINAL_STATUSES):
                 return existing
         except (OSError, UnicodeError, json.JSONDecodeError):
             pass
+    recovery_started = _finite_clock_value(
+        monotonic_clock(), label="monotonic clock")
     telemetry = RunTelemetry.recover(
         operation, run_id=run_id, events_path=events_path,
-        report_path=report_path)
+        report_path=report_path, wall_clock=wall_clock,
+        monotonic_clock=monotonic_clock)
     if telemetry.finished:
         return telemetry.persist_report()
+    active_stages_closed = telemetry.active_stage_count
     telemetry.terminate_active_stages(status, exc)
+    telemetry.record_recovery(
+        active_stages_closed=active_stages_closed,
+        stage_closure_ms=max(
+            0.0, (_finite_clock_value(
+                monotonic_clock(), label="monotonic clock")
+                - recovery_started) * 1000),
+    )
     return telemetry.finish(status, exc=exc)

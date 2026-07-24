@@ -1733,6 +1733,10 @@ def test_qdrant_removed_only_incremental_deletes_later_page_and_saves_manifest(
     assert outcome.removed_records == 1
     assert outcome.upserted_records == 0
     assert outcome.batch_count == 0
+    assert outcome.operations.record_delete_calls == 1
+    assert outcome.operations.upsert_calls == 0
+    assert outcome.operations.queue_put_count == 0
+    assert outcome.operations.physical_mutation_calls == 1
 
 
 def test_qdrant_missing_manifest_removal_fails_without_saving_manifest(
@@ -1900,6 +1904,41 @@ def _prepare_qdrant_changed_existing_incremental(
     )
 
 
+def test_qdrant_append_only_update_commits_without_a_point_delete(
+        monkeypatch, tmp_path):
+    fixture = _prepare_qdrant_changed_existing_incremental(
+        monkeypatch, tmp_path)
+    added_record = {
+        "text": "A newly added rule has no prior point to delete.",
+        "metadata": {
+            "chunk_index": 1,
+            "context": "New doctrine",
+            "embedding_token_count": 7,
+        },
+    }
+    added_id = rag._chunk_id(added_record)
+    fixture.chunks_path.write_text(
+        json.dumps(fixture.old_record) + "\n"
+        + json.dumps(added_record) + "\n",
+        encoding="utf-8",
+    )
+
+    outcome = rag.index_chunks_qdrant(
+        fixture.chunks_path, fixture.db_path,
+        collection_name="book", embedding_model="model-a")
+
+    assert outcome.disposition == "updated"
+    assert outcome.changed_records == 1
+    assert outcome.unchanged_records == 1
+    assert outcome.removed_records == 0
+    assert outcome.operations.record_delete_calls == 0
+    assert outcome.operations.upsert_calls == 1
+    assert outcome.operations.queue_put_count == 1
+    assert fixture.state.deletes == []
+    assert [[point.id for point in batch] for batch in fixture.state.upserts] == [
+        [rag._qdrant_point_id(added_id)]]
+
+
 def test_qdrant_producer_failure_stops_worker_and_preserves_recovery_state(
         monkeypatch, tmp_path):
     resources = _track_queue_worker_resources(
@@ -2032,6 +2071,7 @@ def test_qdrant_worker_failure_closes_resources_and_preserves_manifest(
         raise RuntimeError("injected Qdrant upsert failure")
 
     monkeypatch.setattr(client_type, "upsert", ambiguous_upsert)
+    failure_metrics = {}
 
     # An unrelated outer handler must not make cleanup mistake its exception
     # for an active producer failure and suppress the worker error.
@@ -2042,7 +2082,8 @@ def test_qdrant_worker_failure_closes_resources_and_preserves_manifest(
                 RuntimeError, match="injected Qdrant upsert failure"):
             rag.index_chunks_qdrant(
                 fixture.chunks_path, fixture.db_path,
-                collection_name="book", embedding_model="model-a")
+                collection_name="book", embedding_model="model-a",
+                _operation_observer=failure_metrics.update)
 
     assert len(fixture.state.upserts) == 1
     assert fixture.state.points[fixture.point_id].payload["context"] == (
@@ -2050,6 +2091,18 @@ def test_qdrant_worker_failure_closes_resources_and_preserves_manifest(
     assert fixture.state.scrolls == 2
     assert fixture.marker_path.is_file()
     assert fixture.manifest_path.read_bytes() == original_manifest
+    assert failure_metrics == {
+        "committed": False,
+        "attempted_collection_delete_calls": 0,
+        "attempted_collection_create_calls": 0,
+        "attempted_record_delete_calls": 1,
+        "attempted_upsert_calls": 1,
+        "attempted_physical_mutation_calls": 2,
+        "attempted_queue_put_count": 1,
+        "queue_saturation_events": 0,
+        "queue_wait_ms": failure_metrics["queue_wait_ms"],
+    }
+    assert failure_metrics["queue_wait_ms"] >= 0
 
     executor = resources.executors[0]
     assert executor.shutdown_calls == [(True, False)]
@@ -2233,6 +2286,10 @@ def test_qdrant_changed_existing_is_deleted_then_replaced_before_manifest_save(
     assert outcome.removed_records == 0
     assert outcome.upserted_records == 1
     assert outcome.batch_count == 1
+    assert outcome.operations.record_delete_calls == 1
+    assert outcome.operations.upsert_calls == 1
+    assert outcome.operations.queue_put_count == 1
+    assert outcome.operations.physical_mutation_calls == 2
 
 
 def test_qdrant_client_close_failure_prevents_manifest_commit(
@@ -2645,6 +2702,7 @@ def test_indexer_revalidates_marker_after_embedding_before_each_upsert(
         return result
 
     monkeypatch.setattr(rag, "_embed_texts", replace_marker_during_embedding)
+    failure_metrics = {}
 
     with pytest.raises(RuntimeError, match="ownership changed"):
         run_index(
@@ -2652,6 +2710,7 @@ def test_indexer_revalidates_marker_after_embedding_before_each_upsert(
             fixture.db_path,
             collection_name="book",
             embedding_model="model-a",
+            _operation_observer=failure_metrics.update,
         )
 
     assert fixture.state.upserts == []
@@ -2659,6 +2718,13 @@ def test_indexer_revalidates_marker_after_embedding_before_each_upsert(
     marker = json.loads(fixture.marker_path.read_text(encoding="utf-8"))
     assert marker["owner_token"] == replacement_token
     assert marker["target_source_sha256"] == "replacement-generation"
+    assert failure_metrics["committed"] is False
+    assert failure_metrics["attempted_record_delete_calls"] == 1
+    assert failure_metrics["attempted_upsert_calls"] == 0
+    assert failure_metrics["attempted_physical_mutation_calls"] == 1
+    # The batch was admitted before the worker-side ownership guard rejected
+    # its physical upsert, so admitted queue work is exactly one.
+    assert failure_metrics["attempted_queue_put_count"] == 1
 
 
 def test_chroma_marker_write_failure_prevents_first_mutation(
@@ -2935,6 +3001,10 @@ def test_chroma_changed_existing_is_deleted_then_replaced_before_manifest_save(
     assert outcome.removed_records == 0
     assert outcome.upserted_records == 1
     assert outcome.batch_count == 1
+    assert outcome.operations.record_delete_calls == 1
+    assert outcome.operations.upsert_calls == 1
+    assert outcome.operations.queue_put_count == 1
+    assert outcome.operations.physical_mutation_calls == 2
 
 
 def test_chroma_client_close_failure_prevents_manifest_commit(
@@ -3077,16 +3147,29 @@ def test_chroma_parallel_upsert_failure_closes_progress(
         raise upsert_error
 
     monkeypatch.setattr(fixture.collection, "upsert", ambiguous_upsert)
+    failure_metrics = {}
     with pytest.raises(RuntimeError) as raised:
         rag.index_chunks(
             fixture.chunks_path, fixture.db_path,
             collection_name="book",
-            embedding_model=fixture.embedding_model)
+            embedding_model=fixture.embedding_model,
+            _operation_observer=failure_metrics.update)
 
     assert raised.value is upsert_error
     assert fixture.state.upserts == [[fixture.stable_id]]
     assert fixture.marker_path.is_file()
     assert fixture.manifest_path.read_bytes() == original_manifest
+    assert failure_metrics == {
+        "committed": False,
+        "attempted_collection_delete_calls": 0,
+        "attempted_collection_create_calls": 0,
+        "attempted_record_delete_calls": 1,
+        "attempted_upsert_calls": 1,
+        "attempted_physical_mutation_calls": 2,
+        "attempted_queue_put_count": 0,
+        "queue_saturation_events": 0,
+        "queue_wait_ms": 0.0,
+    }
     assert resources.executors[0].shutdown_calls == [(True, False)]
     assert resources.events == ["executor_shutdown", "progress_close"]
     assert resources.bars[0].updates == 0
@@ -3415,6 +3498,9 @@ def test_chroma_removal_only_commits_before_marker_cleanup(
     assert outcome.removed_records == 1
     assert outcome.upserted_records == 0
     assert outcome.batch_count == 0
+    assert outcome.operations.record_delete_calls == 1
+    assert outcome.operations.upsert_calls == 0
+    assert outcome.operations.queue_put_count == 0
 
 
 def test_chroma_unchanged_run_never_starts_update(monkeypatch, tmp_path):
@@ -3447,6 +3533,8 @@ def test_chroma_unchanged_run_never_starts_update(monkeypatch, tmp_path):
     assert outcome.changed_records == 0
     assert outcome.unchanged_records == outcome.total_records
     assert outcome.committed is True
+    assert outcome.operations.physical_mutation_calls == 0
+    assert outcome.operations.queue_put_count == 0
 
 
 def test_chroma_sequential_cleanup_precedes_manifest_commit(
@@ -3576,6 +3664,10 @@ def test_chroma_migrates_legacy_skips_compatible_and_rebuilds_model_change(
     assert first_outcome.disposition == "rebuilt"
     assert first_outcome.changed_records == 1
     assert first_outcome.upserted_records == 1
+    assert first_outcome.operations.collection_delete_calls == 1
+    assert first_outcome.operations.collection_create_calls == 1
+    assert first_outcome.operations.upsert_calls == 1
+    assert first_outcome.operations.queue_put_count == 1
 
     second_outcome = rag.index_chunks(
         chunks_path, db_path, collection_name="book",
@@ -3585,6 +3677,7 @@ def test_chroma_migrates_legacy_skips_compatible_and_rebuilds_model_change(
     assert len(state.upserts) == first_upsert_count
     assert len(embedding_calls) == first_call_count + 1  # dimension probe only
     assert second_outcome.disposition == "unchanged"
+    assert second_outcome.operations.physical_mutation_calls == 0
 
     third_outcome = rag.index_chunks(
         chunks_path, db_path, collection_name="book",
@@ -3698,6 +3791,10 @@ def test_qdrant_manifest_skip_and_model_change_preserve_sibling(
     assert first_outcome.disposition == "created"
     assert first_outcome.changed_records == 1
     assert first_outcome.upserted_records == 1
+    assert first_outcome.operations.collection_delete_calls == 0
+    assert first_outcome.operations.collection_create_calls == 1
+    assert first_outcome.operations.upsert_calls == 1
+    assert first_outcome.operations.queue_put_count == 1
 
     begin_update = rag._begin_qdrant_index_update
     monkeypatch.setattr(
@@ -3714,6 +3811,7 @@ def test_qdrant_manifest_skip_and_model_change_preserve_sibling(
     assert outcome.disposition == "unchanged"
     assert outcome.changed_records == 0
     assert outcome.physical_count == outcome.total_records
+    assert outcome.operations.physical_mutation_calls == 0
 
     rebuilt_outcome = rag.index_chunks_qdrant(
         chunks_path, db_path, collection_name="book",

@@ -748,8 +748,8 @@ def _report_status(path: Path, *, operation: str,
     if payload is None:
         return None
     if (type(payload.get("schema_version")) is not int
-            or payload.get("schema_version") !=
-            run_telemetry.REPORT_SCHEMA_VERSION
+            or payload.get("schema_version") not in
+            run_telemetry.SUPPORTED_REPORT_SCHEMA_VERSIONS
             or payload.get("operation") != operation
             or payload.get("run_id") != run_id):
         raise JobManagerCorruptError("run report identity or status is invalid")

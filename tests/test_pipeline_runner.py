@@ -728,3 +728,47 @@ def test_pipeline_runner_emits_scoped_stage_and_index_outcomes(
     events = (tmp_path / "events.jsonl").read_text(encoding="utf-8")
     assert '"changed_records":1' in events
     assert "PRIVATE_BOOK" not in events
+
+
+def test_pipeline_runner_preserves_redacted_index_attempts_on_failure(
+        monkeypatch, tmp_path):
+    paths = _paths(monkeypatch, tmp_path)
+    monkeypatch.setattr(rag, "convert_pdf", lambda *args, **kwargs: None)
+    monkeypatch.setattr(rag, "chunk_document", lambda *args, **kwargs: None)
+
+    def fail_index(*args, **kwargs):
+        kwargs["_operation_observer"]({
+            "committed": False,
+            "attempted_record_delete_calls": 1,
+            "attempted_upsert_calls": 1,
+            "attempted_physical_mutation_calls": 2,
+            "attempted_queue_put_count": 1,
+            "queue_saturation_events": 3,
+            "queue_wait_ms": 125.0,
+        })
+        raise RuntimeError("C:/private/source.pdf API_KEY=secret")
+
+    monkeypatch.setattr(rag, "_index_chunks_for_backend", fail_index)
+    telemetry = RunTelemetry(
+        "full", run_id="failed-index-run",
+        events_path=tmp_path / "events.jsonl",
+        report_path=tmp_path / "report.json")
+    telemetry.start()
+
+    with pytest.raises(rag._PipelineStageError) as raised:
+        rag._run_pipeline_stages(
+            Path("PRIVATE_BOOK.pdf"), paths, _args(), resume=False,
+            watermark=None, telemetry=telemetry)
+    report = telemetry.finish("failed", exc=raised.value)
+
+    index_metrics = report["stages"]["index"]["metrics"]
+    assert index_metrics["attempted_physical_mutation_calls"]["total"] == 2
+    assert index_metrics["attempted_queue_put_count"]["total"] == 1
+    assert index_metrics["queue_saturation_events"]["total"] == 3
+    assert index_metrics["queue_wait_ms"]["total"] == 125.0
+    assert index_metrics["committed"]["false_count"] == 1
+    persisted = (
+        (tmp_path / "events.jsonl").read_text(encoding="utf-8")
+        + (tmp_path / "report.json").read_text(encoding="utf-8"))
+    assert "C:/private" not in persisted
+    assert "API_KEY" not in persisted

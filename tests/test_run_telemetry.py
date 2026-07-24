@@ -6,6 +6,7 @@ import threading
 import pytest
 
 from run_telemetry import (
+    REPORT_SCHEMA_VERSION,
     RunTelemetry,
     failure_diagnostic,
     finalize_interrupted_run,
@@ -37,6 +38,17 @@ def test_run_and_stage_reports_share_one_safe_identifier(tmp_path):
     assert report["status"] == "succeeded"
     assert report["stages"]["convert"]["completed"] == 1
     assert report["stages"]["convert"]["duration_ms"] >= 0
+    assert report["schema_version"] == REPORT_SCHEMA_VERSION == 2
+    assert report["stages"]["convert"]["metrics"] == {
+        "pages": {
+            "kind": "number", "samples": 1, "total": 12,
+            "minimum": 12, "maximum": 12, "latest": 12,
+        },
+        "resumed": {
+            "kind": "boolean", "samples": 1,
+            "true_count": 0, "false_count": 1, "latest": False,
+        },
+    }
     assert [event["sequence"] for event in events] == [1, 2, 3, 4]
     assert all(event["run_id"] == "run-123" for event in events)
     assert events[2]["metrics"]["pages"] == 12
@@ -140,6 +152,55 @@ def test_metrics_reject_text_and_nonfinite_values():
         telemetry.stage_started("convert", metrics={"path": "private.pdf"})
     with pytest.raises(TypeError, match="finite numbers"):
         telemetry.stage_started("convert", metrics={"latency": float("nan")})
+    with pytest.raises(TypeError, match="duration"):
+        telemetry.stage_observation("convert", metrics={"duration_ms": True})
+    with pytest.raises(TypeError, match="duration"):
+        telemetry.stage_observation("convert", metrics={"duration_ms": -1})
+
+
+def test_metric_type_drift_is_rejected_before_event_or_state_changes(tmp_path):
+    events_path = tmp_path / "events.jsonl"
+    report_path = tmp_path / "report.json"
+    telemetry = RunTelemetry(
+        "index", events_path=events_path, report_path=report_path)
+    telemetry.start()
+    telemetry.stage_observation("index", metrics={"value": 1})
+    before = _events(events_path)
+
+    with pytest.raises(ValueError, match="changed type"):
+        telemetry.stage_observation("index", metrics={"value": True})
+
+    assert _events(events_path) == before
+    assert telemetry.finished is False
+    assert json.loads(report_path.read_text(encoding="utf-8"))[
+        "status"] == "running"
+    report = telemetry.finish()
+    assert report["status"] == "succeeded"
+    assert report["stages"]["index"]["metrics"]["value"]["total"] == 1
+
+
+def test_metric_aggregate_overflow_is_rejected_before_publication(tmp_path):
+    events_path = tmp_path / "events.jsonl"
+    report_path = tmp_path / "report.json"
+    telemetry = RunTelemetry(
+        "index", events_path=events_path, report_path=report_path)
+    telemetry.start()
+    telemetry.stage_observation("index", metrics={"value": 1e308})
+    before = _events(events_path)
+
+    with pytest.raises(ValueError, match="aggregate is not finite"):
+        telemetry.stage_observation("index", metrics={"value": 1e308})
+
+    assert _events(events_path) == before
+    telemetry.finish()
+
+    def reject_constant(value):
+        raise AssertionError(f"non-standard JSON constant: {value}")
+
+    report = json.loads(
+        report_path.read_text(encoding="utf-8"),
+        parse_constant=reject_constant)
+    assert report["stages"]["index"]["metrics"]["value"]["total"] == 1e308
 
 
 def test_run_outputs_must_be_distinct_files(tmp_path):
@@ -208,9 +269,44 @@ def test_supervisor_can_finalize_a_killed_workers_event_stream(tmp_path):
     assert report["failure"]["category"] == "timeout"
     assert report["event_count"] == 4
     assert report["stages"]["index.chroma"]["failed"] == 1
+    assert report["recovery"]["source_event_count"] == 2
+    assert report["recovery"]["active_stages_closed"] == 1
+    assert report["recovery"]["stage_closure_ms"] >= 0
     assert _events(events_path)[-1]["status"] == "failed"
     assert "PRIVATE_TIMEOUT_DETAIL" not in events_path.read_text(
         encoding="utf-8")
+
+
+def test_interrupted_finalization_is_exactly_idempotent_from_events(tmp_path):
+    events_path = tmp_path / "events.jsonl"
+    report_path = tmp_path / "report.json"
+    worker = RunTelemetry(
+        "index", run_id="idempotent-run", events_path=events_path,
+        report_path=report_path)
+    worker.start()
+    worker.stage_started("index.qdrant")
+
+    first = finalize_interrupted_run(
+        "index", run_id="idempotent-run", status="failed",
+        exc=TimeoutError("PRIVATE_FIRST"),
+        events_path=events_path, report_path=report_path)
+    second = finalize_interrupted_run(
+        "index", run_id="idempotent-run", status="cancelled",
+        exc=KeyboardInterrupt("PRIVATE_SECOND"),
+        events_path=events_path, report_path=report_path)
+    assert second == first
+    assert json.loads(report_path.read_text(encoding="utf-8")) == first
+
+    report_path.unlink()
+    rebuilt = finalize_interrupted_run(
+        "index", run_id="idempotent-run", status="cancelled",
+        exc=KeyboardInterrupt("PRIVATE_THIRD"),
+        events_path=events_path, report_path=report_path)
+    assert rebuilt == first
+    assert rebuilt["recovery"]["source_event_count"] == 2
+    assert "PRIVATE" not in (
+        events_path.read_text(encoding="utf-8")
+        + report_path.read_text(encoding="utf-8"))
 
 
 def test_supervisor_does_not_replace_a_committed_success(tmp_path):
@@ -230,6 +326,41 @@ def test_supervisor_does_not_replace_a_committed_success(tmp_path):
     assert observed == expected
     assert observed["status"] == "succeeded"
     assert len(_events(events_path)) == 2
+
+
+def test_supervisor_accepts_a_committed_schema_v1_terminal_report(tmp_path):
+    report_path = tmp_path / "report.json"
+    legacy = {
+        "schema_version": 1,
+        "run_id": "legacy-run",
+        "operation": "full",
+        "status": "succeeded",
+    }
+    report_path.write_text(json.dumps(legacy), encoding="utf-8")
+
+    observed = finalize_interrupted_run(
+        "full", run_id="legacy-run", status="failed",
+        exc=RuntimeError("private"), report_path=report_path)
+
+    assert observed == legacy
+    assert json.loads(report_path.read_text(encoding="utf-8")) == legacy
+
+
+def test_supervisor_rejects_boolean_report_schema_version(tmp_path):
+    report_path = tmp_path / "report.json"
+    report_path.write_text(json.dumps({
+        "schema_version": True,
+        "run_id": "boolean-schema",
+        "operation": "full",
+        "status": "succeeded",
+    }), encoding="utf-8")
+
+    observed = finalize_interrupted_run(
+        "full", run_id="boolean-schema", status="failed",
+        exc=RuntimeError("private"), report_path=report_path)
+
+    assert observed["schema_version"] == REPORT_SCHEMA_VERSION
+    assert observed["status"] == "failed"
 
 
 def test_new_start_replaces_stale_terminal_report_before_recovery(tmp_path):
@@ -272,6 +403,12 @@ def test_recovery_cancels_every_unmatched_stage(tmp_path):
     assert report["status"] == "cancelled"
     assert report["stages"]["batch"]["cancelled"] == 1
     assert report["stages"]["item_1.index"]["cancelled"] == 1
+    assert report["recovery"] == {
+        "source_event_count": 3,
+        "active_stages_closed": 2,
+        "stage_closure_ms": report["recovery"]["stage_closure_ms"],
+    }
+    assert report["recovery"]["stage_closure_ms"] >= 0
     assert [event["status"] for event in _events(events_path)[-3:]] == [
         "cancelled", "cancelled", "cancelled"]
 
@@ -287,3 +424,23 @@ def test_recovery_rejects_unrecognized_event_fields(tmp_path):
     with pytest.raises(ValueError, match="unsupported fields"):
         RunTelemetry.recover(
             "full", run_id="run-safe", events_path=events_path)
+
+
+def test_recovery_rejects_inconsistent_terminal_recovery_counts(tmp_path):
+    events_path = tmp_path / "events.jsonl"
+    worker = RunTelemetry(
+        "full", run_id="run-counts", events_path=events_path)
+    worker.start()
+    worker.stage_started("index")
+    finalize_interrupted_run(
+        "full", run_id="run-counts", status="failed",
+        exc=RuntimeError("private"), events_path=events_path)
+    events = _events(events_path)
+    events[-1]["metrics"]["recovery_active_stages_closed"] = 99
+    events_path.write_text(
+        "".join(json.dumps(event) + "\n" for event in events),
+        encoding="utf-8")
+
+    with pytest.raises(ValueError, match="event counts"):
+        RunTelemetry.recover(
+            "full", run_id="run-counts", events_path=events_path)

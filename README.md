@@ -555,13 +555,22 @@ it does not change an LLM request ID or cache key.
 
 The schema-v1 JSONL stream records a sequence number, timestamp, operation,
 stage, status, numeric/boolean metrics, and a safe diagnostic when applicable.
-The schema-v1 JSON report summarizes run status (`succeeded`, `partial`,
-`failed`, or `cancelled`), elapsed time, event count, and per-stage counts and
-durations. Pipeline stages cover conversion, chunk/index lease acquisition,
-chunking, indexing, exports, and RAPTOR. Index metrics come from the committed
+The schema-v2 JSON report summarizes run status (`succeeded`, `partial`,
+`failed`, or `cancelled`), elapsed time, event count, per-stage counts and
+durations, and typed numeric/boolean metric aggregates. The job supervisor can
+still read an already-committed schema-v1 terminal report. New writers always
+publish schema v2, reject metric type drift and non-finite aggregate totals
+before appending an event, and persist strict JSON.
+
+Pipeline stages cover conversion, chunk/index lease acquisition, chunking,
+indexing, exports, and RAPTOR. Successful index metrics come from the committed
 `IndexOutcome`: disposition plus total, changed, unchanged, removed, upserted,
-batch, and physically verified record counts. LLM observations aggregate calls,
-attempts, retries, latency, and exact/estimated tokens.
+batch, physically verified record counts, exact physical mutation calls, and
+bounded-queue pressure. A failed index stage instead records separately named
+content-free attempted delete/create/upsert/queue counts with
+`committed=false`; it does not mislabel partial physical work as a committed
+outcome. LLM observations aggregate calls, attempts, retries, latency, and
+exact/estimated tokens.
 
 Each invocation replaces the supplied run-event/report files with its current
 run. Run and LLM event/report outputs must resolve to pairwise distinct files;
@@ -570,8 +579,11 @@ that completes its best-effort loop but has failed, missing, or
 unprocessed inputs reports `partial` while preserving the command's existing
 summary behavior. After a deadline or interruption, the supervisor first
 confirms worker cleanup, then recovers the current event stream, terminates any
-unmatched stages, and writes the final failure/cancellation record. A terminal
-success already committed by the worker wins over a late cancellation.
+unmatched stages, and writes the final failure/cancellation record. Recovery
+counts and stage-closure time are also bound into the terminal event, so a
+missing report can be reconstructed and repeated finalization preserves the
+same evidence. A terminal success already committed by the worker wins over a
+late cancellation.
 
 Run telemetry intentionally omits source and output paths, prompts, responses,
 credentials, endpoints, and exception messages. Its message fingerprint is a
@@ -581,6 +593,34 @@ details. Telemetry uses the same private storage policy as pipeline artifacts
 and LLM outputs: POSIX directories/files are verified at `0700`/`0600`, while
 Windows paths receive a protected DACL granting full control only to the current
 user SID.
+
+### Operational recovery drills
+
+Run both disposable recovery drills into a new or empty evidence directory:
+
+```bash
+python tools/run_operational_drills.py \
+  --output-dir output/operational-drill-2026-07-24
+```
+
+The hard-kill drill starts a real child telemetry writer inside a supervised
+process tree, waits until one stage is durably active, kills the tree, confirms
+complete cleanup, and only then recovers the event stream into a terminal
+report. Parent death also closes the containment primitive and kills the tree;
+unconfirmed cleanup is an explicit failed result. Its child receives only
+allowlisted interpreter/OS environment plumbing, not ambient provider
+credentials. The synced-publication
+drill writes one private staging payload while an injected replacement seam
+raises two Windows sharing violations; publication must retry the same pinned
+bytes, verify the target, and leave no staging file.
+
+`operational-drill.report.json` is a strict, size-bounded schema-v1 report with
+only a random run ID, timestamps, durations, counts, booleans, and safe terminal
+status. It contains no paths, process identities, exception strings,
+credentials, corpus text, prompts, or model output. The drill directory must be
+empty so evidence from separate runs cannot be interleaved or silently
+overwritten. Exit status is `0` only when both drills pass, `1` when a completed
+report contains a failed drill, and `2` when the run cannot start or publish.
 
 ### Private storage and retention
 
@@ -2247,6 +2287,8 @@ cli_policy.py           # Stdlib-only CLI interpretation and serialization polic
 ingestion_core.py       # Stdlib-only PDF inspection and stripping safety policy
 model_artifacts.py      # Stdlib-only model lock, byte verification, and ML-BOM
 operation_contracts.py  # Committed vector-index outcome contract
+operational_metrics.py  # Content-free mutation and queue-pressure counters
+operational_drills.py   # Hard-kill/synced-publication evidence drills
 run_telemetry.py        # Correlated stage events, reports, and recovery
 attempt_reporting.py    # Redacted manager-owned job-attempt outcome reports
 storage_policy.py       # Owner-only DACL/mode and atomic publication policy
@@ -2284,7 +2326,7 @@ requirements-lock-tools.txt # Exact lockfile-generator pin
 requirements-*.lock     # Universal exact CPU locks with SHA-256 hashes
 dependency-license-policy.json # Denied licenses and reviewed exceptions
 dependency-vulnerability-policy.json # Expiring advisory exceptions and audit skips
-tools/                  # Dependency/model lock refresh and policy checks
+tools/                  # Policy checks, lock refresh, and operational drill CLI
 .github/workflows/      # CI, dependency compatibility, and security automation
 output/                 # Per-run book directories (auto-created)
 ```
