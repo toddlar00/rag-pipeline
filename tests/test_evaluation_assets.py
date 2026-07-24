@@ -10,6 +10,7 @@ from retrieval_core import _chunk_id
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 SUITES_ROOT = REPOSITORY_ROOT / "evaluation" / "suites"
 SUITES = ("property", "constitutional_law")
+ETHICS_DRAFT_QUERIES = REPOSITORY_ROOT / "eval_queries_ethics_draft.jsonl"
 
 
 def _load_jsonl(path: Path) -> list[dict]:
@@ -150,6 +151,51 @@ def test_combined_suites_cover_adversarial_categories_and_long_context():
     assert all(case["expected_abstained"] is True for case in grounding_cases)
     assert all("grounding" in query["tags"] for query in all_queries
                if query.get("grounding_case"))
+
+
+def test_private_ethics_draft_is_pinned_and_cannot_pose_as_reviewed():
+    queries = _load_jsonl(ETHICS_DRAFT_QUERIES)
+
+    assert len(queries) == 14
+    assert sum(
+        len(query.get("judgments", [])) for query in queries
+    ) == 24
+    assert len({query["query_id"] for query in queries}) == len(queries)
+    assert {
+        query["review_status"] for query in queries
+    } == {"draft_requires_corpus_owner"}
+
+    declarations = {
+        (query["corpus"]["sha256"], query["corpus"]["record_count"])
+        for query in queries
+    }
+    assert declarations == {(
+        "c3d9dd5d7627333d2f74bb09d12cc35d2432b224c73be17f47a7cd85cc768f91",
+        1715,
+    )}
+    assert all(
+        query["corpus"]["chunks_path"]
+        == "output/Ethics_3/Ethics_3_chunks.jsonl"
+        for query in queries
+    )
+
+    tags = {tag for query in queries for tag in query["tags"]}
+    assert {
+        "abstention", "author_explanation", "case", "cross_page",
+        "filter", "outline_distractor", "positive_outline", "rule_text",
+        "table",
+    } <= tags
+    assert any(query.get("expected_abstain") is True for query in queries)
+    assert any(
+        any(judgment["relevance"] == 0
+            for judgment in query.get("judgments", []))
+        for query in queries
+    )
+    assert all(
+        any(judgment["relevance"] > 0
+            for judgment in query.get("judgments", []))
+        for query in queries if not query.get("expected_abstain")
+    )
 
 
 @pytest.mark.parametrize(("suite_name", "baseline_name"), [

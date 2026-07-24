@@ -1254,9 +1254,14 @@ On Windows, transient synced-folder sharing/access failures (`winerror` 5, 32,
 or 33) receive a small bounded retry only around replacement of the already
 written, fsynced staging file. Every retry revalidates the parent identity,
 destination leaf, staging identity and exact bytes, link count, and private
-permissions after backoff. Owned-marker reads separately retry only
-content-identical ctime churn; any byte, inode, size, mtime, link, schema, or
-ownership change fails closed.
+permissions after backoff. Owned-marker reads and exact artifact snapshot reads
+separately retry only content-identical ctime churn. Artifact retries pin the
+opened device, inode, size, mtime, and SHA-256 across attempts; any content
+generation change still fails closed. Marker reads additionally pin link count,
+schema, and ownership. Windows recomputes exact artifact hashes for every
+verification because its `st_ctime` is a creation time rather than a safe
+change counter; the bounded stat-keyed hash cache is used only on platforms
+where ctime changes with file metadata or content.
 
 The sequential background-upsert paths for both backends share teardown that
 requests a worker stop, waits for completion, and attempts both executor and
@@ -1611,6 +1616,41 @@ These figures informed the Chroma defaults (`dense=0.5`, `lexical=1.0`,
 set before treating them as universal. The old machine-readable run is local
 under ignored `output/` storage and is intentionally not a committed baseline.
 
+`eval_queries_ethics_draft.jsonl` is a 14-query, 24-judgment calibration draft
+pinned to the exact 1,715-record `Ethics_3` snapshot. Its slices distinguish
+Rule 1.5(c)'s page-542 disclosure rule from the page-543 numerical calculation,
+grade an irrelevant section-outline distractor, and cover rule tables, author
+explanations, cases, cross-page chunks, metadata filters, abstention, and direct
+queries for which outlines are relevant. Every row is marked
+`draft_requires_corpus_owner`; do not use it as a release gate or committed
+baseline until a corpus owner reviews the queries, stable IDs, and grades. The
+evaluator enforces that distinction: `--fail-under`, `--fail-over`, and
+baseline-regression checks reject any explicitly draft query. After review,
+change every `review_status` to `approved` before establishing thresholds.
+
+```bash
+python eval.py \
+  --queries eval_queries_ethics_draft.jsonl \
+  --chunks output/Ethics_3/Ethics_3_chunks.jsonl \
+  --db output/Ethics_3/Ethics_3_chroma \
+  --collection ethics_3 \
+  --compare --k 1 3 5 10 --depth 20 \
+  --json-report evaluation-reports/ethics-draft-compare.json
+```
+
+The initial diagnostic run produced the following non-gating results. The
+page-542 rule-specific query ranked its table first; the calculation query
+retrieved all six graded page-542/page-543 chunks in the hybrid top six. Plain
+hybrid's remaining misses were broad outline intents, which is evidence against
+a blanket outline penalty.
+
+| Draft configuration | Success@3 | nDCG@10 | MAP |
+|---|---:|---:|---:|
+| Vector only | 0.923 | 0.872 | 0.836 |
+| Vector + BGE reranker | 1.000 | 0.958 | 0.941 |
+| Hybrid | 0.846 | 0.869 | 0.851 |
+| Hybrid + BGE reranker | 1.000 | 0.958 | 0.941 |
+
 Use repeatable thresholds to make a single-configuration evaluation fail with
 exit code 2 when quality is below a required floor:
 
@@ -1923,6 +1963,7 @@ evaluation/suites/      # Pinned CC0 Property and Constitutional Law fixtures
 evaluation/baselines/   # Portable offline regression baselines
 eval_queries.jsonl      # Starter evaluation queries (10 CivPro)
 eval_queries_judged.jsonl # Pinned 24-query private CivPro calibration
+eval_queries_ethics_draft.jsonl # Pinned Ethics judgments awaiting owner review
 ui.py                   # Gradio web UI (Search, Export, Info, local Jobs tabs)
 scaffold_to_markdown.py # Apply an existing TOC scaffold to PDF text
 requirements.txt        # Direct core dependencies

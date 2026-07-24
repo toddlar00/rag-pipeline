@@ -11,6 +11,7 @@ import hashlib
 import json
 import math
 import os
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -23,11 +24,21 @@ from storage_policy import (
 
 
 ArtifactFingerprint = tuple[int, int, int, int, int]
+ArtifactContentSnapshot = tuple[int, int, int, int, bytes]
 ChunkIdFn = Callable[[dict], str]
 CleanupErrorFn = Callable[..., None]
 ReplaceFn = Callable[[Any, Any], Any]
 ArtifactHashFn = Callable[[Path], str]
 AtomicJsonWriterFn = Callable[[Path, object], None]
+_SYNCED_FOLDER_READ_RETRY_DELAYS = (0.01, 0.05, 0.15)
+
+
+class _ArtifactCtimeChanged(RuntimeError):
+    """Internal signal for content-identical synced-folder metadata churn."""
+
+    def __init__(self, snapshot: ArtifactContentSnapshot):
+        super().__init__("artifact ctime changed while reading")
+        self.snapshot = snapshot
 
 
 def _artifact_stat_fingerprint(stat_result) -> ArtifactFingerprint:
@@ -39,23 +50,65 @@ def _artifact_stat_fingerprint(stat_result) -> ArtifactFingerprint:
     )
 
 
+def _artifact_content_identity(stat_result) -> tuple[int, int, int, int]:
+    """Return the opened-file fields that describe its content generation."""
+    return (
+        int(stat_result.st_dev), int(stat_result.st_ino),
+        int(stat_result.st_size), int(stat_result.st_mtime_ns),
+    )
+
+
+def _read_index_artifact_snapshot_once(
+        path: Path, *,
+        expected_snapshot: ArtifactContentSnapshot | None,
+        ) -> tuple[bytes, str, ArtifactFingerprint]:
+    with path.open("rb") as handle:
+        before_stat = os.fstat(handle.fileno())
+        raw = handle.read()
+        after_stat = os.fstat(handle.fileno())
+
+    before = _artifact_content_identity(before_stat)
+    after = _artifact_content_identity(after_stat)
+    if before != after or len(raw) != before[2]:
+        raise RuntimeError(
+            f"Artifact changed while it was being read: {path}")
+
+    digest = hashlib.sha256(raw)
+    snapshot = before + (digest.digest(),)
+    if expected_snapshot is not None and snapshot != expected_snapshot:
+        raise RuntimeError(
+            f"Artifact changed while it was being read: {path}")
+    if int(before_stat.st_ctime_ns) != int(after_stat.st_ctime_ns):
+        raise _ArtifactCtimeChanged(snapshot)
+    return raw, digest.hexdigest(), _artifact_stat_fingerprint(after_stat)
+
+
 def _read_index_artifact_snapshot(
         path: Path) -> tuple[bytes, str, ArtifactFingerprint]:
     """Read, identify, and hash the exact bytes from one file handle.
 
-    Opening once prevents an atomic path replacement from mixing the hash of
-    one chunks generation with records parsed from another. ``fstat`` guards
-    against an in-place write racing the read.
+    Opening once per attempt prevents an atomic path replacement from mixing
+    the hash of one chunks generation with records parsed from another.
+    ``fstat`` guards against an in-place write racing the read. Synced folders
+    can update only ``ctime`` while the same bytes are open, so that one benign
+    case receives bounded retries pinned to the original content identity.
     """
     path = Path(path)
-    with path.open("rb") as handle:
-        before = _artifact_stat_fingerprint(os.fstat(handle.fileno()))
-        raw = handle.read()
-        after = _artifact_stat_fingerprint(os.fstat(handle.fileno()))
-    if after != before:
-        raise RuntimeError(
-            f"Artifact changed while it was being read: {path}")
-    return raw, hashlib.sha256(raw).hexdigest(), after
+    expected_snapshot = None
+    for attempt in range(len(_SYNCED_FOLDER_READ_RETRY_DELAYS) + 1):
+        if attempt:
+            time.sleep(_SYNCED_FOLDER_READ_RETRY_DELAYS[attempt - 1])
+        try:
+            return _read_index_artifact_snapshot_once(
+                path, expected_snapshot=expected_snapshot)
+        except _ArtifactCtimeChanged as exc:
+            if expected_snapshot is None:
+                expected_snapshot = exc.snapshot
+            if attempt == len(_SYNCED_FOLDER_READ_RETRY_DELAYS):
+                raise RuntimeError(
+                    f"Artifact changed while it was being read: {path}"
+                ) from exc
+    raise AssertionError("unreachable artifact read retry state")
 
 
 def _parse_index_records_strict(

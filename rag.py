@@ -8319,32 +8319,33 @@ _artifact_sha256_cache: dict[
 ] = {}
 _artifact_sha256_cache_lock = _threading.Lock()
 _ARTIFACT_SHA256_CACHE_MAX = 16
+# Windows ``st_ctime`` is creation time rather than an inode change counter.
+# Same-size bytes can therefore alias a restored mtime/ctime fingerprint, so a
+# stat-only cache hit cannot prove content identity there.
+_ARTIFACT_STAT_HASH_CACHE_SAFE = os.name != "nt"
 
 
 def _cached_artifact_sha256(path: Path) -> str:
     """Hash one stable artifact snapshot, caching by strong stat identity."""
     path = Path(path)
     cache_key = os.path.normcase(str(path.resolve(strict=True)))
-    with path.open("rb") as handle:
-        before = _artifact_stat_fingerprint(os.fstat(handle.fileno()))
-        with _artifact_sha256_cache_lock:
-            cached = _artifact_sha256_cache.get(cache_key)
+    if _ARTIFACT_STAT_HASH_CACHE_SAFE:
+        with path.open("rb") as handle:
+            before = _artifact_stat_fingerprint(os.fstat(handle.fileno()))
+            with _artifact_sha256_cache_lock:
+                cached = _artifact_sha256_cache.get(cache_key)
             if cached is not None and cached[0] == before:
-                return cached[1]
+                after = _artifact_stat_fingerprint(os.fstat(handle.fileno()))
+                if after == before:
+                    return cached[1]
 
-        digest = hashlib.sha256()
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-        after = _artifact_stat_fingerprint(os.fstat(handle.fileno()))
-    if after != before:
-        raise RuntimeError(
-            f"Artifact changed while it was being verified: {path}")
-    value = digest.hexdigest()
-    with _artifact_sha256_cache_lock:
-        _artifact_sha256_cache[cache_key] = (after, value)
-        while len(_artifact_sha256_cache) > _ARTIFACT_SHA256_CACHE_MAX:
-            oldest = next(iter(_artifact_sha256_cache))
-            del _artifact_sha256_cache[oldest]
+    _raw, value, fingerprint = _read_index_artifact_snapshot(path)
+    if _ARTIFACT_STAT_HASH_CACHE_SAFE:
+        with _artifact_sha256_cache_lock:
+            _artifact_sha256_cache[cache_key] = (fingerprint, value)
+            while len(_artifact_sha256_cache) > _ARTIFACT_SHA256_CACHE_MAX:
+                oldest = next(iter(_artifact_sha256_cache))
+                del _artifact_sha256_cache[oldest]
     return value
 
 

@@ -737,7 +737,51 @@ def test_query_schema_accepts_abstention_filters_and_slices():
         "tags": ["abstention", "filter"],
         "subject": "Property",
         "book": "Property Mini Corpus",
+        "review_status": "approved",
     })
+
+
+def test_release_gates_reject_explicitly_draft_judgments():
+    retrieval_eval._validate_release_gate_review_status([{
+        "query": "reviewed query",
+        "expected_keywords": ["answer"],
+        "review_status": "approved",
+    }])
+    retrieval_eval._validate_release_gate_review_status([{
+        "query": "legacy reviewed query",
+        "expected_keywords": ["answer"],
+    }])
+
+    with pytest.raises(ValueError, match="Release thresholds cannot use"):
+        retrieval_eval._validate_release_gate_review_status([{
+            "query": "draft query",
+            "expected_keywords": ["answer"],
+            "review_status": "draft_requires_corpus_owner",
+        }])
+
+
+def test_cli_refuses_thresholds_for_explicitly_draft_queries(
+        monkeypatch, tmp_path, caplog):
+    monkeypatch.setattr(
+        retrieval_eval,
+        "load_queries",
+        lambda _path: [{
+            "query": "draft query",
+            "expected_keywords": ["answer"],
+            "review_status": "draft_requires_corpus_owner",
+        }],
+    )
+
+    exit_code = retrieval_eval.main([
+        "--queries", str(tmp_path / "queries.jsonl"),
+        "--chunks", str(tmp_path / "chunks.jsonl"),
+        "--db", str(tmp_path / "db"),
+        "--collection", "book",
+        "--fail-under", "mrr=0.5",
+    ])
+
+    assert exit_code == 1
+    assert "Release thresholds cannot use" in caplog.text
 
 
 @pytest.mark.parametrize(("query", "message"), [
@@ -771,6 +815,11 @@ def test_query_schema_accepts_abstention_filters_and_slices():
         "expected_keywords": ["answer"],
         "tags": ["A!", "a?"],
     }, "unique ASCII"),
+    ({
+        "query": "unknown review state",
+        "expected_keywords": ["answer"],
+        "review_status": "looks_good_to_me",
+    }, "review_status"),
 ])
 def test_query_schema_rejects_ambiguous_adversarial_cases(query, message):
     with pytest.raises(ValueError, match=message):

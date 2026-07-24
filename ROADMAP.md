@@ -25,7 +25,8 @@ Status terms:
 | Foundation | Baseline | End-to-end PDF ingestion, enriched chunking, shared LLM runtime, grounded answers, hybrid retrieval/reranking, evaluation harness, Chroma/Qdrant indexing, CLI, UI, docs, and tests |
 | Ethics corpus coherence and publication quality | Implemented (draft) | [PR #31](https://github.com/toddlar00/rag-pipeline/pull/31): canonical scaffold reconstruction, exact source identity, complete tables and nested footnotes, exact embedding budgets, regenerated exports, and an exactly reconciled 1,715-record Chroma index |
 | Machine-readable corpus quality attestation | Implemented (draft) | [PR #31](https://github.com/toddlar00/rag-pipeline/pull/31): schema-v1 report binds the exact Docling source, chunks bytes, parameters, source-lineage coverage, tables, normalization, classification, entities, token budgets, and stable/hash roots; resume, export, retrieval, and index publication fail closed on missing, stale, malformed, or mismatched evidence |
-| Synced-folder publication resilience | Implemented (draft) | [PR #31](https://github.com/toddlar00/rag-pipeline/pull/31): bounded Windows sharing-violation retries republish only a pinned staging file; marker reads retry only content-identical ctime churn and fail closed on every identity, byte, link, ownership, or schema change |
+| Synced-folder publication and read resilience | Implemented (draft) | [PR #31](https://github.com/toddlar00/rag-pipeline/pull/31): bounded Windows sharing-violation retries republish only a pinned staging file; marker and exact artifact reads retry only content-identical ctime churn while failing closed on content-generation changes; exact hashes bypass unsafe stat caching on Windows |
+| Ethics retrieval calibration | In progress | A 14-query, 24-judgment draft is pinned to the exact 1,715-record corpus and covers rules, explanations, cases, tables, cross-page chunks, filters, abstention, outline distractors, and positive outline intents; corpus-owner review and release thresholds remain outstanding |
 | Exact LLM transport budget | Integrated | [PR #1](https://github.com/toddlar00/rag-pipeline/pull/1) |
 | Qdrant manifest reconciliation | Integrated | [PR #2](https://github.com/toddlar00/rag-pipeline/pull/2) |
 | Qdrant interrupted-update guard | Integrated | [PR #3](https://github.com/toddlar00/rag-pipeline/pull/3) |
@@ -165,10 +166,12 @@ tokens, final task-prefixed inputs top out at the model's 512-token limit, and
 no input is truncated.
 
 The unified export contains 342,886 words; the 15 chapter/front-matter files
-contain 343,650 words. Six current hybrid retrieval probes recover the intended
-pages at ranks 1, 1, 1, 1, 1, and 3. The last result is the page 542 rule table,
-behind closely related explanatory material, and remains a table-retrieval
-calibration target. The Chroma collection, stable IDs, documents, metadata,
+contain 343,650 words. The original six hybrid probes recovered their nominated
+pages at ranks 1, 1, 1, 1, 1, and 3, but decomposition showed that the last
+probe, “Contingent-fee expense calculation,” was underspecified: page 543
+contains the calculation and correctly ranks first, while page 542 states the
+disclosure rule and is dense rank 1. A Rule-1.5(c)-specific query ranks the
+page-542 table first. The Chroma collection, stable IDs, documents, metadata,
 hashes, report binding, and manifests exactly match the 1,715-record JSONL. A
 second no-op resume preserved all three artifact hashes and reported 0 changed,
 1,715 unchanged, and 0 removed records. Evidence is recorded in
@@ -181,17 +184,35 @@ indexed, exported, queried through the hybrid path, or accepted by resume when
 that report is absent, stale, malformed, oversized, or hash-mismatched; legacy
 unlineaged corpora retain an explicit compatibility path.
 
-The same real run exposed transient Dropbox marker and Windows atomic-replace
+The same real run exposed transient Dropbox metadata and Windows atomic-replace
 interference. Publication now retries only `winerror` 5/32/33, only around the
 already-written staging-file replace, with bounded backoff and fresh parent,
 leaf, staging identity, link, and privacy checks immediately before every
-retry. Retention marker reads retry only a ctime-only race while pinning device,
-inode, size, mtime, link count, and the exact bytes hash across attempts.
+retry. Retention markers and exact artifact snapshots retry only ctime-only
+races. Artifact reads pin device, inode, size, mtime, and exact bytes across
+attempts; retention markers additionally pin link count, ownership, and schema.
+Because Windows exposes creation time through `st_ctime`, exact artifact hashes
+are recomputed there on every verification; stat-keyed digest caching remains
+enabled only where ctime is a usable change counter. An adversarial same-size
+rewrite with restored mtime confirms that stale bytes cannot alias a cache hit.
 
-Local validation for the implementation is 1,118 passed and 7 skipped in the
-full suite, 436 passed and 1 skipped in the independent blocker-focused audit,
-successful Python compilation, six live hybrid probes, two real resume runs,
-and a clean `git diff --check`.
+The first retrieval-calibration pass adds
+`eval_queries_ethics_draft.jsonl`: 14 corpus-pinned queries with 24 graded
+judgments. It separately grades page 542's disclosure rule and page 543's
+calculation, marks the page-503 legal-fees outline irrelevant to those intents,
+and also includes three queries where concise outlines are positive evidence.
+The initial depth-20 comparison produced vector/hybrid/reranked nDCG@10 of
+0.872/0.869/0.958 and MAP of 0.836/0.851/0.941. Those figures are diagnostic,
+not gates: every query is explicitly marked as requiring corpus-owner review.
+Together with the targeted ablations, they guard against adopting global
+stemming, equal fusion weights, or blanket outline penalties merely to improve
+one probe while harming already judged legal retrieval.
+
+Local validation for the implementation is 1,127 passed and 7 skipped in the
+full suite, 436 passed and 1 skipped in the initial independent blocker-focused
+audit, and 81 passed in the post-fix artifact/evaluation re-audit. Python
+compilation, six live hybrid probes, two real resume runs, and `git diff
+--check` also pass.
 This milestone is published in draft [PR
 #31](https://github.com/toddlar00/rag-pipeline/pull/31) with all 15 head checks
 passing. It remains “Implemented (draft)” pending review and merge evidence.
@@ -203,7 +224,7 @@ passing. It remains “Implemented (draft)” pending review and merge evidence.
 | P1 | Ethics retrieval calibration | A corpus-owner-reviewed judged set covers rule text, author explanation, cases, tables, cross-page continuations, filters, and abstention; dense, hybrid, and reranked modes receive explicit release thresholds |
 | P2 | Configurable document-structure profiles | Front/back-matter labels, chapter patterns, and canonical-title rules move behind tested profiles, with fixtures from multiple publishers and safe unknown-layout behavior |
 | P2 | Context-aware retrieval assembly | Stable adjacency/parent identifiers allow query-time neighboring-chunk stitching without duplicate text, chapter leakage, or citation ambiguity |
-| P2 | Table-specific retrieval | Large tables gain optional row-level child records linked to their preserved parent table, with header propagation and table-focused relevance tests |
+| P2 | Table-specific retrieval | Large tables gain optional header-propagated cell/paragraph child records linked to their preserved parent table, with duplicate collapse and table-focused relevance tests |
 | P3 | Runtime decomposition | Process supervision and vector lifecycle move out of `rag.py` in separate failure-injected milestones while the compatibility facade remains stable |
 
 ## Completion rule

@@ -54,6 +54,7 @@ DEFAULT_OPERATION_TIMEOUT = 14400.0
 REPORT_SCHEMA_VERSION = 4
 _JUDGMENT_ID_FIELDS = ("chunk_id", "source_id")
 _ALLOWED_FILTER_FIELDS = ("content_type", "chapter_num")
+_REVIEW_STATUSES = frozenset({"approved", "draft_requires_corpus_owner"})
 _chunk_identity_cache: dict[str, tuple[tuple, str, dict]] = {}
 _query_snapshot_sha256: dict[str, str] = {}
 
@@ -149,6 +150,21 @@ def _validate_corpus_pin_coverage(queries: list[dict], *,
             "Corpus-pinned evaluation requires every query to declare the "
             "exact corpus SHA-256 and record count; incomplete query numbers: "
             + examples)
+
+
+def _validate_release_gate_review_status(queries: list[dict]) -> None:
+    """Prevent explicitly draft judgments from becoming release gates."""
+    draft_numbers = [
+        index for index, query in enumerate(queries, 1)
+        if query.get("review_status") == "draft_requires_corpus_owner"
+    ]
+    if draft_numbers:
+        examples = ", ".join(str(index) for index in draft_numbers[:3])
+        raise ValueError(
+            "Release thresholds cannot use judgments marked "
+            "'draft_requires_corpus_owner'; review and mark them 'approved' "
+            f"first (query numbers: {examples})"
+        )
 
 
 def _validate_judged_ids(queries: list[dict], records: list[dict],
@@ -431,6 +447,14 @@ def _validate_query(query: dict, *, label: str = "query") -> None:
         if value is not None and not _slice_slug(value):
             raise ValueError(
                 f"{label} '{field}' must contain an ASCII letter or number")
+
+    review_status = query.get("review_status")
+    if review_status is not None and (
+            not isinstance(review_status, str)
+            or review_status not in _REVIEW_STATUSES):
+        allowed = ", ".join(sorted(_REVIEW_STATUSES))
+        raise ValueError(
+            f"{label} 'review_status' must be one of: {allowed}")
 
     corpus = query.get("corpus")
     if corpus is not None:
@@ -1539,6 +1563,8 @@ def _main_with_args(args, parser: argparse.ArgumentParser) -> int:
         _query_snapshot_sha256.pop(query_cache_key, None)
         queries = load_queries(args.queries)
         args.queries_sha256 = _query_snapshot_sha256.get(query_cache_key)
+        if minimums or maximums or regressions:
+            _validate_release_gate_review_status(queries)
         _validate_corpus_pin_coverage(
             queries,
             required=(args.retriever == "bm25"
