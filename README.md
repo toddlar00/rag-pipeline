@@ -1717,8 +1717,8 @@ query-specific metadata filters. An abstention case intentionally has no
 positive judgment and succeeds only when the retriever returns no evidence:
 
 ```json
-{"query_id":"property-filter","query":"elements of adverse possession","subject":"Property","book":"Property Mini Corpus","tags":["filter"],"filters":{"content_type":"doctrine","chapter_num":2},"judgments":[{"chunk_id":"chunk_c0efee95e1e2bb5b","relevance":3}],"corpus":{"sha256":"177e9a2d4b9015c1bac083a2489d2f622281f623d649d9292ef67eda41a6154f","record_count":10}}
-{"query_id":"property-abstain","query":"unsupported lithium royalty percentage","subject":"Property","book":"Property Mini Corpus","tags":["abstention","adversarial"],"expected_abstain":true,"corpus":{"sha256":"177e9a2d4b9015c1bac083a2489d2f622281f623d649d9292ef67eda41a6154f","record_count":10}}
+{"query_id":"property-filter","query":"elements of adverse possession","subject":"Property","book":"Property Mini Corpus","tags":["filter"],"filters":{"content_type":"doctrine","chapter_num":2},"judgments":[{"chunk_id":"chunk_c0efee95e1e2bb5b","relevance":3}],"corpus":{"sha256":"606ea787c06e32b8b0a8b0e31a96900c5e2996839e8ed384cda291e0693776a8","record_count":11}}
+{"query_id":"property-abstain","query":"unsupported lithium royalty percentage","subject":"Property","book":"Property Mini Corpus","tags":["abstention","adversarial"],"expected_abstain":true,"corpus":{"sha256":"606ea787c06e32b8b0a8b0e31a96900c5e2996839e8ed384cda291e0693776a8","record_count":11}}
 ```
 
 Allowed filters are `content_type` and `chapter_num`. Reports aggregate tagged,
@@ -1730,10 +1730,48 @@ subject, book, and difficulty slices under metric names such as
 Optional `grounding_case` fixtures pass an authored candidate answer through the
 deterministic citation/quotation policy without calling an LLM. Their
 `grounding_accuracy` measures policy-fixture behavior only—not model answer
-quality. The checked-in cases cover an unknown source citation, an uncited
-answer, and an unsupported direct quotation. Every slice metric is accompanied
-by its own `/num_queries` denominator plus a slice-level `total_queries`, so a
-mixed relevance/abstention tag cannot imply that every metric used every case.
+quality. Legacy fixtures cover an unknown source citation. Schema-v2 fixtures
+add ordered, human-reviewed claim labels: each non-empty answer line is one
+explicit `answer_unit`, and `entailed_by` names the exhaustive set of stable
+chunk IDs allowed to support it plus an anchor that must occur in the
+model-visible excerpt. An empty `entailed_by` labels an unsupported claim.
+These labels are corpus-pinned and must declare `review_status` as either
+`approved` or `draft_requires_corpus_owner`. Any CLI run containing a schema-v2
+case requires every query to declare the exact corpus SHA-256 and record count,
+including exploratory runs against a live index.
+
+```json
+{"schema_version":2,"case_type":"supported_claim","answer":"A later purchaser must take without notice and record first [S1].","expected_abstained":false,"claim_judgments":[{"claim_id":"race-notice-elements","answer_unit":"A later purchaser must take without notice and record first [S1].","entailed_by":[{"source_id":"chunk_0b7678dcd47185e0","excerpt_contains":"taking without notice of the earlier interest and recording before the earlier claimant"}]}]}
+```
+
+The evaluator resolves query-local `S#` citations back to stable IDs and emits
+micro-averaged `claim_citation_entailment_accuracy`,
+`unsupported_claim_rate`, and `answer_abstention_accuracy`. It reports exact
+claim/case denominators globally and per slice, rather than averaging cases
+that contain different numbers of claims. `grounding_accuracy` remains the
+backward-compatible case composite, so a perfect value now requires the
+structural citation checks, every supported claim, no exposed unsupported
+claim, the expected answer-abstention behavior, and any prompt-envelope check
+to pass.
+
+The checked-in CC0 suites include accepted supported answers as well as
+withheld uncited, unknown-citation, and unsupported-quotation answers; an
+always-abstaining implementation therefore cannot pass. Each subject also has
+a source containing delimiter, role, question, sentinel, and fake-citation
+strings. `prompt_injection_fixture_accuracy` reconstructs the answer prompt,
+parses every exact one-line JSON source envelope, confirms the declared marker
+never escaped its untrusted payload, and also requires the authored answer to
+meet its expected abstention and claim labels. This is a serialization and
+policy fixture, not evidence that a live model resists prompt injection or a
+general semantic-entailment detector. Runtime quotation validation additionally
+requires a quote to occur in evidence cited by that quote's own paragraph.
+Source JSON escapes newline, next-line, and Unicode paragraph/line-separator
+characters so adversarial source text cannot create a second envelope line.
+
+Every ordinary slice metric is accompanied by its `/num_queries` denominator
+plus a slice-level `total_queries`. Claim metrics additionally include
+`/num_claims`, while answer and prompt metrics include `/num_cases`, so a mixed
+slice cannot imply that every metric used every case.
 
 ```bash
 # Single config with custom cutoffs and a detailed JSON report
@@ -1772,7 +1810,11 @@ python eval.py \
   --baseline-report evaluation/baselines/property-bm25.json \
   --fail-under ndcg@3=0.95 \
   --fail-under abstention_accuracy=1 \
+  --fail-under claim_citation_entailment_accuracy=1 \
+  --fail-under answer_abstention_accuracy=1 \
+  --fail-under prompt_injection_fixture_accuracy=1 \
   --fail-over false_answer_rate=0 \
+  --fail-over unsupported_claim_rate=0 \
   --max-regression ndcg@3=0
 ```
 
@@ -1795,11 +1837,22 @@ All query schemas report Success@k, MRR, and optional top-result type accuracy.
 Queries with explicit judgments additionally report Recall@k, nDCG@k, and MAP;
 those judged metrics are averaged only across judged queries. Detailed JSON
 reports contain a schema version, retrieval configuration, aggregate metrics,
-and per-query ranked-result identities and relevance matches. Schema v4 also
-records per-query plus p50/p95/max retrieval latency, sampled process RSS,
-Python `tracemalloc` peak, and bounded index/storage byte counts. RSS is sampled
+and per-query ranked-result identities and relevance matches. Schema v5 also
+binds grounding-scorer version 2 and records the claim-level metrics above.
+It retains schema v4's per-query retrieval latency plus p50/p95/max summaries,
+sampled process RSS, Python `tracemalloc` peak, and bounded index/storage byte
+counts. RSS is sampled
 rather than a continuous peak, and `tracemalloc` excludes native allocations;
 the report records both measurement methods.
+
+Safety rates are serialized without three-decimal rounding so a single unsafe
+answer in a large suite cannot become `0.0` (or a falsely perfect `1.0`) before
+`--fail-under` or `--fail-over` is applied. Ranking metrics retain their compact
+three-decimal report format. For schema-v2 suites, a
+`--fail-under grounding_accuracy=1` release gate automatically expands to the
+applicable named claim-entailment, unsupported-claim, answer-abstention, and
+prompt-injection gates. Missing component metrics therefore fail closed even if
+an older CI command names only the backward-compatible composite.
 
 Summary detail is the default: query text, source previews, raw stable/source
 IDs, local manifest paths, and storage paths are omitted or hashed so CI
@@ -1926,7 +1979,7 @@ lock where applicable; absolute local manifest paths are intentionally excluded
 from compatibility checks.
 
 CI runs both checked-in offline suites, enforces absolute and zero-tolerance
-baseline gates, and retains the redacted schema-v4 JSON reports for 30 days as
+baseline gates, and retains the redacted schema-v5 JSON reports for 30 days as
 the `offline-retrieval-evaluation` artifact. The repository's
 `eval_queries.jsonl` remains a ten-query keyword starter set, while
 `eval_queries_judged.jsonl` is the 24-query private Civil Procedure calibration.

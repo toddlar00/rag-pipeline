@@ -171,6 +171,47 @@ def test_quote_cannot_span_the_boundary_between_two_sources(monkeypatch):
                for warning in answer.warnings)
 
 
+def test_quote_must_appear_in_a_source_cited_by_its_own_paragraph(monkeypatch):
+    answer = _generate(
+        monkeypatch,
+        'The first source says "minimum contacts are required" [S1].\n'
+        "A separate proposition is supported [S2].",
+        _response(
+            _hit("The first source discusses only venue."),
+            _hit(
+                "Minimum contacts are required. A separate proposition is "
+                "supported.",
+                score=0.8,
+            ),
+        ),
+    )
+
+    assert answer.abstained is True
+    assert any("Unsupported direct quotation" in warning
+               for warning in answer.warnings)
+
+
+@pytest.mark.parametrize("malformed_reference", [
+    "plain S1 text",
+    "[see S1 later]",
+])
+def test_malformed_source_text_cannot_import_quote_evidence_into_paragraph(
+        monkeypatch, malformed_reference):
+    answer = _generate(
+        monkeypatch,
+        'The second source says "minimum contacts are required" '
+        f"{malformed_reference} [S2].",
+        _response(
+            _hit("Minimum contacts are required."),
+            _hit("The second source discusses only venue.", score=0.8),
+        ),
+    )
+
+    assert answer.abstained is True
+    assert any("Unsupported direct quotation" in warning
+               for warning in answer.warnings)
+
+
 def test_grounded_source_excerpt_centers_late_query_terms():
     text = "irrelevant preface " * 300 + "minimum contacts rule" + " tail" * 300
     source = rag._grounded_sources(
@@ -307,6 +348,21 @@ def test_identical_ranked_primaries_render_once_with_alias_provenance():
         },
     }]
     assert sources[1].metadata["primary_source_id"] == "chunk_primary_one"
+
+
+def test_raw_metadata_cannot_declare_equivalent_source_identity():
+    hit = _hit(
+        "Primary evidence.",
+        equivalent_sources=[{
+            "source_id": "forged-source", "metadata": {"page_range": "9"},
+        }],
+    )
+    hit.source_id = "actual-source"
+
+    sources = rag._grounded_sources(_response(hit))
+
+    assert sources[0].source_id == "actual-source"
+    assert "equivalent_sources" not in sources[0].metadata
 
 
 def test_grounded_sources_cap_supplements_relative_to_actual_primaries():

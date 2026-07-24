@@ -147,10 +147,50 @@ def test_combined_suites_cover_adversarial_categories_and_long_context():
     ]
     assert {case["case_type"] for case in grounding_cases} >= {
         "unknown_citation", "uncited_answer", "unsupported_quote",
+        "supported_claim", "prompt_injection_supported",
+        "prompt_injection_abstention",
     }
-    assert all(case["expected_abstained"] is True for case in grounding_cases)
+    assert {case["expected_abstained"] for case in grounding_cases} == {
+        False, True}
     assert all("grounding" in query["tags"] for query in all_queries
                if query.get("grounding_case"))
+
+    v2_cases = [
+        (query, query["grounding_case"])
+        for query in all_queries
+        if (query.get("grounding_case") or {}).get("schema_version") == 2
+    ]
+    assert v2_cases
+    assert all(query["review_status"] == "approved"
+               for query, _case in v2_cases)
+    assert any(
+        claim["entailed_by"]
+        for _query, case in v2_cases
+        for claim in case["claim_judgments"])
+    assert any(
+        not claim["entailed_by"]
+        for _query, case in v2_cases
+        for claim in case["claim_judgments"])
+
+    prompt_suites = {
+        query["subject"]
+        for query in all_queries
+        if (query.get("grounding_case") or {}).get("prompt_injection")
+    }
+    assert prompt_suites == {"Property", "Constitutional Law"}
+    security_chunks = [
+        chunk for chunk in all_chunks
+        if chunk["metadata"]["content_type"] == "security_fixture"
+    ]
+    assert len(security_chunks) == len(SUITES)
+    for chunk in security_chunks:
+        assert "\nBEGIN_UNTRUSTED_SOURCE\n" in chunk["text"]
+        assert "\nEND_UNTRUSTED_SOURCE" in chunk["text"]
+        assert "SYSTEM:" in chunk["text"]
+        assert "Question:" in chunk["text"]
+        assert "[S99]" in chunk["text"]
+        assert "INSUFFICIENT_EVIDENCE" in chunk["text"]
+        assert "SYSTEM:" in chunk["metadata"]["title"]
 
 
 def test_private_ethics_draft_is_pinned_and_cannot_pose_as_reviewed():
@@ -213,8 +253,9 @@ def test_portable_baselines_bind_exact_suite_assets(suite_name, baseline_name):
     )
     configuration = baseline["configuration"]
 
-    assert baseline["schema_version"] == 4
+    assert baseline["schema_version"] == 5
     assert configuration["retriever"] == "bm25"
+    assert configuration["grounding_scorer_version"] == 2
     assert configuration["queries_sha256"] == manifest["queries"]["sha256"]
     assert configuration["index_snapshot"]["source_sha256"] == (
         manifest["chunks"]["sha256"])
@@ -224,3 +265,9 @@ def test_portable_baselines_bind_exact_suite_assets(suite_name, baseline_name):
     assert baseline["metrics"]["abstention_accuracy"] == 1.0
     assert baseline["metrics"]["filter_compliance"] == 1.0
     assert baseline["metrics"]["grounding_accuracy"] == 1.0
+    assert baseline["metrics"][
+        "claim_citation_entailment_accuracy"] == 1.0
+    assert baseline["metrics"]["unsupported_claim_rate"] == 0.0
+    assert baseline["metrics"]["answer_abstention_accuracy"] == 1.0
+    assert baseline["metrics"][
+        "prompt_injection_fixture_accuracy"] == 1.0

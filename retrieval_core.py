@@ -879,6 +879,24 @@ _DIRECT_QUOTE_RE = re.compile(
 _THINK_TAG_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
 
 
+def _valid_source_citation_ids(text: str) -> list[str]:
+    """Return only source IDs from syntactically accepted bracket groups."""
+    citation_ids = []
+    for match in _BRACKETED_TEXT_RE.finditer(text):
+        content = match.group(1)
+        raw_ids = _SOURCE_CITATION_RE.findall(content)
+        if not raw_ids:
+            continue
+        remainder = _SOURCE_CITATION_RE.sub("", content)
+        if remainder.strip(" \t,;:&/-"):
+            continue
+        for raw_id in raw_ids:
+            citation_id = raw_id.upper()
+            if citation_id not in citation_ids:
+                citation_ids.append(citation_id)
+    return citation_ids
+
+
 def _search_hit_source_id(
         hit: SearchHit, *, chunk_id_fn: Callable[[dict], str] = _chunk_id,
 ) -> str:
@@ -981,7 +999,13 @@ def _grounded_sources(
             aliases: list[ContextSourceAlias]
             | tuple[ContextSourceAlias, ...],
     ) -> dict[str, Any]:
-        result = dict(metadata)
+        # Alias provenance is trusted only after the backend adapter has
+        # materialized typed aliases. Raw metadata is source-controlled input
+        # and must not be able to forge another stable evidence identity.
+        result = {
+            key: value for key, value in metadata.items()
+            if key != "equivalent_sources"
+        }
         if aliases:
             result["equivalent_sources"] = [
                 {
@@ -1086,6 +1110,15 @@ def _grounded_sources(
     return sources
 
 
+def _one_line_json_payload(payload: dict[str, Any]) -> str:
+    """Serialize a prompt payload without literal Unicode line separators."""
+    return json.dumps(payload, ensure_ascii=False, default=str).translate({
+        ord("\u0085"): r"\u0085",
+        ord("\u2028"): r"\u2028",
+        ord("\u2029"): r"\u2029",
+    })
+
+
 def _grounded_answer_prompt(query: str,
                             sources: list[GroundedSource]) -> str:
     """Build an injection-resistant evidence prompt with explicit source IDs."""
@@ -1099,7 +1132,7 @@ def _grounded_answer_prompt(query: str,
         }
         source_blocks.append(
             "BEGIN_UNTRUSTED_SOURCE\n"
-            + json.dumps(payload, ensure_ascii=False, default=str)
+            + _one_line_json_payload(payload)
             + "\nEND_UNTRUSTED_SOURCE"
         )
 
@@ -1206,18 +1239,28 @@ def _validate_grounded_answer(raw_answer: str,
             citations=[], sources=sources, warnings=warnings, abstained=True,
         )
 
-    normalized_evidence = [
-        re.sub(r"\s+", " ", source.excerpt or source.text).casefold()
+    evidence_by_citation = {
+        source.citation_id: re.sub(
+            r"\s+", " ", source.excerpt or source.text).casefold()
         for source in sources if source.citation_id in citations
-    ]
+    }
     unsupported_quotes = []
-    for match in _DIRECT_QUOTE_RE.finditer(cleaned):
-        quoted_text = next(group for group in match.groups() if group is not None)
-        normalized_quote = re.sub(r"\s+", " ", quoted_text).strip().casefold()
-        if (normalized_quote
-                and not any(normalized_quote in evidence
-                            for evidence in normalized_evidence)):
-            unsupported_quotes.append(quoted_text.strip())
+    for paragraph in re.split(r"\n+", cleaned):
+        paragraph_citations = set(_valid_source_citation_ids(paragraph))
+        paragraph_evidence = [
+            evidence_by_citation[citation_id]
+            for citation_id in paragraph_citations
+            if citation_id in evidence_by_citation
+        ]
+        for match in _DIRECT_QUOTE_RE.finditer(paragraph):
+            quoted_text = next(
+                group for group in match.groups() if group is not None)
+            normalized_quote = re.sub(
+                r"\s+", " ", quoted_text).strip().casefold()
+            if (normalized_quote
+                    and not any(normalized_quote in evidence
+                                for evidence in paragraph_evidence)):
+                unsupported_quotes.append(quoted_text.strip())
     if unsupported_quotes:
         preview = unsupported_quotes[0]
         if len(preview) > 80:
