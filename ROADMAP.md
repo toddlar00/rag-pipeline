@@ -34,6 +34,7 @@ Status terms:
 | Process supervision extraction | Implemented (draft) | [PR #33](https://github.com/toddlar00/rag-pipeline/pull/33): deadline supervision, Windows/POSIX containment, startup gates, termination confirmation, and generic entrypoint policy moved to stdlib-only `process_supervision.py`; `rag.py` retains late-bound compatibility wrappers |
 | Vector-index lifecycle extraction | Implemented (draft) | [PR #38](https://github.com/toddlar00/rag-pipeline/pull/38): a standard-library-only policy layer owns deterministic reconciliation, dirty-marker ownership, mutation epochs, exact-ID verification, callback-reentry exclusion, legacy-hash repair, and close/manifest/marker commit ordering |
 | Cumulative release migration rehearsal | Implemented (draft) | [PR #39](https://github.com/toddlar00/rag-pipeline/pull/39): actual Chroma and Qdrant probes recreate the integrated schema-5 manifest, rebuild one exact collection to schema 8, preserve and query a sibling collection, verify the no-op path, and require immediate lock release |
+| Evidence-grounded answer evaluation | Implemented (draft) | [PR #40](https://github.com/toddlar00/rag-pipeline/pull/40): corpus-pinned claim judgments, exact citation-entailment and unsupported-claim metrics, abstention and prompt-envelope fixtures, fail-closed named release gates, runtime source-identity hardening, and schema-v5 redacted reports |
 | Exact LLM transport budget | Integrated | [PR #1](https://github.com/toddlar00/rag-pipeline/pull/1) |
 | Qdrant manifest reconciliation | Integrated | [PR #2](https://github.com/toddlar00/rag-pipeline/pull/2) |
 | Qdrant interrupted-update guard | Integrated | [PR #3](https://github.com/toddlar00/rag-pipeline/pull/3) |
@@ -521,13 +522,54 @@ all 15 exact-head checks pass across Linux and Windows, Python 3.10-3.14, the
 full locked CPU environment, local service, real Chroma/Qdrant migration,
 offline retrieval, and both supply-chain jobs.
 
+## Evidence-grounded answer evaluation milestone
+
+Schema-v2 grounding fixtures now label every authored answer line as one ordered
+claim. Supported claims name exhaustive stable source IDs plus text anchors that
+must occur in the exact model-visible corpus excerpt; empty support sets label
+claims that the runtime must withhold. Every v2 CLI run requires all queries to
+pin both a valid corpus SHA-256 and positive record count, and release gates
+reject judgments still marked for corpus-owner review. Sentinel answers must
+have no claims, citation-only denominator padding is invalid, and scorer version
+2 is part of strict baseline compatibility.
+
+Reports use micro-averaged `claim_citation_entailment_accuracy`,
+`unsupported_claim_rate`, `answer_abstention_accuracy`, and
+`prompt_injection_fixture_accuracy`, with exact claim/case and query
+denominators globally and per slice. Safety rates are not rounded before gating.
+The backward-compatible `grounding_accuracy=1` release shorthand expands into
+every named metric applicable to the suite, so missing or independently failing
+components fail closed without requiring a workflow-file change.
+
+The Property and Constitutional Law CC0 suites each add a pinned adversarial
+source plus positive and negative answer cases. The prompt fixture parses exact
+one-line JSON envelopes, pins the full instruction prefix, checks payload
+identity and marker ownership, and treats the expected safe answer outcome as
+part of the score. Runtime hardening prevents source-controlled raw metadata
+from forging an equivalent stable ID, scopes direct-quotation evidence to valid
+citations in the same paragraph, and escapes next-line plus Unicode line and
+paragraph separators inside source JSON. Summary reports hash claim and source
+identities. These deterministic fixtures validate serialization and citation
+policy; they do not claim that a live model is generally injection-resistant or
+perform open-ended semantic entailment.
+
+Both offline suites report perfect claim-entailment, answer-abstention, and
+prompt-fixture accuracy with zero exposed unsupported claims. The final local
+repository run passes 1,372 tests with 7 platform skips, plus both baselines,
+dependency/model-artifact policy, Ruff, Python compilation, and diff checks. An
+independent exploit-oriented audit reproduced each reported boundary and found
+no remaining material blocker. The stacked implementation is published as
+draft [PR #40](https://github.com/toddlar00/rag-pipeline/pull/40), based on the
+cumulative rehearsal in PR #39.
+
 ## Next improvement milestones
+
+The former P2 release rehearsal and P3 grounded-answer evaluation are now
+published as draft PRs #39 and #40. The remaining material priorities are:
 
 | Priority | Milestone | Acceptance evidence |
 |---|---|---|
 | P1 | Ethics retrieval calibration | A corpus-owner-reviewed judged set covers rule text, author explanation, cases, tables, cross-page continuations, filters, and abstention; dense, hybrid, and reranked modes receive explicit release thresholds |
-| P2 | Draft-stack integration and release rehearsal | The profile, context, table, and lifecycle branches are rebased or cumulatively integrated, their migration path is exercised from the last merged schema, and one exact-head release candidate passes the complete optional-client and policy matrix |
-| P3 | Evidence-grounded answer evaluation | Retrieval judgments expand into claim-level citation entailment, unsupported-claim and abstention scoring, adversarial prompt-injection fixtures, and explicit grounded-answer release thresholds |
 | P4 | Operational observability and recovery drills | Correlated telemetry measures stage latency, queue/backpressure, vector mutation counts, recovery time, and cancellation outcomes; hard-kill and synced-folder fault drills produce durable redacted reports |
 
 ## Completion rule
