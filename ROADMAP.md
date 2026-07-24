@@ -517,7 +517,9 @@ policy, and diff checks. The full-collection pause and private local-client
 detector are explicit temporary compatibility costs to retire when a pinned
 Qdrant release closes every cursor. The complete candidate is published against
 `main` as draft [PR #39](https://github.com/toddlar00/rag-pipeline/pull/39);
-exact-head CI remains.
+all 15 exact-head checks pass across Linux and Windows, Python 3.10-3.14, the
+full locked CPU environment, local service, real Chroma/Qdrant migration,
+offline retrieval, and both supply-chain jobs.
 
 ## Next improvement milestones
 
