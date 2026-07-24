@@ -9,12 +9,13 @@ import re
 import sys
 from pathlib import Path
 
+import evaluation_contract
 import evaluation_review
 import model_artifacts
 import retrieval_core
 
 
-RELEASE_POLICY_SCHEMA_VERSION = 1
+RELEASE_POLICY_SCHEMA_VERSION = 2
 MAX_RELEASE_POLICY_BYTES = 256 * 1024
 RELEASE_MODES = (
     "vector",
@@ -63,7 +64,9 @@ _CONFLICTING_EVAL_OPTIONS = frozenset({
 
 def _exact_fields(value: object, expected: set[str], *, label: str) -> dict:
     if not isinstance(value, dict) or set(value) != expected:
-        raise ValueError(f"{label} fields do not match release-policy schema v1")
+        raise ValueError(
+            f"{label} fields do not match release-policy schema "
+            f"v{RELEASE_POLICY_SCHEMA_VERSION}")
     return value
 
 
@@ -102,10 +105,11 @@ def _thresholds(value: object, *, label: str, expected: frozenset[str]) -> dict:
 
 
 def validate_release_policy(policy: object) -> dict:
-    """Validate and normalize one exact schema-v1 release policy."""
+    """Validate and normalize one exact current release policy."""
     policy = _exact_fields(policy, {
         "schema_version", "kind", "status", "policy_id", "queries",
-        "corpus", "review", "model_artifacts", "configuration", "modes",
+        "corpus", "review", "model_artifacts", "scoring", "configuration",
+        "modes",
     }, label="release policy")
     schema_version = policy.get("schema_version")
     if (isinstance(schema_version, bool)
@@ -113,7 +117,9 @@ def validate_release_policy(policy: object) -> dict:
             or schema_version != RELEASE_POLICY_SCHEMA_VERSION
             or policy.get("kind") != "retrieval_release_policy"
             or policy.get("status") != "approved"):
-        raise ValueError("release policy header must be approved schema v1")
+        raise ValueError(
+            "release policy header must be approved schema "
+            f"v{RELEASE_POLICY_SCHEMA_VERSION}")
     policy_id = policy.get("policy_id")
     if not isinstance(policy_id, str) or _POLICY_ID_RE.fullmatch(policy_id) is None:
         raise ValueError("release policy ID must be a portable lowercase slug")
@@ -148,6 +154,29 @@ def validate_release_policy(policy: object) -> dict:
     _digest(
         model_policy.get("lock_sha256"),
         label="release policy model-artifact lock SHA-256")
+
+    scoring = _exact_fields(policy.get("scoring"), {
+        "report_schema_version", "grounding_scorer_version",
+        "judgment_scorer_version", "table_family_judgment_schema_version",
+        "table_retrieval_policy",
+    }, label="release policy scoring")
+    integer_fields = (
+        "report_schema_version", "grounding_scorer_version",
+        "judgment_scorer_version", "table_family_judgment_schema_version",
+    )
+    if any(type(scoring.get(field)) is not int for field in integer_fields):
+        raise ValueError("release policy scoring versions must be integers")
+    table_policy = _exact_fields(scoring.get("table_retrieval_policy"), {
+        "schema_version", "minimum_source_rows", "max_children_per_parent",
+        "max_children_per_corpus", "collapse_version",
+    }, label="release policy table retrieval policy")
+    if any(type(value) is not int for value in table_policy.values()):
+        raise ValueError("release policy table retrieval values must be integers")
+    expected_scoring = evaluation_contract.scoring_contract()
+    if scoring != expected_scoring:
+        raise ValueError(
+            "release policy scoring contract is incompatible with this "
+            "evaluator")
 
     configuration = _exact_fields(policy.get("configuration"), {
         "embedding_model", "db_backend", "reranker_model", "k_values",

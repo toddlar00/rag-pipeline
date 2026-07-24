@@ -1766,6 +1766,23 @@ query must contain at least one positive judgment.
 `stable_id` and `source_file` returned by existing indexes are accepted as
 compatibility aliases when matching results.
 
+When row-level table retrieval is enabled, a reviewed schema-v1 `table_family`
+may list the exact child rows that also satisfy one canonical parent judgment:
+
+```json
+{"chunk_id":"chunk_parent","relevance":3,"table_family":{"schema_version":1,"accepted_child_chunk_ids":["chunk_answer_row"]}}
+```
+
+The parent or any listed child earns one positive parent grade exactly once; a
+zero-relevance judgment cannot declare family aliases. An unlisted
+sibling, unrelated table, repeated family hit, or result that merely claims the
+same parent in backend metadata earns no credit. Child IDs must be sorted and
+unique, belong to the parent's fully attested family in the pinned chunks
+artifact, and be included in corpus-owner review. A family-bearing suite must
+pin every query to the same exact corpus SHA-256 and record count.
+[The table-family evaluation ADR](docs/architecture/decisions/table-family-evaluation.md)
+records the rejected blanket-alias alternatives and version migration.
+
 Judged sets may also declare subject/book labels, repeatable slice tags, and
 query-specific metadata filters. An abstention case intentionally has no
 positive judgment and succeeds only when the retriever returns no evidence:
@@ -1891,9 +1908,11 @@ All query schemas report Success@k, MRR, and optional top-result type accuracy.
 Queries with explicit judgments additionally report Recall@k, nDCG@k, and MAP;
 those judged metrics are averaged only across judged queries. Detailed JSON
 reports contain a schema version, retrieval configuration, aggregate metrics,
-and per-query ranked-result identities and relevance matches. Schema v5 also
-binds grounding-scorer version 2 and records the claim-level metrics above.
-It retains schema v4's per-query retrieval latency plus p50/p95/max summaries,
+and per-query ranked-result identities and relevance matches. Schema v6 binds
+grounding-scorer version 2, judgment-scorer version 2, the table-family
+judgment and retrieval/collapse policies, and the configured context budgets.
+It retains schema v5's claim-level metrics and schema v4's per-query retrieval
+latency plus p50/p95/max summaries,
 sampled process RSS, Python `tracemalloc` peak, and bounded index/storage byte
 counts. RSS is sampled
 rather than a continuous peak, and `tracemalloc` excludes native allocations;
@@ -2029,12 +2048,13 @@ reviewer label. This is a provenance attestation, not an identity signature, so
 a durable human PR review is still required. Receipt-bound queries cannot use
 release thresholds without `--review-receipt`.
 
-After review, create one approved schema-v1 release policy. The policy binds the
+After review, create one approved schema-v2 release policy. The policy binds the
 query set, corpus, review receipt, model-artifact lock, retrieval parameters,
-and explicit Success@3, Recall@10, nDCG@10, MAP, abstention, filter, and
-false-answer thresholds for all four modes. It deliberately owns those CLI
-settings, so ambiguous manual overrides are rejected. Run each mode separately
-to retain a schema-v5 single-run gate report:
+scorer/report versions, table generation and family-collapse semantics, and
+explicit Success@3, Recall@10, nDCG@10, MAP, abstention, filter, and false-answer
+thresholds for all four modes. It deliberately owns those CLI settings, so
+ambiguous manual overrides are rejected. Run each mode separately to retain a
+schema-v6 single-run gate report:
 
 ```bash
 python eval.py \
@@ -2061,7 +2081,7 @@ python eval.py \
   --json-report evaluation-reports/ethics-draft-compare.json
 ```
 
-The current schema-v5 clean-room diagnostic, against corpus SHA-256
+The archived pre-family schema-v5 clean-room diagnostic, against corpus SHA-256
 `a56f145f09a6c97efac1ad622e478a735b9f23fb1d48d4807ae89edd4fd7a790`,
 produced the following non-gating results. The
 page-542 rule-specific query ranked its table first; the calculation query
@@ -2117,7 +2137,7 @@ lock where applicable; absolute local manifest paths are intentionally excluded
 from compatibility checks.
 
 CI runs both checked-in offline suites, enforces absolute and zero-tolerance
-baseline gates, and retains the redacted schema-v5 JSON reports for 30 days as
+baseline gates, and retains the redacted schema-v6 JSON reports for 30 days as
 the `offline-retrieval-evaluation` artifact. The repository's
 `eval_queries.jsonl` remains a ten-query keyword starter set, while
 `eval_queries_judged.jsonl` is the 24-query private Civil Procedure calibration.
@@ -2392,6 +2412,7 @@ model-artifact-policy.json # Reviewed models, consumers, files, code, and licens
 model-artifacts.lock.json # Immutable revisions and per-file raw SHA-256 inventory
 preprocess_pdf.py       # Standalone PDF preprocessing CLI facade
 eval.py                 # Relevance/safety evaluation, gates, and reports
+evaluation_contract.py  # Shared report/scorer/table-policy version contract
 evaluation_review.py    # Private owner-review packets and portable receipts
 evaluation_release.py   # Strict four-mode retrieval release-policy contract
 evaluation_metrics.py   # Latency, memory, storage, usage, and cost measurements

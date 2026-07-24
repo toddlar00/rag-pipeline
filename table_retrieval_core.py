@@ -17,6 +17,7 @@ from typing import Any
 
 
 TABLE_RETRIEVAL_SCHEMA_VERSION = 1
+TABLE_FAMILY_COLLAPSE_VERSION = 1
 TABLE_PARENT_ROLE = "table_parent"
 TABLE_CHILD_ROLE = "table_child"
 DEFAULT_TABLE_CHILD_MIN_ROWS = 4
@@ -400,6 +401,7 @@ def _table_retrieval_summary(
     parent_tables = 0
     expanded_parents = 0
     child_chunks = 0
+    child_record_indexes = []
     seen_child = False
 
     for index, (record, stable_id) in enumerate(zip(records, stable_ids)):
@@ -480,6 +482,9 @@ def _table_retrieval_summary(
         child_count = metadata.get("table_child_count")
         if not _is_positive_int(child_count):
             _add_issue(issues, "invalid_child_count", index)
+        elif child_count > MAX_TABLE_CHILDREN_PER_PARENT:
+            _add_issue(
+                issues, "declared_child_count_exceeds_parent_cap", index)
         if role == TABLE_PARENT_ROLE:
             parent_tables += 1
             expanded_parents += 1
@@ -500,6 +505,7 @@ def _table_retrieval_summary(
                     _add_issue(issues, "parent_table_cols_mismatch", index)
         else:
             child_chunks += 1
+            child_record_indexes.append(index)
             if not _is_nonnegative_int(metadata.get("table_child_index")):
                 _add_issue(issues, "invalid_child_index", index)
             child_table = _parse_markdown_table(
@@ -518,6 +524,9 @@ def _table_retrieval_summary(
                 "table_source_row_count", "table_source_fragment_count"):
             if not _is_positive_int(metadata.get(field)):
                 _add_issue(issues, f"invalid_{field}", index)
+
+    for index in child_record_indexes[MAX_TABLE_CHILDREN_PER_CORPUS:]:
+        _add_issue(issues, "corpus_child_count_exceeds_cap", index)
 
     for indexes in fragment_identity_groups.values():
         occurrences = [
@@ -592,6 +601,10 @@ def _table_retrieval_summary(
     for _parent_id, family in sorted(families.items()):
         parents = family["parents"]
         children = family["children"]
+        if len(children) > MAX_TABLE_CHILDREN_PER_PARENT:
+            for index in (parents or children[:1]):
+                _add_issue(
+                    issues, "family_child_count_exceeds_parent_cap", index)
         if len(parents) != 1:
             for index in parents + children:
                 _add_issue(
@@ -644,6 +657,43 @@ def _table_retrieval_summary(
         "issues": {
             key: sorted(set(indexes)) for key, indexes in sorted(issues.items())
         },
+    }
+
+
+def validated_table_family_members(
+        records: Sequence[dict], *, stable_id_fn: Callable[[dict], str],
+) -> dict[str, frozenset[str]]:
+    """Return attested parent/member IDs for every complete table family.
+
+    Evaluation callers must not infer family equivalence from a retrieved
+    result's metadata: a backend payload can be stale or malformed, and lineage
+    alone cannot say which sibling row answers a particular query.  This helper
+    first recomputes the complete corpus-level family contract, then returns the
+    members that a separately reviewed judgment may select explicitly.
+    """
+    stable_ids = tuple(stable_id_fn(record) for record in records)
+    if (any(not isinstance(value, str) or not value for value in stable_ids)
+            or len(set(stable_ids)) != len(stable_ids)):
+        raise ValueError("table-family validation requires unique stable IDs")
+    summary = _table_retrieval_summary(records, stable_ids=stable_ids)
+    if summary["issues"]:
+        issue_names = ", ".join(summary["issues"])
+        raise ValueError(
+            "table-family metadata fails corpus attestation: " + issue_names)
+
+    families: defaultdict[str, set[str]] = defaultdict(set)
+    for record, stable_id in zip(records, stable_ids):
+        metadata = record.get("metadata")
+        if not isinstance(metadata, dict):
+            continue
+        role = metadata.get("retrieval_role")
+        if role not in {TABLE_PARENT_ROLE, TABLE_CHILD_ROLE}:
+            continue
+        parent_id = metadata["table_parent_stable_id"]
+        families[parent_id].add(stable_id)
+    return {
+        parent_id: frozenset(member_ids)
+        for parent_id, member_ids in sorted(families.items())
     }
 
 

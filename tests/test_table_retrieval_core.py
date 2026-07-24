@@ -144,6 +144,66 @@ def test_expansion_preserves_parent_and_assigns_unique_child_citations():
     assert stable_ids[1] != stable_ids[3]
 
 
+def test_validated_table_family_members_fail_closed_on_incomplete_lineage():
+    expanded = tables.expand_table_records(
+        [_table_record(_large_table())],
+        stable_id_fn=retrieval_core._chunk_id,
+        token_count_fn=lambda value: len(value.split()),
+    )
+    parent_id = retrieval_core._chunk_id(expanded[0])
+    child_ids = {
+        retrieval_core._chunk_id(record) for record in expanded[1:]
+    }
+
+    members = tables.validated_table_family_members(
+        expanded, stable_id_fn=retrieval_core._chunk_id)
+
+    assert members == {parent_id: frozenset({parent_id, *child_ids})}
+    tampered = copy.deepcopy(expanded)
+    tampered[-1]["metadata"]["table_child_count"] = 3
+    with pytest.raises(ValueError, match="corpus attestation"):
+        tables.validated_table_family_members(
+            tampered, stable_id_fn=retrieval_core._chunk_id)
+
+
+def test_table_family_attestation_independently_enforces_child_caps(monkeypatch):
+    first = _table_record(_large_table())
+    second = _table_record(_large_table())
+    second["metadata"]["chunk_index"] = 1
+    second["metadata"]["source_items"][0]["ref"] = "#/tables/1"
+    expanded = tables.expand_table_records(
+        [first, second], stable_id_fn=retrieval_core._chunk_id,
+        token_count_fn=lambda value: len(value.split()),
+    )
+    stable_ids = retrieval_core._attach_retrieval_linkage(expanded)
+
+    monkeypatch.setattr(tables, "MAX_TABLE_CHILDREN_PER_PARENT", 4)
+    monkeypatch.setattr(tables, "MAX_TABLE_CHILDREN_PER_CORPUS", 8)
+    assert tables._table_retrieval_summary(
+        expanded, stable_ids=stable_ids)["issues"] == {}
+
+    monkeypatch.setattr(tables, "MAX_TABLE_CHILDREN_PER_PARENT", 3)
+    parent_overflow = tables._table_retrieval_summary(
+        expanded, stable_ids=stable_ids)
+    assert parent_overflow["issues"][
+        "family_child_count_exceeds_parent_cap"] == [0, 1]
+    assert parent_overflow["issues"][
+        "declared_child_count_exceeds_parent_cap"] == list(range(10))
+    with pytest.raises(ValueError, match="corpus attestation"):
+        tables.validated_table_family_members(
+            expanded, stable_id_fn=retrieval_core._chunk_id)
+
+    monkeypatch.setattr(tables, "MAX_TABLE_CHILDREN_PER_PARENT", 4)
+    monkeypatch.setattr(tables, "MAX_TABLE_CHILDREN_PER_CORPUS", 7)
+    corpus_overflow = tables._table_retrieval_summary(
+        expanded, stable_ids=stable_ids)
+    assert corpus_overflow["issues"][
+        "corpus_child_count_exceeds_cap"] == [9]
+    with pytest.raises(ValueError, match="corpus attestation"):
+        tables.validated_table_family_members(
+            expanded, stable_id_fn=retrieval_core._chunk_id)
+
+
 def test_continued_source_table_qualifies_across_all_fragments():
     fragments = [
         _table_record(

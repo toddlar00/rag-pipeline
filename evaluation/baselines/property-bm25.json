@@ -1,10 +1,19 @@
 {
-  "schema_version": 5,
+  "schema_version": 6,
   "mode": "single",
   "description": "Deterministic offline lexical baseline; not a dense-retrieval calibration.",
   "configuration": {
     "retriever": "bm25",
     "grounding_scorer_version": 2,
+    "judgment_scorer_version": 2,
+    "table_family_judgment_schema_version": 1,
+    "table_retrieval_policy": {
+      "schema_version": 1,
+      "minimum_source_rows": 4,
+      "max_children_per_parent": 128,
+      "max_children_per_corpus": 10000,
+      "collapse_version": 1
+    },
     "model_artifact_lock_sha256": null,
     "k_values": [1, 3, 5],
     "retrieval_depth": 10,
@@ -13,6 +22,7 @@
       "source_sha256": "606ea787c06e32b8b0a8b0e31a96900c5e2996839e8ed384cda291e0693776a8",
       "source_record_count": 11,
       "record_count": 11,
+      "table_child_count": 0,
       "id_scheme": "retrieval_core._chunk_id",
       "retriever_implementation": "offline_retrieval.OfflineBM25Index/v2",
       "scoring": "BM25 Okapi with non-negative Robertson IDF",
@@ -20,7 +30,10 @@
       "stop_words_sha256": "0ea48becd93d2fca663ea0f82865f254488b0ff9a61e91e434dc2e2565a09a6f"
     },
     "use_reranker": false,
-    "hybrid": false
+    "hybrid": false,
+    "context_window": 0,
+    "context_max_characters": 8000,
+    "context_segment_characters": 1600
   },
   "metrics": {
     "success@1": 1.0,

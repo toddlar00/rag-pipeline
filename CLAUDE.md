@@ -82,8 +82,10 @@ Current policy/runtime modules include:
 - `attempt_reporting`, `operational_metrics`, `operational_drills`,
   `run_telemetry`, `storage_policy`, and `retention` — durable redacted
   operational evidence and private artifact lifecycle policy.
-- `evaluation_metrics`, `evaluation_review`, and `evaluation_release` —
-  retrieval/grounding metrics and review-bound evaluation promotion.
+- `evaluation_contract`, `evaluation_metrics`, `evaluation_review`, and
+  `evaluation_release` — versioned retrieval/grounding semantics, metrics, and
+  review-bound evaluation promotion. See the
+  [table-family evaluation ADR](docs/architecture/decisions/table-family-evaluation.md).
 - `llm_adapters`, `llm_runtime`, and `model_artifacts` — provider-neutral LLM
   transport plus locked model-artifact verification.
 

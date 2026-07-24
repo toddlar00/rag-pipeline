@@ -45,6 +45,7 @@ def _content_tokens(text: str) -> list[str]:
 class OfflineIndexSnapshot:
     source_sha256: str
     source_record_count: int
+    table_child_count: int
     stable_ids: tuple[str, ...]
 
     def as_report_dict(self) -> dict:
@@ -52,6 +53,7 @@ class OfflineIndexSnapshot:
             "source_sha256": self.source_sha256,
             "source_record_count": self.source_record_count,
             "record_count": self.source_record_count,
+            "table_child_count": self.table_child_count,
             "id_scheme": "retrieval_core._chunk_id",
             "retriever_implementation": (
                 f"offline_retrieval.OfflineBM25Index/v{OFFLINE_RETRIEVER_VERSION}"),
@@ -74,6 +76,7 @@ class OfflineBM25Index:
         self.snapshot = OfflineIndexSnapshot(
             source_sha256=source_sha256,
             source_record_count=len(records),
+            table_child_count=table_retrieval_core.table_child_count(records),
             stable_ids=self.stable_ids,
         )
         self._tokens = tuple(

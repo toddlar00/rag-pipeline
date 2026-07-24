@@ -27,7 +27,7 @@ def _policy(*, queries_sha256="a" * 64, corpus_sha256="b" * 64):
             "maximums": {"false_answer_rate": 0.0},
         }
     return {
-        "schema_version": 1,
+        "schema_version": evaluation_release.RELEASE_POLICY_SCHEMA_VERSION,
         "kind": "retrieval_release_policy",
         "status": "approved",
         "policy_id": "ethics-v1",
@@ -43,6 +43,17 @@ def _policy(*, queries_sha256="a" * 64, corpus_sha256="b" * 64):
         },
         "model_artifacts": {
             "lock_sha256": model_artifacts.model_artifact_lock_sha256(),
+        },
+        "scoring": {
+            "report_schema_version": retrieval_eval.REPORT_SCHEMA_VERSION,
+            "grounding_scorer_version": (
+                retrieval_eval.GROUNDING_SCORER_VERSION),
+            "judgment_scorer_version": (
+                retrieval_eval.JUDGMENT_SCORER_VERSION),
+            "table_family_judgment_schema_version": (
+                retrieval_eval.TABLE_FAMILY_JUDGMENT_SCHEMA_VERSION),
+            "table_retrieval_policy": (
+                retrieval_eval._table_retrieval_policy_contract()),
         },
         "configuration": {
             "embedding_model": "nomic-ai/nomic-embed-text-v2-moe",
@@ -74,7 +85,8 @@ def test_release_policy_requires_exact_four_mode_threshold_contract(tmp_path):
     policy, binding = evaluation_release.load_release_policy(policy_path)
 
     assert binding["policy_id"] == "ethics-v1"
-    assert binding["schema_version"] == 1
+    assert binding["schema_version"] == (
+        evaluation_release.RELEASE_POLICY_SCHEMA_VERSION)
     assert set(policy["modes"]) == set(evaluation_release.RELEASE_MODES)
     assert all(
         set(mode["minimums"]) == evaluation_release.REQUIRED_MINIMUMS
@@ -103,6 +115,10 @@ def test_release_policy_requires_exact_four_mode_threshold_contract(tmp_path):
      "k_values"),
     (lambda value: value["configuration"].update(dense_weight=float("inf")),
      "finite number"),
+    (lambda value: value["scoring"].update(judgment_scorer_version=999),
+     "incompatible"),
+    (lambda value: value["scoring"].pop("table_retrieval_policy"),
+     "fields"),
 ])
 def test_release_policy_rejects_incomplete_or_ambiguous_contracts(
         mutate, message):

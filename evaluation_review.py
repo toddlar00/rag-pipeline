@@ -20,11 +20,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import artifact_io
+import evaluation_contract
 import retrieval_core
 import storage_policy
+import table_retrieval_core
 
 
-REVIEW_PACKET_SCHEMA_VERSION = 1
+REVIEW_PACKET_SCHEMA_VERSION = 2
 REVIEW_RECEIPT_SCHEMA_VERSION = 1
 MAX_QUERIES_BYTES = 8 * 1024 * 1024
 MAX_CHUNKS_BYTES = 512 * 1024 * 1024
@@ -32,6 +34,9 @@ MAX_PACKET_BYTES = 16 * 1024 * 1024
 MAX_RECEIPT_BYTES = 64 * 1024
 MAX_DIAGNOSTIC_REPORT_BYTES = 64 * 1024 * 1024
 MAX_SOURCE_EVIDENCE_PER_JUDGMENT = 64
+MAX_TABLE_FAMILY_EVIDENCE_PER_JUDGMENT = (
+    table_retrieval_core.MAX_TABLE_CHILDREN_PER_PARENT + 1
+)
 MAX_REVIEW_CANDIDATE_DEPTH = 20
 OWNER_ATTESTATION = (
     "I reviewed every query and judgment against the pinned corpus"
@@ -57,8 +62,10 @@ _EVIDENCE_METADATA_FIELDS = (
     "content_type",
     "content_source",
     "retrieval_role",
+    "table_retrieval_schema_version",
     "table_parent_stable_id",
     "table_child_index",
+    "table_child_count",
 )
 _PACKET_INSTRUCTIONS = {
     "allowed_decisions": ["approve", "reject"],
@@ -71,6 +78,11 @@ _PACKET_INSTRUCTIONS = {
     "retrieval_candidate_note": (
         "When retrieval candidates are present, query approval also attests "
         "that they were checked for missing or incorrectly graded evidence."
+    ),
+    "table_family_note": (
+        "A table_family child is a query-specific alternate satisfier with the "
+        "parent judgment's grade. Approve it only if that exact row answers the "
+        "query; unlisted sibling rows receive no credit."
     ),
 }
 
@@ -286,9 +298,9 @@ def rebind_draft_queries(
         "surviving_judgment_count": sum(
             len(query.get("judgments", [])) for query in rebound),
         "surviving_unique_chunk_ids": len({
-            judgment["chunk_id"]
+            chunk_id
             for query in rebound for judgment in query.get("judgments", [])
-            if "chunk_id" in judgment
+            for chunk_id in _judgment_chunk_ids(judgment)
         }),
         "query_count": len(rebound),
     }
@@ -321,6 +333,17 @@ def _evidence_record(record: dict) -> dict:
     }
 
 
+def _judgment_chunk_ids(judgment: dict) -> tuple[str, ...]:
+    """Return every explicitly reviewed chunk alias for one judgment."""
+    if "chunk_id" not in judgment:
+        return ()
+    family = judgment.get("table_family") or {}
+    return (
+        judgment["chunk_id"].strip(),
+        *family.get("accepted_child_chunk_ids", []),
+    )
+
+
 def _diagnostic_candidates(
         report_path: Path, *, queries: list[dict], queries_sha256: str,
         records: list[dict], chunks_sha256: str,
@@ -336,9 +359,11 @@ def _diagnostic_candidates(
     report = _strict_json_bytes(
         raw, label="diagnostic report",
         max_bytes=MAX_DIAGNOSTIC_REPORT_BYTES)
-    if report.get("schema_version") != 5 or report.get("mode") != "compare":
+    if (report.get("schema_version") != evaluation_contract.REPORT_SCHEMA_VERSION
+            or report.get("mode") != "compare"):
         raise ValueError(
-            "review candidates require a schema-v5 compare diagnostic report")
+            "review candidates require a current-schema compare diagnostic "
+            "report")
     configurations = report.get("configurations")
     if not isinstance(configurations, list) or len(configurations) != 4:
         raise ValueError("diagnostic report must contain all four retrieval modes")
@@ -396,9 +421,9 @@ def _diagnostic_candidates(
                     "diagnostic query identity does not match the query set")
             seen_query_ids.add(query_id)
             judged_ids = {
-                judgment["chunk_id"]
+                chunk_id
                 for judgment in query_by_id[query_id].get("judgments", [])
-                if "chunk_id" in judgment
+                for chunk_id in _judgment_chunk_ids(judgment)
             }
             results = detail.get("results")
             if not isinstance(results, list):
@@ -445,7 +470,7 @@ def _diagnostic_candidates(
             ),
         )
     return ordered, {
-        "schema_version": 5,
+        "schema_version": evaluation_contract.REPORT_SCHEMA_VERSION,
         "mode": "compare",
         "sha256": report_sha256,
         "candidate_depth": candidate_depth,
@@ -479,15 +504,26 @@ def _build_packet(
             id_type = "chunk_id" if "chunk_id" in judgment else "source_id"
             identifier = judgment[id_type].strip()
             evidence = (
-                by_chunk_id.get(identifier, []) if id_type == "chunk_id"
+                [
+                    record
+                    for chunk_id in _judgment_chunk_ids(judgment)
+                    for record in by_chunk_id.get(chunk_id, [])
+                ] if id_type == "chunk_id"
                 else list(by_source_id.get(identifier, {}).values()))
             if not evidence:
                 raise ValueError(
                     f"query {ordinal} judgment has no corpus evidence")
-            if len(evidence) > MAX_SOURCE_EVIDENCE_PER_JUDGMENT:
+            if (id_type == "source_id"
+                    and len(evidence) > MAX_SOURCE_EVIDENCE_PER_JUDGMENT):
                 raise ValueError(
                     f"query {ordinal} source judgment expands to more than "
                     f"{MAX_SOURCE_EVIDENCE_PER_JUDGMENT} chunks; use chunk IDs")
+            if (id_type == "chunk_id"
+                    and len(evidence)
+                    > MAX_TABLE_FAMILY_EVIDENCE_PER_JUDGMENT):
+                raise ValueError(
+                    f"query {ordinal} table-family judgment expands to more "
+                    f"than {MAX_TABLE_FAMILY_EVIDENCE_PER_JUDGMENT} chunks")
             judgment_reviews.append({
                 "id_type": id_type,
                 "id": identifier,
@@ -947,7 +983,7 @@ def _build_parser() -> argparse.ArgumentParser:
     prepare.add_argument("--out", type=Path, required=True)
     prepare.add_argument(
         "--diagnostic-report", type=Path,
-        help="Schema-v5 full compare report used to add unjudged candidates")
+        help="Current-schema full compare report used to add unjudged candidates")
     prepare.add_argument(
         "--candidate-depth", type=int, default=10,
         help=("Candidates retained per retrieval mode when a diagnostic "
@@ -966,7 +1002,7 @@ def _build_parser() -> argparse.ArgumentParser:
     finalize.add_argument("--attestation", required=True)
     finalize.add_argument(
         "--diagnostic-report", type=Path,
-        help="Same schema-v5 full compare report used to prepare the packet")
+        help="Same current-schema full compare report used to prepare the packet")
     finalize.add_argument(
         "--candidate-depth", type=int, default=10,
         help=("Candidate depth used when the review packet was prepared "

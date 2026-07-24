@@ -7,6 +7,7 @@ import pytest
 import eval as retrieval_eval
 import evaluation_review
 from retrieval_core import _chunk_id
+import table_retrieval_core
 
 
 def _write_jsonl(path: Path, records: list[dict]) -> bytes:
@@ -128,7 +129,7 @@ def _write_full_compare_report(
             } for query in queries],
         })
     path.write_text(json.dumps({
-        "schema_version": 5,
+        "schema_version": retrieval_eval.REPORT_SCHEMA_VERSION,
         "mode": "compare",
         "configurations": configurations,
     }), encoding="utf-8")
@@ -197,6 +198,145 @@ def test_prepare_packet_binds_exact_private_evidence(tmp_path):
     assert packet["template_sha256"] == summary["template_sha256"]
 
 
+def test_review_packet_groups_parent_and_accepted_child_evidence(tmp_path):
+    parent = {
+        "text": """Rule table
+| Rule | Result |
+| --- | --- |
+| Alpha | One |
+| Beta | Two |
+| Gamma | Three |
+| Delta | Four |
+""",
+        "metadata": {
+            "source_file": "Private_Book",
+            "content_type": "table",
+            "content_source": "table",
+            "page_start": 1,
+            "page_end": 1,
+            "page_range": "p.1",
+            "table_rows": 4,
+            "table_cols": 2,
+            "token_count": 20,
+        },
+    }
+    records = table_retrieval_core.expand_table_records(
+        [parent], stable_id_fn=_chunk_id,
+        token_count_fn=lambda value: len(value.split()))
+    chunks_path = tmp_path / "table-chunks.jsonl"
+    chunks_raw = _write_jsonl(chunks_path, records)
+    parent_id = _chunk_id(records[0])
+    accepted_child_id = _chunk_id(records[1])
+    query = {
+        "query_id": "table-q1",
+        "query": "Which row supplies the answer?",
+        "review_status": "draft_requires_corpus_owner",
+        "judgments": [{
+            "chunk_id": parent_id,
+            "relevance": 3,
+            "table_family": {
+                "schema_version": 1,
+                "accepted_child_chunk_ids": [accepted_child_id],
+            },
+        }],
+        "corpus": {
+            "sha256": hashlib.sha256(chunks_raw).hexdigest(),
+            "record_count": len(records),
+            "id_scheme": "retrieval_core._chunk_id",
+        },
+    }
+    queries_path = tmp_path / "table-queries.jsonl"
+    _write_jsonl(queries_path, [query])
+    packet_path = tmp_path / "table-review.json"
+    diagnostic_path = tmp_path / "table-diagnostic.json"
+    _write_full_compare_report(
+        diagnostic_path, queries_path, chunks_path, [query], records)
+
+    evaluation_review.prepare_review_packet(
+        queries_path, chunks_path, packet_path,
+        diagnostic_report_path=diagnostic_path, candidate_depth=5)
+
+    packet = json.loads(packet_path.read_text(encoding="utf-8"))
+    review = packet["review_items"][0]["judgment_reviews"][0]
+    assert [item["chunk_id"] for item in review["evidence"]] == [
+        parent_id, accepted_child_id]
+    assert [item["metadata"]["retrieval_role"]
+            for item in review["evidence"]] == [
+                "table_parent", "table_child"]
+    candidate_ids = {
+        item["chunk_id"]
+        for item in packet["review_items"][0]["retrieval_candidates"]
+    }
+    assert parent_id not in candidate_ids
+    assert accepted_child_id not in candidate_ids
+    assert candidate_ids == {_chunk_id(record) for record in records[2:]}
+
+
+def test_review_packet_accepts_maximum_table_family_evidence(tmp_path):
+    row_count = table_retrieval_core.MAX_TABLE_CHILDREN_PER_PARENT
+    rows = "\n".join(
+        f"| Rule {index:03d} | Result {index:03d} |"
+        for index in range(row_count)
+    )
+    parent = {
+        "text": (
+            "Rule table\n"
+            "| Rule | Result |\n"
+            "| --- | --- |\n"
+            f"{rows}\n"
+        ),
+        "metadata": {
+            "source_file": "Private_Book",
+            "content_type": "table",
+            "content_source": "table",
+            "page_start": 1,
+            "page_end": 2,
+            "page_range": "pp.1-2",
+            "table_rows": row_count,
+            "table_cols": 2,
+            "token_count": 1000,
+        },
+    }
+    records = table_retrieval_core.expand_table_records(
+        [parent], stable_id_fn=_chunk_id,
+        token_count_fn=lambda value: len(value.split()))
+    chunks_path = tmp_path / "max-table-chunks.jsonl"
+    chunks_raw = _write_jsonl(chunks_path, records)
+    parent_id = _chunk_id(records[0])
+    accepted_child_ids = sorted(_chunk_id(record) for record in records[1:])
+    query = {
+        "query_id": "table-max-q1",
+        "query": "Which rows are accepted answers?",
+        "review_status": "draft_requires_corpus_owner",
+        "judgments": [{
+            "chunk_id": parent_id,
+            "relevance": 3,
+            "table_family": {
+                "schema_version": 1,
+                "accepted_child_chunk_ids": accepted_child_ids,
+            },
+        }],
+        "corpus": {
+            "sha256": hashlib.sha256(chunks_raw).hexdigest(),
+            "record_count": len(records),
+            "id_scheme": "retrieval_core._chunk_id",
+        },
+    }
+    queries_path = tmp_path / "max-table-queries.jsonl"
+    _write_jsonl(queries_path, [query])
+    packet_path = tmp_path / "max-table-review.json"
+
+    evaluation_review.prepare_review_packet(
+        queries_path, chunks_path, packet_path)
+
+    packet = json.loads(packet_path.read_text(encoding="utf-8"))
+    evidence = packet["review_items"][0]["judgment_reviews"][0]["evidence"]
+    assert len(evidence) == row_count + 1
+    assert evidence[0]["chunk_id"] == parent_id
+    assert {item["chunk_id"] for item in evidence[1:]} == set(
+        accepted_child_ids)
+
+
 def test_prepare_packet_deduplicates_source_judgment_evidence(tmp_path):
     queries, chunks, source_queries, source_chunks = _draft_fixture(tmp_path)
     source_queries[0]["judgments"] = [{
@@ -231,7 +371,7 @@ def test_prepare_packet_adds_exact_unjudged_retrieval_candidates(tmp_path):
     packet = json.loads(packet_path.read_text(encoding="utf-8"))
     assert summary["retrieval_candidate_count"] == 2
     assert packet["source"]["diagnostic_report"] == {
-        "schema_version": 5,
+        "schema_version": retrieval_eval.REPORT_SCHEMA_VERSION,
         "mode": "compare",
         "sha256": hashlib.sha256(diagnostic.read_bytes()).hexdigest(),
         "candidate_depth": 2,

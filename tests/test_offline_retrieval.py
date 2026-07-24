@@ -54,6 +54,7 @@ def test_offline_bm25_is_deterministic_and_returns_stable_ids(tmp_path):
     assert first[0]["chunk_id"] == _chunk_id(records[0])
     assert first[0]["source_id"] == "property"
     assert index.snapshot.source_record_count == 3
+    assert index.snapshot.table_child_count == 0
     assert len(index.snapshot.source_sha256) == 64
 
 
@@ -134,6 +135,7 @@ def test_header_propagated_table_rows_improve_header_dependent_relevance(
     assert "Required safeguard" in results[0]["text"]
     assert _chunk_id(records[0]) not in {
         result["chunk_id"] for result in results}
+    assert index.snapshot.as_report_dict()["table_child_count"] == 4
 
 
 @pytest.mark.parametrize("payload", [

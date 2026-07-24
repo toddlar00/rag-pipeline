@@ -7,6 +7,7 @@ import pytest
 
 import eval as retrieval_eval
 import rag
+import table_retrieval_core
 
 
 def _judged_query():
@@ -61,6 +62,66 @@ def _ranked_results():
             "score": 0.6,
         },
     ]
+
+
+def _expanded_table_families(
+) -> tuple[list[dict], list[str], list[list[str]]]:
+    def parent(label: str) -> dict:
+        return {
+            "text": f"""{label} rules
+| Rule | Result |
+| --- | --- |
+| Alpha | One |
+| Beta | Two |
+| Gamma | Three |
+| Delta | Four |
+""",
+            "metadata": {
+                "source_file": f"book-{label}",
+                "content_type": "table",
+                "content_source": "table",
+                "page_start": 1,
+                "page_end": 1,
+                "page_range": "p.1",
+                "table_rows": 4,
+                "table_cols": 2,
+                "token_count": 20,
+            },
+        }
+
+    records = table_retrieval_core.expand_table_records(
+        [parent("first"), parent("second")],
+        stable_id_fn=rag._chunk_id,
+        token_count_fn=lambda value: len(value.split()),
+    )
+    parent_ids = [rag._chunk_id(record) for record in records[:2]]
+    child_ids = [
+        [
+            rag._chunk_id(record) for record in records
+            if record["metadata"].get("retrieval_role") == "table_child"
+            and record["metadata"].get("table_parent_stable_id") == parent_id
+        ]
+        for parent_id in parent_ids
+    ]
+    return records, parent_ids, child_ids
+
+
+def _table_family_query(parent_id: str, accepted_child_id: str) -> dict:
+    return {
+        "query_id": "table-family",
+        "query": "Which first-table row answers the question?",
+        "review_status": "draft_requires_corpus_owner",
+        "corpus": {"sha256": "a" * 64, "record_count": 10},
+        "judgments": [{
+            "chunk_id": parent_id,
+            "relevance": 3,
+            "table_family": {
+                "schema_version": (
+                    retrieval_eval.TABLE_FAMILY_JUDGMENT_SCHEMA_VERSION),
+                "accepted_child_chunk_ids": [accepted_child_id],
+            },
+        }],
+    }
 
 
 def test_load_queries_accepts_legacy_and_graded_schemas(tmp_path):
@@ -164,6 +225,7 @@ def test_declared_index_requires_exact_manifest_and_physical_count(
     assert snapshot["record_count"] == 1
     assert snapshot["schema_version"] == rag.INDEX_MANIFEST_SCHEMA_VERSION
     assert snapshot["embedding_dimension"] == 3
+    assert snapshot["table_child_count"] == 0
     assert snapshot["model_artifact_lock_sha256"] == (
         rag._model_artifact_lock_sha256())
 
@@ -206,6 +268,27 @@ def test_declared_index_rejects_source_fingerprint_mismatch(monkeypatch, tmp_pat
     monkeypatch.setattr(rag, "_index_collection_count", lambda *args, **kwargs: 1)
 
     with pytest.raises(ValueError, match="different chunks artifact"):
+        retrieval_eval._validate_declared_index(
+            queries, chunks, db, db_backend="chroma", collection="book",
+            embedding_model="model-a", rag_module=rag)
+
+
+def test_declared_index_rejects_manifested_table_child_count_drift(
+        monkeypatch, tmp_path):
+    chunks, db, queries = _write_manifested_eval_corpus(tmp_path)
+    manifest_path = rag._index_manifest_path(
+        db, backend="chroma", collection_name="book")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest.update({
+        "table_child_count": 1,
+        "quality_report_schema_version": (
+            rag._quality_core.QUALITY_REPORT_SCHEMA_VERSION),
+        "quality_report_sha256": "a" * 64,
+    })
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    monkeypatch.setattr(rag, "_index_collection_count", lambda *args, **kwargs: 1)
+
+    with pytest.raises(ValueError, match="table-child count"):
         retrieval_eval._validate_declared_index(
             queries, chunks, db, db_backend="chroma", collection="book",
             embedding_model="model-a", rag_module=rag)
@@ -263,6 +346,204 @@ def test_declared_index_rejects_physical_count_mismatch(monkeypatch, tmp_path):
 def test_query_validation_rejects_invalid_judgments(query, message):
     with pytest.raises(ValueError, match=message):
         retrieval_eval._validate_query(query)
+
+
+@pytest.mark.parametrize(("mutate", "message"), [
+    (lambda family, _query: family.update(schema_version=True),
+     "schema_version"),
+    (lambda family, _query: family.update(accepted_child_chunk_ids=[]),
+     "non-empty bounded"),
+    (lambda family, _query: family.update(
+        accepted_child_chunk_ids=["chunk-z", "chunk-a"]),
+     "sorted and unique"),
+    (lambda family, query: family.update(
+        accepted_child_chunk_ids=[query["judgments"][0]["chunk_id"]]),
+     "parent cannot"),
+    (lambda family, _query: family.update(unrecognized=True),
+     "fields"),
+    (lambda _family, query: query["judgments"][0].update(relevance=0),
+     "positive relevance"),
+])
+def test_table_family_judgment_schema_fails_closed(mutate, message):
+    query = _table_family_query("chunk-parent", "chunk-child")
+    family = query["judgments"][0]["table_family"]
+    mutate(family, query)
+
+    with pytest.raises(ValueError, match=message):
+        retrieval_eval._validate_query(query)
+
+
+def test_table_family_judgments_require_review_and_exact_corpus_pin():
+    query = _table_family_query("chunk-parent", "chunk-child")
+    query.pop("review_status")
+    with pytest.raises(ValueError, match="review_status"):
+        retrieval_eval._validate_query(query)
+
+    query["review_status"] = "draft_requires_corpus_owner"
+    query["corpus"].pop("sha256")
+    with pytest.raises(ValueError, match="exact corpus SHA-256"):
+        retrieval_eval._validate_query(query)
+
+    query["corpus"]["sha256"] = "a" * 64
+    with pytest.raises(ValueError, match="every query"):
+        retrieval_eval._validate_corpus_pin_coverage(
+            [query, {"query": "legacy", "expected_keywords": ["answer"]}],
+            required=retrieval_eval._has_table_family_judgments([query]))
+
+
+def test_table_family_aliases_cannot_overlap_logical_judgments():
+    query = _table_family_query("chunk-parent", "chunk-child")
+    query["judgments"].append({"chunk_id": "chunk-child", "relevance": 1})
+
+    with pytest.raises(ValueError, match="duplicates satisfying ID"):
+        retrieval_eval._validate_query(query)
+
+
+def test_table_family_membership_is_attested_by_exact_corpus_metadata():
+    records, parent_ids, child_ids = _expanded_table_families()
+    query = _table_family_query(parent_ids[0], child_ids[0][0])
+    query["judgments"][0]["table_family"][
+        "accepted_child_chunk_ids"] = sorted(
+            [child_ids[0][0], child_ids[0][2]])
+
+    members = retrieval_eval._validate_judged_ids(
+        [query], records, rag._chunk_id)
+
+    assert members[parent_ids[0]] == frozenset(
+        {parent_ids[0], *child_ids[0]})
+    query["judgments"][0]["table_family"][
+        "accepted_child_chunk_ids"] = [child_ids[1][0]]
+    with pytest.raises(ValueError, match="do not belong"):
+        retrieval_eval._validate_judged_ids(
+            [query], records, rag._chunk_id)
+
+
+def test_table_family_scoring_credits_selected_child_exactly_once(
+        monkeypatch, tmp_path):
+    records, parent_ids, child_ids = _expanded_table_families()
+    query = _table_family_query(parent_ids[0], child_ids[0][0])
+    query["judgments"][0]["table_family"][
+        "accepted_child_chunk_ids"] = sorted(
+            [child_ids[0][0], child_ids[0][2]])
+    family_members = retrieval_eval._validate_judged_ids(
+        [query], records, rag._chunk_id)
+    records_by_id = {rag._chunk_id(record): record for record in records}
+
+    def result(chunk_id: str, *, spoof_parent: str | None = None) -> dict:
+        record = records_by_id[chunk_id]
+        metadata = dict(record["metadata"])
+        if spoof_parent is not None:
+            metadata["table_parent_stable_id"] = spoof_parent
+        return {
+            "text": record["text"],
+            "chunk_id": chunk_id,
+            "metadata": metadata,
+            "score": 1.0,
+        }
+
+    ranked = [
+        result(child_ids[0][1]),
+        result(child_ids[0][0]),
+        result(parent_ids[0]),
+        result(child_ids[0][2]),
+        result(child_ids[1][0], spoof_parent=parent_ids[0]),
+    ]
+    monkeypatch.setattr(
+        retrieval_eval, "run_search", lambda *_args, **_kwargs: ranked)
+
+    report = retrieval_eval.evaluate(
+        [query], tmp_path, k_values=[1, 2, 5], include_details=True,
+        table_family_members=family_members)
+
+    assert report["success@1"] == 0.0
+    assert report["success@2"] == 1.0
+    assert report["recall@1"] == 0.0
+    assert report["recall@2"] == 1.0
+    assert report["recall@5"] == 1.0
+    assert report["ndcg@2"] == 0.631
+    assert report["map"] == 0.5
+    details = report["query_details"][0]["results"]
+    assert [item["relevance"] for item in details] == [
+        0.0, 3.0, 0.0, 0.0, 0.0]
+    assert details[1]["matched_judgments"] == [{
+        "id_type": "chunk_id", "id": parent_ids[0],
+    }]
+
+
+@pytest.mark.parametrize("satisfying_result", ["parent", "accepted_child"])
+def test_table_family_parent_or_selected_child_can_satisfy_one_qrel(
+        satisfying_result, monkeypatch, tmp_path):
+    records, parent_ids, child_ids = _expanded_table_families()
+    query = _table_family_query(parent_ids[0], child_ids[0][0])
+    family_members = retrieval_eval._validate_judged_ids(
+        [query], records, rag._chunk_id)
+    chosen_id = (
+        parent_ids[0] if satisfying_result == "parent" else child_ids[0][0])
+    record = next(record for record in records
+                  if rag._chunk_id(record) == chosen_id)
+    monkeypatch.setattr(retrieval_eval, "run_search", lambda *_args, **_kwargs: [{
+        "text": record["text"], "chunk_id": chosen_id,
+        "metadata": record["metadata"], "score": 1.0,
+    }])
+
+    report = retrieval_eval.evaluate(
+        [query], tmp_path, k_values=[1],
+        table_family_members=family_members)
+
+    assert report["recall@1"] == 1.0
+    assert report["map"] == 1.0
+
+
+def test_table_family_selected_child_credit_does_not_mask_filter_violation(
+        monkeypatch, tmp_path):
+    records, parent_ids, child_ids = _expanded_table_families()
+    query = _table_family_query(parent_ids[0], child_ids[0][0])
+    query["filters"] = {"content_type": "table", "chapter_num": 99}
+    family_members = retrieval_eval._validate_judged_ids(
+        [query], records, rag._chunk_id)
+    observed = {}
+
+    def search(_query, _db, **options):
+        observed.update(options)
+        accepted_child = next(
+            record for record in records
+            if rag._chunk_id(record) == child_ids[0][0])
+        return [{
+            "text": accepted_child["text"],
+            "chunk_id": child_ids[0][0],
+            "metadata": accepted_child["metadata"],
+            "score": 1.0,
+        }]
+
+    monkeypatch.setattr(retrieval_eval, "run_search", search)
+    report = retrieval_eval.evaluate(
+        [query], tmp_path, k_values=[1],
+        table_family_members=family_members)
+
+    assert observed["content_type"] == "table"
+    assert observed["chapter_num"] == 99
+    assert report["recall@1"] == 1.0
+    assert report["map"] == 1.0
+    assert report["filter_compliance"] == 0.0
+
+
+def test_table_family_filtered_out_result_receives_no_credit(
+        monkeypatch, tmp_path):
+    records, parent_ids, child_ids = _expanded_table_families()
+    query = _table_family_query(parent_ids[0], child_ids[0][0])
+    query["filters"] = {"content_type": "table", "chapter_num": 99}
+    family_members = retrieval_eval._validate_judged_ids(
+        [query], records, rag._chunk_id)
+    monkeypatch.setattr(
+        retrieval_eval, "run_search", lambda *_args, **_kwargs: [])
+
+    report = retrieval_eval.evaluate(
+        [query], tmp_path, k_values=[1],
+        table_family_members=family_members)
+
+    assert report["recall@1"] == 0.0
+    assert report["map"] == 0.0
+    assert report["filter_compliance"] == 1.0
 
 
 def test_judged_metrics_and_details_use_stable_ids_once(monkeypatch, tmp_path):
@@ -1765,6 +2046,14 @@ def test_strict_index_baseline_preserves_adaptive_null_modes(tmp_path):
         "sparse_weight": 1.0,
         "model_artifact_lock_sha256": "d" * 64,
         "grounding_scorer_version": retrieval_eval.GROUNDING_SCORER_VERSION,
+        "judgment_scorer_version": retrieval_eval.JUDGMENT_SCORER_VERSION,
+        "table_family_judgment_schema_version": (
+            retrieval_eval.TABLE_FAMILY_JUDGMENT_SCHEMA_VERSION),
+        "table_retrieval_policy": (
+            retrieval_eval._table_retrieval_policy_contract()),
+        "context_window": 0,
+        "context_max_characters": 8000,
+        "context_segment_characters": 1600,
     }
     baseline = tmp_path / "adaptive.json"
     baseline.write_text(json.dumps({

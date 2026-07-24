@@ -16,8 +16,8 @@ Status terms:
 - **Integration candidate (draft)** — all implementation histories are combined
   in one draft PR, pending exact-head validation, review, and merge.
 - **Integrated** — present on `main` through the cumulative integration PR.
-- **Validated locally** — implemented and exercised against the relevant real
-  artifact, but not yet committed, reviewed, or merged.
+- **Implemented locally** — coded, committed, and validated in the local
+  repository, but not yet pushed, reviewed, or merged.
 - **In progress** — active branch; not yet published as a PR.
 - **Owner review pending** — implementation is complete in a draft PR, but a
   release decision requires an explicitly identified human owner.
@@ -28,7 +28,7 @@ Status terms:
 | Milestone | Status | Durable result |
 |---|---|---|
 | Foundation | Baseline | End-to-end PDF ingestion, enriched chunking, shared LLM runtime, grounded answers, hybrid retrieval/reranking, evaluation harness, Chroma/Qdrant indexing, CLI, UI, docs, and tests |
-| Repository truth and exhaustive source gate | Validated locally | The current R0 branch relocates and tests the two local launchers, ignores `tmp/` and `.worktrees/`, replaces the stale compile list with deterministic Git-index discovery, curates the Claude plans and developer guide, adds the process-supervision ADR, and records the unresolved private-source policy as an explicit owner decision. The exact local tree passes 1,507 tests with 7 skips |
+| Repository truth and exhaustive source gate | Implemented locally | Local commit `88fd301` relocates and tests the two local launchers, ignores `tmp/` and `.worktrees/`, replaces the stale compile list with deterministic Git-index discovery, curates the Claude plans and developer guide, adds the process-supervision ADR, and records the unresolved private-source policy as an explicit owner decision. Its exact tree passes 1,507 tests with 7 skips |
 | Ethics corpus coherence and publication quality | Implemented (draft) | [PR #31](https://github.com/toddlar00/rag-pipeline/pull/31): canonical scaffold reconstruction, exact source identity, complete tables and nested footnotes, exact embedding budgets, regenerated exports, and an exactly reconciled 1,715-record Chroma index |
 | Machine-readable corpus quality attestation | Implemented (draft) | [PR #31](https://github.com/toddlar00/rag-pipeline/pull/31): schema-v1 report binds the exact Docling source, chunks bytes, parameters, source-lineage coverage, tables, normalization, classification, entities, token budgets, and stable/hash roots; resume, export, retrieval, and index publication fail closed on missing, stale, malformed, or mismatched evidence |
 | Synced-folder publication and read resilience | Implemented (draft) | [PR #31](https://github.com/toddlar00/rag-pipeline/pull/31): bounded Windows sharing-violation retries republish only a pinned staging file; marker and exact artifact reads retry only content-identical ctime churn while failing closed on content-generation changes; exact hashes bypass unsafe stat caching on Windows |
@@ -36,6 +36,7 @@ Status terms:
 | Configurable document-structure profiles | Implemented (draft) | [PR #35](https://github.com/toddlar00/rag-pipeline/pull/35): an immutable reviewed registry now drives front/back matter, primary divisions, TOC hierarchy, canonical titles, cross-references, classification, quality checks, and exports. Schema-v3 chunk receipts attest the exact profile revision and digest; unknown, mismatched, legacy, and tampered profile evidence fails closed |
 | Context-aware retrieval assembly | Implemented (draft) | [PR #36](https://github.com/toddlar00/rag-pipeline/pull/36): stable published-order linkage, exact index-generation binding, source/chapter/filter isolation, duplicate-text alias provenance, bounded neighboring evidence, and independent citations are wired through Chroma, Qdrant, CLI, UI, grounded answers, and evaluation. A disposable 1,715-record Ethics index passed a real context query |
 | Table-specific retrieval | Implemented (draft) | [PR #37](https://github.com/toddlar00/rag-pipeline/pull/37): optional caption/header-propagated row children, source-wide continued-table eligibility, deterministic repeated-fragment identity, exact parent/child and source-shape attestation, family-aware result collapse, independent citations, and canonical-consumer isolation. A disposable Ethics run produced 69 children and returned the exact requested demographic row first |
+| Table-family evaluation correctness | Implemented locally | The local R4 slice adds explicit owner-selected child aliases, corpus-attested family membership, exact-once logical-qrel scoring, schema-v6 reports/baselines, schema-v2 review packets and release policies, and strict context/table-policy compatibility. The actual Ethics table/context ablations and owner approval remain outstanding |
 | Ethics retrieval calibration | Owner review pending | [PR #43](https://github.com/toddlar00/rag-pipeline/pull/43): a current-schema clean-room rebuild preserved all 20 unique IDs behind 24 judgments in the exact 1,715-record corpus. A private owner packet now combines those judgments with 195 unique top-10 candidates across four modes, while a content-free receipt and strict four-mode release-policy contract make promotion explicit and review-bound. Actual owner decisions and final thresholds remain outstanding |
 | Process supervision extraction | Implemented (draft) | [PR #33](https://github.com/toddlar00/rag-pipeline/pull/33): deadline supervision, Windows/POSIX containment, startup gates, termination confirmation, and generic entrypoint policy moved to stdlib-only `process_supervision.py`; `rag.py` retains late-bound compatibility wrappers |
 | Vector-index lifecycle extraction | Implemented (draft) | [PR #38](https://github.com/toddlar00/rag-pipeline/pull/38): a standard-library-only policy layer owns deterministic reconciliation, dirty-marker ownership, mutation epochs, exact-ID verification, callback-reentry exclusion, legacy-hash repair, and close/manifest/marker commit ordering |
@@ -891,6 +892,17 @@ inflated relevance, or answer-quality regressions.
 - Re-run table-disabled and table-enabled Ethics calibration with the same
   owner-approved queries. Report both retrieval benefit and any parent/child
   displacement rather than selecting only the favorable run.
+- Add a portable CC0 table-family mini suite and CLI baseline. The current
+  public baselines bind the family contract but intentionally contain zero
+  table children, so they do not exercise the official CLI attestation path.
+- Keep retrieval relevance aliases independent from grounding
+  `entailed_by` evidence, add a regression case for that boundary, and expose
+  an explicit `exact` versus `accepted_table_child` match kind in detailed
+  reports instead of requiring reviewers to infer it from two IDs.
+- Preflight the serialized owner-review packet against its size ceiling, and
+  replace or harden the direct-Python `table_family_members` dictionary seam so
+  non-CLI callers cannot mistake caller-supplied membership for corpus-derived
+  attestation.
 - Expand the approved set with chapter-balanced paraphrases, hard negatives,
   filters, tables, cross-page continuations, numeric/multi-hop cases, ambiguity,
   and abstention. Keep raw private evidence out of committed reports.
@@ -899,6 +911,31 @@ inflated relevance, or answer-quality regressions.
 gold judgment cannot receive multiple credit; four-mode baselines reject schema
 or configuration drift; the complete ablation is reproducible; grounded-answer
 gates pass on the approved suite; and the owner signs off on the expanded set.
+
+**Progress (2026-07-24).** The local R4 semantic slice implements the versioned
+`table_family.accepted_child_chunk_ids` contract. It requires a positive
+parent-chunk judgment, full corpus pinning, explicit review status, sorted unique
+children, complete parent/child metadata attestation from the exact chunks
+artifact, and an index-manifest child-count match. The scorer maps the parent
+and only its selected children to one logical qrel, so a sibling, unrelated or
+metadata-spoofed table, parent-after-child, or second accepted child receives no
+extra credit. Review packets show the parent and every selected child together
+and omit them from unjudged diagnostics. Report schema 6, judgment scorer 2,
+review-packet schema 2, and release-policy schema 2 bind the table-generation,
+collapse, context-window, and context-budget contracts; both checked-in offline
+baselines were migrated and pass their zero-regression gates. The decision is
+recorded in `docs/architecture/decisions/table-family-evaluation.md`. The exact
+local tree passes 1,528 tests with 7 skips; the 168 focused evaluator, review,
+release, offline-retrieval, table-core, and asset tests also pass.
+
+This completes only the reusable correctness machinery. R3 owner review must
+still freeze the private judgments; table-enabled query bytes need explicit
+owner-selected children and a fresh receipt; and the 0/1/2 context plus
+table-disabled/table-enabled four-mode Ethics ablations, grounded-answer checks,
+latency/prompt/evidence-size measurements, expanded chapter-balanced cases, and
+owner sign-off remain required before R4 is complete. The portable table-family
+CLI fixture, grounding-boundary test, explicit match provenance, packet-size
+preflight, and direct-API hardening above are also still planned.
 
 ### R5 (P1, medium): create a versioned release and migration contract
 

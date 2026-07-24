@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+import eval as retrieval_eval
 from retrieval_core import _chunk_id
 
 
@@ -253,14 +254,24 @@ def test_portable_baselines_bind_exact_suite_assets(suite_name, baseline_name):
     )
     configuration = baseline["configuration"]
 
-    assert baseline["schema_version"] == 5
+    assert baseline["schema_version"] == retrieval_eval.REPORT_SCHEMA_VERSION
     assert configuration["retriever"] == "bm25"
     assert configuration["grounding_scorer_version"] == 2
+    assert configuration["judgment_scorer_version"] == (
+        retrieval_eval.JUDGMENT_SCORER_VERSION)
+    assert configuration["table_family_judgment_schema_version"] == (
+        retrieval_eval.TABLE_FAMILY_JUDGMENT_SCHEMA_VERSION)
+    assert configuration["table_retrieval_policy"] == (
+        retrieval_eval._table_retrieval_policy_contract())
     assert configuration["queries_sha256"] == manifest["queries"]["sha256"]
     assert configuration["index_snapshot"]["source_sha256"] == (
         manifest["chunks"]["sha256"])
     assert configuration["index_snapshot"]["record_count"] == (
         manifest["chunks"]["record_count"])
+    assert configuration["index_snapshot"]["table_child_count"] == 0
+    assert configuration["context_window"] == 0
+    assert configuration["context_max_characters"] == 8000
+    assert configuration["context_segment_characters"] == 1600
     assert "path" not in configuration["index_snapshot"]
     assert baseline["metrics"]["abstention_accuracy"] == 1.0
     assert baseline["metrics"]["filter_compliance"] == 1.0
