@@ -25,6 +25,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 import service_contracts
 import service_runtime
+import release_security
 import storage_policy
 
 
@@ -1166,14 +1167,17 @@ def _positive(value: str) -> float:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Authenticated loopback-only RAG service")
+        description="Authenticated loopback-only RAG service",
+        allow_abbrev=False)
     actions = parser.add_subparsers(dest="action", required=True)
     initialize = actions.add_parser(
-        "init-tokens", help="Create distinct owner-only reader/admin tokens")
+        "init-tokens", help="Create distinct owner-only reader/admin tokens",
+        allow_abbrev=False)
     initialize.add_argument("--reader-token-file", type=Path, required=True)
     initialize.add_argument("--admin-token-file", type=Path, required=True)
 
-    serve = actions.add_parser("serve", help="Run one local ASGI service")
+    serve = actions.add_parser(
+        "serve", help="Run one local ASGI service", allow_abbrev=False)
     serve.add_argument("--config", type=Path, required=True)
     serve.add_argument("--reader-token-file", type=Path, required=True)
     serve.add_argument("--admin-token-file", type=Path, required=True)
@@ -1188,6 +1192,23 @@ def _parser() -> argparse.ArgumentParser:
         "--reconcile-interval", type=_positive,
         default=DEFAULT_RECONCILE_INTERVAL_SECONDS)
     serve.add_argument("--max-concurrent-searches", type=int, default=2)
+    serve.add_argument(
+        "--security-profile", choices=["release", "development"],
+        default="release")
+    serve.add_argument(
+        "--release-security-policy-version", type=int,
+        default=release_security.RELEASE_SECURITY_POLICY_VERSION,
+        help=argparse.SUPPRESS)
+    serve.add_argument(
+        "--network-policy", choices=["local-only", "allow-cloud"],
+        default="local-only")
+    serve.add_argument(
+        "--model-download-policy",
+        choices=["cache-only", "allow-reviewed-sync"],
+        default="cache-only")
+    serve.add_argument("--llm-cache-namespace", default="")
+    serve.add_argument(
+        "--trust-environment-network", action="store_true")
     return parser
 
 
@@ -1201,6 +1222,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             print("Created owner-only reader and admin token files.")
             return 0
         registry = service_runtime.load_corpus_registry(args.config)
+        security_policy = release_security.ReleaseSecurityPolicy.from_values(
+            profile=args.security_profile,
+            network_policy=args.network_policy,
+            model_download_policy=args.model_download_policy,
+            cache_namespace=args.llm_cache_namespace,
+            trust_environment_network=args.trust_environment_network,
+            schema_version=args.release_security_policy_version,
+        )
         credentials = ServiceCredentials(
             load_token_file(args.reader_token_file),
             load_token_file(args.admin_token_file),
@@ -1213,13 +1242,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             service_state_root=args.service_state_root,
             ready_timeout_seconds=args.ready_timeout,
             max_concurrent_searches=args.max_concurrent_searches,
+            security_policy=security_policy,
         )
         app = create_app(
             runtime, credentials, host=args.host,
             reconcile_interval_seconds=args.reconcile_interval)
     except (OSError, service_contracts.ServiceContractError,
             service_runtime.ServiceRuntimeError,
-            storage_policy.StoragePolicyError) as exc:
+            storage_policy.StoragePolicyError,
+            release_security.ReleaseSecurityError) as exc:
         parser.error(f"service configuration failed ({type(exc).__name__})")
     try:
         import uvicorn

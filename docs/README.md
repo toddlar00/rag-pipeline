@@ -1,0 +1,65 @@
+# Documentation Map
+
+This index separates current decisions and work from historical planning
+material. When documents disagree, use the authority order below.
+
+## Current sources of truth
+
+1. Approved governance decisions — owner-controlled policy boundaries that an
+   agent cannot choose, especially private-source disclosure and corpus
+   approval.
+2. Architecture decision records — maintained behavioral and threat-model
+   decisions that implementations and tests must satisfy.
+3. [`ROADMAP.md`](../ROADMAP.md) — prioritized R0-R12 backlog, current delivery
+   state, dependencies, acceptance evidence, and PR disposition.
+4. [`README.md`](../README.md) — operator-facing commands and current behavior.
+5. Historical plans — design inputs only; unchecked boxes are not live tasks.
+
+## Architecture decisions
+
+- [Release security policy](architecture/decisions/release-security-policy.md)
+  — local/cloud egress, UI trust, model acquisition, caches, tenancy,
+  transport environment, worker receipts, and migration.
+- [Local endpoint boundaries](architecture/decisions/local-endpoint-boundaries.md)
+  — canonical endpoint validation, provider credentials, redirects, and the
+  loopback-only UI exposure boundary.
+- [Process-supervision extraction](architecture/decisions/process-supervision-extraction.md)
+  — containment policy and the stable `rag.py` facade.
+- [Document-structure profiles](architecture/decisions/document-structure-profiles.md)
+  — immutable reviewed profiles and fail-closed evidence.
+- [Context-aware retrieval](architecture/decisions/context-aware-retrieval.md)
+  — stable adjacency, bounded context, and independent citations.
+- [Table-family evaluation](architecture/decisions/table-family-evaluation.md)
+  — exact-once logical relevance and owner-selected child aliases.
+
+The roadmap tracks missing maintained ADR coverage for vector lifecycle,
+table-row retrieval, and immutable source-generation policy rather than using
+historical implementation plans as substitutes.
+
+## Governance
+
+- [Private-source documentation policy proposal](governance/private-source-documentation-policy-proposal.md)
+  — content-free inventory and the unresolved owner decision. It is not an
+  approval to publish corpus-derived material.
+
+## Historical Claude plans
+
+- [Process-supervision extraction plan](superpowers/plans/2026-07-22-process-supervision-extraction-plan.md)
+- [Code improvements and structure-profile plan](superpowers/plans/2026-07-23-codex-improvements-structure-profiles.md)
+
+Both plans are retained for provenance and begin with supersession warnings.
+Their branch instructions, line/test counts, mutable-profile sketch, unchecked
+boxes, and neighbor-citation sketch are stale. The implemented code, maintained
+ADRs, and `ROADMAP.md` deliberately supersede them.
+
+## Evidence and publication state
+
+[`INTEGRATION_AUDIT.md`](../INTEGRATION_AUDIT.md) is the historical exact-head
+record for PRs #1-#28. PRs #31-#43, the local R0/R0A/R0B/R4 changes, CI status,
+review state, and release gaps are summarized in `ROADMAP.md` until R12 moves
+point-in-time transcripts and test counts into an immutable `docs/evidence/`
+ledger keyed by commit and PR.
+
+Ignored `output/` paths are not durable evidence in a fresh clone. A roadmap or
+PR claim that depends on private output must be backed by a tracked content-free
+receipt, a digest-bound retained CI artifact, or an exact PR/commit record.

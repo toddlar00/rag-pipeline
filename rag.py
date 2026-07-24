@@ -53,6 +53,7 @@ import operation_contracts as _operation_contracts
 import operational_metrics as _operational_metrics
 import process_supervision as _process_supervision
 import quality_core as _quality_core
+import release_security as _release_security
 import retention as _retention
 import retrieval_core as _retrieval_core
 import run_telemetry as _run_telemetry
@@ -71,6 +72,13 @@ from llm_runtime import (
     ProviderResponse,
     ProviderSpec,
 )
+
+# Runtime ML/database libraries are never allowed to emit auxiliary analytics
+# or version-check traffic from this private-data process. Provider calls are
+# governed separately by the explicit release-security policy.
+os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
+os.environ["ANONYMIZED_TELEMETRY"] = "False"
+os.environ["DO_NOT_TRACK"] = "1"
 
 # ---------------------------------------------------------------------------
 # Logging — configured in main() based on -v / --quiet flags
@@ -130,17 +138,30 @@ def _structure_profile_parameters_binding(
 # Embedding model max token limits (for validation)
 EMBEDDING_MAX_TOKENS = {
     "voyage-law-2": 16000,
-    "voyage-3-large": 16000,
+    "voyage-3-large": 32000,
+    "voyage-4-large": 32000,
+    "voyage-4": 32000,
+    "voyage-4-lite": 32000,
     "dunzhang/stella_en_400M_v5": 8192,
     "nomic-ai/nomic-embed-text-v2-moe": 512,
     "text-embedding-3-large": 8191,
     "nlpaueb/legal-bert-base-uncased": 512,
 }
 _API_EMBEDDING_BATCH_TOKEN_BUDGET = 100_000
-_API_EMBEDDING_MODEL_PREFIXES = (
-    "voyage-", "text-embedding-", "embed-", "cohere-", "embo-",
-    "minimax-emb",
+_SUPPORTED_API_EMBEDDING_MODEL_PREFIXES = (
+    "voyage-", "text-embedding-", "embed-", "cohere-",
 )
+_UNSUPPORTED_API_EMBEDDING_MODEL_PREFIXES = ("embo-", "minimax-emb")
+_API_EMBEDDING_MODEL_PREFIXES = (
+    *_SUPPORTED_API_EMBEDDING_MODEL_PREFIXES,
+    *_UNSUPPORTED_API_EMBEDDING_MODEL_PREFIXES,
+)
+_VOYAGE_EMBEDDINGS_URL = "https://api.voyageai.com/v1/embeddings"
+_COHERE_EMBEDDINGS_URL = "https://api.cohere.com/v1/embed"
+_OPENAI_EMBEDDINGS_URL = "https://api.openai.com/v1/embeddings"
+_COHERE_RERANK_URL = "https://api.cohere.com/v2/rerank"
+_JINA_RERANK_URL = "https://api.jina.ai/v1/rerank"
+_GEMINI_API_BASE_URL = "https://generativelanguage.googleapis.com"
 _ALLOW_UNPINNED_MODELS_ENV = "RAG_ALLOW_UNPINNED_MODELS"
 # Backward-compatible defaults for standalone commands. ``full`` and
 # ``batch`` derive collision-free, book-scoped paths for every run.
@@ -160,14 +181,31 @@ def _model_artifact_lock_sha256() -> str:
     return _model_artifacts.model_artifact_lock_sha256()
 
 
+def _model_download_transport(
+        policy: _release_security.ReleaseSecurityPolicy) -> dict[str, object]:
+    """Bind Hub endpoint and ambient transport trust to one policy."""
+    endpoint = _model_artifacts.HUGGINGFACE_HUB_OFFICIAL_ENDPOINT
+    if policy.trust_environment_network:
+        endpoint = os.environ.get("HF_ENDPOINT", endpoint) or endpoint
+    return {
+        "download_endpoint": endpoint,
+        "trust_environment_network": policy.trust_environment_network,
+    }
+
+
 def _model_loader_source(
         model_id: str, consumer: str, *,
-        execute_remote_code: bool = False) -> tuple[str, bool]:
+        execute_remote_code: bool = False,
+        security_policy: (
+            _release_security.ReleaseSecurityPolicy | None) = None,
+        ) -> tuple[str, bool]:
     """Resolve a reviewed model to a verified local tree.
 
-    Unknown models fail closed unless the operator explicitly opts into the
-    legacy unpinned behavior with ``RAG_ALLOW_UNPINNED_MODELS=1``.
+    Unknown models fail closed unless the operator selects the development
+    profile, reviewed-sync policy, and ``RAG_ALLOW_UNPINNED_MODELS=1``
+    together.
     """
+    policy = _effective_security_policy(security_policy)
     artifact = _model_artifacts.model_artifact(model_id)
     if artifact is not None:
         if execute_remote_code:
@@ -175,9 +213,23 @@ def _model_loader_source(
                 raise _model_artifacts.ModelArtifactError(
                     f"remote code is not approved for {model_id}")
             _model_artifacts.configure_transformers_dynamic_module_cache()
+        allow_download = policy.model_download_policy == "allow-reviewed-sync"
         return str(_model_artifacts.verified_model_directory(
-            model_id, consumer)), True
-    if os.environ.get(_ALLOW_UNPINNED_MODELS_ENV) == "1":
+            model_id, consumer, allow_download=allow_download,
+            authorize_download_fn=(
+                lambda: _release_security.require_model_download(
+                    policy,
+                    feature=f"model synchronization for {model_id}")
+            ) if allow_download else None,
+            **(_model_download_transport(policy) if allow_download else {}),
+        )), True
+    if (
+        policy.profile == "development"
+        and policy.model_download_policy == "allow-reviewed-sync"
+        and os.environ.get(_ALLOW_UNPINNED_MODELS_ENV) == "1"
+    ):
+        _release_security.require_model_download(
+            policy, feature=f"unpinned model loading for {model_id}")
         if execute_remote_code:
             _model_artifacts.configure_transformers_dynamic_module_cache()
         log.warning(
@@ -188,8 +240,9 @@ def _model_loader_source(
         )
         return model_id, False
     raise _model_artifacts.ModelArtifactError(
-        f"model is not in the reviewed artifact lock: {model_id}; set "
-        f"{_ALLOW_UNPINNED_MODELS_ENV}=1 only after reviewing the model")
+        f"model is not in the reviewed artifact lock: {model_id}; unpinned "
+        "loading requires the development profile, explicit reviewed-sync "
+        f"policy, and {_ALLOW_UNPINNED_MODELS_ENV}=1")
 
 
 class PipelinePaths(TypedDict):
@@ -226,9 +279,9 @@ DEDUP_THRESHOLD = _chunking_core.DEDUP_THRESHOLD
 # LLM classification / contextual retrieval defaults
 DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
 DEFAULT_OLLAMA_MODEL = "qwen3:30b"
-DEFAULT_GEMINI_MODEL = "gemini-2.0-flash"
+DEFAULT_GEMINI_MODEL = "gemini-3.6-flash"
 DEFAULT_CLOUD_URL = "https://api.minimax.io/v1"
-DEFAULT_CLOUD_MODEL = "MiniMax-M2.7-highspeed"
+DEFAULT_CLOUD_MODEL = "MiniMax-M3"
 DEFAULT_DEEPSEEK_URL = "https://api.deepseek.com"
 DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-pro"
 DEFAULT_LLM_WORKERS = 10
@@ -367,23 +420,10 @@ def _count_embedding_text_tokens(texts: list[str],
     texts = _prepare_embedding_inputs(
         texts, embedding_model, "document")
     try:
-        if embedding_model.startswith("voyage-"):
-            import voyageai
-
-            client = voyageai.Client(api_key=os.environ.get("VOYAGE_API_KEY"))
-            return (
-                [len(tokens) for tokens in client.tokenize(
-                    texts, model=embedding_model)],
-                True,
-            )
-        if embedding_model.startswith("text-embedding-"):
-            import tiktoken
-
-            try:
-                encoding = tiktoken.encoding_for_model(embedding_model)
-            except KeyError:
-                encoding = tiktoken.get_encoding("cl100k_base")
-            return [len(encoding.encode(text)) for text in texts], True
+        # API tokenizers can perform hidden model/blob downloads on a cache
+        # miss.  Runtime execution never invokes them: the conservative local
+        # estimator preserves the no-network contract and merely reduces the
+        # effective provider batch size.
         if not embedding_model.startswith(_API_EMBEDDING_MODEL_PREFIXES):
             from transformers import AutoTokenizer
 
@@ -561,13 +601,16 @@ def strip_watermark(text: str, wm: Optional[re.Pattern] = None) -> str:
 
 def _validate_api_key(model_name: str) -> None:
     """Check that required API key is set for API-based models. Call early."""
+    if model_name.startswith(_UNSUPPORTED_API_EMBEDDING_MODEL_PREFIXES):
+        log.error(
+            f"MiniMax embedding model '{model_name}' is unsupported: "
+            "there is no current reviewed MiniMax embedding API contract")
+        sys.exit(1)
     checks = [
         ("voyage-", "VOYAGE_API_KEY", "https://dash.voyageai.com/"),
         ("cohere-", "COHERE_API_KEY", "https://dashboard.cohere.com/"),
         ("embed-", "COHERE_API_KEY", "https://dashboard.cohere.com/"),
         ("text-embedding-", "OPENAI_API_KEY", "https://platform.openai.com/"),
-        ("embo-", "MINIMAX_API_KEY", "https://platform.minimax.io/"),
-        ("minimax-emb", "MINIMAX_API_KEY", "https://platform.minimax.io/"),
     ]
     for prefix, env_var, url in checks:
         if model_name.startswith(prefix):
@@ -578,7 +621,66 @@ def _validate_api_key(model_name: str) -> None:
             return
 
 
-def _get_embedding_fn(model_name: str, *, input_type: str = "document"):
+def _validated_embedding_vectors(
+        value: object, *, expected_count: int, provider: str,
+) -> list[list[float]]:
+    """Validate one provider response without retaining arbitrary payloads."""
+    if not isinstance(value, list) or len(value) != expected_count:
+        raise RuntimeError(f"{provider} returned an invalid embedding count")
+    vectors: list[list[float]] = []
+    dimension: int | None = None
+    for raw_vector in value:
+        if not isinstance(raw_vector, list) or not raw_vector:
+            raise RuntimeError(f"{provider} returned an invalid embedding")
+        vector = []
+        for raw_number in raw_vector:
+            if isinstance(raw_number, bool) or not isinstance(
+                    raw_number, (int, float)):
+                raise RuntimeError(
+                    f"{provider} returned a nonnumeric embedding")
+            number = float(raw_number)
+            if not math.isfinite(number):
+                raise RuntimeError(
+                    f"{provider} returned a non-finite embedding")
+            vector.append(number)
+        if dimension is None:
+            dimension = len(vector)
+        elif len(vector) != dimension:
+            raise RuntimeError(
+                f"{provider} returned inconsistent embedding dimensions")
+        vectors.append(vector)
+    return vectors
+
+
+def _data_embedding_vectors(
+        payload: object, *, expected_count: int, provider: str,
+) -> list[list[float]]:
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"{provider} returned an invalid response")
+    data = payload.get("data")
+    if not isinstance(data, list):
+        raise RuntimeError(f"{provider} returned an invalid response")
+    rows: list[tuple[int, object]] = []
+    for position, item in enumerate(data):
+        if not isinstance(item, dict):
+            raise RuntimeError(f"{provider} returned an invalid response")
+        index = item.get("index", position)
+        if isinstance(index, bool) or not isinstance(index, int):
+            raise RuntimeError(f"{provider} returned an invalid response index")
+        rows.append((index, item.get("embedding")))
+    if sorted(index for index, _ in rows) != list(range(expected_count)):
+        raise RuntimeError(f"{provider} returned invalid embedding indexes")
+    rows.sort(key=lambda item: item[0])
+    return _validated_embedding_vectors(
+        [embedding for _, embedding in rows],
+        expected_count=expected_count, provider=provider)
+
+
+def _get_embedding_fn(
+        model_name: str, *, input_type: str = "document",
+        security_policy: (
+            _release_security.ReleaseSecurityPolicy | None
+        ) = None):
     """Return a vector-client-compatible embedding function for *model_name*.
 
     Automatically routes to the right backend:
@@ -593,6 +695,21 @@ def _get_embedding_fn(model_name: str, *, input_type: str = "document"):
     """
     if input_type not in {"document", "query"}:
         raise ValueError("input_type must be 'document' or 'query'")
+    policy = _effective_security_policy(security_policy)
+    is_api_embedding = model_name.startswith(_API_EMBEDDING_MODEL_PREFIXES)
+
+    def _authorize_api_embedding() -> None:
+        if not is_api_embedding:
+            return
+        _release_security.require_cloud_egress(
+            policy, feature="cloud embedding")
+
+    _authorize_api_embedding()
+
+    if model_name.startswith(_UNSUPPORTED_API_EMBEDDING_MODEL_PREFIXES):
+        raise ValueError(
+            "MiniMax embedding models are unsupported because there is no "
+            "current reviewed MiniMax embedding API contract")
 
     # These adapters are plain callables.  Chroma validates the ``__call__``
     # signature structurally, so inheriting its optional typing protocol only
@@ -606,34 +723,37 @@ def _get_embedding_fn(model_name: str, *, input_type: str = "document"):
             def __init__(self, name: str, role: str):
                 self._name = name
                 self._role = role
-                self._client = None
 
-            def _load(self):
-                if self._client is None:
-                    import voyageai
-                    api_key = os.environ.get("VOYAGE_API_KEY", "")
-                    if not api_key:
-                        raise ValueError(
-                            "VOYAGE_API_KEY env var required for Voyage AI embeddings. "
-                            "Get one at https://dash.voyageai.com/")
-                    self._client = voyageai.Client(api_key=api_key)
-                return self._client
+            def _embed(self, texts: list[str]) -> Embeddings:
+                _authorize_api_embedding()
+                api_key = os.environ.get("VOYAGE_API_KEY", "")
+                if not api_key:
+                    raise ValueError(
+                        "VOYAGE_API_KEY env var required for Voyage AI embeddings. "
+                        "Get one at https://dash.voyageai.com/")
+                response = _post_cloud_with_policy(
+                    policy, _VOYAGE_EMBEDDINGS_URL,
+                    headers={"Accept": "application/json"},
+                    auth=_llm_adapters._BearerAuth(api_key),
+                    json={"input": texts, "model": self._name,
+                          "input_type": self._role},
+                    timeout=60, allow_redirects=False,
+                )
+                _require_no_cloud_redirect(response, "Voyage embedding")
+                response.raise_for_status()
+                return _data_embedding_vectors(
+                    response.json(), expected_count=len(texts),
+                    provider="Voyage")
 
             def __call__(self, input: Documents) -> Embeddings:
-                client = self._load()
                 # Voyage API batch limit: 1000 items or 120K tokens.
                 # Use 128-item batches for safety with long legal texts.
                 BATCH = 128
                 if len(input) <= BATCH:
-                    result = client.embed(input, model=self._name,
-                                          input_type=self._role)
-                    return result.embeddings
+                    return self._embed(list(input))
                 all_embs: Embeddings = []
                 for i in range(0, len(input), BATCH):
-                    batch = input[i:i + BATCH]
-                    result = client.embed(batch, model=self._name,
-                                          input_type=self._role)
-                    all_embs.extend(result.embeddings)
+                    all_embs.extend(self._embed(list(input[i:i + BATCH])))
                 return all_embs
 
         return _VoyageEmbedFn(model_name, input_type)
@@ -644,36 +764,42 @@ def _get_embedding_fn(model_name: str, *, input_type: str = "document"):
             def __init__(self, name: str, role: str):
                 self._name = name.removeprefix("cohere-")
                 self._role = role
-                self._client = None
 
-            def _load(self):
-                if self._client is None:
-                    import cohere
-                    api_key = os.environ.get("COHERE_API_KEY", "")
-                    if not api_key:
-                        raise ValueError(
-                            "COHERE_API_KEY env var required for Cohere embeddings.")
-                    self._client = cohere.Client(api_key)
-                return self._client
+            def _embed(self, texts: list[str]) -> Embeddings:
+                _authorize_api_embedding()
+                api_key = os.environ.get("COHERE_API_KEY", "")
+                if not api_key:
+                    raise ValueError(
+                        "COHERE_API_KEY env var required for Cohere embeddings.")
+                response = _post_cloud_with_policy(
+                    policy, _COHERE_EMBEDDINGS_URL,
+                    headers={"Accept": "application/json"},
+                    auth=_llm_adapters._BearerAuth(api_key),
+                    json={
+                        "texts": texts,
+                        "model": self._name,
+                        "input_type": (
+                            "search_query" if self._role == "query"
+                            else "search_document"),
+                    },
+                    timeout=60, allow_redirects=False,
+                )
+                _require_no_cloud_redirect(response, "Cohere embedding")
+                response.raise_for_status()
+                payload = response.json()
+                if not isinstance(payload, dict):
+                    raise RuntimeError("Cohere returned an invalid response")
+                return _validated_embedding_vectors(
+                    payload.get("embeddings"), expected_count=len(texts),
+                    provider="Cohere")
 
             def __call__(self, input: Documents) -> Embeddings:
-                client = self._load()
                 BATCH = 96
                 if len(input) <= BATCH:
-                    resp = client.embed(
-                        texts=list(input), model=self._name,
-                        input_type=("search_query" if self._role == "query"
-                                    else "search_document"),
-                    )
-                    return [list(e) for e in resp.embeddings]
+                    return self._embed(list(input))
                 all_embs: Embeddings = []
                 for i in range(0, len(input), BATCH):
-                    resp = client.embed(
-                        texts=list(input[i:i + BATCH]), model=self._name,
-                        input_type=("search_query" if self._role == "query"
-                                    else "search_document"),
-                    )
-                    all_embs.extend([list(e) for e in resp.embeddings])
+                    all_embs.extend(self._embed(list(input[i:i + BATCH])))
                 return all_embs
 
         return _CohereEmbedFn(model_name, input_type)
@@ -683,57 +809,36 @@ def _get_embedding_fn(model_name: str, *, input_type: str = "document"):
         class _OpenAIEmbedFn:
             def __init__(self, name: str):
                 self._name = name
-                self._client = None
 
-            def _load(self):
-                if self._client is None:
-                    from openai import OpenAI
-                    self._client = OpenAI()  # reads OPENAI_API_KEY
-                return self._client
+            def _embed(self, texts: list[str]) -> Embeddings:
+                _authorize_api_embedding()
+                api_key = os.environ.get("OPENAI_API_KEY", "")
+                if not api_key:
+                    raise ValueError(
+                        "OPENAI_API_KEY env var required for OpenAI embeddings.")
+                response = _post_cloud_with_policy(
+                    policy, _OPENAI_EMBEDDINGS_URL,
+                    headers={"Accept": "application/json"},
+                    auth=_llm_adapters._BearerAuth(api_key),
+                    json={"model": self._name, "input": texts},
+                    timeout=60, allow_redirects=False,
+                )
+                _require_no_cloud_redirect(response, "OpenAI embedding")
+                response.raise_for_status()
+                return _data_embedding_vectors(
+                    response.json(), expected_count=len(texts),
+                    provider="OpenAI")
 
             def __call__(self, input: Documents) -> Embeddings:
-                client = self._load()
                 BATCH = 2048  # OpenAI allows large batches
                 if len(input) <= BATCH:
-                    resp = client.embeddings.create(model=self._name,
-                                                    input=list(input))
-                    return [d.embedding for d in resp.data]
+                    return self._embed(list(input))
                 all_embs: Embeddings = []
                 for i in range(0, len(input), BATCH):
-                    resp = client.embeddings.create(model=self._name,
-                                                    input=list(input[i:i + BATCH]))
-                    all_embs.extend([d.embedding for d in resp.data])
+                    all_embs.extend(self._embed(list(input[i:i + BATCH])))
                 return all_embs
 
         return _OpenAIEmbedFn(model_name)
-
-    # --- MiniMax (embo-01) ---
-    if model_name.startswith("embo-") or model_name.startswith("minimax-emb"):
-        class _MiniMaxEmbedFn:
-            def __init__(self, name: str):
-                self._name = name
-
-            def __call__(self, input: Documents) -> Embeddings:
-                api_key = os.environ.get("MINIMAX_API_KEY", "")
-                if not api_key:
-                    raise ValueError(
-                        "MINIMAX_API_KEY env var required for MiniMax embeddings.")
-                resp = requests.post(
-                    f"{DEFAULT_CLOUD_URL.rstrip('/')}/embeddings",
-                    headers={"Authorization": f"Bearer {api_key}"},
-                    auth=_llm_adapters._BearerAuth(api_key),
-                    json={"model": self._name, "input": list(input)},
-                    timeout=60,
-                    allow_redirects=False,
-                )
-                if 300 <= resp.status_code < 400:
-                    raise RuntimeError(
-                        "MiniMax embedding endpoint returned a redirect")
-                resp.raise_for_status()
-                data = resp.json()
-                return [d["embedding"] for d in data["data"]]
-
-        return _MiniMaxEmbedFn(model_name)
 
     # --- Local sentence-transformers (nomic, legal-bert, etc.) ---
     # WARNING: trust_remote_code=True allows model repos to execute arbitrary
@@ -754,6 +859,7 @@ def _get_embedding_fn(model_name: str, *, input_type: str = "document"):
                     execute_remote_code=(
                         artifact.trust_remote_code
                         if artifact is not None else True),
+                    security_policy=policy,
                 )
                 from sentence_transformers import SentenceTransformer
                 loader_kwargs = {
@@ -923,6 +1029,22 @@ def _json_file_is_valid(path: Path) -> bool:
         return False
 
 
+def _chroma_settings_kwargs(chromadb_module) -> dict[str, object]:
+    """Construct an explicit no-telemetry Chroma settings object."""
+    settings_factory = getattr(chromadb_module, "Settings", None)
+    if settings_factory is None:
+        # Lightweight unit fakes intentionally expose only PersistentClient.
+        # An installed Chroma package must expose Settings or fail closed.
+        if getattr(chromadb_module, "__file__", None) is None:
+            return {}
+        raise RuntimeError(
+            "installed Chroma does not expose telemetry controls")
+    settings = settings_factory(anonymized_telemetry=False)
+    if getattr(settings, "anonymized_telemetry", None) is not False:
+        raise RuntimeError("Chroma telemetry could not be disabled")
+    return {"settings": settings}
+
+
 def _chunk_record_count(path: Path) -> int | None:
     """Strictly validate a chunk JSONL file and return its record count.
 
@@ -981,7 +1103,8 @@ def _index_collection_count_impl(db_dir: Path, collection_name: str,
     client = None
     operation_error = None
     try:
-        client = chromadb.PersistentClient(path=str(db_dir))
+        client = chromadb.PersistentClient(
+            path=str(db_dir), **_chroma_settings_kwargs(chromadb))
         try:
             collection = client.get_collection(collection_name)
         except Exception as exc:
@@ -1060,7 +1183,7 @@ def _resume_command_defaults() -> _cli_policy.ResumeCommandDefaults:
         dedup_threshold=DEDUP_THRESHOLD,
         db_lock_timeout=DEFAULT_DB_LOCK_TIMEOUT,
         full_operation_timeout=DEFAULT_OPERATION_TIMEOUTS["full"],
-        llm_cache_mode="readwrite",
+        llm_cache_mode="off",
         llm_fallback="ordered",
         llm_failure_policy="best-effort",
         provider=_provider_cli_defaults(),
@@ -2094,7 +2217,7 @@ class _AgentTeam:
         self.kw = {k: v for k, v in llm_kwargs.items()
                    if k in ("cloud_url", "cloud_model", "cloud_key",
                             "ollama_url", "ollama_model", "gemini_key",
-                            "llm_workers", "thinking")}
+                            "llm_workers", "thinking", "security_policy")}
         self.audit: list[dict] = []
         self.flagged: list[str] = []
 
@@ -2917,6 +3040,9 @@ def _build_scaffold(doc: dict, book_sections: dict, *,
                     llm_workers: int = DEFAULT_LLM_WORKERS,
                     thinking: bool = False,
                     use_llm: bool = False,
+                    security_policy: (
+                        _release_security.ReleaseSecurityPolicy | None
+                    ) = None,
                     ) -> list[dict]:
     """Build an authoritative book scaffold from TOC/Contents text items.
 
@@ -2932,7 +3058,8 @@ def _build_scaffold(doc: dict, book_sections: dict, *,
     llm_kwargs = dict(cloud_url=cloud_url, cloud_model=cloud_model,
                       cloud_key=cloud_key, ollama_url=ollama_url,
                       ollama_model=ollama_model, gemini_key=gemini_key,
-                      llm_workers=llm_workers, thinking=thinking)
+                      llm_workers=llm_workers, thinking=thinking,
+                      security_policy=security_policy)
 
     texts = doc.get("texts", [])
     tables = doc.get("tables", [])
@@ -3291,7 +3418,7 @@ def _llm_parse_scaffold(
                 k: v for k, v in llm_kwargs.items()
                 if k in ("cloud_url", "cloud_model", "cloud_key",
                           "ollama_url", "ollama_model", "gemini_key",
-                          "llm_workers", "thinking")})
+                          "llm_workers", "thinking", "security_policy")})
         except (LLMBudgetExceeded, LLMExecutionError):
             raise
         except Exception:
@@ -4149,8 +4276,11 @@ def _llm_parse_toc(toc_text: str, *,
                    thinking: bool = False,
                    structure_profile: (
                        str | _document_profiles.StructureProfile
-                   ) = DEFAULT_STRUCTURE_PROFILE) -> list[dict]:
-    """Send the raw TOC text to M2.7 and get back a structured hierarchy.
+                   ) = DEFAULT_STRUCTURE_PROFILE,
+                   security_policy: (
+                       _release_security.ReleaseSecurityPolicy | None
+                   ) = None) -> list[dict]:
+    """Send raw TOC text through the configured LLM provider and parse it.
 
     The LLM understands the textbook's structure better than regex —
     it can distinguish chapters from sections from subsections from
@@ -4164,8 +4294,8 @@ def _llm_parse_toc(toc_text: str, *,
             for rule in profile.hierarchy_rules
         ],
     ])
-    # Send TOC in chunks of ~100 lines (M2.7 handles 204K context but
-    # output length is the bottleneck — fewer entries = better JSON output)
+    # Send TOC in chunks of ~100 lines. Output length, rather than the large
+    # reviewed provider context windows, is the practical JSON bottleneck.
     lines = toc_text.strip().split("\n")
     all_entries = []
 
@@ -4181,7 +4311,8 @@ def _llm_parse_toc(toc_text: str, *,
             cloud_key=cloud_key, ollama_url=ollama_url,
             ollama_model=ollama_model, gemini_key=gemini_key,
             llm_workers=llm_workers, thinking=thinking,
-            max_tokens=4000, timeout=60, operation="toc.parse")
+            max_tokens=4000, timeout=60, operation="toc.parse",
+            security_policy=security_policy)
         if result:
             result = _THINK_TAG_RE.sub("", result).strip()
             s = result.find("[")
@@ -4339,16 +4470,70 @@ def _post_loopback_without_environment(url: str, **kwargs):
         return session.post(url, **kwargs)
 
 
+_DEFAULT_RELEASE_SECURITY_POLICY = _release_security.ReleaseSecurityPolicy()
+
+
+def _effective_security_policy(
+        policy: _release_security.ReleaseSecurityPolicy | None,
+) -> _release_security.ReleaseSecurityPolicy:
+    """Apply fail-closed release defaults to direct Python callers too."""
+    if policy is None:
+        return _DEFAULT_RELEASE_SECURITY_POLICY
+    if not isinstance(policy, _release_security.ReleaseSecurityPolicy):
+        raise TypeError("invalid release security policy")
+    return policy
+
+
+def _post_cloud_with_policy(
+        policy: _release_security.ReleaseSecurityPolicy,
+        url: str, **kwargs):
+    """POST with ambient proxy/CA/netrc state disabled unless reviewed."""
+    policy = _effective_security_policy(policy)
+    with requests.Session() as session:
+        session.trust_env = policy.trust_environment_network
+        return session.post(url, **kwargs)
+
+
+def _require_no_cloud_redirect(response: object, feature: str) -> None:
+    status_code = getattr(response, "status_code", None)
+    if isinstance(status_code, int) and 300 <= status_code < 400:
+        raise RuntimeError(f"{feature} endpoint returned a redirect")
+
+
+def _require_endpoint_egress(
+        policy: _release_security.ReleaseSecurityPolicy,
+        endpoint: _endpoint_policy.ValidatedEndpoint,
+        *, feature: str) -> None:
+    """Allow literal loopback locally and gate every other endpoint."""
+    if endpoint.is_loopback:
+        return
+    _release_security.require_cloud_egress(
+        policy,
+        feature=feature,
+        custom_gateway=endpoint.provider == "custom",
+    )
+
+
 def _call_ollama_result(prompt: str, *, url: str = DEFAULT_OLLAMA_URL,
                         model: str = DEFAULT_OLLAMA_MODEL,
                         thinking: bool = False,
                         max_tokens: int = 256,
-                        timeout: int = 30) -> ProviderResponse:
+                        timeout: int = 30,
+                        security_policy: (
+                            _release_security.ReleaseSecurityPolicy | None
+                        ) = None) -> ProviderResponse:
     """Return Ollama text with its native prompt/output token counts."""
+    endpoint = _validate_cloud_endpoint(url)
+    assert endpoint is not None
+    policy = _effective_security_policy(security_policy)
+    _require_endpoint_egress(
+        policy, endpoint,
+        feature="Ollama generation")
     return _llm_adapters._call_ollama_result(
-        prompt, url=url, model=model, thinking=thinking,
+        prompt, url=endpoint.base_url, model=model, thinking=thinking,
         max_tokens=max_tokens, timeout=timeout,
-        post_fn=requests.post,
+        post_fn=lambda target, **kwargs: _post_cloud_with_policy(
+            policy, target, **kwargs),
         loopback_post_fn=_post_loopback_without_environment,
         validate_endpoint_fn=_validate_cloud_endpoint,
         provider_token_count_fn=_provider_token_count,
@@ -4360,13 +4545,17 @@ def _call_ollama(prompt: str, *, url: str = DEFAULT_OLLAMA_URL,
                  thinking: bool = False,
                  max_tokens: int = 256,
                  timeout: int = 30,
-                 _structured: bool = False
+                 _structured: bool = False,
+                 security_policy: (
+                     _release_security.ReleaseSecurityPolicy | None
+                 ) = None,
                  ) -> Optional[str] | ProviderResponse:
     """Call Ollama generate endpoint. Returns response text or None on failure."""
     try:
         result = _call_ollama_result(
             prompt, url=url, model=model, thinking=thinking,
-            max_tokens=max_tokens, timeout=timeout)
+            max_tokens=max_tokens, timeout=timeout,
+            security_policy=security_policy)
         return result if _structured else result.text
     except ProviderCallError as exc:
         log.debug("Ollama call failed: %s", exc.category)
@@ -4377,6 +4566,7 @@ def _call_ollama(prompt: str, *, url: str = DEFAULT_OLLAMA_URL,
 
 _gemini_client_cache = None
 _gemini_client_key = ""
+_gemini_client_trust_environment: bool | None = None
 _gemini_client_lock = _threading.Lock()
 
 
@@ -4385,9 +4575,17 @@ def _gemini_content_filtered(response: object) -> bool:
         response, provider_value_fn=_provider_value)
 
 
-def _load_gemini_client(api_key: str) -> tuple[object, object]:
+def _load_gemini_client(
+        api_key: str, *,
+        security_policy: (
+            _release_security.ReleaseSecurityPolicy | None) = None,
+) -> tuple[object, object]:
     """Lazily create the cached Gemini client through facade-owned state."""
     global _gemini_client_cache, _gemini_client_key
+    global _gemini_client_trust_environment
+    policy = _effective_security_policy(security_policy)
+    _release_security.require_cloud_egress(
+        policy, feature="Gemini generation")
     try:
         from google import genai
         from google.genai import types
@@ -4400,9 +4598,36 @@ def _load_gemini_client(api_key: str) -> tuple[object, object]:
     try:
         with _gemini_client_lock:
             if (_gemini_client_cache is None
-                    or _gemini_client_key != api_key):
-                _gemini_client_cache = genai.Client(api_key=api_key)
+                    or _gemini_client_key != api_key
+                    or _gemini_client_trust_environment
+                    != policy.trust_environment_network):
+                transport_args = {
+                    "trust_env": policy.trust_environment_network,
+                    "follow_redirects": False,
+                    "verify": True,
+                }
+                new_client = genai.Client(
+                    vertexai=False,
+                    api_key=api_key,
+                    http_options=types.HttpOptions(
+                        base_url=_GEMINI_API_BASE_URL,
+                        api_version="v1beta",
+                        timeout=60_000,
+                        retry_options=types.HttpRetryOptions(attempts=1),
+                        client_args=dict(transport_args),
+                        async_client_args=dict(transport_args),
+                    ),
+                )
+                _gemini_client_cache = new_client
                 _gemini_client_key = api_key
+                _gemini_client_trust_environment = (
+                    policy.trust_environment_network)
+                # Do not close the displaced client here.  Another admitted
+                # call can still hold it while performing generate_content;
+                # eager close turns a concurrent policy/key rotation into a
+                # spurious provider failure.  Its caller reference keeps it
+                # alive through the request, after which normal object/process
+                # cleanup can reclaim the transport.
             return _gemini_client_cache, types
     except Exception:
         raise ProviderCallError(
@@ -4412,12 +4637,22 @@ def _load_gemini_client(api_key: str) -> tuple[object, object]:
 def _call_gemini_result(prompt: str, *, api_key: str = "",
                         model: str = DEFAULT_GEMINI_MODEL,
                         max_tokens: int = 256,
-                        timeout: int = 30) -> ProviderResponse:
+                        timeout: int = 30,
+                        thinking_level: str | None = None,
+                        security_policy: (
+                            _release_security.ReleaseSecurityPolicy | None
+                        ) = None) -> ProviderResponse:
     """Return Gemini text and usage with SDK retries explicitly disabled."""
+    policy = _effective_security_policy(security_policy)
+    _release_security.require_cloud_egress(
+        policy,
+        feature="Gemini generation")
     return _llm_adapters._call_gemini_result(
         prompt, api_key=api_key, model=model,
         max_tokens=max_tokens, timeout=timeout,
-        client_loader_fn=_load_gemini_client,
+        thinking_level=thinking_level,
+        client_loader_fn=lambda key: _load_gemini_client(
+            key, security_policy=policy),
         environment_get_fn=os.environ.get,
         provider_value_fn=_provider_value,
         provider_token_count_fn=_provider_token_count,
@@ -4429,13 +4664,19 @@ def _call_gemini(prompt: str, *, api_key: str = "",
                  model: str = DEFAULT_GEMINI_MODEL,
                  max_tokens: int = 256,
                  timeout: int = 30,
-                 _structured: bool = False
+                 thinking_level: str | None = None,
+                 _structured: bool = False,
+                 security_policy: (
+                     _release_security.ReleaseSecurityPolicy | None
+                 ) = None,
                  ) -> Optional[str] | ProviderResponse:
     """Call Gemini generate endpoint. Returns response text or None on failure."""
     try:
         result = _call_gemini_result(
             prompt, api_key=api_key, model=model,
-            max_tokens=max_tokens, timeout=timeout)
+            max_tokens=max_tokens, timeout=timeout,
+            thinking_level=thinking_level,
+            security_policy=security_policy)
         return result if _structured else result.text
     except ProviderCallError as exc:
         log.debug("Gemini call failed: %s", exc.category)
@@ -4473,13 +4714,27 @@ def _call_openai_compatible_result(
         thinking: bool = False, max_tokens: int = 256,
         max_workers: int = DEFAULT_LLM_WORKERS,
         timeout: int = 30,
-        _admit_retry: Callable[[], None] | None = None) -> ProviderResponse:
+        _admit_retry: Callable[[], None] | None = None,
+        security_policy: (
+            _release_security.ReleaseSecurityPolicy | None
+        ) = None) -> ProviderResponse:
     """Return OpenAI-compatible text, native usage, and retry provenance."""
+    try:
+        endpoint = _validate_cloud_endpoint(base_url)
+    except (TypeError, ValueError):
+        raise ProviderCallError(
+            "configuration_error", transport_attempts=0) from None
+    assert endpoint is not None
+    policy = _effective_security_policy(security_policy)
+    _require_endpoint_egress(
+        policy, endpoint,
+        feature="OpenAI-compatible generation")
     return _llm_adapters._call_openai_compatible_result(
-        prompt, base_url=base_url, model=model, api_key=api_key,
+        prompt, base_url=endpoint.base_url, model=model, api_key=api_key,
         thinking=thinking, max_tokens=max_tokens,
         max_workers=max_workers, timeout=timeout,
-        post_fn=requests.post,
+        post_fn=lambda url, **kwargs: _post_cloud_with_policy(
+            policy, url, **kwargs),
         loopback_post_fn=_post_loopback_without_environment,
         get_throttle_fn=_get_throttle,
         sleep_fn=time.sleep, validate_endpoint_fn=_validate_cloud_endpoint,
@@ -4498,6 +4753,9 @@ def _call_openai_compatible(prompt: str, *, base_url: str,
                             timeout: int = 30,
                             _structured: bool = False,
                             _admit_retry: Callable[[], None] | None = None,
+                            security_policy: (
+                                _release_security.ReleaseSecurityPolicy | None
+                            ) = None,
                             ) -> Optional[str] | ProviderResponse:
     """Compatibility facade for an OpenAI-compatible chat completion."""
     try:
@@ -4505,7 +4763,8 @@ def _call_openai_compatible(prompt: str, *, base_url: str,
             prompt, base_url=base_url, model=model, api_key=api_key,
             thinking=thinking, max_tokens=max_tokens,
             max_workers=max_workers, timeout=timeout,
-            _admit_retry=_admit_retry)
+            _admit_retry=_admit_retry,
+            security_policy=security_policy)
         return result if _structured else result.text
     except ProviderCallError as exc:
         log.debug("OpenAI-compatible call failed: %s", exc.category)
@@ -4526,27 +4785,47 @@ def _call_llm_result(
         operation: str = "generic", prompt_version: str = "1",
         timeout: int = 30, fallback_policy: str | None = None,
         failure_policy: str | None = None, cache_mode: str | None = None,
-        cache_dir: Path | str | None = None) -> LLMResult:
+        cache_dir: Path | str | None = None,
+        security_policy: (
+            _release_security.ReleaseSecurityPolicy | None
+        ) = None) -> LLMResult:
     """Execute an LLM request with structured provenance and run controls."""
     # Validate every enabled caller-supplied transport before constructing a
     # cache key or consulting a cache.  The adapters repeat this check at the
     # final network boundary, but that alone would let a malformed endpoint
     # reuse a pre-existing cache entry without ever reaching the adapter.
+    policy = _effective_security_policy(security_policy)
+    minimax_enabled = False
     if cloud_url and cloud_key:
         cloud_endpoint = _validate_cloud_endpoint(cloud_url)
         assert cloud_endpoint is not None
+        _require_endpoint_egress(
+            policy, cloud_endpoint,
+            feature="OpenAI-compatible generation")
         cloud_url = cloud_endpoint.base_url
+        minimax_enabled = cloud_endpoint.provider == "minimax"
     if ollama_url:
         ollama_endpoint = _validate_cloud_endpoint(ollama_url)
         assert ollama_endpoint is not None
+        _require_endpoint_egress(
+            policy, ollama_endpoint, feature="Ollama generation")
         ollama_url = ollama_endpoint.base_url
 
     runtime_config = _llm_runtime.config
+    effective_cloud_model = cloud_model or ollama_model
+    minimax_m2_enabled = (
+        minimax_enabled
+        and effective_cloud_model.casefold().startswith("minimax-m2"))
+    # MiniMax M2.x always reasons inside the completion-token allowance.  A
+    # tiny shared operation budget can end before final content appears, so
+    # bind a provider-safe floor before runtime token admission/accounting.
+    effective_max_tokens = (
+        max(max_tokens, 512) if minimax_m2_enabled else max_tokens)
     request = LLMRequest(
         prompt=prompt,
         operation=operation,
         prompt_version=prompt_version,
-        max_tokens=max_tokens,
+        max_tokens=effective_max_tokens,
         thinking=thinking,
         timeout=timeout,
         fallback_policy=fallback_policy or runtime_config.fallback_policy,
@@ -4557,8 +4836,6 @@ def _call_llm_result(
     providers: list[ProviderSpec] = []
 
     if cloud_url and cloud_key:
-        effective_cloud_model = cloud_model or ollama_model
-
         def invoke_cloud(
                 req: LLMRequest) -> Optional[str] | ProviderResponse:
             return _call_openai_compatible(
@@ -4566,11 +4843,14 @@ def _call_llm_result(
                 api_key=cloud_key, max_workers=llm_workers,
                 thinking=req.thinking, max_tokens=req.max_tokens,
                 timeout=req.timeout, _structured=True,
-                _admit_retry=req.admit_transport_retry)
+                _admit_retry=req.admit_transport_retry,
+                security_policy=policy)
 
         providers.append(ProviderSpec(
             name="cloud", model=effective_cloud_model,
-            endpoint_id=_llm_endpoint_id(cloud_url), invoke=invoke_cloud))
+            endpoint_id=_llm_endpoint_id(cloud_url), invoke=invoke_cloud,
+            cache_namespace_id=(
+                policy.cache_namespace_id or "v1:default")))
 
     if ollama_url:
         def invoke_ollama(
@@ -4578,25 +4858,45 @@ def _call_llm_result(
             return _call_ollama(
                 req.prompt, url=ollama_url, model=ollama_model,
                 thinking=req.thinking, max_tokens=req.max_tokens,
-                timeout=req.timeout, _structured=True)
+                timeout=req.timeout, _structured=True,
+                security_policy=policy)
 
         providers.append(ProviderSpec(
             name="ollama", model=ollama_model,
-            endpoint_id=_llm_endpoint_id(ollama_url), invoke=invoke_ollama))
+            endpoint_id=_llm_endpoint_id(ollama_url), invoke=invoke_ollama,
+            cache_namespace_id=(
+                policy.cache_namespace_id or "v1:default")))
 
-    effective_gemini_key = gemini_key or os.environ.get("GEMINI_API_KEY", "")
+    # Ambient cloud credentials do not turn a local-only execution into an
+    # error or a cloud-capable chain.  An explicitly supplied key still fails
+    # closed, while allow-cloud mode may discover the environment key only
+    # after the network policy has been checked.
+    gemini_configured = bool(gemini_key)
+    if not gemini_configured and policy.network_policy == "allow-cloud":
+        gemini_configured = "GEMINI_API_KEY" in os.environ
+    if gemini_configured:
+        _release_security.require_cloud_egress(
+            policy, feature="Gemini generation")
+    effective_gemini_key = (
+        gemini_key or os.environ.get("GEMINI_API_KEY", "")
+        if gemini_configured else ""
+    )
     if effective_gemini_key:
         def invoke_gemini(
                 req: LLMRequest) -> Optional[str] | ProviderResponse:
             return _call_gemini(
                 req.prompt, api_key=effective_gemini_key,
                 model=DEFAULT_GEMINI_MODEL, max_tokens=req.max_tokens,
-                timeout=req.timeout, _structured=True)
+                timeout=req.timeout, _structured=True,
+                thinking_level=("high" if req.thinking else "minimal"),
+                security_policy=policy)
 
         providers.append(ProviderSpec(
             name="gemini", model=DEFAULT_GEMINI_MODEL,
             endpoint_id="generativelanguage.googleapis.com/v1beta",
-            invoke=invoke_gemini))
+            invoke=invoke_gemini,
+            cache_namespace_id=(
+                policy.cache_namespace_id or "v1:default")))
 
     return _llm_runtime.execute(request, providers)
 
@@ -4611,7 +4911,10 @@ def _call_llm(prompt: str, *, ollama_url: str = DEFAULT_OLLAMA_URL,
               timeout: int = 30, fallback_policy: str | None = None,
               failure_policy: str | None = None,
               cache_mode: str | None = None,
-              cache_dir: Path | str | None = None) -> Optional[str]:
+              cache_dir: Path | str | None = None,
+              security_policy: (
+                  _release_security.ReleaseSecurityPolicy | None
+              ) = None) -> Optional[str]:
     """Compatibility facade returning text from the structured LLM runtime."""
     result = _call_llm_result(
         prompt, ollama_url=ollama_url, ollama_model=ollama_model,
@@ -4621,7 +4924,8 @@ def _call_llm(prompt: str, *, ollama_url: str = DEFAULT_OLLAMA_URL,
         max_tokens=max_tokens, operation=operation,
         prompt_version=prompt_version, timeout=timeout,
         fallback_policy=fallback_policy, failure_policy=failure_policy,
-        cache_mode=cache_mode, cache_dir=cache_dir)
+        cache_mode=cache_mode, cache_dir=cache_dir,
+        security_policy=security_policy)
     return result.text or None
 
 
@@ -4671,7 +4975,10 @@ def _llm_classify(text: str, headings: list[str] | None, *,
                   cloud_url: str = "", cloud_model: str = "",
                   cloud_key: str = "",
                   llm_workers: int = DEFAULT_LLM_WORKERS,
-                  thinking: bool = False) -> Optional[str]:
+                  thinking: bool = False,
+                  security_policy: (
+                      _release_security.ReleaseSecurityPolicy | None
+                  ) = None) -> Optional[str]:
     """Classify a chunk using LLM. Returns label or None on failure."""
     heading_str = " > ".join(headings) if headings else "(none)"
     prompt = _CLASSIFY_PROMPT.format(headings=heading_str, text=text[:600])
@@ -4679,7 +4986,8 @@ def _llm_classify(text: str, headings: list[str] | None, *,
                        gemini_key=gemini_key, cloud_url=cloud_url,
                        cloud_model=cloud_model, cloud_key=cloud_key,
                        llm_workers=llm_workers, thinking=thinking,
-                       max_tokens=32, operation="chunk.classify")
+                       max_tokens=256, operation="chunk.classify",
+                       security_policy=security_policy)
     if not result:
         return None
     # Clean thinking tags and extract the label
@@ -4761,7 +5069,10 @@ def _generate_context(text: str, headings: list[str] | None,
                       cloud_url: str = "", cloud_model: str = "",
                       cloud_key: str = "",
                       llm_workers: int = DEFAULT_LLM_WORKERS,
-                      thinking: bool = False) -> str:
+                      thinking: bool = False,
+                      security_policy: (
+                          _release_security.ReleaseSecurityPolicy | None
+                      ) = None) -> str:
     """Generate a contextual retrieval prefix for a chunk."""
     heading_str = " > ".join(headings) if headings else "(none)"
     prompt = _CONTEXT_PROMPT.format(
@@ -4773,7 +5084,8 @@ def _generate_context(text: str, headings: list[str] | None,
                        gemini_key=gemini_key, cloud_url=cloud_url,
                        cloud_model=cloud_model, cloud_key=cloud_key,
                        llm_workers=llm_workers, thinking=thinking,
-                       max_tokens=160, operation="chunk.contextualize")
+                       max_tokens=160, operation="chunk.contextualize",
+                       security_policy=security_policy)
     if not result:
         return ""
     # Clean up: remove thinking tags that deepseek-r1 sometimes emits
@@ -4787,7 +5099,9 @@ def _generate_context(text: str, headings: list[str] | None,
 # Reranker — lazy-loaded, model-keyed cache
 # ---------------------------------------------------------------------------
 
-_reranker_instances: dict[str, object] = {}
+_reranker_instances: dict[
+    tuple[str, _release_security.ReleaseSecurityPolicy], object
+] = {}
 _reranker_lock = _threading.Lock()
 _RERANKER_METADATA_CHAR_LIMIT = 1600
 
@@ -4818,28 +5132,69 @@ def _reranker_document(document: str, metadata: dict) -> str:
     return "\n".join(context_parts) + "\n\nText:\n" + document
 
 
-def _get_reranker(model_name: str = DEFAULT_RERANKER_MODEL):
-    """Lazy-load and cache each local reranker by its exact model name."""
+def _get_reranker(
+        model_name: str = DEFAULT_RERANKER_MODEL, *,
+        security_policy: (
+            _release_security.ReleaseSecurityPolicy | None) = None):
+    """Lazy-load a local reranker within one immutable security policy."""
     if model_name.startswith(("cohere-rerank", "jina-reranker")):
         return None
-    if model_name not in _reranker_instances:
+    policy = _effective_security_policy(security_policy)
+    cache_key = (model_name, policy)
+    if cache_key not in _reranker_instances:
         with _reranker_lock:
-            if model_name in _reranker_instances:
-                return _reranker_instances[model_name]
+            if cache_key in _reranker_instances:
+                return _reranker_instances[cache_key]
             from FlagEmbedding import FlagReranker
             log.info(f"Loading reranker: {model_name}")
             model_source, verified = _model_loader_source(
-                model_name, "reranker")
-            _reranker_instances[model_name] = FlagReranker(
+                model_name, "reranker", security_policy=policy)
+            _reranker_instances[cache_key] = FlagReranker(
                 model_source, use_fp16=True,
                 trust_remote_code=not verified,
             )
-    return _reranker_instances[model_name]
+    return _reranker_instances[cache_key]
+
+
+def _validated_reranker_rows(
+        payload: object, *, document_count: int, top_k: int,
+        provider: str) -> list[tuple[int, float]]:
+    if not isinstance(payload, dict) or not isinstance(
+            payload.get("results"), list):
+        raise RuntimeError(f"{provider} returned an invalid rerank response")
+    raw_results = payload["results"]
+    if len(raw_results) > min(document_count, top_k):
+        raise RuntimeError(f"{provider} returned too many rerank results")
+    rows = []
+    seen = set()
+    for item in raw_results:
+        if not isinstance(item, dict):
+            raise RuntimeError(f"{provider} returned an invalid rerank result")
+        index = item.get("index")
+        score = item.get("relevance_score")
+        if (
+            isinstance(index, bool)
+            or not isinstance(index, int)
+            or not 0 <= index < document_count
+            or index in seen
+        ):
+            raise RuntimeError(f"{provider} returned an invalid rerank index")
+        if isinstance(score, bool) or not isinstance(score, (int, float)):
+            raise RuntimeError(f"{provider} returned an invalid rerank score")
+        numeric_score = float(score)
+        if not math.isfinite(numeric_score):
+            raise RuntimeError(f"{provider} returned an invalid rerank score")
+        seen.add(index)
+        rows.append((index, numeric_score))
+    return rows
 
 
 def _rerank(query: str, documents: list[str], metadatas: list[dict],
             distances: list[float], top_k: int, *,
-            reranker_model: str = DEFAULT_RERANKER_MODEL) -> tuple:
+            reranker_model: str = DEFAULT_RERANKER_MODEL,
+            security_policy: (
+                _release_security.ReleaseSecurityPolicy | None
+            ) = None) -> tuple:
     """Rerank retrieved documents using cross-encoder or API reranker.
 
     Supports:
@@ -4853,53 +5208,67 @@ def _rerank(query: str, documents: list[str], metadatas: list[dict],
         _reranker_document(document, metadata or {})
         for document, metadata in zip(documents, metadatas)
     ]
+    if reranker_model.startswith(("cohere-rerank", "jina-reranker")):
+        policy = _effective_security_policy(security_policy)
+        _release_security.require_cloud_egress(
+            policy,
+            feature="cloud reranking")
+    else:
+        policy = _effective_security_policy(security_policy)
 
     # --- Cohere Rerank API ---
     if reranker_model.startswith("cohere-rerank"):
-        import cohere
         api_key = os.environ.get("COHERE_API_KEY", "")
         if not api_key:
             raise ValueError("COHERE_API_KEY env var required for Cohere reranker")
-        client = cohere.Client(api_key)
         model_id = reranker_model.removeprefix("cohere-")
-        resp = client.rerank(
-            model=model_id, query=query,
-            documents=reranker_documents, top_n=top_k,
+        resp = _post_cloud_with_policy(
+            policy, _COHERE_RERANK_URL,
+            headers={"Accept": "application/json"},
+            auth=_llm_adapters._BearerAuth(api_key),
+            json={"model": model_id, "query": query,
+                  "documents": reranker_documents, "top_n": top_k},
+            timeout=60, allow_redirects=False,
         )
-        ranked_docs = []
-        ranked_metas = []
-        ranked_scores = []
-        for r in resp.results:
-            ranked_docs.append(documents[r.index])
-            ranked_metas.append(metadatas[r.index])
-            ranked_scores.append(r.relevance_score)
-        return ranked_docs, ranked_metas, ranked_scores
+        _require_no_cloud_redirect(resp, "Cohere reranker")
+        resp.raise_for_status()
+        rows = _validated_reranker_rows(
+            resp.json(), document_count=len(documents), top_k=top_k,
+            provider="Cohere")
+        return (
+            [documents[index] for index, _ in rows],
+            [metadatas[index] for index, _ in rows],
+            [score for _, score in rows],
+        )
 
     # --- Jina Rerank API ---
     if reranker_model.startswith("jina-reranker"):
         api_key = os.environ.get("JINA_API_KEY", "")
         if not api_key:
             raise ValueError("JINA_API_KEY env var required for Jina reranker")
-        resp = requests.post(
-            "https://api.jina.ai/v1/rerank",
-            headers={"Authorization": f"Bearer {api_key}"},
+        resp = _post_cloud_with_policy(
+            policy, _JINA_RERANK_URL,
+            headers={"Accept": "application/json"},
             auth=_llm_adapters._BearerAuth(api_key),
             json={"model": reranker_model, "query": query,
                   "documents": reranker_documents, "top_n": top_k},
             timeout=60,
             allow_redirects=False,
         )
-        if 300 <= resp.status_code < 400:
-            raise RuntimeError("Jina reranker endpoint returned a redirect")
+        _require_no_cloud_redirect(resp, "Jina reranker")
         resp.raise_for_status()
-        results = resp.json()["results"]
-        ranked_docs = [documents[r["index"]] for r in results]
-        ranked_metas = [metadatas[r["index"]] for r in results]
-        ranked_scores = [r["relevance_score"] for r in results]
-        return ranked_docs, ranked_metas, ranked_scores
+        rows = _validated_reranker_rows(
+            resp.json(), document_count=len(documents), top_k=top_k,
+            provider="Jina")
+        return (
+            [documents[index] for index, _ in rows],
+            [metadatas[index] for index, _ in rows],
+            [score for _, score in rows],
+        )
 
     # --- Local FlagReranker (BGE, etc.) ---
-    reranker = _get_reranker(reranker_model)
+    reranker = _get_reranker(
+        reranker_model, security_policy=security_policy)
     pairs = [[query, document] for document in reranker_documents]
     scores = reranker.compute_score(pairs, normalize=True)
     if isinstance(scores, float):
@@ -5300,6 +5669,8 @@ def _pin_docling_layout_revision(pipeline_options) -> str | None:
 
 def _configure_docling_model_artifacts(
         pipeline_options, *, include_ocr: bool,
+        security_policy: (
+            _release_security.ReleaseSecurityPolicy | None) = None,
 ) -> Path:
     """Force Docling onto verified local models and deterministic modes."""
     from docling.datamodel.pipeline_options import (
@@ -5308,8 +5679,18 @@ def _configure_docling_model_artifacts(
         TableStructureOptions,
     )
 
+    policy = _effective_security_policy(security_policy)
+    allow_download = (
+        policy.model_download_policy == "allow-reviewed-sync")
     root = _model_artifacts.verified_docling_artifact_directory(
-        include_ocr=include_ocr)
+        include_ocr=include_ocr,
+        allow_download=allow_download,
+        authorize_download_fn=(
+            lambda: _release_security.require_model_download(
+                policy, feature="Docling model synchronization")
+        ) if allow_download else None,
+        **(_model_download_transport(policy) if allow_download else {}),
+    )
     pipeline_options.artifacts_path = root
     pipeline_options.table_structure_options = TableStructureOptions(
         do_cell_matching=True,
@@ -5420,7 +5801,10 @@ def convert_pdf(pdf_path: Path, doc_output: Path, *,
                 auto_preprocess: bool = True,
                 ocr: bool | None = None,
                 preprocessed_output: Path | None = None,
-                markdown_output: Path | None = None) -> None:
+                markdown_output: Path | None = None,
+                security_policy: (
+                    _release_security.ReleaseSecurityPolicy | None) = None,
+                ) -> None:
     """Convert under path-wide leases for the complete artifact set."""
     doc_output = Path(doc_output)
     markdown_path = markdown_output or doc_output.with_name(
@@ -5444,7 +5828,8 @@ def convert_pdf(pdf_path: Path, doc_output: Path, *,
             backend=backend, force=force, watermark=watermark,
             auto_preprocess=auto_preprocess, ocr=ocr,
             preprocessed_output=preprocessed_output,
-            markdown_output=markdown_output)
+            markdown_output=markdown_output,
+            security_policy=security_policy)
 
 
 def _convert_pdf_locked(pdf_path: Path, doc_output: Path, *,
@@ -5455,7 +5840,10 @@ def _convert_pdf_locked(pdf_path: Path, doc_output: Path, *,
                 auto_preprocess: bool = True,
                 ocr: bool | None = None,
                 preprocessed_output: Path | None = None,
-                markdown_output: Path | None = None) -> None:
+                markdown_output: Path | None = None,
+                security_policy: (
+                    _release_security.ReleaseSecurityPolicy | None) = None,
+                ) -> None:
     """Convert one immutable PDF generation and bind its exact source."""
     source_pdf_path = Path(pdf_path)
     _require_file(source_pdf_path, "PDF file")
@@ -5489,7 +5877,8 @@ def _convert_pdf_locked(pdf_path: Path, doc_output: Path, *,
             force=force, watermark=watermark,
             auto_preprocess=auto_preprocess, ocr=ocr,
             preprocessed_output=preprocessed_path,
-            markdown_output=markdown_output)
+            markdown_output=markdown_output,
+            security_policy=security_policy)
         if _cached_artifact_sha256(source_pdf_path) != source_snapshot.sha256:
             raise RuntimeError(
                 f"PDF source changed while converting: {source_pdf_path}")
@@ -5557,7 +5946,10 @@ def _convert_pdf_generation(
                 auto_preprocess: bool = True,
                 ocr: bool | None = None,
                 preprocessed_output: Path | None = None,
-                markdown_output: Path | None = None) -> "ConversionInputBinding":
+                markdown_output: Path | None = None,
+                security_policy: (
+                    _release_security.ReleaseSecurityPolicy | None) = None,
+                ) -> "ConversionInputBinding":
     """Convert an already-pinned PDF pathname generation."""
     import os
 
@@ -5696,7 +6088,8 @@ def _convert_pdf_generation(
     if revision := _pin_docling_layout_revision(pipeline_opts):
         log.info(f"Docling layout revision: {revision}")
     artifacts_root = _configure_docling_model_artifacts(
-        pipeline_opts, include_ocr=effective_ocr)
+        pipeline_opts, include_ocr=effective_ocr,
+        security_policy=security_policy)
     log.info(f"Docling verified model artifacts: {artifacts_root}")
 
     converter = DocumentConverter(
@@ -7474,7 +7867,10 @@ def _chunk_parameters(*, embedding_model: str, max_tokens: int,
                        table_children: bool = False,
                        structure_profile: (
                           str | _document_profiles.StructureProfile
-                      ) = DEFAULT_STRUCTURE_PROFILE) -> dict:
+                      ) = DEFAULT_STRUCTURE_PROFILE,
+                       security_policy: (
+                           _release_security.ReleaseSecurityPolicy | None
+                       ) = None) -> dict:
     """Return credential-free parameters that determine chunking output."""
     profile = _document_profiles.get_profile(structure_profile)
     llm_generation_enabled = any((
@@ -7484,9 +7880,11 @@ def _chunk_parameters(*, embedding_model: str, max_tokens: int,
         quality_score,
         llm_scaffold,
     ))
+    policy = _effective_security_policy(security_policy)
     gemini_enabled = bool(
         llm_generation_enabled
-        and (gemini_key or os.environ.get("GEMINI_API_KEY", "")))
+        and policy.network_policy == "allow-cloud"
+        and (gemini_key or "GEMINI_API_KEY" in os.environ))
     llm_config = _llm_runtime.config
     return {
         "chunking_policy_version": 23,
@@ -7531,6 +7929,7 @@ def _chunk_parameters(*, embedding_model: str, max_tokens: int,
             _table_retrieval_core.MAX_TABLE_CHILDREN_PER_CORPUS),
         "structure_profile": _document_profiles.profile_provenance(profile),
         "model_artifact_lock_sha256": _model_artifact_lock_sha256(),
+        "release_security": policy.provenance(),
     }
 
 
@@ -7980,7 +8379,10 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
                    table_children: bool = False,
                    structure_profile: (
                        str | _document_profiles.StructureProfile
-                   ) = DEFAULT_STRUCTURE_PROFILE) -> None:
+                   ) = DEFAULT_STRUCTURE_PROFILE,
+                   security_policy: (
+                       _release_security.ReleaseSecurityPolicy | None
+                   ) = None) -> None:
     """Build one complete chunk artifact set under a path-wide lease."""
     profile = _document_profiles.get_profile(structure_profile)
     chunks_output = Path(chunks_output)
@@ -8020,6 +8422,7 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
             llm_scaffold=llm_scaffold,
             table_children=table_children,
             structure_profile=profile,
+            security_policy=security_policy,
         )
 
 
@@ -8047,7 +8450,10 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
                    table_children: bool = False,
                    structure_profile: (
                        str | _document_profiles.StructureProfile
-                   ) = DEFAULT_STRUCTURE_PROFILE) -> None:
+                   ) = DEFAULT_STRUCTURE_PROFILE,
+                   security_policy: (
+                       _release_security.ReleaseSecurityPolicy | None
+                   ) = None) -> None:
     """Load a DoclingDocument, chunk with HybridChunker, and enrich."""
     from docling_core.types import DoclingDocument
     from docling_core.transforms.chunker import HybridChunker
@@ -8071,7 +8477,8 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
         reconstruct_headings=reconstruct_headings,
         quality_score=quality_score, llm_scaffold=llm_scaffold,
         table_children=table_children,
-        structure_profile=profile)
+        structure_profile=profile,
+        security_policy=security_policy)
     requested_max_tokens = max_tokens
     reserve_tokens = _CONTEXT_TOKEN_RESERVE if contextualize else 0
     max_tokens = _effective_chunk_token_limit(
@@ -8134,7 +8541,8 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
     llm_kwargs = dict(cloud_url=cloud_url, cloud_model=cloud_model,
                       cloud_key=cloud_key, ollama_url=ollama_url,
                       ollama_model=ollama_model, gemini_key=gemini_key,
-                      llm_workers=llm_workers, thinking=thinking)
+                      llm_workers=llm_workers, thinking=thinking,
+                      security_policy=security_policy)
     scaffold = _build_scaffold(
         doc_dict, book_sections, structure_profile=profile,
         use_llm=llm_scaffold, **llm_kwargs)
@@ -8148,7 +8556,8 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
         log.info(f"Using {tokenizer_model} tokenizer for chunking "
                  f"(embedding model {embedding_model} is API-only)")
     tokenizer_source, tokenizer_verified = _model_loader_source(
-        tokenizer_model, "chunk_tokenizer")
+        tokenizer_model, "chunk_tokenizer",
+        security_policy=security_policy)
     tokenizer = HuggingFaceTokenizer.from_pretrained(
         model_name=tokenizer_source,
         max_tokens=max_tokens,
@@ -8563,7 +8972,8 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
         llm_kwargs = dict(ollama_url=ollama_url, ollama_model=ollama_model,
                           gemini_key=gemini_key, cloud_url=cloud_url,
                           cloud_model=cloud_model, cloud_key=cloud_key,
-                          llm_workers=llm_workers, thinking=thinking)
+                          llm_workers=llm_workers, thinking=thinking,
+                          security_policy=security_policy)
 
         # Only reconstruct low-quality headings (bare letters/numerals)
         low_quality = [r for r in enriched
@@ -8622,7 +9032,8 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
                 log.info(
                     f"Loading zero-shot classifier: {DEFAULT_ZEROSHOT_MODEL}")
                 model_source, verified = _model_loader_source(
-                    DEFAULT_ZEROSHOT_MODEL, "zero_shot_classifier")
+                    DEFAULT_ZEROSHOT_MODEL, "zero_shot_classifier",
+                    security_policy=security_policy)
                 _zeroshot_classifier = hf_pipeline(
                     "zero-shot-classification",
                     model=model_source,
@@ -8703,7 +9114,8 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
         llm_kwargs = dict(ollama_url=ollama_url, ollama_model=ollama_model,
                           gemini_key=gemini_key, cloud_url=cloud_url,
                           cloud_model=cloud_model, cloud_key=cloud_key,
-                          llm_workers=llm_workers, thinking=thinking)
+                          llm_workers=llm_workers, thinking=thinking,
+                          security_policy=security_policy)
         _lock = threading.Lock()
 
         def _process_chunk(rec):
@@ -9138,6 +9550,9 @@ def _index_chunks_chroma_impl(
         collection_name: str = DEFAULT_COLLECTION,
         embedding_model: str = DEFAULT_EMBEDDING_MODEL,
         full_reindex: bool = False,
+        security_policy: (
+            _release_security.ReleaseSecurityPolicy | None
+        ) = None,
         _active_update_token: str | None = None,
         _client_owner: _VectorClientOwner,
         _operation_tracker: _IndexOperationalTracker,
@@ -9168,7 +9583,8 @@ def _index_chunks_chroma_impl(
 
     chroma_dir = _storage_policy.ensure_private_tree(chroma_dir)
     client = _client_owner.own(
-        chromadb.PersistentClient(path=str(chroma_dir)))
+        chromadb.PersistentClient(
+            path=str(chroma_dir), **_chroma_settings_kwargs(chromadb)))
 
     try:
         collection = client.get_collection(collection_name)
@@ -9177,7 +9593,8 @@ def _index_chunks_chroma_impl(
         collection = None
         collection_exists = False
 
-    embedding_dimension = _embedding_dimension(embedding_model)
+    embedding_dimension = _embedding_dimension(
+        embedding_model, security_policy=security_policy)
     old_hashes, rebuild_collection, rebuild_reason = (
         _resolve_incremental_index_state(
             chroma_dir, backend="chroma", collection_name=collection_name,
@@ -9297,7 +9714,9 @@ def _index_chunks_chroma_impl(
     def _embed_batch(batch_data):
         """Embed a batch and return (ids, embeddings, documents, metadatas)."""
         ids, embedding_inputs, documents, metadatas = batch_data
-        embeddings = _embed_texts(embedding_inputs, embedding_model)
+        embeddings = _embed_texts(
+            embedding_inputs, embedding_model,
+            security_policy=security_policy)
         return ids, embeddings, documents, metadatas
 
     batches = _batch_index_records(
@@ -9416,6 +9835,9 @@ def index_chunks(chunks_path: Path, chroma_dir: Path, *,
                  collection_name: str = DEFAULT_COLLECTION,
                  embedding_model: str = DEFAULT_EMBEDDING_MODEL,
                  full_reindex: bool = False,
+                 security_policy: (
+                     _release_security.ReleaseSecurityPolicy | None
+                 ) = None,
                  lock_timeout: float = DEFAULT_DB_LOCK_TIMEOUT,
                  _active_update_token: str | None = None,
                  _operation_observer: Callable[
@@ -9436,6 +9858,7 @@ def index_chunks(chunks_path: Path, chroma_dir: Path, *,
                     collection_name=collection_name,
                     embedding_model=embedding_model,
                     full_reindex=full_reindex,
+                    security_policy=security_policy,
                     _active_update_token=_active_update_token,
                     _client_owner=client_owner,
                     _operation_tracker=operation_tracker,
@@ -9455,7 +9878,9 @@ def index_chunks(chunks_path: Path, chroma_dir: Path, *,
 # Step 3b: Index into Qdrant
 # ---------------------------------------------------------------------------
 
-_embed_fn_cache: dict[tuple[str, str], object] = {}
+_embed_fn_cache: dict[
+    tuple[str, str, _release_security.ReleaseSecurityPolicy], object
+] = {}
 
 
 _stable_token_hash = _retrieval_core._stable_token_hash
@@ -9853,11 +10278,15 @@ _validate_query_vector_dimension = (
     _index_state._validate_query_vector_dimension)
 
 
-def _embedding_dimension(model_name: str) -> int:
+def _embedding_dimension(
+        model_name: str, *,
+        security_policy: (
+            _release_security.ReleaseSecurityPolicy | None
+        ) = None) -> int:
     """Probe and validate the configured document embedding dimension."""
     embeddings = _embed_texts(
         ["RAG index embedding-dimension probe"], model_name,
-        input_type="document")
+        input_type="document", security_policy=security_policy)
     if len(embeddings) != 1 or len(embeddings[0]) < 1:
         raise ValueError(
             f"Embedding model '{model_name}' returned no usable vector")
@@ -10041,13 +10470,24 @@ def _qdrant_payload(record: dict, stable_id: str) -> dict:
     }
 
 
-def _embed_texts(texts: list[str], model_name: str, *,
-                 input_type: str = "document") -> list[list[float]]:
+def _embed_texts(
+        texts: list[str], model_name: str, *,
+        input_type: str = "document",
+        security_policy: (
+            _release_security.ReleaseSecurityPolicy | None
+        ) = None) -> list[list[float]]:
     """Embed texts with a cached document- or query-role embedder."""
-    cache_key = (model_name, input_type)
+    policy = _effective_security_policy(security_policy)
+    if model_name.startswith(_API_EMBEDDING_MODEL_PREFIXES):
+        # Re-authorize before cache lookup.  The process can execute operations
+        # with different policies, and ambient network configuration can change
+        # after a provider closure was constructed.
+        _release_security.require_cloud_egress(
+            policy, feature="cloud embedding")
+    cache_key = (model_name, input_type, policy)
     if cache_key not in _embed_fn_cache:
         _embed_fn_cache[cache_key] = _get_embedding_fn(
-            model_name, input_type=input_type)
+            model_name, input_type=input_type, security_policy=policy)
     return _embed_fn_cache[cache_key](texts)
 
 
@@ -10056,6 +10496,9 @@ def _index_chunks_qdrant_impl(
         collection_name: str = DEFAULT_COLLECTION,
         embedding_model: str = DEFAULT_EMBEDDING_MODEL,
         full_reindex: bool = False,
+        security_policy: (
+            _release_security.ReleaseSecurityPolicy | None
+        ) = None,
         _active_update_token: str | None = None,
         _client_owner: _VectorClientOwner,
         _operation_tracker: _IndexOperationalTracker,
@@ -10096,7 +10539,8 @@ def _index_chunks_qdrant_impl(
     client = _client_owner.own(
         QdrantClient(path=str(qdrant_dir)))
 
-    dim = _embedding_dimension(embedding_model)
+    dim = _embedding_dimension(
+        embedding_model, security_policy=security_policy)
     collection_exists = client.collection_exists(collection_name)
     old_hashes, rebuild_collection, rebuild_reason = (
         _resolve_incremental_index_state(
@@ -10264,7 +10708,8 @@ def _index_chunks_qdrant_impl(
                 texts.append(_embedding_text(r))
 
             # GPU: embed this batch (while previous batch upserts in background)
-            dense_vectors = _embed_texts(texts, embedding_model)
+            dense_vectors = _embed_texts(
+                texts, embedding_model, security_policy=security_policy)
 
             # Build points
             points = []
@@ -10334,6 +10779,9 @@ def index_chunks_qdrant(chunks_path: Path, qdrant_dir: Path, *,
                         collection_name: str = DEFAULT_COLLECTION,
                         embedding_model: str = DEFAULT_EMBEDDING_MODEL,
                         full_reindex: bool = False,
+                        security_policy: (
+                            _release_security.ReleaseSecurityPolicy | None
+                        ) = None,
                         lock_timeout: float = DEFAULT_DB_LOCK_TIMEOUT,
                         _active_update_token: str | None = None,
                         _operation_observer: Callable[
@@ -10355,6 +10803,7 @@ def index_chunks_qdrant(chunks_path: Path, qdrant_dir: Path, *,
                     collection_name=collection_name,
                     embedding_model=embedding_model,
                     full_reindex=full_reindex,
+                    security_policy=security_policy,
                     _active_update_token=_active_update_token,
                     _client_owner=client_owner,
                     _operation_tracker=operation_tracker,
@@ -10399,7 +10848,10 @@ def query_index_qdrant(query: str, qdrant_dir: Path, *,
                        gemini_key: str = "",
                        llm_workers: int = DEFAULT_LLM_WORKERS,
                        thinking: bool = False,
-                       lock_timeout: float = DEFAULT_DB_LOCK_TIMEOUT) -> None:
+                       lock_timeout: float = DEFAULT_DB_LOCK_TIMEOUT,
+                       security_policy: (
+                           _release_security.ReleaseSecurityPolicy | None
+                       ) = None) -> None:
     """Query Qdrant and preserve the legacy CLI/JSON output contract."""
     try:
         response = search_index(
@@ -10414,6 +10866,7 @@ def query_index_qdrant(query: str, qdrant_dir: Path, *,
             context_max_characters=context_max_characters,
             context_segment_characters=context_segment_characters,
             lock_timeout=lock_timeout,
+            security_policy=security_policy,
         )
     except (FileNotFoundError, LookupError) as exc:
         log.error(str(exc))
@@ -10426,6 +10879,7 @@ def query_index_qdrant(query: str, qdrant_dir: Path, *,
         cloud_key=cloud_key, ollama_url=ollama_url,
         ollama_model=ollama_model, gemini_key=gemini_key,
         llm_workers=llm_workers, thinking=thinking,
+        security_policy=security_policy,
     )
     _write_search_output(
         query, response, output_json=output_json, llm_answer=llm_answer,
@@ -10570,13 +11024,17 @@ def _search_chroma_candidates_impl(
         sparse_weight: float = DEFAULT_SPARSE_RRF_WEIGHT,
         expected_dimension: int | None = None,
         expected_source_sha256: str | None = None,
+        security_policy: (
+            _release_security.ReleaseSecurityPolicy | None
+        ) = None,
         _client_owner: _VectorClientOwner,
 ) -> tuple[list[str], list[dict], list[float], str]:
     """Retrieve Chroma candidates, falling back cleanly from BM25."""
     import chromadb
 
     client = _client_owner.own(
-        chromadb.PersistentClient(path=str(db_dir)))
+        chromadb.PersistentClient(
+            path=str(db_dir), **_chroma_settings_kwargs(chromadb)))
     try:
         collection = client.get_collection(collection_name)
     except Exception as exc:
@@ -10586,7 +11044,8 @@ def _search_chroma_candidates_impl(
     where = _build_chroma_where(content_type, chapter_num)
     fetch_n = n_results
     query_vector = _embed_texts(
-        [query], embedding_model, input_type="query")[0]
+        [query], embedding_model, input_type="query",
+        security_policy=security_policy)[0]
     _validate_query_vector_dimension(
         query_vector, expected_dimension, embedding_model)
     query_kwargs = {
@@ -10665,6 +11124,9 @@ def _search_chroma_candidates(
         sparse_weight: float = DEFAULT_SPARSE_RRF_WEIGHT,
         expected_dimension: int | None = None,
         expected_source_sha256: str | None = None,
+        security_policy: (
+            _release_security.ReleaseSecurityPolicy | None
+        ) = None,
 ) -> tuple[list[str], list[dict], list[float], str]:
     """Retrieve Chroma candidates and deterministically close the client."""
     client_owner = _VectorClientOwner("Chroma")
@@ -10680,6 +11142,7 @@ def _search_chroma_candidates(
             sparse_weight=sparse_weight,
             expected_dimension=expected_dimension,
             expected_source_sha256=expected_source_sha256,
+            security_policy=security_policy,
             _client_owner=client_owner,
         )
     except BaseException as exc:
@@ -10694,6 +11157,9 @@ def _search_qdrant_candidates(
         content_type: str | None, chapter_num: int | None,
         collection_name: str, embedding_model: str, hybrid: bool,
         warnings: list[str], expected_dimension: int | None = None,
+        security_policy: (
+            _release_security.ReleaseSecurityPolicy | None
+        ) = None,
 ) -> tuple[list[str], list[dict], list[float], str]:
     """Retrieve Qdrant candidates with native dense/sparse fusion."""
     from qdrant_client import QdrantClient, models
@@ -10721,7 +11187,8 @@ def _search_qdrant_candidates(
 
         fetch_n = n_results
         query_vector = _embed_texts(
-            [query], embedding_model, input_type="query")[0]
+            [query], embedding_model, input_type="query",
+            security_policy=security_policy)[0]
         _validate_query_vector_dimension(
             query_vector, expected_dimension, embedding_model)
         effective_mode = "vector"
@@ -10811,6 +11278,9 @@ def _search_index_impl(query: str, db_dir: Path, *,
                        context_segment_characters: int = (
                            DEFAULT_CONTEXT_SEGMENT_CHARACTERS),
                        lock_timeout: float = DEFAULT_DB_LOCK_TIMEOUT,
+                       security_policy: (
+                           _release_security.ReleaseSecurityPolicy | None
+                       ) = None,
                        ) -> SearchResponse:
     """Search either supported vector backend and return structured results.
 
@@ -10819,6 +11289,16 @@ def _search_index_impl(query: str, db_dir: Path, *,
     ``effective_mode``, ``reranker_applied``, and ``warnings`` rather than being
     mislabeled as a successful requested mode.
     """
+    policy = _effective_security_policy(security_policy)
+    if embedding_model.startswith(_API_EMBEDDING_MODEL_PREFIXES):
+        _release_security.require_cloud_egress(
+            policy, feature="cloud embedding")
+    if (
+        use_reranker is not False
+        and reranker_model.startswith(("cohere-rerank", "jina-reranker"))
+    ):
+        _release_security.require_cloud_egress(
+            policy, feature="cloud reranking")
     backend = db_backend.lower()
     if backend not in {"chroma", "qdrant"}:
         raise ValueError("db_backend must be 'chroma' or 'qdrant'")
@@ -10940,6 +11420,7 @@ def _search_index_impl(query: str, db_dir: Path, *,
                 dense_weight=dense_weight, sparse_weight=sparse_weight,
                 expected_dimension=expected_dimension,
                 expected_source_sha256=hybrid_source_sha256,
+                security_policy=policy,
             )
         else:
             docs, metas, scores, effective_mode = _search_qdrant_candidates(
@@ -10948,6 +11429,7 @@ def _search_index_impl(query: str, db_dir: Path, *,
                 collection_name=collection_name,
                 embedding_model=embedding_model, hybrid=hybrid_enabled,
                 warnings=warnings, expected_dimension=expected_dimension,
+                security_policy=policy,
             )
 
         if (backend == "chroma" and effective_mode == "hybrid"
@@ -10971,6 +11453,7 @@ def _search_index_impl(query: str, db_dir: Path, *,
             docs, metas, scores = _rerank(
                 query, docs, metas, [1.0 - score for score in scores],
                 n_results, reranker_model=reranker_model,
+                security_policy=policy,
             )
             reranker_applied = True
         except Exception as exc:
@@ -11033,6 +11516,9 @@ def search_index(query: str, db_dir: Path, *,
                  context_segment_characters: int = (
                      DEFAULT_CONTEXT_SEGMENT_CHARACTERS),
                  lock_timeout: float = DEFAULT_DB_LOCK_TIMEOUT,
+                 security_policy: (
+                     _release_security.ReleaseSecurityPolicy | None
+                 ) = None,
                  ) -> SearchResponse:
     """Search a coherent local index generation under its exclusive lease."""
     backend = db_backend.lower()
@@ -11049,7 +11535,8 @@ def search_index(query: str, db_dir: Path, *,
             context_window=context_window,
             context_max_characters=context_max_characters,
             context_segment_characters=context_segment_characters,
-            lock_timeout=lock_timeout)
+            lock_timeout=lock_timeout,
+            security_policy=security_policy)
     db_path = Path(db_dir)
     return _search_index_impl(
         query, db_path, db_backend=backend, n_results=n_results,
@@ -11062,7 +11549,8 @@ def search_index(query: str, db_dir: Path, *,
         context_window=context_window,
         context_max_characters=context_max_characters,
         context_segment_characters=context_segment_characters,
-        lock_timeout=lock_timeout)
+        lock_timeout=lock_timeout,
+        security_policy=security_policy)
 
 
 _ANSWER_SOURCE_LIMIT = _retrieval_core._ANSWER_SOURCE_LIMIT
@@ -11097,7 +11585,10 @@ def _answer_search_results(query: str, response: SearchResponse, *,
                            cloud_key: str, ollama_url: str,
                            ollama_model: str, gemini_key: str,
                            llm_workers: int = DEFAULT_LLM_WORKERS,
-                           thinking: bool = False) -> GroundedAnswer | None:
+                           thinking: bool = False,
+                           security_policy: (
+                               _release_security.ReleaseSecurityPolicy | None
+                           ) = None) -> GroundedAnswer | None:
     """Optionally generate a source-grounded answer from structured hits."""
     if not answer:
         return None
@@ -11117,6 +11608,7 @@ def _answer_search_results(query: str, response: SearchResponse, *,
         ollama_model=ollama_model, gemini_key=gemini_key,
         llm_workers=llm_workers, thinking=thinking,
         operation="query.grounded_answer",
+        security_policy=security_policy,
     )
     if not llm_answer:
         return GroundedAnswer(
@@ -11284,7 +11776,10 @@ def query_index(query: str, chroma_dir: Path, *,
                 gemini_key: str = "",
                 llm_workers: int = DEFAULT_LLM_WORKERS,
                 thinking: bool = False,
-                lock_timeout: float = DEFAULT_DB_LOCK_TIMEOUT) -> None:
+                lock_timeout: float = DEFAULT_DB_LOCK_TIMEOUT,
+                security_policy: (
+                    _release_security.ReleaseSecurityPolicy | None
+                ) = None) -> None:
     """Query Chroma and preserve the legacy CLI/JSON output contract."""
     try:
         response = search_index(
@@ -11299,6 +11794,7 @@ def query_index(query: str, chroma_dir: Path, *,
             context_max_characters=context_max_characters,
             context_segment_characters=context_segment_characters,
             lock_timeout=lock_timeout,
+            security_policy=security_policy,
         )
     except (FileNotFoundError, LookupError) as exc:
         log.error(str(exc))
@@ -11311,6 +11807,7 @@ def query_index(query: str, chroma_dir: Path, *,
         cloud_key=cloud_key, ollama_url=ollama_url,
         ollama_model=ollama_model, gemini_key=gemini_key,
         llm_workers=llm_workers, thinking=thinking,
+        security_policy=security_policy,
     )
     _write_search_output(
         query, response, output_json=output_json, llm_answer=llm_answer,
@@ -11672,7 +12169,10 @@ def export_markdown(chunks_path: Path, export_path: Path, *,
                     ollama_model: str = DEFAULT_OLLAMA_MODEL,
                     gemini_key: str = "",
                     llm_workers: int = DEFAULT_LLM_WORKERS,
-                    thinking: bool = False) -> None:
+                    thinking: bool = False,
+                    security_policy: (
+                        _release_security.ReleaseSecurityPolicy | None
+                    ) = None) -> None:
     """Produce clean export file(s) optimized for LLM consumption.
 
     With --format plaintext: writes a .txt + .metadata.json sidecar
@@ -11710,7 +12210,8 @@ def export_markdown(chunks_path: Path, export_path: Path, *,
                            cloud_url=cloud_url, cloud_model=cloud_model,
                            cloud_key=cloud_key, ollama_url=ollama_url,
                            ollama_model=ollama_model, gemini_key=gemini_key,
-                           llm_workers=llm_workers, thinking=thinking)
+                           llm_workers=llm_workers, thinking=thinking,
+                           security_policy=security_policy)
         return
 
     if split_chapters:
@@ -11945,7 +12446,10 @@ def generate_exam_questions(chunks_path: Path, output_path: Path, *,
                             ollama_model: str = DEFAULT_OLLAMA_MODEL,
                             gemini_key: str = "",
                             llm_workers: int = DEFAULT_LLM_WORKERS,
-                            thinking: bool = False) -> None:
+                            thinking: bool = False,
+                            security_policy: (
+                                _release_security.ReleaseSecurityPolicy | None
+                            ) = None) -> None:
     """Generate exam-style questions from chapter chunks via LLM.
 
     Groups chunks by chapter, selects representative passages (mix of
@@ -11975,6 +12479,7 @@ def generate_exam_questions(chunks_path: Path, output_path: Path, *,
         gemini_key=gemini_key, cloud_url=cloud_url,
         cloud_model=cloud_model, cloud_key=cloud_key,
         llm_workers=llm_workers, thinking=thinking,
+        security_policy=security_policy,
     )
 
     def _generate_for_chapter(ch_num, ch_chunks):
@@ -12240,7 +12745,10 @@ def generate_briefs(chunks_path: Path, output_path: Path, *,
                     ollama_model: str = DEFAULT_OLLAMA_MODEL,
                     gemini_key: str = "",
                     llm_workers: int = DEFAULT_LLM_WORKERS,
-                    thinking: bool = False) -> None:
+                    thinking: bool = False,
+                    security_policy: (
+                        _release_security.ReleaseSecurityPolicy | None
+                    ) = None) -> None:
     """Generate case briefs for all case_opinion chunks via LLM."""
     from concurrent.futures import ThreadPoolExecutor, as_completed
     from tqdm import tqdm
@@ -12262,7 +12770,8 @@ def generate_briefs(chunks_path: Path, output_path: Path, *,
     llm_kwargs = dict(ollama_url=ollama_url, ollama_model=ollama_model,
                       gemini_key=gemini_key, cloud_url=cloud_url,
                       cloud_model=cloud_model, cloud_key=cloud_key,
-                      llm_workers=llm_workers, thinking=thinking)
+                      llm_workers=llm_workers, thinking=thinking,
+                      security_policy=security_policy)
 
     def _parse_brief(response: str) -> dict:
         """Parse a brief response into structured fields."""
@@ -12383,7 +12892,10 @@ def _export_flashcards(chunks: list[dict], export_path: Path, *,
                        ollama_model: str = DEFAULT_OLLAMA_MODEL,
                        gemini_key: str = "",
                        llm_workers: int = DEFAULT_LLM_WORKERS,
-                       thinking: bool = False) -> None:
+                       thinking: bool = False,
+                       security_policy: (
+                           _release_security.ReleaseSecurityPolicy | None
+                       ) = None) -> None:
     """Generate Anki-compatible flashcards from chunks via LLM."""
     from concurrent.futures import ThreadPoolExecutor, as_completed
     from tqdm import tqdm
@@ -12393,7 +12905,8 @@ def _export_flashcards(chunks: list[dict], export_path: Path, *,
     llm_kwargs = dict(ollama_url=ollama_url, ollama_model=ollama_model,
                       gemini_key=gemini_key, cloud_url=cloud_url,
                       cloud_model=cloud_model, cloud_key=cloud_key,
-                      llm_workers=llm_workers, thinking=thinking)
+                      llm_workers=llm_workers, thinking=thinking,
+                      security_policy=security_policy)
 
     def _generate_card(rec):
         meta = rec["metadata"]
@@ -12533,7 +13046,14 @@ def _cluster_embeddings(embeddings: list[list[float]], k: int) -> list[list[int]
 def _raptor_parameters(*, embedding_model: str, cloud_url: str,
                        cloud_model: str, cloud_key: str,
                        ollama_url: str, ollama_model: str,
-                       gemini_key: str, thinking: bool) -> dict:
+                       gemini_key: str, thinking: bool,
+                       security_policy: (
+                           _release_security.ReleaseSecurityPolicy | None
+                       ) = None) -> dict:
+    policy = _effective_security_policy(security_policy)
+    gemini_configured = bool(
+        policy.network_policy == "allow-cloud"
+        and (gemini_key or "GEMINI_API_KEY" in os.environ))
     return {
         "embedding_model": embedding_model,
         "cloud_url": _endpoint_parameter_binding(cloud_url),
@@ -12541,9 +13061,10 @@ def _raptor_parameters(*, embedding_model: str, cloud_url: str,
         "cloud_configured": bool(cloud_url and cloud_key),
         "ollama_url": _endpoint_parameter_binding(ollama_url),
         "ollama_model": ollama_model,
-        "gemini_configured": bool(gemini_key),
+        "gemini_configured": gemini_configured,
         "thinking": thinking,
         "prompt_version": 1,
+        "release_security": policy.provenance(),
     }
 
 
@@ -12624,7 +13145,10 @@ def build_raptor_tree(chunks_path: Path, output_path: Path, *,
                       ollama_model: str = DEFAULT_OLLAMA_MODEL,
                       gemini_key: str = "",
                       llm_workers: int = DEFAULT_LLM_WORKERS,
-                      thinking: bool = False) -> None:
+                      thinking: bool = False,
+                      security_policy: (
+                          _release_security.ReleaseSecurityPolicy | None
+                      ) = None) -> None:
     """Build a 3-level RAPTOR tree over chunks.
 
     Level 0: Raw chunks (from JSONL)
@@ -12644,7 +13168,8 @@ def build_raptor_tree(chunks_path: Path, output_path: Path, *,
         embedding_model=embedding_model, cloud_url=cloud_url,
         cloud_model=cloud_model, cloud_key=cloud_key,
         ollama_url=ollama_url, ollama_model=ollama_model,
-        gemini_key=gemini_key, thinking=thinking)
+        gemini_key=gemini_key, thinking=thinking,
+        security_policy=security_policy)
     log.info(f"RAPTOR: building tree over {len(records)} chunks")
 
     if not records:
@@ -12655,7 +13180,8 @@ def build_raptor_tree(chunks_path: Path, output_path: Path, *,
     llm_kwargs = dict(ollama_url=ollama_url, ollama_model=ollama_model,
                       gemini_key=gemini_key, cloud_url=cloud_url,
                       cloud_model=cloud_model, cloud_key=cloud_key,
-                      llm_workers=llm_workers, thinking=thinking)
+                      llm_workers=llm_workers, thinking=thinking,
+                      security_policy=security_policy)
 
     def _summarize(texts: list[str]) -> str:
         """Summarize a cluster of texts via LLM."""
@@ -12672,7 +13198,8 @@ def build_raptor_tree(chunks_path: Path, output_path: Path, *,
     log.info("RAPTOR Level 0: Embedding chunks...")
     texts_l0 = [r["text"] for r in records]
     try:
-        embeddings_l0 = _embed_texts(texts_l0, embedding_model)
+        embeddings_l0 = _embed_texts(
+            texts_l0, embedding_model, security_policy=security_policy)
     except Exception as e:
         log.error(f"RAPTOR embedding failed: {e}")
         log.error("  Check --embedding-model and API keys.")
@@ -12755,7 +13282,8 @@ def build_raptor_tree(chunks_path: Path, output_path: Path, *,
     # --- Level 2: Chapter summaries (cluster Level 1 nodes) ---
     log.info("RAPTOR Level 2: Embedding section summaries...")
     try:
-        embeddings_l1 = _embed_texts(texts_l1, embedding_model)
+        embeddings_l1 = _embed_texts(
+            texts_l1, embedding_model, security_policy=security_policy)
     except Exception as e:
         log.error(f"RAPTOR Level 2 embedding failed: {e}")
         log.error("  Saving partial tree (Level 0 + Level 1 only).")
@@ -13172,6 +13700,9 @@ def _index_chunks_for_backend(chunks_path: Path, db_dir: Path, *,
                               db_backend: str, collection_name: str,
                               embedding_model: str,
                               full_reindex: bool = False,
+                              security_policy: (
+                                  _release_security.ReleaseSecurityPolicy | None
+                              ) = None,
                               lock_timeout: float = (
                                   DEFAULT_DB_LOCK_TIMEOUT),
                               _active_update_token: str | None = None,
@@ -13189,6 +13720,7 @@ def _index_chunks_for_backend(chunks_path: Path, db_dir: Path, *,
             collection_name=collection_name,
             embedding_model=embedding_model,
             full_reindex=full_reindex,
+            security_policy=security_policy,
             lock_timeout=lock_timeout,
             _active_update_token=_active_update_token,
             **observer_kwargs,
@@ -13199,6 +13731,7 @@ def _index_chunks_for_backend(chunks_path: Path, db_dir: Path, *,
             collection_name=collection_name,
             embedding_model=embedding_model,
             full_reindex=full_reindex,
+            security_policy=security_policy,
             lock_timeout=lock_timeout,
             _active_update_token=_active_update_token,
             **observer_kwargs,
@@ -13233,6 +13766,11 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
         args,
         include_workers=True,
         resolve_credentials=_cli_policy._pipeline_features_use_llm(args),
+    )
+    llm_kwargs.setdefault(
+        "security_policy",
+        _effective_security_policy(
+            getattr(args, "_release_security_policy", None)),
     )
     structure_profile = _document_profiles.get_profile(
         getattr(args, "structure_profile", DEFAULT_STRUCTURE_PROFILE))
@@ -13276,6 +13814,7 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
                 ocr=getattr(args, "ocr", None),
                 preprocessed_output=paths["preprocessed"],
                 markdown_output=paths["converted_markdown"],
+                security_policy=llm_kwargs["security_policy"],
             )
             if not _converted_outputs_complete(
                     pdf_path, paths["doc"], paths["converted_markdown"],
@@ -13415,6 +13954,7 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
                 collection_name=collection,
                 embedding_model=args.embedding_model,
                 full_reindex=getattr(args, "full_reindex", False),
+                security_policy=llm_kwargs["security_policy"],
                 lock_timeout=lock_timeout,
                 _active_update_token=active_update_token,
                 _operation_observer=index_attempt_metrics.update,
@@ -13484,7 +14024,8 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
                 ollama_url=llm_kwargs["ollama_url"],
                 ollama_model=llm_kwargs["ollama_model"],
                 gemini_key=llm_kwargs["gemini_key"],
-                thinking=llm_kwargs["thinking"])
+                thinking=llm_kwargs["thinking"],
+                security_policy=llm_kwargs["security_policy"])
             if resume and _raptor_output_complete(
                     paths["chunks"], raptor_out,
                     parameters=raptor_parameters):
@@ -13973,6 +14514,87 @@ def _background_submit_tokens(tokens: list[str]) -> tuple[str, list[str]]:
     return command, command_arguments
 
 
+_BACKGROUND_SECURITY_VALUE_OPTIONS = {
+    "--security-profile": "security_profile",
+    "--network-policy": "network_policy",
+    "--model-download-policy": "model_download_policy",
+    "--llm-cache-namespace": "llm_cache_namespace",
+    "--release-cache-namespace-id": "release_cache_namespace_id",
+    "--release-security-policy-version": (
+        "release_security_policy_version"),
+}
+
+
+def _canonical_background_security_argv(
+        command: str, arguments: list[str]) -> list[str]:
+    """Replace submitted policy flags with one immutable canonical receipt."""
+    if command not in _job_runtime.ALLOWED_JOB_COMMANDS:
+        return list(arguments)
+    try:
+        terminator_index = arguments.index("--")
+    except ValueError:
+        policy_arguments = list(arguments)
+        positional_suffix: list[str] = []
+    else:
+        policy_arguments = list(arguments[:terminator_index])
+        positional_suffix = list(arguments[terminator_index:])
+    values: dict[str, object] = {
+        "security_profile": "release",
+        "network_policy": "local-only",
+        "model_download_policy": "cache-only",
+        "llm_cache_namespace": "",
+        "release_cache_namespace_id": None,
+        "release_security_policy_version": (
+            _release_security.RELEASE_SECURITY_POLICY_VERSION),
+        "trust_environment_network": False,
+    }
+    cleaned: list[str] = []
+    index = 0
+    while index < len(policy_arguments):
+        token = policy_arguments[index]
+        option, separator, inline_value = token.partition("=")
+        attr = _BACKGROUND_SECURITY_VALUE_OPTIONS.get(option)
+        if attr is not None:
+            if separator:
+                value = inline_value
+            else:
+                index += 1
+                if index >= len(policy_arguments):
+                    raise _job_runtime.JobValidationError(
+                        f"{option} requires a value")
+                value = policy_arguments[index]
+            if attr == "release_security_policy_version":
+                try:
+                    values[attr] = int(value)
+                except ValueError as exc:
+                    raise _job_runtime.JobValidationError(
+                        "invalid release-security policy version") from exc
+            else:
+                values[attr] = value
+        elif option == "--trust-environment-network":
+            if separator:
+                raise _job_runtime.JobValidationError(
+                    "--trust-environment-network accepts no value")
+            values["trust_environment_network"] = True
+        else:
+            cleaned.append(token)
+        index += 1
+    policy = _cli_policy._release_security_policy_from_args(
+        argparse.Namespace(**values))
+    cleaned.extend([
+        "--release-security-policy-version", str(policy.schema_version),
+        "--security-profile", policy.profile,
+        "--network-policy", policy.network_policy,
+        "--model-download-policy", policy.model_download_policy,
+    ])
+    if policy.cache_namespace_id is not None:
+        cleaned.extend([
+            "--release-cache-namespace-id", policy.cache_namespace_id])
+    if policy.trust_environment_network:
+        cleaned.append("--trust-environment-network")
+    return cleaned + positional_suffix
+
+
 def _run_jobs_command(args) -> dict[str, int | bool]:
     import job_manager as _job_manager
 
@@ -13983,6 +14605,8 @@ def _run_jobs_command(args) -> dict[str, int | bool]:
     if action == "submit":
         command, command_arguments = _background_submit_tokens(
             args.job_command)
+        command_arguments = _canonical_background_security_argv(
+            command, command_arguments)
         submitted = store.submit_job(
             command, command_arguments,
             timeout_seconds=args.timeout,
@@ -14121,7 +14745,44 @@ def main(argv: list[str] | None = None):
     sub = parser.add_subparsers(dest="command")
 
     # --- Shared flag definitions ---
+    def add_release_security_flags(p):
+        if getattr(p, "_release_security_flags_added", False):
+            return
+        p._release_security_flags_added = True
+        p.add_argument(
+            "--security-profile", choices=["release", "development"],
+            default="release",
+            help=("Trust defaults (release is fail-closed; development "
+                  "retains explicitly selected unsafe conveniences)"))
+        p.add_argument(
+            "--release-security-policy-version", type=int,
+            default=_release_security.RELEASE_SECURITY_POLICY_VERSION,
+            help=argparse.SUPPRESS)
+        p.add_argument(
+            "--network-policy", choices=["local-only", "allow-cloud"],
+            default="local-only",
+            help=("Private-data egress policy (default: local-only; cloud "
+                  "providers require explicit allow-cloud)"))
+        p.add_argument(
+            "--model-download-policy",
+            choices=["cache-only", "allow-reviewed-sync"],
+            default="cache-only",
+            help=("Reviewed model artifact synchronization policy "
+                  "(default: cache-only)"))
+        p.add_argument(
+            "--llm-cache-namespace", default="",
+            help=("Nonsecret trust/tenant label required for custom cloud "
+                  "gateways in release mode; only its hash is reported"))
+        p.add_argument(
+            "--release-cache-namespace-id", default=None,
+            help=argparse.SUPPRESS)
+        p.add_argument(
+            "--trust-environment-network", action="store_true",
+            help=("Allow reviewed proxy and custom-CA environment overrides "
+                  "for release cloud transports"))
+
     def add_embedding_flags(p):
+        add_release_security_flags(p)
         p.add_argument("--embedding-model", type=str,
                         default=DEFAULT_EMBEDDING_MODEL,
                         help=f"Embedding model (default: {DEFAULT_EMBEDDING_MODEL}). "
@@ -14202,6 +14863,7 @@ def main(argv: list[str] | None = None):
         )
 
     def add_llm_provider_flags(p):
+        add_release_security_flags(p)
         p.add_argument("--ollama-url", type=_cloud_endpoint_arg,
                         default=DEFAULT_OLLAMA_URL,
                         help=f"Ollama API URL (default: {DEFAULT_OLLAMA_URL})")
@@ -14222,12 +14884,14 @@ def main(argv: list[str] | None = None):
                         help="Gemini API key (or set GEMINI_API_KEY env var)")
         p.add_argument(
             "--thinking", action=argparse.BooleanOptionalAction, default=False,
-            help="Enable DeepSeek/Ollama reasoning; --no-thinking disables it")
+            help=("Use provider reasoning mode (DeepSeek, MiniMax M3, Gemini, "
+                  "or Ollama); --no-thinking selects its minimal/disabled mode"))
         p.add_argument(
-            "--llm-cache-mode", default="readwrite",
+            "--llm-cache-mode", default=None,
             choices=["readwrite", "readonly", "refresh", "off"],
-            help=("LLM response cache policy (default: readwrite; refresh "
-                  "bypasses reads and replaces successful entries)"))
+            help=("LLM response cache policy (release default: off; "
+                  "development default: readwrite; refresh bypasses reads "
+                  "and replaces successful entries)"))
         p.add_argument(
             "--llm-cache-dir", type=Path, default=None,
             help="Persistent LLM response cache directory")
@@ -14656,6 +15320,7 @@ def main(argv: list[str] | None = None):
     for command_parser in (
             p_pre, p_conv, p_chunk, p_idx, p_eq, p_genq, p_cg, p_rap,
             p_brief, p_q, p_exp, p_info, p_storage, p_full, p_batch):
+        add_release_security_flags(command_parser)
         add_run_telemetry_flags(command_parser)
 
     parse_argv = list(sys.argv[1:] if argv is None else argv)
@@ -14664,6 +15329,25 @@ def main(argv: list[str] | None = None):
             "endpoint and credential options must be written in full and "
             "with exact case")
     args = parser.parse_args(parse_argv)
+    try:
+        security_policy = _cli_policy._release_security_policy_from_args(args)
+        if (
+            not security_policy.allow_inline_secrets
+            and _cli_policy._argv_has_inline_secret(parse_argv)
+        ):
+            raise _release_security.ReleaseSecurityError(
+                "release mode does not accept credential values in argv; "
+                "use provider environment variables or the interactive "
+                "hidden prompt"
+            )
+        args._release_security_policy = security_policy
+        if (
+            hasattr(args, "llm_cache_mode")
+            and args.llm_cache_mode is None
+        ):
+            args.llm_cache_mode = security_policy.default_llm_cache_mode
+    except (TypeError, ValueError) as exc:
+        parser.error(str(exc))
 
     # --- Configure logging ---
     level = logging.WARNING if args.quiet else (
@@ -14738,6 +15422,11 @@ def main(argv: list[str] | None = None):
             _llm_kwargs_from_args(args, include_workers=True)
             if _namespace_uses_llm(args) else {}
         )
+        if args.command in {"chunk", "query"}:
+            # These operations can use embeddings/rerankers even when no LLM
+            # generation feature is selected.  Carry the same immutable
+            # policy to those boundaries and to chunk provenance.
+            llm_kwargs.setdefault("security_policy", security_policy)
         _configure_llm_runtime_from_args(args)
         llm_runtime_configured = True
 
@@ -14745,7 +15434,18 @@ def main(argv: list[str] | None = None):
             run_telemetry.stage_started(args.command)
         # Validate API keys early (before expensive processing)
         if hasattr(args, "embedding_model"):
+            if args.embedding_model.startswith(
+                    _API_EMBEDDING_MODEL_PREFIXES):
+                _release_security.require_cloud_egress(
+                    security_policy, feature="cloud embedding")
             _validate_api_key(args.embedding_model)
+        if (
+            getattr(args, "reranker", False) is not False
+            and getattr(args, "reranker_model", "").startswith(
+                ("cohere-rerank", "jina-reranker"))
+        ):
+            _release_security.require_cloud_egress(
+                security_policy, feature="cloud reranking")
 
         if args.command == "preprocess":
             preprocess_pdf(args.pdf, args.out,
@@ -14760,7 +15460,8 @@ def main(argv: list[str] | None = None):
                         force=args.force,
                         watermark=wm,
                         auto_preprocess=not args.no_preprocess,
-                        ocr=getattr(args, "ocr", None))
+                        ocr=getattr(args, "ocr", None),
+                        security_policy=security_policy)
 
         elif args.command == "chunk":
             chunk_document(args.doc, args.out,
@@ -14788,6 +15489,7 @@ def main(argv: list[str] | None = None):
                 collection_name=args.collection,
                 embedding_model=args.embedding_model,
                 full_reindex=full_reindex,
+                security_policy=security_policy,
                 lock_timeout=args.db_lock_timeout,
                 _operation_observer=operation_metrics.update,
             )
@@ -15248,7 +15950,35 @@ def _menu_file(prompt: str, extension: str = "", default: Path | None = None,
 _menu_args_use_llm = _cli_policy._menu_args_use_llm
 
 
-def _menu_llm_provider_args() -> list[str]:
+def _menu_cloud_consent_args(
+        feature: str, *, already_allowed: bool = False,
+        ) -> list[str] | None:
+    """Return explicit cloud consent flags, or ``None`` when declined."""
+    if already_allowed:
+        return []
+    if not _menu_yesno(
+            f"Allow this operation to send {feature} to a cloud provider?",
+            default=False):
+        print("  Cloud egress was not enabled. Operation cancelled.")
+        return None
+    return ["--network-policy", "allow-cloud"]
+
+
+def _menu_cache_namespace_args() -> list[str]:
+    """Collect a validated nonsecret trust/tenant label for a custom host."""
+    while True:
+        namespace = input(
+            "  Nonsecret custom-gateway trust/tenant label: ").strip()
+        try:
+            _release_security.cache_namespace_identity(namespace)
+        except (TypeError, ValueError) as exc:
+            print(f"  Invalid label: {exc}")
+            continue
+        return ["--llm-cache-namespace", namespace]
+
+
+def _menu_llm_provider_args(*, cloud_already_allowed: bool = False,
+                            ) -> list[str] | None:
     """Collect provider settings, including a securely typed API key."""
     provider = _menu_choose("LLM provider:", [
         ("automatic", "Automatic fallback chain (environment/defaults)"),
@@ -15261,7 +15991,24 @@ def _menu_llm_provider_args() -> list[str]:
     ])
     provider_args: list[str] = []
 
-    if provider.startswith("deepseek-"):
+    if provider == "automatic":
+        if cloud_already_allowed or _menu_yesno(
+                "Allow automatic fallback to reviewed cloud providers?",
+                default=False):
+            if not cloud_already_allowed:
+                provider_args.extend(["--network-policy", "allow-cloud"])
+        else:
+            print("  Automatic fallback will remain local-only.")
+        if _menu_yesno(
+                "Enable thinking when the selected provider supports it?",
+                default=False):
+            provider_args.append("--thinking")
+    elif provider.startswith("deepseek-"):
+        consent = _menu_cloud_consent_args(
+            "private prompts", already_allowed=cloud_already_allowed)
+        if consent is None:
+            return None
+        provider_args.extend(consent)
         provider_args.extend([
             "--llm-url", DEFAULT_DEEPSEEK_URL,
             "--llm-model", provider,
@@ -15277,6 +16024,11 @@ def _menu_llm_provider_args() -> list[str]:
             else "--no-thinking"
         )
     elif provider == "minimax":
+        consent = _menu_cloud_consent_args(
+            "private prompts", already_allowed=cloud_already_allowed)
+        if consent is None:
+            return None
+        provider_args.extend(consent)
         key = getpass(
             "  MiniMax API key (hidden; Enter for MINIMAX_API_KEY): "
         ).strip()
@@ -15289,6 +16041,13 @@ def _menu_llm_provider_args() -> list[str]:
         endpoint = _validate_cloud_endpoint(url)
         assert endpoint is not None
         url = endpoint.base_url
+        if not endpoint.is_loopback:
+            consent = _menu_cloud_consent_args(
+                "private prompts", already_allowed=cloud_already_allowed)
+            if consent is None:
+                return None
+            provider_args.extend(consent)
+            provider_args.extend(_menu_cache_namespace_args())
         model = input(
             f"  Ollama model (Enter for {DEFAULT_OLLAMA_MODEL}): "
         ).strip() or DEFAULT_OLLAMA_MODEL
@@ -15302,6 +16061,11 @@ def _menu_llm_provider_args() -> list[str]:
             else "--no-thinking"
         )
     elif provider == "gemini":
+        consent = _menu_cloud_consent_args(
+            "private prompts", already_allowed=cloud_already_allowed)
+        if consent is None:
+            return None
+        provider_args.extend(consent)
         key = getpass(
             "  Gemini API key (hidden; Enter for GEMINI_API_KEY): "
         ).strip()
@@ -15309,6 +16073,11 @@ def _menu_llm_provider_args() -> list[str]:
         if key:
             provider_args.extend(["--gemini-key", key])
     elif provider == "custom":
+        consent = _menu_cloud_consent_args(
+            "private prompts", already_allowed=cloud_already_allowed)
+        if consent is None:
+            return None
+        provider_args.extend(consent)
         url = input("  OpenAI-compatible API URL: ").strip()
         model = input("  Model name: ").strip()
         if not url or not model:
@@ -15316,17 +16085,13 @@ def _menu_llm_provider_args() -> list[str]:
         endpoint = _validate_cloud_endpoint(url)
         assert endpoint is not None
         url = endpoint.base_url
+        provider_args.extend(_menu_cache_namespace_args())
         key = getpass(
             "  API key (hidden; Enter for CLOUD_API_KEY): "
         ).strip()
         provider_args.extend(["--llm-url", url, "--llm-model", model])
         if key:
             provider_args.extend(["--api-key", key])
-    elif _menu_yesno(
-            "Enable thinking when the selected provider supports it?",
-            default=False):
-        provider_args.append("--thinking")
-
     return provider_args
 
 
@@ -15679,8 +16444,25 @@ def interactive_menu():
         if chunks:
             args.extend(["--chunks", chunks])
 
+    cloud_allowed = False
+    for index, token in enumerate(args[:-1]):
+        if (
+            token == "--embedding-model"
+            and args[index + 1].startswith(_API_EMBEDDING_MODEL_PREFIXES)
+        ):
+            consent = _menu_cloud_consent_args("private embedding text")
+            if consent is None:
+                return
+            args.extend(consent)
+            cloud_allowed = True
+            break
+
     if _menu_args_use_llm(args):
-        args.extend(_menu_llm_provider_args())
+        provider_args = _menu_llm_provider_args(
+            cloud_already_allowed=cloud_allowed)
+        if provider_args is None:
+            return
+        args.extend(provider_args)
 
     # Show the generated command
     display_args = _redact_cli_secrets(args)

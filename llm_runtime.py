@@ -27,12 +27,14 @@ from storage_policy import (
 )
 
 
-CACHE_KEY_SCHEMA_VERSION = 1
-CACHE_RECORD_SCHEMA_VERSION = 2
-EVENT_SCHEMA_VERSION = 2
-REPORT_SCHEMA_VERSION = 3
+CACHE_KEY_SCHEMA_VERSION = 2
+CACHE_RECORD_SCHEMA_VERSION = 3
+EVENT_SCHEMA_VERSION = 3
+REPORT_SCHEMA_VERSION = 4
 CACHE_MAX_BYTES = 32 * 1024 * 1024
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
+_CACHE_NAMESPACE_ID = re.compile(r"v[1-9][0-9]*:(?:default|sha256:[0-9a-f]{64})")
+DEFAULT_CACHE_NAMESPACE_ID = "v1:default"
 
 PROVIDER_ERROR_CATEGORIES = frozenset({
     "missing_credentials",
@@ -105,6 +107,7 @@ class ProviderSpec:
     endpoint_id: str
     invoke: Callable[[LLMRequest], str | ProviderResponse | None] = field(
         repr=False, compare=False)
+    cache_namespace_id: str = DEFAULT_CACHE_NAMESPACE_ID
 
 
 @dataclass(frozen=True)
@@ -174,6 +177,7 @@ class LLMResult:
     reasoning_tokens: int = 0
     provider_attempts: tuple[LLMAttempt, ...] = ()
     usage_source: str = "unavailable"
+    cache_namespace_id: str | None = None
 
     @property
     def transport_attempts(self) -> int:
@@ -392,9 +396,13 @@ class LLMRuntime:
                 raise TypeError("providers must contain ProviderSpec values")
             for name, value in (
                     ("name", provider.name), ("model", provider.model),
-                    ("endpoint_id", provider.endpoint_id)):
+                    ("endpoint_id", provider.endpoint_id),
+                    ("cache_namespace_id", provider.cache_namespace_id)):
                 if not isinstance(value, str) or not value.strip():
                     raise ValueError(f"provider {name} must not be blank")
+            if _CACHE_NAMESPACE_ID.fullmatch(
+                    provider.cache_namespace_id) is None:
+                raise ValueError("provider cache_namespace_id is invalid")
             if not callable(provider.invoke):
                 raise TypeError("provider invoke must be callable")
 
@@ -452,6 +460,7 @@ class LLMRuntime:
                     "name": provider.name,
                     "model": provider.model,
                     "endpoint_id": provider.endpoint_id,
+                    "cache_namespace_id": provider.cache_namespace_id,
                 }
                 for provider in providers
             ],
@@ -510,12 +519,14 @@ class LLMRuntime:
             usage_source = (
                 result.get("usage_source") if isinstance(result, dict)
                 else None)
+            cache_namespace_id = (
+                result.get("cache_namespace_id")
+                if isinstance(result, dict) else None)
             if usage_source is None and isinstance(usage_exact, bool):
                 usage_source = "exact" if usage_exact else "estimated"
-            if (record_version not in {1, 2}
+            if (record_version != CACHE_RECORD_SCHEMA_VERSION
                     or payload.get("cache_key") != key
-                    or (record_version == 2
-                        and payload.get("result_sha256") != result_digest)
+                    or payload.get("result_sha256") != result_digest
                     or not isinstance(result, dict)
                     or not isinstance(text, str)
                     or not text.strip()
@@ -542,7 +553,10 @@ class LLMRuntime:
                     or reasoning_tokens < 0
                     or not isinstance(usage_exact, bool)
                     or usage_source not in USAGE_SOURCES
-                    or usage_exact != (usage_source == "exact")):
+                    or usage_exact != (usage_source == "exact")
+                    or not isinstance(cache_namespace_id, str)
+                    or _CACHE_NAMESPACE_ID.fullmatch(
+                        cache_namespace_id) is None):
                 raise ValueError("cache record failed validation")
             return LLMResult(
                 text=text.strip(), request_id=request_id,
@@ -556,6 +570,7 @@ class LLMRuntime:
                 cached_prompt_tokens=cached_prompt_tokens,
                 reasoning_tokens=reasoning_tokens,
                 usage_source=usage_source,
+                cache_namespace_id=cache_namespace_id,
             )
         except OSError:
             with self._lock:
@@ -580,6 +595,7 @@ class LLMRuntime:
             "reasoning_tokens": result.reasoning_tokens,
             "usage_exact": result.usage_exact,
             "usage_source": result.usage_source,
+            "cache_namespace_id": result.cache_namespace_id,
         }
         payload = {
             "schema_version": CACHE_RECORD_SCHEMA_VERSION,
@@ -637,6 +653,7 @@ class LLMRuntime:
                 "estimated_usage_attempts": 0,
                 "unknown_usage_attempts": 0,
                 "error_categories": {},
+                "cache_namespace_ids": set(),
             })
             metrics["attempts"] += 1
             metrics["transport_admissions"] += 1
@@ -739,6 +756,9 @@ class LLMRuntime:
             except LLMBudgetExceeded:
                 last_error = "budget_exceeded"
                 break
+            with self._lock:
+                self._providers[provider.name]["cache_namespace_ids"].add(
+                    provider.cache_namespace_id)
             fallback_path.append(provider.name)
 
             attempt_started = time.perf_counter()
@@ -902,6 +922,7 @@ class LLMRuntime:
                     reasoning_tokens=reasoning_tokens,
                     provider_attempts=tuple(attempt_records),
                     usage_source=usage_source,
+                    cache_namespace_id=provider.cache_namespace_id,
                 )
             self._record_provider_outcome(
                 provider.name, succeeded=False, latency_ms=latency,
@@ -986,6 +1007,7 @@ class LLMRuntime:
                 for attempt in result.provider_attempts
             ],
             "cache_status": result.cache_status,
+            "cache_namespace_id": result.cache_namespace_id,
             "error_category": result.error_category,
             "succeeded": result.succeeded,
         }
@@ -1124,6 +1146,7 @@ class LLMRuntime:
                 name: {
                     key: (
                         round(value, 3) if isinstance(value, float)
+                        else sorted(value) if isinstance(value, set)
                         else dict(sorted(value.items()))
                         if isinstance(value, dict) else value)
                     for key, value in metrics.items()

@@ -9,6 +9,7 @@ import pytest
 
 import eval as retrieval_eval
 import rag
+import release_security
 
 
 @pytest.fixture
@@ -45,7 +46,10 @@ def search_fakes(monkeypatch, tmp_path):
             source_record_count=1,
         )
 
-    def fake_embed(texts, model_name, *, input_type="document"):
+    def fake_embed(
+            texts, model_name, *, input_type="document",
+            security_policy=None):
+        del security_policy
         state["embedding_calls"].append((list(texts), model_name, input_type))
         return [[0.25, 0.75] for _ in texts]
 
@@ -1160,7 +1164,9 @@ def test_metadata_aware_reranker_scores_enriched_text_but_returns_raw(
             captured["normalize"] = normalize
             return [0.1, 0.9]
 
-    monkeypatch.setattr(rag, "_get_reranker", lambda model: FakeReranker())
+    monkeypatch.setattr(
+        rag, "_get_reranker",
+        lambda model, **_kwargs: FakeReranker())
     documents = ["raw first", "raw second"]
     metadatas = [
         {"primary_case": "Case One", "section_path": "Jurisdiction"},
@@ -1196,11 +1202,15 @@ def test_jina_reranker_has_a_deadline_and_refuses_redirects(monkeypatch):
         return Response()
 
     monkeypatch.setenv("JINA_API_KEY", "secret")
-    monkeypatch.setattr(rag.requests, "post", post)
+    monkeypatch.setattr(
+        rag, "_post_cloud_with_policy",
+        lambda _policy, url, **kwargs: post(url, **kwargs))
 
     documents, metadatas, scores = rag._rerank(
         "query", ["document"], [{"stable_id": "one"}], [0.2], 1,
         reranker_model="jina-reranker-v2-base-multilingual",
+        security_policy=release_security.ReleaseSecurityPolicy(
+            profile="development", network_policy="allow-cloud"),
     )
 
     assert documents == ["document"]
@@ -1224,18 +1234,24 @@ def test_jina_reranker_rejects_redirect_response_body(monkeypatch):
 
     monkeypatch.setenv("JINA_API_KEY", "secret")
     monkeypatch.setattr(
-        rag.requests, "post", lambda *_args, **_kwargs: Response())
+        rag, "_post_cloud_with_policy",
+        lambda *_args, **_kwargs: Response())
 
     with pytest.raises(RuntimeError, match="returned a redirect"):
         rag._rerank(
             "query", ["document"], [{}], [0.2], 1,
             reranker_model="jina-reranker-v2-base-multilingual",
+            security_policy=release_security.ReleaseSecurityPolicy(
+                profile="development", network_policy="allow-cloud"),
         )
 
 
 def test_reranker_cache_is_keyed_by_model(monkeypatch):
     loaded = []
     monkeypatch.setenv("RAG_ALLOW_UNPINNED_MODELS", "1")
+    policy = release_security.ReleaseSecurityPolicy(
+        profile="development",
+        model_download_policy="allow-reviewed-sync")
 
     class FakeFlagReranker:
         def __init__(self, model_name, **kwargs):
@@ -1247,10 +1263,11 @@ def test_reranker_cache_is_keyed_by_model(monkeypatch):
     monkeypatch.setitem(sys.modules, "FlagEmbedding", module)
     monkeypatch.setattr(rag, "_reranker_instances", {})
 
-    model_a = rag._get_reranker("model-a")
-    model_b = rag._get_reranker("model-b")
+    model_a = rag._get_reranker("model-a", security_policy=policy)
+    model_b = rag._get_reranker("model-b", security_policy=policy)
 
-    assert rag._get_reranker("model-a") is model_a
+    assert rag._get_reranker(
+        "model-a", security_policy=policy) is model_a
     assert model_b is not model_a
     assert [item[0] for item in loaded] == ["model-a", "model-b"]
 

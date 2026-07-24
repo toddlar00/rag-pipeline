@@ -35,6 +35,28 @@ def test_background_submit_tokens_require_fresh_allowed_command():
         ])
 
 
+def test_background_policy_is_canonical_opaque_and_stops_at_terminator():
+    result = rag._canonical_background_security_argv(
+        "index",
+        [
+            "--chunks", "Book.jsonl",
+            "--security-profile=development",
+            "--network-policy", "allow-cloud",
+            "--llm-cache-namespace", "private-tenant",
+            "--trust-environment-network",
+            "--", "--security-profile", "literal-positional",
+        ],
+    )
+
+    assert "private-tenant" not in result
+    assert result[-3:] == [
+        "--", "--security-profile", "literal-positional"]
+    assert result[result.index("--security-profile") + 1] == "development"
+    namespace_index = result.index("--release-cache-namespace-id")
+    assert result[namespace_index + 1].startswith("v1:sha256:")
+    assert "--release-security-policy-version" in result
+
+
 def test_jobs_submit_persists_private_spec_and_prints_redacted_json(
         monkeypatch, tmp_path, capsys):
     private_pdf = tmp_path / "Private Casebook.pdf"
@@ -60,7 +82,13 @@ def test_jobs_submit_persists_private_spec_and_prints_redacted_json(
     assert str(private_pdf) not in output
     assert "--pdf" not in output
     execution = observed["store"].load_execution(observed["job_id"])
-    assert execution.argv == ("--pdf", str(private_pdf))
+    assert execution.argv == (
+        "--pdf", str(private_pdf),
+        "--release-security-policy-version", "1",
+        "--security-profile", "release",
+        "--network-policy", "local-only",
+        "--model-download-policy", "cache-only",
+    )
     assert execution.timeout_seconds == 90
     assert observed["kwargs"] == {"ready_timeout": 2}
     assert metrics == {"jobs": 1, "terminal": 0, "applied": True}

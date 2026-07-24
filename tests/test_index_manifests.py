@@ -44,7 +44,10 @@ def _write_chunks(path: Path) -> None:
 
 
 def _fake_embeddings(calls, dimensions):
-    def embed(texts, model_name, *, input_type="document"):
+    def embed(
+            texts, model_name, *, input_type="document",
+            security_policy=None):
+        del security_policy
         calls.append((list(texts), model_name, input_type))
         dimension = dimensions[model_name]
         return [[float(index) for index in range(dimension)] for _ in texts]

@@ -6,6 +6,7 @@ import pytest
 
 import job_manager
 import job_runtime
+import release_security
 import ui
 
 
@@ -97,6 +98,9 @@ def test_vector_worker_serializes_search_response(monkeypatch, tmp_path):
             "collection": "book",
             "embedding_model": "embedding",
             "db_lock_timeout": 1,
+            "release_security": (
+                release_security.ReleaseSecurityPolicy(
+                    trusted_single_user_ui=True).provenance()),
         },
         "options": {
             "n_results": 5, "content_type": None, "chapter_num": None,
@@ -111,6 +115,73 @@ def test_vector_worker_serializes_search_response(monkeypatch, tmp_path):
         "score": 0.75,
     }]
     assert result["reranker_applied"] is True
+
+
+def test_vector_worker_reconstructs_release_security_policy(
+        monkeypatch, tmp_path):
+    observed = {}
+    policy = release_security.ReleaseSecurityPolicy.from_values(
+        profile="development", network_policy="allow-cloud",
+        cache_namespace="tenant-a", trust_environment_network=True,
+        trusted_single_user_ui=True,
+    )
+
+    def fake_search(*args, **kwargs):
+        observed["policy"] = kwargs["security_policy"]
+        return SimpleNamespace(
+            hits=[], context_window=0, effective_mode="vector",
+            reranker_applied=False, warnings=[])
+
+    monkeypatch.setattr(ui.rag, "search_index", fake_search)
+    request = {
+        "action": "search", "query": "terms",
+        "config": {
+            "db_path": str(tmp_path / "db"),
+            "chunks_path": str(tmp_path / "chunks.jsonl"),
+            "db_backend": "chroma", "collection": "book",
+            "embedding_model": "embedding", "db_lock_timeout": 1,
+            "release_security": policy.provenance(),
+        },
+        "options": {
+            "n_results": 5, "content_type": None, "chapter_num": None,
+            "use_reranker": False, "hybrid": False,
+        },
+    }
+
+    ui._execute_vector_request(request)
+
+    assert observed["policy"] == policy
+
+
+@pytest.mark.parametrize("receipt", [
+    None,
+    release_security.ReleaseSecurityPolicy().provenance(),
+])
+def test_vector_worker_rejects_missing_or_disabled_ui_policy_before_search(
+        monkeypatch, tmp_path, receipt):
+    monkeypatch.setattr(
+        ui.rag, "search_index",
+        lambda *_args, **_kwargs: pytest.fail(
+            "untrusted worker receipt must fail before search"))
+    config = {
+        "db_path": str(tmp_path / "db"),
+        "chunks_path": str(tmp_path / "chunks.jsonl"),
+        "db_backend": "chroma", "collection": "book",
+        "embedding_model": "embedding", "db_lock_timeout": 1,
+    }
+    if receipt is not None:
+        config["release_security"] = receipt
+    request = {
+        "action": "search", "query": "terms", "config": config,
+        "options": {
+            "n_results": 5, "content_type": None, "chapter_num": None,
+            "use_reranker": False, "hybrid": False,
+        },
+    }
+
+    with pytest.raises(
+            (KeyError, release_security.ReleaseSecurityError)):
+        ui._execute_vector_request(request)
 
 
 def test_vector_worker_serializes_context_and_alias_provenance(
@@ -141,6 +212,9 @@ def test_vector_worker_serializes_context_and_alias_provenance(
             "collection": "book",
             "embedding_model": "embedding",
             "db_lock_timeout": 1,
+            "release_security": (
+                release_security.ReleaseSecurityPolicy(
+                    trusted_single_user_ui=True).provenance()),
         },
         "options": {
             "n_results": 5, "content_type": None, "chapter_num": None,
@@ -282,6 +356,9 @@ def test_jobs_reindex_submits_only_the_configured_corpus(
     monkeypatch.setitem(ui._config, "db_lock_timeout", 7.0)
     monkeypatch.setitem(ui._config, "job_root", job_root)
     monkeypatch.setitem(ui._config, "job_ready_timeout", 2.0)
+    monkeypatch.setitem(
+        ui._config, "release_security_policy",
+        release_security.ReleaseSecurityPolicy())
     observed = {}
 
     def fake_launch(store, job_id, **kwargs):
@@ -301,6 +378,10 @@ def test_jobs_reindex_submits_only_the_configured_corpus(
         "--collection", "private_book",
         "--embedding-model", "test-embedding",
         "--db-lock-timeout", "7.0",
+        "--release-security-policy-version", "1",
+        "--security-profile", "release",
+        "--network-policy", "local-only",
+        "--model-download-policy", "cache-only",
         "--full-reindex",
     )
     assert execution.timeout_seconds == ui.rag.DEFAULT_OPERATION_TIMEOUTS[
@@ -381,14 +462,32 @@ def test_main_binds_literal_loopback_and_disables_public_sharing(
         "--db", str(tmp_path / "db"),
         "--collection", "book",
         "--port", "8877",
+        "--trust-local-user",
     ])
 
     assert observed == {
         "server_name": "127.0.0.1",
         "server_port": 8877,
         "share": False,
+        "enable_monitoring": False,
     }
     assert ui._config["share"] is False
+
+
+def test_main_requires_explicit_trusted_single_user_boundary(
+        monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(
+        ui, "build_app", lambda: pytest.fail(
+            "untrusted UI must not be built"))
+
+    with pytest.raises(SystemExit):
+        ui.main([
+            "--chunks", str(tmp_path / "chunks.jsonl"),
+            "--db", str(tmp_path / "db"),
+            "--collection", "book",
+        ])
+
+    assert "requires --trust-local-user" in capsys.readouterr().err
 
 
 def test_main_rejects_removed_share_flag_before_building_app(

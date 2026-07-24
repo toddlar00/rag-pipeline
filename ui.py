@@ -11,6 +11,7 @@ Usage:
 
 import argparse
 import json
+import os
 import sys
 import tempfile
 import time
@@ -18,11 +19,19 @@ import zipfile
 from pathlib import Path
 from uuid import uuid4
 
+# Gradio and Hugging Face libraries can otherwise make unrelated analytics or
+# version-check requests.  The UI is a private local surface, so disable those
+# auxiliary transports before importing either the pipeline or Gradio.
+os.environ["GRADIO_ANALYTICS_ENABLED"] = "False"
+os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
+os.environ["DO_NOT_TRACK"] = "1"
+
 # Import pipeline functions
 sys.path.insert(0, str(Path(__file__).parent))
 import rag
 import job_manager
 import job_runtime
+import release_security
 import storage_policy
 
 
@@ -45,6 +54,7 @@ _config = {
     "job_root": job_runtime.DEFAULT_JOB_ROOT,
     "job_ready_timeout": 5.0,
     "share": False,
+    "release_security_policy": release_security.ReleaseSecurityPolicy(),
 }
 
 _VECTOR_WORKER_FLAG = "--vector-worker"
@@ -80,6 +90,9 @@ def _execute_vector_request(request: dict) -> dict:
     action = request.get("action")
     config = request["config"]
     if action == "search":
+        policy = release_security.ReleaseSecurityPolicy.from_provenance(
+            config["release_security"])
+        release_security.require_trusted_ui(policy)
         options = request["options"]
         response = rag.search_index(
             request["query"], Path(config["db_path"]),
@@ -94,6 +107,7 @@ def _execute_vector_request(request: dict) -> dict:
             chunks_path=Path(config["chunks_path"]),
             context_window=options.get("context_window", 0),
             lock_timeout=config["db_lock_timeout"],
+            security_policy=policy,
         )
         hits = []
         for hit in response.hits:
@@ -193,6 +207,9 @@ def _supervised_vector_request(action: str, payload: dict, *,
 
 
 def _vector_config_payload() -> dict:
+    policy = _config["release_security_policy"]
+    if not isinstance(policy, release_security.ReleaseSecurityPolicy):
+        raise TypeError("UI release-security policy is invalid")
     return {
         "db_path": str(_config["db_path"]),
         "chunks_path": str(_config["chunks_path"]),
@@ -200,6 +217,7 @@ def _vector_config_payload() -> dict:
         "collection": _config["collection"],
         "embedding_model": _config["embedding_model"],
         "db_lock_timeout": _config["db_lock_timeout"],
+        "release_security": policy.provenance(),
     }
 
 
@@ -575,6 +593,20 @@ def do_job_reindex(full_reindex):
         "--embedding-model", str(_config["embedding_model"]),
         "--db-lock-timeout", str(_config["db_lock_timeout"]),
     ]
+    policy = _config["release_security_policy"]
+    if not isinstance(policy, release_security.ReleaseSecurityPolicy):
+        return "UI release-security policy is invalid."
+    arguments.extend([
+        "--release-security-policy-version", str(policy.schema_version),
+        "--security-profile", policy.profile,
+        "--network-policy", policy.network_policy,
+        "--model-download-policy", policy.model_download_policy,
+    ])
+    if policy.cache_namespace_id is not None:
+        arguments.extend([
+            "--release-cache-namespace-id", policy.cache_namespace_id])
+    if policy.trust_environment_network:
+        arguments.append("--trust-environment-network")
     if full_reindex:
         arguments.append("--full-reindex")
     try:
@@ -627,6 +659,8 @@ def do_job_resume(job_id):
 # ---------------------------------------------------------------------------
 
 def build_app():
+    policy = _config["release_security_policy"]
+    release_security.require_trusted_ui(policy)
     try:
         import gradio as gr
     except ImportError as exc:
@@ -638,8 +672,13 @@ def build_app():
     type_choices = ["All"] + meta["types"]
     ch_choices = ["All"] + [str(c) for c in meta["chapters"]]
 
-    with gr.Blocks(title="RAG Pipeline", theme=gr.themes.Soft()) as app:
+    with gr.Blocks(
+            title="RAG Pipeline", theme=gr.themes.Soft(),
+            analytics_enabled=False) as app:
         gr.Markdown("# RAG Pipeline")
+        gr.Markdown(
+            "> **Private local UI:** unauthenticated and supported only in "
+            "the trusted single-user OS session acknowledged at startup.")
 
         with gr.Tab("Search"):
             with gr.Row():
@@ -747,6 +786,27 @@ def main(argv: list[str] | None = None):
     parser = argparse.ArgumentParser(
         description="RAG Pipeline Web UI", allow_abbrev=False)
     parser.add_argument("--port", type=int, default=7860)
+    parser.add_argument(
+        "--trust-local-user", action="store_true",
+        help=("Acknowledge that this unauthenticated loopback UI is only "
+              "for one trusted local OS user"))
+    parser.add_argument(
+        "--security-profile", choices=["release", "development"],
+        default="release")
+    parser.add_argument(
+        "--release-security-policy-version", type=int,
+        default=release_security.RELEASE_SECURITY_POLICY_VERSION,
+        help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--network-policy", choices=["local-only", "allow-cloud"],
+        default="local-only")
+    parser.add_argument(
+        "--model-download-policy",
+        choices=["cache-only", "allow-reviewed-sync"],
+        default="cache-only")
+    parser.add_argument("--llm-cache-namespace", default="")
+    parser.add_argument(
+        "--trust-environment-network", action="store_true")
     parser.add_argument("--chunks", type=Path, required=True,
                         help="Book-scoped chunks JSONL from a pipeline run")
     parser.add_argument("--db", type=Path, required=True,
@@ -775,6 +835,19 @@ def main(argv: list[str] | None = None):
         help="Seconds to wait for a detached job-manager handshake")
     args = parser.parse_args(argv)
     try:
+        policy = release_security.ReleaseSecurityPolicy.from_values(
+            profile=args.security_profile,
+            network_policy=args.network_policy,
+            model_download_policy=args.model_download_policy,
+            cache_namespace=args.llm_cache_namespace,
+            trust_environment_network=args.trust_environment_network,
+            trusted_single_user_ui=args.trust_local_user,
+            schema_version=args.release_security_policy_version,
+        )
+        release_security.require_trusted_ui(policy)
+        if args.embedding_model.startswith(rag._API_EMBEDDING_MODEL_PREFIXES):
+            release_security.require_cloud_egress(
+                policy, feature="cloud embedding")
         args.db_lock_timeout = rag._normalize_db_lock_timeout(
             args.db_lock_timeout)
         args.search_timeout = rag._normalize_operation_timeout(
@@ -783,7 +856,7 @@ def main(argv: list[str] | None = None):
             args.info_timeout)
         args.job_ready_timeout = rag._normalize_operation_timeout(
             args.job_ready_timeout)
-    except ValueError as exc:
+    except (TypeError, ValueError) as exc:
         parser.error(str(exc))
 
     _config["chunks_path"] = args.chunks
@@ -797,12 +870,14 @@ def main(argv: list[str] | None = None):
     _config["job_root"] = args.job_root
     _config["job_ready_timeout"] = args.job_ready_timeout
     _config["share"] = False
+    _config["release_security_policy"] = policy
 
     app = build_app()
     app.launch(
         server_name="127.0.0.1",
         server_port=args.port,
         share=False,
+        enable_monitoring=False,
     )
 
 

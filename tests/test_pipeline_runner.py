@@ -8,6 +8,7 @@ import pytest
 
 import job_runtime
 import rag
+import release_security
 from operation_contracts import IndexOutcome
 from run_telemetry import RunTelemetry
 
@@ -674,6 +675,33 @@ def test_shared_runner_forwards_thinking_and_provider_to_all_llm_stages(
         assert kwargs["cloud_model"] == "deepseek-v4-pro"
         assert kwargs["cloud_key"] == "typed-key"
         assert kwargs["llm_workers"] == 4
+
+
+def test_shared_runner_uses_nondefault_policy_for_raptor_completion(
+        monkeypatch, tmp_path):
+    paths = _paths(monkeypatch, tmp_path)
+    observed_parameters = []
+    policy = release_security.ReleaseSecurityPolicy.from_values(
+        network_policy="allow-cloud", cache_namespace="tenant-a",
+        trust_environment_network=True)
+    monkeypatch.setattr(rag, "convert_pdf", lambda *args, **kwargs: None)
+    monkeypatch.setattr(rag, "chunk_document", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        rag, "_index_chunks_for_backend",
+        lambda *args, **kwargs: _index_outcome())
+    monkeypatch.setattr(rag, "export_markdown", lambda *args, **kwargs: None)
+    monkeypatch.setattr(rag, "build_raptor_tree", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        rag, "_raptor_output_complete",
+        lambda *_args, **kwargs: (
+            observed_parameters.append(kwargs["parameters"]) or True))
+    args = _args(raptor=True, _release_security_policy=policy)
+
+    rag._run_pipeline_stages(
+        Path("Book.pdf"), paths, args, resume=False, watermark=None)
+
+    assert len(observed_parameters) == 1
+    assert observed_parameters[0]["release_security"] == policy.provenance()
 
 
 def test_resume_validators_reject_partial_json_artifacts(tmp_path):

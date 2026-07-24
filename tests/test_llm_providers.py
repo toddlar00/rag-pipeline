@@ -8,6 +8,7 @@ import pytest
 import requests
 
 import rag
+import release_security
 from llm_runtime import (
     LLMBudgetExceeded,
     LLMRequest,
@@ -17,6 +18,23 @@ from llm_runtime import (
     ProviderResponse,
     ProviderSpec,
 )
+
+
+@pytest.fixture(autouse=True)
+def _explicit_cloud_policy_for_provider_contracts(monkeypatch):
+    monkeypatch.setattr(
+        rag,
+        "_DEFAULT_RELEASE_SECURITY_POLICY",
+        release_security.ReleaseSecurityPolicy(
+            profile="development",
+            network_policy="allow-cloud",
+            trust_environment_network=True,
+        ),
+    )
+    monkeypatch.setattr(
+        rag, "_post_cloud_with_policy",
+        lambda _policy, url, **kwargs: rag.requests.post(url, **kwargs),
+    )
 
 
 class _Response:
@@ -477,6 +495,10 @@ def _install_fake_gemini(monkeypatch, response=None, error=None):
         def __init__(self, **kwargs):
             self.__dict__.update(kwargs)
 
+    class ThinkingConfig:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
     class Models:
         def generate_content(self, **kwargs):
             observed.update(kwargs)
@@ -491,6 +513,7 @@ def _install_fake_gemini(monkeypatch, response=None, error=None):
     type_module.HttpRetryOptions = HttpRetryOptions
     type_module.HttpOptions = HttpOptions
     type_module.GenerateContentConfig = GenerateContentConfig
+    type_module.ThinkingConfig = ThinkingConfig
     genai_module.types = type_module
     google_module = python_types.ModuleType("google")
     google_module.genai = genai_module
@@ -517,7 +540,7 @@ def test_gemini_structured_usage_and_timeout(monkeypatch):
 
     result = rag._call_gemini_result(
         "prompt", api_key="secret", model="gemini-test",
-        max_tokens=55, timeout=17)
+        max_tokens=55, timeout=17, thinking_level="minimal")
 
     assert result.text == "gemini answer"
     assert result.prompt_tokens == 31
@@ -526,8 +549,14 @@ def test_gemini_structured_usage_and_timeout(monkeypatch):
     assert result.reasoning_tokens == 4
     config = observed["config"]
     assert config.max_output_tokens == 55
+    assert not hasattr(config, "temperature")
+    assert config.thinking_config.thinking_level == "minimal"
     assert config.http_options.timeout == 17_000
     assert config.http_options.retry_options.attempts == 1
+
+
+def test_default_gemini_model_tracks_live_stable_api():
+    assert rag.DEFAULT_GEMINI_MODEL == "gemini-3.6-flash"
 
 
 def test_gemini_error_and_content_filter_categories(monkeypatch):
@@ -660,7 +689,7 @@ def test_exact_usage_survives_cache_hit_without_live_attempts(tmp_path):
     assert calls == 1
 
 
-def test_legacy_v1_cache_record_remains_readable(tmp_path):
+def test_legacy_v1_cache_record_fails_closed_after_namespace_upgrade(tmp_path):
     cache_dir = tmp_path / "cache"
     runtime = LLMRuntime(LLMRuntimeConfig(
         cache_mode="readwrite", cache_dir=cache_dir))
@@ -681,12 +710,13 @@ def test_legacy_v1_cache_record_remains_readable(tmp_path):
 
     hit = runtime.execute(request, [provider])
 
-    assert hit.cache_status == "hit"
+    assert hit.cache_status == "miss"
     assert hit.usage_source == "exact"
     assert hit.prompt_tokens == 9
     assert hit.completion_tokens == 3
     assert hit.cached_prompt_tokens == 0
     assert hit.reasoning_tokens == 0
+    assert runtime.report_payload()["counts"]["cache_corrupt"] == 1
 
 
 def test_v2_cache_detects_tampered_usage_metadata(tmp_path):

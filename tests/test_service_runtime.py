@@ -10,6 +10,7 @@ import pytest
 import job_manager
 import job_runtime
 import retention
+import release_security
 import retrieval_core
 import service_contracts
 import service_runtime
@@ -138,6 +139,68 @@ def test_registry_loader_is_strict_private_and_resolves_relative_paths(
         registry["property"].public_dict())
 
 
+def test_service_rejects_cloud_embedding_under_local_only_before_startup(
+        tmp_path):
+    config = _config(tmp_path)
+    cloud = service_contracts.CorpusConfig(
+        corpus_id=config.corpus_id,
+        db_path=config.db_path,
+        chunks_path=config.chunks_path,
+        collection_name=config.collection_name,
+        embedding_model="text-embedding-3-small",
+    )
+
+    with pytest.raises(
+            release_security.ReleaseSecurityError,
+            match="network-policy allow-cloud"):
+        service_runtime.RagApplicationService(
+            {cloud.corpus_id: cloud},
+            job_root=tmp_path / "jobs",
+            working_directory=tmp_path,
+            output_root=tmp_path / "output",
+        )
+
+
+def test_service_worker_receipt_round_trips_opaque_policy(tmp_path):
+    config = _config(tmp_path)
+    request = service_contracts.SearchRequest("private query")
+    policy = release_security.ReleaseSecurityPolicy.from_values(
+        profile="development", network_policy="allow-cloud",
+        cache_namespace="tenant-label",
+        model_download_policy="allow-reviewed-sync",
+    )
+
+    parsed = service_runtime._parse_worker_request(
+        service_runtime._search_request_payload(
+            config, request, "req-1", security_policy=policy))
+
+    assert parsed[3] == policy
+    assert "tenant-label" not in json.dumps(
+        service_runtime._search_request_payload(
+            config, request, "req-1", security_policy=policy))
+
+
+def test_service_reindex_job_pins_versioned_opaque_policy(tmp_path):
+    config = _config(tmp_path)
+    policy = release_security.ReleaseSecurityPolicy.from_values(
+        cache_namespace="tenant-label")
+    service = service_runtime.RagApplicationService(
+        {config.corpus_id: config},
+        job_root=tmp_path / "jobs",
+        working_directory=tmp_path,
+        output_root=tmp_path / "output",
+        security_policy=policy,
+    )
+
+    argv = service._reindex_argv(
+        config, service_contracts.ReindexRequest())
+
+    assert "tenant-label" not in argv
+    assert "--release-security-policy-version" in argv
+    namespace_index = argv.index("--release-cache-namespace-id")
+    assert argv[namespace_index + 1] == policy.cache_namespace_id
+
+
 def test_committed_service_config_example_matches_registry_contract(tmp_path):
     source = Path(__file__).resolve().parents[1] / "service-config.example.json"
     config_path = tmp_path / "service.json"
@@ -147,7 +210,8 @@ def test_committed_service_config_example_matches_registry_contract(tmp_path):
 
     assert tuple(registry) == ("civil_procedure",)
     assert registry["civil_procedure"].collection_name == "civil_procedure"
-    assert registry["civil_procedure"].embedding_model == "embo-01"
+    assert registry["civil_procedure"].embedding_model == (
+        "text-embedding-3-small")
 
 
 @pytest.mark.parametrize("mutator", [
@@ -560,7 +624,7 @@ def test_supervised_search_surfaces_and_marks_cleanup_failure(
         result = _empty_search_response(config, request, "req-1")
         storage_policy.atomic_write_private_json(
             Path(argv[2]), {
-                "schema_version": 1,
+                "schema_version": service_runtime._INTERNAL_SCHEMA_VERSION,
                 "kind": "service_search_result",
                 "ok": True,
                 "result": result,

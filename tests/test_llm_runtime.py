@@ -7,6 +7,7 @@ from dataclasses import replace
 import pytest
 
 import rag
+import release_security
 from llm_runtime import (
     LLMBudgetExceeded,
     LLMExecutionError,
@@ -17,6 +18,19 @@ from llm_runtime import (
     ProviderResponse,
     ProviderSpec,
 )
+
+
+@pytest.fixture(autouse=True)
+def _explicit_cloud_policy_for_provider_contracts(monkeypatch):
+    monkeypatch.setattr(
+        rag,
+        "_DEFAULT_RELEASE_SECURITY_POLICY",
+        release_security.ReleaseSecurityPolicy(
+            profile="development",
+            network_policy="allow-cloud",
+            trust_environment_network=True,
+        ),
+    )
 
 
 def _provider(invoke, *, name="primary", model="model-a",
@@ -77,6 +91,11 @@ def test_request_id_covers_semantic_inputs(tmp_path):
         (replace(base, fallback_policy="none"), [primary]),
         (base, [replace(primary, model="model-c")]),
         (base, [replace(primary, endpoint_id="https://other.test/v1")]),
+        (base, [replace(
+            primary,
+            cache_namespace_id=(
+                "v1:sha256:" + "a" * 64),
+        )]),
         (base, [secondary, primary]),
     ]
 
@@ -88,6 +107,64 @@ def test_request_id_covers_semantic_inputs(tmp_path):
 
     assert base_id not in varied_ids
     assert len(varied_ids) == len(cases)
+
+
+def test_cache_and_single_flight_are_isolated_by_opaque_namespace(tmp_path):
+    calls = []
+
+    def invoke(_request):
+        calls.append(threading.current_thread().name)
+        return f"answer-{len(calls)}"
+
+    runtime = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="readwrite", cache_dir=tmp_path / "cache"))
+    request = LLMRequest(prompt="same prompt", operation="test.namespace")
+    first = _provider(invoke)
+    first = replace(first, cache_namespace_id="v1:sha256:" + "a" * 64)
+    second = replace(first, cache_namespace_id="v1:sha256:" + "b" * 64)
+
+    result_a = runtime.execute(request, [first])
+    result_b = runtime.execute(request, [second])
+    warm_a = runtime.execute(request, [first])
+
+    assert result_a.request_id != result_b.request_id
+    assert result_a.text == warm_a.text
+    assert result_b.text != result_a.text
+    assert warm_a.cache_status == "hit"
+    assert len(calls) == 2
+    assert len(list((tmp_path / "cache").rglob("*.json"))) == 2
+    assert runtime.report_payload()["providers"]["primary"][
+        "cache_namespace_ids"] == [
+            "v1:sha256:" + "a" * 64,
+            "v1:sha256:" + "b" * 64,
+        ]
+
+
+def test_legacy_ambiguous_cache_record_fails_closed(tmp_path):
+    calls = 0
+
+    def invoke(_request):
+        nonlocal calls
+        calls += 1
+        return f"answer-{calls}"
+
+    cache_dir = tmp_path / "cache"
+    runtime = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="readwrite", cache_dir=cache_dir))
+    request = LLMRequest(prompt="prompt", operation="test.legacy_cache")
+    provider = _provider(invoke)
+    assert runtime.execute(request, [provider]).text == "answer-1"
+
+    cache_path = next(cache_dir.rglob("*.json"))
+    payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    payload["schema_version"] = 2
+    cache_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    repaired = runtime.execute(request, [provider])
+
+    assert repaired.text == "answer-2"
+    assert repaired.cache_status == "miss"
+    assert runtime.report_payload()["counts"]["cache_corrupt"] == 1
 
 
 def test_cache_omits_prompt_endpoint_and_credentials(tmp_path):
@@ -744,6 +821,49 @@ def test_rag_facade_remains_string_or_none(monkeypatch, isolated_rag_runtime):
     assert rag._call_llm("prompt", cloud_url="") == "answer"
     assert rag._call_llm(
         "prompt", cloud_url="", ollama_url="", gemini_key="") is None
+
+
+def test_rag_gemini_maps_request_thinking_to_current_model_contract(
+        monkeypatch, isolated_rag_runtime):
+    observed = []
+
+    def fake_gemini(*_args, **kwargs):
+        observed.append(kwargs)
+        return ProviderResponse(text="answer")
+
+    monkeypatch.setattr(rag, "_call_gemini", fake_gemini)
+    policy = release_security.ReleaseSecurityPolicy(
+        profile="development", network_policy="allow-cloud")
+
+    for thinking in (False, True):
+        result = rag._call_llm_result(
+            "prompt", cloud_url="", ollama_url="", gemini_key="secret",
+            thinking=thinking, security_policy=policy)
+        assert result.text == "answer"
+
+    assert [call["thinking_level"] for call in observed] == [
+        "minimal", "high"]
+
+
+def test_rag_minimax_m2_floor_is_bound_before_runtime_admission(
+        monkeypatch, isolated_rag_runtime):
+    observed = {}
+
+    def fake_cloud(*_args, **kwargs):
+        observed.update(kwargs)
+        return ProviderResponse(text="answer")
+
+    monkeypatch.setattr(rag, "_call_openai_compatible", fake_cloud)
+    policy = release_security.ReleaseSecurityPolicy(
+        profile="development", network_policy="allow-cloud")
+
+    result = rag._call_llm_result(
+        "prompt", cloud_url=rag.DEFAULT_CLOUD_URL,
+        cloud_model="MiniMax-M2.7", cloud_key="secret", ollama_url="",
+        thinking=True, max_tokens=64, security_policy=policy)
+
+    assert result.text == "answer"
+    assert observed["max_tokens"] == 512
 
 
 def test_endpoint_identity_hashes_rejected_credential_bearing_url():

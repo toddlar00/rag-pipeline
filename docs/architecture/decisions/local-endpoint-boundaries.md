@@ -58,12 +58,13 @@ credential is accepted for later redaction.
 The OpenAI-compatible and Ollama adapters validate again immediately before
 network I/O. Requests redirects are disabled and every 3xx response is a
 single-attempt configuration error. Literal-loopback calls use a short-lived
-Requests session with `trust_env=False`; public HTTPS calls retain normal
-operator-managed certificate and proxy behavior. Credentialed Requests calls
-also pass an explicit Bearer authentication object so ambient `.netrc` entries
-cannot replace or add credentials. Fixed MiniMax embedding and Jina reranking
-Requests calls refuse redirects explicitly, reject every 3xx body, and have a
-finite timeout.
+Requests session with `trust_env=False`; public HTTPS calls also ignore ambient
+routing unless the R0B policy explicitly accepts it. Credentialed Requests
+calls pass an explicit Bearer authentication object so ambient `.netrc`
+entries cannot replace or add credentials. Fixed Voyage/OpenAI/Cohere
+embedding and Cohere/Jina reranking Requests calls refuse redirects, reject
+every 3xx body, and have a finite timeout. MiniMax embedding identifiers fail
+closed because no current reviewed embedding API contract exists.
 
 Background-job submission validates and canonicalizes endpoint arguments
 before creating a job document. Endpoint and secret option abbreviations are
@@ -100,5 +101,9 @@ disclosure, and distribution licensing.
   transport-attempt budget and recorded endpoint provenance; callers must
   configure the final base URL directly.
 - **Hash API keys into cache namespaces.** Credential-derived persistence adds
-  a new secret-handling surface. A future nonsecret tenant namespace is the
-  safer compatibility mechanism when shared custom gateways require it.
+  a new secret-handling surface. R0B instead implements a caller-declared,
+  validated nonsecret tenant label and persists only its SHA-256 identity.
+
+The R0B release-security ADR is authoritative for environment trust, tenant
+namespaces, provider-specific model contracts, and policy propagation added
+after this endpoint decision.

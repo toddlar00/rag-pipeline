@@ -22,6 +22,7 @@ from typing import Any, Callable, Mapping, Sequence
 import job_manager
 import job_runtime
 import rag
+import release_security
 import retention
 import service_contracts
 import storage_policy
@@ -40,7 +41,7 @@ _OWNER_MARKER_SCHEMA_VERSION = 1
 _OWNER_MARKER_KIND = "rag_service_job_root_owner"
 _MAX_OWNER_MARKER_BYTES = 4096
 _SEARCH_WORKER_ACTION = "_search_worker"
-_INTERNAL_SCHEMA_VERSION = 1
+_INTERNAL_SCHEMA_VERSION = 2
 _ACTIVE_SERVICE_GUARD = threading.Lock()
 _ACTIVE_SERVICE_KEYS: set[tuple[int, str]] = set()
 
@@ -277,11 +278,17 @@ def load_corpus_registry(path: Path) -> dict[str, service_contracts.CorpusConfig
 def _search_request_payload(
         config: service_contracts.CorpusConfig,
         request: service_contracts.SearchRequest,
-        request_id: str) -> dict[str, Any]:
+        request_id: str, *,
+        security_policy: release_security.ReleaseSecurityPolicy | None = None,
+        ) -> dict[str, Any]:
+    policy = security_policy or release_security.ReleaseSecurityPolicy()
+    if not isinstance(policy, release_security.ReleaseSecurityPolicy):
+        raise TypeError("invalid release-security policy")
     return {
         "schema_version": _INTERNAL_SCHEMA_VERSION,
         "kind": "service_search_request",
         "request_id": request_id,
+        "release_security": policy.provenance(),
         "corpus": {
             "corpus_id": config.corpus_id,
             "backend": config.backend,
@@ -303,17 +310,22 @@ def _search_request_payload(
 def _parse_worker_request(
         payload: object,
         ) -> tuple[service_contracts.CorpusConfig,
-                   service_contracts.SearchRequest, str]:
+                   service_contracts.SearchRequest, str,
+                   release_security.ReleaseSecurityPolicy]:
     payload = _exact_fields(
         payload,
         allowed=frozenset({
-            "schema_version", "kind", "request_id", "corpus", "search"}),
+            "schema_version", "kind", "request_id", "release_security",
+            "corpus", "search"}),
         required=frozenset({
-            "schema_version", "kind", "request_id", "corpus", "search"}))
+            "schema_version", "kind", "request_id", "release_security",
+            "corpus", "search"}))
     if (payload["schema_version"] != _INTERNAL_SCHEMA_VERSION
             or payload["kind"] != "service_search_request"):
         raise service_contracts.ServiceContractError()
     request_id = service_contracts.validate_request_id(payload["request_id"])
+    policy = release_security.ReleaseSecurityPolicy.from_provenance(
+        payload["release_security"])
     corpus = _exact_fields(
         payload["corpus"],
         allowed=frozenset({
@@ -336,13 +348,15 @@ def _parse_worker_request(
         db_lock_timeout_seconds=corpus["db_lock_timeout_seconds"],
     )
     request = service_contracts.parse_search_request(payload["search"])
-    return config, request, request_id
+    return config, request, request_id, policy
 
 
 def _execute_search(
         config: service_contracts.CorpusConfig,
         request: service_contracts.SearchRequest,
-        request_id: str) -> dict[str, Any]:
+        request_id: str, *,
+        security_policy: release_security.ReleaseSecurityPolicy | None = None,
+        ) -> dict[str, Any]:
     hybrid = None
     if request.mode == "vector":
         hybrid = False
@@ -361,6 +375,7 @@ def _execute_search(
         hybrid=hybrid,
         chunks_path=config.chunks_path,
         lock_timeout=config.db_lock_timeout_seconds,
+        security_policy=security_policy,
     )
     return service_contracts.public_search_response(
         response, corpus_id=config.corpus_id, request_id=request_id)
@@ -385,8 +400,9 @@ def search_worker_main(request_path: Path, result_path: Path) -> int:
     try:
         payload = _read_private_json(
             request_path, max_bytes=service_contracts.MAX_REQUEST_BYTES)
-        config, request, request_id = _parse_worker_request(payload)
-        result = _execute_search(config, request, request_id)
+        config, request, request_id, policy = _parse_worker_request(payload)
+        result = _execute_search(
+            config, request, request_id, security_policy=policy)
         envelope = {
             "schema_version": _INTERNAL_SCHEMA_VERSION,
             "kind": "service_search_result",
@@ -445,7 +461,9 @@ def supervised_search(
         config: service_contracts.CorpusConfig,
         request: service_contracts.SearchRequest,
         request_id: str, *,
-        temporary_root: Path | None = None) -> dict[str, Any]:
+        temporary_root: Path | None = None,
+        security_policy: release_security.ReleaseSecurityPolicy | None = None,
+        ) -> dict[str, Any]:
     """Execute one search behind a hard, process-tree-cleaning deadline."""
     request_id = service_contracts.validate_request_id(request_id)
     parent = (
@@ -460,7 +478,9 @@ def supervised_search(
         request_path = temporary_path / "request.json"
         result_path = temporary_path / "result.json"
         storage_policy.atomic_write_private_json(
-            request_path, _search_request_payload(config, request, request_id))
+            request_path, _search_request_payload(
+                config, request, request_id,
+                security_policy=security_policy))
         try:
             with open(os.devnull, "wb") as output_sink:
                 exit_code = rag._run_cli_with_deadline(
@@ -509,6 +529,8 @@ class RagApplicationService:
             service_state_root: Path | None = None,
             ready_timeout_seconds: float = 10.0,
             max_concurrent_searches: int = 2,
+            security_policy: (
+                release_security.ReleaseSecurityPolicy | None) = None,
             search_runner: Callable[[
                 service_contracts.CorpusConfig,
                 service_contracts.SearchRequest, str], dict[str, Any]
@@ -525,6 +547,18 @@ class RagApplicationService:
                     or key != config.corpus_id or key in checked):
                 raise service_contracts.ServiceContractError()
             checked[key] = config
+        self.security_policy = (
+            security_policy or release_security.ReleaseSecurityPolicy())
+        if not isinstance(
+                self.security_policy,
+                release_security.ReleaseSecurityPolicy):
+            raise service_contracts.ServiceContractError()
+        for config in checked.values():
+            if config.embedding_model.startswith(
+                    rag._API_EMBEDDING_MODEL_PREFIXES):
+                release_security.require_cloud_egress(
+                    self.security_policy,
+                    feature=f"cloud embedding for corpus {config.corpus_id}")
         if (isinstance(max_concurrent_searches, bool)
                 or not isinstance(max_concurrent_searches, int)
                 or not 1 <= max_concurrent_searches <= 16):
@@ -592,7 +626,8 @@ class RagApplicationService:
             self._search_runner = lambda config, request, request_id: (
                 supervised_search(
                     config, request, request_id,
-                    temporary_root=self.search_temporary_root))
+                    temporary_root=self.search_temporary_root,
+                    security_policy=self.security_policy))
         else:
             self._search_runner = search_runner
         self._launcher = launcher
@@ -1075,7 +1110,20 @@ class RagApplicationService:
             "--embedding-model", config.embedding_model,
             "--db-backend", "qdrant",
             "--db-lock-timeout", f"{config.db_lock_timeout_seconds:g}",
+            "--release-security-policy-version",
+            str(self.security_policy.schema_version),
+            "--security-profile", self.security_policy.profile,
+            "--network-policy", self.security_policy.network_policy,
+            "--model-download-policy",
+            self.security_policy.model_download_policy,
         ]
+        if self.security_policy.cache_namespace_id is not None:
+            arguments.extend([
+                "--release-cache-namespace-id",
+                self.security_policy.cache_namespace_id,
+            ])
+        if self.security_policy.trust_environment_network:
+            arguments.append("--trust-environment-network")
         if request.full_reindex:
             arguments.append("--full-reindex")
         return tuple(arguments)

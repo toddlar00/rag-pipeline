@@ -35,6 +35,7 @@ from pathlib import Path
 import evaluation_contract
 import evaluation_metrics
 import model_artifacts
+import release_security
 import retrieval_core
 import table_retrieval_core
 
@@ -1107,7 +1108,10 @@ def run_search(query: str, db_path: Path, *,
                    retrieval_core.DEFAULT_CONTEXT_MAX_CHARACTERS),
                context_segment_characters: int = (
                    retrieval_core.DEFAULT_CONTEXT_SEGMENT_CHARACTERS),
-               lock_timeout: float = DEFAULT_DB_LOCK_TIMEOUT) -> list[dict]:
+               lock_timeout: float = DEFAULT_DB_LOCK_TIMEOUT,
+               security_policy: (
+                   release_security.ReleaseSecurityPolicy | None) = None,
+               ) -> list[dict]:
     """Run a search and return results as plain dictionaries."""
     import rag  # lazy import to avoid loading models at import time
 
@@ -1129,6 +1133,7 @@ def run_search(query: str, db_path: Path, *,
         "context_max_characters": context_max_characters,
         "context_segment_characters": context_segment_characters,
         "lock_timeout": lock_timeout,
+        "security_policy": security_policy,
     }
     if chunks_path is not None:
         search_options["chunks_path"] = chunks_path
@@ -2153,6 +2158,7 @@ def _load_baseline_metrics(path: Path, *,
             "table_family_judgment_schema_version",
             "table_retrieval_policy", "context_window",
             "context_max_characters", "context_segment_characters",
+            "release_security",
         }
         mismatches = []
         for key in comparable_keys:
@@ -2266,6 +2272,23 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--collection", type=str)
     parser.add_argument("--embedding-model", type=str,
                         default="nomic-ai/nomic-embed-text-v2-moe")
+    parser.add_argument(
+        "--security-profile", choices=["release", "development"],
+        default="release")
+    parser.add_argument(
+        "--release-security-policy-version", type=int,
+        default=release_security.RELEASE_SECURITY_POLICY_VERSION,
+        help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--network-policy", choices=["local-only", "allow-cloud"],
+        default="local-only")
+    parser.add_argument(
+        "--model-download-policy",
+        choices=["cache-only", "allow-reviewed-sync"],
+        default="cache-only")
+    parser.add_argument("--llm-cache-namespace", default="")
+    parser.add_argument(
+        "--trust-environment-network", action="store_true")
     parser.add_argument("--db-backend", type=str, default="chroma",
                         choices=["chroma", "qdrant"])
     parser.add_argument(
@@ -2405,6 +2428,9 @@ def _report_config(args, **overrides) -> dict:
         "context_window": args.context_window,
         "context_max_characters": args.context_max_characters,
         "context_segment_characters": args.context_segment_characters,
+        "release_security": getattr(
+            args, "_release_security_policy",
+            release_security.ReleaseSecurityPolicy()).provenance(),
         **overrides,
     }
     if args.report_detail == "summary":
@@ -2448,6 +2474,24 @@ def _main_with_args(args, parser: argparse.ArgumentParser) -> int:
             or args.context_window):
         parser.error(
             "hybrid, reranker, and context flags do not apply to offline BM25")
+    if args.retriever == "index":
+        try:
+            if args.embedding_model.startswith(
+                    ("voyage-", "text-embedding-", "embed-", "cohere-",
+                     "embo-", "minimax-emb")):
+                release_security.require_cloud_egress(
+                    args._release_security_policy,
+                    feature="evaluation cloud embedding")
+            if (
+                (args.compare or args.reranker is not False)
+                and args.reranker_model.startswith(
+                    ("cohere-rerank", "jina-reranker"))
+            ):
+                release_security.require_cloud_egress(
+                    args._release_security_policy,
+                    feature="evaluation cloud reranking")
+        except release_security.ReleaseSecurityError as exc:
+            parser.error(str(exc))
     if args.max_regression and not args.baseline_report:
         parser.error("--max-regression requires --baseline-report")
     if args.baseline_report and not args.max_regression:
@@ -2612,6 +2656,7 @@ def _main_with_args(args, parser: argparse.ArgumentParser) -> int:
             "context_window": args.context_window,
             "context_max_characters": args.context_max_characters,
             "context_segment_characters": args.context_segment_characters,
+            "security_policy": args._release_security_policy,
         })
     storage_target = args.db if args.retriever == "index" else args.chunks
     storage = evaluation_metrics.measure_path(storage_target)
@@ -2751,6 +2796,15 @@ def main(argv: list[str] | None = None) -> int:
     try:
         import evaluation_release
         evaluation_release.apply_release_policy(args, argv=cli_args)
+        args._release_security_policy = (
+            release_security.ReleaseSecurityPolicy.from_values(
+                profile=args.security_profile,
+                network_policy=args.network_policy,
+                model_download_policy=args.model_download_policy,
+                cache_namespace=args.llm_cache_namespace,
+                trust_environment_network=args.trust_environment_network,
+                schema_version=args.release_security_policy_version,
+            ))
     except (OSError, UnicodeError, ValueError) as exc:
         parser.error(str(exc))
     import rag

@@ -272,6 +272,7 @@ def _gemini_content_filtered(
 def _call_gemini_result(
         prompt: str, *, api_key: str, model: str,
         max_tokens: int, timeout: int,
+        thinking_level: str | None,
         client_loader_fn: GeminiClientLoaderFn,
         provider_value_fn: ProviderValueFn,
         provider_token_count_fn: ProviderTokenCountFn,
@@ -293,18 +294,25 @@ def _call_gemini_result(
         raise ProviderCallError(
             "configuration_error", transport_attempts=0) from None
 
+    config_kwargs = {
+        "max_output_tokens": max_tokens,
+        "http_options": types.HttpOptions(
+            timeout=timeout * 1000,
+            retry_options=types.HttpRetryOptions(attempts=1),
+        ),
+    }
+    if thinking_level is not None:
+        if thinking_level not in {"minimal", "low", "medium", "high"}:
+            raise ProviderCallError(
+                "configuration_error", transport_attempts=0)
+        config_kwargs["thinking_config"] = types.ThinkingConfig(
+            thinking_level=thinking_level)
+
     try:
         response = client.models.generate_content(
             model=model,
             contents=prompt,
-            config=types.GenerateContentConfig(
-                max_output_tokens=max_tokens,
-                temperature=0.0,
-                http_options=types.HttpOptions(
-                    timeout=timeout * 1000,
-                    retry_options=types.HttpRetryOptions(attempts=1),
-                ),
-            ),
+            config=types.GenerateContentConfig(**config_kwargs),
         )
     except LLMBudgetExceeded:
         raise
@@ -484,14 +492,32 @@ def _call_openai_compatible_result(
     payload = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": max_tokens,
     }
+    token_limit_field = (
+        "max_completion_tokens"
+        if endpoint.provider == "minimax" else "max_tokens")
+    payload[token_limit_field] = max_tokens
+    if endpoint.provider == "minimax":
+        # Native M2.x responses otherwise mix private reasoning tags into the
+        # answer text.  The reviewed API can return that reasoning separately;
+        # callers intentionally consume only the final ``content`` field.
+        payload["reasoning_split"] = True
     if is_deepseek:
         payload["thinking"] = {
             "type": "enabled" if thinking else "disabled"
         }
     if not (is_deepseek and thinking):
         payload["temperature"] = 0.0
+    if endpoint.provider == "minimax":
+        is_minimax_m3 = model.casefold().startswith("minimax-m3")
+        if not is_minimax_m3 and not thinking:
+            # M2.x cannot disable reasoning, so accepting ``thinking=False``
+            # would make request identity/provenance disagree with execution.
+            raise ProviderCallError(
+                "configuration_error", transport_attempts=0)
+        payload["thinking"] = {
+            "type": "adaptive" if thinking else "disabled"
+        }
 
     transient_errors: list[str] = []
     selected_post_fn = (

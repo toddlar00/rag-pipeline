@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import TypedDict
 
 import endpoint_policy
+import release_security
 
 
 EndpointPredicateFn = Callable[..., bool]
@@ -57,6 +58,9 @@ class ResumeCommandDefaults:
     llm_fallback: str
     llm_failure_policy: str
     provider: ProviderCliDefaults
+    security_profile: str = "release"
+    network_policy: str = "local-only"
+    model_download_policy: str = "cache-only"
 
 
 class LLMCallOptions(TypedDict, total=False):
@@ -70,6 +74,7 @@ class LLMCallOptions(TypedDict, total=False):
     gemini_key: str
     thinking: bool
     llm_workers: int
+    security_policy: release_security.ReleaseSecurityPolicy
 
 
 class LLMRuntimeConfigValues(TypedDict):
@@ -120,6 +125,7 @@ def _build_resume_cmd(
         "llm_scaffold": "--llm-scaffold",
         "table_children": "--table-children",
         "thinking": "--thinking",
+        "trust_environment_network": "--trust-environment-network",
     }
     for attr, flag in boolean_flags.items():
         if getattr(args, attr, False):
@@ -174,6 +180,11 @@ def _build_resume_cmd(
          "--max-llm-transport-attempts"),
         ("max_llm_reserved_tokens", None,
          "--max-llm-reserved-tokens"),
+        ("security_profile", defaults.security_profile,
+         "--security-profile"),
+        ("network_policy", defaults.network_policy, "--network-policy"),
+        ("model_download_policy", defaults.model_download_policy,
+         "--model-download-policy"),
     )
     for attr, default, flag in value_flags:
         value = getattr(args, attr, default)
@@ -184,6 +195,17 @@ def _build_resume_cmd(
                 value = endpoint.base_url if endpoint is not None else ""
             parts.extend([
                 flag, f'"{value}"' if " " in str(value) else str(value)])
+    policy = getattr(args, "_release_security_policy", None)
+    if isinstance(policy, release_security.ReleaseSecurityPolicy):
+        parts.extend([
+            "--release-security-policy-version",
+            str(policy.schema_version),
+        ])
+        if policy.cache_namespace_id is not None:
+            parts.extend([
+                "--release-cache-namespace-id",
+                policy.cache_namespace_id,
+            ])
     if extra_flags:
         parts.append(extra_flags)
     return " ".join(parts)
@@ -262,24 +284,90 @@ def _llm_kwargs_from_args(
         getattr(args, "ollama_url", defaults.ollama_url),
         allow_disabled=True,
     )
+    policy = getattr(args, "_release_security_policy", None)
+    cloud_credentials_enabled = resolve_credentials
+    if policy is not None:
+        if not isinstance(policy, release_security.ReleaseSecurityPolicy):
+            raise TypeError("invalid release security policy")
+        cloud_credentials_enabled = (
+            resolve_credentials and policy.network_policy == "allow-cloud")
+        if cloud_credentials_enabled:
+            cloud_endpoint = endpoint_policy.validate_cloud_endpoint(
+                cloud_url, allow_disabled=True)
+            release_security.require_cloud_egress(
+                policy,
+                feature="LLM generation",
+                custom_gateway=(
+                    cloud_endpoint is not None
+                    and cloud_endpoint.provider == "custom"),
+            )
     kwargs: LLMCallOptions = {
         "cloud_url": cloud_url,
         "cloud_model": cloud_model,
         "cloud_key": (
             resolve_cloud_key_fn(
                 args, cloud_url=cloud_url, cloud_model=cloud_model)
-            if resolve_credentials else ""),
+            if cloud_credentials_enabled else ""),
         "ollama_url": (
             ollama_endpoint.base_url if ollama_endpoint is not None else ""),
         "ollama_model": getattr(args, "ollama_model", defaults.ollama_model),
         "gemini_key": (
-            getattr(args, "gemini_key", "") if resolve_credentials else ""),
+            getattr(args, "gemini_key", "")
+            if cloud_credentials_enabled else ""),
         "thinking": getattr(args, "thinking", False),
     }
     if include_workers:
         kwargs["llm_workers"] = getattr(
             args, "llm_workers", defaults.llm_workers)
+    if policy is not None:
+        kwargs["security_policy"] = policy
     return kwargs
+
+
+def _release_security_policy_from_args(
+        args: object) -> release_security.ReleaseSecurityPolicy:
+    """Construct the one immutable policy shared by the parsed operation."""
+    namespace = getattr(args, "llm_cache_namespace", "")
+    namespace_id = getattr(args, "release_cache_namespace_id", None)
+    if namespace and namespace_id:
+        raise release_security.ReleaseSecurityError(
+            "cache namespace and canonical namespace identity conflict")
+    if namespace_id:
+        return release_security.ReleaseSecurityPolicy(
+            profile=getattr(args, "security_profile", "release"),
+            network_policy=getattr(args, "network_policy", "local-only"),
+            model_download_policy=getattr(
+                args, "model_download_policy", "cache-only"),
+            cache_namespace_id=namespace_id,
+            trust_environment_network=getattr(
+                args, "trust_environment_network", False),
+            trusted_single_user_ui=getattr(args, "trust_local_user", False),
+            schema_version=getattr(
+                args, "release_security_policy_version",
+                release_security.RELEASE_SECURITY_POLICY_VERSION),
+        )
+    return release_security.ReleaseSecurityPolicy.from_values(
+        profile=getattr(args, "security_profile", "release"),
+        network_policy=getattr(args, "network_policy", "local-only"),
+        model_download_policy=getattr(
+            args, "model_download_policy", "cache-only"),
+        cache_namespace=namespace,
+        trust_environment_network=getattr(
+            args, "trust_environment_network", False),
+        trusted_single_user_ui=getattr(args, "trust_local_user", False),
+        schema_version=getattr(
+            args, "release_security_policy_version",
+            release_security.RELEASE_SECURITY_POLICY_VERSION),
+    )
+
+
+def _argv_has_inline_secret(args: list[str]) -> bool:
+    """Return whether exact CLI syntax carries a credential value in argv."""
+    return any(
+        isinstance(token, str)
+        and token.partition("=")[0] in _SECRET_CLI_FLAGS
+        for token in args
+    )
 
 
 def _option_spelling_conflicts(

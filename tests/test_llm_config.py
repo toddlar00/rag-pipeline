@@ -324,9 +324,11 @@ def test_cli_provider_aliases_and_thinking_reach_command(
     monkeypatch.setattr(
         sys,
         "argv",
-        [
-            "rag.py", "generate-questions",
-            key_flag, "typed-secret",
+            [
+                "rag.py", "generate-questions",
+                "--security-profile", "development",
+                "--network-policy", "allow-cloud",
+                key_flag, "typed-secret",
             url_flag, "https://api.deepseek.com",
             model_flag, "deepseek-v4-pro",
             "--llm-workers", "3",
@@ -384,6 +386,7 @@ def test_interactive_deepseek_key_is_hidden_and_argv_is_restored(
     assert "<redacted>" in output
     assert observed["argv"] == [
         "rag.py", "generate-questions",
+        "--network-policy", "allow-cloud",
         "--llm-url", rag.DEFAULT_DEEPSEEK_URL,
         "--llm-model", "deepseek-v4-pro",
         "--thinking",
@@ -391,6 +394,52 @@ def test_interactive_deepseek_key_is_hidden_and_argv_is_restored(
     assert observed["deepseek_key"] == "menu-secret"
     assert __import__("os").environ["DEEPSEEK_API_KEY"] == "ambient-secret"
     assert sys.argv == original_argv
+
+
+@pytest.mark.parametrize(
+    ("provider", "inputs", "expected"),
+    [
+        ("deepseek-v4-flash", [], ["--llm-model", "deepseek-v4-flash"]),
+        ("minimax", [], []),
+        ("gemini", [], ["--gemini-key", "menu-secret"]),
+        (
+            "custom",
+            ["https://example.test/v1", "model-name", "tenant-a"],
+            ["--llm-cache-namespace", "tenant-a"],
+        ),
+    ],
+)
+def test_interactive_cloud_llm_providers_serialize_explicit_consent(
+        monkeypatch, provider, inputs, expected):
+    values = iter(inputs)
+    monkeypatch.setattr(rag, "_menu_choose", lambda *_args, **_kwargs: provider)
+    monkeypatch.setattr(rag, "_menu_yesno", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(rag, "getpass", lambda _prompt: "menu-secret")
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(values))
+
+    args = rag._menu_llm_provider_args()
+
+    assert args is not None
+    assert ["--network-policy", "allow-cloud"] == args[:2]
+    for offset in range(0, len(expected), 2):
+        flag, value = expected[offset:offset + 2]
+        assert args[args.index(flag) + 1] == value
+
+
+def test_interactive_cloud_embedding_serializes_explicit_consent(monkeypatch):
+    choices = iter(["index", "chroma", rag.DEFAULT_EMBEDDING_MODEL_LEGAL])
+    captured = {}
+    monkeypatch.setattr(
+        rag, "_menu_choose", lambda *_args, **_kwargs: next(choices))
+    monkeypatch.setattr(rag, "_menu_file", lambda *_args, **_kwargs: "")
+    monkeypatch.setattr(rag, "_menu_yesno", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        rag, "_run_rag_entrypoint",
+        lambda args, **_kwargs: captured.update(args=list(args)) or 0)
+
+    rag.interactive_menu()
+
+    assert captured["args"][-2:] == ["--network-policy", "allow-cloud"]
 
 
 @pytest.mark.parametrize(

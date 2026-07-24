@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Mapping
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote
+from urllib.parse import quote, urljoin, urlsplit
 from urllib.request import Request, urlopen
 
 
@@ -41,6 +41,7 @@ _MAX_HUB_RESPONSE_BYTES = 10 * 1024 * 1024
 _MAX_HUB_REGULAR_FILE_BYTES = 16 * 1024 * 1024
 _MAX_PYPI_RESPONSE_BYTES = 5 * 1024 * 1024
 _MAX_PACKAGE_BYTES = 64 * 1024 * 1024
+HUGGINGFACE_HUB_OFFICIAL_ENDPOINT = "https://huggingface.co"
 
 
 class ModelArtifactError(ValueError):
@@ -1490,9 +1491,176 @@ def _runtime_bundle_identity(
     ).encode("utf-8")).hexdigest()
 
 
+def _validated_hub_endpoint(endpoint: str) -> str:
+    """Return a canonical HTTPS Hub endpoint without exposing credentials."""
+    if not isinstance(endpoint, str):
+        raise TypeError("model download endpoint must be text")
+    if endpoint != endpoint.strip() or not endpoint.isascii():
+        raise ModelArtifactError("model download endpoint is not canonical")
+    try:
+        parsed = urlsplit(endpoint)
+        port = parsed.port
+    except ValueError:
+        raise ModelArtifactError("model download endpoint is malformed") from None
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or port not in {None, 443}
+    ):
+        raise ModelArtifactError(
+            "model download endpoint must be credential-free HTTPS")
+    path = parsed.path.rstrip("/")
+    authority = parsed.hostname.casefold()
+    return f"https://{authority}{path}"
+
+
+def _model_download_session(requests_module, *, trust_environment_network: bool):
+    """Build a session that may trust routing state but never ambient auth."""
+    class _NoAmbientAuth(requests_module.auth.AuthBase):
+        def __call__(self, request):
+            request.headers.pop("Authorization", None)
+            return request
+
+    class _ModelDownloadSession(requests_module.Session):
+        def get_redirect_target(self, response):
+            target = super().get_redirect_target(response)
+            if target is not None:
+                resolved = urljoin(response.url, target)
+                _require_https_model_download_url(
+                    resolved, context="model download redirect")
+            return target
+
+        def rebuild_auth(self, prepared_request, _response):
+            # Requests may rediscover .netrc credentials after a redirect even
+            # when the initial request used explicit empty auth.  Reviewed
+            # public artifacts never need authorization on Hub or CDN hosts.
+            prepared_request.headers.pop("Authorization", None)
+
+    session = _ModelDownloadSession()
+    session.trust_env = trust_environment_network
+    session.auth = _NoAmbientAuth()
+    session.max_redirects = 5
+    session.headers.clear()
+    session.headers.update({
+        "Accept-Encoding": "identity",
+        "User-Agent": "rag-pipeline-model-sync/1",
+    })
+    return session
+
+
+def _require_https_model_download_url(url: str, *, context: str) -> None:
+    """Reject credential-bearing or plaintext model-download destinations."""
+    try:
+        parsed = urlsplit(url)
+    except (TypeError, ValueError):
+        raise ModelArtifactError(f"{context} URL is malformed") from None
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        raise ModelArtifactError(
+            f"{context} must remain credential-free HTTPS")
+
+
+def _snapshot_model_repository(
+        *, repo_id: str, revision: str, allow_patterns: list[str],
+        endpoint: str, trust_environment_network: bool,
+        destination: Path | None = None,
+        expected_sizes: Mapping[str, int] | None = None,
+        snapshot_download_fn: Callable[..., str] | None = None,
+) -> str:
+    """Download exact public files without delegating transport policy to an SDK."""
+    kwargs = {
+        "repo_id": repo_id,
+        "revision": revision,
+        "allow_patterns": allow_patterns,
+        "endpoint": endpoint,
+        # Reviewed artifacts are public.  Never discover or transmit an
+        # ambient stored Hub credential for them.
+        "token": False,
+        "etag_timeout": 10,
+    }
+    if snapshot_download_fn is not None:
+        return snapshot_download_fn(**kwargs)
+    if destination is None or expected_sizes is None:
+        raise ModelArtifactError(
+            "direct model synchronization requires a private destination")
+    try:
+        import requests
+    except ImportError as exc:
+        raise ModelArtifactError(
+            "requests is required to synchronize model artifacts") from exc
+
+    destination.mkdir(parents=True, exist_ok=False)
+    session = _model_download_session(
+        requests, trust_environment_network=trust_environment_network)
+    try:
+        for file_path in allow_patterns:
+            expected_size = expected_sizes.get(file_path)
+            if isinstance(expected_size, bool) or not isinstance(
+                    expected_size, int) or expected_size < 0:
+                raise ModelArtifactError(
+                    f"model file has no safe size bound: {file_path}")
+            url = (
+                f"{endpoint}/{quote(repo_id, safe='/')}/resolve/"
+                f"{revision}/{quote(file_path, safe='/')}"
+            )
+            output = destination / Path(*PurePosixPath(file_path).parts)
+            output.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                with session.get(
+                        url, stream=True, allow_redirects=True,
+                        timeout=(10, 60)) as response:
+                    _require_https_model_download_url(
+                        getattr(response, "url", url),
+                        context="final model download")
+                    response.raise_for_status()
+                    length = response.headers.get("Content-Length")
+                    if length is not None and (
+                        not length.isdecimal() or int(length) > expected_size
+                    ):
+                        raise ModelArtifactError(
+                            f"model file exceeds its size bound: {file_path}")
+                    written = 0
+                    with output.open("xb") as handle:
+                        for chunk in response.iter_content(chunk_size=1024 * 1024):
+                            if not chunk:
+                                continue
+                            written += len(chunk)
+                            if written > expected_size:
+                                raise ModelArtifactError(
+                                    "model file exceeds its size bound: "
+                                    f"{file_path}")
+                            handle.write(chunk)
+                        handle.flush()
+                        os.fsync(handle.fileno())
+                    if written != expected_size:
+                        raise ModelArtifactError(
+                            f"model file size differs: {file_path}")
+            except ModelArtifactError:
+                raise
+            except (OSError, requests.RequestException) as exc:
+                raise ModelArtifactError(
+                    f"model file download failed for {file_path}: "
+                    f"{type(exc).__name__}") from exc
+    finally:
+        session.close()
+    return str(destination)
+
+
 def verified_model_directory(
         model_id: str, consumer: str, *, cache_root: Path | None = None,
         snapshot_download_fn: Callable[..., str] | None = None,
+        allow_download: bool = False,
+        authorize_download_fn: Callable[[], None] | None = None,
+        download_endpoint: str = HUGGINGFACE_HUB_OFFICIAL_ENDPOINT,
+        trust_environment_network: bool = False,
 ) -> Path:
     """Return an isolated, byte-verified local directory for a model loader.
 
@@ -1500,6 +1668,17 @@ def verified_model_directory(
     resolves an immutable commit with an exact allowlist, verifies every byte,
     copies regular files into a private tree, and atomically publishes it.
     """
+    if not isinstance(allow_download, bool):
+        raise TypeError("allow_download must be boolean")
+    if not isinstance(trust_environment_network, bool):
+        raise TypeError("trust_environment_network must be boolean")
+    download_endpoint = _validated_hub_endpoint(download_endpoint)
+    if (
+        not trust_environment_network
+        and download_endpoint != HUGGINGFACE_HUB_OFFICIAL_ENDPOINT
+    ):
+        raise ModelArtifactError(
+            "a custom model endpoint requires explicit environment trust")
     artifact = model_artifact(model_id)
     if artifact is None:
         raise ModelArtifactError(f"model is not in the reviewed lock: {model_id}")
@@ -1546,44 +1725,66 @@ def verified_model_directory(
         _verify_runtime_tree(target, expected | code_expected)
         return target
 
-    if snapshot_download_fn is None:
-        try:
-            from huggingface_hub import snapshot_download
-        except ImportError as exc:
-            raise ModelArtifactError(
-                "huggingface-hub is required to synchronize model artifacts") from exc
-        snapshot_download_fn = snapshot_download
-    source_root = Path(snapshot_download_fn(
-        repo_id=artifact.model_id,
-        revision=artifact.revision,
-        allow_patterns=[file.path for file in approved],
-    ))
-    for file in approved:
-        _verify_source_file(
-            source_root / Path(*PurePosixPath(file.path).parts), file)
-
-    code_files: tuple[ModelArtifactFile, ...] = ()
-    code_root: Path | None = None
-    if transforms:
-        if artifact.code_model_id is None:
-            raise ModelArtifactError("runtime transform has no reviewed code model")
-        code_artifact = model_artifact(artifact.code_model_id)
-        if code_artifact is None:
-            raise ModelArtifactError("remote code artifact is missing")
-        code_consumer = f"{consumer}_remote_code"
-        code_files = code_artifact.files_for(code_consumer)
-        code_root = Path(snapshot_download_fn(
-            repo_id=code_artifact.model_id,
-            revision=code_artifact.revision,
-            allow_patterns=[file.path for file in code_files],
-        ))
-        for file in code_files:
-            _verify_source_file(
-                code_root / Path(*PurePosixPath(file.path).parts), file)
+    if not allow_download:
+        raise ModelArtifactError(
+            f"reviewed model is not synchronized for {model_id}:{consumer}; "
+            "run tools/sync_model_artifacts.py before processing private data"
+        )
+    if authorize_download_fn is None:
+        raise ModelArtifactError(
+            "model synchronization requires an explicit download authorizer")
+    authorize_download_fn()
 
     target.parent.mkdir(parents=True, exist_ok=True)
-    stage = Path(tempfile.mkdtemp(prefix=f".{target.name}.", dir=target.parent))
+    download_stage = Path(tempfile.mkdtemp(
+        prefix=f".{target.name}.download.", dir=target.parent))
+    code_files: tuple[ModelArtifactFile, ...] = ()
+    code_root: Path | None = None
     try:
+        source_root = Path(_snapshot_model_repository(
+            repo_id=artifact.model_id,
+            revision=artifact.revision,
+            allow_patterns=[file.path for file in approved],
+            endpoint=download_endpoint,
+            trust_environment_network=trust_environment_network,
+            destination=download_stage / "primary",
+            expected_sizes={file.path: file.size for file in approved},
+            snapshot_download_fn=snapshot_download_fn,
+        ))
+        for file in approved:
+            _verify_source_file(
+                source_root / Path(*PurePosixPath(file.path).parts), file)
+
+        if transforms:
+            if artifact.code_model_id is None:
+                raise ModelArtifactError(
+                    "runtime transform has no reviewed code model")
+            code_artifact = model_artifact(artifact.code_model_id)
+            if code_artifact is None:
+                raise ModelArtifactError("remote code artifact is missing")
+            code_consumer = f"{consumer}_remote_code"
+            code_files = code_artifact.files_for(code_consumer)
+            code_root = Path(_snapshot_model_repository(
+                repo_id=code_artifact.model_id,
+                revision=code_artifact.revision,
+                allow_patterns=[file.path for file in code_files],
+                endpoint=download_endpoint,
+                trust_environment_network=trust_environment_network,
+                destination=download_stage / "code",
+                expected_sizes={file.path: file.size for file in code_files},
+                snapshot_download_fn=snapshot_download_fn,
+            ))
+            for file in code_files:
+                _verify_source_file(
+                    code_root / Path(*PurePosixPath(file.path).parts), file)
+    except BaseException:
+        shutil.rmtree(download_stage, ignore_errors=True)
+        raise
+
+    stage: Path | None = None
+    try:
+        stage = Path(tempfile.mkdtemp(
+            prefix=f".{target.name}.", dir=target.parent))
         for file in approved:
             source = source_root / Path(*PurePosixPath(file.path).parts)
             destination = stage / Path(*PurePosixPath(file.path).parts)
@@ -1625,8 +1826,10 @@ def verified_model_directory(
         _verify_runtime_tree(target, expected)
         return target
     finally:
-        if stage.exists():
+        if stage is not None and stage.exists():
             shutil.rmtree(stage, ignore_errors=True)
+        if download_stage.exists():
+            shutil.rmtree(download_stage, ignore_errors=True)
 
 
 def verified_installed_package_model(
@@ -1681,6 +1884,10 @@ def verified_docling_artifact_directory(
         *, include_ocr: bool, cache_root: Path | None = None,
         snapshot_download_fn: Callable[..., str] | None = None,
         package_files_fn: Callable[[str, str], dict[str, Path]] | None = None,
+        allow_download: bool = False,
+        authorize_download_fn: Callable[[], None] | None = None,
+        download_endpoint: str = HUGGINGFACE_HUB_OFFICIAL_ENDPOINT,
+        trust_environment_network: bool = False,
 ) -> Path:
     """Build Docling's exact local layout, TableFormer, and optional OCR tree."""
     layout = model_artifact("docling-project/docling-layout-heron")
@@ -1715,6 +1922,10 @@ def verified_docling_artifact_directory(
             consumer,
             cache_root=cache_root,
             snapshot_download_fn=snapshot_download_fn,
+            allow_download=allow_download,
+            authorize_download_fn=authorize_download_fn,
+            download_endpoint=download_endpoint,
+            trust_environment_network=trust_environment_network,
         )
         prefix = artifact.model_id.replace("/", "--")
         for file in artifact.files_for(consumer):

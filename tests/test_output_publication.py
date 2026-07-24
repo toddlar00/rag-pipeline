@@ -8,6 +8,7 @@ import textwrap
 import pytest
 
 import rag
+import release_security
 
 
 def _record(index: int, chapter: int, title: str, text: str) -> dict:
@@ -514,6 +515,32 @@ def test_raptor_validator_accepts_source_bound_degraded_tree(tmp_path):
     rag._atomic_write_json(output, tree)
     assert not rag._raptor_output_complete(
         chunks, output, parameters=parameters)
+
+
+def test_raptor_parameters_bind_ambient_gemini_without_persisting_key(
+        monkeypatch):
+    kwargs = {
+        "embedding_model": "model",
+        "cloud_url": "",
+        "cloud_model": "",
+        "cloud_key": "",
+        "ollama_url": "http://127.0.0.1:11434",
+        "ollama_model": "local",
+        "gemini_key": "",
+        "thinking": False,
+        "security_policy": release_security.ReleaseSecurityPolicy(
+            network_policy="allow-cloud"),
+    }
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    without_key = rag._raptor_parameters(**kwargs)
+    monkeypatch.setenv("GEMINI_API_KEY", "GEMINI_SECRET_CANARY")
+    with_key = rag._raptor_parameters(**kwargs)
+
+    assert without_key["gemini_configured"] is False
+    assert with_key["gemini_configured"] is True
+    assert rag._artifact_parameters_sha256(without_key) != (
+        rag._artifact_parameters_sha256(with_key))
+    assert "GEMINI_SECRET_CANARY" not in json.dumps(with_key)
 
 
 def test_killed_export_before_completion_commit_is_not_resumable(tmp_path):

@@ -23,6 +23,9 @@ def test_effective_chunk_limit_respects_embedding_model_capacity():
         4096,
         reserve_tokens=192,
     ) == 318
+    assert rag.EMBEDDING_MAX_TOKENS["voyage-law-2"] == 16_000
+    assert rag.EMBEDDING_MAX_TOKENS["voyage-3-large"] == 32_000
+    assert rag.EMBEDDING_MAX_TOKENS["voyage-4-large"] == 32_000
     assert rag._effective_chunk_token_limit("unknown/model", 9000) == 9000
 
 

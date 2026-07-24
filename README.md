@@ -14,7 +14,8 @@ with explicit abstention.
 See [`ROADMAP.md`](ROADMAP.md) for implemented hardening milestones, merge
 status, and the ordered improvement backlog. The historical #1-#28 integration
 findings and their disposition are recorded in
-[`INTEGRATION_AUDIT.md`](INTEGRATION_AUDIT.md).
+[`INTEGRATION_AUDIT.md`](INTEGRATION_AUDIT.md). The maintained documentation
+map is [`docs/README.md`](docs/README.md).
 
 ## Architecture
 
@@ -127,6 +128,13 @@ providers only from their exact reviewed HTTPS origin and base path; and emits
 opaque identities for custom and rejected targets. See the
 [endpoint and UI boundary ADR](docs/architecture/decisions/local-endpoint-boundaries.md).
 
+`release_security.py` owns the versioned release trust record shared by every
+CLI, UI, service, evaluation, worker, durable-job, cache, provider, and model
+loader boundary. Release defaults are local-only, model-cache-only, and
+LLM-cache-off; cloud egress, trusted proxy/CA configuration, custom gateway
+tenancy, and the unauthenticated single-user UI each require explicit consent.
+See the [release-security ADR](docs/architecture/decisions/release-security-policy.md).
+
 `cli_policy.py` is the standard-library-only command policy layer for timeout
 validation and scanning, resume-command serialization, provider and credential
 option mapping, menu LLM detection, and secret redaction/environment routing.
@@ -179,16 +187,29 @@ pip install "torch>=2.7,<3" --index-url https://download.pytorch.org/whl/cu128
 # 2. Install the core dependencies
 pip install -r requirements.txt
 
-# 3. Full pipeline -- one command
+# 3. Synchronize only the reviewed bundles needed by the first full run
+python tools/sync_model_artifacts.py \
+  --model docling-project/docling-layout-heron \
+  --model docling-project/docling-models \
+  --model nomic-ai/nomic-embed-text-v2-moe
+
+# 4. Full pipeline -- one command
 python rag.py full --pdf Civil_procedure.pdf --force
 
 # Experimental profile qualification; not yet production-supported
 python rag.py full --pdf Scholarly_book.pdf \
   --structure-profile roman-parts-book-v1
 
-# 4. Interactive menu (no arguments)
+# 5. Interactive menu (no arguments)
 python rag.py
 ```
+
+The three first-run bundles total roughly 2.2 GiB under the current lock. A
+bare sync command selects every safe reviewed consumer and totals roughly
+7.5 GiB. Synchronization sends only public model IDs and file requests, never
+corpus text. It uses the official Hugging Face endpoint unless a reviewed
+`HF_ENDPOINT`, proxy, or custom CA is explicitly accepted with
+`--trust-environment-network`.
 
 For a first run of `Civil_procedure.pdf`, the main artifacts are scoped to one
 book directory. A temporary preprocessed PDF, when needed, is run-named beside
@@ -429,13 +450,14 @@ python -c "from pathlib import Path; import storage_policy; storage_policy.enfor
 The registry is credential-free, strictly shaped, Qdrant-only, and rejects
 links. Its database directory and chunks JSONL must already exist, while the
 collection name and embedding model must exactly match the indexed collection.
-The example uses MiniMax `embo-01`, which requires `MINIMAX_API_KEY` and works
-with the narrow service profile's HTTP dependencies. Change it to the model
-that built the index. Local sentence-transformer models require the full locked
-runtime; Voyage, OpenAI, and Cohere embeddings require their optional SDKs, so
-add the full locked runtime while retaining `requirements-service.lock` when
-using those backends. The service profile does not silently install those
-heavier providers.
+The example uses OpenAI `text-embedding-3-small`, which requires
+`OPENAI_API_KEY` and works with the narrow service profile's HTTP dependencies.
+Change it to the model that built the index. Voyage, OpenAI, and Cohere
+embeddings use the same pinned Requests transport and do not require their
+provider SDKs. MiniMax embedding IDs fail closed because there is no current
+reviewed MiniMax embedding API contract. Local
+sentence-transformer models still require the full locked runtime; the service
+profile does not silently install that heavier local-model stack.
 
 Loopback describes who can call this HTTP service; it does not prevent provider
 network egress. A cloud embedding model sends raw search query text during
@@ -454,8 +476,15 @@ python service_api.py serve \
   --working-directory . \
   --output-root output \
   --job-root output/.rag-service-jobs \
-  --service-state-root output/.rag-service
+  --service-state-root output/.rag-service \
+  --network-policy allow-cloud
 ```
+
+The explicit cloud policy is required because the example registry uses an
+OpenAI embedding. If reviewed proxy or custom-CA environment variables are
+active, the release profile also refuses startup until the operator either
+removes them or adds `--trust-environment-network` after reviewing that route.
+Use the default `local-only` policy with a compatible local embedding model.
 
 The examples below assume the two token values have been loaded into
 `READER_TOKEN` and `ADMIN_TOKEN` without printing them. Health endpoints are
@@ -696,14 +725,17 @@ and device-appropriate cryptographic erasure when those copies are in scope.
 ### Interactive Menu
 
 Running `python rag.py` with no arguments launches a guided menu that walks
-through file selection, options, and command construction. All commands are
-accessible through the menu, with file path validation and sensible defaults.
+through common pipeline commands, file selection, options, and command
+construction. Administrative commands such as `storage` and `jobs` remain CLI
+only.
 For LLM-backed operations, the menu also offers DeepSeek V4 Pro/Flash, MiniMax,
 Ollama, Gemini, and custom providers. API keys entered there use a hidden prompt
 and are redacted from the generated command shown on screen. They are removed
 from worker process arguments and supplied only through that worker's child-only
 environment; press Enter at the key prompt to use the corresponding ambient
-environment variable instead.
+environment variable instead. Cloud selections require an explicit egress
+confirmation, and custom/public gateways also collect the required nonsecret
+trust/tenant namespace.
 
 ## Searching
 
@@ -885,7 +917,12 @@ python rag.py query "What is the minimum contacts test?" --answer \
 
 ## Optional LLM Intelligence Layer
 
-MiniMax M2.7-highspeed remains the default cloud model. DeepSeek is also
+MiniMax M3 is the default cloud model. Its reviewed adapter maps `--thinking`
+to adaptive thinking and the default to disabled thinking, separates reasoning
+from final answer text, uses `max_completion_tokens`, and sends temperature
+zero. Legacy MiniMax M2.x models cannot honor disabled thinking; the adapter
+rejects that combination and applies a 512-token completion floor when
+reasoning is explicitly enabled. DeepSeek is also
 supported directly through its official `https://api.deepseek.com` endpoint,
 with `deepseek-v4-pro` and `deepseek-v4-flash` as the built-in model choices.
 See the official [DeepSeek API documentation](https://api-docs.deepseek.com/)
@@ -916,22 +953,30 @@ custom targets require HTTPS. Plain HTTP is accepted only for a canonical
 literal loopback address such as `127.0.0.1` or `[::1]`; names such as
 `localhost`, noncanonical IP spellings, IPv4-mapped IPv6, user information,
 queries, fragments, redirects, and ambiguous path encodings are rejected.
-Loopback requests ignore ambient proxy settings, and all built-in Requests
-transports refuse redirects so one admitted transport is one HTTP request.
+Loopback requests ignore ambient proxy settings, and all built-in provider API
+Requests transports refuse redirects so one admitted API transport is one HTTP
+request. Reviewed model synchronization separately permits repository-to-CDN
+redirects while enforcing exact byte hashes and a credential-free request.
 Credentialed Requests calls use an explicit Bearer-auth object so ambient
 `.netrc` credentials cannot replace the provider key selected by policy.
 
-CLI calls use a persistent, machine-local response cache by default. Direct
-Python calls default to `off`, preserving the original library behavior. A
-cache key covers the exact prompt digest, operation and prompt versions,
-generation settings, timeout, fallback policy, and ordered provider/model/
-endpoint identities. Prompts, API keys, and raw endpoint URLs are not stored in
-the cache key or record: reviewed official targets use a versioned canonical
-identity, while custom and rejected targets use opaque SHA-256 identities.
+Release CLI calls default the response cache to `off`; development-profile CLI
+calls retain the persistent machine-local `readwrite` default. Direct Python
+calls inherit the process `LLMRuntimeConfig` (initially `off`) unless they pass
+an explicit `cache_mode`; changing only the security profile does not rewrite
+an already configured runtime. A cache key covers the exact prompt digest,
+operation and prompt
+versions, generation settings, timeout, fallback policy, ordered
+provider/model/endpoint identities, and opaque trust/tenant namespace.
+Prompts, API keys, raw endpoints, and raw namespace labels are not stored in the
+key or record: reviewed official targets use a versioned canonical identity,
+while custom/rejected targets and namespaces use opaque SHA-256 identities.
 Enabled endpoints are validated before cache lookup. Only non-empty successful
-responses are cached, and entries use integrity hashes plus atomic replacement
-so truncated or tampered records become misses and are repaired by the next
-successful call.
+responses are cached, and entries use unkeyed integrity hashes plus atomic
+replacement so truncated, malformed, hash-inconsistent, or ambiguous legacy
+records fail closed and are repaired only by a later explicitly cache-enabled
+successful call. This detects damage; it is not cryptographic protection from
+a trusted local writer.
 
 The cache itself contains successful response text in plaintext. Treat its
 directory as sensitive when textbook excerpts, client facts, or other private
@@ -944,6 +989,11 @@ default location is the platform user-cache directory
 
 | Option | Purpose |
 |--------|---------|
+| `--security-profile release|development` | Select fail-closed release defaults or explicit development conveniences |
+| `--network-policy local-only|allow-cloud` | Consent before private text can reach a cloud provider |
+| `--model-download-policy cache-only|allow-reviewed-sync` | Keep runtime offline by default or explicitly permit reviewed model sync |
+| `--llm-cache-namespace LABEL` | Nonsecret custom-gateway trust/tenant label; only its digest persists |
+| `--trust-environment-network` | Accept reviewed proxy/custom-CA routing and an explicit `HF_ENDPOINT` for model sync |
 | `--llm-cache-mode readwrite|readonly|refresh|off` | Read/write policy; `refresh` bypasses a hit and replaces it after live success |
 | `--llm-cache-dir PATH` | Override the machine-local response-cache directory |
 | `--llm-events PATH` | Append one prompt-free JSONL event per logical request |
@@ -965,7 +1015,7 @@ python rag.py generate-questions \
 # Retry the preferred cloud provider even if a fallback result is cached
 python rag.py brief \
   --chunks output/Civil_procedure/Civil_procedure_chunks.jsonl \
-  --llm-cache-mode refresh
+  --llm-cache-mode refresh --network-policy allow-cloud
 
 # Require the selected first provider and fail on unavailable output
 python rag.py query "What is the Erie doctrine?" --answer \
@@ -978,6 +1028,12 @@ python rag.py query "What is the Erie doctrine?" --answer \
 Caching is chain-level: if Ollama or Gemini succeeds after the preferred cloud
 provider fails, that successful fallback remains the warm result. Use
 `--llm-cache-mode refresh` to retry the preferred provider and replace it.
+Release CLI mode defaults the plaintext LLM cache to `off`; select a cache mode
+explicitly only after accepting its local retention. Development CLI mode
+retains the historical `readwrite` default. Direct Python calls use their
+explicit or process runtime configuration. Custom release gateways require a
+nonsecret `--llm-cache-namespace` even with caching off so cache, single-flight,
+report, and resume identities cannot cross credential tenants.
 Single-flight coalescing and budgets are process-local; separate processes do
 not share admissions. Event logs and reports include stable request IDs,
 operation labels, provider/model names, latency, fallback paths, cache status,
@@ -1011,7 +1067,7 @@ and stops fallback, with the contract violation exposed in the run report.
 Gemini receives the configured timeout and has SDK retries disabled, so its
 transport count remains explicit.
 
-### DeepSeek V4 configuration
+### Cloud-provider configuration
 
 The shorter LLM option names and the existing cloud option names are aliases:
 
@@ -1019,20 +1075,23 @@ The shorter LLM option names and the existing cloud option names are aliases:
 |--------|-------------------|---------|
 | `--llm-url URL` | `--cloud-url URL` | OpenAI-compatible API base URL |
 | `--llm-model MODEL` | `--cloud-model MODEL` | Cloud model name |
-| `--api-key KEY` | `--cloud-key KEY` | One-off, hand-entered cloud API key |
-| `--thinking` | — | Enable supported model reasoning |
-| `--no-thinking` | — | Explicitly disable supported model reasoning (the default) |
+| `--api-key KEY` | `--cloud-key KEY` | Development-only inline key (prefer environment/hidden prompt) |
+| `--thinking` | — | DeepSeek thinking, MiniMax M3 adaptive thinking, Gemini high thinking, or Ollama `think=true` |
+| `--no-thinking` | — | DeepSeek/MiniMax M3 disabled, Gemini minimal, or Ollama `think=false` (the default) |
 
 Selecting a `deepseek-*` model while the URL is still at its MiniMax default
 automatically selects the official DeepSeek endpoint. Conversely, selecting the
 official DeepSeek endpoint without changing the default model selects
-`deepseek-v4-pro`. `--thinking` / `--no-thinking` controls DeepSeek's thinking
-mode and is also forwarded to Ollama's `think` option.
+`deepseek-v4-pro`. The thinking flags are provider-specific: DeepSeek and
+MiniMax M3 support enabled/disabled modes, Gemini maps them to high/minimal,
+and Ollama receives its native boolean. MiniMax M2.x always reasons, so a
+`--no-thinking` M2.x request fails closed rather than misreporting provenance.
 
 Cloud API keys are resolved without reusing a provider-specific secret for an
 unrelated host. Endpoint validation always happens first:
 
-1. `--api-key` / `--cloud-key`, when supplied, wins only for a valid endpoint.
+1. In the development profile only, `--api-key` / `--cloud-key`, when
+   supplied, wins only for a valid endpoint. Release mode rejects inline keys.
 2. DeepSeek uses `DEEPSEEK_API_KEY`, then falls back to `CLOUD_API_KEY`.
 3. MiniMax uses `MINIMAX_API_KEY`, then falls back to `CLOUD_API_KEY`.
 4. A custom HTTPS endpoint uses only `CLOUD_API_KEY`.
@@ -1043,19 +1102,22 @@ unrelated host. Endpoint validation always happens first:
 # DeepSeek V4 Pro with thinking (set DEEPSEEK_API_KEY first)
 python rag.py generate-questions \
   --chunks output/Civil_procedure/Civil_procedure_chunks.jsonl \
-  --llm-model deepseek-v4-pro --thinking
+  --llm-model deepseek-v4-pro --thinking \
+  --network-policy allow-cloud
 
 # DeepSeek V4 Flash with thinking explicitly disabled
 python rag.py brief \
   --chunks output/Civil_procedure/Civil_procedure_chunks.jsonl \
   --llm-url https://api.deepseek.com \
-  --llm-model deepseek-v4-flash --no-thinking
+  --llm-model deepseek-v4-flash --no-thinking \
+  --network-policy allow-cloud
 
 # Use the default MiniMax cloud model (requires MINIMAX_API_KEY)
 python rag.py chunk \
   --doc output/Civil_procedure/Civil_procedure.json \
   --out output/Civil_procedure/Civil_procedure_chunks.jsonl \
-  --llm-classify --contextualize
+  --llm-classify --contextualize \
+  --network-policy allow-cloud
 
 # Configure the local Ollama fallback (unset cloud keys to use it first)
 python rag.py chunk \
@@ -1063,18 +1125,19 @@ python rag.py chunk \
   --out output/Civil_procedure/Civil_procedure_chunks.jsonl \
   --llm-classify --ollama-url http://127.0.0.1:11434 --ollama-model qwen3:30b
 
-# Configure the Gemini fallback
+# Configure the Gemini fallback (set GEMINI_API_KEY first)
 python rag.py chunk \
   --doc output/Civil_procedure/Civil_procedure.json \
   --out output/Civil_procedure/Civil_procedure_chunks.jsonl \
-  --llm-classify --gemini-key YOUR_KEY
+  --llm-classify --network-policy allow-cloud
 
-# Custom OpenAI-compatible endpoint
+# Custom OpenAI-compatible endpoint (set CLOUD_API_KEY first)
 python rag.py chunk \
   --doc output/Civil_procedure/Civil_procedure.json \
   --out output/Civil_procedure/Civil_procedure_chunks.jsonl \
   --llm-classify --cloud-url https://api.example.com/v1 \
-  --cloud-model model-name --cloud-key KEY
+  --cloud-model model-name --network-policy allow-cloud \
+  --llm-cache-namespace reviewed-tenant
 ```
 
 ### Adaptive Rate Limiting
@@ -1086,10 +1149,12 @@ successes. No manual intervention needed.
 
 ```bash
 # Start with 10 parallel workers (default)
-python rag.py full --pdf book.pdf --llm-classify --llm-workers 10
+python rag.py full --pdf book.pdf --llm-classify --llm-workers 10 \
+  --network-policy allow-cloud
 
 # Conservative start for strict rate limits
-python rag.py full --pdf book.pdf --llm-classify --llm-workers 4
+python rag.py full --pdf book.pdf --llm-classify --llm-workers 4 \
+  --network-policy allow-cloud
 ```
 
 ## Case Briefs
@@ -1238,13 +1303,14 @@ available (using a conservative fallback), rejects oversized chunks, and sizes
 API batches by aggregate tokens rather than record count. Legacy JSONL without
 count fields is rechecked during indexing.
 
-| Model | Type | Cost | Max Tokens | Best for |
-|-------|------|------|-----------|----------|
+| Model | Type | Pricing | Max Tokens | Best for |
+|-------|------|---------|------------|----------|
 | `nomic-ai/nomic-embed-text-v2-moe` | Local GPU | Free | 512 | **Default.** Best open-source; raw chunks are capped at 506 tokens. |
-| `voyage-law-2` | Voyage API | ~$0.12/M tokens | 16000 | Legal-specific. Trained on case law. |
-| `voyage-3-large` | Voyage API | ~$0.18/M tokens | 16000 | Best general Voyage model. |
-| `text-embedding-3-large` | OpenAI API | $0.13/M tokens | 8191 | Best commercial general-purpose. |
-| `embed-v4.0` | Cohere API | $0.10/M tokens | - | Multilingual. |
+| `voyage-law-2` | Voyage API | Provider-priced | 16000 | Legal-specific retrieval. |
+| `voyage-4-large` | Voyage API | Provider-priced | 32000 | Current high-quality general/multilingual option. |
+| `voyage-3-large` | Voyage API | Provider-priced | 32000 | Supported previous-generation general model. |
+| `text-embedding-3-large` | OpenAI API | Provider-priced | 8191 | Commercial general-purpose embedding. |
+| `embed-v4.0` | Cohere API | Provider-priced | Provider-defined | Multilingual. |
 | `dunzhang/stella_en_400M_v5` | Local GPU | Free | 8192 | High quality (requires xformers). |
 | `nlpaueb/legal-bert-base-uncased` | Local GPU | Free | 512 | Inventory only: legacy pickle weights are blocked. |
 
@@ -1257,17 +1323,36 @@ from its separately pinned code repository and its `auto_map` is deterministical
 rewritten to local references before offline loading. BGE, BART, and Docling use
 only selected safe weights. LegalBERT remains in the provenance inventory, but
 its only PyTorch weight is pickle-based and therefore fails closed. An unknown
-custom model also fails closed unless the operator explicitly sets
-`RAG_ALLOW_UNPINNED_MODELS=1`; that escape hatch logs that provenance and byte
+custom model also fails closed unless all three development-only gates are
+present: `--security-profile development`,
+`--model-download-policy allow-reviewed-sync`, and
+`RAG_ALLOW_UNPINNED_MODELS=1`. That escape hatch logs that provenance and byte
 verification are disabled.
 
-The first use synchronizes the selected files into
+Runtime loading is cache-only by default. Before opening a private document,
+explicitly synchronize the reviewed models the run will need into
 `~/.cache/rag-pipeline/model-artifacts` (override with
-`RAG_MODEL_ARTIFACT_CACHE`). Subsequent loads rehash that isolated tree and run
-offline. Delete a corrupt cache entry and rerun to synchronize it again; never
-edit a published cache tree in place. Each process keeps one validated registry
-snapshot so loader records and provenance cannot cross lock generations;
-restart long-running processes after intentionally replacing the policy/lock.
+`RAG_MODEL_ARTIFACT_CACHE`):
+
+```bash
+python tools/sync_model_artifacts.py \
+  --model docling-project/docling-layout-heron \
+  --model docling-project/docling-models \
+  --model nomic-ai/nomic-embed-text-v2-moe \
+  --model BAAI/bge-reranker-v2-m3
+```
+
+The Docling and Nomic selections support PDF conversion plus default embedding;
+BGE is needed for default reranked queries. Omit `--model` to synchronize every
+safe reviewed runtime consumer (roughly 7.5 GiB under the current lock). The tool
+fetches exact revisions and allowlisted files, then verifies raw and transformed
+bytes before atomic publication. A runtime cache miss fails before Hub import
+or transport; `--model-download-policy allow-reviewed-sync` is an explicit
+convenience, not the release default. Delete a corrupt cache entry and rerun the
+sync tool; never edit a published cache tree in place. Each process keeps one
+validated registry snapshot so loader records and provenance cannot cross lock
+generations; restart long-running processes after intentionally replacing the
+policy/lock.
 
 ### Cross-Encoder Reranker
 
@@ -1279,8 +1364,8 @@ containing case, section, heading, chapter, context, and raw text. Returned text
 remains the original chunk. Local models are lazy-loaded and cached by exact
 model name, so switching rerankers cannot silently reuse the wrong model.
 
-Additional reranker backends: Cohere (`cohere-rerank-*`, requires API key) and
-Jina (`jina-reranker-*`, requires API key).
+Additional reranker backends: Cohere (`cohere-rerank-*`, requires
+`COHERE_API_KEY`) and Jina (`jina-reranker-*`, requires `JINA_API_KEY`).
 
 Use `--no-rerank` to disable it, `--reranker-model` to select a model, and
 `--overfetch` to control candidate depth.
@@ -1288,9 +1373,9 @@ Use `--no-rerank` to disable it, `--reranker-model` to select a model, and
 ### LLM Features
 
 LLM-enabled features try the configured OpenAI-compatible cloud endpoint first
-(MiniMax M2.7-highspeed by default, or DeepSeek/custom when selected), then
+(MiniMax M3 by default, or DeepSeek/custom when selected), then
 local Ollama at `http://127.0.0.1:11434`, then Gemini when configured. See
-[DeepSeek V4 configuration](#deepseek-v4-configuration) for model, key, and
+[cloud-provider configuration](#cloud-provider-configuration) for model, key, and
 thinking options. Ordinary chunking and TOC scaffold construction are
 deterministic and make no LLM calls unless an LLM feature flag is supplied.
 
@@ -2206,17 +2291,22 @@ pip install -r requirements-optional.txt
 python ui.py \
   --chunks output/Civil_procedure/Civil_procedure_chunks.jsonl \
   --db output/Civil_procedure/Civil_procedure_chroma \
-  --collection civil_procedure             # http://127.0.0.1:7860
+  --collection civil_procedure \
+  --trust-local-user                        # http://127.0.0.1:7860
 
 # Qdrant run
 python ui.py --db-backend qdrant \
   --chunks output/Civil_procedure/Civil_procedure_chunks.jsonl \
   --db output/Civil_procedure/Civil_procedure_qdrant \
-  --collection civil_procedure
+  --collection civil_procedure \
+  --trust-local-user
 ```
 
 The UI always binds the literal loopback address `127.0.0.1` and explicitly
-disables Gradio sharing. There is no supported public-share flag. Remote access
+disables Gradio sharing. Because loopback does not authenticate another local
+OS user, the UI refuses to build or launch without the explicit
+`--trust-local-user` acknowledgement and is supported only in a trusted
+single-user OS session. There is no supported public-share flag. Remote access
 requires a separately reviewed deployment boundary with authentication, TLS,
 authorization, origin protections, rate isolation, audit policy, and corpus
 distribution approval. Search retrieval and Info's exact vector count execute
@@ -2353,7 +2443,8 @@ python rag.py convert --pdf book.pdf --batch-size 2
 
 The adaptive throttle handles this automatically. To start more conservatively:
 ```bash
-python rag.py full --pdf book.pdf --llm-classify --llm-workers 4
+python rag.py full --pdf book.pdf --llm-classify --llm-workers 4 \
+  --network-policy allow-cloud
 ```
 
 ### Missing API key
@@ -2363,6 +2454,7 @@ API-based models validate keys at startup. Set the appropriate env var:
 set VOYAGE_API_KEY=voy-...
 set OPENAI_API_KEY=sk-...
 set COHERE_API_KEY=...
+set JINA_API_KEY=...
 set GEMINI_API_KEY=...
 set MINIMAX_API_KEY=...
 set DEEPSEEK_API_KEY=...
@@ -2411,19 +2503,40 @@ rebuild with `--full-reindex` if needed.
   enabled only for the reviewed Nomic and Stella local bundles; the BGE reranker
   explicitly uses `trust_remote_code=False`. Reviewed remote Python is copied
   through a fresh process-private Transformers module cache so stale global
-  cache entries cannot shadow the verified source tree.
-- Unknown model IDs fail closed unless `RAG_ALLOW_UNPINNED_MODELS=1` is set.
+  cache entries cannot shadow the verified source tree. Runtime is cache-only by
+  default; use `tools/sync_model_artifacts.py` before private-data processing.
+- Unknown model IDs fail closed. The legacy escape requires the development
+  profile, `--model-download-policy allow-reviewed-sync`, and
+  `RAG_ALLOW_UNPINNED_MODELS=1` together.
   LegalBERT's pickle weight is inventoried but blocked; prefer safetensors.
 - Model-card and package license fields are publisher-declared evidence, not a
   legal attestation. In particular, review LegalBERT's share-alike terms and
   RapidOCR model-data rights before distribution.
+- Release mode defaults to `--network-policy local-only`. API embeddings,
+  rerankers, Gemini, and public/custom LLM endpoints require explicit
+  `allow-cloud` before credential lookup, import, cache access, or transport.
+  Official embedding/reranking origins are pinned; redirects and implicit SDK
+  retries are disabled. Custom release gateways also require a nonsecret cache
+  namespace whose opaque digest binds cache, single-flight, report, and resume
+  identity.
+- Cloud transports ignore ambient proxy, custom-CA, and SDK endpoint settings
+  by default. Release mode reads values only to identify non-empty override
+  variable names, never persisting, echoing, or reporting those values, and
+  requires `--trust-environment-network` after review.
+  This does not replace OS DNS, firewall, or egress controls.
 - API keys can come from environment variables or the interactive menu's hidden
   prompt; menu-entered keys are redacted from the displayed command, removed
   from child process arguments, scoped to the child environment, and not
   written to a configuration file.
 - Direct CLI key flags (`--api-key`, `--cloud-key`, and `--gemini-key`) are
-  supported, but their values can be visible in process listings and shell
-  history. Prefer environment variables or the interactive menu.
+  rejected by the release profile because their values can be visible in
+  process listings and shell history. They remain a discouraged explicit
+  development-profile escape hatch.
+- The release LLM cache default is `off`; explicit cache modes use a private
+  plaintext store, not encryption. Chroma, Gradio, and Hugging Face auxiliary
+  telemetry is disabled. See the
+  [release-security ADR](docs/architecture/decisions/release-security-policy.md)
+  for the complete data-flow and migration contract.
 - Input paths remain user-selected and are not a general-purpose sandbox.
   Managed sensitive outputs use the private, link-aware storage policy above.
 
@@ -2443,6 +2556,7 @@ vector_lifecycle.py     # Stdlib-only guarded vector mutation and commit policy
 llm_adapters.py         # Typed LLM provider transport adapters
 llm_runtime.py          # Reproducible caching, fallback, budgets, and reports
 endpoint_policy.py      # Canonical cloud/loopback endpoint trust boundary
+release_security.py     # Versioned egress/UI/cache/model release policy
 cli_policy.py           # Stdlib-only CLI interpretation and serialization policy
 ingestion_core.py       # Stdlib-only PDF inspection and stripping safety policy
 model_artifacts.py      # Stdlib-only model lock, byte verification, and ML-BOM
@@ -2638,6 +2752,7 @@ python rag.py full --pdf CivPro_Casebook.pdf \
   --raptor \
   --db-backend qdrant \
   --embedding-model voyage-law-2 \
+  --network-policy allow-cloud \
   --llm-workers 10
 
 # Then query with answer generation
@@ -2646,15 +2761,18 @@ python rag.py query "minimum contacts test" --answer --hybrid \
   --db output/CivPro_Casebook/CivPro_Casebook_qdrant \
   --chunks output/CivPro_Casebook/CivPro_Casebook_chunks.jsonl \
   --collection civpro_casebook \
-  --embedding-model voyage-law-2
+  --embedding-model voyage-law-2 \
+  --network-policy allow-cloud
 
 # Generate study materials
 python rag.py brief \
   --chunks output/CivPro_Casebook/CivPro_Casebook_chunks.jsonl \
-  -o output/CivPro_Casebook/CivPro_Casebook_briefs.jsonl
+  -o output/CivPro_Casebook/CivPro_Casebook_briefs.jsonl \
+  --network-policy allow-cloud
 python rag.py generate-questions \
   --chunks output/CivPro_Casebook/CivPro_Casebook_chunks.jsonl \
-  -o output/CivPro_Casebook/CivPro_Casebook_exam_questions.jsonl
+  -o output/CivPro_Casebook/CivPro_Casebook_exam_questions.jsonl \
+  --network-policy allow-cloud
 python rag.py export --format flashcards \
   --chunks output/CivPro_Casebook/CivPro_Casebook_chunks.jsonl \
   -o output/CivPro_Casebook/CivPro_Casebook_flashcards.tsv
