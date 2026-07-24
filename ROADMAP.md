@@ -33,6 +33,7 @@ Status terms:
 | Ethics retrieval calibration | In progress | A 14-query, 24-judgment draft is pinned to the exact 1,715-record corpus and covers rules, explanations, cases, tables, cross-page chunks, filters, abstention, outline distractors, and positive outline intents; corpus-owner review and release thresholds remain outstanding |
 | Process supervision extraction | Implemented (draft) | [PR #33](https://github.com/toddlar00/rag-pipeline/pull/33): deadline supervision, Windows/POSIX containment, startup gates, termination confirmation, and generic entrypoint policy moved to stdlib-only `process_supervision.py`; `rag.py` retains late-bound compatibility wrappers |
 | Vector-index lifecycle extraction | Implemented (draft) | [PR #38](https://github.com/toddlar00/rag-pipeline/pull/38): a standard-library-only policy layer owns deterministic reconciliation, dirty-marker ownership, mutation epochs, exact-ID verification, callback-reentry exclusion, legacy-hash repair, and close/manifest/marker commit ordering |
+| Cumulative release migration rehearsal | In progress | A real-client probe now recreates the integrated schema-5 manifest, rebuilds one exact collection to schema 8 in Chroma and Qdrant, preserves a sibling collection and manifest, verifies the no-op/query path, and requires immediate lock release; cumulative draft publication and exact-head CI remain |
 | Exact LLM transport budget | Integrated | [PR #1](https://github.com/toddlar00/rag-pipeline/pull/1) |
 | Qdrant manifest reconciliation | Integrated | [PR #2](https://github.com/toddlar00/rag-pipeline/pull/2) |
 | Qdrant interrupted-update guard | Integrated | [PR #3](https://github.com/toddlar00/rag-pipeline/pull/3) |
@@ -480,6 +481,42 @@ An independent exploit-oriented re-audit reproduced and closed callback
 reentry during verification and commit, then found no remaining code blocker.
 The stacked implementation is published as draft [PR
 #38](https://github.com/toddlar00/rag-pipeline/pull/38), based on PR #37.
+
+## Cumulative release migration rehearsal
+
+The release candidate is a 21-commit cumulative stack over the last integrated
+`main`. Its document profiles, source-generation receipts, context assembly,
+table-row retrieval, process supervision, corpus attestation, and vector
+lifecycle policies therefore need one release-shaped proof in addition to the
+focused stacked PRs. The rehearsal constructs the exact index-manifest payload
+emitted by integrated schema 5, keeps a second collection in the same physical
+database, and runs the candidate indexer without an explicit full-reindex
+override.
+
+Both actual local clients must classify that old generation as incompatible,
+rebuild only the selected collection into schema 8, publish the exact two
+target hashes and IDs, leave the sibling manifest byte-identical and its point
+count intact, clear the owned dirty marker, accept a subsequent no-op, and
+return both rebuilt and sibling records through search. The same subprocess
+then removes the database directory before exit, converting latent Windows
+handle retention into a test failure rather than tolerating it as cleanup
+noise.
+
+The first Qdrant rehearsal exposed a real Windows `storage.sqlite` handle that
+survived public `close()` after repeated multi-collection operations. Local
+Qdrant persistence creates short-lived SQLite cursors that are unreachable but
+not necessarily finalized immediately. Client teardown now performs one
+explicit garbage collection only for filesystem-local Qdrant on Windows;
+remote clients, Chroma, and other platforms are unchanged. Direct tests prove
+that scope, and both real-client migration probes now pass locally. Independent
+review reproduced the lock with collection disabled and with generation-0/1
+collection in five of five runs each; full collection released it immediately
+in five of five runs and left no code blocker. The full suite passes with 1,342
+tests and 7 platform skips, plus Ruff, compilation, dependency/model-artifact
+policy, and diff checks. The full-collection pause and private local-client
+detector are explicit temporary compatibility costs to retire when a pinned
+Qdrant release closes every cursor. Cumulative draft publication and exact-head
+CI remain.
 
 ## Next improvement milestones
 

@@ -626,6 +626,63 @@ def test_vector_client_cleanup_requires_close_and_closes_once():
     assert events == ["close"]
 
 
+@pytest.mark.parametrize(
+    ("platform", "client_name", "transport_module", "expected_gc_calls"),
+    [
+        ("win32", "Qdrant", "qdrant_client.local.qdrant_local", 1),
+        ("linux", "Qdrant", "qdrant_client.local.qdrant_local", 0),
+        ("win32", "Qdrant", "qdrant_client.qdrant_remote", 0),
+        ("win32", "Chroma", "qdrant_client.local.qdrant_local", 0),
+    ],
+)
+def test_vector_client_cleanup_collects_local_qdrant_cursors_only_on_windows(
+        monkeypatch, platform, client_name, transport_module,
+        expected_gc_calls):
+    events = []
+    transport_type = type("Transport", (), {"__module__": transport_module})
+    client = SimpleNamespace(
+        _client=transport_type(), close=lambda: events.append("close"))
+    monkeypatch.setattr(rag.sys, "platform", platform)
+    monkeypatch.setattr(
+        rag.gc, "collect", lambda: events.append("collect") or 0)
+
+    rag._finish_vector_client(
+        client, client_name=client_name, primary_error=None)
+
+    assert events == ["close"] + ["collect"] * expected_gc_calls
+
+
+def test_local_qdrant_cursor_collection_failure_obeys_cleanup_precedence(
+        monkeypatch):
+    collection_error = RuntimeError("injected cursor collection failure")
+    transport_type = type(
+        "Transport", (), {"__module__": "qdrant_client.local.qdrant_local"})
+    close_calls = []
+    client = SimpleNamespace(
+        _client=transport_type(), close=lambda: close_calls.append("close"))
+    monkeypatch.setattr(rag.sys, "platform", "win32")
+    monkeypatch.setattr(
+        rag.gc, "collect",
+        lambda: (_ for _ in ()).throw(collection_error))
+
+    with pytest.raises(RuntimeError) as raised:
+        rag._finish_vector_client(
+            client, client_name="Qdrant", primary_error=None)
+    assert raised.value is collection_error
+
+    primary_error = ValueError("active vector operation failure")
+    try:
+        raise primary_error
+    except ValueError as active_error:
+        original_traceback = active_error.__traceback__
+        rag._finish_vector_client(
+            client, client_name="Qdrant", primary_error=active_error)
+        assert active_error is primary_error
+        assert active_error.__traceback__ is original_traceback
+
+    assert close_calls == ["close", "close"]
+
+
 def test_vector_client_cleanup_preserves_primary_error_and_traceback():
     close_error = RuntimeError("secondary client close failure")
 

@@ -1359,7 +1359,13 @@ the recovery marker and old manifest instead of reporting success while a
 Windows database lock remains held. Operation errors take precedence over
 secondary close errors. Chroma 1.5.2 is the minimum supported release because
 it provides the public, reference-counted `close()` needed to release shared
-local database handles without invalidating another live client.
+local database handles without invalidating another live client. On Windows,
+closing a filesystem-local Qdrant client is followed by one explicit garbage
+collection to finalize unreachable SQLite cursors retained by the local client;
+remote Qdrant clients and non-Windows platforms do not pay that cost. This
+correctness trade-off can add a variable pause to a Windows local-mode request;
+real-client CI keeps it observable, and it should be removed when the pinned
+client release explicitly finalizes every persistence cursor.
 
 If the model, model-artifact lock, vector dimension, or manifest schema
 changes—or an older shared `chunk_hashes.json` sidecar is encountered—the
@@ -1371,6 +1377,13 @@ Chunk JSONL is parsed and schema-checked strictly before a collection can be
 changed. `full --resume` always revalidates the manifest and hashes, and queries
 refuse a model, model-lock generation, or vector dimension that conflicts with
 an existing manifest.
+
+The real-vector-client release rehearsal recreates the exact schema-5 manifest
+field set emitted by the last integrated release, upgrades only the selected
+collection to schema 8, and verifies exact IDs and hashes, sibling collection
+and manifest preservation, a subsequent no-op, successful queries against both
+collections, clean recovery-marker state, and immediate database-directory
+removal on Windows and Linux for both Chroma and Qdrant.
 
 ```bash
 python rag.py index \

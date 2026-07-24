@@ -17,6 +17,7 @@ Usage:
 import argparse
 from contextlib import ExitStack, contextmanager
 import errno
+import gc
 from getpass import getpass
 import hashlib
 import json
@@ -1820,6 +1821,18 @@ def _finish_vector_client(client, *, client_name: str,
             raise RuntimeError(
                 f"{client_name} client does not expose required close()")
         close()
+        if sys.platform == "win32" and client_name == "Qdrant":
+            inner_client = getattr(client, "_client", None)
+            is_local_client = type(inner_client).__module__.startswith(
+                "qdrant_client.local.")
+        else:
+            is_local_client = False
+        if is_local_client:
+            # qdrant-client local persistence creates short-lived sqlite
+            # cursors that can retain a Windows file handle after close().
+            # One explicit full collection finalizes those unreachable cursors
+            # so a caller can immediately move or remove a multi-collection DB.
+            gc.collect()
     except BaseException as close_error:
         if primary_error is None:
             raise
