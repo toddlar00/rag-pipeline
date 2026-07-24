@@ -107,8 +107,15 @@ runtime composition, mutable caches/throttles, and the compatibility facades.
 validation and scanning, resume-command serialization, provider and credential
 option mapping, menu LLM detection, and secret redaction/environment routing.
 `rag.py` injects live defaults and endpoint predicates while retaining argparse
-definitions and dispatch, process supervision, environment mutation/restoration,
-runtime mutation, pipeline execution, and output/artifact behavior.
+definitions and dispatch, runtime mutation, pipeline execution, and
+output/artifact behavior.
+
+`process_supervision.py` is the standard-library-only deadline and containment
+runtime. It owns Windows Job Objects, POSIX process groups, same-PID startup
+gates, bounded termination confirmation, cancellation/deadline control, and the
+generic supervised entrypoint flow. `rag.py` snapshots its timing/environment
+configuration and late-binds telemetry and compatibility collaborators for
+each call, preserving the established facade and monkeypatch seams.
 
 `ingestion_core.py` is the standard-library-only PDF safety layer for text-layer
 quality, page-coverage-aware background detection, complete pre-mutation
@@ -1932,6 +1939,7 @@ rebuild with `--full-reindex` if needed.
 
 ```
 rag.py                  # Stable command/API facade and pipeline orchestration
+process_supervision.py  # Stdlib-only process containment and deadlines
 retrieval_core.py       # Stdlib-only retrieval models and pure algorithms
 artifact_io.py          # Stdlib-only strict reads and atomic publication
 chunking_core.py        # Stdlib-only text preparation and classification

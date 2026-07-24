@@ -26,9 +26,9 @@ import os
 import queue
 import re
 import requests
-import signal
+import signal  # noqa: F401 - shared module retained for facade monkeypatching
 import stat
-import subprocess
+import subprocess  # noqa: F401 - shared module retained for facade monkeypatching
 import sys
 import threading as _threading
 import time
@@ -46,6 +46,7 @@ import job_runtime as _job_runtime
 import llm_adapters as _llm_adapters
 import model_artifacts as _model_artifacts
 import operation_contracts as _operation_contracts
+import process_supervision as _process_supervision
 import quality_core as _quality_core
 import retention as _retention
 import retrieval_core as _retrieval_core
@@ -11970,409 +11971,37 @@ def _cli_operation_timeout(argv: list[str], operation: str) -> float:
     )
 
 
-class _WindowsKillJob:
-    """Windows Job Object that kills every assigned process when closed."""
-
-    _KILL_ON_JOB_CLOSE = 0x00002000
-    _EXTENDED_LIMIT_INFORMATION = 9
-
-    def __init__(self):
-        import ctypes
-        from ctypes import wintypes
-
-        class _IoCounters(ctypes.Structure):
-            _fields_ = [
-                ("ReadOperationCount", ctypes.c_ulonglong),
-                ("WriteOperationCount", ctypes.c_ulonglong),
-                ("OtherOperationCount", ctypes.c_ulonglong),
-                ("ReadTransferCount", ctypes.c_ulonglong),
-                ("WriteTransferCount", ctypes.c_ulonglong),
-                ("OtherTransferCount", ctypes.c_ulonglong),
-            ]
-
-        class _BasicLimitInformation(ctypes.Structure):
-            _fields_ = [
-                ("PerProcessUserTimeLimit", wintypes.LARGE_INTEGER),
-                ("PerJobUserTimeLimit", wintypes.LARGE_INTEGER),
-                ("LimitFlags", wintypes.DWORD),
-                ("MinimumWorkingSetSize", ctypes.c_size_t),
-                ("MaximumWorkingSetSize", ctypes.c_size_t),
-                ("ActiveProcessLimit", wintypes.DWORD),
-                ("Affinity", ctypes.c_size_t),
-                ("PriorityClass", wintypes.DWORD),
-                ("SchedulingClass", wintypes.DWORD),
-            ]
-
-        class _ExtendedLimitInformation(ctypes.Structure):
-            _fields_ = [
-                ("BasicLimitInformation", _BasicLimitInformation),
-                ("IoInfo", _IoCounters),
-                ("ProcessMemoryLimit", ctypes.c_size_t),
-                ("JobMemoryLimit", ctypes.c_size_t),
-                ("PeakProcessMemoryUsed", ctypes.c_size_t),
-                ("PeakJobMemoryUsed", ctypes.c_size_t),
-            ]
-
-        class _BasicAccountingInformation(ctypes.Structure):
-            _fields_ = [
-                ("TotalUserTime", wintypes.LARGE_INTEGER),
-                ("TotalKernelTime", wintypes.LARGE_INTEGER),
-                ("ThisPeriodTotalUserTime", wintypes.LARGE_INTEGER),
-                ("ThisPeriodTotalKernelTime", wintypes.LARGE_INTEGER),
-                ("TotalPageFaultCount", wintypes.DWORD),
-                ("TotalProcesses", wintypes.DWORD),
-                ("ActiveProcesses", wintypes.DWORD),
-                ("TotalTerminatedProcesses", wintypes.DWORD),
-            ]
-
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        create_job = kernel32.CreateJobObjectW
-        create_job.argtypes = [wintypes.LPVOID, wintypes.LPCWSTR]
-        create_job.restype = wintypes.HANDLE
-        set_information = kernel32.SetInformationJobObject
-        set_information.argtypes = [
-            wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD,
-        ]
-        set_information.restype = wintypes.BOOL
-        assign_process = kernel32.AssignProcessToJobObject
-        assign_process.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
-        assign_process.restype = wintypes.BOOL
-        terminate_job = kernel32.TerminateJobObject
-        terminate_job.argtypes = [wintypes.HANDLE, wintypes.UINT]
-        terminate_job.restype = wintypes.BOOL
-        query_information = kernel32.QueryInformationJobObject
-        query_information.argtypes = [
-            wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD,
-            ctypes.POINTER(wintypes.DWORD),
-        ]
-        query_information.restype = wintypes.BOOL
-        close_handle = kernel32.CloseHandle
-        close_handle.argtypes = [wintypes.HANDLE]
-        close_handle.restype = wintypes.BOOL
-        set_handle_information = kernel32.SetHandleInformation
-        set_handle_information.argtypes = [
-            wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD,
-        ]
-        set_handle_information.restype = wintypes.BOOL
-
-        handle = create_job(None, None)
-        if not handle:
-            raise ctypes.WinError(ctypes.get_last_error())
-        if not set_handle_information(handle, 0x00000001, 0):
-            error = ctypes.WinError(ctypes.get_last_error())
-            close_handle(handle)
-            raise error
-        limits = _ExtendedLimitInformation()
-        limits.BasicLimitInformation.LimitFlags = self._KILL_ON_JOB_CLOSE
-        if not set_information(
-                handle, self._EXTENDED_LIMIT_INFORMATION,
-                ctypes.byref(limits), ctypes.sizeof(limits)):
-            error = ctypes.WinError(ctypes.get_last_error())
-            close_handle(handle)
-            raise error
-        self._ctypes = ctypes
-        self._wintypes = wintypes
-        self._assign_process = assign_process
-        self._terminate_job = terminate_job
-        self._query_information = query_information
-        self._close_handle = close_handle
-        self._basic_accounting_type = _BasicAccountingInformation
-        self._handle = handle
-
-    def assign(self, process) -> None:
-        if not self._assign_process(
-                self._handle, self._wintypes.HANDLE(int(process._handle))):
-            raise self._ctypes.WinError(self._ctypes.get_last_error())
-
-    def close(self) -> bool:
-        if self._handle:
-            closed = bool(self._close_handle(self._handle))
-            self._handle = None
-            return closed
-        return True
-
-    def terminate(self, exit_code: int = 124) -> bool:
-        if not self._handle:
-            return True
-        return bool(self._terminate_job(self._handle, exit_code))
-
-    def active_processes(self) -> int:
-        if not self._handle:
-            return 0
-        information = self._basic_accounting_type()
-        returned = self._wintypes.DWORD()
-        if not self._query_information(
-                self._handle, 1, self._ctypes.byref(information),
-                self._ctypes.sizeof(information),
-                self._ctypes.byref(returned)):
-            raise self._ctypes.WinError(self._ctypes.get_last_error())
-        return int(information.ActiveProcesses)
-
-    def terminate_and_confirm(
-            self, *, exit_code: int = 124,
-            timeout: float = _SUPERVISED_TERMINATE_GRACE) -> bool:
-        """Terminate every assigned process and confirm the Job is empty."""
-        confirmed = False
-        try:
-            if not self.terminate(exit_code):
-                return False
-            deadline = time.monotonic() + timeout
-            while True:
-                if self.active_processes() == 0:
-                    confirmed = True
-                    break
-                if time.monotonic() >= deadline:
-                    break
-                time.sleep(0.025)
-        except OSError:
-            confirmed = False
-        finally:
-            closed = self.close()
-        return confirmed and closed
-
-
-class _PosixSupervisedStartGate:
-    """Startup gate whose open writer also proves supervisor liveness."""
-
-    kind = "posix-pipe"
-
-    def __init__(self):
-        self._read_descriptor, self._write_descriptor = os.pipe()
-
-    @property
-    def child_value(self) -> str:
-        return str(self._read_descriptor)
-
-    def popen_options(self) -> dict:
-        return {
-            "close_fds": True,
-            "pass_fds": (self._read_descriptor,),
-        }
-
-    def release(self) -> None:
-        if self._write_descriptor < 0:
-            raise RuntimeError("supervised worker start gate is closed")
-        if os.write(self._write_descriptor, b"\x01") != 1:
-            raise OSError("supervised worker start gate release was incomplete")
-        # The child retains the read end after consuming this byte.  Keep the
-        # write end open until normal tree cleanup; abrupt supervisor death
-        # then delivers EOF to the child's watchdog.
-        descriptor = self._read_descriptor
-        self._read_descriptor = -1
-        if descriptor >= 0:
-            os.close(descriptor)
-
-    def close(self) -> None:
-        for attribute in ("_write_descriptor", "_read_descriptor"):
-            descriptor = getattr(self, attribute)
-            if descriptor < 0:
-                continue
-            setattr(self, attribute, -1)
-            try:
-                os.close(descriptor)
-            except OSError:
-                pass
-
-
-class _WindowsSupervisedStartGate:
-    """One-shot inherited event used to release a contained Windows worker."""
-
-    kind = "windows-event"
-
-    def __init__(self):
-        import ctypes
-        from ctypes import wintypes
-
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        create_event = kernel32.CreateEventW
-        create_event.argtypes = [
-            wintypes.LPVOID, wintypes.BOOL, wintypes.BOOL, wintypes.LPCWSTR,
-        ]
-        create_event.restype = wintypes.HANDLE
-        set_event = kernel32.SetEvent
-        set_event.argtypes = [wintypes.HANDLE]
-        set_event.restype = wintypes.BOOL
-        set_handle_information = kernel32.SetHandleInformation
-        set_handle_information.argtypes = [
-            wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD,
-        ]
-        set_handle_information.restype = wintypes.BOOL
-        close_handle = kernel32.CloseHandle
-        close_handle.argtypes = [wintypes.HANDLE]
-        close_handle.restype = wintypes.BOOL
-        handle = create_event(None, True, False, None)
-        if not handle:
-            raise ctypes.WinError(ctypes.get_last_error())
-        if not set_handle_information(handle, 0x00000001, 0x00000001):
-            error = ctypes.WinError(ctypes.get_last_error())
-            close_handle(handle)
-            raise error
-        self._ctypes = ctypes
-        self._set_event = set_event
-        self._close_handle = close_handle
-        self._handle = handle
-
-    @property
-    def child_value(self) -> str:
-        return str(int(self._handle))
-
-    def popen_options(self) -> dict:
-        startup = subprocess.STARTUPINFO()
-        startup.lpAttributeList = {"handle_list": [int(self._handle)]}
-        return {"close_fds": True, "startupinfo": startup}
-
-    def release(self) -> None:
-        if not self._handle:
-            raise RuntimeError("supervised worker start gate is closed")
-        if not self._set_event(self._handle):
-            raise self._ctypes.WinError(self._ctypes.get_last_error())
-        self.close()
-
-    def close(self) -> None:
-        if self._handle:
-            self._close_handle(self._handle)
-            self._handle = None
+_WindowsKillJob = _process_supervision._WindowsKillJob
+_PosixSupervisedStartGate = _process_supervision._PosixSupervisedStartGate
+_WindowsSupervisedStartGate = _process_supervision._WindowsSupervisedStartGate
+_SupervisorSignal = _process_supervision._SupervisorSignal
+_SupervisorCleanupError = _process_supervision._SupervisorCleanupError
 
 
 def _new_supervised_start_gate():
+    """Build a platform gate through facade-replaceable class globals."""
     return (_WindowsSupervisedStartGate()
             if os.name == "nt" else _PosixSupervisedStartGate())
 
 
-class _SupervisorSignal(BaseException):
-    """Internal control flow used to clean up before honoring a signal."""
-
-    def __init__(self, signum: int):
-        self.signum = signum
-        super().__init__(signum)
-
-
-class _SupervisorCleanupError(RuntimeError):
-    """Raised only after owned process-tree cleanup remains unconfirmed."""
+def _supervision_config() -> _process_supervision.SupervisionConfig:
+    """Snapshot facade-owned supervision constants for one operation."""
+    return _process_supervision.SupervisionConfig(
+        supervised_child_env=_SUPERVISED_CHILD_ENV,
+        run_id_env=_RUN_ID_ENV,
+        terminate_grace=_SUPERVISED_TERMINATE_GRACE,
+        poll_interval=_SUPERVISED_POLL_INTERVAL,
+        start_gate_timeout=_SUPERVISED_START_GATE_TIMEOUT,
+    )
 
 
 def _terminate_supervised_process(process, *, kill_job=None) -> bool:
-    """Terminate a supervised tree and confirm the direct worker was reaped."""
-    if kill_job is not None:
-        # The Job remains authoritative even if the direct worker exited before
-        # one of its descendants.  Confirm it is empty before reporting cleanup.
-        try:
-            confirm = getattr(kill_job, "terminate_and_confirm", None)
-            if confirm is not None:
-                tree_gone = bool(confirm(
-                    timeout=_SUPERVISED_TERMINATE_GRACE))
-            else:
-                tree_gone = bool(kill_job.terminate())
-                tree_gone = bool(kill_job.close()) and tree_gone
-        except BaseException:
-            tree_gone = False
-            try:
-                kill_job.close()
-            except BaseException:
-                pass
-        try:
-            process.wait(timeout=_SUPERVISED_TERMINATE_GRACE)
-        except subprocess.TimeoutExpired:
-            if process.poll() is None:
-                try:
-                    process.kill()
-                except OSError:
-                    pass
-            try:
-                process.wait(timeout=_SUPERVISED_TERMINATE_GRACE)
-            except subprocess.TimeoutExpired:
-                return False
-        return process.poll() is not None and tree_gone
-
-    if os.name == "nt":
-        # ``Popen.terminate()`` only kills the direct Windows process. The
-        # vector client or model runtime may have descendants that retain DB
-        # handles, so ask the OS to terminate the exact PID tree instead.
-        taskkill_options = {
-            "stdout": subprocess.DEVNULL,
-            "stderr": subprocess.DEVNULL,
-            "check": False,
-            "timeout": _SUPERVISED_TERMINATE_GRACE,
-        }
-        create_no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        if create_no_window:
-            taskkill_options["creationflags"] = create_no_window
-        taskkill_succeeded = False
-        try:
-            completed = subprocess.run(
-                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
-                **taskkill_options,
-            )
-            taskkill_succeeded = completed.returncode == 0
-            if completed.returncode and process.poll() is None:
-                process.kill()
-        except (OSError, subprocess.SubprocessError):
-            if process.poll() is None:
-                try:
-                    process.kill()
-                except OSError:
-                    pass
-        try:
-            process.wait(timeout=_SUPERVISED_TERMINATE_GRACE)
-        except subprocess.TimeoutExpired:
-            if process.poll() is None:
-                try:
-                    process.kill()
-                except OSError:
-                    pass
-            try:
-                process.wait(timeout=_SUPERVISED_TERMINATE_GRACE)
-            except subprocess.TimeoutExpired:
-                pass
-        return process.poll() is not None and taskkill_succeeded
-
-    def send_signal(sig) -> None:
-        try:
-            os.killpg(process.pid, sig)
-        except ProcessLookupError:
-            pass
-
-    try:
-        send_signal(signal.SIGTERM)
-    except OSError:
-        if process.poll() is None:
-            process.kill()
-
-    deadline = time.monotonic() + _SUPERVISED_TERMINATE_GRACE
-    while time.monotonic() < deadline:
-        process.poll()  # reap the direct worker so only live descendants count
-        try:
-            os.killpg(process.pid, 0)
-        except ProcessLookupError:
-            break
-        except PermissionError:
-            # The group still exists even if the current account cannot signal
-            # one of its members.
-            pass
-        time.sleep(0.05)
-    try:
-        send_signal(signal.SIGKILL)
-    except OSError:
-        pass
-    worker_reaped = process.poll() is not None
-    if not worker_reaped:
-        try:
-            process.wait(timeout=_SUPERVISED_TERMINATE_GRACE)
-        except subprocess.TimeoutExpired:
-            return False
-        worker_reaped = True
-    group_gone = False
-    deadline = time.monotonic() + _SUPERVISED_TERMINATE_GRACE
-    while time.monotonic() < deadline:
-        try:
-            os.killpg(process.pid, 0)
-        except ProcessLookupError:
-            group_gone = True
-            break
-        except PermissionError:
-            pass
-        time.sleep(0.05)
-    return worker_reaped and group_gone
+    """Terminate a supervised tree through the extracted runtime core."""
+    return _process_supervision._terminate_supervised_process(
+        process,
+        kill_job=kill_job,
+        terminate_grace=_SUPERVISED_TERMINATE_GRACE,
+    )
 
 
 def _supervised_telemetry_requested(
@@ -12401,6 +12030,15 @@ def _finalize_supervised_run_telemetry(
         )
 
 
+def _start_supervised_run_telemetry(
+        operation: str, *, run_id: str | None,
+        run_events: Path | None, run_report: Path | None) -> None:
+    if _supervised_telemetry_requested(run_id, run_events, run_report):
+        _run_telemetry.RunTelemetry(
+            operation, run_id=run_id, events_path=run_events,
+            report_path=run_report).start()
+
+
 def _run_cli_with_deadline(script_path: Path, argv: list[str], *,
                            operation: str, timeout: float,
                            working_directory: Path | None = None,
@@ -12416,219 +12054,36 @@ def _run_cli_with_deadline(script_path: Path, argv: list[str], *,
                            heartbeat: Callable[[Any], None] | None = None,
                            stdout_target: Any = None,
                            stderr_target: Any = None) -> int:
-    """Run one CLI operation in a killable process with a wall-clock deadline."""
-    timeout = _normalize_operation_timeout(timeout)
-    environment = os.environ.copy()
-    environment[_SUPERVISED_CHILD_ENV] = "1"
-    for name, value in (environment_overrides or {}).items():
-        if value is None:
-            environment.pop(name, None)
-        else:
-            environment[name] = value
-    if run_id is not None:
-        environment[_RUN_ID_ENV] = run_id
-    if _supervised_telemetry_requested(run_id, run_events, run_report):
-        _run_telemetry.RunTelemetry(
-            operation, run_id=run_id, events_path=run_events,
-            report_path=run_report).start()
-    target_script = str(Path(script_path).resolve())
-    bootstrap_script = str(
-        Path(__file__).with_name("supervised_worker.py").resolve())
-    process_options = {"env": environment}
-    if working_directory is not None:
-        process_options["cwd"] = os.fspath(working_directory)
-    if stdout_target is not None:
-        process_options["stdout"] = stdout_target
-    if stderr_target is not None:
-        process_options["stderr"] = stderr_target
-    kill_job = None
-    start_gate = None
-    try:
-        if os.name == "nt":
-            process_options["creationflags"] = getattr(
-                subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-            kill_job = _WindowsKillJob()
-        else:
-            process_options["start_new_session"] = True
-        start_gate = _new_supervised_start_gate()
-        process_options.update(start_gate.popen_options())
-        command = [
-            sys.executable, "-u", bootstrap_script,
-            start_gate.kind, start_gate.child_value,
-            str(_SUPERVISED_START_GATE_TIMEOUT), target_script, *argv,
-        ]
-        process = subprocess.Popen(command, **process_options)
-    except BaseException as exc:
-        if start_gate is not None:
-            start_gate.close()
-        if kill_job is not None:
-            kill_job.close()
-        _finalize_supervised_run_telemetry(
-            operation, run_id=run_id, run_events=run_events,
-            run_report=run_report,
-            status="cancelled" if isinstance(exc, KeyboardInterrupt)
-            else "failed",
-            exc=exc)
-        raise
-    try:
-        if kill_job is not None:
-            kill_job.assign(process)
-        if on_child_started is not None:
-            on_child_started(process)
-        start_gate.release()
-    except BaseException as exc:
-        start_gate.close()
-        cleanup_complete = _terminate_supervised_process(
-            process, kill_job=kill_job)
-        if cleanup_complete:
-            _finalize_supervised_run_telemetry(
-                operation, run_id=run_id, run_events=run_events,
-                run_report=run_report, status="failed", exc=exc)
-        else:
-            raise _SupervisorCleanupError(
-                "supervised worker tree cleanup could not be confirmed"
-            ) from exc
-        raise
+    """Run one CLI operation through the extracted supervision core.
 
-    previous_handlers = {}
-    try:
-        if (os.name != "nt"
-                and _threading.current_thread() is _threading.main_thread()):
-            def raise_supervisor_signal(received, _frame):
-                raise _SupervisorSignal(received)
-
-            for signal_name in ("SIGTERM", "SIGHUP"):
-                signum = getattr(signal, signal_name, None)
-                if signum is None:
-                    continue
-                previous_handlers[signum] = signal.getsignal(signum)
-                signal.signal(signum, raise_supervisor_signal)
-    except BaseException as exc:
-        start_gate.close()
-        cleanup_complete = _terminate_supervised_process(
-            process, kill_job=kill_job)
-        for signum, previous in previous_handlers.items():
-            signal.signal(signum, previous)
-        if not cleanup_complete:
-            raise _SupervisorCleanupError(
-                "supervised worker tree cleanup could not be confirmed"
-            ) from exc
-        raise
-    try:
-        deadline = time.monotonic() + timeout
-        poll_callbacks = cancel_requested is not None or heartbeat is not None
-        while True:
-            if cancel_requested is not None and cancel_requested():
-                observed_exit = process.poll()
-                if observed_exit is not None:
-                    exit_code = int(observed_exit)
-                    break
-                cleanup_complete = _terminate_supervised_process(
-                    process, kill_job=kill_job)
-                if cleanup_complete:
-                    _finalize_supervised_run_telemetry(
-                        operation, run_id=run_id, run_events=run_events,
-                        run_report=run_report, status="cancelled",
-                        exc=KeyboardInterrupt())
-                else:
-                    raise _SupervisorCleanupError(
-                        "supervised worker tree cleanup could not be confirmed")
-                return 130
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise subprocess.TimeoutExpired(command, timeout)
-            wait_timeout = (
-                min(remaining, _SUPERVISED_POLL_INTERVAL)
-                if poll_callbacks else remaining
-            )
-            try:
-                exit_code = int(process.wait(timeout=wait_timeout))
-                break
-            except subprocess.TimeoutExpired:
-                if heartbeat is not None:
-                    heartbeat(process)
-                if not poll_callbacks or time.monotonic() >= deadline:
-                    raise
-        cleanup_complete = _terminate_supervised_process(
-            process, kill_job=kill_job)
-        if not cleanup_complete:
-            raise _SupervisorCleanupError(
-                "supervised worker tree cleanup could not be confirmed")
-        if exit_code:
-            _finalize_supervised_run_telemetry(
-                operation, run_id=run_id, run_events=run_events,
-                run_report=run_report,
-                status="cancelled" if exit_code == 130 else "failed",
-                exc=SystemExit(exit_code))
-        return exit_code
-    except subprocess.TimeoutExpired:
-        cleanup_complete = _terminate_supervised_process(
-            process, kill_job=kill_job)
-        if cleanup_complete:
-            _finalize_supervised_run_telemetry(
-                operation, run_id=run_id, run_events=run_events,
-                run_report=run_report, status="failed",
-                exc=TimeoutError("supervised operation deadline exceeded"))
-        cleanup_status = (
-            "Any operating-system vector-store lease was released; retry "
-            "the command to recover an interrupted index."
-            if cleanup_complete else
-            "Worker cleanup could not be confirmed; verify that no child "
-            "process remains before retrying the index."
-        )
-        print(
-            f"Operation '{operation}' exceeded its {timeout:g}s deadline and "
-            f"was terminated. {cleanup_status}",
-            file=sys.stderr,
-        )
-        if not cleanup_complete:
-            raise _SupervisorCleanupError(
-                "supervised worker tree cleanup could not be confirmed")
-        return 124
-    except _SupervisorSignal as exc:
-        cleanup_complete = _terminate_supervised_process(
-            process, kill_job=kill_job)
-        if cleanup_complete:
-            _finalize_supervised_run_telemetry(
-                operation, run_id=run_id, run_events=run_events,
-                run_report=run_report, status="cancelled",
-                exc=KeyboardInterrupt())
-        else:
-            raise _SupervisorCleanupError(
-                "supervised worker tree cleanup could not be confirmed") from exc
-        return 128 + exc.signum
-    except KeyboardInterrupt as exc:
-        cleanup_complete = _terminate_supervised_process(
-            process, kill_job=kill_job)
-        if cleanup_complete:
-            _finalize_supervised_run_telemetry(
-                operation, run_id=run_id, run_events=run_events,
-                run_report=run_report, status="cancelled", exc=exc)
-        else:
-            raise _SupervisorCleanupError(
-                "supervised worker tree cleanup could not be confirmed") from exc
-        return 130
-    except _SupervisorCleanupError:
-        # Cleanup already exhausted its graceful and forced confirmation
-        # windows. Do not claim a terminal telemetry state or retry blindly.
-        raise
-    except BaseException as exc:
-        cleanup_complete = _terminate_supervised_process(
-            process, kill_job=kill_job)
-        if cleanup_complete:
-            _finalize_supervised_run_telemetry(
-                operation, run_id=run_id, run_events=run_events,
-                run_report=run_report, status="failed", exc=exc)
-        else:
-            raise _SupervisorCleanupError(
-                "supervised worker tree cleanup could not be confirmed") from exc
-        raise
-    finally:
-        for signum, previous in previous_handlers.items():
-            signal.signal(signum, previous)
-        start_gate.close()
-        if kill_job is not None:
-            kill_job.close()
+    Mutable collaborators are resolved from this facade for every call so the
+    established monkeypatch and consumer seams remain compatible.
+    """
+    return _process_supervision._run_cli_with_deadline(
+        script_path,
+        argv,
+        operation=operation,
+        timeout=timeout,
+        config=_supervision_config(),
+        normalize_timeout_fn=_normalize_operation_timeout,
+        telemetry_start_fn=_start_supervised_run_telemetry,
+        telemetry_finalize_fn=_finalize_supervised_run_telemetry,
+        kill_job_factory=_WindowsKillJob,
+        start_gate_factory=_new_supervised_start_gate,
+        terminate_fn=_terminate_supervised_process,
+        supervisor_signal_type=_SupervisorSignal,
+        cleanup_error_type=_SupervisorCleanupError,
+        working_directory=working_directory,
+        environment_overrides=environment_overrides,
+        run_id=run_id,
+        run_events=run_events,
+        run_report=run_report,
+        cancel_requested=cancel_requested,
+        on_child_started=on_child_started,
+        heartbeat=heartbeat,
+        stdout_target=stdout_target,
+        stderr_target=stderr_target,
+    )
 
 
 _rag_cli_command = _cli_policy._rag_cli_command
@@ -12638,53 +12093,21 @@ _cli_run_telemetry_options = _cli_policy._cli_run_telemetry_options
 def _run_rag_entrypoint(
         argv: list[str] | None = None, *,
         environment_overrides: dict[str, str | None] | None = None) -> int:
-    """Run the CLI, supervising vector-using commands in a child process."""
-    cli_args = list(sys.argv[1:] if argv is None else argv)
-    command = _rag_cli_command(cli_args)
-    if not cli_args or command == "menu":
-        interactive_menu()
-        return 0
-    if (command in DEFAULT_OPERATION_TIMEOUTS
-            and os.environ.get(_SUPERVISED_CHILD_ENV) != "1"):
-        telemetry_options = _cli_run_telemetry_options(cli_args, command)
-        explicit_run_id = telemetry_options["run_id"]
-        run_id = (
-            explicit_run_id if explicit_run_id is not None
-            else os.environ.get(_RUN_ID_ENV) or _run_telemetry.new_run_id())
-        supervisor_options = {
-            "operation": command,
-            "timeout": _cli_operation_timeout(cli_args, command),
-            "run_id": run_id,
-            "run_events": (
-                Path(telemetry_options["events_path"])
-                if telemetry_options["events_path"] is not None else None),
-            "run_report": (
-                Path(telemetry_options["report_path"])
-                if telemetry_options["report_path"] is not None else None),
-        }
-        if environment_overrides:
-            supervisor_options["environment_overrides"] = environment_overrides
-        return _run_cli_with_deadline(
-            Path(__file__), cli_args, **supervisor_options)
-
-    previous_environment = {}
-    missing_environment = set()
-    for name, value in (environment_overrides or {}).items():
-        if name in os.environ:
-            previous_environment[name] = os.environ[name]
-        else:
-            missing_environment.add(name)
-        if value is None:
-            os.environ.pop(name, None)
-        else:
-            os.environ[name] = value
-    try:
-        main(cli_args)
-    finally:
-        for name in missing_environment:
-            os.environ.pop(name, None)
-        os.environ.update(previous_environment)
-    return 0
+    """Run the CLI through the generic extracted entrypoint policy."""
+    return _process_supervision._run_supervised_entrypoint(
+        argv,
+        environment_overrides=environment_overrides,
+        config=_supervision_config(),
+        script_path=Path(__file__),
+        command_resolver=_rag_cli_command,
+        operation_timeouts=DEFAULT_OPERATION_TIMEOUTS,
+        telemetry_options_fn=_cli_run_telemetry_options,
+        timeout_fn=_cli_operation_timeout,
+        run_id_factory=_run_telemetry.new_run_id,
+        menu_fn=interactive_menu,
+        main_fn=main,
+        supervisor_fn=_run_cli_with_deadline,
+    )
 
 
 def _render_storage_outcome(payload: dict) -> None:

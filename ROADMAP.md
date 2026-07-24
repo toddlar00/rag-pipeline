@@ -27,6 +27,7 @@ Status terms:
 | Machine-readable corpus quality attestation | Implemented (draft) | [PR #31](https://github.com/toddlar00/rag-pipeline/pull/31): schema-v1 report binds the exact Docling source, chunks bytes, parameters, source-lineage coverage, tables, normalization, classification, entities, token budgets, and stable/hash roots; resume, export, retrieval, and index publication fail closed on missing, stale, malformed, or mismatched evidence |
 | Synced-folder publication and read resilience | Implemented (draft) | [PR #31](https://github.com/toddlar00/rag-pipeline/pull/31): bounded Windows sharing-violation retries republish only a pinned staging file; marker and exact artifact reads retry only content-identical ctime churn while failing closed on content-generation changes; exact hashes bypass unsafe stat caching on Windows |
 | Ethics retrieval calibration | In progress | A 14-query, 24-judgment draft is pinned to the exact 1,715-record corpus and covers rules, explanations, cases, tables, cross-page chunks, filters, abstention, outline distractors, and positive outline intents; corpus-owner review and release thresholds remain outstanding |
+| Process supervision extraction | Validated locally | Deadline supervision, Windows/POSIX containment, startup gates, termination confirmation, and generic entrypoint policy moved to stdlib-only `process_supervision.py`; `rag.py` retains late-bound compatibility wrappers |
 | Exact LLM transport budget | Integrated | [PR #1](https://github.com/toddlar00/rag-pipeline/pull/1) |
 | Qdrant manifest reconciliation | Integrated | [PR #2](https://github.com/toddlar00/rag-pipeline/pull/2) |
 | Qdrant interrupted-update guard | Integrated | [PR #3](https://github.com/toddlar00/rag-pipeline/pull/3) |
@@ -82,11 +83,11 @@ Python compatibility facade. These seams are integrated on `main`.
 
 - The extracted modules own deterministic policy, typed records, and explicit
   callback/protocol boundaries; `rag.py` re-exports the established surface.
-- Runtime orchestration, process supervision, mutable caches, and physical
-  Chroma/Qdrant backends deliberately remain in `rag.py`. Further decomposition
-  is a distinct future track, starting with process supervision and then vector
-  lifecycle, because those OS-containment and lease boundaries require their
-  own failure-injection milestones.
+- Runtime orchestration, mutable caches, and physical Chroma/Qdrant backends
+  deliberately remain in `rag.py`. Process supervision is now extracted behind
+  late-bound facade wrappers; vector lifecycle is the next decomposition slice
+  because its lease and mutation boundaries require a separate failure-injected
+  milestone.
 - This phase is therefore a completed policy-seam extraction, not a claim that
   `rag.py` has become a thin or fully decomposed facade.
 
@@ -217,6 +218,26 @@ This milestone is published in draft [PR
 #31](https://github.com/toddlar00/rag-pipeline/pull/31) with all 15 head checks
 passing. It remains “Implemented (draft)” pending review and merge evidence.
 
+## Process supervision extraction milestone
+
+The first P3 runtime-decomposition slice moves operating-system containment,
+startup gating, deadline/cancellation control, termination confirmation, and
+generic entrypoint routing into the standard-library-only
+`process_supervision.py`. `rag.py` remains the public compatibility facade: it
+snapshots its constants and resolves job, gate, termination, telemetry, CLI,
+and entrypoint collaborators for every call so existing consumers and
+monkeypatch-based failure tests retain their behavior.
+
+Seventeen direct module tests exercise the dependency boundary, facade exports,
+frozen configuration, Windows-job failure cases, timeout and cancellation
+cleanup, telemetry ordering,
+pre-launch failures, command routing, recursion prevention, and exact environment
+restoration. The unchanged real-process characterization suite passes on the
+facade. Real supervised `info` and Ethics hybrid-query smokes also pass; the
+Rule-1.5(c) table remains rank 1. The complete repository suite passes with
+1,144 tests and 7 platform skips; Ruff, compileall, and `git diff --check` are
+clean.
+
 ## Next improvement milestones
 
 | Priority | Milestone | Acceptance evidence |
@@ -225,7 +246,7 @@ passing. It remains “Implemented (draft)” pending review and merge evidence.
 | P2 | Configurable document-structure profiles | Front/back-matter labels, chapter patterns, and canonical-title rules move behind tested profiles, with fixtures from multiple publishers and safe unknown-layout behavior |
 | P2 | Context-aware retrieval assembly | Stable adjacency/parent identifiers allow query-time neighboring-chunk stitching without duplicate text, chapter leakage, or citation ambiguity |
 | P2 | Table-specific retrieval | Large tables gain optional header-propagated cell/paragraph child records linked to their preserved parent table, with duplicate collapse and table-focused relevance tests |
-| P3 | Runtime decomposition | Process supervision and vector lifecycle move out of `rag.py` in separate failure-injected milestones while the compatibility facade remains stable |
+| P3 | Runtime decomposition | Vector lifecycle moves out of `rag.py` in a separate failure-injected milestone; process supervision is extracted behind the stable facade |
 
 ## Completion rule
 
