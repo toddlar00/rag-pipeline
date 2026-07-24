@@ -16,9 +16,37 @@ from pathlib import Path
 from typing import Iterable, Sequence
 
 
-QUALITY_REPORT_SCHEMA_VERSION = 1
+QUALITY_REPORT_SCHEMA_VERSION = 2
 SOURCE_LINEAGE_SCHEMA_VERSION = 1
 MAX_QUALITY_REPORT_BYTES = 16 * 1024 * 1024
+_QUALITY_REPORT_FIELDS = {
+    "schema_version", "kind", "status", "source", "parameters_sha256",
+    "inputs", "embedding", "source_lineage", "tables", "corpus",
+    "normalization", "classification", "entities", "hashes", "checks",
+}
+_EMBEDDING_FIELDS = {
+    "model", "limit", "raw_token_min", "raw_token_max", "raw_token_p50",
+    "raw_token_p95", "raw_token_p99", "raw_token_count", "input_token_min",
+    "input_token_max", "input_token_p50", "input_token_p95",
+    "input_token_p99", "inputs_over_limit",
+}
+_SOURCE_LINEAGE_FIELDS = {
+    "schema_version", "inventory_issues", "eligible_items",
+    "represented_items", "coverage_ppm", "missing_refs", "unknown_refs",
+    "chunks_without_lineage", "invalid_entries", "metadata_mismatches",
+    "schema_issues", "excluded_items_by_reason",
+}
+_TABLE_FIELDS = {
+    "eligible_source_tables", "represented_source_tables", "missing_refs",
+    "recovered_from_pdf", "recovered_refs", "published_table_chunks",
+    "issues",
+}
+_CORPUS_FIELDS = {
+    "content_types", "content_sources", "chapter_counts",
+    "page_metadata_issues", "page_regressions", "allowed_page_regressions",
+    "unexpected_page_regressions", "structural_leaks",
+    "chunk_index_issues", "canonical_duplicate_groups",
+}
 
 _SOURCE_LABELS = {
     "text", "list_item", "footnote", "caption", "code", "table",
@@ -108,6 +136,90 @@ def _nearest_rank(values: Sequence[int], percentile: int) -> int | None:
 def _is_nonnegative_int(value: object) -> bool:
     return (isinstance(value, int) and not isinstance(value, bool)
             and value >= 0)
+
+
+def _valid_count_mapping(
+        value: object, *, expected_total: int | None = None) -> bool:
+    if (not isinstance(value, dict)
+            or any(not isinstance(key, str) or not key
+                   or not _is_nonnegative_int(count) or count < 1
+                   for key, count in value.items())):
+        return False
+    return expected_total is None or sum(value.values()) == expected_total
+
+
+def _valid_index_list(
+        value: object, *, record_count: int, minimum_length: int = 0) -> bool:
+    return (
+        isinstance(value, list)
+        and len(value) >= minimum_length
+        and all(_is_nonnegative_int(index) and index < record_count
+                for index in value)
+        and value == sorted(set(value))
+    )
+
+
+def _valid_issue_mapping(
+        value: object, *, record_count: int, require_empty: bool) -> bool:
+    if (not isinstance(value, dict)
+            or any(not isinstance(key, str) or not key
+                   or not _valid_index_list(
+                       indexes, record_count=record_count)
+                   for key, indexes in value.items())):
+        return False
+    return not require_empty or not any(value.values())
+
+
+def _valid_sha256(value: object) -> bool:
+    return (isinstance(value, str)
+            and re.fullmatch(r"[0-9a-f]{64}", value) is not None)
+
+
+def _valid_file_binding(value: object, *, capture_policy: bool = False) -> bool:
+    expected = {"name", "size", "sha256"}
+    if capture_policy:
+        expected.add("capture_policy")
+    if not isinstance(value, dict) or set(value) != expected:
+        return False
+    return (
+        isinstance(value.get("name"), str)
+        and bool(value["name"])
+        and Path(value["name"]).name == value["name"]
+        and _is_nonnegative_int(value.get("size"))
+        and value["size"] > 0
+        and _valid_sha256(value.get("sha256"))
+        and (not capture_policy
+             or value.get("capture_policy") == "stream-copy-v1")
+    )
+
+
+def _valid_input_bindings(value: object) -> bool:
+    if (not isinstance(value, dict)
+            or set(value) != {
+                "docling_json", "conversion_manifest", "table_recovery"}
+            or not _valid_file_binding(value.get("docling_json"))):
+        return False
+    conversion = value.get("conversion_manifest")
+    if conversion is not None and (
+            not isinstance(conversion, dict)
+            or set(conversion) != {"name", "sha256", "schema_version"}
+            or not isinstance(conversion.get("name"), str)
+            or not conversion["name"]
+            or Path(conversion["name"]).name != conversion["name"]
+            or not _valid_sha256(conversion.get("sha256"))
+            or conversion.get("schema_version") != 2):
+        return False
+    recovery = value.get("table_recovery")
+    if recovery is None:
+        return True
+    return (
+        conversion is not None
+        and isinstance(recovery, dict)
+        and set(recovery) == {"pdf", "conversion_manifest", "discovery"}
+        and _valid_file_binding(recovery.get("pdf"), capture_policy=True)
+        and recovery.get("conversion_manifest") == conversion
+        and recovery.get("discovery") in {"explicit", "adjacent", "ancestor"}
+    )
 
 
 def _headings(metadata: dict) -> tuple[str, ...]:
@@ -468,11 +580,14 @@ def build_quality_report(
         source_sha256: str, chunks_name: str, chunks_sha256: str,
         chunks_size: int, parameters_sha256: str,
         embedding_model: str, embedding_limit: int | None,
+        input_bindings: dict,
 ) -> dict:
     """Build a deterministic, release-gating report for one chunks artifact."""
     if len(stable_ids) != len(records) or len(chunk_hashes) != len(records):
         raise ValueError(
             "stable_ids and chunk_hashes must align one-to-one with records")
+    if not _valid_input_bindings(input_bindings):
+        raise ValueError("quality input bindings are invalid")
 
     ranges = tuple(sorted(set(structural_ranges)))
     (all_items, eligible_items, exclusion_counts,
@@ -769,6 +884,7 @@ def build_quality_report(
             },
         },
         "parameters_sha256": parameters_sha256,
+        "inputs": input_bindings,
         "embedding": {
             "model": embedding_model,
             "limit": embedding_limit,
@@ -865,10 +981,16 @@ def validate_quality_report(
         parameters_sha256: str | None = None,
         embedding_model: str | None = None,
         embedding_limit: int | None = None,
+        input_bindings: dict | None = None,
+        recovered_table_count: int | None = None,
+        recovered_table_refs: Sequence[str] | None = None,
+        records: Sequence[dict] | None = None,
 ) -> dict:
     """Validate report schema, pass state, and exact chunks binding."""
     if not isinstance(payload, dict):
         raise ValueError("corpus quality report must be a JSON object")
+    if set(payload) != _QUALITY_REPORT_FIELDS:
+        raise ValueError("corpus quality report has an invalid field set")
     schema_version = payload.get("schema_version")
     if (not isinstance(schema_version, int)
             or isinstance(schema_version, bool)
@@ -880,6 +1002,26 @@ def validate_quality_report(
         raise ValueError("corpus quality report did not pass")
     source = payload.get("source")
     chunks = source.get("chunks_jsonl") if isinstance(source, dict) else None
+    docling = source.get("docling_json") if isinstance(source, dict) else None
+    if (not isinstance(source, dict)
+            or set(source) != {"docling_json", "chunks_jsonl"}
+            or not isinstance(docling, dict)
+            or set(docling) != {"name", "sha256"}
+            or not isinstance(docling.get("name"), str)
+            or not docling["name"]
+            or Path(docling["name"]).name != docling["name"]
+            or not _valid_sha256(docling.get("sha256"))
+            or not isinstance(chunks, dict)
+            or set(chunks) != {
+                "name", "sha256", "size", "record_count"}
+            or not isinstance(chunks.get("name"), str)
+            or not chunks["name"]
+            or Path(chunks["name"]).name != chunks["name"]
+            or not _valid_sha256(chunks.get("sha256"))
+            or not _is_nonnegative_int(chunks.get("size"))
+            or chunks["size"] <= 0
+            or not _is_nonnegative_int(chunks.get("record_count"))):
+        raise ValueError("corpus quality report source binding is invalid")
     expected = {
         "name": chunks_name,
         "sha256": chunks_sha256,
@@ -889,7 +1031,6 @@ def validate_quality_report(
     if not isinstance(chunks, dict) or any(
             chunks.get(key) != value for key, value in expected.items()):
         raise ValueError("corpus quality report does not match chunks artifact")
-    docling = source.get("docling_json") if isinstance(source, dict) else None
     if source_name is not None and (
             not isinstance(docling, dict)
             or docling.get("name") != source_name):
@@ -901,7 +1042,74 @@ def validate_quality_report(
     if (parameters_sha256 is not None
             and payload.get("parameters_sha256") != parameters_sha256):
         raise ValueError("corpus quality report does not match parameters")
+    manifested_inputs = payload.get("inputs")
+    if not _valid_input_bindings(manifested_inputs):
+        raise ValueError("corpus quality report inputs are invalid")
+    docling_input = manifested_inputs["docling_json"]
+    if docling != {
+            "name": docling_input["name"],
+            "sha256": docling_input["sha256"],
+    }:
+        raise ValueError(
+            "corpus quality report source and input bindings disagree")
+    if input_bindings is not None and manifested_inputs != input_bindings:
+        raise ValueError("corpus quality report does not match input bindings")
+    if not _valid_sha256(payload.get("parameters_sha256")):
+        raise ValueError("corpus quality report parameters are invalid")
+    tables = payload.get("tables")
+    recovered_count = (
+        tables.get("recovered_from_pdf") if isinstance(tables, dict) else None)
+    if (not _is_nonnegative_int(recovered_count)
+            or (recovered_count > 0
+                and manifested_inputs.get("table_recovery") is None)):
+        raise ValueError("corpus quality report recovery binding is invalid")
+    if (recovered_table_count is not None
+            and (not _is_nonnegative_int(recovered_table_count)
+                 or recovered_count != recovered_table_count)):
+        raise ValueError(
+            "corpus quality report does not match recovered source tables")
+    recovered_refs = tables.get("recovered_refs") if isinstance(tables, dict) \
+        else None
+    if (not isinstance(recovered_refs, list)
+            or any(not isinstance(ref, str) or not ref
+                   for ref in recovered_refs)
+            or recovered_refs != sorted(set(recovered_refs))
+            or len(recovered_refs) != recovered_count):
+        raise ValueError("corpus quality report recovered refs are invalid")
+    if recovered_table_refs is not None:
+        expected_recovered_refs = sorted(set(recovered_table_refs))
+        if (any(not isinstance(ref, str) or not ref
+                for ref in recovered_table_refs)
+                or recovered_refs != expected_recovered_refs):
+            raise ValueError(
+                "corpus quality report does not match recovered source refs")
     embedding = payload.get("embedding")
+    if (not isinstance(embedding, dict)
+            or set(embedding) != _EMBEDDING_FIELDS
+            or not isinstance(embedding.get("model"), str)
+            or not embedding["model"]
+            or (embedding.get("limit") is not None
+                and not _is_nonnegative_int(embedding["limit"]))
+            or any(
+                value is not None and not _is_nonnegative_int(value)
+                for key, value in embedding.items()
+                if key not in {"model", "limit"}
+            )
+            or embedding.get("inputs_over_limit") != 0):
+        raise ValueError("corpus quality report embedding is invalid")
+    for prefix in ("raw_token", "input_token"):
+        ordered = [
+            embedding[f"{prefix}_{suffix}"]
+            for suffix in ("min", "p50", "p95", "p99", "max")
+        ]
+        if any(not _is_nonnegative_int(value) for value in ordered) \
+                or ordered != sorted(ordered):
+            raise ValueError(
+                "corpus quality report embedding statistics are invalid")
+    if (embedding["limit"] is not None
+            and embedding["input_token_max"] > embedding["limit"]):
+        raise ValueError(
+            "corpus quality report embedding statistics exceed the limit")
     if embedding_model is not None and (
             not isinstance(embedding, dict)
             or embedding.get("model") != embedding_model):
@@ -916,8 +1124,12 @@ def validate_quality_report(
         f"{stable_id}\0{chunk_hash}"
         for stable_id, chunk_hash in zip(stable_ids, chunk_hashes))
     if (not isinstance(hashes, dict)
+            or set(hashes) != {
+                "stable_id_root_sha256", "chunk_hash_root_sha256",
+                "unique_stable_ids"}
             or hashes.get("stable_id_root_sha256") != expected_stable_root
             or hashes.get("chunk_hash_root_sha256") != expected_chunk_root
+            or not _is_nonnegative_int(hashes.get("unique_stable_ids"))
             or hashes.get("unique_stable_ids") != len(set(stable_ids))):
         raise ValueError("corpus quality report hash roots do not match chunks")
     checks = payload.get("checks")
@@ -925,7 +1137,8 @@ def validate_quality_report(
         raise ValueError("corpus quality report has invalid checks")
     checks_by_name = {}
     for check in checks:
-        if not isinstance(check, dict):
+        if (not isinstance(check, dict)
+                or set(check) != {"name", "status", "observed", "required"}):
             raise ValueError("corpus quality report contains an invalid check")
         name = check.get("name")
         status = check.get("status")
@@ -985,6 +1198,7 @@ def validate_quality_report(
     lineage_version = (
         lineage.get("schema_version") if isinstance(lineage, dict) else None)
     if (not isinstance(lineage, dict)
+            or set(lineage) != _SOURCE_LINEAGE_FIELDS
             or not isinstance(lineage_version, int)
             or isinstance(lineage_version, bool)
             or lineage_version != SOURCE_LINEAGE_SCHEMA_VERSION
@@ -992,9 +1206,17 @@ def validate_quality_report(
             or lineage.get("missing_refs") != []
             or lineage.get("unknown_refs") != []
             or lineage.get("chunks_without_lineage") != []
+            or not _is_nonnegative_int(lineage.get("invalid_entries"))
             or lineage.get("invalid_entries") != 0
             or lineage.get("metadata_mismatches") != []
-            or lineage.get("schema_issues") != []):
+            or lineage.get("schema_issues") != []
+            or not _is_nonnegative_int(lineage.get("eligible_items"))
+            or not _is_nonnegative_int(lineage.get("represented_items"))
+            or lineage.get("represented_items")
+            != lineage.get("eligible_items")
+            or lineage.get("coverage_ppm") != 1_000_000
+            or not _valid_count_mapping(
+                lineage.get("excluded_items_by_reason"))):
         raise ValueError("corpus quality report lineage gate is invalid")
     corpus = payload.get("corpus")
     page_regressions = (
@@ -1006,6 +1228,7 @@ def validate_quality_report(
         corpus.get("unexpected_page_regressions")
         if isinstance(corpus, dict) else None)
     if (not isinstance(corpus, dict)
+            or set(corpus) != _CORPUS_FIELDS
             or not isinstance(page_regressions, list)
             or any(not _is_nonnegative_int(index) or index < 1
                    for index in page_regressions)
@@ -1018,6 +1241,23 @@ def validate_quality_report(
                 entry["chunk_index"] for entry in allowed_regressions
             ) != page_regressions):
         raise ValueError("corpus quality report page order gate is invalid")
+    duplicate_groups = corpus.get("canonical_duplicate_groups")
+    warning_check = checks_by_name.get("canonical_text_duplicates")
+    if (not _valid_count_mapping(
+            corpus.get("content_types"), expected_total=record_count)
+            or not _valid_count_mapping(
+                corpus.get("content_sources"), expected_total=record_count)
+            or not _valid_count_mapping(
+                corpus.get("chapter_counts"), expected_total=record_count)
+            or corpus.get("page_metadata_issues") != []
+            or corpus.get("structural_leaks") != []
+            or corpus.get("chunk_index_issues") != []
+            or not isinstance(duplicate_groups, list)
+            or any(not _valid_index_list(
+                group, record_count=record_count, minimum_length=2)
+                for group in duplicate_groups)
+            or warning_check.get("observed") != len(duplicate_groups)):
+        raise ValueError("corpus quality report corpus details are invalid")
     raw_token_count = (
         embedding.get("raw_token_count")
         if isinstance(embedding, dict) else None)
@@ -1025,6 +1265,103 @@ def validate_quality_report(
             or not _is_nonnegative_int(raw_token_count)
             or raw_token_count != record_count):
         raise ValueError("corpus quality report raw token gate is invalid")
+    eligible_tables = tables.get("eligible_source_tables") \
+        if isinstance(tables, dict) else None
+    represented_tables = tables.get("represented_source_tables") \
+        if isinstance(tables, dict) else None
+    if (not isinstance(tables, dict) or set(tables) != _TABLE_FIELDS
+            or not _is_nonnegative_int(eligible_tables)
+            or not _is_nonnegative_int(represented_tables)
+            or represented_tables != eligible_tables
+            or tables.get("missing_refs") != []
+            or recovered_count > represented_tables
+            or not _is_nonnegative_int(tables.get("published_table_chunks"))
+            or tables.get("published_table_chunks")
+            != corpus["content_types"].get("table", 0)
+            or not _valid_issue_mapping(
+                tables.get("issues"), record_count=record_count,
+                require_empty=True)
+            or not _valid_issue_mapping(
+                payload.get("normalization"), record_count=record_count,
+                require_empty=True)
+            or not isinstance(payload.get("classification"), dict)
+            or set(payload["classification"]) != {"issues"}
+            or not _valid_issue_mapping(
+                payload["classification"]["issues"],
+                record_count=record_count, require_empty=True)
+            or not isinstance(payload.get("entities"), dict)
+            or set(payload["entities"]) != {"issues", "mentions", "unique"}
+            or not _valid_issue_mapping(
+                payload["entities"]["issues"],
+                record_count=record_count, require_empty=True)
+            or not _is_nonnegative_int(payload["entities"]["mentions"])
+            or not _is_nonnegative_int(payload["entities"]["unique"])
+            or payload["entities"]["unique"]
+            > payload["entities"]["mentions"]):
+        raise ValueError("corpus quality report detail schema is invalid")
+    if records is not None:
+        if len(records) != record_count:
+            raise ValueError(
+                "corpus quality report record summary input is misaligned")
+        expected_types = Counter()
+        expected_sources = Counter()
+        expected_chapters = Counter()
+        raw_counts = []
+        input_counts = []
+        case_names = []
+        for record in records:
+            metadata = record.get("metadata")
+            if not isinstance(metadata, dict):
+                raise ValueError(
+                    "corpus quality report record metadata is invalid")
+            expected_types[str(metadata.get("content_type") or "")] += 1
+            expected_sources[str(metadata.get("content_source") or "")] += 1
+            expected_chapters[str(metadata.get("chapter_num"))] += 1
+            raw_counts.append(metadata.get("token_count"))
+            input_counts.append(metadata.get("embedding_token_count"))
+            names = metadata.get("case_names")
+            if (not isinstance(names, list)
+                    or any(not isinstance(name, str) for name in names)):
+                raise ValueError(
+                    "corpus quality report case-name summary is invalid")
+            case_names.extend(names)
+        if (corpus["content_types"] != dict(sorted(expected_types.items()))
+                or corpus["content_sources"]
+                != dict(sorted(expected_sources.items()))
+                or corpus["chapter_counts"]
+                != dict(sorted(expected_chapters.items()))):
+            raise ValueError(
+                "corpus quality report summaries do not match records")
+        if (any(not _is_nonnegative_int(value) for value in raw_counts)
+                or any(not _is_nonnegative_int(value)
+                       for value in input_counts)):
+            raise ValueError(
+                "corpus quality report token summaries are invalid")
+        expected_embedding = {
+            "raw_token_min": min(raw_counts),
+            "raw_token_max": max(raw_counts),
+            "raw_token_p50": _nearest_rank(raw_counts, 50),
+            "raw_token_p95": _nearest_rank(raw_counts, 95),
+            "raw_token_p99": _nearest_rank(raw_counts, 99),
+            "raw_token_count": len(raw_counts),
+            "input_token_min": min(input_counts),
+            "input_token_max": max(input_counts),
+            "input_token_p50": _nearest_rank(input_counts, 50),
+            "input_token_p95": _nearest_rank(input_counts, 95),
+            "input_token_p99": _nearest_rank(input_counts, 99),
+            "inputs_over_limit": (
+                sum(value > embedding["limit"] for value in input_counts)
+                if embedding["limit"] is not None else 0),
+        }
+        if any(embedding.get(key) != value
+               for key, value in expected_embedding.items()):
+            raise ValueError(
+                "corpus quality report token summaries do not match records")
+        actual_names = [name for name in case_names if isinstance(name, str)]
+        if (payload["entities"]["mentions"] != len(case_names)
+                or payload["entities"]["unique"] != len(set(actual_names))):
+            raise ValueError(
+                "corpus quality report entity summaries do not match records")
     return payload
 
 
@@ -1036,9 +1373,14 @@ def read_quality_report(
         parameters_sha256: str | None = None,
         embedding_model: str | None = None,
         embedding_limit: int | None = None,
+        input_bindings: dict | None = None,
+        recovered_table_count: int | None = None,
+        recovered_table_refs: Sequence[str] | None = None,
+        records: Sequence[dict] | None = None,
 ) -> dict:
     try:
-        raw = Path(path).read_bytes()
+        with Path(path).open("rb") as handle:
+            raw = handle.read(MAX_QUALITY_REPORT_BYTES + 1)
     except OSError as exc:
         raise ValueError(f"cannot read corpus quality report: {path}") from exc
     return parse_quality_report_bytes(
@@ -1047,7 +1389,11 @@ def read_quality_report(
         stable_ids=stable_ids, chunk_hashes=chunk_hashes,
         source_name=source_name, source_sha256=source_sha256,
         parameters_sha256=parameters_sha256,
-        embedding_model=embedding_model, embedding_limit=embedding_limit)
+        embedding_model=embedding_model, embedding_limit=embedding_limit,
+        input_bindings=input_bindings,
+        recovered_table_count=recovered_table_count,
+        recovered_table_refs=recovered_table_refs,
+        records=records)
 
 
 def parse_quality_report_bytes(
@@ -1058,6 +1404,10 @@ def parse_quality_report_bytes(
         parameters_sha256: str | None = None,
         embedding_model: str | None = None,
         embedding_limit: int | None = None,
+        input_bindings: dict | None = None,
+        recovered_table_count: int | None = None,
+        recovered_table_refs: Sequence[str] | None = None,
+        records: Sequence[dict] | None = None,
 ) -> dict:
     """Strictly parse and validate one exact report byte snapshot."""
     if len(raw) > MAX_QUALITY_REPORT_BYTES:
@@ -1087,4 +1437,8 @@ def parse_quality_report_bytes(
         stable_ids=stable_ids, chunk_hashes=chunk_hashes,
         source_name=source_name, source_sha256=source_sha256,
         parameters_sha256=parameters_sha256,
-        embedding_model=embedding_model, embedding_limit=embedding_limit)
+        embedding_model=embedding_model, embedding_limit=embedding_limit,
+        input_bindings=input_bindings,
+        recovered_table_count=recovered_table_count,
+        recovered_table_refs=recovered_table_refs,
+        records=records)

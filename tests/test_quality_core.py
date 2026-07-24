@@ -1,5 +1,6 @@
 import copy
 import json
+from pathlib import Path
 
 import pytest
 
@@ -60,6 +61,15 @@ def _build(records: list[dict], document: dict, **overrides) -> dict:
         "parameters_sha256": "c" * 64,
         "embedding_model": "model-a",
         "embedding_limit": 512,
+        "input_bindings": {
+            "docling_json": {
+                "name": "book.json",
+                "size": 50,
+                "sha256": "a" * 64,
+            },
+            "conversion_manifest": None,
+            "table_recovery": None,
+        },
     }
     values.update(overrides)
     return quality_core.build_quality_report(**values)
@@ -422,6 +432,98 @@ def test_validate_quality_report_rejects_failed_or_tampered_gates():
         quality_core.validate_quality_report(tampered, **kwargs)
 
 
+@pytest.mark.parametrize("mutation", [
+    lambda report: report["source"].pop("docling_json"),
+    lambda report: report.__setitem__("parameters_sha256", None),
+    lambda report: report["embedding"].__setitem__("model", None),
+    lambda report: report["source"]["docling_json"].__setitem__(
+        "sha256", "d" * 64),
+    lambda report: report["source"].__setitem__("unexpected", {}),
+    lambda report: report["tables"].__setitem__(
+        "issues", {"hidden_failure": [0]}),
+    lambda report: report["corpus"]["content_types"].__setitem__(
+        "author_narrative", 2),
+    lambda report: report["source_lineage"].__setitem__(
+        "eligible_items", 2),
+    lambda report: report["embedding"].__setitem__(
+        "raw_token_p50", report["embedding"]["raw_token_max"] + 1),
+    lambda report: report["embedding"].__setitem__("inputs_over_limit", 77),
+    lambda report: report["hashes"].__setitem__("unique_stable_ids", True),
+    lambda report: report["source_lineage"].__setitem__(
+        "invalid_entries", False),
+    lambda report: report["tables"].__setitem__(
+        "represented_source_tables", False),
+    lambda report: report["embedding"].update({
+        f"input_token_{suffix}": 999
+        for suffix in ("min", "p50", "p95", "p99", "max")
+    }),
+    lambda report: report["corpus"].update({
+        "content_types": {"case_opinion": 1},
+        "content_sources": {"table": 1},
+        "chapter_counts": {"999": 1},
+    }),
+])
+def test_validate_quality_report_requires_canonical_v2_provenance(mutation):
+    document = {"texts": [_source_item("#/texts/0", 1)]}
+    record = _record(0, "#/texts/0", 1)
+    report = _build([record], document)
+    mutation(report)
+
+    with pytest.raises(ValueError):
+        quality_core.validate_quality_report(
+            report, **_validation_kwargs(), records=[record])
+
+
+def test_validate_quality_report_binds_recovery_to_actual_record_refs():
+    table = _source_item("#/tables/0", 3, label="table", text="")
+    record = _record(
+        0, "#/tables/0", 3,
+        text="| Rule |\n|---|\n| Value |",
+        content_type="table", content_source="table")
+    record["metadata"]["source_items"][0]["label"] = "table"
+    record["metadata"]["table_recovered_from_pdf"] = True
+    conversion = {
+        "name": ".book.json.conversion.complete.json",
+        "sha256": "d" * 64,
+        "schema_version": 2,
+    }
+    bindings = {
+        "docling_json": {
+            "name": "book.json", "size": 50, "sha256": "a" * 64},
+        "conversion_manifest": conversion,
+        "table_recovery": {
+            "pdf": {
+                "name": "book.pdf", "size": 100,
+                "sha256": "e" * 64,
+                "capture_policy": "stream-copy-v1",
+            },
+            "conversion_manifest": conversion,
+            "discovery": "explicit",
+        },
+    }
+    report = _build(
+        [record], {"tables": [table]},
+        recovered_table_refs=["#/tables/0"], input_bindings=bindings)
+    assert quality_core.validate_quality_report(
+        report, **_validation_kwargs(), recovered_table_count=1,
+        recovered_table_refs=["#/tables/0"]) is report
+
+    wrong_ref = copy.deepcopy(report)
+    wrong_ref["tables"]["recovered_refs"] = ["#/tables/other"]
+    with pytest.raises(ValueError, match="recovered source refs"):
+        quality_core.validate_quality_report(
+            wrong_ref, **_validation_kwargs(), recovered_table_count=1,
+            recovered_table_refs=["#/tables/0"])
+
+    tampered = copy.deepcopy(report)
+    tampered["tables"]["recovered_from_pdf"] = 0
+    tampered["tables"]["recovered_refs"] = []
+    tampered["inputs"]["table_recovery"] = None
+    with pytest.raises(ValueError, match="recovered source tables"):
+        quality_core.validate_quality_report(
+            tampered, **_validation_kwargs(), recovered_table_count=1)
+
+
 def test_validate_quality_report_requires_exact_schema_v1_check_set():
     document = {"texts": [_source_item("#/texts/0", 1)]}
     report = _build([_record(0, "#/texts/0", 1)], document)
@@ -499,3 +601,50 @@ def test_report_byte_parser_rejects_duplicate_keys_and_nonfinite_numbers():
     with pytest.raises(ValueError, match="numeric constant"):
         quality_core.parse_quality_report_bytes(
             raw[:-1] + b',"not_finite":NaN}', **kwargs)
+
+
+def test_quality_report_file_reader_uses_bounded_read(monkeypatch):
+    requested_sizes = []
+
+    class GuardedFile:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self, size=-1):
+            requested_sizes.append(size)
+            return b"{}"
+
+    monkeypatch.setattr(
+        Path, "open", lambda *_args, **_kwargs: GuardedFile())
+    monkeypatch.setattr(
+        quality_core, "parse_quality_report_bytes",
+        lambda raw, **_kwargs: raw)
+
+    result = quality_core.read_quality_report(
+        Path("report.json"),
+        chunks_name="chunks.jsonl",
+        chunks_sha256="a" * 64,
+        chunks_size=1,
+        record_count=1,
+        stable_ids=["stable"],
+        chunk_hashes=["b" * 16],
+    )
+
+    assert result == b"{}"
+    assert requested_sizes == [quality_core.MAX_QUALITY_REPORT_BYTES + 1]
+
+
+def test_quality_report_rejects_nonstring_case_name_summary():
+    document = {"texts": [_source_item("#/texts/0", 1)]}
+    record = _record(0, "#/texts/0", 1)
+    report = _build([record], document)
+    report["entities"]["mentions"] = 1
+    invalid_record = copy.deepcopy(record)
+    invalid_record["metadata"]["case_names"] = [7]
+
+    with pytest.raises(ValueError, match="case-name summary"):
+        quality_core.validate_quality_report(
+            report, **_validation_kwargs(), records=[invalid_record])

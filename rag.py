@@ -15,7 +15,7 @@ Usage:
 """
 
 import argparse
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 import errno
 from getpass import getpass
 import hashlib
@@ -26,6 +26,7 @@ import os
 import queue
 import re
 import requests
+import shutil
 import signal  # noqa: F401 - shared module retained for facade monkeypatching
 import stat
 import subprocess  # noqa: F401 - shared module retained for facade monkeypatching
@@ -94,6 +95,12 @@ DEFAULT_OPERATION_TIMEOUTS = {
     "storage": 600.0,
 }
 ARTIFACT_COMPLETION_SCHEMA_VERSION = 1
+CONVERSION_COMPLETION_SCHEMA_VERSION = 2
+CHUNK_COMPLETION_SCHEMA_VERSION = 2
+_CONVERSION_CAPTURE_POLICY = "stream-copy-v1"
+_MAX_CONVERSION_MANIFEST_BYTES = 1024 * 1024
+_MAX_CHUNK_COMPLETION_BYTES = 1024 * 1024
+_SNAPSHOT_SCRATCH_ENV = "RAG_SNAPSHOT_SCRATCH"
 _SUPERVISED_CHILD_ENV = "RAG_PIPELINE_SUPERVISED_CHILD"
 _RUN_ID_ENV = "RAG_PIPELINE_RUN_ID"
 _SUPERVISED_TERMINATE_GRACE = 5.0
@@ -1077,6 +1084,75 @@ def _quality_report_required(chunks_path: Path, records: list[dict]) -> bool:
     )
 
 
+def _load_index_chunk_completion_inputs(
+        chunks_path: Path, *, chunks_sha256: str, chunks_size: int,
+        records: list[dict]) -> tuple[dict, str]:
+    """Validate the adjacent chunk-v2 completion used by index readers.
+
+    Indexing does not need the live Docling/PDF inputs, but it must not accept
+    a quality report whose provenance was detached from the chunk completion
+    that committed this exact JSONL generation.
+    """
+    chunks_path = Path(chunks_path)
+    manifest_path = _artifact_completion_path(
+        chunks_path, stage="chunking")
+    try:
+        raw, _, _ = _read_index_artifact_snapshot(
+            manifest_path, max_bytes=_MAX_CHUNK_COMPLETION_BYTES)
+    except FileNotFoundError as exc:
+        raise ValueError(
+            "Quality-bound chunks require an adjacent chunk-v2 completion: "
+            f"{manifest_path}"
+        ) from exc
+    payload = _strict_json_object(raw, description="chunk completion")
+    if payload.get("schema_version") != CHUNK_COMPLETION_SCHEMA_VERSION:
+        raise ValueError(
+            "Quality-bound chunks require a supported chunk-v2 completion")
+    if set(payload) != {
+            "schema_version", "stage", "source_sha256",
+            "source_record_count", "parameters_sha256", "outputs",
+            "inputs"}:
+        raise ValueError("chunk completion has an invalid field set")
+
+    inputs = payload.get("inputs")
+    if (payload.get("stage") != "chunking"
+            or payload.get("source_record_count") is not None
+            or not isinstance(payload.get("parameters_sha256"), str)
+            or re.fullmatch(
+                r"[0-9a-f]{64}", payload["parameters_sha256"]) is None
+            or not _quality_core._valid_input_bindings(inputs)):
+        raise ValueError("chunk completion header or inputs are invalid")
+    if payload.get("source_sha256") != inputs["docling_json"]["sha256"]:
+        raise ValueError("chunk completion header or inputs are invalid")
+
+    outputs = payload.get("outputs")
+    output = (
+        outputs[0]
+        if isinstance(outputs, list) and len(outputs) == 1
+        else None
+    )
+    if (not isinstance(output, dict)
+            or set(output) != {"role", "name", "size", "sha256"}
+            or output.get("role") != "chunks_jsonl"
+            or not _valid_manifest_file_record({
+                key: output.get(key) for key in ("name", "size", "sha256")
+            })
+            or output.get("name") != chunks_path.name
+            or output.get("size") != chunks_size
+            or output.get("sha256") != chunks_sha256):
+        raise ValueError(
+            "chunk completion does not bind this chunks generation")
+
+    if (any(
+            isinstance(metadata := record.get("metadata"), dict)
+            and metadata.get("table_recovered_from_pdf")
+            for record in records)
+            and inputs.get("table_recovery") is None):
+        raise ValueError(
+            "recovered tables lack a bound source-PDF input")
+    return inputs, payload["parameters_sha256"]
+
+
 def _validated_quality_report_binding(
         chunks_path: Path, records: list[dict], chunks_sha256: str,
         chunks_size: int, *, source_name: str | None = None,
@@ -1084,15 +1160,18 @@ def _validated_quality_report_binding(
         parameters_sha256: str | None = None,
         embedding_model: str | None = None,
         embedding_limit: int | None = None,
+        input_bindings: dict | None = None,
 ) -> tuple[int | None, str | None, dict | None]:
     """Validate one exact adjacent report snapshot and return its binding."""
     chunks_path = Path(chunks_path)
     if not _quality_report_required(chunks_path, records):
         return None, None, None
     report_path = _quality_core.quality_report_path(chunks_path)
-    report_raw, report_sha256, _ = _read_index_artifact_snapshot(report_path)
+    report_raw, report_sha256, _ = _read_index_artifact_snapshot(
+        report_path, max_bytes=_quality_core.MAX_QUALITY_REPORT_BYTES)
     stable_ids = [_retrieval_core._chunk_id(record) for record in records]
     chunk_hashes = [_retrieval_core._chunk_hash(record) for record in records]
+    recovered_table_refs = _recovered_table_refs_from_records(records)
     payload = _quality_core.parse_quality_report_bytes(
         report_raw,
         chunks_name=chunks_path.name,
@@ -1106,7 +1185,25 @@ def _validated_quality_report_binding(
         parameters_sha256=parameters_sha256,
         embedding_model=embedding_model,
         embedding_limit=embedding_limit,
+        input_bindings=input_bindings,
+        recovered_table_count=len(recovered_table_refs),
+        recovered_table_refs=sorted(recovered_table_refs),
+        records=records,
     )
+    if input_bindings is None:
+        completion_inputs, completion_parameters_sha256 = (
+            _load_index_chunk_completion_inputs(
+            chunks_path,
+            chunks_sha256=chunks_sha256,
+            chunks_size=chunks_size,
+            records=records,
+        ))
+        if (payload.get("inputs") != completion_inputs
+                or payload.get("parameters_sha256")
+                != completion_parameters_sha256):
+            raise ValueError(
+                "corpus quality report does not match input bindings or "
+                "parameters")
     return _quality_core.QUALITY_REPORT_SCHEMA_VERSION, report_sha256, payload
 
 
@@ -1118,14 +1215,15 @@ def _load_index_snapshot_with_quality(
 ]:
     """Load one exact chunks snapshot plus its validated quality binding."""
     path = Path(path)
-    raw, source_sha256, fingerprint = _read_index_artifact_snapshot(path)
-    records = _parse_index_records_strict(raw, path)
-    schema_version, report_sha256, _ = _validated_quality_report_binding(
-        path, records, source_sha256, len(raw))
-    return (
-        records, source_sha256, fingerprint,
-        (schema_version, report_sha256),
-    )
+    with _chunk_output_lease(path):
+        raw, source_sha256, fingerprint = _read_index_artifact_snapshot(path)
+        records = _parse_index_records_strict(raw, path)
+        schema_version, report_sha256, _ = _validated_quality_report_binding(
+            path, records, source_sha256, len(raw))
+        return (
+            records, source_sha256, fingerprint,
+            (schema_version, report_sha256),
+        )
 
 
 def _load_index_snapshot_strict(
@@ -1570,6 +1668,56 @@ def _pipeline_job_lock(
         resource_description=f"pipeline outputs for '{Path(pdf_path).stem}'",
         timeout_option="--db-lock-timeout",
     )
+
+
+@contextmanager
+def _conversion_output_lease(
+        *targets: Path, timeout: float = DEFAULT_DB_LOCK_TIMEOUT):
+    """Serialize writers for every conversion output pathname."""
+    canonical_targets = sorted({
+        str(Path(target).resolve(strict=False)) for target in targets
+    }, key=os.path.normcase)
+    with ExitStack() as leases:
+        for value in canonical_targets:
+            target = Path(value)
+            leases.enter_context(_VectorStoreLease(
+                target,
+                backend="conversion",
+                collection_name=target.name,
+                operation="conversion artifact publication",
+                timeout=timeout,
+                resource_description=f"conversion output '{target}'",
+                timeout_option="conversion lock timeout",
+            ))
+        yield
+
+
+@contextmanager
+def _chunk_output_lease(
+        chunks_output: Path, *, timeout: float = DEFAULT_DB_LOCK_TIMEOUT):
+    """Serialize chunks, completion, and quality-report publication."""
+    chunks_output = Path(chunks_output)
+    targets = {
+        chunks_output,
+        _artifact_completion_path(chunks_output, stage="chunking"),
+        _quality_core.quality_report_path(chunks_output),
+    }
+    canonical_targets = sorted({
+        str(target.resolve(strict=False)) for target in targets
+    }, key=os.path.normcase)
+    with ExitStack() as leases:
+        for value in canonical_targets:
+            target = Path(value)
+            leases.enter_context(_VectorStoreLease(
+                target,
+                backend="chunking",
+                collection_name=chunks_output.name,
+                operation="chunk artifact publication",
+                timeout=timeout,
+                resource_description=f"chunk output '{target}'",
+                timeout_option="chunk output lock timeout",
+            ))
+        yield
 
 
 def _finish_executor_progress(executor, progress, *, operation_name: str,
@@ -3556,6 +3704,12 @@ def _build_chapter_map(doc_path: Path) -> dict[int, dict]:
         else:
             return {}
 
+    return _build_chapter_map_from_document(doc)
+
+
+def _build_chapter_map_from_document(doc: dict) -> dict[int, dict]:
+    """Build chapter ranges from one already-captured document mapping."""
+
     texts = doc.get("texts", [])
     if not texts:
         return {}
@@ -4940,25 +5094,79 @@ def _configure_docling_model_artifacts(
 
 def _converted_outputs_complete(
         pdf_path: Path, doc_output: Path, markdown_output: Path, *,
-        parameters: dict) -> bool:
+        parameters: dict,
+        preprocessed_output: Path | None = None) -> bool:
+    """Validate conversion evidence under the complete output-set lease."""
+    doc_output = Path(doc_output)
+    markdown_output = Path(markdown_output)
+    preprocessed_path = preprocessed_output or doc_output.with_name(
+        f"{doc_output.stem}_preprocessed.pdf")
+    completion_path = _artifact_completion_path(
+        doc_output, stage="conversion")
+    with _conversion_output_lease(
+            doc_output, markdown_output, preprocessed_path, completion_path):
+        return _converted_outputs_complete_locked(
+            pdf_path, doc_output, markdown_output,
+            parameters=parameters,
+            preprocessed_output=preprocessed_path,
+        )
+
+
+def _converted_outputs_complete_locked(
+        pdf_path: Path, doc_output: Path, markdown_output: Path, *,
+        parameters: dict,
+        preprocessed_output: Path | None = None) -> bool:
+    """Validate conversion evidence while its output-set lease is held."""
+    preprocessed_path = preprocessed_output or doc_output.with_name(
+        f"{doc_output.stem}_preprocessed.pdf")
     try:
-        source_sha256 = _cached_artifact_sha256(pdf_path)
+        source_generation = _hash_file_generation(pdf_path)
     except (OSError, RuntimeError):
         return False
     manifest_path = _artifact_completion_path(
         doc_output, stage="conversion")
-    if not _fixed_artifacts_complete(
-            manifest_path, stage="conversion",
-            source_sha256=source_sha256, source_record_count=None,
-            parameters=parameters,
-            outputs={"docling_json": doc_output,
-                     "docling_markdown": markdown_output}):
-        return False
     try:
-        document = json.loads(doc_output.read_text(encoding="utf-8"))
-        return isinstance(document, dict) and bool(
-            markdown_output.read_text(encoding="utf-8").strip())
-    except (OSError, UnicodeError, json.JSONDecodeError):
+        document_raw, document_sha256, _ = (
+            _read_index_artifact_snapshot(doc_output))
+        document = json.loads(document_raw)
+        binding = _load_conversion_source_binding(
+            doc_output,
+            document_sha256=document_sha256,
+            document_size=len(document_raw),
+        )
+        if (binding is None
+                or binding.source_name != Path(pdf_path).name
+                or binding.source_sha256 != source_generation.sha256
+                or binding.source_size != source_generation.size):
+            return False
+        outputs = {
+            "docling_json": doc_output,
+            "docling_markdown": markdown_output,
+        }
+        if binding.effective_input_kind == "preprocessed":
+            if preprocessed_path.name != binding.effective_input_name:
+                return False
+            outputs["preprocessed_pdf"] = preprocessed_path
+        v2_complete = _fixed_artifacts_complete(
+            manifest_path, stage="conversion",
+            source_sha256=source_generation.sha256,
+            source_record_count=None, parameters=parameters,
+            outputs=outputs,
+            source_name=Path(pdf_path).name,
+            schema_version=CONVERSION_COMPLETION_SCHEMA_VERSION)
+        if not v2_complete:
+            # Schema-v1 cannot prove immutable capture or a correctly derived
+            # preprocessed input.  Regenerate it once under the v2 contract.
+            return False
+        if (not isinstance(document, dict)
+                or not markdown_output.read_text(
+                    encoding="utf-8").strip()):
+            return False
+        final_source = _hash_file_generation(
+            pdf_path, expected_sha256=source_generation.sha256)
+        return final_source.size == source_generation.size
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError,
+            RuntimeError):
         return False
 
 
@@ -4971,25 +5179,149 @@ def convert_pdf(pdf_path: Path, doc_output: Path, *,
                 ocr: bool | None = None,
                 preprocessed_output: Path | None = None,
                 markdown_output: Path | None = None) -> None:
-    """Convert PDF to Docling's internal document representation."""
-    import os
+    """Convert under path-wide leases for the complete artifact set."""
+    doc_output = Path(doc_output)
+    markdown_path = markdown_output or doc_output.with_name(
+        f"{doc_output.stem}_docling.md")
+    preprocessed_path = preprocessed_output or doc_output.with_name(
+        f"{doc_output.stem}_preprocessed.pdf")
+    completion_path = _artifact_completion_path(
+        doc_output, stage="conversion")
+    _run_telemetry.validate_distinct_output_paths({
+        "source PDF": Path(pdf_path),
+        "Docling JSON": doc_output,
+        "Docling Markdown": markdown_path,
+        "preprocessed PDF": preprocessed_path,
+        "conversion completion": completion_path,
+    })
+    with _conversion_output_lease(
+            doc_output, markdown_path, preprocessed_path, completion_path):
+        _convert_pdf_locked(
+            pdf_path, doc_output,
+            batch_size_override=batch_size_override,
+            backend=backend, force=force, watermark=watermark,
+            auto_preprocess=auto_preprocess, ocr=ocr,
+            preprocessed_output=preprocessed_output,
+            markdown_output=markdown_output)
 
+
+def _convert_pdf_locked(pdf_path: Path, doc_output: Path, *,
+                batch_size_override: int | None = None,
+                backend: str = "pypdfium2",
+                force: bool = False,
+                watermark: Optional[re.Pattern] = None,
+                auto_preprocess: bool = True,
+                ocr: bool | None = None,
+                preprocessed_output: Path | None = None,
+                markdown_output: Path | None = None) -> None:
+    """Convert one immutable PDF generation and bind its exact source."""
     source_pdf_path = Path(pdf_path)
     _require_file(source_pdf_path, "PDF file")
-    pdf_path = source_pdf_path
-
     md_path = markdown_output or doc_output.with_name(
         f"{doc_output.stem}_docling.md")
+    preprocessed_path = preprocessed_output or doc_output.with_name(
+        f"{doc_output.stem}_preprocessed.pdf")
     completion_parameters = _conversion_parameters(
         batch_size_override=batch_size_override, backend=backend,
         auto_preprocess=auto_preprocess, ocr=ocr, watermark=watermark)
 
-    if (not force and _converted_outputs_complete(
+    if (not force and _converted_outputs_complete_locked(
             source_pdf_path, doc_output, md_path,
-            parameters=completion_parameters)):
+            parameters=completion_parameters,
+            preprocessed_output=preprocessed_path)):
         log.info(f"Conversion outputs already complete: {doc_output}")
         log.info("  Use --force to overwrite, or skip to the next step.")
         return
+
+    with ExitStack() as snapshot_stack:
+        source_snapshot = snapshot_stack.enter_context(
+            _immutable_file_snapshot(source_pdf_path))
+        original_input = ConversionInputBinding(
+            kind="original", name=source_snapshot.source_name,
+            sha256=source_snapshot.sha256, size=source_snapshot.size)
+        effective_input = _convert_pdf_generation(
+            source_snapshot.path, doc_output,
+            snapshot_stack=snapshot_stack,
+            original_input=original_input,
+            batch_size_override=batch_size_override, backend=backend,
+            force=force, watermark=watermark,
+            auto_preprocess=auto_preprocess, ocr=ocr,
+            preprocessed_output=preprocessed_path,
+            markdown_output=markdown_output)
+        if _cached_artifact_sha256(source_pdf_path) != source_snapshot.sha256:
+            raise RuntimeError(
+                f"PDF source changed while converting: {source_pdf_path}")
+
+    conversion_outputs = {
+        "docling_json": doc_output,
+        "docling_markdown": md_path,
+    }
+    if effective_input.kind == "preprocessed":
+        if effective_input.name != preprocessed_path.name:
+            raise RuntimeError(
+                "Preprocessed conversion input does not match its output path")
+        published_generation = _hash_file_generation(
+            preprocessed_path, expected_sha256=effective_input.sha256)
+        if published_generation.size != effective_input.size:
+            raise RuntimeError(
+                "Preprocessed conversion output size changed before commit")
+        conversion_outputs["preprocessed_pdf"] = preprocessed_path
+    else:
+        # This path is a declared, lease-protected pipeline output.  Remove a
+        # prior derived generation when the current conversion used the
+        # original PDF so callers never mistake stale sensitive bytes for a
+        # member of the newly committed artifact set.
+        try:
+            preprocessed_path.unlink(missing_ok=True)
+        except OSError as exc:
+            raise RuntimeError(
+                "Could not remove stale preprocessed conversion output: "
+                f"{preprocessed_path}") from exc
+    _write_artifact_completion(
+        _artifact_completion_path(doc_output, stage="conversion"),
+        stage="conversion", source_sha256=source_snapshot.sha256,
+        source_name=source_pdf_path.name,
+        source_record_count=None, parameters=completion_parameters,
+        outputs=conversion_outputs,
+        schema_version=CONVERSION_COMPLETION_SCHEMA_VERSION,
+        extra_fields={
+            "source": {
+                "name": source_snapshot.source_name,
+                "size": source_snapshot.size,
+                "sha256": source_snapshot.sha256,
+                "capture_policy": source_snapshot.capture_policy,
+            },
+            "effective_input": {
+                "kind": effective_input.kind,
+                "name": effective_input.name,
+                "size": effective_input.size,
+                "sha256": effective_input.sha256,
+            },
+        })
+    if _cached_artifact_sha256(source_pdf_path) != source_snapshot.sha256:
+        raise RuntimeError(
+            f"PDF source changed while committing conversion: "
+            f"{source_pdf_path}")
+
+
+def _convert_pdf_generation(
+                pdf_path: Path, doc_output: Path, *,
+                snapshot_stack: ExitStack,
+                original_input: "ConversionInputBinding",
+                batch_size_override: int | None = None,
+                backend: str = "pypdfium2",
+                force: bool = False,
+                watermark: Optional[re.Pattern] = None,
+                auto_preprocess: bool = True,
+                ocr: bool | None = None,
+                preprocessed_output: Path | None = None,
+                markdown_output: Path | None = None) -> "ConversionInputBinding":
+    """Convert an already-pinned PDF pathname generation."""
+    import os
+
+    md_path = markdown_output or doc_output.with_name(
+        f"{doc_output.stem}_docling.md")
+    effective_input = original_input
 
     # --- Assess text layer, then preprocess or OCR scans safely ---
     stats = None
@@ -5016,22 +5348,51 @@ def convert_pdf(pdf_path: Path, doc_output: Path, *,
         )
 
     if auto_preprocess and stats is not None and not effective_ocr:
+        private_cleaned_path: Path | None = None
         try:
             ratio = stats["pages_with_large_images"] / max(stats["total_pages"], 1)
             if ratio > 0.1:
                 log.info(f"Detected background scans on {stats['pages_with_large_images']}"
                          f"/{stats['total_pages']} pages — auto-preprocessing")
-                cleaned_path = preprocessed_output or doc_output.with_name(
+                published_cleaned_path = preprocessed_output or doc_output.with_name(
                     f"{doc_output.stem}_preprocessed.pdf")
-                cleaned = preprocess_pdf(pdf_path, cleaned_path,
-                                         force=force, _analysis_cache=stats)
+                # Keep owned scratch trees flat so stale cleanup never has to
+                # traverse a replaceable directory component.
+                private_cleaned_path = (
+                    pdf_path.parent / f".rag-preprocess-{uuid4().hex}.pdf")
+                cleaned = preprocess_pdf(pdf_path, private_cleaned_path,
+                                         force=True, _analysis_cache=stats)
                 if cleaned:
-                    pdf_path = cleaned
+                    cleaned_snapshot = snapshot_stack.enter_context(
+                        _immutable_file_snapshot(
+                            cleaned,
+                            snapshot_name=published_cleaned_path.name,
+                        ))
+                    _storage_policy.atomic_publish_private_file(
+                        published_cleaned_path,
+                        lambda staging: shutil.copyfile(
+                            cleaned_snapshot.path, staging),
+                    )
+                    pdf_path = cleaned_snapshot.path
+                    effective_input = ConversionInputBinding(
+                        kind="preprocessed",
+                        name=published_cleaned_path.name,
+                        sha256=cleaned_snapshot.sha256,
+                        size=cleaned_snapshot.size,
+                    )
         except ImportError:
             log.debug(
                 "PyMuPDF not installed — skipping auto-preprocess "
                 "(pip install PyMuPDF)"
             )
+        finally:
+            if private_cleaned_path is not None:
+                try:
+                    private_cleaned_path.unlink(missing_ok=True)
+                except OSError as exc:
+                    _log_cleanup_error(
+                        "Could not remove private preprocessed PDF %s",
+                        private_cleaned_path, error=exc)
     elif (auto_preprocess and stats is not None and effective_ocr
           and stats.get("pages_with_large_images", 0)):
         log.info(
@@ -5165,14 +5526,8 @@ def convert_pdf(pdf_path: Path, doc_output: Path, *,
     # Markdown export — normalize encoding + strip watermark
     md_text = _normalize_text(strip_watermark(dl_doc.export_to_markdown(), watermark))
     _atomic_write_text(md_path, md_text)
-    _write_artifact_completion(
-        _artifact_completion_path(doc_output, stage="conversion"),
-        stage="conversion",
-        source_sha256=_cached_artifact_sha256(source_pdf_path),
-        source_record_count=None, parameters=completion_parameters,
-        outputs={"docling_json": doc_output,
-                 "docling_markdown": md_path})
     log.info(f"Markdown export  → {md_path}")
+    return effective_input
 
 
 # ---------------------------------------------------------------------------
@@ -5863,20 +6218,330 @@ def _source_lineage_for_items(
     return source_items
 
 
-def _find_docling_source_pdf(doc_path: Path, doc_dict: dict) -> Path | None:
-    """Find the source PDF named in a Docling document, without broad search."""
-    filename = str((doc_dict.get("origin") or {}).get("filename") or "")
-    if not filename or Path(filename).name != filename:
+@dataclass(frozen=True, slots=True)
+class ConversionInputBinding:
+    """Hash-bound original or derived PDF input used by conversion."""
+
+    kind: str
+    name: str
+    sha256: str
+    size: int
+
+
+@dataclass(frozen=True, slots=True)
+class ConversionSourceBinding:
+    """Strict capture proof loaded from a conversion-v2 completion."""
+
+    manifest_path: Path
+    manifest_sha256: str
+    schema_version: int
+    capture_verified: bool
+    source_name: str
+    source_sha256: str
+    source_size: int
+    effective_input_kind: str
+    effective_input_name: str
+    effective_input_sha256: str
+    effective_input_size: int
+
+
+@dataclass(frozen=True, slots=True)
+class TableRecoverySource:
+    """Private PDF generation and conversion proof used for table checks."""
+
+    pdf: _artifact_io.ImmutableFileSnapshot
+    conversion: ConversionSourceBinding
+    discovery: str
+    source_path: Path
+
+    def manifest_input(self) -> dict:
+        return {
+            "pdf": {
+                "name": self.pdf.source_name,
+                "size": self.pdf.size,
+                "sha256": self.pdf.sha256,
+                "capture_policy": self.pdf.capture_policy,
+            },
+            "conversion_manifest": {
+                "name": self.conversion.manifest_path.name,
+                "sha256": self.conversion.manifest_sha256,
+                "schema_version": self.conversion.schema_version,
+            },
+            "discovery": self.discovery,
+        }
+
+
+def _strict_json_object(raw: bytes, *, description: str) -> dict:
+    """Decode one UTF-8 JSON object while rejecting ambiguous syntax."""
+    def reject_constant(value: str):
+        raise ValueError(f"invalid JSON numeric constant: {value}")
+
+    def reject_duplicate_keys(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"duplicate {description} field: {key}")
+            result[key] = value
+        return result
+
+    try:
+        payload = json.loads(
+            raw.decode("utf-8"),
+            parse_constant=reject_constant,
+            object_pairs_hook=reject_duplicate_keys,
+        )
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"cannot parse {description}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"{description} must be a JSON object")
+    return payload
+
+
+def _valid_manifest_file_record(value: object) -> bool:
+    if not isinstance(value, dict) or set(value) != {
+            "name", "size", "sha256"}:
+        return False
+    name = value.get("name")
+    size = value.get("size")
+    digest = value.get("sha256")
+    return (
+        isinstance(name, str) and bool(name) and Path(name).name == name
+        and isinstance(size, int) and not isinstance(size, bool) and size > 0
+        and isinstance(digest, str)
+        and re.fullmatch(r"[0-9a-f]{64}", digest) is not None
+    )
+
+
+def _load_conversion_source_binding(
+        doc_path: Path, *, document_sha256: str,
+        document_size: int) -> ConversionSourceBinding | None:
+    """Load strict v2 capture proof for one already-snapshotted document.
+
+    Legacy v1 completion files are readable migration inputs, but are returned
+    as unverified and force one rebuild before they can authorize source-PDF
+    table recovery or resume.
+    """
+    manifest_path = _artifact_completion_path(doc_path, stage="conversion")
+    try:
+        raw, manifest_sha256, _ = _read_index_artifact_snapshot(
+            manifest_path, max_bytes=_MAX_CONVERSION_MANIFEST_BYTES)
+    except FileNotFoundError:
         return None
-    candidates = [Path(filename), doc_path.parent / filename]
-    candidates.extend(parent / filename for parent in doc_path.parents)
+    payload = _strict_json_object(raw, description="conversion completion")
+    if payload.get("schema_version") != CONVERSION_COMPLETION_SCHEMA_VERSION:
+        return None
+    expected_root_fields = {
+        "schema_version", "stage", "source_sha256", "source_name",
+        "source_record_count", "parameters_sha256", "outputs", "source",
+        "effective_input",
+    }
+    if set(payload) != expected_root_fields:
+        raise ValueError("conversion completion has an invalid field set")
+    if (payload.get("stage") != "conversion"
+            or payload.get("source_record_count") is not None
+            or not isinstance(payload.get("parameters_sha256"), str)
+            or re.fullmatch(
+                r"[0-9a-f]{64}", payload["parameters_sha256"]) is None):
+        raise ValueError("conversion completion header is invalid")
+
+    source = payload.get("source")
+    if (not isinstance(source, dict)
+            or set(source) != {"name", "size", "sha256", "capture_policy"}
+            or source.get("capture_policy") != _CONVERSION_CAPTURE_POLICY
+            or not _valid_manifest_file_record({
+                key: source.get(key) for key in ("name", "size", "sha256")
+            })):
+        raise ValueError("conversion completion source binding is invalid")
+    if (payload.get("source_name") != source["name"]
+            or payload.get("source_sha256") != source["sha256"]):
+        raise ValueError("conversion completion source fields disagree")
+
+    effective_input = payload.get("effective_input")
+    if (not isinstance(effective_input, dict)
+            or set(effective_input) != {"kind", "name", "size", "sha256"}
+            or effective_input.get("kind") not in {"original", "preprocessed"}
+            or not _valid_manifest_file_record({
+                key: effective_input.get(key)
+                for key in ("name", "size", "sha256")
+            })):
+        raise ValueError(
+            "conversion completion effective-input binding is invalid")
+    if (effective_input["kind"] == "original"
+            and any(effective_input[key] != source[key]
+                    for key in ("name", "size", "sha256"))):
+        raise ValueError("original effective input must equal captured source")
+
+    records = payload.get("outputs")
+    if not isinstance(records, list):
+        raise ValueError("conversion completion outputs are invalid")
+    expected_roles = {"docling_json", "docling_markdown"}
+    if effective_input["kind"] == "preprocessed":
+        expected_roles.add("preprocessed_pdf")
+    if (len(records) != len(expected_roles)
+            or any(not isinstance(record, dict)
+                   or set(record) != {"role", "name", "size", "sha256"}
+                   or not isinstance(record.get("role"), str)
+                   or record["role"] not in expected_roles
+                   or not _valid_manifest_file_record({
+                       key: record.get(key)
+                       for key in ("name", "size", "sha256")
+                   }) for record in records)):
+        raise ValueError("conversion completion output records are invalid")
+    by_role = {record["role"]: record for record in records}
+    if len(by_role) != len(expected_roles) or set(by_role) != expected_roles:
+        raise ValueError("conversion completion output roles are invalid")
+    document_record = by_role["docling_json"]
+    if (document_record["name"] != doc_path.name
+            or document_record["size"] != document_size
+            or document_record["sha256"] != document_sha256):
+        raise ValueError(
+            "conversion completion does not bind this document generation")
+    if effective_input["kind"] == "preprocessed":
+        preprocessed_record = by_role["preprocessed_pdf"]
+        if any(
+                preprocessed_record[key] != effective_input[key]
+                for key in ("name", "size", "sha256")):
+            raise ValueError(
+                "conversion completion does not bind its preprocessed input")
+
+    return ConversionSourceBinding(
+        manifest_path=manifest_path,
+        manifest_sha256=manifest_sha256,
+        schema_version=CONVERSION_COMPLETION_SCHEMA_VERSION,
+        capture_verified=True,
+        source_name=source["name"],
+        source_sha256=source["sha256"],
+        source_size=source["size"],
+        effective_input_kind=effective_input["kind"],
+        effective_input_name=effective_input["name"],
+        effective_input_sha256=effective_input["sha256"],
+        effective_input_size=effective_input["size"],
+    )
+
+
+def _conversion_source_identity(
+        doc_path: Path, *, document_sha256: str, document_size: int,
+        origin_filename: str | None = None) -> tuple[str, str] | None:
+    """Compatibility view over strict capture-verified conversion lineage."""
+    del origin_filename
+    binding = _load_conversion_source_binding(
+        doc_path,
+        document_sha256=document_sha256,
+        document_size=document_size,
+    )
+    if binding is None:
+        return None
+    return binding.source_name, binding.source_sha256
+
+
+def _find_docling_source_pdf(
+        doc_path: Path, doc_dict: dict, *,
+        source_identity: tuple[str, str] | None = None) -> Path | None:
+    """Find only a source PDF whose bytes match proven conversion lineage."""
+    del doc_dict  # Kept in the facade signature for compatibility.
+    if source_identity is None:
+        return None
+    filename, expected_sha256 = source_identity
+    if (not filename or Path(filename).name != filename
+            or re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None):
+        return None
+
+    seen: set[Path] = set()
+    candidates = [doc_path.parent / filename]
+    candidates.extend(parent / filename for parent in doc_path.parents[1:])
     for candidate in candidates:
         try:
-            if candidate.is_file():
-                return candidate.resolve()
-        except OSError:
+            resolved = candidate.resolve(strict=True)
+            if resolved in seen or not resolved.is_file():
+                continue
+            seen.add(resolved)
+            candidate_generation = _hash_file_generation(
+                resolved, expected_sha256=expected_sha256)
+            if candidate_generation.sha256 == expected_sha256:
+                return resolved
+        except (OSError, RuntimeError):
             continue
     return None
+
+
+@contextmanager
+def _open_docling_source_pdf_snapshot(
+        doc_path: Path, binding: ConversionSourceBinding | None, *,
+        explicit_source_pdf: Path | None = None):
+    """Yield the only source-PDF pathname permitted to reach PyMuPDF."""
+    if binding is None:
+        if explicit_source_pdf is not None:
+            raise ValueError(
+                "--source-pdf requires a capture-verified conversion-v2 "
+                "completion manifest")
+        yield None
+        return
+
+    if explicit_source_pdf is not None:
+        candidate = Path(explicit_source_pdf)
+        _require_file(candidate, "source PDF")
+        candidate = candidate.resolve(strict=True)
+        discovery = "explicit"
+    else:
+        candidate = _find_docling_source_pdf(
+            doc_path, {},
+            source_identity=(binding.source_name, binding.source_sha256),
+        )
+        if candidate is None:
+            yield None
+            return
+        discovery = (
+            "adjacent" if candidate.parent == Path(doc_path).parent.resolve()
+            else "ancestor")
+
+    with _immutable_file_snapshot(
+            candidate, expected_sha256=binding.source_sha256) as snapshot:
+        yield TableRecoverySource(
+            pdf=snapshot, conversion=binding, discovery=discovery,
+            source_path=candidate)
+
+
+class _SourceOutputAliasError(ValueError):
+    """A recovered source PDF aliases an artifact that would overwrite it."""
+
+
+def _recover_bound_table_markdown(
+        dl_doc, doc_path: Path, binding: ConversionSourceBinding | None, *,
+        source_pdf_path: Path | None = None,
+        forbidden_output_paths: dict[str, Path] | None = None,
+) -> tuple[dict[str, str], dict | None]:
+    """Recover table text transactionally from a verified private PDF."""
+    candidate_overrides: dict[str, str] = {}
+    candidate_input: dict | None = None
+    try:
+        with _open_docling_source_pdf_snapshot(
+                doc_path, binding,
+                explicit_source_pdf=source_pdf_path) as recovery_source:
+            if recovery_source is not None:
+                if forbidden_output_paths:
+                    try:
+                        _run_telemetry.validate_distinct_output_paths({
+                            "recovery source PDF": recovery_source.source_path,
+                            **forbidden_output_paths,
+                        })
+                    except ValueError as exc:
+                        raise _SourceOutputAliasError(str(exc)) from exc
+                candidate_overrides = _recover_incomplete_table_markdown(
+                    dl_doc, recovery_source.pdf.path)
+                candidate_input = recovery_source.manifest_input()
+    except _SourceOutputAliasError:
+        raise
+    except Exception as exc:
+        if source_pdf_path is not None:
+            raise RuntimeError(
+                f"Explicit source PDF could not be verified: "
+                f"{source_pdf_path}") from exc
+        log.warning(
+            "Could not verify Docling tables against its bound source PDF: %s",
+            exc)
+        return {}, None
+    # Returning only after context exit makes verification part of the commit.
+    return candidate_overrides, candidate_input
 
 
 def _markdown_table_cell(text: str, *, preserve_lines: bool = False) -> str:
@@ -6565,24 +7230,175 @@ def _book_structural_ranges(book_sections: dict) -> set[tuple[int, int]]:
     return ranges
 
 
+def _load_chunk_completion_inputs(
+        doc_path: Path, chunks_output: Path, *,
+        document_sha256: str, document_size: int,
+        chunks_sha256: str, chunks_size: int, parameters: dict,
+        records: list[dict], source_pdf_path: Path | None = None,
+) -> dict | None:
+    """Strictly validate chunk-v2 inputs against current exact artifacts."""
+    manifest_path = _artifact_completion_path(
+        chunks_output, stage="chunking")
+    try:
+        raw, _, _ = _read_index_artifact_snapshot(
+            manifest_path, max_bytes=_MAX_CHUNK_COMPLETION_BYTES)
+    except FileNotFoundError:
+        return None
+    payload = _strict_json_object(raw, description="chunk completion")
+    if payload.get("schema_version") != CHUNK_COMPLETION_SCHEMA_VERSION:
+        return None
+    if set(payload) != {
+            "schema_version", "stage", "source_sha256",
+            "source_record_count", "parameters_sha256", "outputs",
+            "inputs"}:
+        raise ValueError("chunk completion has an invalid field set")
+    if (payload.get("stage") != "chunking"
+            or payload.get("source_sha256") != document_sha256
+            or payload.get("source_record_count") is not None
+            or payload.get("parameters_sha256")
+            != _artifact_parameters_sha256(parameters)):
+        raise ValueError("chunk completion header is invalid")
+
+    outputs = payload.get("outputs")
+    if (not isinstance(outputs, list) or len(outputs) != 1
+            or not isinstance(outputs[0], dict)
+            or set(outputs[0]) != {"role", "name", "size", "sha256"}
+            or outputs[0].get("role") != "chunks_jsonl"
+            or outputs[0].get("name") != chunks_output.name
+            or outputs[0].get("size") != chunks_size
+            or outputs[0].get("sha256") != chunks_sha256):
+        raise ValueError("chunk completion output binding is invalid")
+
+    inputs = payload.get("inputs")
+    if (not isinstance(inputs, dict)
+            or set(inputs) != {
+                "docling_json", "conversion_manifest", "table_recovery"}):
+        raise ValueError("chunk completion inputs are invalid")
+    document_input = inputs.get("docling_json")
+    if (not _valid_manifest_file_record(document_input)
+            or document_input != {
+                "name": doc_path.name,
+                "size": document_size,
+                "sha256": document_sha256,
+            }):
+        raise ValueError("chunk completion Docling input is invalid")
+
+    conversion_binding = _load_conversion_source_binding(
+        doc_path,
+        document_sha256=document_sha256,
+        document_size=document_size,
+    )
+    conversion_input = inputs.get("conversion_manifest")
+    expected_conversion_input = (
+        {
+            "name": conversion_binding.manifest_path.name,
+            "sha256": conversion_binding.manifest_sha256,
+            "schema_version": conversion_binding.schema_version,
+        }
+        if conversion_binding is not None else None
+    )
+    if conversion_input != expected_conversion_input:
+        raise ValueError("chunk completion conversion input is invalid")
+
+    table_recovery = inputs.get("table_recovery")
+    if table_recovery is not None:
+        if (conversion_binding is None
+                or not isinstance(table_recovery, dict)
+                or set(table_recovery) != {
+                    "pdf", "conversion_manifest", "discovery"}
+                or table_recovery.get("conversion_manifest")
+                != expected_conversion_input
+                or table_recovery.get("discovery")
+                not in {"explicit", "adjacent", "ancestor"}):
+            raise ValueError("chunk completion table recovery is invalid")
+        pdf_input = table_recovery.get("pdf")
+        if (not isinstance(pdf_input, dict)
+                or set(pdf_input) != {
+                    "name", "size", "sha256", "capture_policy"}
+                or pdf_input.get("capture_policy")
+                != _CONVERSION_CAPTURE_POLICY
+                or not _valid_manifest_file_record({
+                    key: pdf_input.get(key)
+                    for key in ("name", "size", "sha256")
+                })
+                or pdf_input.get("size") != conversion_binding.source_size
+                or pdf_input.get("sha256")
+                != conversion_binding.source_sha256):
+            raise ValueError("chunk completion recovery PDF is invalid")
+
+    recovered_tables = any(
+        (record.get("metadata") or {}).get("table_recovered_from_pdf")
+        for record in records)
+    if recovered_tables and table_recovery is None:
+        raise ValueError(
+            "recovered tables lack a bound source-PDF input")
+
+    if source_pdf_path is not None:
+        if conversion_binding is None or table_recovery is None:
+            raise ValueError(
+                "explicit source PDF was not inspected by this chunk artifact")
+        source_generation = _hash_file_generation(
+            source_pdf_path,
+            expected_sha256=conversion_binding.source_sha256,
+        )
+        if (source_generation.size != conversion_binding.source_size
+                or table_recovery["pdf"]["sha256"]
+                != source_generation.sha256):
+            raise ValueError("explicit source PDF binding changed")
+    return inputs
+
+
 def _chunks_complete(doc_path: Path, chunks_output: Path, *,
-                     parameters: dict) -> bool:
+                     parameters: dict,
+                     source_pdf_path: Path | None = None) -> bool:
+    """Validate chunk completeness under the artifact-set lease."""
+    with _chunk_output_lease(chunks_output):
+        return _chunks_complete_locked(
+            doc_path, chunks_output,
+            parameters=parameters,
+            source_pdf_path=source_pdf_path,
+        )
+
+
+def _chunks_complete_locked(
+        doc_path: Path, chunks_output: Path, *, parameters: dict,
+        source_pdf_path: Path | None = None) -> bool:
     """Validate a chunk artifact and its source/configuration completion."""
     try:
-        source_sha256 = _cached_artifact_sha256(doc_path)
-    except (OSError, RuntimeError):
+        document_raw, source_sha256, _ = _read_index_artifact_snapshot(
+            doc_path)
+        chunks_raw, chunks_sha256, _ = _read_index_artifact_snapshot(
+            chunks_output)
+        records = _parse_index_records_strict(chunks_raw, chunks_output)
+        inputs = _load_chunk_completion_inputs(
+            doc_path, chunks_output,
+            document_sha256=source_sha256,
+            document_size=len(document_raw),
+            chunks_sha256=chunks_sha256,
+            chunks_size=len(chunks_raw),
+            parameters=parameters,
+            records=records,
+            source_pdf_path=source_pdf_path,
+        )
+    except (OSError, RuntimeError, ValueError):
         return False
-    if not _fixed_artifacts_complete(
-            _artifact_completion_path(chunks_output, stage="chunking"),
-            stage="chunking", source_sha256=source_sha256,
-            source_record_count=None, parameters=parameters,
-            outputs={"chunks_jsonl": chunks_output}):
-        return False
-    return _chunk_record_count(chunks_output) is not None
+    if inputs is not None:
+        return bool(records)
+    # Schema-v1 cannot attest one Docling generation or supplemental PDF
+    # recovery.  It is readable for migration tooling but never "complete".
+    return False
 
 
 def _quality_report_complete(doc_path: Path, chunks_output: Path, *,
                              parameters: dict) -> bool:
+    """Validate one quality report under its artifact-set lease."""
+    with _chunk_output_lease(chunks_output):
+        return _quality_report_complete_locked(
+            doc_path, chunks_output, parameters=parameters)
+
+
+def _quality_report_complete_locked(
+        doc_path: Path, chunks_output: Path, *, parameters: dict) -> bool:
     """Validate the report against exact source, chunks, and parameters."""
     try:
         source_raw, source_sha256, _ = _read_index_artifact_snapshot(doc_path)
@@ -6591,6 +7407,17 @@ def _quality_report_complete(doc_path: Path, chunks_output: Path, *,
         chunks_raw, chunks_sha256, _ = _read_index_artifact_snapshot(
             chunks_output)
         records = _parse_index_records_strict(chunks_raw, chunks_output)
+        input_bindings = _load_chunk_completion_inputs(
+            doc_path, chunks_output,
+            document_sha256=source_sha256,
+            document_size=len(source_raw),
+            chunks_sha256=chunks_sha256,
+            chunks_size=len(chunks_raw),
+            parameters=parameters,
+            records=records,
+        )
+        if input_bindings is None:
+            return False
         schema_version, report_sha256, _ = _validated_quality_report_binding(
             chunks_output,
             records,
@@ -6603,6 +7430,7 @@ def _quality_report_complete(doc_path: Path, chunks_output: Path, *,
             embedding_model=parameters.get("embedding_model"),
             embedding_limit=EMBEDDING_MAX_TOKENS.get(
                 parameters.get("embedding_model")),
+            input_bindings=input_bindings,
         )
         return (
             schema_version == _quality_core.QUALITY_REPORT_SCHEMA_VERSION
@@ -6630,21 +7458,65 @@ def _recovered_table_refs_from_records(records: list[dict]) -> set[str]:
 def _publish_corpus_quality_report(
         doc_path: Path, chunks_output: Path, *, parameters: dict,
         structural_ranges: set[tuple[int, int]] | None = None,
+        document_snapshot: tuple[dict, str, int] | None = None,
+        chunk_inputs: dict | None = None,
+) -> dict:
+    """Publish quality evidence under the chunk artifact-set lease."""
+    with _chunk_output_lease(chunks_output):
+        return _publish_corpus_quality_report_locked(
+            doc_path, chunks_output,
+            parameters=parameters,
+            structural_ranges=structural_ranges,
+            document_snapshot=document_snapshot,
+            chunk_inputs=chunk_inputs,
+        )
+
+
+def _publish_corpus_quality_report_locked(
+        doc_path: Path, chunks_output: Path, *, parameters: dict,
+        structural_ranges: set[tuple[int, int]] | None = None,
+        document_snapshot: tuple[dict, str, int] | None = None,
+        chunk_inputs: dict | None = None,
 ) -> dict:
     """Build and atomically publish a report over exact artifact snapshots."""
     doc_path = Path(doc_path)
     chunks_output = Path(chunks_output)
-    source_raw, source_sha256, _ = _read_index_artifact_snapshot(doc_path)
-    try:
-        document = json.loads(source_raw)
-    except (UnicodeError, json.JSONDecodeError) as exc:
-        raise ValueError(f"Invalid Docling source JSON: {doc_path}") from exc
-    if not isinstance(document, dict):
-        raise ValueError(f"Docling source must be a JSON object: {doc_path}")
+    if document_snapshot is None:
+        source_raw, source_sha256, _ = _read_index_artifact_snapshot(doc_path)
+        source_size = len(source_raw)
+        try:
+            document = json.loads(source_raw)
+        except (UnicodeError, json.JSONDecodeError) as exc:
+            raise ValueError(f"Invalid Docling source JSON: {doc_path}") from exc
+        if not isinstance(document, dict):
+            raise ValueError(
+                f"Docling source must be a JSON object: {doc_path}")
+    else:
+        document, source_sha256, source_size = document_snapshot
+        if (not isinstance(document, dict)
+                or not isinstance(source_size, int) or source_size <= 0
+                or re.fullmatch(r"[0-9a-f]{64}", source_sha256) is None):
+            raise ValueError("Invalid captured Docling source snapshot")
 
     chunks_raw, chunks_sha256, _ = _read_index_artifact_snapshot(
         chunks_output)
     records = _parse_index_records_strict(chunks_raw, chunks_output)
+    validated_chunk_inputs = _load_chunk_completion_inputs(
+        doc_path, chunks_output,
+        document_sha256=source_sha256,
+        document_size=source_size,
+        chunks_sha256=chunks_sha256,
+        chunks_size=len(chunks_raw),
+        parameters=parameters,
+        records=records,
+    )
+    if validated_chunk_inputs is None:
+        raise ValueError(
+            "Corpus quality requires a verified chunk-v2 completion")
+    if chunk_inputs is not None and chunk_inputs != validated_chunk_inputs:
+        raise RuntimeError(
+            "Chunk inputs changed before quality report publication")
+    chunk_inputs = validated_chunk_inputs
     if structural_ranges is None:
         structural_ranges = _book_structural_ranges(
             _identify_book_sections(document))
@@ -6667,6 +7539,7 @@ def _publish_corpus_quality_report(
             parameters),
         embedding_model=embedding_model,
         embedding_limit=EMBEDDING_MAX_TOKENS.get(embedding_model),
+        input_bindings=chunk_inputs,
     )
     report_path = _quality_core.quality_report_path(chunks_output)
     _atomic_write_json(report_path, report)
@@ -6689,6 +7562,7 @@ def _publish_corpus_quality_report(
             parameters),
         embedding_model=embedding_model,
         embedding_limit=EMBEDDING_MAX_TOKENS.get(embedding_model),
+        input_bindings=chunk_inputs,
     )
     if (_cached_artifact_sha256(doc_path) != source_sha256
             or _cached_artifact_sha256(chunks_output) != chunks_sha256):
@@ -6697,7 +7571,93 @@ def _publish_corpus_quality_report(
     return report
 
 
+def _load_docling_document_snapshot(
+        doc_path: Path, document_type) -> tuple[object, dict, str, int]:
+    """Parse the model and mapping views from one exact JSON generation."""
+    raw, source_sha256, _ = _read_index_artifact_snapshot(doc_path)
+    last_error: Exception | None = None
+    for encoding in ("utf-8-sig", "latin-1"):
+        try:
+            decoded = raw.decode(encoding)
+            mapping = json.loads(decoded)
+            if not isinstance(mapping, dict):
+                raise ValueError("DoclingDocument JSON must be an object")
+        except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+            last_error = exc
+            continue
+        try:
+            document = document_type.model_validate(mapping)
+            return document, mapping, source_sha256, len(raw)
+        except Exception as exc:
+            # Pydantic/Docling validation failures are content failures, not a
+            # reason to parse the same mapping again under another encoding.
+            last_error = exc
+            break
+    raise ValueError(f"Cannot parse DoclingDocument: {doc_path}") from last_error
+
+
 def chunk_document(doc_path: Path, chunks_output: Path, *,
+                   source_pdf_path: Path | None = None,
+                   embedding_model: str = DEFAULT_EMBEDDING_MODEL,
+                   max_tokens: int = DEFAULT_MAX_TOKENS,
+                   min_words: int = MIN_CHUNK_WORDS,
+                   dedup_threshold: float = DEDUP_THRESHOLD,
+                   watermark: Optional[re.Pattern] = None,
+                   llm_classify: bool = False,
+                   zeroshot_classify: bool = False,
+                   contextualize: bool = False,
+                   ollama_url: str = DEFAULT_OLLAMA_URL,
+                   ollama_model: str = DEFAULT_OLLAMA_MODEL,
+                   gemini_key: str = "",
+                   cloud_url: str = DEFAULT_CLOUD_URL,
+                   cloud_model: str = DEFAULT_CLOUD_MODEL,
+                   cloud_key: str = "",
+                   llm_workers: int = DEFAULT_LLM_WORKERS,
+                   thinking: bool = False,
+                   reconstruct_headings: bool = False,
+                   quality_score: bool = False,
+                   llm_scaffold: bool = False) -> None:
+    """Build one complete chunk artifact set under a path-wide lease."""
+    chunks_output = Path(chunks_output)
+    _run_telemetry.validate_distinct_output_paths({
+        "Docling JSON": Path(doc_path),
+        "source PDF": (
+            Path(source_pdf_path) if source_pdf_path is not None else None),
+        "chunks JSONL": chunks_output,
+        "conversion completion": _artifact_completion_path(
+            Path(doc_path), stage="conversion"),
+        "chunk completion": _artifact_completion_path(
+            chunks_output, stage="chunking"),
+        "quality report": _quality_core.quality_report_path(chunks_output),
+    })
+    with _chunk_output_lease(chunks_output):
+        _chunk_document_locked(
+            doc_path, chunks_output,
+            source_pdf_path=source_pdf_path,
+            embedding_model=embedding_model,
+            max_tokens=max_tokens,
+            min_words=min_words,
+            dedup_threshold=dedup_threshold,
+            watermark=watermark,
+            llm_classify=llm_classify,
+            zeroshot_classify=zeroshot_classify,
+            contextualize=contextualize,
+            ollama_url=ollama_url,
+            ollama_model=ollama_model,
+            gemini_key=gemini_key,
+            cloud_url=cloud_url,
+            cloud_model=cloud_model,
+            cloud_key=cloud_key,
+            llm_workers=llm_workers,
+            thinking=thinking,
+            reconstruct_headings=reconstruct_headings,
+            quality_score=quality_score,
+            llm_scaffold=llm_scaffold,
+        )
+
+
+def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
+                   source_pdf_path: Path | None = None,
                    embedding_model: str = DEFAULT_EMBEDDING_MODEL,
                    max_tokens: int = DEFAULT_MAX_TOKENS,
                    min_words: int = MIN_CHUNK_WORDS,
@@ -6738,8 +7698,6 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
         llm_workers=llm_workers, thinking=thinking,
         reconstruct_headings=reconstruct_headings,
         quality_score=quality_score, llm_scaffold=llm_scaffold)
-    source_sha256 = _cached_artifact_sha256(doc_path)
-
     requested_max_tokens = max_tokens
     reserve_tokens = _CONTEXT_TOKEN_RESERVE if contextualize else 0
     max_tokens = _effective_chunk_token_limit(
@@ -6759,23 +7717,13 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
         )
 
     log.info(f"Loading DoclingDocument from {doc_path}")
-    # Try bytes first (fast, avoids encoding issues for valid UTF-8 JSON).
-    # Fall back to string with encoding detection for legacy files.
     try:
-        dl_doc = DoclingDocument.model_validate_json(doc_path.read_bytes())
-    except Exception:
-        dl_doc = None
-        for enc in ("utf-8", "latin-1"):
-            try:
-                raw_json = doc_path.read_text(encoding=enc)
-                dl_doc = DoclingDocument.model_validate_json(raw_json)
-                break
-            except (UnicodeDecodeError, Exception):
-                continue
-        if dl_doc is None:
-            log.error(f"Cannot parse DoclingDocument: {doc_path}")
-            log.error("  File may be corrupted. Re-run 'convert' to regenerate.")
-            sys.exit(1)
+        dl_doc, doc_dict, source_sha256, source_size = (
+            _load_docling_document_snapshot(doc_path, DoclingDocument))
+    except (OSError, RuntimeError, ValueError):
+        log.error(f"Cannot parse DoclingDocument: {doc_path}")
+        log.error("  File may be corrupted. Re-run 'convert' to regenerate.")
+        sys.exit(1)
 
     # Derive total page count from the document itself
     total_pages = 0
@@ -6786,12 +7734,7 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
 
     # Structural ranges must be known before enrichment so TOC/back-matter
     # chunks cannot enter classification or inherit chapter metadata.
-    try:
-        doc_dict = json.loads(doc_path.read_bytes())
-    except Exception:
-        log.error(f"Cannot parse DoclingDocument JSON: {doc_path}")
-        sys.exit(1)
-    chapter_map = _build_chapter_map(doc_path)
+    chapter_map = _build_chapter_map_from_document(doc_dict)
     book_sections = _identify_book_sections(doc_dict)
     has_toc = any(
         book_sections.get(name) is not None
@@ -6829,20 +7772,50 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
     raw_chunks = list(tqdm(chunker.chunk(dl_doc), desc="Chunking", unit="chunk"))
     log.info(f"HybridChunker produced {len(raw_chunks)} raw chunks")
 
-    table_markdown_overrides: dict[str, str] = {}
-    if source_pdf := _find_docling_source_pdf(doc_path, doc_dict):
-        try:
-            table_markdown_overrides = _recover_incomplete_table_markdown(
-                dl_doc, source_pdf)
-        except Exception as exc:
-            log.warning(
-                "Could not verify Docling tables against source PDF %s: %s",
-                source_pdf, exc)
-        else:
-            if table_markdown_overrides:
-                log.info(
-                    "Recovered %s incomplete tables from source PDF text",
-                    len(table_markdown_overrides))
+    conversion_binding = _load_conversion_source_binding(
+        doc_path,
+        document_sha256=source_sha256,
+        document_size=source_size,
+    )
+    table_markdown_overrides, table_recovery_input = (
+        _recover_bound_table_markdown(
+            dl_doc, doc_path, conversion_binding,
+            source_pdf_path=source_pdf_path,
+            forbidden_output_paths={
+                "chunks JSONL": chunks_output,
+                "chunk completion": _artifact_completion_path(
+                    chunks_output, stage="chunking"),
+                "quality report": _quality_core.quality_report_path(
+                    chunks_output),
+            }))
+    if table_markdown_overrides:
+        log.info(
+            "Recovered %s incomplete tables from source PDF text",
+            len(table_markdown_overrides))
+    elif conversion_binding is not None and table_recovery_input is None:
+        log.warning(
+            "No source PDF matching conversion hash is available; "
+            "skipping table-text recovery")
+    if conversion_binding is None:
+        log.debug(
+            "Capture-verified conversion lineage is unavailable; "
+            "skipping unbound table-text recovery")
+    chunk_input_bindings = {
+        "docling_json": {
+            "name": doc_path.name,
+            "size": source_size,
+            "sha256": source_sha256,
+        },
+        "conversion_manifest": (
+            {
+                "name": conversion_binding.manifest_path.name,
+                "sha256": conversion_binding.manifest_sha256,
+                "schema_version": conversion_binding.schema_version,
+            }
+            if conversion_binding is not None else None
+        ),
+        "table_recovery": table_recovery_input,
+    }
     prepared_chunks = _prepare_source_preserving_chunks(
         raw_chunks, dl_doc,
         lambda value: int(tokenizer.count_tokens(value)), max_tokens,
@@ -7464,12 +8437,16 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
         _artifact_completion_path(chunks_output, stage="chunking"),
         stage="chunking", source_sha256=source_sha256,
         source_record_count=None, parameters=completion_parameters,
-        outputs={"chunks_jsonl": chunks_output})
-    quality_report = _publish_corpus_quality_report(
+        outputs={"chunks_jsonl": chunks_output},
+        schema_version=CHUNK_COMPLETION_SCHEMA_VERSION,
+        extra_fields={"inputs": chunk_input_bindings})
+    quality_report = _publish_corpus_quality_report_locked(
         doc_path,
         chunks_output,
         parameters=completion_parameters,
         structural_ranges=structural_ranges,
+        document_snapshot=(doc_dict, source_sha256, source_size),
+        chunk_inputs=chunk_input_bindings,
     )
 
     # Stats
@@ -8080,29 +9057,46 @@ _artifact_parameters_sha256 = _artifact_io._artifact_parameters_sha256
 _artifact_completion_path = _artifact_io._artifact_completion_path
 
 
+_hash_file_generation = _artifact_io.hash_file_generation
+
+
+def _immutable_file_snapshot(path: Path, **kwargs):
+    """Capture through the configured private scratch location."""
+    if ("temporary_root" not in kwargs and "scratch_root" not in kwargs
+            and (configured := os.environ.get(_SNAPSHOT_SCRATCH_ENV))):
+        kwargs["scratch_root"] = Path(configured)
+    kwargs.setdefault("cleanup_error_fn", _log_cleanup_error)
+    return _artifact_io.immutable_file_snapshot(path, **kwargs)
+
+
 def _write_artifact_completion(
         manifest_path: Path, *, stage: str, source_sha256: str,
         source_record_count: int | None, parameters: dict,
-        outputs: dict[str, Path]) -> None:
+        outputs: dict[str, Path], source_name: str | None = None,
+        schema_version: int = ARTIFACT_COMPLETION_SCHEMA_VERSION,
+        extra_fields: dict[str, object] | None = None) -> None:
     """Commit completion through the facade's current hash/write hooks."""
     _artifact_io._write_artifact_completion(
         manifest_path, stage=stage, source_sha256=source_sha256,
         source_record_count=source_record_count, parameters=parameters,
-        outputs=outputs, schema_version=ARTIFACT_COMPLETION_SCHEMA_VERSION,
+        outputs=outputs, schema_version=schema_version,
         artifact_sha256_fn=_cached_artifact_sha256,
-        atomic_write_json_fn=_atomic_write_json)
+        atomic_write_json_fn=_atomic_write_json,
+        source_name=source_name, extra_fields=extra_fields)
 
 
 def _fixed_artifacts_complete(
         manifest_path: Path, *, stage: str, source_sha256: str,
         source_record_count: int | None, parameters: dict,
-        outputs: dict[str, Path]) -> bool:
+        outputs: dict[str, Path], source_name: str | None = None,
+        schema_version: int = ARTIFACT_COMPLETION_SCHEMA_VERSION) -> bool:
     """Validate completion through the facade's current hashing policy."""
     return _artifact_io._fixed_artifacts_complete(
         manifest_path, stage=stage, source_sha256=source_sha256,
         source_record_count=source_record_count, parameters=parameters,
-        outputs=outputs, schema_version=ARTIFACT_COMPLETION_SCHEMA_VERSION,
-        artifact_sha256_fn=_cached_artifact_sha256)
+        outputs=outputs, schema_version=schema_version,
+        artifact_sha256_fn=_cached_artifact_sha256,
+        source_name=source_name)
 
 
 def _atomic_write_json(path: Path, payload: object) -> None:
@@ -8340,7 +9334,9 @@ def _cached_artifact_sha256(path: Path) -> str:
                 if after == before:
                     return cached[1]
 
-    _raw, value, fingerprint = _read_index_artifact_snapshot(path)
+    generation = _hash_file_generation(path)
+    value = generation.sha256
+    fingerprint = generation.fingerprint
     if _ARTIFACT_STAT_HASH_CACHE_SAFE:
         with _artifact_sha256_cache_lock:
             _artifact_sha256_cache[cache_key] = (fingerprint, value)
@@ -11594,7 +12590,8 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
             ocr=getattr(args, "ocr", None), watermark=watermark)
         if resume and _converted_outputs_complete(
                 pdf_path, paths["doc"], paths["converted_markdown"],
-                parameters=conversion_parameters):
+                parameters=conversion_parameters,
+                preprocessed_output=paths["preprocessed"]):
             log.info(f"  [SKIP] convert (output exists: {paths['doc']})")
             stage_finished(current_stage, status="skipped")
         else:
@@ -11612,7 +12609,8 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
             )
             if not _converted_outputs_complete(
                     pdf_path, paths["doc"], paths["converted_markdown"],
-                    parameters=conversion_parameters):
+                    parameters=conversion_parameters,
+                    preprocessed_output=paths["preprocessed"]):
                 raise RuntimeError(
                     "Conversion did not publish a complete artifact set")
             log.info(f"  [DONE] convert -> {paths['doc']}")
@@ -11644,7 +12642,8 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
                 _chunk_record_count(paths["chunks"])
                 if _chunks_complete(
                     paths["doc"], paths["chunks"],
-                    parameters=chunk_parameters)
+                    parameters=chunk_parameters,
+                    source_pdf_path=pdf_path)
                 else None
             )
             active_update_token = None
@@ -11671,6 +12670,7 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
                 chunk_document(
                     paths["doc"],
                     paths["chunks"],
+                    source_pdf_path=pdf_path,
                     embedding_model=args.embedding_model,
                     max_tokens=args.max_tokens,
                     min_words=args.min_words,
@@ -11686,7 +12686,8 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
                 )
                 if not _chunks_complete(
                         paths["doc"], paths["chunks"],
-                        parameters=chunk_parameters):
+                        parameters=chunk_parameters,
+                        source_pdf_path=pdf_path):
                     raise RuntimeError(
                         "Chunking did not publish a complete artifact set")
                 log.info(f"  [DONE] chunk -> {paths['chunks']}")
@@ -12185,6 +13186,43 @@ def _run_storage_command(args) -> dict[str, int]:
             _retention.apply_retention_plan(plan)
             if args.apply else plan.as_dict())
         outcomes = [payload]
+    elif getattr(args, "prune_snapshot_scratch", False):
+        min_age_seconds = args.older_than_days * 24 * 60 * 60
+        planned = _artifact_io.cleanup_stale_snapshot_directories(
+            getattr(args, "snapshot_scratch_root", None),
+            min_age_seconds=min_age_seconds,
+            apply=False,
+        )
+        if args.apply:
+            removed = _artifact_io.cleanup_stale_snapshot_directories(
+                getattr(args, "snapshot_scratch_root", None),
+                min_age_seconds=min_age_seconds,
+                apply=True,
+            )
+            payload = {
+                "schema_version": 1,
+                "action": "prune_snapshot_scratch",
+                "mode": "applied",
+                "deleted_count": len(removed),
+                "deleted_bytes": 0,
+            }
+        else:
+            payload = {
+                "schema_version": 1,
+                "action": "prune_snapshot_scratch",
+                "mode": "dry_run",
+                "apply_required": True,
+                "root": str(_artifact_io._snapshot_scratch_root_path(
+                    getattr(args, "snapshot_scratch_root", None))),
+                "candidate_count": len(planned),
+                "total_bytes": 0,
+                "candidates": [{
+                    "relative_path": path.name,
+                    "size_bytes": 0,
+                    "age_days": args.older_than_days,
+                } for path in planned],
+            }
+        outcomes = [payload]
     else:
         roots = [Path(args.output_root), Path(cache_root)]
         unique_roots = []
@@ -12532,6 +13570,10 @@ def main(argv: list[str] | None = None):
     p_chunk = sub.add_parser("chunk", help="DoclingDocument to enriched chunks")
     p_chunk.add_argument("--doc", type=Path, default=DEFAULT_DOC_PATH)
     p_chunk.add_argument("--out", type=Path, default=DEFAULT_CHUNKS_PATH)
+    p_chunk.add_argument(
+        "--source-pdf", type=Path, default=None,
+        help=("Exact original PDF for hash-verified table recovery; requires "
+              "a conversion-v2 completion manifest"))
     p_chunk.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS,
                          help=f"Max tokens per chunk (default: {DEFAULT_MAX_TOKENS})")
     p_chunk.add_argument("--min-words", type=int, default=MIN_CHUNK_WORDS,
@@ -12701,12 +13743,18 @@ def main(argv: list[str] | None = None):
     storage_action.add_argument(
         "--purge-quarantine", action="store_true",
         help="Purge validated retention quarantine directories by age")
+    storage_action.add_argument(
+        "--prune-snapshot-scratch", action="store_true",
+        help="Prune marker-owned scratch trees whose process is gone")
     p_storage.add_argument(
         "--output-root", type=Path, default=OUTPUT_DIR,
         help=f"Pipeline output root (default: {OUTPUT_DIR})")
     p_storage.add_argument(
         "--llm-cache-dir", type=Path, default=None,
         help="LLM response-cache root (default: runtime cache directory)")
+    p_storage.add_argument(
+        "--snapshot-scratch-root", type=Path, default=None,
+        help="Base directory containing the private snapshot scratch root")
     p_storage.add_argument(
         "--older-than-days", type=float, default=30.0,
         help="Minimum age for prune/purge candidates (default: 30)")
@@ -12969,6 +14017,7 @@ def main(argv: list[str] | None = None):
 
         elif args.command == "chunk":
             chunk_document(args.doc, args.out,
+                           source_pdf_path=args.source_pdf,
                            embedding_model=args.embedding_model,
                            max_tokens=args.max_tokens,
                            min_words=args.min_words,

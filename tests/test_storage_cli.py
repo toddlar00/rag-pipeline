@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+import artifact_io
 import rag
 import retention
 import storage_policy
@@ -73,3 +74,60 @@ def test_storage_cli_refuses_unowned_run_without_traceback(tmp_path):
 
     assert raised.value.code == 1
     assert (output_root / "unowned").is_dir()
+
+
+def test_storage_cli_plans_then_prunes_dead_snapshot_scratch(
+        tmp_path, capsys):
+    scratch_root = artifact_io._snapshot_scratch_root(tmp_path)
+    owned = storage_policy.ensure_private_directory(
+        scratch_root / "run-owned")
+    storage_policy.atomic_write_private_json(
+        owned / artifact_io._SNAPSHOT_OWNER_MARKER,
+        {
+            "schema_version": artifact_io._SNAPSHOT_OWNER_SCHEMA_VERSION,
+            "kind": "rag_snapshot_scratch",
+            "pid": 2_147_483_647,
+            "process_birth": None,
+            "created_ns": 1,
+            "nonce": owned.name,
+        },
+    )
+    storage_policy.atomic_write_private_text(
+        owned / "sensitive.pdf", "private")
+    common = [
+        "--quiet", "storage", "--prune-snapshot-scratch",
+        "--snapshot-scratch-root", str(tmp_path),
+        "--older-than-days", "0", "--json",
+    ]
+
+    rag.main(common)
+
+    plan = json.loads(capsys.readouterr().out)
+    assert plan["mode"] == "dry_run"
+    assert plan["apply_required"] is True
+    assert plan["candidate_count"] == 1
+    assert plan["candidates"][0]["relative_path"] == owned.name
+    assert owned.is_dir()
+
+    rag.main([*common, "--apply"])
+
+    result = json.loads(capsys.readouterr().out)
+    assert result["mode"] == "applied"
+    assert result["deleted_count"] == 1
+    assert not owned.exists()
+
+
+def test_storage_cli_snapshot_dry_run_does_not_create_root(tmp_path, capsys):
+    owned_root = artifact_io._snapshot_scratch_root_path(tmp_path)
+
+    rag.main([
+        "--quiet", "storage", "--prune-snapshot-scratch",
+        "--snapshot-scratch-root", str(tmp_path),
+        "--older-than-days", "0", "--json",
+    ])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["mode"] == "dry_run"
+    assert payload["root"] == str(owned_root)
+    assert payload["candidate_count"] == 0
+    assert not owned_root.exists()

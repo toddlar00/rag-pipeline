@@ -583,10 +583,17 @@ python rag.py storage --prune-ui-exports --older-than-days 7
 # Inspect recoverable leftovers from an interrupted deletion, then purge them
 python rag.py storage --purge-quarantine --older-than-days 7
 python rag.py storage --purge-quarantine --older-than-days 7 --apply
+
+# Inspect, then prune old marker-owned PDF snapshot trees left by a hard kill
+python rag.py storage --prune-snapshot-scratch --older-than-days 1
+python rag.py storage --prune-snapshot-scratch --older-than-days 1 --apply
 ```
 
-Use `--output-root`, `--llm-cache-dir`, `--max-cache-bytes`, and `--json` for
-custom locations, size policy, and automation. A plan deletes only data whose
+Use `--output-root`, `--llm-cache-dir`, `--snapshot-scratch-root`,
+`--max-cache-bytes`, and `--json` for custom locations, size policy, and
+automation. `--snapshot-scratch-root` is the base directory containing the
+owned `rag-pipeline-scratch-v1` directory; `RAG_SNAPSHOT_SCRATCH` selects the
+same base for conversion and table-recovery snapshots. A plan deletes only data whose
 marker/schema/token or cache key validates; unowned directories, special files,
 links, junctions, and hard-linked content fail closed. Applied run deletion
 replans after acquiring the run and all existing vector-store leases, moves the
@@ -1374,9 +1381,9 @@ validating their artifacts as follows:
 
 | Stage | Checks for |
 |-------|-----------|
-| Convert | Source/config/model-lock completion plus both output hashes |
-| Chunk | Source/config/model-lock completion, output hash, and strict JSONL schema |
-| Quality | Exact Docling/chunks/parameters binding plus every required PASS check |
+| Convert | Schema-v2 immutable original/effective PDF binding, config/model lock, and exact JSON/Markdown/derived-PDF output hashes |
+| Chunk | Schema-v2 exact Docling/conversion/recovery inputs, output hash, and strict JSONL schema |
+| Quality | Schema-v2 chunk-input provenance plus exact Docling/chunks/parameters binding and every required PASS check |
 | Index | Clean compatible manifest plus report binding, physical IDs/count, and chunk hashes |
 | Export | Source/config completion and output hash |
 | Chapter export | Exact manifested chapter-file set and hashes |
@@ -1394,6 +1401,50 @@ python rag.py batch *.pdf --resume
 ```
 
 On failure, the pipeline prints a ready-to-paste resume command.
+
+Conversion and chunk schema-v1 completion files remain readable as migration
+inputs but are never accepted as verified resume evidence. Schema-v1 quality
+reports and index bindings are not accepted for query, export, or indexing.
+Migrate the whole artifact chain in order, using the same processing flags and
+embedding model as the original run:
+
+```bash
+# Rebuild conversion, chunks, and quality evidence when needed, then reconcile
+# the collection and commit its new quality-report binding.
+python rag.py full --pdf Book.pdf --resume
+
+# Optional conservative variant: replace the named vector collection outright.
+python rag.py full --pdf Book.pdf --resume --full-reindex
+```
+
+Do not query or export the old collection until this command finishes. Resume
+rebuilds invalid conversion and chunk stages once under schema v2, regenerates
+the schema-v2 quality report from the exact chunk-completion inputs, and then
+reconciles or rebuilds an index whose prior quality binding is incompatible.
+Deleting or hand-editing only one manifest cannot migrate the chain and fails
+closed. Keep any LLM/classification/context flags from the original command;
+changing them intentionally creates a new parameter-bound generation.
+
+Conversion streams one opened PDF generation into a private,
+access-restricted scratch pathname, gives only that pathname to preprocessing
+and Docling, and verifies both the staged copy and live source before committing
+its manifest. Chunking captures one exact Docling JSON generation and, when PDF
+table recovery is used, records the hash-verified PDF and conversion-manifest
+identities in both the chunk and quality manifests. Standalone recovery should
+name the source explicitly:
+
+```bash
+python rag.py chunk --doc output/Book/Book.json \
+  --out output/Book/Book_chunks.jsonl --source-pdf Book.pdf
+```
+
+`full` and `batch` pass their exact source PDF automatically. Snapshot copies
+require free scratch space equal to the PDF size plus a 64 MiB margin. Normal
+exit removes them immediately; startup and the storage command conservatively
+remove only old, marker-owned trees whose exact process generation is no longer
+alive. Cleanup pins the owned root and run directory, refuses device-boundary
+crossings, nested/link-like entries, and multiply linked files, and preserves
+the ownership marker whenever removal cannot be completed safely.
 
 ## Question Extraction
 

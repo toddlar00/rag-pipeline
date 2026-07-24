@@ -542,7 +542,7 @@ def test_runner_reports_the_failing_stage_including_system_exit(
     assert isinstance(error.value.cause, SystemExit)
 
 
-def test_convert_derives_a_preprocessed_path_from_its_output(
+def test_convert_derives_preprocessed_bytes_in_private_scratch(
         monkeypatch, tmp_path):
     pdf = tmp_path / "source.pdf"
     pdf.write_bytes(b"pdf")
@@ -563,7 +563,9 @@ def test_convert_derives_a_preprocessed_path_from_its_output(
         pass
 
     def fake_preprocess(input_path, output_path, **kwargs):
+        observed["input"] = input_path
         observed["output"] = output_path
+        observed["force"] = kwargs["force"]
         raise StopAfterPreprocess
 
     monkeypatch.setattr(rag, "preprocess_pdf", fake_preprocess)
@@ -571,7 +573,11 @@ def test_convert_derives_a_preprocessed_path_from_its_output(
     with pytest.raises(StopAfterPreprocess):
         rag.convert_pdf(pdf, doc_output)
 
-    assert observed["output"] == doc_output.with_name("book_preprocessed.pdf")
+    assert observed["input"] != pdf
+    assert observed["output"].name.startswith(".rag-preprocess-")
+    assert observed["output"].suffix == ".pdf"
+    assert observed["output"].parent != doc_output.parent
+    assert observed["force"] is True
 
 
 def test_resume_command_preserves_pipeline_options():

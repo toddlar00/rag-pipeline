@@ -69,6 +69,33 @@ def _write_quality_source(path: Path) -> None:
     })
 
 
+def _chunk_inputs(document: Path) -> dict:
+    raw = document.read_bytes()
+    return {
+        "docling_json": {
+            "name": document.name,
+            "size": len(raw),
+            "sha256": hashlib.sha256(raw).hexdigest(),
+        },
+        "conversion_manifest": None,
+        "table_recovery": None,
+    }
+
+
+def _write_chunk_completion(
+        document: Path, chunks: Path, parameters: dict) -> None:
+    rag._write_artifact_completion(
+        rag._artifact_completion_path(chunks, stage="chunking"),
+        stage="chunking",
+        source_sha256=rag._cached_artifact_sha256(document),
+        source_record_count=None,
+        parameters=parameters,
+        outputs={"chunks_jsonl": chunks},
+        schema_version=rag.CHUNK_COMPLETION_SCHEMA_VERSION,
+        extra_fields={"inputs": _chunk_inputs(document)},
+    )
+
+
 def test_atomic_text_failure_preserves_previous_bytes(monkeypatch, tmp_path):
     target = tmp_path / "book.md"
     original = b"previous complete output\n"
@@ -99,8 +126,24 @@ def test_conversion_completion_requires_both_untampered_outputs(
     rag._write_artifact_completion(
         rag._artifact_completion_path(document, stage="conversion"),
         stage="conversion", source_sha256=rag._cached_artifact_sha256(source),
+        source_name=source.name,
         source_record_count=None, parameters=parameters,
-        outputs={"docling_json": document, "docling_markdown": markdown})
+        outputs={"docling_json": document, "docling_markdown": markdown},
+        schema_version=rag.CONVERSION_COMPLETION_SCHEMA_VERSION,
+        extra_fields={
+            "source": {
+                "name": source.name,
+                "size": source.stat().st_size,
+                "sha256": rag._cached_artifact_sha256(source),
+                "capture_policy": "stream-copy-v1",
+            },
+            "effective_input": {
+                "kind": "original",
+                "name": source.name,
+                "size": source.stat().st_size,
+                "sha256": rag._cached_artifact_sha256(source),
+            },
+        })
 
     assert rag._converted_outputs_complete(
         source, document, markdown, parameters=parameters)
@@ -150,12 +193,7 @@ def test_chunk_completion_binds_source_options_model_lock_and_output(
 
     initial = parameters()
     assert initial["max_llm_transport_attempts"] == 3
-    manifest = rag._artifact_completion_path(chunks, stage="chunking")
-    rag._write_artifact_completion(
-        manifest, stage="chunking",
-        source_sha256=rag._cached_artifact_sha256(document),
-        source_record_count=None, parameters=initial,
-        outputs={"chunks_jsonl": chunks})
+    _write_chunk_completion(document, chunks, initial)
 
     assert rag._chunks_complete(document, chunks, parameters=initial)
     assert "secret-a" not in str(initial)
@@ -188,6 +226,7 @@ def test_quality_report_is_repairable_and_required_for_lineaged_chunks(
     parameters = {"embedding_model": "model-a", "chunking_policy_version": 19}
     _write_quality_source(document)
     _write_chunks(chunks, [_lineaged_record()])
+    _write_chunk_completion(document, chunks, parameters)
 
     report = rag._publish_corpus_quality_report(
         document, chunks, parameters=parameters, structural_ranges=set())
@@ -217,6 +256,7 @@ def test_lineaged_chunks_refuse_stale_or_failed_quality_report(tmp_path):
     parameters = {"embedding_model": "model-a", "chunking_policy_version": 19}
     _write_quality_source(document)
     _write_chunks(chunks, [_lineaged_record()])
+    _write_chunk_completion(document, chunks, parameters)
     rag._publish_corpus_quality_report(
         document, chunks, parameters=parameters, structural_ranges=set())
     report_path = rag._quality_core.quality_report_path(chunks)
