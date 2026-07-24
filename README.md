@@ -1966,8 +1966,90 @@ queries for which outlines are relevant. Every row is marked
 `draft_requires_corpus_owner`; do not use it as a release gate or committed
 baseline until a corpus owner reviews the queries, stable IDs, and grades. The
 evaluator enforces that distinction: `--fail-under`, `--fail-over`, and
-baseline-regression checks reject any explicitly draft query. After review,
-change every `review_status` to `approved` before establishing thresholds.
+baseline-regression checks reject any explicitly draft query.
+
+`evaluation_review.py` makes the owner boundary explicit instead of relying on
+an unaudited JSON edit. First, re-pin a still-draft set after a regenerated
+corpus proves that every judged stable ID survives. Then produce a protected
+full-detail comparison and combine its top candidates with the exact judged
+passages in an owner-only packet:
+
+```bash
+python evaluation_review.py rebind \
+  --queries eval_queries_ethics_draft.jsonl \
+  --chunks output/Ethics_3/Ethics_3_chunks.jsonl \
+  --declared-chunks-path output/Ethics_3/Ethics_3_chunks.jsonl \
+  --out evaluation-reports/ethics-draft-current.jsonl
+
+python eval.py \
+  --queries evaluation-reports/ethics-draft-current.jsonl \
+  --chunks output/Ethics_3/Ethics_3_chunks.jsonl \
+  --db output/Ethics_3/Ethics_3_chroma \
+  --collection ethics_3 --compare --k 1 3 5 10 --depth 20 \
+  --report-detail full \
+  --json-report evaluation-reports/ethics-draft-current.full.json
+
+python evaluation_review.py prepare \
+  --queries evaluation-reports/ethics-draft-current.jsonl \
+  --chunks output/Ethics_3/Ethics_3_chunks.jsonl \
+  --diagnostic-report evaluation-reports/ethics-draft-current.full.json \
+  --candidate-depth 10 \
+  --out evaluation-reports/ethics-owner-review.packet.json
+```
+
+The packet contains private query and evidence text and is published with the
+same owner-only, link-aware storage policy as pipeline artifacts. Edit only each
+`query_decision` and `judgment_reviews[].decision`, using `approve` or `reject`.
+Approving a query also attests that its displayed unjudged retrieval candidates
+were checked for missing evidence; an abstention approval attests that the
+negative proposition was independently checked against the pinned corpus. A
+rejection requires revising the draft and preparing a new packet.
+
+Once every decision is `approve`, the corpus owner—not an automated agent—can
+promote the set and issue a content-free receipt:
+
+```bash
+python evaluation_review.py finalize \
+  --packet evaluation-reports/ethics-owner-review.packet.json \
+  --queries evaluation-reports/ethics-draft-current.jsonl \
+  --chunks output/Ethics_3/Ethics_3_chunks.jsonl \
+  --diagnostic-report evaluation-reports/ethics-draft-current.full.json \
+  --candidate-depth 10 \
+  --approved-queries-out evaluation-reports/ethics-v1.jsonl \
+  --receipt-out evaluation-reports/ethics-v1.review.json \
+  --reviewer-id "CORPUS OWNER LABEL" \
+  --reviewed-at 2026-07-24T18:30:00Z \
+  --attestation "I reviewed every query and judgment against the pinned corpus"
+```
+
+The approved set is bound to the receipt by its exact bytes and a review batch
+digest. The receipt stores only hashes, counts, coverage tags, and the review
+time; it does not contain query text, corpus text, stable IDs, paths, or the
+reviewer label. This is a provenance attestation, not an identity signature, so
+a durable human PR review is still required. Receipt-bound queries cannot use
+release thresholds without `--review-receipt`.
+
+After review, create one approved schema-v1 release policy. The policy binds the
+query set, corpus, review receipt, model-artifact lock, retrieval parameters,
+and explicit Success@3, Recall@10, nDCG@10, MAP, abstention, filter, and
+false-answer thresholds for all four modes. It deliberately owns those CLI
+settings, so ambiguous manual overrides are rejected. Run each mode separately
+to retain a schema-v5 single-run gate report:
+
+```bash
+python eval.py \
+  --release-policy evaluation/policies/ethics-v1.json \
+  --policy-mode vector \
+  --review-receipt evaluation/reviews/ethics-v1.review.json \
+  --queries evaluation/suites/ethics/queries.jsonl \
+  --chunks output/Ethics_3/Ethics_3_chunks.jsonl \
+  --db output/Ethics_3/Ethics_3_chroma --collection ethics_3 \
+  --json-report evaluation-reports/ethics-v1-vector.json
+```
+
+Repeat with `vector_reranked`, `hybrid`, and `hybrid_reranked`. Do not create an
+approved policy or choose final floors from draft judgments; derive them only
+after the final owner-reviewed labels are fixed.
 
 ```bash
 python eval.py \
@@ -1979,7 +2061,9 @@ python eval.py \
   --json-report evaluation-reports/ethics-draft-compare.json
 ```
 
-The initial diagnostic run produced the following non-gating results. The
+The current schema-v5 clean-room diagnostic, against corpus SHA-256
+`a56f145f09a6c97efac1ad622e478a735b9f23fb1d48d4807ae89edd4fd7a790`,
+produced the following non-gating results. The
 page-542 rule-specific query ranked its table first; the calculation query
 retrieved all six graded page-542/page-543 chunks in the hybrid top six. Plain
 hybrid's remaining misses were broad outline intents, which is evidence against
@@ -1988,9 +2072,9 @@ a blanket outline penalty.
 | Draft configuration | Success@3 | nDCG@10 | MAP |
 |---|---:|---:|---:|
 | Vector only | 0.923 | 0.872 | 0.836 |
-| Vector + BGE reranker | 1.000 | 0.958 | 0.941 |
-| Hybrid | 0.846 | 0.869 | 0.851 |
-| Hybrid + BGE reranker | 1.000 | 0.958 | 0.941 |
+| Vector + BGE reranker | 1.000 | 0.986 | 0.977 |
+| Hybrid | 0.923 | 0.874 | 0.862 |
+| Hybrid + BGE reranker | 1.000 | 0.986 | 0.977 |
 
 Use repeatable thresholds to make a single-configuration evaluation fail with
 exit code 2 when quality is below a required floor:
@@ -2305,6 +2389,8 @@ model-artifact-policy.json # Reviewed models, consumers, files, code, and licens
 model-artifacts.lock.json # Immutable revisions and per-file raw SHA-256 inventory
 preprocess_pdf.py       # Standalone PDF preprocessing CLI facade
 eval.py                 # Relevance/safety evaluation, gates, and reports
+evaluation_review.py    # Private owner-review packets and portable receipts
+evaluation_release.py   # Strict four-mode retrieval release-policy contract
 evaluation_metrics.py   # Latency, memory, storage, usage, and cost measurements
 offline_retrieval.py    # Deterministic no-model BM25 evaluation adapter
 evaluation/suites/      # Pinned CC0 Property and Constitutional Law fixtures

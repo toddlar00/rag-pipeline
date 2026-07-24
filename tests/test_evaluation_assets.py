@@ -210,7 +210,7 @@ def test_private_ethics_draft_is_pinned_and_cannot_pose_as_reviewed():
         for query in queries
     }
     assert declarations == {(
-        "c3d9dd5d7627333d2f74bb09d12cc35d2432b224c73be17f47a7cd85cc768f91",
+        "a56f145f09a6c97efac1ad622e478a735b9f23fb1d48d4807ae89edd4fd7a790",
         1715,
     )}
     assert all(

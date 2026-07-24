@@ -30,7 +30,7 @@ Status terms:
 | Configurable document-structure profiles | Implemented (draft) | [PR #35](https://github.com/toddlar00/rag-pipeline/pull/35): an immutable reviewed registry now drives front/back matter, primary divisions, TOC hierarchy, canonical titles, cross-references, classification, quality checks, and exports. Schema-v3 chunk receipts attest the exact profile revision and digest; unknown, mismatched, legacy, and tampered profile evidence fails closed |
 | Context-aware retrieval assembly | Implemented (draft) | [PR #36](https://github.com/toddlar00/rag-pipeline/pull/36): stable published-order linkage, exact index-generation binding, source/chapter/filter isolation, duplicate-text alias provenance, bounded neighboring evidence, and independent citations are wired through Chroma, Qdrant, CLI, UI, grounded answers, and evaluation. A disposable 1,715-record Ethics index passed a real context query |
 | Table-specific retrieval | Implemented (draft) | [PR #37](https://github.com/toddlar00/rag-pipeline/pull/37): optional caption/header-propagated row children, source-wide continued-table eligibility, deterministic repeated-fragment identity, exact parent/child and source-shape attestation, family-aware result collapse, independent citations, and canonical-consumer isolation. A disposable Ethics run produced 69 children and returned the exact requested demographic row first |
-| Ethics retrieval calibration | In progress | A 14-query, 24-judgment draft is pinned to the exact 1,715-record corpus and covers rules, explanations, cases, tables, cross-page chunks, filters, abstention, outline distractors, and positive outline intents; corpus-owner review and release thresholds remain outstanding |
+| Ethics retrieval calibration | In progress | A current-schema clean-room rebuild preserved all 20 unique IDs behind 24 judgments in the exact 1,715-record corpus. A private owner packet now combines those judgments with 195 unique top-10 candidates across four modes, while a content-free receipt and strict four-mode release-policy contract make promotion explicit and review-bound. Actual owner decisions and final thresholds remain outstanding |
 | Process supervision extraction | Implemented (draft) | [PR #33](https://github.com/toddlar00/rag-pipeline/pull/33): deadline supervision, Windows/POSIX containment, startup gates, termination confirmation, and generic entrypoint policy moved to stdlib-only `process_supervision.py`; `rag.py` retains late-bound compatibility wrappers |
 | Vector-index lifecycle extraction | Implemented (draft) | [PR #38](https://github.com/toddlar00/rag-pipeline/pull/38): a standard-library-only policy layer owns deterministic reconciliation, dirty-marker ownership, mutation epochs, exact-ID verification, callback-reentry exclusion, legacy-hash repair, and close/manifest/marker commit ordering |
 | Cumulative release migration rehearsal | Implemented (draft) | [PR #39](https://github.com/toddlar00/rag-pipeline/pull/39): actual Chroma and Qdrant probes recreate the integrated schema-5 manifest, rebuild one exact collection to schema 8, preserve and query a sibling collection, verify the no-op path, and require immediate lock release |
@@ -212,7 +212,7 @@ judgments. It separately grades page 542's disclosure rule and page 543's
 calculation, marks the page-503 legal-fees outline irrelevant to those intents,
 and also includes three queries where concise outlines are positive evidence.
 The initial depth-20 comparison produced vector/hybrid/reranked nDCG@10 of
-0.872/0.869/0.958 and MAP of 0.836/0.851/0.941. Those figures are diagnostic,
+0.872/0.869/0.958 and MAP of 0.836/0.851/0.941. Those figures were diagnostic,
 not gates: every query is explicitly marked as requiring corpus-owner review.
 Together with the targeted ablations, they guard against adopting global
 stemming, equal fusion weights, or blanket outline penalties merely to improve
@@ -226,6 +226,27 @@ compilation, six live hybrid probes, two real resume runs, and `git diff
 This milestone is published in draft [PR
 #31](https://github.com/toddlar00/rag-pipeline/pull/31) with all 15 head checks
 passing. It remains “Implemented (draft)” pending review and merge evidence.
+
+The current calibration-hardening pass rebuilds the same 912-page source under
+conversion/chunk/quality/index schemas 2/3/4/8. The resulting chunks SHA-256 is
+`a56f145f09a6c97efac1ad622e478a735b9f23fb1d48d4807ae89edd4fd7a790`:
+the record count remains 1,715, all 20 unique judged stable IDs survive, and a
+second exact resume performs zero vector mutations. Schema-v5 diagnostics now
+measure vector, vector-reranked, hybrid, and hybrid-reranked Success@3 at
+0.923/1.000/0.923/1.000, nDCG@10 at 0.872/0.986/0.874/0.986, and MAP at
+0.836/0.977/0.862/0.977.
+
+`evaluation_review.py` re-pins only after exact ID validation, produces a
+private packet containing the 24 judged passages plus 195 unique top-10
+retrieval candidates, and refuses promotion until every query and judgment is
+explicitly approved with the exact owner attestation. Its portable receipt
+contains hashes, counts, tags, and time but no corpus/query text, stable IDs,
+paths, or reviewer label. `evaluation_release.py` then requires one immutable
+approved policy to bind that receipt, the reviewed query/corpus bytes, the
+model-artifact lock, retrieval configuration, and complete Success/Recall/
+nDCG/MAP/abstention/filter/false-answer gates for all four modes. Direct CLI
+overrides fail closed. This work deliberately does not create approval or final
+thresholds: those two decisions remain corpus-owner responsibilities.
 
 ## Process supervision extraction milestone
 

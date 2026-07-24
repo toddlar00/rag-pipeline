@@ -614,6 +614,26 @@ def _validate_query(query: dict, *, label: str = "query") -> None:
         raise ValueError(
             f"{label} 'review_status' must be one of: {allowed}")
 
+    approval = query.get("approval")
+    if approval is not None:
+        approval_schema = (
+            approval.get("schema_version")
+            if isinstance(approval, dict) else None)
+        if (not isinstance(approval, dict)
+                or set(approval) != {"schema_version", "review_batch_id"}
+                or isinstance(approval_schema, bool)
+                or not isinstance(approval_schema, int)
+                or approval_schema != 1
+                or not isinstance(approval.get("review_batch_id"), str)
+                or re.fullmatch(
+                    r"[0-9a-f]{64}", approval["review_batch_id"]) is None):
+            raise ValueError(
+                f"{label} 'approval' must be a schema-v1 review batch binding")
+        if review_status != "approved":
+            raise ValueError(
+                f"{label} receipt-bound approval requires review_status "
+                "'approved'")
+
     corpus = query.get("corpus")
     if corpus is not None:
         if not isinstance(corpus, dict):
@@ -2005,6 +2025,17 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Evaluate RAG pipeline retrieval quality")
     parser.add_argument("--queries", type=Path, default=DEFAULT_QUERIES)
     parser.add_argument(
+        "--review-receipt", type=Path,
+        help=("Content-free corpus-owner review receipt required by "
+              "receipt-bound release queries"))
+    parser.add_argument(
+        "--release-policy", type=Path,
+        help="Approved schema-v1 policy owning one release-gated configuration")
+    parser.add_argument(
+        "--policy-mode",
+        choices=("vector", "vector_reranked", "hybrid", "hybrid_reranked"),
+        help="Retrieval mode selected from --release-policy")
+    parser.add_argument(
         "--retriever", choices=["index", "bm25"], default="index",
         help=("Production vector index or deterministic offline BM25 "
               "(default: index)"))
@@ -2156,6 +2187,12 @@ def _report_config(args, **overrides) -> dict:
         if "index_snapshot" in configuration:
             configuration["index_snapshot"] = _portable_index_snapshot(
                 configuration["index_snapshot"])
+    review_binding = getattr(args, "review_receipt_binding", None)
+    if review_binding is not None:
+        configuration["review_receipt"] = dict(review_binding)
+    release_binding = getattr(args, "release_policy_binding", None)
+    if release_binding is not None:
+        configuration["release_policy"] = dict(release_binding)
     return configuration
 
 
@@ -2248,6 +2285,25 @@ def _main_with_args(args, parser: argparse.ArgumentParser) -> int:
         args.queries_sha256 = _query_snapshot_sha256.get(query_cache_key)
         if minimums or maximums or regressions:
             _validate_release_gate_review_status(queries)
+            if (any(query.get("approval") is not None for query in queries)
+                    and args.review_receipt is None):
+                raise ValueError(
+                    "Receipt-bound release thresholds require "
+                    "--review-receipt")
+        if args.review_receipt is not None:
+            import evaluation_review
+            args.review_receipt_binding = (
+                evaluation_review.validate_review_receipt(
+                    queries, args.queries_sha256, args.review_receipt))
+        release_policy = getattr(args, "release_policy_payload", None)
+        if release_policy is not None:
+            import evaluation_release
+            evaluation_release.validate_release_policy_runtime(
+                release_policy,
+                queries=queries,
+                queries_sha256=args.queries_sha256,
+                review_receipt_binding=args.review_receipt_binding,
+            )
         _expand_grounding_release_thresholds(queries, minimums, maximums)
         _validate_corpus_pin_coverage(
             queries,
@@ -2453,8 +2509,14 @@ def _main_with_args(args, parser: argparse.ArgumentParser) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     """Run one generation-consistent evaluation under a database lease."""
+    cli_args = list(sys.argv[1:] if argv is None else argv)
     parser = _build_parser()
-    args = parser.parse_args(argv)
+    args = parser.parse_args(cli_args)
+    try:
+        import evaluation_release
+        evaluation_release.apply_release_policy(args, argv=cli_args)
+    except (OSError, UnicodeError, ValueError) as exc:
+        parser.error(str(exc))
     import rag
 
     try:
