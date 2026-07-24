@@ -137,6 +137,31 @@ def test_dependency_policy_restricts_bounded_file_includes(tmp_path):
     )
 
 
+def test_dependency_policy_rejects_sdks_for_owned_provider_transports(tmp_path):
+    _valid_policy_tree(tmp_path)
+    _write(
+        tmp_path / "requirements-optional.txt",
+        "extra>=2,<3\nopenai>=1,<3\n",
+    )
+    _write(
+        tmp_path / "requirements-full.lock",
+        f"core==1.5 --hash=sha256:{'0' * 64}\n"
+        f"extra==2.5 --hash=sha256:{'0' * 64}\n"
+        f"openai==2.0 --hash=sha256:{'0' * 64}\n",
+    )
+
+    errors = check_dependency_policy.validate(tmp_path)
+
+    assert any(
+        "openai is forbidden while the provider uses" in error
+        for error in errors
+    )
+    assert any(
+        "openai unexpectedly expands" in error
+        for error in errors
+    )
+
+
 def test_lock_refresh_commands_cover_every_lock_and_cpu_runtime():
     commands = refresh_locks.lock_commands("uv", upgrade=True)
 

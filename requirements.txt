@@ -8,7 +8,7 @@
 # Then:
 #   pip install -r requirements.txt
 #
-# For optional features (Qdrant, Voyage AI, LLM classification, web UI):
+# For optional features (Qdrant, Gemini, web UI):
 #   pip install -r requirements.txt -r requirements-optional.txt
 # ============================================================
 

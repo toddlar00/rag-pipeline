@@ -8,13 +8,6 @@
 # Qdrant vector DB backend (native hybrid search)
 qdrant-client>=1.17,<2
 
-# Voyage AI embeddings (legal-specific, paid)
-voyageai>=0.2,<1
-
-# OpenAI and Cohere embedding/reranking adapters
-openai>=1.0,<3
-cohere>=5.0,<6
-
 # LLM classification + contextual retrieval
 google-genai>=1.68,<2      # Gemini fallback; per-request timeout/retry controls
 

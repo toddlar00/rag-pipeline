@@ -108,6 +108,10 @@ Requests session with:
 - strict JSON MIME/UTF-8/framing/depth validation before parsing, with decoded
   ceilings of 32 MiB for embeddings and 8 MiB for reranking.
 
+The Voyage, OpenAI, and Cohere SDK distributions are not runtime dependencies;
+the full lock omits them and their SDK-only transitive graph. Dependency policy
+fails if those packages return without an explicit transport decision change.
+
 OpenAI-compatible and Ollama generation use the same reader with a 16 MiB
 decoded ceiling. It permits absent `Content-Length` for legitimate chunked
 responses, but rejects malformed, oversized, ambiguous, or dishonest lengths.

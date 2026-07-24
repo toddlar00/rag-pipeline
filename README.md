@@ -2649,14 +2649,14 @@ numpy>=1.26,<3                  # RAPTOR clustering
 
 ```
 qdrant-client>=1.17,<2       # Qdrant vector DB backend
-voyageai>=0.2,<1             # Voyage AI embeddings
-openai>=1.0,<3               # OpenAI embeddings
-cohere>=5.0,<6               # Cohere embeddings and reranking
 google-genai>=1.68,<2        # Gemini fallback + timeout/retry controls
 gradio>=6.0,<7               # Web UI
 ```
 
 These are the project's direct declarations; transitive packages are omitted.
+Voyage, OpenAI, Cohere, Jina, DeepSeek, MiniMax, and custom OpenAI-compatible
+operations use the owned Requests transport already present in the core profile;
+their provider SDK packages are neither imported nor installed.
 Lower bounds preserve the established feature floor; upper bounds cap the
 admitted compatibility range. Dependabot proposes bounded updates weekly.
 
