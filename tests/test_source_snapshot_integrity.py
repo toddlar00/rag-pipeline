@@ -678,6 +678,49 @@ def test_stale_snapshot_cleanup_pins_root_against_scan_swap(
     assert sentinel.read_text(encoding="utf-8") == "must survive"
 
 
+def test_snapshot_pin_resolves_root_and_direct_child_together(
+        monkeypatch, tmp_path):
+    owned_root = artifact_io._snapshot_scratch_root(tmp_path)
+    owned = artifact_io.ensure_private_directory(owned_root / "run-owned")
+    canonical_root = tmp_path / "canonical-root-spelling"
+    real_resolve = Path.resolve
+    real_lstat = os.lstat
+
+    def simulate_windows_alias(path, strict=False):
+        absolute = Path(os.path.abspath(path))
+        if absolute == owned_root:
+            return canonical_root
+        if absolute == owned:
+            return canonical_root / owned.name
+        return real_resolve(path, strict=strict)
+
+    monkeypatch.setattr(Path, "resolve", simulate_windows_alias)
+    monkeypatch.setattr(
+        artifact_io.os, "lstat",
+        lambda path: real_lstat(
+            owned_root if Path(path) == canonical_root
+            else owned if Path(path) == canonical_root / owned.name
+            else path))
+    monkeypatch.setattr(
+        artifact_io, "_windows_open_pinned_directory",
+        lambda path: object())
+    monkeypatch.setattr(
+        artifact_io, "_windows_close_handle", lambda _handle: None)
+
+    # Path validation must accept two canonicalized spellings that preserve
+    # the same direct-child relationship.  Entering then fails later on POSIX
+    # descriptor operations only if the helper regresses before this point.
+    if os.name == "nt":
+        with artifact_io._pin_snapshot_directory(owned, owned_root) as pinned:
+            assert pinned.path == canonical_root / owned.name
+    else:
+        # On POSIX, avoid exercising fake, nonexistent canonical descriptors;
+        # the shared pre-pin validation is reached before the expected open.
+        with pytest.raises(FileNotFoundError):
+            with artifact_io._pin_snapshot_directory(owned, owned_root):
+                pass
+
+
 def test_snapshot_pin_rejects_cross_device_run(monkeypatch, tmp_path):
     owned_root = artifact_io._snapshot_scratch_root(tmp_path)
     owned = artifact_io.ensure_private_directory(owned_root / "run-owned")

@@ -568,16 +568,27 @@ def _pin_snapshot_directory(
         directory: Path, owned_root: Path,
 ) -> Iterator[_PinnedSnapshotDirectory]:
     """Pin a direct owned child so cleanup never follows a swapped path."""
-    resolved_root = Path(owned_root).resolve(strict=True)
+    lexical_root = Path(os.path.abspath(owned_root))
     absolute_directory = Path(os.path.abspath(directory))
-    if (absolute_directory.parent != resolved_root
+    if (absolute_directory.parent != lexical_root
             or not absolute_directory.name.startswith("run-")):
         raise OSError("refusing unsafe snapshot scratch cleanup target")
-    assert_no_link_components(resolved_root)
+    # Check the operator-visible path before resolving it.  Resolving only the
+    # root can produce a long-name/short-name mismatch on Windows temporary
+    # directories even when the child is genuinely direct.  Resolving both
+    # after link rejection preserves that safety boundary without depending
+    # on one spelling of the same filesystem path.
+    assert_no_link_components(lexical_root)
     assert_no_link_components(absolute_directory)
-    if (path_is_link_like(resolved_root)
+    if (path_is_link_like(lexical_root)
             or path_is_link_like(absolute_directory)):
         raise OSError("refusing linked snapshot scratch directory")
+    resolved_root = lexical_root.resolve(strict=True)
+    resolved_directory = absolute_directory.resolve(strict=True)
+    if (resolved_directory.parent != resolved_root
+            or resolved_directory.name != absolute_directory.name):
+        raise OSError("refusing resolved snapshot scratch escape")
+    absolute_directory = resolved_directory
     root_before = os.lstat(resolved_root)
     directory_before = os.lstat(absolute_directory)
     if (not stat.S_ISDIR(root_before.st_mode)

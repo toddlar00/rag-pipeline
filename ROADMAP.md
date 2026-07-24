@@ -286,7 +286,7 @@ operator does not want incremental reconciliation.
 Adversarial tests cover bounded reads, same-generation snapshots, cleanup-error
 precedence, stale-owner selection, recovery rollback, explicit hash mismatch,
 unbound recovered tables, Docling A/B races, and concurrent publishers. The
-complete repository suite passes with 1,209 tests and 7 platform skips; Ruff,
+complete repository suite passes with 1,210 tests and 7 platform skips; Ruff,
 Python compilation, and `git diff --check` are clean. A disposable real run
 converted all 912 pages of `Ethics.pdf`, then produced 1,715 chunks, six
 PDF-bound recovered table chunks, and a schema-v2 quality PASS with no failed or
