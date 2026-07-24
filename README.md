@@ -428,7 +428,7 @@ curl -i http://127.0.0.1:8765/health/ready
 curl -sS -H "Authorization: Bearer $READER_TOKEN" \
   http://127.0.0.1:8765/v1/corpora
 
-# Bounded retrieval only: no reranker or generated answer
+# Bounded primary retrieval only: no reranker, neighbor context, or answer
 curl -sS -X POST \
   -H "Authorization: Bearer $READER_TOKEN" \
   -H "Content-Type: application/json" \
@@ -649,6 +649,12 @@ python rag.py query "minimum contacts test" --answer \
   --chunks output/Civil_procedure/Civil_procedure_chunks.jsonl \
   --collection civil_procedure
 
+# Opt-in neighboring evidence; each neighbor keeps its own citation identity
+python rag.py query "minimum contacts test" --answer --context-window 1 \
+  --db output/Civil_procedure/Civil_procedure_chroma \
+  --chunks output/Civil_procedure/Civil_procedure_chunks.jsonl \
+  --collection civil_procedure
+
 # Filter by content type
 python rag.py query "stream of commerce" --type case_opinion \
   --db output/Civil_procedure/Civil_procedure_chroma \
@@ -685,16 +691,19 @@ python rag.py query "Rule 12(b)(6)" --db-backend qdrant --hybrid \
 ```
 Query --> [1] Embedding (nomic MoE) --> Vector similarity (ChromaDB/Qdrant)
                                               |
-      --> [2] Legal analyzer + BM25 ---> weighted RRF (auto/--hybrid)
+      --> [2] Legal analyzer + BM25 ---> [3] weighted RRF (auto/--hybrid)
                                               |
                                               v
-                                  [3] Adaptive reranker (BGE)
+                                  [4] Adaptive reranker (BGE)
                                               |
                                               v
                                         Top-K results
                                               |
                                               v
-                                     [4] LLM answer (if --answer)
+                              [5] Neighbor assembly (opt-in)
+                                              |
+                                              v
+                                     [6] LLM answer (if --answer)
 ```
 
 1. **Vector search** retrieves semantically similar chunks.
@@ -706,13 +715,33 @@ Query --> [1] Embedding (nomic MoE) --> Vector similarity (ChromaDB/Qdrant)
 4. **Adaptive reranking** reranks vector fallback automatically but preserves
    calibrated hybrid order. `--rerank` forces BGE reranking and `--no-rerank`
    disables it.
-5. **Answer generation** (optional) gives each retrieved source a stable ID and
+5. **Neighbor assembly** (optional) resolves canonical preceding/following
+   chunks from the exact quality-attested JSONL generation. It preserves the
+   ranked hits, hard filters, source/chapter boundary, and one stable ID per
+   supplementary source.
+6. **Answer generation** (optional) gives each retrieved source a stable ID and
    requires the configured LLM to cite those sources as `[S1]`, `[S2]`, and so on.
 
 Use `--vector-only` to suppress lexical retrieval. Advanced reproducibility
 controls are `--overfetch`, `--rrf-k`, `--dense-weight`, `--sparse-weight`, and
 `--reranker-model`. Search responses distinguish the requested mode (`auto`,
 `hybrid`, or `vector`) from the effective mode after any safe fallback.
+
+`--context-window 1` or `2` attaches supplementary neighbors after ranking;
+the default `0` performs no context-specific snapshot load and preserves the
+historical response shape. Context-enabled queries require the chunks and
+quality-report SHA-256 values to match the active index manifest for either
+backend. Assembly follows final published order, never crosses a source or
+explicit chapter, reapplies content/chapter filters, reserves ranked primaries,
+and emits identical text only once while retaining equivalent-source aliases.
+Previous chunks contribute their tail and following chunks their head. Bound
+the total and per-neighbor supplementary payload with the character-based
+`--context-max-characters` and `--context-segment-characters` controls. Answer
+generation separately caps each rendered primary or neighbor excerpt at 2,400
+characters and admits at most five primaries plus ten supplementary sources.
+The defaults are 8,000 total and 1,600 per neighbor; hard maxima are 32,000 and
+8,000. Ranked retrieval metrics remain based only on primary hits;
+supplementary context is not promoted into the ranking.
 
 ### Answer Generation (`--answer`)
 
@@ -724,6 +753,13 @@ uncited answer paragraphs, or direct quotations absent from the exact supplied
 source excerpt cause the pipeline to withhold the entire answer. Long chunks use
 a query-centered excerpt so matching evidence near the end is not discarded.
 Empty responses and explicit insufficient-evidence responses also abstain.
+When neighbor assembly is enabled, every rendered supplementary segment
+receives its own `[S#]` label and stable ID; byte-identical occurrences are
+represented as equivalent-source aliases. The pipeline never concatenates
+neighbor text under the primary chunk's citation, so quote validation and
+source tracing remain exact. Supplementary source mappings report `score: null`
+and `score_kind: supplementary_context`; they never inherit the primary hit's
+relevance score.
 
 The terminal output prints the answer and cited source locations before the
 ordinary ranked results. Combine `--answer` with `--json` for a structured
@@ -1157,6 +1193,7 @@ deterministic and make no LLM calls unless an LLM feature flag is supplied.
 |---------|---------------|--------------|
 | Content classification | `--llm-classify` | Replaces regex type detection with LLM inference per chunk |
 | Contextual retrieval | `--contextualize` | Generates 1-2 sentence context prefix per chunk (Anthropic pattern) |
+| Neighbor assembly | `query --context-window N` | Adds manifest-bound adjacent evidence after ranking while preserving independent citations |
 | Heading reconstruction | `--reconstruct-headings` | Infers full section paths for bare headings ("B", "III") |
 | Quality scoring | `--quality-score` | Rates each chunk 1-5 for RAG usefulness |
 | Answer generation | `--answer` (on query) | Produces source-cited answers and abstains when citations are unsupported |
@@ -1247,11 +1284,11 @@ before work begins, publish the JSONL via atomic replacement, and retain the
 vector lease until the matching index commits. A crash therefore exposes
 neither partial JSONL nor an apparently clean old index paired with a new
 corpus. Before any vector-client mutation, indexing validates the adjacent
-quality report against one exact chunks snapshot; schema-v6 manifests bind the
-validated report SHA-256. Chroma hybrid search independently compares both the
-chunks and quality-report SHA-256 values with the manifest, parses and hashes
-one exact file-handle snapshot, and refuses
-cross-generation lexical/vector fusion until reindexing. A legacy Chroma index
+quality report against one exact chunks snapshot; schema-v7 manifests bind the
+validated schema-v3 report SHA-256. Chroma hybrid search and opt-in neighbor
+assembly compare both the chunks and quality-report SHA-256 values with the
+manifest, parse and hash one exact file-handle snapshot, and refuse
+cross-generation retrieval until reindexing. A legacy Chroma index
 without a manifested source SHA-256 falls back to vector retrieval with a
 warning instead of fusing unproven lexical data. Reranking begins only after the
 retrieval lease and vector client are released, so model or API latency does not
@@ -1412,8 +1449,8 @@ validating their artifacts as follows:
 |-------|-----------|
 | Convert | Schema-v2 immutable original/effective PDF binding, config/model lock, and exact JSON/Markdown/derived-PDF output hashes |
 | Chunk | Schema-v3 exact Docling/conversion/recovery inputs, immutable structure-profile receipt, output hash, and strict JSONL schema |
-| Quality | Schema-v2 chunk-input provenance plus exact Docling/chunks/parameters binding and every required PASS check |
-| Index | Clean compatible manifest plus report binding, physical IDs/count, and chunk hashes |
+| Quality | Schema-v3 chunk-input provenance plus exact Docling/chunks/parameters/retrieval-linkage binding and every required PASS check |
+| Index | Clean schema-v7 manifest plus schema-v3 report binding, physical IDs/count, and chunk hashes |
 | Export | Source/config completion and output hash |
 | Chapter export | Exact manifested chapter-file set and hashes |
 | RAPTOR | Source/config-bound tree schema and statistics |
@@ -1433,9 +1470,12 @@ On failure, the pipeline prints a ready-to-paste resume command.
 
 Conversion schema-v1 and chunk schema-v1/v2 completion files remain readable as
 migration inputs but are never accepted as verified resume evidence. Schema-v1
-quality reports and index bindings are not accepted for query, export, or
-indexing. Migrate the whole artifact chain in order, using the same processing
-flags, embedding model, and explicit structure profile as the original run:
+or schema-v2 quality reports and pre-v7 index bindings are not accepted for
+export or indexing. A narrow query-only compatibility path accepts a schema-v6
+manifest paired with its schema-v2 quality report when neighbor context is off;
+`--context-window 1` or `2` requires schema-v7/schema-v3 evidence. Migrate the
+whole artifact chain in order, using the same processing flags, embedding model,
+and explicit structure profile as the original run:
 
 ```bash
 # Rebuild conversion, chunks, and quality evidence when needed, then reconcile
@@ -1450,8 +1490,9 @@ python rag.py full --pdf Book.pdf --resume --full-reindex \
 
 Do not query or export the old collection until this command finishes. Resume
 keeps valid schema-v2 conversion evidence, rebuilds invalid or pre-v3 chunk
-evidence under schema v3, regenerates the schema-v2 quality report from the
-exact chunk-completion inputs, and then reconciles or rebuilds an index whose
+evidence under schema v3 and chunking policy v21, regenerates the schema-v3
+quality report from the exact chunk-completion inputs, and then reconciles or
+rebuilds an index whose
 prior quality binding is incompatible. The chunk receipt records the selected
 profile name, revision, schema, and canonical policy SHA-256 plus a
 credential-free composite binding between that receipt and the complete
@@ -1554,6 +1595,11 @@ Each enriched chunk carries:
 | `embedding_token_count` | int | Token count of the exact contextualized, task-prefixed model input, including special tokens |
 | `source_lineage_schema_version` | int | Version of the exact source-item lineage contract |
 | `source_items` | list[object] | Deterministic Docling refs with labels, parent refs, pages, and optional bounding boxes |
+| `retrieval_linkage_schema_version` | int | Version of the stable context-link contract |
+| `stable_id` | str | Intrinsic `chunk_<digest>` identity; independent of output position and derived linkage |
+| `context_parent_id` | str | Deterministic source/chapter context group; empty when no explicit chapter is safe to link |
+| `previous_stable_id` | str | Immediate prior chunk in final published order within the same context parent, or empty |
+| `next_stable_id` | str | Immediate following chunk in final published order within the same context parent, or empty |
 | `chunk_index` | int | Positional index in output |
 
 ### Content Types
@@ -1621,6 +1667,16 @@ python eval.py \
   --depth 100 \
   --json-report output/eval/current.json
 
+# Preserve primary ranking metrics while serializing adjacent evidence
+python eval.py \
+  --queries my_judged_queries.jsonl \
+  --chunks output/Civil_procedure/Civil_procedure_chunks.jsonl \
+  --db output/Civil_procedure/Civil_procedure_chroma \
+  --collection civil_procedure \
+  --context-window 1 \
+  --context-max-characters 8000 \
+  --context-segment-characters 1600
+
 # Compare 4 configs side-by-side
 python eval.py --compare \
   --chunks output/Civil_procedure/Civil_procedure_chunks.jsonl \
@@ -1647,6 +1703,10 @@ lower-fidelity lexical adapter for deterministic, no-download regression tests;
 its scores must not be presented as dense-retrieval quality. The checked-in
 CC0 Property and Constitutional Law mini corpora are controlled calibration
 fixtures, not substitutes for expert review of a full private textbook.
+The index adapter also accepts the three context flags shown above, records
+them in the report, and serializes supplementary segments without changing the
+primary result list used for ranking metrics. Offline BM25 rejects nonzero
+neighbor context because it has no manifested adjacency contract.
 For explicit no-evidence behavior, the adapter removes a pinned stop-word set
 and requires two distinct content-term matches for queries containing more than
 two content terms; its implementation version and stop-word digest are recorded
@@ -1823,7 +1883,9 @@ Search retrieval and Info's exact vector count execute in killable workers. Use
 independently.
 
 **Search tab**: query box, content type/chapter filters, three-state retrieval
-and reranker controls (Auto/forced/disabled), formatted results with metadata.
+and reranker controls (Auto/forced/disabled), a Neighbor context slider from
+zero to two, and formatted primary/neighbor results with source aliases. The UI
+uses the default total and per-segment character budgets.
 
 **Export tab**: single-file or split-chapter export with content type filters;
 returns one file download or a ZIP archive for split chapters.

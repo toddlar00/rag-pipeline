@@ -28,6 +28,7 @@ Status terms:
 | Synced-folder publication and read resilience | Implemented (draft) | [PR #31](https://github.com/toddlar00/rag-pipeline/pull/31): bounded Windows sharing-violation retries republish only a pinned staging file; marker and exact artifact reads retry only content-identical ctime churn while failing closed on content-generation changes; exact hashes bypass unsafe stat caching on Windows |
 | Immutable source-generation provenance | Implemented (draft) | [PR #34](https://github.com/toddlar00/rag-pipeline/pull/34): conversion, preprocessing, Docling, table recovery, chunking, and schema-v2 quality reports bind one exact PDF/Docling generation; multi-output leases prevent interleaved publishers; marker-owned private scratch is self-cleaning and dry-run prunable after hard termination. A disposable 912-page Ethics run produced 1,715 records, six bound recovered-table chunks, and a warning-free PASS report |
 | Configurable document-structure profiles | Implemented (draft) | [PR #35](https://github.com/toddlar00/rag-pipeline/pull/35): an immutable reviewed registry now drives front/back matter, primary divisions, TOC hierarchy, canonical titles, cross-references, classification, quality checks, and exports. Schema-v3 chunk receipts attest the exact profile revision and digest; unknown, mismatched, legacy, and tampered profile evidence fails closed |
+| Context-aware retrieval assembly | Validated locally | Stable published-order linkage, exact index-generation binding, source/chapter/filter isolation, duplicate-text alias provenance, bounded neighboring evidence, and independent citations are wired through Chroma, Qdrant, CLI, UI, grounded answers, and evaluation. A disposable 1,715-record Ethics index passed a real context query |
 | Ethics retrieval calibration | In progress | A 14-query, 24-judgment draft is pinned to the exact 1,715-record corpus and covers rules, explanations, cases, tables, cross-page chunks, filters, abstention, outline distractors, and positive outline intents; corpus-owner review and release thresholds remain outstanding |
 | Process supervision extraction | Implemented (draft) | [PR #33](https://github.com/toddlar00/rag-pipeline/pull/33): deadline supervision, Windows/POSIX containment, startup gates, termination confirmation, and generic entrypoint policy moved to stdlib-only `process_supervision.py`; `rag.py` retains late-bound compatibility wrappers |
 | Exact LLM transport budget | Integrated | [PR #1](https://github.com/toddlar00/rag-pipeline/pull/1) |
@@ -316,7 +317,8 @@ credential-free composite digest binds that receipt to the complete parameter
 digest without persisting endpoint userinfo, query credentials, or API keys.
 Old schema-v1/v2 chunk completion, a changed policy, missing fields, unknown
 names, detached receipts, and tampering all force re-chunking.
-Conversion and corpus-quality evidence remain schema v2; ordered resume keeps a
+At this profile milestone, conversion and corpus-quality evidence remained
+schema v2; ordered resume keeps a
 valid conversion generation, rebuilds chunks under schema v3, republishes the
 exactly bound quality report, and only then reconciles the index. Generated
 resume commands always serialize `--structure-profile`, including the default.
@@ -347,14 +349,49 @@ The stacked implementation is published as draft [PR
 #35](https://github.com/toddlar00/rag-pipeline/pull/35), based on PR #34 until
 the immutable-source dependency merges.
 
+## Context-aware retrieval assembly milestone
+
+The current branch adds stable, intrinsic chunk IDs plus immediate
+previous/next IDs within a deterministic source-and-explicit-chapter parent.
+Linkage is attached only after final deduplication and publication ordering, and
+schema-v3 quality evidence recomputes every linkage field so skipped,
+nonreciprocal, cross-source, cross-chapter, or forged relationships fail closed.
+Schema-v7 index manifests bind that exact chunks and quality generation. The
+legacy schema-v6/schema-v2 pair remains queryable only with context disabled;
+context-enabled retrieval requires regeneration.
+
+Query-time assembly is opt-in with a window of zero to two. It preserves ranked
+primary hits, reapplies content/chapter filters, reserves primary IDs, collapses
+overlapping neighborhoods, renders byte-identical text once with all equivalent
+source occurrences retained as aliases, and never crosses an unproven context
+boundary. Total and per-neighbor supplementary payloads are character-bounded;
+grounded-answer prompts apply a separate 2,400-character excerpt cap per source.
+Neighbors receive independent stable IDs and citations, never inherit an anchor
+relevance score, and cannot silently support the primary citation.
+
+The behavior is available through Chroma and Qdrant search, CLI JSON and text
+output, the local UI, and the evaluation harness. The service v1 response stays
+context-off and therefore retains its established wire shape. Failure-injected
+coverage includes stale and missing manifests, path replacement after snapshot
+load, wrong vector text or identity metadata, legacy compatibility, linkage
+tampering, duplicate provenance, prompt caps, UI serialization/rendering, and
+both backend paths.
+
+A disposable regeneration of the exact 912-page Ethics source produced 1,715
+records in 14 context parents: 1,679 linked chunks, 36 safely isolated chunks,
+and zero linkage issues. A schema-v7 Chroma index over that generation returned
+three unchanged ranked hits plus five unique chapter-9 neighbors for a
+contingent-fee query, using 4,361 of the 8,000 supplementary characters with no
+duplicate text, primary-ID reuse, source crossing, or chapter crossing. The
+existing user output tree remained unchanged.
+
 ## Next improvement milestones
 
 | Priority | Milestone | Acceptance evidence |
 |---|---|---|
 | P1 | Ethics retrieval calibration | A corpus-owner-reviewed judged set covers rule text, author explanation, cases, tables, cross-page continuations, filters, and abstention; dense, hybrid, and reranked modes receive explicit release thresholds |
-| P2 | Context-aware retrieval assembly | Stable adjacency/parent identifiers allow query-time neighboring-chunk stitching without duplicate text, chapter leakage, or citation ambiguity |
-| P2 | Table-specific retrieval | Large tables gain optional header-propagated cell/paragraph child records linked to their preserved parent table, with duplicate collapse and table-focused relevance tests |
-| P3 | Runtime decomposition | Vector lifecycle moves out of `rag.py` in a separate failure-injected milestone; process supervision is extracted behind the stable facade |
+| P2 | Table-specific retrieval | Large tables gain optional header-propagated cell/paragraph child records linked to their preserved parent table, with schema migration, parent/child duplicate collapse, independent citation provenance, and table-focused relevance tests |
+| P3 | Runtime decomposition | Vector lifecycle moves out of `rag.py` in a separate failure-injected milestone behind the stable facade |
 
 ## Completion rule
 
