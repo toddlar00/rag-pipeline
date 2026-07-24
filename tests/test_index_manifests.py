@@ -2424,6 +2424,53 @@ def _prepare_chroma_changed_existing_incremental(
 
 
 @pytest.mark.parametrize("backend", ["chroma", "qdrant"])
+def test_indexer_repairs_legacy_empty_manifest_hash(
+        monkeypatch, tmp_path, backend):
+    if backend == "chroma":
+        fixture = _prepare_chroma_changed_existing_incremental(
+            monkeypatch, tmp_path)
+        run_index = rag.index_chunks
+    else:
+        fixture = _prepare_qdrant_changed_existing_incremental(
+            monkeypatch, tmp_path)
+        run_index = rag.index_chunks_qdrant
+
+    rag._save_index_manifest(
+        fixture.db_path,
+        backend=backend,
+        collection_name="book",
+        embedding_model="model-a",
+        embedding_dimension=2,
+        chunk_hashes={fixture.stable_id: ""},
+        source_sha256="legacy-source",
+        source_record_count=1,
+    )
+
+    outcome = run_index(
+        fixture.chunks_path,
+        fixture.db_path,
+        collection_name="book",
+        embedding_model="model-a",
+    )
+
+    manifest = json.loads(
+        fixture.manifest_path.read_text(encoding="utf-8"))
+    assert manifest["chunk_hashes"] == {
+        fixture.stable_id: fixture.new_hash}
+    assert outcome.changed_records == 1
+    assert outcome.unchanged_records == 0
+    assert outcome.removed_records == 0
+    assert outcome.committed is True
+    assert not fixture.marker_path.exists()
+    if backend == "chroma":
+        assert fixture.collection.rows[fixture.stable_id]["metadata"][
+            "context"] == "Corrected classification"
+    else:
+        assert fixture.state.points[fixture.point_id].payload[
+            "context"] == "Corrected classification"
+
+
+@pytest.mark.parametrize("backend", ["chroma", "qdrant"])
 def test_index_manifest_and_vectors_use_one_chunks_byte_snapshot(
         monkeypatch, tmp_path, backend):
     if backend == "chroma":
@@ -2506,6 +2553,52 @@ def test_indexer_cannot_clean_marker_replaced_after_manifest_commit(
             fixture.chunks_path, fixture.db_path,
             collection_name="book", embedding_model="model-a")
 
+    marker = json.loads(fixture.marker_path.read_text(encoding="utf-8"))
+    assert marker["owner_token"] == replacement_token
+    assert marker["target_source_sha256"] == "replacement-generation"
+
+
+@pytest.mark.parametrize("backend", ["chroma", "qdrant"])
+def test_indexer_revalidates_marker_after_embedding_before_each_upsert(
+        monkeypatch, tmp_path, backend):
+    if backend == "chroma":
+        fixture = _prepare_chroma_changed_existing_incremental(
+            monkeypatch, tmp_path)
+        run_index = rag.index_chunks
+    else:
+        fixture = _prepare_qdrant_changed_existing_incremental(
+            monkeypatch, tmp_path)
+        run_index = rag.index_chunks_qdrant
+    original_manifest = fixture.manifest_path.read_bytes()
+    replacement_token = "replacement-before-upsert"
+    successful_embed = rag._embed_texts
+
+    def replace_marker_during_embedding(texts, model, **kwargs):
+        result = successful_embed(texts, model, **kwargs)
+        if texts != ["RAG index embedding-dimension probe"]:
+            rag._begin_index_update(
+                fixture.db_path,
+                backend=backend,
+                collection_name="book",
+                source_sha256="replacement-generation",
+                source_record_count=1,
+                owner_token=replacement_token,
+                replace_existing=True,
+            )
+        return result
+
+    monkeypatch.setattr(rag, "_embed_texts", replace_marker_during_embedding)
+
+    with pytest.raises(RuntimeError, match="ownership changed"):
+        run_index(
+            fixture.chunks_path,
+            fixture.db_path,
+            collection_name="book",
+            embedding_model="model-a",
+        )
+
+    assert fixture.state.upserts == []
+    assert fixture.manifest_path.read_bytes() == original_manifest
     marker = json.loads(fixture.marker_path.read_text(encoding="utf-8"))
     assert marker["owner_token"] == replacement_token
     assert marker["target_source_sha256"] == "replacement-generation"

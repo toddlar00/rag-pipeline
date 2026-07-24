@@ -56,6 +56,7 @@ import retrieval_core as _retrieval_core
 import run_telemetry as _run_telemetry
 import storage_policy as _storage_policy
 import table_retrieval_core as _table_retrieval_core
+import vector_lifecycle as _vector_lifecycle
 
 from llm_runtime import (
     LLMBudgetExceeded,
@@ -8974,6 +8975,62 @@ def _require_chroma_stable_ids(
     return physical_ids
 
 
+def _new_vector_update_lifecycle(
+        db_dir: Path, *, backend: str, collection_name: str,
+        source_sha256: str, source_record_count: int,
+        target_ids: set[str] | frozenset[str],
+        active_update_token: str | None,
+        ) -> _vector_lifecycle.VectorUpdateLifecycle:
+    """Compose backend-neutral lifecycle policy with late-bound facades."""
+    if backend == "chroma":
+        marker_path = _chroma_update_marker_path(
+            db_dir, collection_name=collection_name)
+
+        def begin_update(owner_token: str, replace_existing: bool):
+            return _begin_chroma_index_update(
+                db_dir, collection_name=collection_name,
+                source_sha256=source_sha256,
+                source_record_count=source_record_count,
+                owner_token=owner_token,
+                replace_existing=replace_existing)
+    elif backend == "qdrant":
+        marker_path = _qdrant_update_marker_path(
+            db_dir, collection_name=collection_name)
+
+        def begin_update(owner_token: str, replace_existing: bool):
+            return _begin_qdrant_index_update(
+                db_dir, collection_name=collection_name,
+                source_sha256=source_sha256,
+                source_record_count=source_record_count,
+                owner_token=owner_token,
+                replace_existing=replace_existing)
+    else:
+        raise ValueError(f"Unsupported vector lifecycle backend: {backend}")
+
+    def marker_owned(owner_token: str | None) -> bool:
+        return _index_update_marker_owned_by(
+            marker_path, owner_token, backend=backend,
+            collection_name=collection_name)
+
+    def finish_update(owner_token: str) -> None:
+        _finish_index_update(
+            marker_path, owner_token=owner_token, backend=backend,
+            collection_name=collection_name)
+
+    guard = _vector_lifecycle.UpdateGuard(
+        backend=backend,
+        collection_name=collection_name,
+        marker_path=marker_path,
+        active_token=active_update_token,
+        marker_owned_fn=marker_owned,
+        begin_update_fn=begin_update,
+        finish_update_fn=finish_update,
+        token_factory=lambda: uuid4().hex,
+    )
+    return _vector_lifecycle.VectorUpdateLifecycle(
+        target_ids=target_ids, guard=guard)
+
+
 def _index_chunks_chroma_impl(
         chunks_path: Path, chroma_dir: Path, *,
         collection_name: str = DEFAULT_COLLECTION,
@@ -9029,121 +9086,90 @@ def _index_chunks_chroma_impl(
         )
     )
     collection_existed_at_start = collection_exists
-    changed_count = source_record_count
-    unchanged_count = 0
-    removed_count = 0
-    reuse_existing_collection = collection_exists and not rebuild_collection
-    update_marker_path = _chroma_update_marker_path(
-        chroma_dir, collection_name=collection_name)
-    update_token = (
-        _active_update_token
-        if _index_update_marker_owned_by(
-            update_marker_path, _active_update_token, backend="chroma",
-            collection_name=collection_name)
-        else None
-    )
-    update_guarded = update_token is not None
-
-    def _ensure_update_guard() -> None:
-        nonlocal update_guarded, update_token
-        if update_guarded:
-            if not _index_update_marker_owned_by(
-                    update_marker_path, update_token, backend="chroma",
-                    collection_name=collection_name):
-                raise RuntimeError(
-                    "Chroma index update marker ownership was lost before "
-                    "physical mutation")
-            return
-        update_token = uuid4().hex
-        try:
-            _begin_chroma_index_update(
-                chroma_dir, collection_name=collection_name,
-                source_sha256=source_sha256,
-                source_record_count=source_record_count,
-                owner_token=update_token,
-                replace_existing=update_marker_path.exists())
-        except BaseException:
-            update_token = None
-            raise
-        update_guarded = True
+    plan = _vector_lifecycle.plan_reconciliation(chunk_info, old_hashes)
+    new_hashes = plan.new_hashes
+    update_lifecycle = _new_vector_update_lifecycle(
+        chroma_dir, backend="chroma", collection_name=collection_name,
+        source_sha256=source_sha256,
+        source_record_count=source_record_count,
+        target_ids=plan.target_ids,
+        active_update_token=_active_update_token)
 
     if rebuild_collection:
         log.info("Rebuilding Chroma collection '%s': %s",
                  collection_name, rebuild_reason)
-        _ensure_update_guard()
-        client.delete_collection(collection_name)
-        collection = None
-        collection_exists = False
 
-    if not collection_exists:
-        _ensure_update_guard()
-        collection = client.get_or_create_collection(
+    def _delete_collection() -> None:
+        client.delete_collection(collection_name)
+
+    def _create_collection():
+        return client.get_or_create_collection(
             name=collection_name,
             metadata={"hnsw:space": "cosine"},
         )
 
-    # --- Incremental indexing: skip unchanged chunks ---
-    if old_hashes:
-        changed_info = [
-            (record, chunk_id, chunk_hash)
-            for record, chunk_id, chunk_hash in chunk_info
-            if chunk_hash != old_hashes.get(chunk_id)
-        ]
-        changed = [record for record, _, _ in changed_info]
-        removed_ids = [k for k in old_hashes if k not in new_hashes]
-        changed_count = len(changed)
-        unchanged_count = source_record_count - changed_count
-        removed_count = len(removed_ids)
-        changed_existing_ids = [
-            chunk_id for _, chunk_id, _ in changed_info
-            if chunk_id in old_hashes
-        ]
-        deletion_ids = removed_ids + changed_existing_ids
-        _require_chroma_stable_ids(
-            collection, collection_name, set(old_hashes))
-        if deletion_ids:
-            delete_batch_size = _chroma_mutation_batch_size(client)
-            _ensure_update_guard()
-            for start in range(0, len(deletion_ids), delete_batch_size):
-                collection.delete(
-                    ids=deletion_ids[start:start + delete_batch_size])
-            _require_chroma_stable_ids(
-                collection, collection_name,
-                set(old_hashes).difference(deletion_ids))
+    def _verify_stable_ids(handle, expected):
+        return _require_chroma_stable_ids(
+            handle, collection_name, expected)
 
-        unchanged = len(records) - len(changed)
-        log.info(f"Incremental: {len(changed)} changed, {unchanged} unchanged "
-                 f"(skipped), {len(removed_ids)} removed")
-        if not changed:
-            _client_owner.close(client)
-            _save_index_manifest(
-                chroma_dir, backend="chroma",
-                collection_name=collection_name,
-                embedding_model=embedding_model,
-                embedding_dimension=embedding_dimension,
-                chunk_hashes=new_hashes, source_sha256=source_sha256,
-                source_record_count=source_record_count,
-                table_child_count=table_child_count,
-                quality_report_schema_version=quality_schema_version,
-                quality_report_sha256=quality_report_sha256)
-            if update_guarded:
-                _finish_index_update(
-                    update_marker_path, owner_token=update_token,
-                    backend="chroma", collection_name=collection_name)
-            disposition = "updated" if removed_count else "unchanged"
-            return _operation_contracts.IndexOutcome(
-                backend="chroma", disposition=disposition,
-                total_records=source_record_count,
-                changed_records=changed_count,
-                unchanged_records=unchanged_count,
-                removed_records=removed_count,
-                upserted_records=0, batch_count=0,
-                physical_count=source_record_count, committed=True)
-        records = changed
-    elif reuse_existing_collection:
-        # A compatible empty manifest is safe to populate only if the physical
-        # collection is also empty.
-        _require_chroma_stable_ids(collection, collection_name, set())
+    def _delete_stable_ids(handle, stable_ids, _verified) -> None:
+        delete_batch_size = _chroma_mutation_batch_size(client)
+        for start in range(0, len(stable_ids), delete_batch_size):
+            handle.delete(
+                ids=list(stable_ids[start:start + delete_batch_size]))
+
+    reconciled = _vector_lifecycle.reconcile_collection(
+        lifecycle=update_lifecycle,
+        plan=plan,
+        handle=collection,
+        collection_exists=collection_exists,
+        rebuild_collection=rebuild_collection,
+        delete_collection_fn=_delete_collection,
+        create_collection_fn=_create_collection,
+        verify_stable_ids_fn=_verify_stable_ids,
+        delete_stable_ids_fn=_delete_stable_ids,
+    )
+    collection = reconciled.handle
+
+    def _save_manifest():
+        return _save_index_manifest(
+            chroma_dir, backend="chroma",
+            collection_name=collection_name,
+            embedding_model=embedding_model,
+            embedding_dimension=embedding_dimension,
+            chunk_hashes=new_hashes, source_sha256=source_sha256,
+            source_record_count=source_record_count,
+            table_child_count=table_child_count,
+            quality_report_schema_version=quality_schema_version,
+            quality_report_sha256=quality_report_sha256)
+
+    if old_hashes:
+        log.info(
+            "Incremental: %d changed, %d unchanged (skipped), %d removed",
+            plan.changed_count, plan.unchanged_count, plan.removed_count)
+
+    if not plan.changed_items:
+        if reconciled.receipt is None:
+            raise RuntimeError(
+                "Vector reconciliation produced no final verification")
+        verified_ids = update_lifecycle.commit(
+            reconciled.receipt,
+            close_client_fn=lambda: _client_owner.close(client),
+            save_manifest_fn=_save_manifest)
+        disposition = (
+            "created" if not collection_existed_at_start else
+            "rebuilt" if rebuild_collection else
+            "updated" if plan.removed_count else
+            "unchanged")
+        return _operation_contracts.IndexOutcome(
+            backend="chroma", disposition=disposition,
+            total_records=source_record_count,
+            changed_records=plan.changed_count,
+            unchanged_records=plan.unchanged_count,
+            removed_records=plan.removed_count,
+            upserted_records=0, batch_count=0,
+            physical_count=len(verified_ids), committed=True)
+    records = list(plan.changed_records)
 
     # --- Parallel embedding + pipelined upsert ---
     # For API-based embeddings (Voyage, OpenAI, Cohere), embed batches in
@@ -9168,7 +9194,13 @@ def _index_chunks_chroma_impl(
     batches = _batch_index_records(
         records, embedding_model, max_records=BATCH_SIZE)
     prepared = [_prepare_chroma_batch(batch) for batch in batches]
-    _ensure_update_guard()
+    update_lifecycle.prepare_mutation()
+
+    def _upsert_prepared(ids, embeddings, documents, metadatas) -> None:
+        update_lifecycle.mutate(
+            lambda: collection.upsert(
+                ids=ids, embeddings=embeddings,
+                documents=documents, metadatas=metadatas))
 
     if embed_workers > 1:
         # Parallel embedding for API models (network I/O bound)
@@ -9188,8 +9220,8 @@ def _index_chunks_chroma_impl(
             # Upsert in order
             for i in range(len(batches)):
                 ids, embeddings, documents, metadatas = results_map[i]
-                collection.upsert(ids=ids, embeddings=embeddings,
-                                  documents=documents, metadatas=metadatas)
+                _upsert_prepared(
+                    ids, embeddings, documents, metadatas)
                 pbar.update(1)
         except BaseException as exc:
             parallel_error = exc
@@ -9208,8 +9240,7 @@ def _index_chunks_chroma_impl(
                 if item is None:
                     break
                 ids, embs, docs, metas = item
-                collection.upsert(ids=ids, embeddings=embs,
-                                  documents=docs, metadatas=metas)
+                _upsert_prepared(ids, embs, docs, metas)
                 pbar.update(1)
                 upsert_q.task_done()
 
@@ -9236,21 +9267,14 @@ def _index_chunks_chroma_impl(
                 worker_name="Chroma upsert worker",
                 primary_error=pipeline_error)
 
-    verified_ids = _require_chroma_stable_ids(
-        collection, collection_name, set(new_hashes))
-    _client_owner.close(client)
-    _save_index_manifest(
-        chroma_dir, backend="chroma", collection_name=collection_name,
-        embedding_model=embedding_model,
-        embedding_dimension=embedding_dimension,
-        chunk_hashes=new_hashes, source_sha256=source_sha256,
-        source_record_count=source_record_count,
-        table_child_count=table_child_count,
-        quality_report_schema_version=quality_schema_version,
-        quality_report_sha256=quality_report_sha256)
-    _finish_index_update(
-        update_marker_path, owner_token=update_token, backend="chroma",
-        collection_name=collection_name)
+    verification = update_lifecycle.verify(
+        plan.target_ids,
+        lambda expected: _require_chroma_stable_ids(
+            collection, collection_name, expected))
+    verified_ids = update_lifecycle.commit(
+        verification,
+        close_client_fn=lambda: _client_owner.close(client),
+        save_manifest_fn=_save_manifest)
 
     log.info(
         "Collection '%s' → %d documents",
@@ -9266,10 +9290,10 @@ def _index_chunks_chroma_impl(
     return _operation_contracts.IndexOutcome(
         backend="chroma", disposition=disposition,
         total_records=source_record_count,
-        changed_records=changed_count,
-        unchanged_records=unchanged_count,
-        removed_records=removed_count,
-        upserted_records=changed_count, batch_count=len(batches),
+        changed_records=plan.changed_count,
+        unchanged_records=plan.unchanged_count,
+        removed_records=plan.removed_count,
+        upserted_records=plan.changed_count, batch_count=len(batches),
         physical_count=len(verified_ids), committed=True)
 
 
@@ -9960,54 +9984,23 @@ def _index_chunks_qdrant_impl(
         )
     )
     collection_existed_at_start = collection_exists
-    changed_count = source_record_count
-    unchanged_count = 0
-    removed_count = 0
-    reuse_existing_collection = collection_exists and not rebuild_collection
-    update_marker_path = _qdrant_update_marker_path(
-        qdrant_dir, collection_name=collection_name)
-    update_token = (
-        _active_update_token
-        if _index_update_marker_owned_by(
-            update_marker_path, _active_update_token, backend="qdrant",
-            collection_name=collection_name)
-        else None
-    )
-    update_guarded = update_token is not None
-
-    def _ensure_update_guard() -> None:
-        nonlocal update_guarded, update_token
-        if update_guarded:
-            if not _index_update_marker_owned_by(
-                    update_marker_path, update_token, backend="qdrant",
-                    collection_name=collection_name):
-                raise RuntimeError(
-                    "Qdrant index update marker ownership was lost before "
-                    "physical mutation")
-            return
-        update_token = uuid4().hex
-        try:
-            _begin_qdrant_index_update(
-                qdrant_dir, collection_name=collection_name,
-                source_sha256=source_sha256,
-                source_record_count=source_record_count,
-                owner_token=update_token,
-                replace_existing=update_marker_path.exists())
-        except BaseException:
-            update_token = None
-            raise
-        update_guarded = True
+    plan = _vector_lifecycle.plan_reconciliation(chunk_info, old_hashes)
+    new_hashes = plan.new_hashes
+    update_lifecycle = _new_vector_update_lifecycle(
+        qdrant_dir, backend="qdrant", collection_name=collection_name,
+        source_sha256=source_sha256,
+        source_record_count=source_record_count,
+        target_ids=plan.target_ids,
+        active_update_token=_active_update_token)
 
     if rebuild_collection:
         log.info("Rebuilding Qdrant collection '%s': %s",
                  collection_name, rebuild_reason)
-        _ensure_update_guard()
-        client.delete_collection(collection_name)
-        collection_exists = False
 
-    # Create collection if needed (don't recreate on compatible incremental)
-    if not collection_exists:
-        _ensure_update_guard()
+    def _delete_collection() -> None:
+        client.delete_collection(collection_name)
+
+    def _create_collection():
         client.create_collection(
             collection_name=collection_name,
             vectors_config=models.VectorParams(
@@ -10020,85 +10013,86 @@ def _index_chunks_qdrant_impl(
                 ),
             },
         )
+        return client
 
-    # --- Incremental indexing via hash comparison ---
-    if old_hashes:
-        changed_info = [
-            (record, chunk_id, chunk_hash)
-            for record, chunk_id, chunk_hash in chunk_info
-            if chunk_hash != old_hashes.get(chunk_id)
-        ]
-        changed = [record for record, _, _ in changed_info]
-        removed_ids = [k for k in old_hashes if k not in new_hashes]
-        changed_count = len(changed)
-        unchanged_count = source_record_count - changed_count
-        removed_count = len(removed_ids)
-        changed_existing_ids = [
-            chunk_id for _, chunk_id, _ in changed_info
-            if chunk_id in old_hashes
-        ]
+    def _verify_stable_ids(handle, expected):
+        return _require_qdrant_stable_ids(
+            handle, collection_name, expected)
+
+    def _delete_stable_ids(handle, stable_ids, verified_point_ids) -> None:
         # Delete removals and stale versions of changed durable IDs first. A
         # post-delete identity check makes a no-op delete fail closed; the
         # final check likewise catches a no-op replacement upsert.
-        deletion_ids = removed_ids + changed_existing_ids
-        existing_point_ids = _require_qdrant_stable_ids(
-            client, collection_name, set(old_hashes))
-        # We can't delete by string ID in Qdrant, so use verified point IDs.
-        if deletion_ids:
-            points_to_delete = [
-                point_id
-                for stable_id in deletion_ids
-                for point_id in existing_point_ids[stable_id]
-            ]
-            if points_to_delete:
-                _ensure_update_guard()
-                delete_result = client.delete(
-                    collection_name,
-                    points_selector=models.PointIdsList(
-                        points=points_to_delete),
-                    wait=True)
-                _require_qdrant_update_completed(
-                    delete_result, "point deletion")
-            _require_qdrant_stable_ids(
-                client, collection_name,
-                set(old_hashes).difference(deletion_ids))
+        points_to_delete = [
+            point_id
+            for stable_id in stable_ids
+            for point_id in verified_point_ids[stable_id]
+        ]
+        if points_to_delete:
+            delete_result = handle.delete(
+                collection_name,
+                points_selector=models.PointIdsList(
+                    points=points_to_delete),
+                wait=True)
+            _require_qdrant_update_completed(
+                delete_result, "point deletion")
 
-        unchanged = len(records) - len(changed)
-        log.info(f"Incremental: {len(changed)} changed, {unchanged} unchanged "
-                 f"(skipped), {len(removed_ids)} removed")
-        if not changed:
-            _client_owner.close(client)
-            _save_index_manifest(
-                qdrant_dir, backend="qdrant",
-                collection_name=collection_name,
-                embedding_model=embedding_model,
-                embedding_dimension=dim,
-                chunk_hashes=new_hashes, source_sha256=source_sha256,
-                source_record_count=source_record_count,
-                table_child_count=table_child_count,
-                quality_report_schema_version=quality_schema_version,
-                quality_report_sha256=quality_report_sha256)
-            if update_guarded:
-                _finish_index_update(
-                    update_marker_path, owner_token=update_token,
-                    backend="qdrant", collection_name=collection_name)
-            disposition = "updated" if removed_count else "unchanged"
-            return _operation_contracts.IndexOutcome(
-                backend="qdrant", disposition=disposition,
-                total_records=source_record_count,
-                changed_records=changed_count,
-                unchanged_records=unchanged_count,
-                removed_records=removed_count,
-                upserted_records=0, batch_count=0,
-                physical_count=source_record_count, committed=True)
-        records = changed
-    elif reuse_existing_collection:
-        # A compatible empty manifest is safe to populate only if the physical
-        # collection is also empty.
-        _require_qdrant_stable_ids(client, collection_name, set())
+    reconciled = _vector_lifecycle.reconcile_collection(
+        lifecycle=update_lifecycle,
+        plan=plan,
+        handle=client,
+        collection_exists=collection_exists,
+        rebuild_collection=rebuild_collection,
+        delete_collection_fn=_delete_collection,
+        create_collection_fn=_create_collection,
+        verify_stable_ids_fn=_verify_stable_ids,
+        delete_stable_ids_fn=_delete_stable_ids,
+    )
+
+    def _save_manifest():
+        return _save_index_manifest(
+            qdrant_dir, backend="qdrant",
+            collection_name=collection_name,
+            embedding_model=embedding_model,
+            embedding_dimension=dim,
+            chunk_hashes=new_hashes, source_sha256=source_sha256,
+            source_record_count=source_record_count,
+            table_child_count=table_child_count,
+            quality_report_schema_version=quality_schema_version,
+            quality_report_sha256=quality_report_sha256)
+
+    if old_hashes:
+        log.info(
+            "Incremental: %d changed, %d unchanged (skipped), %d removed",
+            plan.changed_count, plan.unchanged_count, plan.removed_count)
+
+    if not plan.changed_items:
+        if reconciled.receipt is None:
+            raise RuntimeError(
+                "Vector reconciliation produced no final verification")
+        verified_point_ids = update_lifecycle.commit(
+            reconciled.receipt,
+            close_client_fn=lambda: _client_owner.close(client),
+            save_manifest_fn=_save_manifest)
+        verified_count = sum(
+            len(ids) for ids in verified_point_ids.values())
+        disposition = (
+            "created" if not collection_existed_at_start else
+            "rebuilt" if rebuild_collection else
+            "updated" if plan.removed_count else
+            "unchanged")
+        return _operation_contracts.IndexOutcome(
+            backend="qdrant", disposition=disposition,
+            total_records=source_record_count,
+            changed_records=plan.changed_count,
+            unchanged_records=plan.unchanged_count,
+            removed_records=plan.removed_count,
+            upserted_records=0, batch_count=0,
+            physical_count=verified_count, committed=True)
+    records = list(plan.changed_records)
 
     # Pipeline: embed batch N on GPU while upserting batch N-1 to disk
-    _ensure_update_guard()
+    update_lifecycle.prepare_mutation()
     from concurrent.futures import ThreadPoolExecutor
     BATCH_SIZE = 64
     batches = _batch_index_records(
@@ -10112,9 +10106,16 @@ def _index_chunks_qdrant_impl(
             item = upsert_queue.get()
             if item is None:
                 break
-            upsert_result = client.upsert(
-                collection_name=collection_name, points=item, wait=True)
-            _require_qdrant_update_completed(upsert_result, "point upsert")
+
+            def _upsert_points() -> None:
+                upsert_result = client.upsert(
+                    collection_name=collection_name,
+                    points=item,
+                    wait=True)
+                _require_qdrant_update_completed(
+                    upsert_result, "point upsert")
+
+            update_lifecycle.mutate(_upsert_points)
             pbar.update(1)
             upsert_queue.task_done()
 
@@ -10165,20 +10166,14 @@ def _index_chunks_qdrant_impl(
             worker_name="Qdrant upsert worker",
             primary_error=pipeline_error)
 
-    verified_point_ids = _require_qdrant_stable_ids(
-        client, collection_name, set(new_hashes))
-    _client_owner.close(client)
-    _save_index_manifest(
-        qdrant_dir, backend="qdrant", collection_name=collection_name,
-        embedding_model=embedding_model, embedding_dimension=dim,
-        chunk_hashes=new_hashes, source_sha256=source_sha256,
-        source_record_count=source_record_count,
-        table_child_count=table_child_count,
-        quality_report_schema_version=quality_schema_version,
-        quality_report_sha256=quality_report_sha256)
-    _finish_index_update(
-        update_marker_path, owner_token=update_token, backend="qdrant",
-        collection_name=collection_name)
+    verification = update_lifecycle.verify(
+        plan.target_ids,
+        lambda expected: _require_qdrant_stable_ids(
+            client, collection_name, expected))
+    verified_point_ids = update_lifecycle.commit(
+        verification,
+        close_client_fn=lambda: _client_owner.close(client),
+        save_manifest_fn=_save_manifest)
 
     verified_count = sum(len(ids) for ids in verified_point_ids.values())
     log.info(
@@ -10193,10 +10188,10 @@ def _index_chunks_qdrant_impl(
     return _operation_contracts.IndexOutcome(
         backend="qdrant", disposition=disposition,
         total_records=source_record_count,
-        changed_records=changed_count,
-        unchanged_records=unchanged_count,
-        removed_records=removed_count,
-        upserted_records=changed_count, batch_count=len(batches),
+        changed_records=plan.changed_count,
+        unchanged_records=plan.unchanged_count,
+        removed_records=plan.removed_count,
+        upserted_records=plan.changed_count, batch_count=len(batches),
         physical_count=verified_count, committed=True)
 
 

@@ -108,6 +108,13 @@ collection-scoped manifest and dirty-marker rules, incremental rebuild
 decisions, and query compatibility checks; `rag.py` injects schema, logging,
 atomic publication, artifact hashing, and vector-store lease collaborators.
 
+`vector_lifecycle.py` is the standard-library-only vector mutation policy
+layer. It computes deterministic add/replace/remove plans, owns dirty-marker
+acquisition and revalidation, invalidates stale verification evidence after
+every physical mutation, and permits manifest publication only after an exact
+post-mutation identity check. `rag.py` retains vector-store locking, client
+construction, embedding workers, and the physical Chroma/Qdrant adapters.
+
 `llm_adapters.py` translates Ollama, Gemini, and OpenAI-compatible transport
 responses into the typed, provider-neutral contracts in `llm_runtime.py`.
 Gemini remains lazily imported, while `rag.py` retains provider selection,
@@ -2154,6 +2161,7 @@ artifact_io.py          # Stdlib-only strict reads and atomic publication
 chunking_core.py        # Stdlib-only text preparation and classification
 quality_core.py         # Stdlib-only corpus quality reports and bindings
 index_state.py          # Stdlib-only index manifests and compatibility policy
+vector_lifecycle.py     # Stdlib-only guarded vector mutation and commit policy
 llm_adapters.py         # Typed LLM provider transport adapters
 cli_policy.py           # Stdlib-only CLI interpretation and serialization policy
 ingestion_core.py       # Stdlib-only PDF inspection and stripping safety policy

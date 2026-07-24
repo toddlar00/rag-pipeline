@@ -32,6 +32,7 @@ Status terms:
 | Table-specific retrieval | Implemented (draft) | [PR #37](https://github.com/toddlar00/rag-pipeline/pull/37): optional caption/header-propagated row children, source-wide continued-table eligibility, deterministic repeated-fragment identity, exact parent/child and source-shape attestation, family-aware result collapse, independent citations, and canonical-consumer isolation. A disposable Ethics run produced 69 children and returned the exact requested demographic row first |
 | Ethics retrieval calibration | In progress | A 14-query, 24-judgment draft is pinned to the exact 1,715-record corpus and covers rules, explanations, cases, tables, cross-page chunks, filters, abstention, outline distractors, and positive outline intents; corpus-owner review and release thresholds remain outstanding |
 | Process supervision extraction | Implemented (draft) | [PR #33](https://github.com/toddlar00/rag-pipeline/pull/33): deadline supervision, Windows/POSIX containment, startup gates, termination confirmation, and generic entrypoint policy moved to stdlib-only `process_supervision.py`; `rag.py` retains late-bound compatibility wrappers |
+| Vector-index lifecycle extraction | In progress | A standard-library-only policy layer now owns deterministic reconciliation, dirty-marker ownership, mutation epochs, exact-ID verification, and close/manifest/marker commit ordering; publication and exact-head review evidence remain outstanding |
 | Exact LLM transport budget | Integrated | [PR #1](https://github.com/toddlar00/rag-pipeline/pull/1) |
 | Qdrant manifest reconciliation | Integrated | [PR #2](https://github.com/toddlar00/rag-pipeline/pull/2) |
 | Qdrant interrupted-update guard | Integrated | [PR #3](https://github.com/toddlar00/rag-pipeline/pull/3) |
@@ -89,9 +90,9 @@ Python compatibility facade. These seams are integrated on `main`.
   callback/protocol boundaries; `rag.py` re-exports the established surface.
 - Runtime orchestration, mutable caches, and physical Chroma/Qdrant backends
   deliberately remain in `rag.py`. Process supervision is now extracted behind
-  late-bound facade wrappers; vector lifecycle is the next decomposition slice
-  because its lease and mutation boundaries require a separate failure-injected
-  milestone.
+  late-bound facade wrappers. Vector lifecycle is now extracted behind the same
+  stable facade on the active milestone branch; physical backend adapters,
+  leases, embeddings, and workers remain deliberately runtime-owned.
 - This phase is therefore a completed policy-seam extraction, not a claim that
   `rag.py` has become a thin or fully decomposed facade.
 
@@ -448,12 +449,44 @@ dependency/model-artifact policies, both offline retrieval baselines, and
 `git diff --check` pass. The stacked implementation is published as draft [PR
 #37](https://github.com/toddlar00/rag-pipeline/pull/37), based on PR #36.
 
+## Vector-index lifecycle extraction milestone
+
+`vector_lifecycle.py` now owns the backend-neutral transaction policy for one
+exact vector-index generation. It rejects duplicate source identities, plans
+deterministic additions, replacements, and removals, acquires or reuses a
+collection-scoped dirty marker before worker startup, and revalidates marker
+ownership immediately before every physical mutation. Each mutation advances
+an internal epoch, so verification evidence obtained before a later delete,
+create, or upsert cannot authorize commit.
+
+The Chroma and Qdrant paths retain their physical clients, locks, embedding
+pipelines, bounded scans, and backend-specific mutation checks in `rag.py`, but
+both now use the same lifecycle for reconciliation and publication. Commit is
+strictly ordered as marker revalidation, client close, marker revalidation,
+manifest publication, and marker cleanup. A close, manifest, ownership, or
+cleanup failure therefore cannot silently publish a clean but unverified index.
+Late-bound facade callbacks preserve the existing public and monkeypatch seams.
+
+Failure-injected tests cover add, replace, remove, mixed and no-op plans;
+foreign-marker replacement; marker creation failure; ownership loss after
+embedding and between upserts; receipt invalidation; rebuild verification; and
+every close/manifest/cleanup failure boundary. The full repository suite passes
+with 1,335 tests and 7 platform skips, along with Ruff, compile checks,
+dependency/model-artifact policy checks, and `git diff --check`. Disposable
+real-client runs against Chroma 1.5.5 and Qdrant local mode each completed a
+create, no-op, and mixed update with exactly two final records, two changed
+records, one removal, matching manifest hashes, and no residual dirty marker.
+Independent review and draft-PR publication remain before this milestone is
+complete.
+
 ## Next improvement milestones
 
 | Priority | Milestone | Acceptance evidence |
 |---|---|---|
 | P1 | Ethics retrieval calibration | A corpus-owner-reviewed judged set covers rule text, author explanation, cases, tables, cross-page continuations, filters, and abstention; dense, hybrid, and reranked modes receive explicit release thresholds |
-| P2 | Runtime decomposition | Vector lifecycle moves out of `rag.py` in a separate failure-injected milestone behind the stable facade |
+| P2 | Draft-stack integration and release rehearsal | The profile, context, table, and lifecycle branches are rebased or cumulatively integrated, their migration path is exercised from the last merged schema, and one exact-head release candidate passes the complete optional-client and policy matrix |
+| P3 | Evidence-grounded answer evaluation | Retrieval judgments expand into claim-level citation entailment, unsupported-claim and abstention scoring, adversarial prompt-injection fixtures, and explicit grounded-answer release thresholds |
+| P4 | Operational observability and recovery drills | Correlated telemetry measures stage latency, queue/backpressure, vector mutation counts, recovery time, and cancellation outcomes; hard-kill and synced-folder fault drills produce durable redacted reports |
 
 ## Completion rule
 
