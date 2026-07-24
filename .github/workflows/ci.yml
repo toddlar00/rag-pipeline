@@ -40,20 +40,7 @@ jobs:
       - name: Lint
         run: python -m ruff check .
       - name: Compile Python sources
-        run: >-
-          python -m py_compile
-          rag.py process_supervision.py retrieval_core.py artifact_io.py
-          chunking_core.py cli_policy.py
-          ingestion_core.py index_state.py llm_adapters.py model_artifacts.py
-          operation_contracts.py run_telemetry.py storage_policy.py retention.py
-          job_runtime.py job_manager.py supervised_worker.py
-          service_contracts.py service_runtime.py service_api.py
-          eval.py evaluation_metrics.py offline_retrieval.py
-          llm_runtime.py preprocess_pdf.py
-          scaffold_to_markdown.py inspect_chunks.py ui.py
-          tools/check_dependency_policy.py tools/check_licenses.py
-          tools/check_model_artifacts.py tools/check_vulnerabilities.py
-          tools/refresh_locks.py tools/refresh_model_artifacts.py
+        run: python tools/check_python_sources.py
       - name: Check GPU setup shell syntax
         run: bash -n setup_rtx5060.sh
 

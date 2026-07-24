@@ -2361,12 +2361,15 @@ rebuild with `--full-reindex` if needed.
 rag.py                  # Stable command/API facade and pipeline orchestration
 process_supervision.py  # Stdlib-only process containment and deadlines
 retrieval_core.py       # Stdlib-only retrieval models and pure algorithms
+table_retrieval_core.py # Stdlib-only table-row generation and family collapse
 artifact_io.py          # Stdlib-only strict reads and atomic publication
 chunking_core.py        # Stdlib-only text preparation and classification
+document_profiles.py    # Immutable reviewed document-layout policy registry
 quality_core.py         # Stdlib-only corpus quality reports and bindings
 index_state.py          # Stdlib-only index manifests and compatibility policy
 vector_lifecycle.py     # Stdlib-only guarded vector mutation and commit policy
 llm_adapters.py         # Typed LLM provider transport adapters
+llm_runtime.py          # Reproducible caching, fallback, budgets, and reports
 cli_policy.py           # Stdlib-only CLI interpretation and serialization policy
 ingestion_core.py       # Stdlib-only PDF inspection and stripping safety policy
 model_artifacts.py      # Stdlib-only model lock, byte verification, and ML-BOM
@@ -2412,7 +2415,9 @@ requirements-lock-tools.txt # Exact lockfile-generator pin
 requirements-*.lock     # Universal exact CPU locks with SHA-256 hashes
 dependency-license-policy.json # Denied licenses and reviewed exceptions
 dependency-vulnerability-policy.json # Expiring advisory exceptions and audit skips
-tools/                  # Policy checks, lock refresh, and operational drill CLI
+scripts/                # Repository-local convenience launchers
+docs/                   # Maintained ADRs, governance proposals, and archived plans
+tools/                  # Source/policy checks, lock refresh, and operational drills
 .github/workflows/      # CI, dependency compatibility, and security automation
 output/                 # Per-run book directories (auto-created)
 ```
@@ -2470,6 +2475,7 @@ a CUDA environment.
 
 ```bash
 pip install --require-hashes -r requirements-test.lock
+python tools/check_python_sources.py
 python tools/check_dependency_policy.py
 python tools/check_model_artifacts.py
 python -m ruff check .

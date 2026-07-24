@@ -2,8 +2,11 @@
 
 This roadmap was reconstructed on 2026-07-21 from the repository, tests, and
 published pull requests after the original chat brainstorm was not preserved as
-a durable artifact. It records the recoverable milestones and turns the
-remaining improvement themes into an explicit, ordered backlog.
+a durable artifact. It was comprehensively refreshed on 2026-07-24 against
+`main`, the exact PR #43 head, every open pull request, CI policy, the full test
+suite, and the two Claude-authored plans under `docs/`. It records the completed
+work without treating stale plan checkboxes as backlog, and turns the remaining
+improvements into an ordered, acceptance-testable release plan.
 
 Status terms:
 
@@ -16,6 +19,8 @@ Status terms:
 - **Validated locally** — implemented and exercised against the relevant real
   artifact, but not yet committed, reviewed, or merged.
 - **In progress** — active branch; not yet published as a PR.
+- **Owner review pending** — implementation is complete in a draft PR, but a
+  release decision requires an explicitly identified human owner.
 - **Planned** — scoped direction, not yet implemented.
 
 ## Current status
@@ -23,6 +28,7 @@ Status terms:
 | Milestone | Status | Durable result |
 |---|---|---|
 | Foundation | Baseline | End-to-end PDF ingestion, enriched chunking, shared LLM runtime, grounded answers, hybrid retrieval/reranking, evaluation harness, Chroma/Qdrant indexing, CLI, UI, docs, and tests |
+| Repository truth and exhaustive source gate | Validated locally | The current R0 branch relocates and tests the two local launchers, ignores `tmp/` and `.worktrees/`, replaces the stale compile list with deterministic Git-index discovery, curates the Claude plans and developer guide, adds the process-supervision ADR, and records the unresolved private-source policy as an explicit owner decision. The exact local tree passes 1,507 tests with 7 skips |
 | Ethics corpus coherence and publication quality | Implemented (draft) | [PR #31](https://github.com/toddlar00/rag-pipeline/pull/31): canonical scaffold reconstruction, exact source identity, complete tables and nested footnotes, exact embedding budgets, regenerated exports, and an exactly reconciled 1,715-record Chroma index |
 | Machine-readable corpus quality attestation | Implemented (draft) | [PR #31](https://github.com/toddlar00/rag-pipeline/pull/31): schema-v1 report binds the exact Docling source, chunks bytes, parameters, source-lineage coverage, tables, normalization, classification, entities, token budgets, and stable/hash roots; resume, export, retrieval, and index publication fail closed on missing, stale, malformed, or mismatched evidence |
 | Synced-folder publication and read resilience | Implemented (draft) | [PR #31](https://github.com/toddlar00/rag-pipeline/pull/31): bounded Windows sharing-violation retries republish only a pinned staging file; marker and exact artifact reads retry only content-identical ctime churn while failing closed on content-generation changes; exact hashes bypass unsafe stat caching on Windows |
@@ -30,7 +36,7 @@ Status terms:
 | Configurable document-structure profiles | Implemented (draft) | [PR #35](https://github.com/toddlar00/rag-pipeline/pull/35): an immutable reviewed registry now drives front/back matter, primary divisions, TOC hierarchy, canonical titles, cross-references, classification, quality checks, and exports. Schema-v3 chunk receipts attest the exact profile revision and digest; unknown, mismatched, legacy, and tampered profile evidence fails closed |
 | Context-aware retrieval assembly | Implemented (draft) | [PR #36](https://github.com/toddlar00/rag-pipeline/pull/36): stable published-order linkage, exact index-generation binding, source/chapter/filter isolation, duplicate-text alias provenance, bounded neighboring evidence, and independent citations are wired through Chroma, Qdrant, CLI, UI, grounded answers, and evaluation. A disposable 1,715-record Ethics index passed a real context query |
 | Table-specific retrieval | Implemented (draft) | [PR #37](https://github.com/toddlar00/rag-pipeline/pull/37): optional caption/header-propagated row children, source-wide continued-table eligibility, deterministic repeated-fragment identity, exact parent/child and source-shape attestation, family-aware result collapse, independent citations, and canonical-consumer isolation. A disposable Ethics run produced 69 children and returned the exact requested demographic row first |
-| Ethics retrieval calibration | In progress | [PR #43](https://github.com/toddlar00/rag-pipeline/pull/43): a current-schema clean-room rebuild preserved all 20 unique IDs behind 24 judgments in the exact 1,715-record corpus. A private owner packet now combines those judgments with 195 unique top-10 candidates across four modes, while a content-free receipt and strict four-mode release-policy contract make promotion explicit and review-bound. Actual owner decisions and final thresholds remain outstanding |
+| Ethics retrieval calibration | Owner review pending | [PR #43](https://github.com/toddlar00/rag-pipeline/pull/43): a current-schema clean-room rebuild preserved all 20 unique IDs behind 24 judgments in the exact 1,715-record corpus. A private owner packet now combines those judgments with 195 unique top-10 candidates across four modes, while a content-free receipt and strict four-mode release-policy contract make promotion explicit and review-bound. Actual owner decisions and final thresholds remain outstanding |
 | Process supervision extraction | Implemented (draft) | [PR #33](https://github.com/toddlar00/rag-pipeline/pull/33): deadline supervision, Windows/POSIX containment, startup gates, termination confirmation, and generic entrypoint policy moved to stdlib-only `process_supervision.py`; `rag.py` retains late-bound compatibility wrappers |
 | Vector-index lifecycle extraction | Implemented (draft) | [PR #38](https://github.com/toddlar00/rag-pipeline/pull/38): a standard-library-only policy layer owns deterministic reconciliation, dirty-marker ownership, mutation epochs, exact-ID verification, callback-reentry exclusion, legacy-hash repair, and close/manifest/marker commit ordering |
 | Cumulative release migration rehearsal | Implemented (draft) | [PR #39](https://github.com/toddlar00/rag-pipeline/pull/39): actual Chroma and Qdrant probes recreate the integrated schema-5 manifest, rebuild one exact collection to schema 8, preserve and query a sibling collection, verify the no-op path, and require immediate lock release |
@@ -650,24 +656,504 @@ schema, ownership-race, queue-overflow, and physical-operation boundaries and
 found no remaining P0/P1 blocker. The implementation is published against PR
 #41 as draft [PR #42](https://github.com/toddlar00/rag-pipeline/pull/42).
 
-## Next improvement milestones
+## 2026-07-24 evidence refresh
 
-The former P2 release rehearsal, P3 grounded-answer evaluation, P4a durable
-attempt evidence, and P4b queue-pressure/recovery-drill work are now published
-as draft PRs #39 through #42. The remaining material priority is:
+The forward plan below is based on the following repository state. These facts
+are a snapshot, not release claims:
 
-| Priority | Milestone | Acceptance evidence |
+- `main` is `54cdb00`. The current exact head is `e2196a1` on PR #43, 33
+  commits and 80 changed files ahead of `main` with 28,881 insertions and 2,014
+  deletions. Roughly half of the changed files are tests.
+- PRs #31 and #33-#43 form one dependency stack. PR #39 is cumulative only
+  through PR #38; PRs #40-#43 are later stacked work. PR #32 is a standalone
+  process-supervision design document, and PR #30 is an independent Dependabot
+  update. Neither belongs to the current implementation stack.
+- All implementation PRs are open drafts and GitHub reports them mergeable.
+  They have durable self-audit evidence, but none has a submitted GitHub review.
+  The repository's current GitHub plan does not permit protected-branch rules
+  for this private repository, so required review and exact-head checks are not
+  mechanically enforced.
+- The exact local head passes 1,493 tests with 7 skips. A statement-coverage
+  probe reports 75% over application and tool code when tests are omitted.
+  That number is directional: branch coverage is disabled and separately
+  launched workers are not automatically combined. CI does not currently
+  measure coverage.
+- CI is broad across Linux, Windows, Python 3.10-3.14, the full CPU environment,
+  the loopback service, both local vector clients, dependency resolution, SBOM,
+  vulnerability, license, model-artifact, and offline-evaluation checks. Its
+  PR #43 `py_compile` list is stale, however: it omits several current modules.
+  The current R0 branch replaces it with a tested, deterministic compile of all
+  Python sources in the proposed Git index; the first exact inventory contains
+  110 files.
+- There are no repository issues, milestones, tags, or GitHub releases. The
+  roadmap is therefore the only active backlog and there is no versioned
+  rollback point for the current release candidate.
+- Four supply-chain exceptions expire on 2026-08-31: the Chroma vulnerability
+  exception, normalized Torch and Torchvision audit skips, the PyMuPDF license
+  exception, and FlagEmbedding's missing wheel-license metadata allowance.
+- At the audited PR #43 head, `_run_civpro.py` and `_resume_civpro.py` remained
+  in the root; `tmp/` and `.worktrees/` were not ignored; and `CLAUDE.md` plus
+  `docs/` were untracked. The current R0 branch corrects those mechanical and
+  documentation-state defects. The 2,581-line, approximately 132 KB README
+  still requires the task-oriented decomposition planned in R12.
+
+## Claude-plan reconciliation
+
+The two files under `docs/superpowers/plans/` are useful design history, but
+they contain 59 unchecked boxes and stale branch, line-count, test-count, and
+interface assumptions. They must not be executed or committed verbatim.
+
+| Claude proposal | Actual repository state | Roadmap disposition |
 |---|---|---|
-| P1 | Ethics retrieval calibration | A corpus-owner-reviewed judged set covers rule text, author explanation, cases, tables, cross-page continuations, filters, and abstention; dense, hybrid, and reranked modes receive explicit release thresholds |
+| Repository hygiene | Implemented and validated on the current R0 branch except for the owner policy/PR lifecycle gates | Finish the private-source decision, publish the branch, and reconcile PR #32 before marking R0 complete |
+| Process-supervision extraction | Implemented by PR #33 with a stdlib-only policy module, compatibility facade, direct tests, and cross-platform CI | Mark the plan implemented/superseded; preserve a concise ADR instead of live checkboxes |
+| Document-structure profiles | Implemented by PR #35 with explicit per-call immutable profiles, fail-closed unknown layouts, and schema-v3 rebuild evidence | Retain the stronger implementation; explicitly reject the plan's mutable global, fallback, and legacy-compatibility proposals |
+| Stable adjacency/context retrieval | Implemented by PR #36 across stores, CLI, UI, grounded answers, and evaluation | Keep the code; add a complete owner-approved corpus ablation in R4 |
+| Table-specific retrieval | Implemented by PR #37, including attested row children and family-aware result collapse | Keep the code; add family-aware judgment semantics before enabling children in release calibration |
+| Vector-lifecycle extraction | Implemented and failure-injected by PR #38 | Remove it from the active backlog; retain the temporary Windows/Qdrant compatibility cost in R6 |
+| Ethics calibration | Review packet, receipt, and fail-closed four-mode release contract implemented by PR #43 | Corpus-owner relevance decisions and final thresholds remain R3 |
+| Leaf-module static typing | No mypy or Pyright configuration, dependency, or CI gate exists | Implement incrementally in R7 after branch convergence |
+| README split | Not implemented; the README has grown since the plan was written | Implement task-oriented documentation in R9 |
+| Dissolve the `rag`/jobs dependency seam | Still present: `job_manager.py` imports `rag`, while `rag.py` lazily imports `job_manager`; `service_runtime.py` depends on both | Promote from an assumption to the explicit R8 architecture milestone |
+
+The process-supervision plan links a specification that is absent from the
+current branch but present in standalone PR #32. PR #33 already implements that
+design. R0 must convert any still-useful rationale into an ADR, repair the link,
+and close or supersede PR #32 rather than merging an obsolete execution plan.
+
+The Claude material also exposes a documentation-policy contradiction. It says
+private source text must never be excerpted or paraphrased into committed
+artifacts, while tracked README/roadmap passages and PR #37's description
+include exact source-specific wording. The repository being private reduces
+exposure but does not resolve the contradiction. R0 therefore requires an owner
+decision about permitted metadata and a corresponding documentation audit
+before integration. History rewriting is not implied; if the owner requires
+historical removal, that must be a separately approved, carefully scoped action.
+
+## Detailed forward roadmap
+
+Priorities describe release order, not desirability. R0-R3 are the convergence
+gate and can proceed partly in parallel. R4-R6 make the first versioned release
+credible. R7-R10 reduce change risk and operating cost after the branch stack
+has converged. R11-R12 expand corpus confidence and product scope only after the
+same safety boundaries are reusable.
+
+### R0 (P0, small): establish documentation, privacy, and repository truth
+
+**Outcome.** One current source of truth exists before any cumulative merge,
+and local/private material cannot be mistaken for project content.
+
+**Progress (2026-07-24).** The mechanical and documentation work is implemented
+on `agent/repository-truth-compile-gate`: both launchers are moved and directly
+tested; local transient directories are ignored; 110 proposed tracked Python
+sources pass the exhaustive compile gate; the two plans are historical; the
+developer guide and process-supervision ADR match the current stack; and a
+content-free policy proposal inventories the remaining owner choice. Ruff,
+dependency/model-artifact policies, diff checks, 13 focused tests, and the full
+suite (1,507 passed, 7 skipped) are green. Owner policy selection, the active
+GitHub-surface audit, PR #32 disposition, and publication remain open.
+
+**Work.**
+
+- Decide and document which private-corpus artifacts are permitted in Git and
+  PRs. At minimum distinguish aggregate metrics, stable IDs, page references,
+  authored queries, content-free receipts, and raw/paraphrased source text.
+- Audit tracked docs, active PR descriptions/comments, and proposed docs against
+  that decision. Replace disallowed examples with synthetic or CC0 material.
+- Add `Implemented/Superseded` status banners to both Claude plans and convert
+  durable architectural rationale into short ADRs. Do not retain executable
+  unchecked task lists as the active backlog.
+- Reconcile PR #32 with PR #33: bring forward only the current ADR, repair the
+  dangling link, then close/supersede the standalone design PR.
+- Update `CLAUDE.md` before tracking it. It currently says process supervision
+  remains in `rag.py` and omits the newer policy, quality, retrieval, evaluation,
+  and operational modules.
+- Move `_run_civpro.py` and `_resume_civpro.py` under `scripts/`, correct their
+  root discovery, and ignore `tmp/` plus `.worktrees/` without deleting either
+  directory.
+- Replace CI's hand-maintained source compile list with deterministic discovery
+  of every Git-tracked Python file, with explicit exclusions documented in code.
+
+**Acceptance evidence.** A fresh clone has no dangling project-relative links;
+all tracked Python files are compiled by CI; the two plans clearly identify the
+implementing PRs; the updated developer guide matches the module graph; the
+privacy decision is recorded and the active PR/doc audit is attached; local
+scratch/worktree directories stay untracked; and the full suite remains green.
+
+### R1 (P0, medium): converge PRs #31-#43 into one reviewed exact-head change
+
+**Outcome.** `main` contains one reproducible tree rather than a long-lived
+stack whose middle cumulative PR stops before the current head.
+
+**Work.**
+
+- Freeze and record the intended exact tree. Create a new cumulative PR from
+  the current stack head to `main`, or equivalently advance a cumulative branch
+  without rewriting the focused review histories. Do not merge the stacked PRs
+  one by one and assume their earlier checks compose.
+- Keep PR #30 out of this convergence change. Its dependency/API migration is
+  R2, so functional integration and dependency churn remain independently
+  diagnosable.
+- Re-run every applicable workflow on the cumulative head, including the two
+  real-client migration/lock-release probes, the full locked CPU suite, service
+  loopback tests, offline suites, dependency policies, and supply-chain jobs.
+- Obtain a formal human review of the exact cumulative diff. Self-authored audit
+  comments remain useful evidence but are not a substitute for an independent
+  submitted review.
+- Because branch protection is unavailable on the present plan, record a manual
+  merge checklist with exact commit, check conclusions, reviewer, privacy
+  decision, migration result, and rollback commit. Alternatively, upgrade the
+  repository plan and require checks/review mechanically.
+- After the cumulative commit is on `main`, close the focused draft PRs as
+  superseded and preserve their audit links, following the PR #28 precedent.
+
+**Acceptance evidence.** The cumulative PR has no unexpected tree difference
+from the reviewed stack head; every required check passes on that exact commit;
+Chroma and Qdrant each rebuild the target generation, preserve a sibling
+collection, serve search, complete a no-op rerun, and release filesystem locks;
+an independent review and manual/protected merge gate are durable; and a clean
+clone of `main` reproduces all dependency-light tests.
+
+### R2 (P0, medium-large, deadline 2026-08-31): resolve dependency and license debt
+
+**Outcome.** No release relies on an expired exception or an untested bulk
+dependency update.
+
+**Work.**
+
+- Replace or rebase PR #30 after R1. It proposes 13 direct upgrades, including
+  major API lines for OpenAI, Cohere, Google GenAI, Sentence Transformers, and
+  PDF/vector dependencies, but currently fails the universal-lock consistency
+  check and does not update generated locks.
+- Upgrade in reviewable compatibility groups, regenerate every universal lock,
+  and test each provider adapter with deterministic fake transports plus one
+  explicitly authorized live smoke where credentials and cost policy permit.
+- Re-evaluate the Chroma vulnerability exception against the then-current pinned
+  release. If no fixed embedded client exists, record a fresh owner decision,
+  retain filesystem-local-only use, and keep Qdrant mandatory for networked
+  deployments.
+- Decide and record the legal basis for PyMuPDF. Either record the applicable
+  commercial license, accept the documented AGPL obligations for the intended
+  distribution, or replace/remove the dependency before distribution or hosted
+  use.
+- Reconfirm the Torch/Torchvision normalized-version audit and FlagEmbedding
+  upstream-license evidence; remove exceptions when tooling/package metadata
+  permits rather than merely extending dates.
+
+**Acceptance evidence.** Lock regeneration produces no diff on a second run;
+resolution passes on Python 3.10 and 3.14; `pip check`, the full installed suite,
+both vector-client probes, service profile, vulnerability policy, license
+policy, SBOM/ML-BOM, model-artifact verification, and offline release suites all
+pass; every remaining exception names an owner, narrow scope, evidence, and new
+review date; no exception is expired on the release commit.
+
+### R3 (P0, owner decision): finish Ethics review and four-mode calibration
+
+**Outcome.** The retrieval policy is grounded in owner-reviewed relevance, not
+agent-authored labels or convenient thresholds.
+
+**Work.**
+
+- Have the corpus owner review all 14 current queries and 24 judgments in the
+  private packet, explicitly accepting, editing, or rejecting each judgment.
+- Finalize the content-free review receipt only from the reviewed packet. Do not
+  infer approval from unchanged draft labels and do not put source text in the
+  receipt.
+- Run all four policy-bound retrieval modes against the exact approved corpus,
+  model locks, index manifest, and judged-set digest. Select per-mode floors only
+  after inspecting errors and confidence/denominator limits.
+- Record known blind spots separately: the current set is small, table children
+  are disabled for exact-ID correctness, and context-window benefit has not yet
+  been established by a full-corpus ablation.
+
+**Acceptance evidence.** No judgment remains `draft_requires_corpus_owner`; the
+receipt validates against the exact query and corpus digests; all four modes
+have explicit owner-approved floors and immutable configuration bindings; the
+release command fails closed on any missing/mismatched approval; and reports
+contain only policy-approved metadata. This milestone is blocked on human
+review by design, not on additional code generation.
+
+### R4 (P1, medium): make evaluation semantics match context and table retrieval
+
+**Outcome.** New retrieval features can be calibrated without false misses,
+inflated relevance, or answer-quality regressions.
+
+**Work.**
+
+- Add a versioned judgment-family schema so an attested row child may satisfy a
+  judged parent exactly once. Parent, matching child, sibling row, unrelated
+  table, duplicate family, and filtered-family cases must be explicit.
+- Bind table-child generation policy, family semantics, context window, context
+  budget, and collapse behavior into baselines and release policies.
+- After R3, run context windows 0/1/2 across all four modes. Compare primary
+  ranking, grounded claim/citation entailment, unsupported-claim rate,
+  abstention, prompt size, latency, and returned-evidence size.
+- Re-run table-disabled and table-enabled Ethics calibration with the same
+  owner-approved queries. Report both retrieval benefit and any parent/child
+  displacement rather than selecting only the favorable run.
+- Expand the approved set with chapter-balanced paraphrases, hard negatives,
+  filters, tables, cross-page continuations, numeric/multi-hop cases, ambiguity,
+  and abstention. Keep raw private evidence out of committed reports.
+
+**Acceptance evidence.** Deterministic unit tests cover every family case; one
+gold judgment cannot receive multiple credit; four-mode baselines reject schema
+or configuration drift; the complete ablation is reproducible; grounded-answer
+gates pass on the approved suite; and the owner signs off on the expanded set.
+
+### R5 (P1, medium): create a versioned release and migration contract
+
+**Outcome.** Operators can identify, reproduce, migrate to, and roll back a
+known release.
+
+**Work.**
+
+- Choose the first release version after R1-R3, add a changelog and release
+  notes, expose a CLI version, and tag the exact commit. Attach no private corpus
+  artifacts to a GitHub release.
+- Publish a compatibility matrix for Python versions, dependency profiles,
+  artifact/report schemas, profile receipts, Chroma/Qdrant backends, and
+  supported upgrade paths from the last `main` generation.
+- Turn the existing cumulative migration rehearsal into a documented preflight
+  and rollback runbook. Define backup, failure, retry, dirty-marker, sibling
+  collection, and downgrade expectations.
+- Add a machine-readable release manifest binding source commit, lock hashes,
+  model-artifact lock, schema versions, evaluation policy/receipt digests, and
+  completed workflow URLs or conclusions.
+
+**Acceptance evidence.** A disposable environment installs from locked inputs,
+migrates both backends from the prior generation, verifies search/no-op/sibling
+preservation, exercises the rollback runbook, and reproduces the release
+manifest. The Git tag and release notes identify the exact reviewed commit and
+known limitations.
+
+### R6 (P1, small-medium): retire or isolate vector-client compatibility debt
+
+**Outcome.** The Windows Qdrant cursor workaround is a tested adapter decision,
+not permanent private-client coupling hidden in orchestration.
+
+**Work.**
+
+- Preserve a minimal reproducer for the Windows local-Qdrant SQLite handle that
+  survives public `close()` after multi-collection migration.
+- Re-run it when Qdrant is upgraded in R2. If the pinned client reliably releases
+  every cursor, remove the private local-client detector and forced collection;
+  otherwise isolate both behind a versioned backend adapter with an explicit
+  sunset condition.
+- Expand the real-client matrix to prove immediate directory deletion after
+  create, incremental update, rebuild, sibling preservation, failure recovery,
+  and no-op on Windows.
+
+**Acceptance evidence.** The reproducer passes repeatedly on the supported
+Windows runner; no remote or non-Windows client receives the workaround; the
+adapter is version-gated and documented if retained; and removal is covered by
+the same lock-release regression tests.
+
+### R7 (P1, medium): add risk-based coverage, typing, lint, and architecture gates
+
+**Outcome.** CI detects untested or boundary-breaking changes without demanding
+a disruptive whole-repository rewrite.
+
+**Work.**
+
+- Commit Coverage.py configuration with branch measurement and subprocess data
+  combination where supported. First publish a trustworthy baseline, then add a
+  no-regression ratchet for safety-critical leaf modules and changed lines.
+- Prioritize uncovered behavior in `supervised_worker.py`, process supervision,
+  `rag.py` orchestration, the UI, inspection/scaffold CLIs, artifact review, and
+  dependency/security tooling. Distinguish genuinely uncovered code from child
+  processes that were not traced by the initial probe.
+- Introduce Pyright or mypy on stable stdlib-only leaves first:
+  `operation_contracts`, `cli_policy`, `index_state`, `document_profiles`,
+  `vector_lifecycle`, `service_contracts`, `evaluation_release`, and related
+  policy records. Expand by clean dependency layers, not by blanket ignores.
+- Add an import-DAG test that prevents leaf modules from importing `rag` or
+  physical clients and records the few intentional facade edges.
+- Stage additional Ruff rules after zero-warning baseline cleanup. Add
+  property/state-machine tests for strict JSON schemas, ownership markers,
+  publication recovery, pagination, and policy parsing; do not use a high
+  percentage target as a substitute for failure-injection quality.
+
+**Acceptance evidence.** CI reports branch and statement coverage with a
+documented subprocess caveat; changed safety-critical code cannot lower its
+ratchet; the initial typed leaf set passes with no broad suppression; forbidden
+import edges fail a focused test; and the full Python/OS matrix remains green.
+
+### R8 (P2, large in small slices): remove the `rag`/jobs/service dependency cycle
+
+**Outcome.** Runtime composition points inward through narrow protocols while
+`rag.py` remains a compatible public facade.
+
+**Work.**
+
+- Characterize job submission, startup gating, cancellation, exact-worker
+  termination, recovery, reindex, search, service request, and Windows cleanup
+  behavior before moving imports.
+- Define narrow runtime protocols for pipeline execution, search/index
+  operations, storage/retention, and telemetry. Inject implementations into job
+  and service layers instead of importing the `rag` module as a service locator.
+- Move application composition to one root module. Keep late-bound wrappers and
+  re-exports until all tests and callers have migrated.
+- Enforce the target dependency graph in the R7 architecture test and delete
+  compatibility edges only after direct consumers are proven absent.
+
+**Acceptance evidence.** `job_manager.py` and `service_runtime.py` no longer
+import `rag`; `rag.py` does not need a lazy `job_manager` import for core
+composition; existing CLI/service/Python surfaces remain compatible; direct
+protocol tests cover error propagation and recovery; and every supervision and
+real-client regression passes unchanged.
+
+### R9 (P2, large in behavior-preserving slices): decompose orchestration hot spots
+
+**Outcome.** High-risk changes no longer require editing thousand-line control
+flows or mirrored schema builders/validators.
+
+**Work.**
+
+- Extract `rag.main` (about 1,015 lines) and `interactive_menu` into a typed
+  command registry plus leaf handlers while preserving exact help text, defaults,
+  exit codes, resume serialization, and monkeypatch seams.
+- Split `_chunk_document_locked` (about 866 lines) into pure source preparation,
+  classification, chunk assembly, quality validation, and publication stages
+  coordinated by one transaction object. Preserve leases, provenance, fault
+  injection, and commit ordering.
+- Consolidate `quality_core`'s large report builder and validator around a
+  declarative exact-field schema so they cannot silently drift. Add generated
+  canonical examples plus mutation/property tests before deleting mirrored code.
+- Split very large test files by behavioral contract only when doing so improves
+  ownership and diagnostics; do not combine refactoring with policy changes.
+
+**Acceptance evidence.** Characterization snapshots prove CLI compatibility;
+each pure stage has direct tests; all failure-injection and source-generation
+tests pass; report bytes/digests remain stable unless a deliberate schema
+version changes; and each slice is independently reviewable and reversible.
+
+### R10 (P2, medium): establish performance and capacity budgets
+
+**Outcome.** Existing telemetry becomes an operational decision tool rather
+than descriptive data with no release ceiling.
+
+**Work.**
+
+- Define representative small, medium, and authorized large-corpus scenarios
+  for conversion, chunking, embedding, indexing, retrieval, reranking, grounded
+  answer generation, queue saturation, recovery, and retention.
+- Record wall time, p50/p95 latency, peak memory, queue wait/saturation, vector
+  mutations, storage growth, token reservations/use, cache behavior, and
+  caller-priced cost under pinned hardware/model/dependency identities.
+- Add generous regression budgets first, normalize noisy measurements, and keep
+  cost/network benchmarks opt-in unless credentials and spend ceilings are
+  explicit. Exercise bounded overload and cancellation rather than only the
+  success path.
+
+**Acceptance evidence.** Benchmarks emit redacted schema-validated reports;
+baselines name hardware and model/lock identities; repeated local/CI runs show
+documented variability; material regressions fail a dedicated non-flaky gate;
+and queue/recovery limits have an operator-facing capacity recommendation.
+
+### R11 (P3, medium): qualify profiles and retrieval across authorized corpora
+
+**Outcome.** The second structure profile and general retrieval claims are
+supported by real authorized evidence, not only synthetic fixtures or one
+private casebook.
+
+**Work.**
+
+- Build a content-free corpus/profile qualification matrix keyed by immutable
+  generation digest, profile/revision, page count, and validation status rather
+  than filenames or excerpts.
+- Add a structure-only diagnostic command that reports recognized divisions,
+  unmatched headings, front/back-matter decisions, and profile digest without
+  emitting source text.
+- Validate `roman-parts-book-v1` on at least one authorized real corpus before
+  calling it production-qualified. Add new profiles only as reviewed immutable
+  code; do not restore arbitrary runtime JSON or unknown-layout fallback.
+- For every production corpus, require owner-reviewed retrieval and grounded
+  answer suites, release floors, and drift evidence after profile/model/index
+  changes.
+
+**Acceptance evidence.** Each declared production profile has one real
+authorized validation receipt and synthetic regression fixtures; unknown or
+mismatched layouts fail before expensive publication; diagnostics contain no
+source excerpts; and release policy is corpus-specific rather than inferred
+from the Property/Constitutional Law mini suites.
+
+### R12 (P3, medium-large): improve packaging, documentation, and product UX
+
+**Outcome.** New operators can install and use the local product without reading
+a 2,581-line README or invoking repository-internal script paths.
+
+**Work.**
+
+- Split the README into a concise quickstart/architecture index plus focused
+  operator, ingestion, retrieval, evaluation, service, security/privacy,
+  migration, and contributor guides. Generate or test command examples against
+  the real parsers to prevent documentation drift.
+- Add project metadata and stable console entry points for pipeline, evaluation,
+  service, and inspection commands. Delay a `src/` relocation until import-cycle
+  work is complete; packaging and architecture migration need not be one change.
+- Add end-to-end UI/service tests for first-run setup, empty/error states,
+  cancellation/resume, accessible labels/keyboard use, result citations, and
+  recovery guidance. Keep browser artifacts content-free.
+- Keep the current service loopback-only. Any remote/multi-user deployment is a
+  separate product milestone requiring a threat model, TLS/proxy/auth design,
+  rate/tenant isolation, audit retention, and a resolved PyMuPDF distribution
+  basis; it is not an incidental host-binding flag.
+
+**Acceptance evidence.** A clean environment installs from the documented
+locked profile and runs each console entry point; docs links and examples are
+checked; the README remains a short navigable entry point; representative UI
+flows pass on Windows and Linux; and no change weakens loopback or private-data
+boundaries.
+
+## Recommended execution sequence
+
+| Sequence | Workstream | Dependency or gate |
+|---|---|---|
+| 1 | R0 documentation/privacy truth and R3 owner review | Start immediately; owner decisions can run while code is reviewed |
+| 2 | R1 exact-head convergence | Requires R0's integration policy; excludes dependency PR #30 |
+| 3 | R2 dependency/license resolution | Rebase on converged `main`; finish before 2026-08-31 |
+| 4 | R4 evaluation semantics and approved ablations | Requires R3's frozen judgments |
+| 5 | R5 first versioned release and R6 client-workaround decision | Requires R1-R4 and the R2 release locks |
+| 6 | R7 quality gates | Establish before architecture slices so later work is measurable |
+| 7 | R8 dependency direction and R9 orchestration decomposition | Small, behavior-preserving PRs guarded by R7 |
+| 8 | R10 capacity budgets, R11 corpus breadth, and R12 product experience | Build on stable release contracts and approved privacy policy |
+
+After owner review of this roadmap, create one GitHub issue per R0-R12 item,
+use P0-P3 labels plus a first-release milestone, and link each PR to exactly one
+primary acceptance section. The Markdown roadmap remains the architectural
+ordering document; issues become the live assignment and execution state.
+
+## Explicit non-goals
+
+- Do not execute the Claude plans verbatim or restore their mutable global
+  profile, unknown-layout fallback, or legacy profile-evidence compatibility.
+- Do not fabricate Ethics approvals, infer thresholds from the current small
+  denominator, or enable table children before family-aware evaluation exists.
+- Do not merge 13 dependency upgrades merely to make Dependabot green, and do
+  not extend security/license exceptions without a fresh owner decision.
+- Do not use a whole-project typing conversion, arbitrary coverage percentage,
+  or broad `# type: ignore` inventory as a proxy for risk reduction.
+- Do not perform a large `rag.py` rewrite before exact-head integration. Preserve
+  public facades and land characterized, reversible slices.
+- Do not expose Chroma or the current service over a network. Remote deployment
+  is outside the approved loopback/private-storage threat model.
+- Do not rewrite Git history, delete worktrees/scratch data, publish a release,
+  or close PRs until the corresponding owner-approved milestone authorizes it.
 
 ## Completion rule
 
-A milestone is complete only when its behavior is implemented, failure-injected,
-covered by the full test suite and static checks, exercised against the relevant
-real optional client where practical, independently reviewed, and published as a
-mergeable draft PR. Review evidence must be durable in a committed audit or PR
-review/comment rather than existing only in an ephemeral work log. A milestone
-becomes integrated only after merge into `main`.
+A code milestone is complete only when its behavior is implemented,
+failure-injected, covered by the full test suite and static checks, exercised
+against the relevant real optional client where practical, independently
+reviewed, and published as a mergeable draft PR. Technical self-audits may be
+durable supporting evidence, but release integration additionally requires a
+submitted human review or an owner-signed manual merge record for the exact
+commit. A milestone becomes integrated only after merge into `main`.
+
+An integrated milestone is release-ready only when its applicable corpus-owner,
+privacy, dependency, vulnerability, license, migration, and rollback gates also
+pass. A green implementation PR alone does not satisfy those owner or lifecycle
+decisions.
 
 Rows marked “Implemented (draft)” still require review and merge; the earlier
 merged milestones have reached the integrated state.
