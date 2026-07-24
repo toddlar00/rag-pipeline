@@ -364,8 +364,10 @@ Query-time assembly is opt-in with a window of zero to two. It preserves ranked
 primary hits, reapplies content/chapter filters, reserves primary IDs, collapses
 overlapping neighborhoods, renders byte-identical text once with all equivalent
 source occurrences retained as aliases, and never crosses an unproven context
-boundary. Total and per-neighbor supplementary payloads are character-bounded;
-grounded-answer prompts apply a separate 2,400-character excerpt cap per source.
+boundary. Total serialized supplementary evidence and per-neighbor text are
+character-bounded, locating metadata is independently capped and charged to the
+total, and grounded-answer prompts apply a separate 2,400-character excerpt cap
+per source.
 Neighbors receive independent stable IDs and citations, never inherit an anchor
 relevance score, and cannot silently support the primary citation.
 
@@ -381,8 +383,9 @@ A disposable regeneration of the exact 912-page Ethics source produced 1,715
 records in 14 context parents: 1,679 linked chunks, 36 safely isolated chunks,
 and zero linkage issues. A schema-v7 Chroma index over that generation returned
 three unchanged ranked hits plus five unique chapter-9 neighbors for a
-contingent-fee query, using 4,361 of the 8,000 supplementary characters with no
-duplicate text, primary-ID reuse, source crossing, or chapter crossing. The
+contingent-fee query, using 6,925 of the 8,000 serialized supplementary
+characters with no duplicate text, primary-ID reuse, source crossing, or
+chapter crossing. The
 existing user output tree remained unchanged.
 
 ## Next improvement milestones

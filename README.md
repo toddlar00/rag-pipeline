@@ -735,12 +735,14 @@ backend. Assembly follows final published order, never crosses a source or
 explicit chapter, reapplies content/chapter filters, reserves ranked primaries,
 and emits identical text only once while retaining equivalent-source aliases.
 Previous chunks contribute their tail and following chunks their head. Bound
-the total and per-neighbor supplementary payload with the character-based
-`--context-max-characters` and `--context-segment-characters` controls. Answer
-generation separately caps each rendered primary or neighbor excerpt at 2,400
-characters and admits at most five primaries plus ten supplementary sources.
-The defaults are 8,000 total and 1,600 per neighbor; hard maxima are 32,000 and
-8,000. Ranked retrieval metrics remain based only on primary hits;
+the total serialized supplementary evidence and each neighbor's text with the
+character-based `--context-max-characters` and
+`--context-segment-characters` controls. Locating metadata is independently
+bounded and charged to the total. Answer generation separately caps each
+rendered primary or neighbor excerpt at 2,400 characters and admits at most five
+primaries plus ten supplementary sources. The defaults are 8,000 total and
+1,600 per-neighbor text; hard maxima are 32,000 and 8,000. Ranked retrieval
+metrics remain based only on primary hits;
 supplementary context is not promoted into the ranking.
 
 ### Answer Generation (`--answer`)
