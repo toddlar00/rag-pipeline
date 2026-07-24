@@ -29,6 +29,7 @@ Status terms:
 | Immutable source-generation provenance | Implemented (draft) | [PR #34](https://github.com/toddlar00/rag-pipeline/pull/34): conversion, preprocessing, Docling, table recovery, chunking, and schema-v2 quality reports bind one exact PDF/Docling generation; multi-output leases prevent interleaved publishers; marker-owned private scratch is self-cleaning and dry-run prunable after hard termination. A disposable 912-page Ethics run produced 1,715 records, six bound recovered-table chunks, and a warning-free PASS report |
 | Configurable document-structure profiles | Implemented (draft) | [PR #35](https://github.com/toddlar00/rag-pipeline/pull/35): an immutable reviewed registry now drives front/back matter, primary divisions, TOC hierarchy, canonical titles, cross-references, classification, quality checks, and exports. Schema-v3 chunk receipts attest the exact profile revision and digest; unknown, mismatched, legacy, and tampered profile evidence fails closed |
 | Context-aware retrieval assembly | Implemented (draft) | [PR #36](https://github.com/toddlar00/rag-pipeline/pull/36): stable published-order linkage, exact index-generation binding, source/chapter/filter isolation, duplicate-text alias provenance, bounded neighboring evidence, and independent citations are wired through Chroma, Qdrant, CLI, UI, grounded answers, and evaluation. A disposable 1,715-record Ethics index passed a real context query |
+| Table-specific retrieval | Implemented (draft) | [PR #37](https://github.com/toddlar00/rag-pipeline/pull/37): optional caption/header-propagated row children, source-wide continued-table eligibility, deterministic repeated-fragment identity, exact parent/child and source-shape attestation, family-aware result collapse, independent citations, and canonical-consumer isolation. A disposable Ethics run produced 69 children and returned the exact requested demographic row first |
 | Ethics retrieval calibration | In progress | A 14-query, 24-judgment draft is pinned to the exact 1,715-record corpus and covers rules, explanations, cases, tables, cross-page chunks, filters, abstention, outline distractors, and positive outline intents; corpus-owner review and release thresholds remain outstanding |
 | Process supervision extraction | Implemented (draft) | [PR #33](https://github.com/toddlar00/rag-pipeline/pull/33): deadline supervision, Windows/POSIX containment, startup gates, termination confirmation, and generic entrypoint policy moved to stdlib-only `process_supervision.py`; `rag.py` retains late-bound compatibility wrappers |
 | Exact LLM transport budget | Integrated | [PR #1](https://github.com/toddlar00/rag-pipeline/pull/1) |
@@ -392,13 +393,67 @@ The stacked implementation is published as draft [PR
 #36](https://github.com/toddlar00/rag-pipeline/pull/36), based on PR #35 until
 the document-profile dependency merges.
 
+## Table-specific retrieval milestone
+
+The optional `--table-children` path now derives one independently citable
+retrieval record per strict Markdown data row while preserving the complete
+parent table as the canonical publication record. Every child repeats its
+caption, header, and separator, inherits exact source/page/section provenance,
+and receives a stable identity from its parent plus row ordinal. Children are
+appended after all canonical records and remain isolated from ordinary
+previous/next context. Continued fragments sharing one exact Docling table ref
+qualify by their aggregate source-row count, so a one-row continuation is no
+longer skipped merely because its sibling fragment contains the other rows.
+
+Repeated long rows can produce byte-identical row-packed fragments before the
+optional expansion step. Deterministic fragment occurrence metadata now runs
+on the default path before deduplication, preserves every legitimate source
+occurrence, keeps the historical identity of occurrence zero, and gives later
+occurrences distinct parent and child IDs. Source families must share an exact
+Markdown schema. Quality schema v4 strictly recomputes every role, count,
+ordinal, local dimension, source-wide row/fragment total, child rendering, and
+ordering invariant; it also compares non-recovered families with bound Docling
+matrix dimensions. PDF-recovered tables instead retain their hash-verified PDF
+and conversion-manifest evidence because the defective native matrix is the
+reason recovery was required.
+
+Index manifest schema v8 records the exact table-child count and requires a
+current quality binding whenever children exist. Search overfetches before
+family collapse, suppresses a parent only when a child from that same family
+is present, retains independently relevant sibling rows, and performs the
+collapse before reranking and final top-N selection in both Chroma and Qdrant.
+The deterministic offline BM25 adapter uses the same policy. Exports,
+flashcards, question and brief generation, citation graphs, and RAPTOR consume
+only canonical records, so enabling row retrieval does not duplicate study or
+publication material. Safe schema-v3 quality and schema-v6/v7 index generations
+remain readable where the requested feature does not require current evidence.
+
+A disposable run over the exact Ethics Docling generation produced 1,715
+canonical records plus 69 row children from 15 parent fragments across 13
+source-table families. All 1,784 stable IDs were unique, all 69 children were
+context-isolated, and the schema-v4 quality report passed with zero table issues.
+A real 768-dimensional Chroma index published schema-v8 evidence for all 1,784
+records. The query “What percent of U.S. lawyers were Black in 2021?” returned
+the exact `Black | 12.6 | 12.4 | 5 | 5` row first; canonical export loaded all
+1,784 records and emitted exactly 1,715. Original user Ethics artifacts remained
+byte-for-byte unchanged.
+
+Adversarial review reproduced and closed partial continued-table expansion,
+dimension-counter spoofing with JSON numeric lookalikes, identical-fragment
+loss, colliding parent IDs, incompatible same-source schemas, default-path
+deduplication loss, and false native-shape failures for PDF-recovered tables.
+The final independent re-audit found no remaining material issue. The complete
+suite passes with 1,304 tests and 7 platform skips; Ruff, the CI compile set,
+dependency/model-artifact policies, both offline retrieval baselines, and
+`git diff --check` pass. The stacked implementation is published as draft [PR
+#37](https://github.com/toddlar00/rag-pipeline/pull/37), based on PR #36.
+
 ## Next improvement milestones
 
 | Priority | Milestone | Acceptance evidence |
 |---|---|---|
 | P1 | Ethics retrieval calibration | A corpus-owner-reviewed judged set covers rule text, author explanation, cases, tables, cross-page continuations, filters, and abstention; dense, hybrid, and reranked modes receive explicit release thresholds |
-| P2 | Table-specific retrieval | Large tables gain optional header-propagated cell/paragraph child records linked to their preserved parent table, with schema migration, parent/child duplicate collapse, independent citation provenance, and table-focused relevance tests |
-| P3 | Runtime decomposition | Vector lifecycle moves out of `rag.py` in a separate failure-injected milestone behind the stable facade |
+| P2 | Runtime decomposition | Vector lifecycle moves out of `rag.py` in a separate failure-injected milestone behind the stable facade |
 
 ## Completion rule
 
