@@ -32,7 +32,7 @@ Status terms:
 | Table-specific retrieval | Implemented (draft) | [PR #37](https://github.com/toddlar00/rag-pipeline/pull/37): optional caption/header-propagated row children, source-wide continued-table eligibility, deterministic repeated-fragment identity, exact parent/child and source-shape attestation, family-aware result collapse, independent citations, and canonical-consumer isolation. A disposable Ethics run produced 69 children and returned the exact requested demographic row first |
 | Ethics retrieval calibration | In progress | A 14-query, 24-judgment draft is pinned to the exact 1,715-record corpus and covers rules, explanations, cases, tables, cross-page chunks, filters, abstention, outline distractors, and positive outline intents; corpus-owner review and release thresholds remain outstanding |
 | Process supervision extraction | Implemented (draft) | [PR #33](https://github.com/toddlar00/rag-pipeline/pull/33): deadline supervision, Windows/POSIX containment, startup gates, termination confirmation, and generic entrypoint policy moved to stdlib-only `process_supervision.py`; `rag.py` retains late-bound compatibility wrappers |
-| Vector-index lifecycle extraction | In progress | A standard-library-only policy layer now owns deterministic reconciliation, dirty-marker ownership, mutation epochs, exact-ID verification, and close/manifest/marker commit ordering; publication and exact-head review evidence remain outstanding |
+| Vector-index lifecycle extraction | Implemented (draft) | [PR #38](https://github.com/toddlar00/rag-pipeline/pull/38): a standard-library-only policy layer owns deterministic reconciliation, dirty-marker ownership, mutation epochs, exact-ID verification, callback-reentry exclusion, legacy-hash repair, and close/manifest/marker commit ordering |
 | Exact LLM transport budget | Integrated | [PR #1](https://github.com/toddlar00/rag-pipeline/pull/1) |
 | Qdrant manifest reconciliation | Integrated | [PR #2](https://github.com/toddlar00/rag-pipeline/pull/2) |
 | Qdrant interrupted-update guard | Integrated | [PR #3](https://github.com/toddlar00/rag-pipeline/pull/3) |
@@ -476,8 +476,10 @@ dependency/model-artifact policy checks, and `git diff --check`. Disposable
 real-client runs against Chroma 1.5.5 and Qdrant local mode each completed a
 create, no-op, and mixed update with exactly two final records, two changed
 records, one removal, matching manifest hashes, and no residual dirty marker.
-Independent review and draft-PR publication remain before this milestone is
-complete.
+An independent exploit-oriented re-audit reproduced and closed callback
+reentry during verification and commit, then found no remaining code blocker.
+The stacked implementation is published as draft [PR
+#38](https://github.com/toddlar00/rag-pipeline/pull/38), based on PR #37.
 
 ## Next improvement milestones
 
