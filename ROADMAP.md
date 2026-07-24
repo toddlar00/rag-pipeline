@@ -27,7 +27,7 @@ Status terms:
 | Machine-readable corpus quality attestation | Implemented (draft) | [PR #31](https://github.com/toddlar00/rag-pipeline/pull/31): schema-v1 report binds the exact Docling source, chunks bytes, parameters, source-lineage coverage, tables, normalization, classification, entities, token budgets, and stable/hash roots; resume, export, retrieval, and index publication fail closed on missing, stale, malformed, or mismatched evidence |
 | Synced-folder publication and read resilience | Implemented (draft) | [PR #31](https://github.com/toddlar00/rag-pipeline/pull/31): bounded Windows sharing-violation retries republish only a pinned staging file; marker and exact artifact reads retry only content-identical ctime churn while failing closed on content-generation changes; exact hashes bypass unsafe stat caching on Windows |
 | Ethics retrieval calibration | In progress | A 14-query, 24-judgment draft is pinned to the exact 1,715-record corpus and covers rules, explanations, cases, tables, cross-page chunks, filters, abstention, outline distractors, and positive outline intents; corpus-owner review and release thresholds remain outstanding |
-| Process supervision extraction | Validated locally | Deadline supervision, Windows/POSIX containment, startup gates, termination confirmation, and generic entrypoint policy moved to stdlib-only `process_supervision.py`; `rag.py` retains late-bound compatibility wrappers |
+| Process supervision extraction | Implemented (draft) | [PR #33](https://github.com/toddlar00/rag-pipeline/pull/33): deadline supervision, Windows/POSIX containment, startup gates, termination confirmation, and generic entrypoint policy moved to stdlib-only `process_supervision.py`; `rag.py` retains late-bound compatibility wrappers |
 | Exact LLM transport budget | Integrated | [PR #1](https://github.com/toddlar00/rag-pipeline/pull/1) |
 | Qdrant manifest reconciliation | Integrated | [PR #2](https://github.com/toddlar00/rag-pipeline/pull/2) |
 | Qdrant interrupted-update guard | Integrated | [PR #3](https://github.com/toddlar00/rag-pipeline/pull/3) |
@@ -236,7 +236,9 @@ restoration. The unchanged real-process characterization suite passes on the
 facade. Real supervised `info` and Ethics hybrid-query smokes also pass; the
 Rule-1.5(c) table remains rank 1. The complete repository suite passes with
 1,144 tests and 7 platform skips; Ruff, compileall, and `git diff --check` are
-clean.
+clean. The stacked implementation is published as draft [PR
+#33](https://github.com/toddlar00/rag-pipeline/pull/33), based on PR #31 until
+the Ethics-coherence dependency merges.
 
 ## Next improvement milestones
 
