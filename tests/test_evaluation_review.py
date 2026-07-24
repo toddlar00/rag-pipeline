@@ -198,6 +198,18 @@ def test_prepare_packet_binds_exact_private_evidence(tmp_path):
     assert packet["template_sha256"] == summary["template_sha256"]
 
 
+def test_prepare_packet_preflights_exact_serialized_size(monkeypatch, tmp_path):
+    queries, chunks, _source_queries, _source_chunks = _draft_fixture(tmp_path)
+    packet_path = tmp_path / "oversize-packet.json"
+    monkeypatch.setattr(evaluation_review, "MAX_PACKET_BYTES", 256)
+
+    with pytest.raises(ValueError, match="would exceed the publication limit"):
+        evaluation_review.prepare_review_packet(
+            queries, chunks, packet_path)
+
+    assert not packet_path.exists()
+
+
 def test_review_packet_groups_parent_and_accepted_child_evidence(tmp_path):
     parent = {
         "text": """Rule table

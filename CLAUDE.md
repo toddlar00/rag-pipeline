@@ -41,6 +41,9 @@ uv pip install --torch-backend cpu --require-hashes -r requirements-full.lock -r
 # Offline retrieval regression (network-free, thresholds + baseline gates)
 python eval.py --retriever bm25 --queries evaluation/suites/property/queries.jsonl \
   --chunks evaluation/suites/property/chunks.jsonl --k 1 3 5 --depth 10
+python eval.py --retriever bm25 \
+  --queries evaluation/suites/table_family/queries.jsonl \
+  --chunks evaluation/suites/table_family/chunks.jsonl --k 1 3 5 --depth 10
 
 # Regenerate lockfiles (never hand-edit *.lock)
 python tools/refresh_locks.py            # same versions

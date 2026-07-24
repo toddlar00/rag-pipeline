@@ -1779,7 +1779,14 @@ sibling, unrelated table, repeated family hit, or result that merely claims the
 same parent in backend metadata earns no credit. Child IDs must be sorted and
 unique, belong to the parent's fully attested family in the pinned chunks
 artifact, and be included in corpus-owner review. A family-bearing suite must
-pin every query to the same exact corpus SHA-256 and record count.
+pin every query to the same exact corpus SHA-256, record count, and stable-ID
+scheme. Direct Python callers must derive a sealed `TableFamilyAttestation`
+from the exact corpus with `evaluation_contract.attest_table_families`; the
+evaluator rejects caller-authored membership mappings. Full reports name the
+canonical judgment ID, the actual matched ID, and `match_kind` (`exact` or
+`accepted_table_child`). Summary reports retain the match kind but hash both
+identities. Retrieval aliases do not broaden claim-level grounding evidence:
+`grounding_case.entailed_by` must still name the exact model-visible source.
 [The table-family evaluation ADR](docs/architecture/decisions/table-family-evaluation.md)
 records the rejected blanket-alias alternatives and version migration.
 
@@ -1887,14 +1894,28 @@ python eval.py \
   --fail-over false_answer_rate=0 \
   --fail-over unsupported_claim_rate=0 \
   --max-regression ndcg@3=0
+
+# Focused table-family contract: selected rows earn one logical parent qrel,
+# while sibling and unrelated-family hard negatives remain misses at rank 1
+python eval.py \
+  --retriever bm25 \
+  --queries evaluation/suites/table_family/queries.jsonl \
+  --chunks evaluation/suites/table_family/chunks.jsonl \
+  --k 1 3 5 --depth 10 \
+  --json-report evaluation-reports/table-family.json \
+  --baseline-report evaluation/baselines/table-family-bm25.json
 ```
 
 `--retriever index` remains the default and exercises the real Chroma/Qdrant,
 embedding, hybrid, and reranker path. `--retriever bm25` is deliberately a
 lower-fidelity lexical adapter for deterministic, no-download regression tests;
 its scores must not be presented as dense-retrieval quality. The checked-in
-CC0 Property and Constitutional Law mini corpora are controlled calibration
-fixtures, not substitutes for expert review of a full private textbook.
+CC0 Property, Constitutional Law, and synthetic table-family mini corpora are
+controlled calibration fixtures, not substitutes for expert review of a full
+private textbook. The table-family suite deliberately contains two generated
+four-row families and hard negatives; it exercises exact corpus attestation,
+parent suppression, selected-child credit, exact-once scoring, filters, and
+full-detail match provenance through the public CLI.
 The index adapter also accepts the three context flags shown above, records
 them in the report, and serializes supplementary segments without changing the
 primary result list used for ranking metrics. Offline BM25 rejects nonzero
@@ -2023,6 +2044,9 @@ Approving a query also attests that its displayed unjudged retrieval candidates
 were checked for missing evidence; an abstention approval attests that the
 negative proposition was independently checked against the pinned corpus. A
 rejection requires revising the draft and preparing a new packet.
+Preparation computes the exact indented UTF-8 payload size before publication
+and fails without creating the output when the packet would exceed its parser
+ceiling.
 
 Once every decision is `approve`, the corpus owner—not an automated agent—can
 promote the set and issue a content-free receipt:
@@ -2136,9 +2160,9 @@ query digest, portable index snapshot fields, retrieval settings, and model
 lock where applicable; absolute local manifest paths are intentionally excluded
 from compatibility checks.
 
-CI runs both checked-in offline suites, enforces absolute and zero-tolerance
-baseline gates, and retains the redacted schema-v6 JSON reports for 30 days as
-the `offline-retrieval-evaluation` artifact. The repository's
+CI runs all three checked-in offline suites, enforces absolute and
+zero-tolerance baseline gates, and retains the redacted schema-v6 JSON reports
+for 30 days as the `offline-retrieval-evaluation` artifact. The repository's
 `eval_queries.jsonl` remains a ten-query keyword starter set, while
 `eval_queries_judged.jsonl` is the 24-query private Civil Procedure calibration.
 Create and expert-review a separate stable-ID set before calibrating any full
@@ -2417,7 +2441,7 @@ evaluation_review.py    # Private owner-review packets and portable receipts
 evaluation_release.py   # Strict four-mode retrieval release-policy contract
 evaluation_metrics.py   # Latency, memory, storage, usage, and cost measurements
 offline_retrieval.py    # Deterministic no-model BM25 evaluation adapter
-evaluation/suites/      # Pinned CC0 Property and Constitutional Law fixtures
+evaluation/suites/      # Pinned CC0 legal and synthetic table-family fixtures
 evaluation/baselines/   # Portable offline regression baselines
 eval_queries.jsonl      # Starter evaluation queries (10 CivPro)
 eval_queries_judged.jsonl # Pinned 24-query private CivPro calibration

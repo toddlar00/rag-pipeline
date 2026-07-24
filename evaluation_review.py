@@ -101,6 +101,18 @@ def _canonical_sha256(payload: object) -> str:
     return hashlib.sha256(_canonical_bytes(payload)).hexdigest()
 
 
+def _pretty_json_size(payload: object) -> int:
+    """Return the exact UTF-8 size used by private indented JSON writes."""
+    serialized = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        indent=2,
+        allow_nan=False,
+    ) + "\n"
+    return len(serialized.encode("utf-8"))
+
+
 def _hex_digest(value: object, *, label: str) -> str:
     if not isinstance(value, str) or _HEX64_RE.fullmatch(value) is None:
         raise ValueError(f"{label} must be a lowercase SHA-256 digest")
@@ -240,7 +252,8 @@ def _load_inputs(
         retrieval_eval._validate_declared_corpus_snapshot(
             queries, actual_hash=chunk_sha256, actual_count=len(records))
     retrieval_eval._validate_judged_ids(
-        queries, records, retrieval_core._chunk_id)
+        queries, records, retrieval_core._chunk_id,
+        corpus_sha256=chunk_sha256)
     retrieval_eval._validate_grounding_evidence_ids(
         queries, records, retrieval_core._chunk_id)
     if required_status is not None:
@@ -603,6 +616,11 @@ def prepare_review_packet(
         records=records, chunks_sha256=chunks_sha256,
         retrieval_candidates=retrieval_candidates,
         diagnostic_binding=diagnostic_binding)
+    packet_size = _pretty_json_size(packet)
+    if packet_size > MAX_PACKET_BYTES:
+        raise ValueError(
+            "review packet would exceed the publication limit: "
+            f"{packet_size} > {MAX_PACKET_BYTES} bytes")
     storage_policy.atomic_write_private_json(output_path, packet, indent=2)
     return {
         "schema_version": REVIEW_PACKET_SCHEMA_VERSION,

@@ -298,14 +298,26 @@ def _has_table_family_judgments(queries: list[dict]) -> bool:
 
 
 def _validate_attested_table_family_judgments(
-        queries: list[dict], family_members: dict[str, frozenset[str]] | None,
+        queries: list[dict],
+        attestation: evaluation_contract.TableFamilyAttestation | None,
 ) -> None:
     """Require every selected child alias to belong to its declared parent."""
     if not _has_table_family_judgments(queries):
         return
-    if not isinstance(family_members, dict):
+    if not isinstance(attestation, evaluation_contract.TableFamilyAttestation):
         raise ValueError(
             "Table-family judgments require an attested chunks artifact")
+    for query_index, query in enumerate(queries, 1):
+        corpus = query.get("corpus") or {}
+        if (
+            corpus.get("sha256") != attestation.corpus_sha256
+            or corpus.get("record_count") != attestation.corpus_record_count
+            or corpus.get("id_scheme") != attestation.id_scheme
+        ):
+            raise ValueError(
+                "Table-family attestation does not match the exact query "
+                f"corpus binding: query #{query_index}")
+    family_members = attestation.members
     for query_index, query in enumerate(queries, 1):
         for judgment_index, judgment in enumerate(
                 query.get("judgments", []), 1):
@@ -330,7 +342,9 @@ def _validate_attested_table_family_judgments(
 
 
 def _validate_judged_ids(queries: list[dict], records: list[dict],
-                         chunk_id_fn) -> dict[str, frozenset[str]]:
+                         chunk_id_fn, *, corpus_sha256: str | None = None,
+                         id_scheme: str = "retrieval_core._chunk_id",
+                         ) -> evaluation_contract.TableFamilyAttestation | None:
     known_chunks = {chunk_id_fn(record) for record in records}
     known_sources = {
         str(value).strip()
@@ -358,12 +372,16 @@ def _validate_judged_ids(queries: list[dict], records: list[dict],
         raise ValueError(
             "Judged IDs are absent from the declared chunks artifact: "
             + examples)
-    family_members = None
+    attestation = None
     if _has_table_family_judgments(queries):
-        family_members = table_retrieval_core.validated_table_family_members(
-            records, stable_id_fn=chunk_id_fn)
-    _validate_attested_table_family_judgments(queries, family_members)
-    return family_members or {}
+        if corpus_sha256 is None:
+            raise ValueError(
+                "Table-family validation requires the exact corpus SHA-256")
+        attestation = evaluation_contract.attest_table_families(
+            records, stable_id_fn=chunk_id_fn,
+            corpus_sha256=corpus_sha256, id_scheme=id_scheme)
+    _validate_attested_table_family_judgments(queries, attestation)
+    return attestation
 
 
 def _validate_grounding_evidence_ids(
@@ -481,8 +499,9 @@ def _validate_declared_index_impl(
             f"{manifest.get('source_record_count')}. Re-run indexing for this "
             "collection.")
 
-    family_members = _validate_judged_ids(
-        queries, records, rag_module._chunk_id)
+    table_family_attestation = _validate_judged_ids(
+        queries, records, rag_module._chunk_id,
+        corpus_sha256=source_sha256)
     _validate_grounding_evidence_ids(
         queries, records, rag_module._chunk_id)
 
@@ -517,7 +536,7 @@ def _validate_declared_index_impl(
     if include_runtime_context:
         snapshot["_identity_lookup"] = _chunk_identity_lookup_from_records(
             records, rag_module)
-        snapshot["_table_family_members"] = family_members
+        snapshot["_table_family_attestation"] = table_family_attestation
     return snapshot
 
 
@@ -799,10 +818,12 @@ def _validate_query(query: dict, *, label: str = "query") -> None:
     if has_table_family and (
             not isinstance(corpus, dict)
             or corpus.get("sha256") is None
-            or corpus.get("record_count") is None):
+            or corpus.get("record_count") is None
+            or not isinstance(corpus.get("id_scheme"), str)
+            or not corpus["id_scheme"].strip()):
         raise ValueError(
             f"{label} table-family judgments require an exact corpus SHA-256 "
-            "and record count")
+            "record count, and ID scheme")
 
     grounding_case = query.get("grounding_case")
     if grounding_case is not None:
@@ -1185,7 +1206,13 @@ def _grade_results(results: list[dict], judgments: list[dict]) -> list[dict]:
         for judgment in judgments if judgment["relevance"] > 0
     }
     aliases = {
-        satisfying_id: (judgment["id_type"], judgment["id"])
+        satisfying_id: {
+            "judgment": (judgment["id_type"], judgment["id"]),
+            "match_kind": (
+                "exact" if satisfying_id
+                == (judgment["id_type"], judgment["id"])
+                else "accepted_table_child"),
+        }
         for judgment in judgments if judgment["relevance"] > 0
         for satisfying_id in judgment["satisfying_ids"]
     }
@@ -1193,17 +1220,30 @@ def _grade_results(results: list[dict], judgments: list[dict]) -> list[dict]:
     graded = []
     for result in results:
         identifiers = _result_identifiers(result)
-        matched = sorted({
-            aliases[(id_type, value)]
-            for id_type, value in identifiers.items()
-            if (id_type, value) in aliases
-            and aliases[(id_type, value)] not in seen
-        })
+        matches_by_judgment = {}
+        for id_type, value in identifiers.items():
+            alias = aliases.get((id_type, value))
+            if alias is None or alias["judgment"] in seen:
+                continue
+            existing = matches_by_judgment.get(alias["judgment"])
+            candidate = {
+                "id_type": alias["judgment"][0],
+                "id": alias["judgment"][1],
+                "matched_id": value,
+                "match_kind": alias["match_kind"],
+            }
+            if (existing is None
+                    or candidate["match_kind"] == "exact"):
+                matches_by_judgment[alias["judgment"]] = candidate
+        matched = sorted(matches_by_judgment)
         seen.update(matched)
         relevance = max((gold[key] for key in matched), default=0.0)
         graded.append({
             "relevance": relevance,
             "matched_judgments": matched,
+            "judgment_matches": [
+                matches_by_judgment[key] for key in matched
+            ],
             "identifiers": identifiers,
         })
     return graded
@@ -1245,7 +1285,7 @@ def _judged_metrics(graded: list[dict], judgments: list[dict],
 
 
 def _result_detail(result: dict, rank: int, relevance: float,
-                   matched_judgments: list[tuple[str, str]],
+                   judgment_matches: list[dict],
                    keyword_matches: list[str] | None = None, *,
                    include_text: bool = False) -> dict:
     metadata = result.get("metadata") or {}
@@ -1261,10 +1301,8 @@ def _result_detail(result: dict, rank: int, relevance: float,
     if include_text:
         detail["chunk_id"] = identifiers.get("chunk_id")
         detail["source_id"] = identifiers.get("source_id")
-        detail["matched_judgments"] = [
-            {"id_type": id_type, "id": value}
-            for id_type, value in matched_judgments
-        ]
+        detail["matched_judgments"] = [dict(match)
+                                        for match in judgment_matches]
         detail["text_preview"] = str(result.get("text", ""))[:200]
     else:
         detail["chunk_id_sha256"] = _optional_text_sha256(
@@ -1273,10 +1311,14 @@ def _result_detail(result: dict, rank: int, relevance: float,
             identifiers.get("source_id"))
         detail["matched_judgments"] = [
             {
-                "id_type": id_type,
-                "id_sha256": hashlib.sha256(value.encode("utf-8")).hexdigest(),
+                "id_type": match["id_type"],
+                "id_sha256": hashlib.sha256(
+                    match["id"].encode("utf-8")).hexdigest(),
+                "matched_id_sha256": hashlib.sha256(
+                    match["matched_id"].encode("utf-8")).hexdigest(),
+                "match_kind": match["match_kind"],
             }
-            for id_type, value in matched_judgments
+            for match in judgment_matches
         ]
     if keyword_matches is not None:
         if include_text:
@@ -1647,8 +1689,9 @@ def _evaluate_impl(queries: list[dict], db_path: Path, *,
                    k_values: list[int] | None = None,
                    include_details: bool = False,
                    report_detail: str = "full",
-                   table_family_members: (
-                       dict[str, frozenset[str]] | None) = None,
+                   table_family_attestation: (
+                       evaluation_contract.TableFamilyAttestation | None
+                   ) = None,
                    search_fn=None,
                    collect_measurements: bool = False,
                    embedding_requests: bool = True,
@@ -1670,7 +1713,7 @@ def _evaluate_impl(queries: list[dict], db_path: Path, *,
     if _has_table_family_judgments(queries):
         _validate_corpus_pin_coverage(queries, required=True)
     _validate_attested_table_family_judgments(
-        queries, table_family_members)
+        queries, table_family_attestation)
     required_results = max(k_values, default=0)
     if required_results:
         configured_results = int(search_kwargs.get(
@@ -1758,7 +1801,7 @@ def _evaluate_impl(queries: list[dict], db_path: Path, *,
                 result_details = [
                     _result_detail(
                         result, rank, grade["relevance"],
-                        grade["matched_judgments"],
+                        grade["judgment_matches"],
                         include_text=report_detail == "full",
                     )
                     for rank, (result, grade) in enumerate(
@@ -1957,8 +2000,9 @@ def evaluate(queries: list[dict], db_path: Path, *,
              k_values: list[int] | None = None,
              include_details: bool = False,
              report_detail: str = "full",
-             table_family_members: (
-                 dict[str, frozenset[str]] | None) = None,
+             table_family_attestation: (
+                 evaluation_contract.TableFamilyAttestation | None
+             ) = None,
              collect_measurements: bool = False,
              embedding_cost_per_million_tokens: float | None = None,
              llm_usage: dict | None = None,
@@ -1979,7 +2023,7 @@ def evaluate(queries: list[dict], db_path: Path, *,
         return _evaluate_impl(
             queries, db_path, k_values=k_values,
             include_details=include_details, report_detail=report_detail,
-            table_family_members=table_family_members,
+            table_family_attestation=table_family_attestation,
             collect_measurements=collect_measurements,
             embedding_cost_per_million_tokens=(
                 embedding_cost_per_million_tokens),
@@ -1996,8 +2040,9 @@ def evaluate_offline_bm25(queries: list[dict], index, *,
                           k_values: list[int] | None = None,
                           include_details: bool = False,
                           report_detail: str = "summary",
-                          table_family_members: (
-                              dict[str, frozenset[str]] | None) = None,
+                          table_family_attestation: (
+                              evaluation_contract.TableFamilyAttestation | None
+                          ) = None,
                           collect_measurements: bool = False,
                           **options) -> dict:
     """Evaluate a pinned corpus with the deterministic, model-free adapter."""
@@ -2012,7 +2057,7 @@ def evaluate_offline_bm25(queries: list[dict], index, *,
     return _evaluate_impl(
         queries, Path("."), k_values=k_values, include_details=include_details,
         report_detail=report_detail, search_fn=offline_search,
-        table_family_members=table_family_members,
+        table_family_attestation=table_family_attestation,
         collect_measurements=collect_measurements, embedding_requests=False,
         **options)
 
@@ -2461,7 +2506,7 @@ def _main_with_args(args, parser: argparse.ArgumentParser) -> int:
 
     offline_index = None
     chunk_identity_lookup = None
-    table_family_members = None
+    table_family_attestation = None
     llm_usage = None
     try:
         query_cache_key = str(args.queries.resolve())
@@ -2506,8 +2551,9 @@ def _main_with_args(args, parser: argparse.ArgumentParser) -> int:
                 queries,
                 actual_hash=offline_index.snapshot.source_sha256,
                 actual_count=offline_index.snapshot.source_record_count)
-            table_family_members = _validate_judged_ids(
-                queries, list(offline_index.records), _chunk_id)
+            table_family_attestation = _validate_judged_ids(
+                queries, list(offline_index.records), _chunk_id,
+                corpus_sha256=offline_index.snapshot.source_sha256)
             _validate_grounding_evidence_ids(
                 queries, list(offline_index.records), _chunk_id)
             index_snapshot = offline_index.snapshot.as_report_dict()
@@ -2520,8 +2566,8 @@ def _main_with_args(args, parser: argparse.ArgumentParser) -> int:
                 include_runtime_context=True)
             if index_snapshot is not None:
                 chunk_identity_lookup = index_snapshot.pop("_identity_lookup")
-                table_family_members = index_snapshot.pop(
-                    "_table_family_members", {})
+                table_family_attestation = index_snapshot.pop(
+                    "_table_family_attestation", None)
                 _validate_declared_corpus_snapshot(
                     queries,
                     actual_hash=index_snapshot["source_sha256"],
@@ -2540,7 +2586,7 @@ def _main_with_args(args, parser: argparse.ArgumentParser) -> int:
         "k_values": args.k,
         "include_details": True,
         "report_detail": args.report_detail,
-        "table_family_members": table_family_members,
+        "table_family_attestation": table_family_attestation,
         "collect_measurements": True,
         "embedding_cost_per_million_tokens": (
             args.embedding_cost_per_million_tokens),

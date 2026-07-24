@@ -41,10 +41,22 @@ the exact chunks artifact. The canonical parent must be an attested table parent
 and every accepted child must be an attested child of that parent. Retrieved
 payload claims never create equivalence.
 
+The CLI and direct Python API share that boundary. Direct callers receive a
+sealed immutable `TableFamilyAttestation` only from the corpus-derived factory;
+raw membership mappings are not an accepted evaluator input. The attestation
+binds the corpus SHA-256, record count, and stable-ID scheme declared by every
+family-bearing query.
+
 The scorer maps the parent and its explicitly accepted children to one logical
 gold key. The first matching result receives the parent grade; later parent,
 accepted-child, or duplicate hits receive no additional credit. Unlisted
 siblings and unrelated tables receive zero credit.
+
+Detailed results record the canonical judgment ID, the retrieved ID that
+satisfied it, and whether the match was `exact` or `accepted_table_child`.
+Summary reports hash both identities while retaining the match kind. This
+retrieval-relevance alias is deliberately not reused by claim-level grounding;
+grounding evidence must still name the exact model-visible source ID.
 
 ## Version and review boundaries
 
@@ -65,11 +77,21 @@ when their stable IDs differ. Existing owner approvals are never transferred to
 new child aliases automatically. Historical schema-5 diagnostics remain useful
 as non-gating evidence, but they are not comparable release baselines.
 
+A portable CC0 suite exercises two real generated table families through the
+public BM25 CLI path. Its baseline uses both lower and upper bounds for sibling
+and unrelated-family hard-negative slices: blanket aliasing is a regression
+even though it would superficially increase ordinary ranking metrics. Owner
+review packet preparation also checks its exact serialized size before the
+atomic write, so a packet cannot be created that the strict parser must reject
+as oversized.
+
 ## Rejected alternatives
 
 - **Alias every child to its parent.** This credits irrelevant siblings.
 - **Trust result metadata at scoring time.** This permits stale or spoofed
   lineage to affect metrics.
+- **Accept a caller-supplied family dictionary.** This gives direct callers an
+  apparently attested input without binding it to corpus bytes or ID policy.
 - **Count each accepted child as a separate qrel.** This inflates denominators
   and rewards duplicate evidence from one logical source.
 - **Silently reuse schema-5 baselines.** This compares different scorer semantics

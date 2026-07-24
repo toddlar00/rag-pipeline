@@ -111,7 +111,11 @@ def _table_family_query(parent_id: str, accepted_child_id: str) -> dict:
         "query_id": "table-family",
         "query": "Which first-table row answers the question?",
         "review_status": "draft_requires_corpus_owner",
-        "corpus": {"sha256": "a" * 64, "record_count": 10},
+        "corpus": {
+            "sha256": "a" * 64,
+            "record_count": 10,
+            "id_scheme": "retrieval_core._chunk_id",
+        },
         "judgments": [{
             "chunk_id": parent_id,
             "relevance": 3,
@@ -385,6 +389,11 @@ def test_table_family_judgments_require_review_and_exact_corpus_pin():
         retrieval_eval._validate_query(query)
 
     query["corpus"]["sha256"] = "a" * 64
+    query["corpus"].pop("id_scheme")
+    with pytest.raises(ValueError, match="ID scheme"):
+        retrieval_eval._validate_query(query)
+
+    query["corpus"]["id_scheme"] = "retrieval_core._chunk_id"
     with pytest.raises(ValueError, match="every query"):
         retrieval_eval._validate_corpus_pin_coverage(
             [query, {"query": "legacy", "expected_keywords": ["answer"]}],
@@ -406,16 +415,36 @@ def test_table_family_membership_is_attested_by_exact_corpus_metadata():
         "accepted_child_chunk_ids"] = sorted(
             [child_ids[0][0], child_ids[0][2]])
 
-    members = retrieval_eval._validate_judged_ids(
-        [query], records, rag._chunk_id)
+    attestation = retrieval_eval._validate_judged_ids(
+        [query], records, rag._chunk_id, corpus_sha256="a" * 64)
 
-    assert members[parent_ids[0]] == frozenset(
+    assert attestation.members[parent_ids[0]] == frozenset(
         {parent_ids[0], *child_ids[0]})
+    with pytest.raises(TypeError):
+        attestation.members[parent_ids[0]] = frozenset()
+    with pytest.raises(TypeError, match="derived from corpus records"):
+        retrieval_eval.evaluation_contract.TableFamilyAttestation(
+            corpus_sha256="a" * 64,
+            corpus_record_count=len(records),
+            id_scheme="retrieval_core._chunk_id",
+            members={},
+            _factory_token=object(),
+        )
+
+    mismatched = _table_family_query(parent_ids[0], child_ids[0][0])
+    mismatched["corpus"]["sha256"] = "b" * 64
+    with pytest.raises(ValueError, match="exact query corpus binding"):
+        retrieval_eval._validate_attested_table_family_judgments(
+            [mismatched], attestation)
+    with pytest.raises(ValueError, match="attested chunks artifact"):
+        retrieval_eval._validate_attested_table_family_judgments(
+            [query], attestation.members)
+
     query["judgments"][0]["table_family"][
         "accepted_child_chunk_ids"] = [child_ids[1][0]]
     with pytest.raises(ValueError, match="do not belong"):
         retrieval_eval._validate_judged_ids(
-            [query], records, rag._chunk_id)
+            [query], records, rag._chunk_id, corpus_sha256="a" * 64)
 
 
 def test_table_family_scoring_credits_selected_child_exactly_once(
@@ -425,8 +454,8 @@ def test_table_family_scoring_credits_selected_child_exactly_once(
     query["judgments"][0]["table_family"][
         "accepted_child_chunk_ids"] = sorted(
             [child_ids[0][0], child_ids[0][2]])
-    family_members = retrieval_eval._validate_judged_ids(
-        [query], records, rag._chunk_id)
+    attestation = retrieval_eval._validate_judged_ids(
+        [query], records, rag._chunk_id, corpus_sha256="a" * 64)
     records_by_id = {rag._chunk_id(record): record for record in records}
 
     def result(chunk_id: str, *, spoof_parent: str | None = None) -> dict:
@@ -453,7 +482,7 @@ def test_table_family_scoring_credits_selected_child_exactly_once(
 
     report = retrieval_eval.evaluate(
         [query], tmp_path, k_values=[1, 2, 5], include_details=True,
-        table_family_members=family_members)
+        table_family_attestation=attestation)
 
     assert report["success@1"] == 0.0
     assert report["success@2"] == 1.0
@@ -466,7 +495,10 @@ def test_table_family_scoring_credits_selected_child_exactly_once(
     assert [item["relevance"] for item in details] == [
         0.0, 3.0, 0.0, 0.0, 0.0]
     assert details[1]["matched_judgments"] == [{
-        "id_type": "chunk_id", "id": parent_ids[0],
+        "id_type": "chunk_id",
+        "id": parent_ids[0],
+        "matched_id": child_ids[0][0],
+        "match_kind": "accepted_table_child",
     }]
 
 
@@ -475,8 +507,8 @@ def test_table_family_parent_or_selected_child_can_satisfy_one_qrel(
         satisfying_result, monkeypatch, tmp_path):
     records, parent_ids, child_ids = _expanded_table_families()
     query = _table_family_query(parent_ids[0], child_ids[0][0])
-    family_members = retrieval_eval._validate_judged_ids(
-        [query], records, rag._chunk_id)
+    attestation = retrieval_eval._validate_judged_ids(
+        [query], records, rag._chunk_id, corpus_sha256="a" * 64)
     chosen_id = (
         parent_ids[0] if satisfying_result == "parent" else child_ids[0][0])
     record = next(record for record in records
@@ -487,11 +519,61 @@ def test_table_family_parent_or_selected_child_can_satisfy_one_qrel(
     }])
 
     report = retrieval_eval.evaluate(
-        [query], tmp_path, k_values=[1],
-        table_family_members=family_members)
+        [query], tmp_path, k_values=[1], include_details=True,
+        table_family_attestation=attestation)
 
     assert report["recall@1"] == 1.0
     assert report["map"] == 1.0
+    expected_kind = (
+        "exact" if satisfying_result == "parent"
+        else "accepted_table_child")
+    assert report["query_details"][0]["results"][0][
+        "matched_judgments"] == [{
+            "id_type": "chunk_id",
+            "id": parent_ids[0],
+            "matched_id": chosen_id,
+            "match_kind": expected_kind,
+        }]
+
+
+def test_table_family_relevance_alias_does_not_broaden_grounding_evidence(
+        monkeypatch, tmp_path):
+    records, parent_ids, child_ids = _expanded_table_families()
+    query = _table_family_query(parent_ids[0], child_ids[0][0])
+    query["grounding_case"] = {
+        "schema_version": retrieval_eval.GROUNDING_CASE_SCHEMA_VERSION,
+        "case_type": "table-family-grounding-boundary",
+        "answer": "The selected row supplies the answer [S1].",
+        "expected_abstained": False,
+        "expected_citations": ["S1"],
+        "claim_judgments": [{
+            "claim_id": "selected-row",
+            "answer_unit": "The selected row supplies the answer [S1].",
+            "entailed_by": [{
+                "source_id": parent_ids[0],
+                "excerpt_contains": "Alpha | One",
+            }],
+        }],
+    }
+    attestation = retrieval_eval._validate_judged_ids(
+        [query], records, rag._chunk_id, corpus_sha256="a" * 64)
+    selected = next(
+        record for record in records
+        if rag._chunk_id(record) == child_ids[0][0])
+    monkeypatch.setattr(retrieval_eval, "run_search", lambda *_args, **_kwargs: [{
+        "text": selected["text"],
+        "chunk_id": child_ids[0][0],
+        "metadata": selected["metadata"],
+        "score": 1.0,
+    }])
+
+    report = retrieval_eval.evaluate(
+        [query], tmp_path, k_values=[1],
+        table_family_attestation=attestation)
+
+    assert report["recall@1"] == 1.0
+    assert report["claim_citation_entailment_accuracy"] == 0.0
+    assert report["grounding_accuracy"] == 0.0
 
 
 def test_table_family_selected_child_credit_does_not_mask_filter_violation(
@@ -499,8 +581,8 @@ def test_table_family_selected_child_credit_does_not_mask_filter_violation(
     records, parent_ids, child_ids = _expanded_table_families()
     query = _table_family_query(parent_ids[0], child_ids[0][0])
     query["filters"] = {"content_type": "table", "chapter_num": 99}
-    family_members = retrieval_eval._validate_judged_ids(
-        [query], records, rag._chunk_id)
+    attestation = retrieval_eval._validate_judged_ids(
+        [query], records, rag._chunk_id, corpus_sha256="a" * 64)
     observed = {}
 
     def search(_query, _db, **options):
@@ -518,7 +600,7 @@ def test_table_family_selected_child_credit_does_not_mask_filter_violation(
     monkeypatch.setattr(retrieval_eval, "run_search", search)
     report = retrieval_eval.evaluate(
         [query], tmp_path, k_values=[1],
-        table_family_members=family_members)
+        table_family_attestation=attestation)
 
     assert observed["content_type"] == "table"
     assert observed["chapter_num"] == 99
@@ -532,14 +614,14 @@ def test_table_family_filtered_out_result_receives_no_credit(
     records, parent_ids, child_ids = _expanded_table_families()
     query = _table_family_query(parent_ids[0], child_ids[0][0])
     query["filters"] = {"content_type": "table", "chapter_num": 99}
-    family_members = retrieval_eval._validate_judged_ids(
-        [query], records, rag._chunk_id)
+    attestation = retrieval_eval._validate_judged_ids(
+        [query], records, rag._chunk_id, corpus_sha256="a" * 64)
     monkeypatch.setattr(
         retrieval_eval, "run_search", lambda *_args, **_kwargs: [])
 
     report = retrieval_eval.evaluate(
         [query], tmp_path, k_values=[1],
-        table_family_members=family_members)
+        table_family_attestation=attestation)
 
     assert report["recall@1"] == 0.0
     assert report["map"] == 0.0
@@ -1317,6 +1399,30 @@ def test_summary_detail_hashes_legacy_keywords(monkeypatch, tmp_path):
     assert "keyword_matches" not in result
     assert result["keyword_match_count"] == 1
     assert len(result["keyword_match_sha256"][0]) == 64
+
+
+def test_summary_detail_preserves_match_kind_but_hashes_both_identities():
+    detail = retrieval_eval._result_detail(
+        {"text": "private table row", "chunk_id": "child-private",
+         "metadata": {}, "score": 1.0},
+        1,
+        3.0,
+        [{
+            "id_type": "chunk_id",
+            "id": "parent-private",
+            "matched_id": "child-private",
+            "match_kind": "accepted_table_child",
+        }],
+    )
+
+    assert detail["matched_judgments"] == [{
+        "id_type": "chunk_id",
+        "id_sha256": hashlib.sha256(b"parent-private").hexdigest(),
+        "matched_id_sha256": hashlib.sha256(b"child-private").hexdigest(),
+        "match_kind": "accepted_table_child",
+    }]
+    assert "parent-private" not in json.dumps(detail)
+    assert "child-private" not in json.dumps(detail)
 
 
 def test_grounding_cases_are_aggregated_without_running_an_llm(

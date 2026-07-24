@@ -10,7 +10,8 @@ from retrieval_core import _chunk_id
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 SUITES_ROOT = REPOSITORY_ROOT / "evaluation" / "suites"
-SUITES = ("property", "constitutional_law")
+LEGAL_SUITES = ("property", "constitutional_law")
+SUITES = (*LEGAL_SUITES, "table_family")
 ETHICS_DRAFT_QUERIES = REPOSITORY_ROOT / "eval_queries_ethics_draft.jsonl"
 
 
@@ -63,11 +64,12 @@ def test_judgments_match_stable_chunk_ids_and_declared_corpus(suite_name):
     assert len(chunks_by_id) == len(chunks)
     assert all(chunk["metadata"]["subject"] == manifest["subject"] for chunk in chunks)
     assert all(chunk["metadata"]["book"] for chunk in chunks)
-    assert any(
-        "distractor" in chunk["metadata"]["content_type"]
-        or "distractor" in chunk["metadata"]["title"].lower()
-        for chunk in chunks
-    )
+    if suite_name in LEGAL_SUITES:
+        assert any(
+            "distractor" in chunk["metadata"]["content_type"]
+            or "distractor" in chunk["metadata"]["title"].lower()
+            for chunk in chunks
+        )
 
     query_ids = [query["query_id"] for query in queries]
     assert len(query_ids) == len(set(query_ids))
@@ -92,6 +94,13 @@ def test_judgments_match_stable_chunk_ids_and_declared_corpus(suite_name):
         assert judgments
         assert all(judgment["chunk_id"] in chunks_by_id for judgment in judgments)
         assert all(judgment["relevance"] in (1, 2, 3) for judgment in judgments)
+        for judgment in judgments:
+            table_family = judgment.get("table_family")
+            if table_family is None:
+                continue
+            accepted_ids = table_family["accepted_child_chunk_ids"]
+            assert accepted_ids == sorted(set(accepted_ids))
+            assert all(child_id in chunks_by_id for child_id in accepted_ids)
 
         filters = query.get("filters")
         if filters:
@@ -104,11 +113,22 @@ def test_judgments_match_stable_chunk_ids_and_declared_corpus(suite_name):
                 for judgment in judgments
             )
 
+    attestation = retrieval_eval._validate_judged_ids(
+        queries, chunks, _chunk_id,
+        corpus_sha256=manifest["chunks"]["sha256"],
+    )
+    if suite_name == "table_family":
+        assert attestation is not None
+        assert attestation.corpus_record_count == len(chunks)
+        assert len(attestation.members) == 2
+    else:
+        assert attestation is None
+
 
 def test_combined_suites_cover_adversarial_categories_and_long_context():
     all_chunks = []
     all_queries = []
-    for suite_name in SUITES:
+    for suite_name in LEGAL_SUITES:
         suite_dir = SUITES_ROOT / suite_name
         all_chunks.extend(_load_jsonl(suite_dir / "chunks.jsonl"))
         all_queries.extend(_load_jsonl(suite_dir / "queries.jsonl"))
@@ -127,7 +147,7 @@ def test_combined_suites_cover_adversarial_categories_and_long_context():
     long_context_queries = [
         query for query in all_queries if "long_context" in query["tags"]
     ]
-    assert len(long_context_queries) >= len(SUITES)
+    assert len(long_context_queries) >= len(LEGAL_SUITES)
     for query in long_context_queries:
         target_id = query["judgments"][0]["chunk_id"]
         target_text = chunks_by_id[target_id]["text"]
@@ -138,7 +158,7 @@ def test_combined_suites_cover_adversarial_categories_and_long_context():
     abstention_queries = [
         query for query in all_queries if "abstention" in query["tags"]
     ]
-    assert len(abstention_queries) >= len(SUITES)
+    assert len(abstention_queries) >= len(LEGAL_SUITES)
     assert all(query.get("expected_abstain") is True for query in abstention_queries)
     assert all("judgments" not in query for query in abstention_queries)
 
@@ -183,7 +203,7 @@ def test_combined_suites_cover_adversarial_categories_and_long_context():
         chunk for chunk in all_chunks
         if chunk["metadata"]["content_type"] == "security_fixture"
     ]
-    assert len(security_chunks) == len(SUITES)
+    assert len(security_chunks) == len(LEGAL_SUITES)
     for chunk in security_chunks:
         assert "\nBEGIN_UNTRUSTED_SOURCE\n" in chunk["text"]
         assert "\nEND_UNTRUSTED_SOURCE" in chunk["text"]
@@ -239,11 +259,14 @@ def test_private_ethics_draft_is_pinned_and_cannot_pose_as_reviewed():
     )
 
 
-@pytest.mark.parametrize(("suite_name", "baseline_name"), [
-    ("property", "property-bm25.json"),
-    ("constitutional_law", "constitutional-law-bm25.json"),
+@pytest.mark.parametrize(
+    ("suite_name", "baseline_name", "table_child_count", "has_grounding"), [
+    ("property", "property-bm25.json", 0, True),
+    ("constitutional_law", "constitutional-law-bm25.json", 0, True),
+    ("table_family", "table-family-bm25.json", 8, False),
 ])
-def test_portable_baselines_bind_exact_suite_assets(suite_name, baseline_name):
+def test_portable_baselines_bind_exact_suite_assets(
+        suite_name, baseline_name, table_child_count, has_grounding):
     suite_dir = SUITES_ROOT / suite_name
     manifest = json.loads(
         (suite_dir / "manifest.json").read_text(encoding="utf-8")
@@ -268,17 +291,77 @@ def test_portable_baselines_bind_exact_suite_assets(suite_name, baseline_name):
         manifest["chunks"]["sha256"])
     assert configuration["index_snapshot"]["record_count"] == (
         manifest["chunks"]["record_count"])
-    assert configuration["index_snapshot"]["table_child_count"] == 0
+    assert configuration["index_snapshot"]["table_child_count"] == (
+        table_child_count)
     assert configuration["context_window"] == 0
     assert configuration["context_max_characters"] == 8000
     assert configuration["context_segment_characters"] == 1600
     assert "path" not in configuration["index_snapshot"]
-    assert baseline["metrics"]["abstention_accuracy"] == 1.0
     assert baseline["metrics"]["filter_compliance"] == 1.0
-    assert baseline["metrics"]["grounding_accuracy"] == 1.0
-    assert baseline["metrics"][
-        "claim_citation_entailment_accuracy"] == 1.0
-    assert baseline["metrics"]["unsupported_claim_rate"] == 0.0
-    assert baseline["metrics"]["answer_abstention_accuracy"] == 1.0
-    assert baseline["metrics"][
-        "prompt_injection_fixture_accuracy"] == 1.0
+    if has_grounding:
+        assert baseline["metrics"]["abstention_accuracy"] == 1.0
+        assert baseline["metrics"]["grounding_accuracy"] == 1.0
+        assert baseline["metrics"][
+            "claim_citation_entailment_accuracy"] == 1.0
+        assert baseline["metrics"]["unsupported_claim_rate"] == 0.0
+        assert baseline["metrics"]["answer_abstention_accuracy"] == 1.0
+        assert baseline["metrics"][
+            "prompt_injection_fixture_accuracy"] == 1.0
+
+
+def test_table_family_cli_exercises_exact_alias_and_hard_negative_contract(
+        tmp_path):
+    report_path = tmp_path / "table-family.full.json"
+    suite_dir = SUITES_ROOT / "table_family"
+
+    assert retrieval_eval.main([
+        "--retriever", "bm25",
+        "--queries", str(suite_dir / "queries.jsonl"),
+        "--chunks", str(suite_dir / "chunks.jsonl"),
+        "--k", "1", "3", "5",
+        "--depth", "10",
+        "--report-detail", "full",
+        "--json-report", str(report_path),
+        "--baseline-report", str(
+            REPOSITORY_ROOT / "evaluation" / "baselines"
+            / "table-family-bm25.json"),
+        "--max-regression", "map=0",
+    ]) == 0
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    details = {
+        item["query_id"]: item for item in report["query_details"]
+    }
+    q02 = details["table-family-q02"]["results"]
+    assert [(item["chunk_id"], item["relevance"]) for item in q02[:2]] == [
+        ("chunk_2ad9bf3c2ba42524", 0.0),
+        ("chunk_1a5994e98b1033fd", 3.0),
+    ]
+    q03 = details["table-family-q03"]["results"]
+    assert [(item["chunk_id"], item["relevance"]) for item in q03[:2]] == [
+        ("chunk_a709964456bf50fa", 0.0),
+        ("chunk_ec16645820b1e91f", 3.0),
+    ]
+    q04 = details["table-family-q04"]["results"]
+    assert [item["relevance"] for item in q04[:2]] == [3.0, 0.0]
+    q05 = details["table-family-q05"]["results"]
+    assert [item["relevance"] for item in q05[:2]] == [3.0, 3.0]
+    assert details["table-family-q06"]["metrics"][
+        "filter_compliance"] == 1.0
+    for item in report["query_details"]:
+        result_ids = {result["chunk_id"] for result in item["results"]}
+        assert "chunk_047c47bbfced2c79" not in result_ids
+        if item["query_id"] == "table-family-q05":
+            assert "chunk_28a4cc2744a3bcf3" not in result_ids
+    for query_id in ("table-family-q01", "table-family-q02",
+                     "table-family-q03", "table-family-q04",
+                     "table-family-q05", "table-family-q06"):
+        positive_matches = [
+            match
+            for result in details[query_id]["results"]
+            if result["relevance"] > 0
+            for match in result["matched_judgments"]
+        ]
+        assert positive_matches
+        assert all(match["match_kind"] == "accepted_table_child"
+                   for match in positive_matches)
