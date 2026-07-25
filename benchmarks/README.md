@@ -8,8 +8,8 @@ fresh-process repetitions.
 ## Provenance
 
 Both replacement reports were generated from the clean pre-gate source
-checkpoint `9e81ef30f9f68206268a10a1954fd3bb7ab98557` (tree
-`bd77977c41a68b0b85dd41c3fc72aaa84d730a86`). The executing environments were
+checkpoint `840287f08e7a885f2bf595585e65940180bb4a5d` (tree
+`229190c715615928aacb9a0225f922cc498f0d68`). The executing environments were
 synchronized with repository-pinned uv 0.11.31 against the exact CPU
 application/test lock union plus its retained bootstrapper:
 
@@ -29,8 +29,8 @@ interpreters, which declare themselves externally managed.
 
 | Platform | Runtime | Report | Bytes | File SHA-256 | Embedded report SHA-256 |
 |---|---:|---|---:|---|---|
-| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 49,243 | `bd9ca30d6a50b507ed69e0ff94e6b734a635833522d4de37654a9c16cf8474e4` | `4a313fb42f66b7880a75ac173f753422287603f4a3272e08b96726d505b74351` |
-| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 48,654 | `34d3334aa8da7571cf30fde7b0b8fa6f1979e57032e5f28011e49893f1ef9ec4` | `7918d9259a5572e7b934df9c80b04b231a5766c27a5762ced66d675ac471e746` |
+| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 49,241 | `0aa4fa7206cb0d1e5ff9749370aee0c4691494f532d8ca035a5770e1e9f05457` | `79e25ef920ba5e7e1a319b975749b93937540930e537f8fb13268a1f90285f6e` |
+| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 48,655 | `3187c5f244300939afbb7aa81aac043906be0ad20adf5b44a218c3d699713067` | `cdfa72003b3f75cd37425dbe4b891da90577200428933a40da20af5598536a2e` |
 
 The reports attest the same source commit, clean-worktree state, tracked-diff
 digest, eight LF and `HEAD`-identical dependency/model-lock inputs, authoritative
@@ -61,13 +61,14 @@ initialization, inherited `Path.home`, the public `pathlib.Path` identity,
 `typing.Any`, implicit optional annotations, and nested forward references.
 Pre-gate source `fdb08d2` closed those cases without weakening home/tilde
 denial, and its architecture baseline reproduced on Windows and Linux across
-Python 3.10-3.14. Current pre-gate source `9e81ef3` retains those controls and
-the strict classification and shared TOC hierarchy contracts, then adds the
-strict upstream TOC layout contract. Its complete locked Windows suite passes
-2,489 tests with 7 skips. All dependency, model-artifact, CI-security,
-architecture, Ruff, and tracked-source compilation gates pass. The refreshed
-canonical architecture inventory records 2,021 functions and 380 compact
-runtime callables.
+Python 3.10-3.14. Current pre-gate source `840287f` retains those controls and
+the strict classification, TOC hierarchy, and upstream TOC layout contracts,
+then adds the exact Boolean TOC page-verification contract and bounded evidence
+framing. Its complete locked Windows suite passes 2,558 tests with 7 skips. All
+dependency, model-artifact, CI-security, architecture, Ruff, tracked-source
+compilation, Bash-syntax, and diff gates pass. The refreshed canonical
+architecture inventory records 2,027 functions, 384 compact runtime callables,
+632 static facade bindings, and 640 runtime facade bindings.
 
 The replacement reports above are local baseline candidates, and each passes an
 independent complete same-platform 9×5 comparison. The gate-only commit that
@@ -103,7 +104,7 @@ ancestor of the final head. Integrate a passing candidate with a
 history-preserving merge; a squash or history-rewriting rebase invalidates this
 evidence and requires regeneration from the replacement history.
 
-The replacement gate-only delta after `9e81ef3` is limited to the two reviewed
+The replacement gate-only delta after `840287f` is limited to the two reviewed
 reports and their provenance/status documentation. The repaired workflow,
 line-ending policy, and Python gates are already part of the pre-gate source and
 were exercised while generating and comparing the baselines. Each successful
