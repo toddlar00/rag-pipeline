@@ -12,7 +12,6 @@ import json
 import os
 from pathlib import Path
 import re
-import subprocess
 import sys
 import tempfile
 import textwrap
@@ -21,9 +20,19 @@ from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_BASELINE = Path("architecture-inventory.json")
-SCHEMA_VERSION = 2
-ANALYSIS_MODEL = "tracked-python-ast-v2"
-INTERPRETER_NORMALIZATION = "cpython-3.12-3.14-semantic-v1"
+SCHEMA_VERSION = 3
+ANALYSIS_MODEL = "tracked-python-ast-v3"
+INTERPRETER_NORMALIZATION = "cpython-3.12-3.14-platform-neutral-v2"
+HASH_DOMAINS = {
+    "definition_locations": "rag-pipeline:architecture:definition-locations:v1",
+    "runtime_symbol_contract": "rag-pipeline:architecture:runtime-symbol-contract:v1",
+    "static_signature": "rag-pipeline:architecture:static-signature:v1",
+}
+_EDGE_CONTEXTS = ("conditional", "runtime", "type_only")
+_EDGE_ORIGINS = ("dynamic", "static")
+_PLATFORM_VARIANT_BINDINGS = {
+    "getpass": "python-stdlib:getpass:platform-dispatch:v1",
+}
 _GROUP_NAMES = ("production", "tests", "tools", "other")
 _INTERPRETER_VARIANT_NAMES = (
     "__annotate__",
@@ -80,6 +89,11 @@ socket.socket = DeniedSocket
 socket.socketpair = denied_network
 socket.create_connection = denied_network
 socket.getaddrinfo = denied_network
+socket.getfqdn = denied_network
+socket.gethostbyaddr = denied_network
+socket.gethostbyname = denied_network
+socket.gethostbyname_ex = denied_network
+socket.getnameinfo = denied_network
 probe_subprocess.Popen = denied_network
 
 import rag
@@ -119,7 +133,15 @@ def value_identity(value):
         ]
         return {"items": sorted(items, key=digest), "kind": "mapping"}
     if isinstance(value, os.PathLike):
-        return {"kind": f"{type(value).__module__}.{type(value).__qualname__}"}
+        rendered = os.fspath(value).replace("\\", "/")
+        parts = [part for part in rendered.split("/") if part not in {"", "."}]
+        return {
+            "absolute": rendered.startswith("/") or (
+                len(rendered) > 2 and rendered[1:3] == ":/"
+            ),
+            "kind": "path",
+            "value_sha256": digest(parts),
+        }
     origin = typing.get_origin(value)
     if origin is not None:
         args = []
@@ -267,12 +289,28 @@ delattr(rag, dynamic_name)
 namespace = {}
 exec("from rag import *", namespace)
 import_star_names = sorted(name for name in namespace if name != "__builtins__")
+platform_variant_tokens = {
+    "getpass": "python-stdlib:getpass:platform-dispatch:v1",
+}
+platform_variant_bindings = []
+for name, token in sorted(platform_variant_tokens.items()):
+    value = vars(rag).get(name)
+    if value is None:
+        continue
+    if (
+        getattr(value, "__module__", None) != "getpass"
+        or getattr(value, "__qualname__", None)
+        not in {"unix_getpass", "win_getpass"}
+    ):
+        raise RuntimeError("unexpected platform-variant facade binding")
+    platform_variant_bindings.append({"name": name, "token": token})
 vars_names = sorted(name for name in vars(rag) if name not in variant_names)
 dir_names = sorted(name for name in dir(rag) if name not in variant_names)
 callables = [
     callable_record(name, value)
     for name, value in sorted(vars(rag).items())
     if name not in variant_names
+    and name not in platform_variant_tokens
     and (inspect.isfunction(value) or inspect.isclass(value))
 ]
 
@@ -284,6 +322,7 @@ result = {
     "interpreter_variant_exclusions": sorted(variant_names),
     "logger_name": rag.log.name,
     "module_type": f"{type(rag).__module__}.{type(rag).__qualname__}",
+    "platform_variant_bindings": platform_variant_bindings,
     "vars_names": vars_names,
 }
 sys.stdout.write(json.dumps(
@@ -295,6 +334,7 @@ sys.stdout.write(json.dumps(
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+import process_supervision  # noqa: E402
 from tools.check_python_sources import (  # noqa: E402
     SourceGateError,
     tracked_python_paths,
@@ -318,6 +358,12 @@ def _canonical_json_bytes(value: object) -> bytes:
 
 def _canonical_sha256(value: object) -> str:
     return hashlib.sha256(_canonical_json_bytes(value)).hexdigest()
+
+
+def _domain_sha256(domain: str, value: object) -> str:
+    return hashlib.sha256(
+        domain.encode("utf-8") + b"\0" + _canonical_json_bytes(value)
+    ).hexdigest()
 
 
 def _module_name(path: Path) -> str:
@@ -414,6 +460,20 @@ def _type_checking_guard(node: ast.AST) -> bool:
 
 
 class _ImportEdgeVisitor(ast.NodeVisitor):
+    """Collect first-party imports with execution context and edge provenance.
+
+    The small alias environment is deliberately flow-sensitive.  It recognizes
+    only importlib/typing objects whose provenance is known, and drops that
+    provenance as soon as a name is rebound.  This avoids treating an arbitrary
+    ``object.import_module(...)`` call as an import edge.
+    """
+
+    _IMPORTLIB = "importlib_module"
+    _IMPORT_MODULE = "import_module_function"
+    _TYPING = "typing_module"
+    _TYPE_CHECKING = "type_checking_constant"
+    _BUILTIN_IMPORT = "builtin_import"
+
     def __init__(
         self, current: str, path: Path, known: set[str],
     ) -> None:
@@ -421,7 +481,14 @@ class _ImportEdgeVisitor(ast.NodeVisitor):
         self.path = path
         self.known = known
         self.context = "runtime"
-        self.edges: dict[str, set[str]] = defaultdict(set)
+        self.edges: dict[str, set[tuple[str, str]]] = defaultdict(set)
+        self.aliases: dict[str, str] = {"__import__": self._BUILTIN_IMPORT}
+        self.scope_map: _ScopeMap | None = None
+
+    def visit_Module(self, node: ast.Module) -> None:
+        self.scope_map = _ScopeMap(node)
+        for statement in node.body:
+            self.visit(statement)
 
     def _with_context(self, context: str, nodes: Iterable[ast.AST]) -> None:
         previous = self.context
@@ -430,86 +497,390 @@ class _ImportEdgeVisitor(ast.NodeVisitor):
             self.visit(node)
         self.context = previous
 
-    def _add(self, targets: Iterable[str], *extra: str) -> None:
+    def _conditional_context(self) -> str:
+        return "type_only" if self.context == "type_only" else "conditional"
+
+    def _add(self, targets: Iterable[str], origin: str) -> None:
         for target in targets:
-            self.edges[target].update((self.context, *extra))
+            self.edges[target].add((self.context, origin))
+
+    def _role(self, value: ast.AST) -> str | None:
+        if isinstance(value, ast.Name):
+            return self.aliases.get(value.id)
+        if isinstance(value, ast.Attribute) and value.attr == "import_module":
+            if self._role(value.value) == self._IMPORTLIB:
+                return self._IMPORT_MODULE
+        if isinstance(value, ast.Attribute) and value.attr == "TYPE_CHECKING":
+            if self._role(value.value) == self._TYPING:
+                return self._TYPE_CHECKING
+        return None
+
+    def _bind(self, target: ast.AST, role: str | None) -> None:
+        for name in _target_names(target):
+            if role is None:
+                self.aliases.pop(name, None)
+            else:
+                self.aliases[name] = role
+
+    def _visit_branch(
+        self, nodes: Iterable[ast.AST], context: str,
+        aliases: Mapping[str, str],
+    ) -> dict[str, str]:
+        previous_aliases = self.aliases
+        self.aliases = dict(aliases)
+        self._with_context(context, nodes)
+        result = self.aliases
+        self.aliases = previous_aliases
+        return result
+
+    @staticmethod
+    def _merge_aliases(*branches: Mapping[str, str]) -> dict[str, str]:
+        if not branches:
+            return {}
+        names = set.intersection(*(set(branch) for branch in branches))
+        return {
+            name: branches[0][name]
+            for name in names
+            if all(branch[name] == branches[0][name] for branch in branches[1:])
+        }
+
+    def _type_checking_guard(self, node: ast.AST) -> bool:
+        return self._role(node) == self._TYPE_CHECKING
+
+    def _package_name(self, expression: ast.AST | None) -> str | None:
+        if expression is None:
+            return None
+        if isinstance(expression, ast.Name) and expression.id == "__package__":
+            return (
+                self.current
+                if self.path.name == "__init__.py"
+                else self.current.rpartition(".")[0]
+            )
+        if isinstance(expression, ast.Constant) and isinstance(expression.value, str):
+            return expression.value
+        return None
+
+    def _dynamic_name(self, node: ast.Call) -> str | None:
+        role = self._role(node.func)
+        if role not in {self._IMPORT_MODULE, self._BUILTIN_IMPORT} or not node.args:
+            return None
+        first = node.args[0]
+        if not isinstance(first, ast.Constant) or not isinstance(first.value, str):
+            return None
+        name = first.value
+        if role == self._BUILTIN_IMPORT or not name.startswith("."):
+            return name if not name.startswith(".") else None
+        package_expression = node.args[1] if len(node.args) > 1 else None
+        if package_expression is None:
+            package_expression = next(
+                (keyword.value for keyword in node.keywords if keyword.arg == "package"),
+                None,
+            )
+        package = self._package_name(package_expression)
+        if not package:
+            return None
+        level = len(name) - len(name.lstrip("."))
+        package_parts = package.split(".")
+        if level > len(package_parts):
+            return None
+        prefix = package_parts[:len(package_parts) - level + 1]
+        suffix = name[level:]
+        if suffix:
+            prefix.extend(suffix.split("."))
+        return ".".join(prefix)
 
     def visit_Import(self, node: ast.Import) -> None:
-        self._add(_import_targets(self.current, self.path, node, self.known))
+        self._add(
+            _import_targets(self.current, self.path, node, self.known), "static"
+        )
+        for alias in node.names:
+            binding = alias.asname or alias.name.split(".")[0]
+            if alias.name == "importlib":
+                self.aliases[binding] = self._IMPORTLIB
+            elif alias.name == "typing":
+                self.aliases[binding] = self._TYPING
+            else:
+                self.aliases.pop(binding, None)
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
-        self._add(_import_targets(self.current, self.path, node, self.known))
+        self._add(
+            _import_targets(self.current, self.path, node, self.known), "static"
+        )
+        base = _absolute_from_import(self.current, self.path, node)
+        for alias in node.names:
+            if alias.name == "*":
+                continue
+            binding = alias.asname or alias.name
+            role = None
+            if base == "importlib" and alias.name == "import_module":
+                role = self._IMPORT_MODULE
+            elif base == "typing" and alias.name == "TYPE_CHECKING":
+                role = self._TYPE_CHECKING
+            if role is None:
+                self.aliases.pop(binding, None)
+            else:
+                self.aliases[binding] = role
 
     def visit_Call(self, node: ast.Call) -> None:
-        dynamic_name: str | None = None
-        if (
-            isinstance(node.func, ast.Name)
-            and node.func.id == "__import__"
-            and node.args
-            and isinstance(node.args[0], ast.Constant)
-            and isinstance(node.args[0].value, str)
-        ):
-            dynamic_name = node.args[0].value
-        elif (
-            isinstance(node.func, ast.Attribute)
-            and node.func.attr == "import_module"
-            and node.args
-            and isinstance(node.args[0], ast.Constant)
-            and isinstance(node.args[0].value, str)
-        ):
-            dynamic_name = node.args[0].value
+        dynamic_name = self._dynamic_name(node)
         if dynamic_name:
-            self._add(
-                _known_prefixes(dynamic_name, self.known),
-                "dynamic_constant",
-            )
+            self._add(_known_prefixes(dynamic_name, self.known), "dynamic")
         self.generic_visit(node)
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        self.visit(node.value)
+        role = self._role(node.value)
+        for target in node.targets:
+            self._bind(target, role)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        self.visit(node.annotation)
+        if node.value is not None:
+            self.visit(node.value)
+            self._bind(node.target, self._role(node.value))
+        else:
+            self._bind(node.target, None)
+
+    def visit_NamedExpr(self, node: ast.NamedExpr) -> None:
+        self.visit(node.value)
+        self._bind(node.target, self._role(node.value))
+
+    def visit_AugAssign(self, node: ast.AugAssign) -> None:
+        self.visit(node.target)
+        self.visit(node.value)
+        self._bind(node.target, None)
+
+    def visit_Delete(self, node: ast.Delete) -> None:
+        for target in node.targets:
+            self._bind(target, None)
 
     def visit_If(self, node: ast.If) -> None:
         self.visit(node.test)
-        if _type_checking_guard(node.test):
-            self._with_context("type_only", node.body)
-            self._with_context(self.context, node.orelse)
-            return
-        context = "type_only" if self.context == "type_only" else "conditional"
-        self._with_context(context, node.body)
-        self._with_context(context, node.orelse)
+        starting = dict(self.aliases)
+        if self._type_checking_guard(node.test):
+            body = self._visit_branch(node.body, "type_only", starting)
+            otherwise = self._visit_branch(node.orelse, self.context, starting)
+        else:
+            context = self._conditional_context()
+            body = self._visit_branch(node.body, context, starting)
+            otherwise = self._visit_branch(node.orelse, context, starting)
+        self.aliases = self._merge_aliases(body, otherwise)
 
-    def _visit_conditional_body(self, node: ast.AST) -> None:
-        context = "type_only" if self.context == "type_only" else "conditional"
-        self._with_context(context, ast.iter_child_nodes(node))
+    def _visit_function_header(
+        self, node: ast.FunctionDef | ast.AsyncFunctionDef,
+    ) -> None:
+        for decorator in node.decorator_list:
+            self.visit(decorator)
+        for type_parameter in getattr(node, "type_params", ()):
+            self.visit(type_parameter)
+        arguments = node.args
+        for argument in [
+            *arguments.posonlyargs, *arguments.args, *arguments.kwonlyargs,
+        ]:
+            if argument.annotation is not None:
+                self.visit(argument.annotation)
+        if arguments.vararg is not None and arguments.vararg.annotation is not None:
+            self.visit(arguments.vararg.annotation)
+        if arguments.kwarg is not None and arguments.kwarg.annotation is not None:
+            self.visit(arguments.kwarg.annotation)
+        for default in [
+            *arguments.defaults,
+            *(item for item in arguments.kw_defaults if item is not None),
+        ]:
+            self.visit(default)
+        if node.returns is not None:
+            self.visit(node.returns)
+
+    def _function_locals(
+        self,
+        node: ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda,
+    ) -> set[str]:
+        names = {
+            argument.arg
+            for argument in [
+                *node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs,
+            ]
+        }
+        if node.args.vararg is not None:
+            names.add(node.args.vararg.arg)
+        if node.args.kwarg is not None:
+            names.add(node.args.kwarg.arg)
+
+        globals_: set[str] = set()
+        nonlocals: set[str] = set()
+        if self.scope_map is None:
+            raise ArchitectureInventoryError("import scope analysis is unavailable")
+        for item, owner in self.scope_map.node_scope.items():
+            if owner is not node:
+                continue
+            if isinstance(item, ast.Name) and isinstance(
+                item.ctx, (ast.Store, ast.Del)
+            ):
+                names.add(item.id)
+            elif isinstance(item, ast.Import):
+                names.update(
+                    alias.asname or alias.name.split(".", 1)[0]
+                    for alias in item.names
+                )
+            elif isinstance(item, ast.ImportFrom):
+                names.update(
+                    alias.asname or alias.name
+                    for alias in item.names if alias.name != "*"
+                )
+            elif isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                names.add(item.name)
+            elif isinstance(item, ast.ExceptHandler) and item.name:
+                names.add(item.name)
+            elif isinstance(item, ast.Global):
+                globals_.update(item.names)
+            elif isinstance(item, ast.Nonlocal):
+                nonlocals.update(item.names)
+        return names - globals_ - nonlocals
+
+    def _visit_function(
+        self, node: ast.FunctionDef | ast.AsyncFunctionDef,
+    ) -> None:
+        self._visit_function_header(node)
+        outer = self.aliases
+        local = dict(outer)
+        for name in self._function_locals(node):
+            local.pop(name, None)
+        self.aliases = local
+        self._with_context(self._conditional_context(), node.body)
+        self.aliases = outer
+        self.aliases.pop(node.name, None)
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-        self._visit_conditional_body(node)
+        self._visit_function(node)
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
-        self._visit_conditional_body(node)
+        self._visit_function(node)
 
     def visit_Lambda(self, node: ast.Lambda) -> None:
-        self._visit_conditional_body(node)
+        for default in [
+            *node.args.defaults,
+            *(item for item in node.args.kw_defaults if item is not None),
+        ]:
+            self.visit(default)
+        outer = self.aliases
+        local = dict(outer)
+        for name in self._function_locals(node):
+            local.pop(name, None)
+        self.aliases = local
+        self._with_context(self._conditional_context(), (node.body,))
+        self.aliases = outer
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        for decorator in node.decorator_list:
+            self.visit(decorator)
+        for type_parameter in getattr(node, "type_params", ()):
+            self.visit(type_parameter)
+        for expression in [*node.bases, *(item.value for item in node.keywords)]:
+            self.visit(expression)
+        outer = self.aliases
+        self.aliases = dict(outer)
+        self._with_context(self.context, node.body)
+        self.aliases = outer
+        self.aliases.pop(node.name, None)
+
+    def _visit_loop(
+        self, eager: Iterable[ast.AST], target: ast.AST | None,
+        conditional: Iterable[ast.AST],
+    ) -> None:
+        for node in eager:
+            self.visit(node)
+        starting = dict(self.aliases)
+        previous_aliases = self.aliases
+        self.aliases = dict(starting)
+        if target is not None:
+            self.visit(target)
+            self._bind(target, None)
+        self._with_context(self._conditional_context(), conditional)
+        executed = self.aliases
+        self.aliases = previous_aliases
+        self.aliases = self._merge_aliases(starting, executed)
 
     def visit_For(self, node: ast.For) -> None:
-        self._visit_conditional_body(node)
+        self._visit_loop((node.iter,), node.target, (*node.body, *node.orelse))
 
     def visit_AsyncFor(self, node: ast.AsyncFor) -> None:
-        self._visit_conditional_body(node)
+        self._visit_loop((node.iter,), node.target, (*node.body, *node.orelse))
 
     def visit_While(self, node: ast.While) -> None:
-        self._visit_conditional_body(node)
+        self._visit_loop((node.test,), None, (*node.body, *node.orelse))
+
+    def _visit_comprehension(
+        self,
+        node: ast.ListComp | ast.SetComp | ast.DictComp | ast.GeneratorExp,
+        results: Iterable[ast.AST],
+    ) -> None:
+        first, *remaining = node.generators
+        self.visit(first.iter)
+        outer = self.aliases
+        self.aliases = dict(outer)
+        self.visit(first.target)
+        self._bind(first.target, None)
+        for condition in first.ifs:
+            self.visit(condition)
+        for generator in remaining:
+            self.visit(generator.iter)
+            self.visit(generator.target)
+            self._bind(generator.target, None)
+            for condition in generator.ifs:
+                self.visit(condition)
+        for result in results:
+            self.visit(result)
+        self.aliases = outer
+
+    def visit_ListComp(self, node: ast.ListComp) -> None:
+        self._visit_comprehension(node, (node.elt,))
+
+    def visit_SetComp(self, node: ast.SetComp) -> None:
+        self._visit_comprehension(node, (node.elt,))
+
+    def visit_DictComp(self, node: ast.DictComp) -> None:
+        self._visit_comprehension(node, (node.key, node.value))
+
+    def visit_GeneratorExp(self, node: ast.GeneratorExp) -> None:
+        self._visit_comprehension(node, (node.elt,))
 
     def visit_Try(self, node: ast.Try) -> None:
-        self._visit_conditional_body(node)
+        self._visit_uncertain_block(node)
 
     def visit_TryStar(self, node: ast.TryStar) -> None:
-        self._visit_conditional_body(node)
+        self._visit_uncertain_block(node)
+
+    def _visit_uncertain_block(self, node: ast.Try | ast.TryStar) -> None:
+        starting = dict(self.aliases)
+        branches = [
+            self._visit_branch(node.body, self._conditional_context(), starting),
+            *(self._visit_branch(handler.body, self._conditional_context(), starting)
+              for handler in node.handlers),
+        ]
+        merged = self._merge_aliases(*branches)
+        after_else = self._visit_branch(node.orelse, self._conditional_context(), merged)
+        self.aliases = self._visit_branch(
+            node.finalbody, self._conditional_context(), after_else
+        )
 
     def visit_Match(self, node: ast.Match) -> None:
-        self._visit_conditional_body(node)
+        self.visit(node.subject)
+        starting = dict(self.aliases)
+        branches = [starting]
+        for case in node.cases:
+            branch_nodes: list[ast.AST] = []
+            if case.guard is not None:
+                branch_nodes.append(case.guard)
+            branch_nodes.extend(case.body)
+            branches.append(self._visit_branch(
+                branch_nodes, self._conditional_context(), starting
+            ))
+        self.aliases = self._merge_aliases(*branches)
 
 
 def _module_import_edges(
     module: str, path: Path, tree: ast.Module, known: set[str],
-) -> dict[str, set[str]]:
+) -> dict[str, set[tuple[str, str]]]:
     visitor = _ImportEdgeVisitor(module, path, known)
     visitor.visit(tree)
     return visitor.edges
@@ -631,6 +1002,10 @@ def _signature_inventory(
     return {
         "parameters": parameters,
         "return_annotation_sha256": _ast_identity(node.returns),
+        "type_parameters_sha256": [
+            _ast_identity(parameter)
+            for parameter in getattr(node, "type_params", ())
+        ],
         "type_comment_sha256": _text_identity(node.type_comment),
     }
 
@@ -705,6 +1080,61 @@ def _definitions(
         )
 
     return sorted(visitor.functions, key=key), sorted(visitor.classes, key=key)
+
+
+def _compact_definitions(
+    module: str,
+    functions: Sequence[Mapping[str, object]],
+    classes: Sequence[Mapping[str, object]],
+) -> tuple[list[dict[str, object]], list[dict[str, object]], str]:
+    compact_functions = sorted((
+        {
+            "kind": item["kind"],
+            "name": item["name"],
+            "scope": item["scope"],
+            "signature_sha256": _domain_sha256(
+                HASH_DOMAINS["static_signature"],
+                {
+                    "kind": item["kind"],
+                    "module": module,
+                    "name": item["name"],
+                    "signature": item["signature"],
+                },
+            ),
+        }
+        for item in functions
+    ), key=lambda item: (item["name"], item["kind"]))
+    compact_classes = sorted((
+        {"name": item["name"], "scope": item["scope"]}
+        for item in classes
+    ), key=lambda item: item["name"])
+    locations = [
+        {
+            "kind": item["kind"],
+            "name": item["name"],
+            "scope": item["scope"],
+            "span": item["span"],
+        }
+        for item in functions
+    ]
+    locations.extend(
+        {
+            "kind": "class",
+            "name": item["name"],
+            "scope": item["scope"],
+            "span": item["span"],
+        }
+        for item in classes
+    )
+    locations.sort(key=lambda item: (item["span"][0], item["name"], item["kind"]))
+    return (
+        compact_functions,
+        compact_classes,
+        _domain_sha256(
+            HASH_DOMAINS["definition_locations"],
+            {"definitions": locations, "module": module},
+        ),
+    )
 
 
 def _target_names(target: ast.AST) -> list[str]:
@@ -824,6 +1254,7 @@ def _module_binding_origins(tree: ast.Module) -> dict[str, list[dict[str, object
             origins[name].append(record)
 
     def visit(statements: Iterable[ast.stmt]) -> None:
+        type_alias_type = getattr(ast, "TypeAlias", ())
         for statement in statements:
             if isinstance(statement, ast.Import):
                 for alias in statement.names:
@@ -846,6 +1277,9 @@ def _module_binding_origins(tree: ast.Module) -> dict[str, list[dict[str, object
                 add(statement.name, "definition", statement.lineno)
             elif isinstance(statement, ast.ClassDef):
                 add(statement.name, "class_definition", statement.lineno)
+            elif type_alias_type and isinstance(statement, type_alias_type):
+                for name in _target_names(statement.name):
+                    add(name, "type_alias", statement.lineno)
             elif isinstance(statement, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
                 if isinstance(statement, ast.AnnAssign) and statement.value is None:
                     continue
@@ -923,7 +1357,9 @@ def _module_binding_origins(tree: ast.Module) -> dict[str, list[dict[str, object
         if isinstance(node, ast.NamedExpr):
             for name in _target_names(node.target):
                 add(name, "named_expression", node.lineno)
-        elif isinstance(node, ast.Delete):
+        elif isinstance(node, ast.Delete) and any(
+            _target_names(target) for target in node.targets
+        ):
             raise ArchitectureInventoryError(
                 "rag.py module-scope del requires explicit namespace analysis"
             )
@@ -941,45 +1377,104 @@ def _module_binding_origins(tree: ast.Module) -> dict[str, list[dict[str, object
 
 def _literal_all(tree: ast.Module) -> tuple[bool, list[str]]:
     scope_map = _ScopeMap(tree)
+    def executed_at_module(scope: ast.AST) -> bool:
+        current: ast.AST | None = scope
+        while isinstance(current, _ScopeMap._COMPREHENSIONS):
+            current = scope_map.parent_scope[current]
+        return current is tree
+
+    nodes = [
+        node for node, scope in scope_map.node_scope.items()
+        if executed_at_module(scope)
+    ]
+
+    def root_name(node: ast.AST) -> str | None:
+        current = node
+        while isinstance(current, (ast.Attribute, ast.Subscript, ast.Starred)):
+            current = current.value
+        return current.id if isinstance(current, ast.Name) else None
+
+    aliases = {"__all__"}
+    mutator_aliases: set[str] = set()
+    changed = True
+    while changed:
+        changed = False
+        for node in nodes:
+            pairs: list[tuple[ast.AST, ast.AST]] = []
+            if isinstance(node, ast.Assign):
+                pairs.extend((target, node.value) for target in node.targets)
+            elif isinstance(node, ast.AnnAssign) and node.value is not None:
+                pairs.append((node.target, node.value))
+            elif isinstance(node, ast.NamedExpr):
+                pairs.append((node.target, node.value))
+            for target, value in pairs:
+                if not isinstance(target, ast.Name):
+                    continue
+                source_root = root_name(value)
+                if source_root in aliases and target.id not in aliases:
+                    aliases.add(target.id)
+                    changed = True
+                if (
+                    isinstance(value, ast.Attribute)
+                    and root_name(value) in aliases
+                    and target.id not in mutator_aliases
+                ):
+                    mutator_aliases.add(target.id)
+                    changed = True
+                if (
+                    isinstance(value, ast.Name)
+                    and value.id in mutator_aliases
+                    and target.id not in mutator_aliases
+                ):
+                    mutator_aliases.add(target.id)
+                    changed = True
+
     candidates: list[tuple[ast.AST, ast.AST | None]] = []
-    for node, scope in scope_map.node_scope.items():
-        if scope is not tree:
-            continue
-        target: ast.AST | None = None
-        value: ast.AST | None = None
-        if isinstance(node, ast.Assign) and any(
-            isinstance(item, ast.Name) and item.id == "__all__"
-            for item in node.targets
-        ):
-            target, value = node, node.value
-        elif (
-            isinstance(node, (ast.AnnAssign, ast.AugAssign))
-            and isinstance(node.target, ast.Name)
-            and node.target.id == "__all__"
-        ):
-            target = node
-            value = node.value if isinstance(node, ast.AnnAssign) else None
-        elif (
-            isinstance(node, ast.NamedExpr)
-            and isinstance(node.target, ast.Name)
-            and node.target.id == "__all__"
-        ):
-            target, value = node, node.value
+    ambiguous = False
+    for node in nodes:
+        if isinstance(node, ast.Assign):
+            direct = [
+                target for target in node.targets
+                if isinstance(target, ast.Name) and target.id == "__all__"
+            ]
+            if direct:
+                candidates.append((node, node.value))
+                if len(node.targets) != 1:
+                    ambiguous = True
+            if any(
+                not isinstance(target, ast.Name) and root_name(target) in aliases
+                for target in node.targets
+            ):
+                ambiguous = True
+        elif isinstance(node, ast.AnnAssign):
+            if isinstance(node.target, ast.Name) and node.target.id == "__all__":
+                candidates.append((node, node.value))
+            elif root_name(node.target) in aliases:
+                ambiguous = True
+        elif isinstance(node, ast.AugAssign) and root_name(node.target) in aliases:
+            ambiguous = True
+        elif isinstance(node, ast.NamedExpr) and root_name(node.target) in aliases:
+            ambiguous = True
         elif isinstance(node, ast.Delete) and any(
-            isinstance(item, ast.Name) and item.id == "__all__"
-            for item in node.targets
+            root_name(target) in aliases for target in node.targets
         ):
-            target = node
-        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-            chain = _attribute_chain(node.func)
-            if chain is not None and chain[0] == "__all__":
-                target = node
-        if target is not None:
-            candidates.append((target, value))
-    if not candidates:
+            ambiguous = True
+        elif isinstance(node, ast.Call):
+            function_root = root_name(node.func)
+            if (
+                function_root in aliases
+                or (isinstance(node.func, ast.Name)
+                    and node.func.id in mutator_aliases)
+                or any(root_name(argument) in aliases for argument in node.args)
+                or any(root_name(keyword.value) in aliases for keyword in node.keywords)
+            ):
+                ambiguous = True
+    if not candidates and not ambiguous:
         return False, []
-    target, value = candidates[0]
+    target, value = candidates[0] if candidates else (tree, None)
     if (
+        ambiguous
+        or
         len(candidates) != 1
         or target not in tree.body
         or not isinstance(target, (ast.Assign, ast.AnnAssign))
@@ -1087,6 +1582,8 @@ class _ScopeMap(ast.NodeVisitor):
     ) -> None:
         for decorator in node.decorator_list:
             self.visit(decorator)
+        for type_parameter in getattr(node, "type_params", ()):
+            self.visit(type_parameter)
         self._visit_arguments_in_outer_scope(node.args)
         if node.returns is not None:
             self.visit(node.returns)
@@ -1116,6 +1613,8 @@ class _ScopeMap(ast.NodeVisitor):
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         for decorator in node.decorator_list:
             self.visit(decorator)
+        for type_parameter in getattr(node, "type_params", ()):
+            self.visit(type_parameter)
         for base in node.bases:
             self.visit(base)
         for keyword in node.keywords:
@@ -1128,43 +1627,266 @@ class _ScopeMap(ast.NodeVisitor):
             self.visit(statement)
         self.current = outer
 
-    def _visit_comprehension(self, node: ast.AST) -> None:
+    def _visit_comprehension(
+        self, node: ast.ListComp | ast.SetComp | ast.DictComp | ast.GeneratorExp,
+        result_nodes: Iterable[ast.AST],
+    ) -> None:
+        # Python evaluates only the leftmost iterable in the enclosing scope;
+        # iteration targets, filters, later iterables, and result expressions
+        # execute in the implicit comprehension scope.
+        first, *remaining = node.generators
+        self.visit(first.iter)
         outer = self.current
         self.parent_scope[node] = outer
         self.scopes.append(node)
         self.current = node
-        self.generic_visit(node)
+        self.visit(first.target)
+        for condition in first.ifs:
+            self.visit(condition)
+        for generator in remaining:
+            self.visit(generator.iter)
+            self.visit(generator.target)
+            for condition in generator.ifs:
+                self.visit(condition)
+        for result in result_nodes:
+            self.visit(result)
         self.current = outer
 
     def visit_ListComp(self, node: ast.ListComp) -> None:
-        self._visit_comprehension(node)
+        self._visit_comprehension(node, [node.elt])
 
     def visit_SetComp(self, node: ast.SetComp) -> None:
-        self._visit_comprehension(node)
+        self._visit_comprehension(node, [node.elt])
 
     def visit_DictComp(self, node: ast.DictComp) -> None:
-        self._visit_comprehension(node)
+        self._visit_comprehension(node, [node.key, node.value])
 
     def visit_GeneratorExp(self, node: ast.GeneratorExp) -> None:
-        self._visit_comprehension(node)
+        self._visit_comprehension(node, [node.elt])
+
+    def visit_NamedExpr(self, node: ast.NamedExpr) -> None:
+        evaluation_scope = self.current
+        self.visit(node.value)
+        binding_scope = evaluation_scope
+        while isinstance(binding_scope, self._COMPREHENSIONS):
+            parent = self.parent_scope[binding_scope]
+            if parent is None:
+                break
+            binding_scope = parent
+        self.node_scope[node] = binding_scope
+        self.node_scope[node.target] = binding_scope
 
 
-class _FacadeAnalysis:
-    """Resolve direct, re-exported, propagated, and scope-safe rag aliases."""
+class _FacadeAnalysis(ast.NodeVisitor):
+    """Flow-sensitive resolution of direct and re-exported ``rag`` values."""
+
+    # A rule maps an attribute prefix on a local root to a rag capability.
+    # ``import consumer as layer`` can therefore map ``layer.facade`` to the
+    # facade root while ``from rag import operating as op`` maps ``op`` to the
+    # ``operating`` capability directly.
+    _Rule = tuple[tuple[str, ...], tuple[str, ...]]
 
     def __init__(
         self,
         tree: ast.Module,
-        exposed_bindings: Mapping[str, set[str]],
+        exposed_bindings: Mapping[str, Mapping[str, tuple[str, ...]]],
     ) -> None:
         self.tree = tree
         self.exposed_bindings = exposed_bindings
         self.scope_map = _ScopeMap(tree)
-        self.names: dict[ast.AST, set[str]] = {}
-        self.prefixes: dict[
-            ast.AST, dict[str, set[tuple[str, ...]]]
+        self.environment: dict[str, set[_FacadeAnalysis._Rule]] = {}
+        self.resolved: dict[ast.AST, tuple[str, ...]] = {}
+        self._roots: set[str] = set()
+        self._module_environment: dict[str, set[_FacadeAnalysis._Rule]] = {}
+        self._class_lexical_environments: dict[
+            ast.ClassDef, dict[str, set[_FacadeAnalysis._Rule]]
         ] = {}
-        self._build()
+        self.visit(tree)
+        self._module_environment = self._copy_environment(self.environment)
+
+    @staticmethod
+    def _copy_environment(
+        environment: Mapping[str, set[_Rule]],
+    ) -> dict[str, set[_Rule]]:
+        return {name: set(rules) for name, rules in environment.items()}
+
+    @staticmethod
+    def _merge_environments(
+        *environments: Mapping[str, set[_Rule]],
+    ) -> dict[str, set[_Rule]]:
+        if not environments:
+            return {}
+        names = set.intersection(*(set(environment) for environment in environments))
+        return {
+            name: set(environments[0][name])
+            for name in names
+            if all(
+                environment[name] == environments[0][name]
+                for environment in environments[1:]
+            )
+        }
+
+    def _remember_roots(self, name: str, rules: Iterable[_Rule]) -> None:
+        for match, _capability in rules:
+            self._roots.add(".".join((name, *match)))
+
+    def _set_rules(self, name: str, rules: Iterable[_Rule]) -> None:
+        values = set(rules)
+        if values:
+            self.environment[name] = values
+            self._remember_roots(name, values)
+        else:
+            self.environment.pop(name, None)
+
+    def _resolve_with(
+        self, node: ast.AST,
+        environment: Mapping[str, set[_Rule]] | None = None,
+    ) -> tuple[str, ...] | None:
+        chain = _attribute_chain(node)
+        if chain is None:
+            return None
+        root, raw_attributes = chain
+        attributes = tuple(raw_attributes)
+        candidates = {
+            (*capability, *attributes[len(match):])
+            for match, capability in (environment or self.environment).get(root, set())
+            if attributes[:len(match)] == match
+        }
+        if len(candidates) != 1:
+            return None
+        return next(iter(candidates))
+
+    def _rules_for(self, node: ast.AST) -> set[_Rule]:
+        chain = _attribute_chain(node)
+        if chain is None:
+            return set()
+        root, raw_attributes = chain
+        attributes = tuple(raw_attributes)
+        result: set[_FacadeAnalysis._Rule] = set()
+        for match, capability in self.environment.get(root, set()):
+            if attributes[:len(match)] == match:
+                result.add(((), (*capability, *attributes[len(match):])))
+            elif match[:len(attributes)] == attributes:
+                result.add((match[len(attributes):], capability))
+        return result
+
+    def _record(self, node: ast.AST) -> None:
+        capability = self._resolve_with(node)
+        if capability is not None:
+            self.resolved[node] = capability
+
+    def visit_Name(self, node: ast.Name) -> None:
+        self._record(node)
+
+    def visit_Attribute(self, node: ast.Attribute) -> None:
+        self._record(node)
+        self.generic_visit(node)
+
+    def visit_Module(self, node: ast.Module) -> None:
+        for statement in node.body:
+            self.visit(statement)
+
+    def visit_Import(self, node: ast.Import) -> None:
+        for alias in node.names:
+            if alias.name == "rag":
+                self._set_rules(alias.asname or "rag", {((), ())})
+                continue
+            exports = self.exposed_bindings.get(alias.name, {})
+            if alias.asname:
+                binding = alias.asname
+                module_prefix: tuple[str, ...] = ()
+            else:
+                parts = tuple(alias.name.split("."))
+                binding = parts[0]
+                module_prefix = parts[1:]
+            self._set_rules(
+                binding,
+                {
+                    ((*module_prefix, exported), capability)
+                    for exported, capability in exports.items()
+                },
+            )
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        if node.level:
+            for alias in node.names:
+                if alias.name != "*":
+                    self._set_rules(alias.asname or alias.name, set())
+            return
+        if node.module == "rag":
+            for alias in node.names:
+                if alias.name != "*":
+                    self._set_rules(
+                        alias.asname or alias.name,
+                        {((), tuple(alias.name.split(".")))},
+                    )
+            return
+        exports = self.exposed_bindings.get(node.module or "", {})
+        for alias in node.names:
+            if alias.name == "*":
+                for binding, capability in exports.items():
+                    self._set_rules(binding, {((), capability)})
+            else:
+                capability = exports.get(alias.name)
+                self._set_rules(
+                    alias.asname or alias.name,
+                    set() if capability is None else {((), capability)},
+                )
+
+    @staticmethod
+    def _assignment_pairs(
+        target: ast.AST, value: ast.AST,
+    ) -> list[tuple[ast.AST, ast.AST]]:
+        if (
+            isinstance(target, (ast.Tuple, ast.List))
+            and isinstance(value, (ast.Tuple, ast.List))
+            and len(target.elts) == len(value.elts)
+        ):
+            return list(zip(target.elts, value.elts))
+        return [(target, value)]
+
+    def _bind_target(self, target: ast.AST, rules: set[_Rule]) -> None:
+        if isinstance(target, ast.Name):
+            self._set_rules(target.id, rules)
+        elif isinstance(target, (ast.Tuple, ast.List)):
+            for item in target.elts:
+                self._bind_target(item, set())
+        elif isinstance(target, ast.Starred):
+            self._bind_target(target.value, set())
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        self.visit(node.value)
+        for target in node.targets:
+            self.visit(target)
+            for nested_target, nested_value in self._assignment_pairs(
+                target, node.value
+            ):
+                self._bind_target(nested_target, self._rules_for(nested_value))
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        self.visit(node.annotation)
+        if node.value is None:
+            return
+        self.visit(node.value)
+        self.visit(node.target)
+        self._bind_target(node.target, self._rules_for(node.value))
+
+    def visit_NamedExpr(self, node: ast.NamedExpr) -> None:
+        self.visit(node.value)
+        self.visit(node.target)
+        self._bind_target(node.target, self._rules_for(node.value))
+
+    def visit_AugAssign(self, node: ast.AugAssign) -> None:
+        self.visit(node.target)
+        self.visit(node.value)
+        if isinstance(node.target, ast.Name):
+            self._set_rules(node.target.id, set())
+
+    def visit_Delete(self, node: ast.Delete) -> None:
+        for target in node.targets:
+            self.visit(target)
+            if isinstance(target, ast.Name):
+                self._set_rules(target.id, set())
 
     @staticmethod
     def _arguments(scope: ast.AST) -> list[ast.arg]:
@@ -1177,179 +1899,262 @@ class _FacadeAnalysis:
             *([arguments.kwarg] if arguments.kwarg else []),
         ]
 
-    def _scope_bindings(
-        self, scope: ast.AST,
-    ) -> tuple[set[str], set[str], set[str]]:
+    def _scope_bindings(self, scope: ast.AST) -> tuple[set[str], set[str]]:
         bound = {argument.arg for argument in self._arguments(scope)}
         globals_: set[str] = set()
         nonlocals: set[str] = set()
         for node, owner in self.scope_map.node_scope.items():
             if owner is not scope:
                 continue
-            if isinstance(node, ast.Name) and isinstance(
-                node.ctx, (ast.Store, ast.Del)
-            ):
+            if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
                 bound.add(node.id)
-            elif isinstance(node, (ast.Import, ast.ImportFrom)):
-                if isinstance(node, ast.Import):
-                    bound.update(
-                        alias.asname or alias.name.split(".", 1)[0]
-                        for alias in node.names
-                    )
-                else:
-                    bound.update(
-                        alias.asname or alias.name
-                        for alias in node.names
-                        if alias.name != "*"
-                    )
+            elif isinstance(node, ast.Import):
+                bound.update(
+                    alias.asname or alias.name.split(".", 1)[0]
+                    for alias in node.names
+                )
+            elif isinstance(node, ast.ImportFrom):
+                bound.update(
+                    alias.asname or alias.name
+                    for alias in node.names if alias.name != "*"
+                )
             elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                if self.scope_map.node_scope[node] is scope:
-                    bound.add(node.name)
+                bound.add(node.name)
             elif isinstance(node, ast.Global):
                 globals_.update(node.names)
             elif isinstance(node, ast.Nonlocal):
                 nonlocals.update(node.names)
             elif isinstance(node, ast.ExceptHandler) and node.name:
                 bound.add(node.name)
-        bound.difference_update(globals_ | nonlocals)
-        return bound, globals_, nonlocals
+        return bound - globals_ - nonlocals, globals_
 
-    def _lexical_parent(self, scope: ast.AST) -> ast.AST | None:
-        parent = self.scope_map.parent_scope[scope]
-        if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
-            while isinstance(parent, ast.ClassDef):
-                parent = self.scope_map.parent_scope[parent]
-        return parent
-
-    def _add_imports(
-        self,
-        scope: ast.AST,
-        names: set[str],
-        prefixes: dict[str, set[tuple[str, ...]]],
+    def _function_header(
+        self, node: ast.FunctionDef | ast.AsyncFunctionDef,
     ) -> None:
-        for node, owner in self.scope_map.node_scope.items():
-            if owner is not scope:
-                continue
-            if isinstance(node, ast.Import):
-                for alias in node.names:
-                    if alias.name == "rag":
-                        names.add(alias.asname or "rag")
-                        continue
-                    exported = self.exposed_bindings.get(alias.name, set())
-                    if not exported:
-                        continue
-                    if alias.asname:
-                        binding = alias.asname
-                        module_prefix: tuple[str, ...] = ()
-                    else:
-                        parts = tuple(alias.name.split("."))
-                        binding = parts[0]
-                        module_prefix = parts[1:]
-                    for facade_binding in exported:
-                        prefixes[binding].add(
-                            (*module_prefix, facade_binding)
-                        )
-            elif isinstance(node, ast.ImportFrom) and node.level == 0:
-                exported = self.exposed_bindings.get(node.module or "", set())
-                for alias in node.names:
-                    if alias.name == "*":
-                        names.update(exported)
-                    elif alias.name in exported:
-                        names.add(alias.asname or alias.name)
+        for decorator in node.decorator_list:
+            self.visit(decorator)
+        for type_parameter in getattr(node, "type_params", ()):
+            self.visit(type_parameter)
+        for argument in self._arguments(node):
+            if argument.annotation is not None:
+                self.visit(argument.annotation)
+        for default in [
+            *node.args.defaults,
+            *(value for value in node.args.kw_defaults if value is not None),
+        ]:
+            self.visit(default)
+        if node.returns is not None:
+            self.visit(node.returns)
 
-    @staticmethod
-    def _assignment_pairs(node: ast.AST) -> list[tuple[ast.AST, ast.AST]]:
-        if isinstance(node, ast.Assign):
-            result: list[tuple[ast.AST, ast.AST]] = []
-            for target in node.targets:
-                if (
-                    isinstance(target, (ast.Tuple, ast.List))
-                    and isinstance(node.value, (ast.Tuple, ast.List))
-                    and len(target.elts) == len(node.value.elts)
-                ):
-                    result.extend(zip(target.elts, node.value.elts))
-                else:
-                    result.append((target, node.value))
-            return result
-        if isinstance(node, ast.AnnAssign) and node.value is not None:
-            return [(node.target, node.value)]
-        if isinstance(node, ast.NamedExpr):
-            return [(node.target, node.value)]
-        return []
+    def _visit_function(
+        self, node: ast.FunctionDef | ast.AsyncFunctionDef,
+    ) -> None:
+        self._function_header(node)
+        outer = self.environment
+        parent = self.scope_map.parent_scope.get(node)
+        lexical = (
+            self._class_lexical_environments[parent]
+            if isinstance(parent, ast.ClassDef)
+            else outer
+        )
+        local = self._copy_environment(lexical)
+        bound, _globals = self._scope_bindings(node)
+        for name in bound:
+            local.pop(name, None)
+        self.environment = local
+        for statement in node.body:
+            self.visit(statement)
+        self.environment = outer
+        self._set_rules(node.name, set())
 
-    @staticmethod
-    def _resolve_with(
-        node: ast.AST,
-        names: set[str],
-        prefixes: Mapping[str, set[tuple[str, ...]]],
-    ) -> list[str] | None:
-        chain = _attribute_chain(node)
-        if chain is None:
-            return None
-        root, attributes = chain
-        if root in names:
-            return attributes
-        for prefix in sorted(
-            prefixes.get(root, set()),
-            key=lambda value: (-len(value), value),
-        ):
-            if tuple(attributes[:len(prefix)]) == prefix:
-                return attributes[len(prefix):]
-        return None
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self._visit_function(node)
 
-    def _build(self) -> None:
-        for scope in self.scope_map.scopes:
-            parent = self._lexical_parent(scope)
-            names = set(self.names.get(parent, set()))
-            prefixes = defaultdict(set, {
-                name: set(values)
-                for name, values in self.prefixes.get(parent, {}).items()
-            })
-            bound, globals_, _nonlocals = self._scope_bindings(scope)
-            for name in bound:
-                names.discard(name)
-                prefixes.pop(name, None)
-            if scope is not self.tree:
-                for name in globals_:
-                    names.discard(name)
-                    prefixes.pop(name, None)
-                    if name in self.names[self.tree]:
-                        names.add(name)
-                    if name in self.prefixes[self.tree]:
-                        prefixes[name].update(self.prefixes[self.tree][name])
-            self._add_imports(scope, names, prefixes)
-            changed = True
-            while changed:
-                changed = False
-                for node, owner in self.scope_map.node_scope.items():
-                    if owner is not scope:
-                        continue
-                    for target, value in self._assignment_pairs(node):
-                        if self._resolve_with(value, names, prefixes) != []:
-                            continue
-                        for name in _target_names(target):
-                            if name not in names:
-                                names.add(name)
-                                changed = True
-            self.names[scope] = names
-            self.prefixes[scope] = dict(prefixes)
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self._visit_function(node)
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        for default in [
+            *node.args.defaults,
+            *(value for value in node.args.kw_defaults if value is not None),
+        ]:
+            self.visit(default)
+        outer = self.environment
+        parent = self.scope_map.parent_scope.get(node)
+        lexical = (
+            self._class_lexical_environments[parent]
+            if isinstance(parent, ast.ClassDef)
+            else outer
+        )
+        local = self._copy_environment(lexical)
+        bound, _globals = self._scope_bindings(node)
+        for name in bound:
+            local.pop(name, None)
+        self.environment = local
+        self.visit(node.body)
+        self.environment = outer
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        for decorator in node.decorator_list:
+            self.visit(decorator)
+        for type_parameter in getattr(node, "type_params", ()):
+            self.visit(type_parameter)
+        for expression in [*node.bases, *(keyword.value for keyword in node.keywords)]:
+            self.visit(expression)
+        outer = self.environment
+        parent = self.scope_map.parent_scope.get(node)
+        self._class_lexical_environments[node] = self._copy_environment(
+            self._class_lexical_environments[parent]
+            if isinstance(parent, ast.ClassDef)
+            else outer
+        )
+        self.environment = self._copy_environment(outer)
+        for statement in node.body:
+            self.visit(statement)
+        self.environment = outer
+        self._set_rules(node.name, set())
+
+    def _visit_branch(
+        self, statements: Iterable[ast.AST],
+        starting: Mapping[str, set[_Rule]],
+    ) -> dict[str, set[_Rule]]:
+        outer = self.environment
+        self.environment = self._copy_environment(starting)
+        for statement in statements:
+            self.visit(statement)
+        result = self.environment
+        self.environment = outer
+        return result
+
+    def visit_If(self, node: ast.If) -> None:
+        self.visit(node.test)
+        starting = self._copy_environment(self.environment)
+        body = self._visit_branch(node.body, starting)
+        otherwise = self._visit_branch(node.orelse, starting)
+        self.environment = self._merge_environments(body, otherwise)
+
+    def _visit_loop(
+        self, header: Iterable[ast.AST], target: ast.AST | None,
+        body: Iterable[ast.AST],
+    ) -> None:
+        for expression in header:
+            self.visit(expression)
+        starting = self._copy_environment(self.environment)
+        outer = self.environment
+        self.environment = self._copy_environment(starting)
+        if target is not None:
+            self.visit(target)
+            self._bind_target(target, set())
+        for statement in body:
+            self.visit(statement)
+        executed = self.environment
+        self.environment = outer
+        self.environment = self._merge_environments(starting, executed)
+
+    def visit_For(self, node: ast.For) -> None:
+        self._visit_loop((node.iter,), node.target, (*node.body, *node.orelse))
+
+    def visit_AsyncFor(self, node: ast.AsyncFor) -> None:
+        self._visit_loop((node.iter,), node.target, (*node.body, *node.orelse))
+
+    def visit_While(self, node: ast.While) -> None:
+        self._visit_loop((node.test,), None, (*node.body, *node.orelse))
+
+    def visit_With(self, node: ast.With) -> None:
+        self._visit_with(node)
+
+    def visit_AsyncWith(self, node: ast.AsyncWith) -> None:
+        self._visit_with(node)
+
+    def _visit_with(self, node: ast.With | ast.AsyncWith) -> None:
+        for item in node.items:
+            self.visit(item.context_expr)
+            if item.optional_vars is not None:
+                self.visit(item.optional_vars)
+                self._bind_target(item.optional_vars, set())
+        for statement in node.body:
+            self.visit(statement)
+
+    def visit_Try(self, node: ast.Try) -> None:
+        self._visit_try(node)
+
+    def visit_TryStar(self, node: ast.TryStar) -> None:
+        self._visit_try(node)
+
+    def _visit_try(self, node: ast.Try | ast.TryStar) -> None:
+        starting = self._copy_environment(self.environment)
+        branches = [self._visit_branch(node.body, starting)]
+        for handler in node.handlers:
+            handler_nodes: list[ast.AST] = []
+            if handler.type is not None:
+                handler_nodes.append(handler.type)
+            handler_nodes.extend(handler.body)
+            branches.append(self._visit_branch(handler_nodes, starting))
+        merged = self._merge_environments(*branches)
+        after_else = self._visit_branch(node.orelse, merged)
+        self.environment = self._visit_branch(node.finalbody, after_else)
+
+    def visit_Match(self, node: ast.Match) -> None:
+        self.visit(node.subject)
+        starting = self._copy_environment(self.environment)
+        branches = [starting]
+        for case in node.cases:
+            statements: list[ast.AST] = []
+            if case.guard is not None:
+                statements.append(case.guard)
+            statements.extend(case.body)
+            branches.append(self._visit_branch(statements, starting))
+        self.environment = self._merge_environments(*branches)
+
+    def _visit_comprehension(
+        self,
+        node: ast.ListComp | ast.SetComp | ast.DictComp | ast.GeneratorExp,
+        results: Iterable[ast.AST],
+    ) -> None:
+        first, *remaining = node.generators
+        self.visit(first.iter)
+        outer = self.environment
+        self.environment = self._copy_environment(outer)
+        self.visit(first.target)
+        self._bind_target(first.target, set())
+        for condition in first.ifs:
+            self.visit(condition)
+        for generator in remaining:
+            self.visit(generator.iter)
+            self.visit(generator.target)
+            self._bind_target(generator.target, set())
+            for condition in generator.ifs:
+                self.visit(condition)
+        for result in results:
+            self.visit(result)
+        self.environment = outer
+
+    def visit_ListComp(self, node: ast.ListComp) -> None:
+        self._visit_comprehension(node, (node.elt,))
+
+    def visit_SetComp(self, node: ast.SetComp) -> None:
+        self._visit_comprehension(node, (node.elt,))
+
+    def visit_DictComp(self, node: ast.DictComp) -> None:
+        self._visit_comprehension(node, (node.key, node.value))
+
+    def visit_GeneratorExp(self, node: ast.GeneratorExp) -> None:
+        self._visit_comprehension(node, (node.elt,))
 
     def resolve(self, node: ast.AST) -> list[str] | None:
-        scope = self.scope_map.node_scope.get(node, self.tree)
-        return self._resolve_with(
-            node, self.names.get(scope, set()), self.prefixes.get(scope, {})
-        )
+        capability = self.resolved.get(node)
+        return None if capability is None else list(capability)
 
     def roots(self) -> list[str]:
-        roots: set[str] = set()
-        for scope in self.scope_map.scopes:
-            roots.update(self.names.get(scope, set()))
-            roots.update(
-                ".".join((name, *prefix))
-                for name, prefixes in self.prefixes.get(scope, {}).items()
-                for prefix in prefixes
-            )
-        return sorted(roots)
+        return sorted(self._roots)
+
+    def module_exports(self) -> dict[str, tuple[str, ...]]:
+        result: dict[str, tuple[str, ...]] = {}
+        for name, rules in sorted(self._module_environment.items()):
+            direct = {capability for match, capability in rules if not match}
+            if len(direct) == 1:
+                result[name] = next(iter(direct))
+        return result
 
 
 def _facade_attribute_accesses(
@@ -1389,24 +2194,25 @@ def _facade_attribute_accesses(
 
 def _literal_facade_target(
     value: object,
-    exposed_bindings: Mapping[str, set[str]],
+    exposed_bindings: Mapping[str, Mapping[str, tuple[str, ...]]],
 ) -> str | None:
     if not isinstance(value, str):
         return None
     if value.startswith("rag."):
         return value[4:]
     for module, bindings in sorted(exposed_bindings.items()):
-        for binding in sorted(bindings):
+        for binding, capability in sorted(bindings.items()):
             prefix = f"{module}.{binding}."
             if value.startswith(prefix):
-                return value[len(prefix):]
+                remainder = tuple(value[len(prefix):].split("."))
+                return ".".join((*capability, *remainder))
     return None
 
 
 def _patch_target(
     call: ast.Call,
     resolver: _FacadeAnalysis,
-    exposed_bindings: Mapping[str, set[str]],
+    exposed_bindings: Mapping[str, Mapping[str, tuple[str, ...]]],
 ) -> tuple[str, str] | None:
     function_name = (
         call.func.id
@@ -1531,7 +2337,7 @@ def _facade_tree_variants(
 
 def _patch_inventory(
     trees: Mapping[Path, ast.Module],
-    exposed_bindings: Mapping[str, set[str]],
+    exposed_bindings: Mapping[str, Mapping[str, tuple[str, ...]]],
 ) -> dict[str, object]:
     grouped: dict[str, list[dict[str, object]]] = defaultdict(list)
     dynamic: list[dict[str, object]] = []
@@ -1579,7 +2385,7 @@ def _patch_inventory(
 
 def _direct_mutation_inventory(
     trees: Mapping[Path, ast.Module],
-    exposed_bindings: Mapping[str, set[str]],
+    exposed_bindings: Mapping[str, Mapping[str, tuple[str, ...]]],
 ) -> dict[str, object]:
     grouped: dict[str, list[dict[str, object]]] = defaultdict(list)
     dynamic: list[dict[str, object]] = []
@@ -1679,7 +2485,7 @@ def _consumer_inventory(
     module: str,
     path: Path,
     tree: ast.Module,
-    exposed_bindings: Mapping[str, set[str]],
+    exposed_bindings: Mapping[str, Mapping[str, tuple[str, ...]]],
 ) -> dict[str, object] | None:
     _aliases, direct_imports, from_imports = _rag_aliases(tree)
     analysis = _FacadeAnalysis(tree, exposed_bindings)
@@ -1738,8 +2544,10 @@ def _imported_binding_inventory(
 def _facade_exports(
     modules: Mapping[str, Path],
     trees: Mapping[Path, ast.Module],
-) -> dict[str, set[str]]:
-    exports: dict[str, set[str]] = {module: set() for module in modules}
+) -> dict[str, dict[str, tuple[str, ...]]]:
+    exports: dict[str, dict[str, tuple[str, ...]]] = {
+        module: {} for module in modules
+    }
     changed = True
     while changed:
         changed = False
@@ -1747,8 +2555,9 @@ def _facade_exports(
             if module == "rag":
                 continue
             analysis = _FacadeAnalysis(trees[path], exports)
-            observed = analysis.names[trees[path]]
-            if not observed <= exports[module]:
+            observed = analysis.module_exports()
+            if any(exports[module].get(name) != capability
+                   for name, capability in observed.items()):
                 exports[module].update(observed)
                 changed = True
     return {
@@ -1801,30 +2610,66 @@ def _runtime_facade_contract(root: Path) -> dict[str, object]:
         })
         stdout_path = isolated_root / "stdout.json"
         stderr_path = isolated_root / "stderr.log"
+        probe_path = isolated_root / "architecture_runtime_probe.py"
+        probe_path.write_text(_RUNTIME_PROBE, encoding="utf-8", newline="\n")
+        child_environment_name = "RAG_ARCH_INVENTORY_SUPERVISED_CHILD"
+        run_id_environment_name = "RAG_ARCH_INVENTORY_RUN_ID"
+        overrides: dict[str, str | None] = {
+            name: None
+            for name in os.environ
+            if name.casefold() != child_environment_name.casefold()
+        }
+        overrides.update(environment)
+        config = process_supervision.SupervisionConfig(
+            supervised_child_env=child_environment_name,
+            run_id_env=run_id_environment_name,
+            terminate_grace=5.0,
+            poll_interval=0.05,
+            start_gate_timeout=10.0,
+        )
         try:
             with stdout_path.open("wb") as stdout_file, stderr_path.open("wb") as stderr_file:
-                result = subprocess.run(
-                    [sys.executable, "-I", "-c", _RUNTIME_PROBE, str(root)],
-                    cwd=temporary,
-                    env=environment,
-                    stdin=subprocess.DEVNULL,
-                    stdout=stdout_file,
-                    stderr=stderr_file,
-                    timeout=90,
-                    check=False,
+                def enforce_output_ceiling(_process: object) -> None:
+                    if any(
+                        os.fstat(handle.fileno()).st_size > 4 * 1024 * 1024
+                        for handle in (stdout_file, stderr_file)
+                    ):
+                        raise ArchitectureInventoryError(
+                            "Isolated rag runtime probe exceeded its output ceiling"
+                        )
+
+                return_code = process_supervision._run_cli_with_deadline(
+                    probe_path,
+                    [str(root)],
+                    operation="architecture runtime probe",
+                    timeout=90.0,
+                    config=config,
+                    working_directory=isolated_root,
+                    environment_overrides=overrides,
+                    heartbeat=enforce_output_ceiling,
+                    stdout_target=stdout_file,
+                    stderr_target=stderr_file,
+                    warn_fn=lambda _message: None,
                 )
-        except subprocess.TimeoutExpired as exc:
+                enforce_output_ceiling(None)
+                stdout_file.flush()
+                stderr_file.flush()
+        except ArchitectureInventoryError:
+            raise
+        except process_supervision._SupervisorCleanupError as exc:
+            raise ArchitectureInventoryError(
+                "Isolated rag runtime probe cleanup could not be confirmed"
+            ) from exc
+        except BaseException as exc:
+            raise ArchitectureInventoryError(
+                "Isolated rag runtime probe failed (supervision error)"
+            ) from exc
+        if return_code == 124:
             raise ArchitectureInventoryError(
                 "Isolated rag runtime probe timed out"
-            ) from exc
-        stdout_size = stdout_path.stat().st_size
-        stderr_size = stderr_path.stat().st_size
-        if stdout_size > 4 * 1024 * 1024 or stderr_size > 4 * 1024 * 1024:
-            raise ArchitectureInventoryError(
-                "Isolated rag runtime probe exceeded its output ceiling"
             )
-        if result.returncode != 0:
-            exit_kind = "signal" if result.returncode < 0 else "nonzero exit"
+        if return_code != 0:
+            exit_kind = "signal" if return_code > 128 else "nonzero exit"
             raise ArchitectureInventoryError(
                 f"Isolated rag runtime probe failed ({exit_kind})"
             )
@@ -1848,6 +2693,25 @@ def _runtime_facade_contract(root: Path) -> dict[str, object]:
             "Isolated rag runtime probe did not emit an object"
         )
     return value
+
+
+def _compact_runtime_contract(
+    value: Mapping[str, object],
+) -> dict[str, object]:
+    compact = dict(value)
+    compact["callables"] = [
+        {
+            "contract_sha256": _domain_sha256(
+                HASH_DOMAINS["runtime_symbol_contract"], item
+            ),
+            "kind": item["kind"],
+            "module": item["module"],
+            "name": item["name"],
+            "qualname": item["qualname"],
+        }
+        for item in value["callables"]
+    ]
+    return compact
 
 
 def build_inventory(root: Path = PROJECT_ROOT) -> dict[str, object]:
@@ -1890,30 +2754,36 @@ def build_inventory(root: Path = PROJECT_ROOT) -> dict[str, object]:
 
     known = set(modules)
     graph: dict[str, set[str]] = {module: set() for module in modules}
-    edge_kinds: dict[str, dict[str, set[str]]] = {}
     module_records: list[dict[str, object]] = []
     for module, relative in sorted(modules.items()):
         tree = trees[relative]
         edges = _module_import_edges(module, relative, tree, known)
-        edge_kinds[module] = edges
         graph[module].update(edges)
-        functions, classes = _definitions(tree)
+        raw_functions, raw_classes = _definitions(tree)
+        functions, classes, definition_locations_sha256 = _compact_definitions(
+            module, raw_functions, raw_classes
+        )
         source = sources[relative]
         module_records.append({
             "class_count": len(classes),
             "classes": classes,
+            "definition_locations_sha256": definition_locations_sha256,
             "function_count": len(functions),
             "functions": functions,
             "import_edges": [
-                {"kinds": sorted(kinds), "target": target}
-                for target, kinds in sorted(edges.items())
+                {
+                    "contexts": sorted({context for context, _origin in evidence}),
+                    "origins": sorted({origin for _context, origin in evidence}),
+                    "target": target,
+                }
+                for target, evidence in sorted(edges.items())
             ],
             "module": module,
             "non_blank_lines": sum(bool(line.strip()) for line in source.splitlines()),
             "path": relative.as_posix(),
             "physical_lines": len(source.splitlines()),
             "top_level_function_count": sum(
-                item["scope"] == "top_level" for item in functions
+                item["scope"] == "top_level" for item in raw_functions
             ),
         })
 
@@ -1923,18 +2793,6 @@ def build_inventory(root: Path = PROJECT_ROOT) -> dict[str, object]:
         for component in components
         if len(component) > 1 or component[0] in graph[component[0]]
     ]
-    graph_nodes = [
-        {
-            "edges": [
-                {"kinds": sorted(kinds), "target": target}
-                for target, kinds in sorted(edge_kinds[module].items())
-            ],
-            "module": module,
-            "path": modules[module].as_posix(),
-        }
-        for module in sorted(modules)
-    ]
-
     rag_tree = trees[modules["rag"]]
     rag_origins = _module_binding_origins(rag_tree)
     if "*" in rag_origins:
@@ -2039,15 +2897,14 @@ def build_inventory(root: Path = PROJECT_ROOT) -> dict[str, object]:
                 ),
             },
         },
+        "hash_domains": dict(HASH_DOMAINS),
         "source_architecture": {
             "class_count": sum(len(item["classes"]) for item in module_records),
             "function_count": sum(len(item["functions"]) for item in module_records),
             "import_graph": {
                 "cyclic_components": cyclic,
-                "edge_policy": "runtime+conditional+type-only+constant-dynamic",
+                "edge_policy": "first-party-all-contexts-with-provenance-v1",
                 "edge_count": sum(len(dependencies) for dependencies in graph.values()),
-                "nodes": graph_nodes,
-                "strongly_connected_components": components,
             },
             "module_count": len(module_records),
             "modules": module_records,
@@ -2058,7 +2915,9 @@ def build_inventory(root: Path = PROJECT_ROOT) -> dict[str, object]:
             ),
         },
         "interpreter_normalization": INTERPRETER_NORMALIZATION,
-        "rag_runtime_contract": _runtime_facade_contract(resolved_root),
+        "rag_runtime_contract": _compact_runtime_contract(
+            _runtime_facade_contract(resolved_root)
+        ),
         "rag_source_owner": {
             "consumer_exports": [
                 {"bindings": sorted(bindings), "module": module}
@@ -2251,22 +3110,19 @@ def _validate_signature(value: object, context: str) -> None:
 def _validate_definition(
     value: object, context: str, *, function: bool,
 ) -> None:
-    keys = {"name", "scope", "span"}
+    keys = {"name", "scope"}
     if function:
-        keys.update({"kind", "signature"})
+        keys.update({"kind", "signature_sha256"})
     record = _require_dict(value, keys, context)
     _require_string(record["name"], f"{context}.name")
-    span = _require_list(record["span"], f"{context}.span")
-    if len(span) != 2:
-        raise ArchitectureInventoryError(f"{context}.span must have two lines")
-    first = _require_int(span[0], f"{context}.span[0]", 1)
-    _require_int(span[1], f"{context}.span[1]", first)
     if record["scope"] not in {"top_level", "class", "nested"}:
         raise ArchitectureInventoryError(f"{context}.scope is invalid")
     if function:
         if record["kind"] not in {"function", "async_function"}:
             raise ArchitectureInventoryError(f"{context}.kind is invalid")
-        _validate_signature(record["signature"], f"{context}.signature")
+        _validate_sha256(
+            record["signature_sha256"], f"{context}.signature_sha256"
+        )
 
 
 def _validate_import_record(value: object, context: str) -> None:
@@ -2428,22 +3284,28 @@ def _validate_tracked_sources_v2(
     return grouped, set(all_paths)
 
 
-def _validate_edge_records_v2(
+def _validate_edge_records_v3(
     value: object, context: str, known_modules: set[str],
 ) -> list[dict[str, Any]]:
     raw_edges = _require_list(value, context)
     edges: list[dict[str, Any]] = []
     targets: list[str] = []
-    allowed_kinds = {"conditional", "dynamic_constant", "runtime", "type_only"}
     for index, raw_edge in enumerate(raw_edges):
         label = f"{context}[{index}]"
-        edge = _require_dict(raw_edge, {"kinds", "target"}, label)
+        edge = _require_dict(
+            raw_edge, {"contexts", "origins", "target"}, label
+        )
         target = _require_string(edge["target"], f"{label}.target")
         if target not in known_modules:
             raise ArchitectureInventoryError(f"{label}.target is not architectural")
-        kinds = _validate_sorted_strings(edge["kinds"], f"{label}.kinds")
-        if not kinds or not set(kinds) <= allowed_kinds:
-            raise ArchitectureInventoryError(f"{label}.kinds is invalid")
+        contexts = _validate_sorted_strings(
+            edge["contexts"], f"{label}.contexts"
+        )
+        origins = _validate_sorted_strings(edge["origins"], f"{label}.origins")
+        if not contexts or not set(contexts) <= set(_EDGE_CONTEXTS):
+            raise ArchitectureInventoryError(f"{label}.contexts is invalid")
+        if not origins or not set(origins) <= set(_EDGE_ORIGINS):
+            raise ArchitectureInventoryError(f"{label}.origins is invalid")
         edges.append(edge)
         targets.append(target)
     if targets != sorted(set(targets)):
@@ -2451,7 +3313,7 @@ def _validate_edge_records_v2(
     return edges
 
 
-def _validate_source_architecture_v2(
+def _validate_source_architecture_v3(
     value: object, grouped_paths: Mapping[str, list[str]],
 ) -> set[str]:
     context = "source_architecture"
@@ -2469,9 +3331,10 @@ def _validate_source_architecture_v2(
     for index, raw_module in enumerate(raw_modules):
         label = f"{context}.modules[{index}]"
         module = _require_dict(raw_module, {
-            "class_count", "classes", "function_count", "functions",
-            "import_edges", "module", "non_blank_lines", "path",
-            "physical_lines", "top_level_function_count",
+            "class_count", "classes", "definition_locations_sha256",
+            "function_count", "functions", "import_edges", "module",
+            "non_blank_lines", "path", "physical_lines",
+            "top_level_function_count",
         }, label)
         name = _require_string(module["module"], f"{label}.module")
         path = _validate_path(module["path"], f"{label}.path")
@@ -2492,8 +3355,6 @@ def _validate_source_architecture_v2(
             "source_architecture module/source paths differ"
         )
     known_modules = set(module_names)
-    paths_by_module: dict[str, str] = {}
-    edges_by_module: dict[str, list[dict[str, Any]]] = {}
     graph_sets: dict[str, set[str]] = {}
     function_total = 0
     top_level_total = 0
@@ -2505,24 +3366,30 @@ def _validate_source_architecture_v2(
         non_blank = _require_int(module["non_blank_lines"], f"{label}.non_blank_lines")
         if non_blank > physical:
             raise ArchitectureInventoryError(f"{label} line counts are inconsistent")
+        _validate_sha256(
+            module["definition_locations_sha256"],
+            f"{label}.definition_locations_sha256",
+        )
         functions = _require_list(module["functions"], f"{label}.functions")
-        function_keys: list[tuple[int, str, str]] = []
+        function_keys: list[tuple[str, str]] = []
         for def_index, definition in enumerate(functions):
             def_label = f"{label}.functions[{def_index}]"
             _validate_definition(definition, def_label, function=True)
-            function_keys.append((
-                definition["span"][0], definition["name"], definition["kind"],
-            ))
+            function_keys.append((definition["name"], definition["kind"]))
         if function_keys != sorted(function_keys):
-            raise ArchitectureInventoryError(f"{label}.functions is not source-sorted")
+            raise ArchitectureInventoryError(
+                f"{label}.functions is not name-sorted"
+            )
         classes = _require_list(module["classes"], f"{label}.classes")
-        class_keys: list[tuple[int, str]] = []
+        class_keys: list[str] = []
         for def_index, definition in enumerate(classes):
             def_label = f"{label}.classes[{def_index}]"
             _validate_definition(definition, def_label, function=False)
-            class_keys.append((definition["span"][0], definition["name"]))
+            class_keys.append(definition["name"])
         if class_keys != sorted(class_keys):
-            raise ArchitectureInventoryError(f"{label}.classes is not source-sorted")
+            raise ArchitectureInventoryError(
+                f"{label}.classes is not name-sorted"
+            )
         observed_top = sum(item["scope"] == "top_level" for item in functions)
         if _require_int(module["function_count"], f"{label}.function_count") != len(functions):
             raise ArchitectureInventoryError(f"{label}.function_count is inconsistent")
@@ -2534,11 +3401,9 @@ def _validate_source_architecture_v2(
             raise ArchitectureInventoryError(
                 f"{label}.top_level_function_count is inconsistent"
             )
-        edges = _validate_edge_records_v2(
+        edges = _validate_edge_records_v3(
             module["import_edges"], f"{label}.import_edges", known_modules
         )
-        paths_by_module[name] = path
-        edges_by_module[name] = edges
         graph_sets[name] = {edge["target"] for edge in edges}
         function_total += len(functions)
         top_level_total += observed_top
@@ -2555,44 +3420,34 @@ def _validate_source_architecture_v2(
         if _require_int(architecture[field], f"{context}.{field}") != expected:
             raise ArchitectureInventoryError(f"{context}.{field} is inconsistent")
     graph = _require_dict(architecture["import_graph"], {
-        "cyclic_components", "edge_count", "edge_policy", "nodes",
-        "strongly_connected_components",
+        "cyclic_components", "edge_count", "edge_policy",
     }, f"{context}.import_graph")
-    if graph["edge_policy"] != "runtime+conditional+type-only+constant-dynamic":
+    if graph["edge_policy"] != "first-party-all-contexts-with-provenance-v1":
         raise ArchitectureInventoryError(
             f"{context}.import_graph.edge_policy is invalid"
-        )
-    nodes = _require_list(graph["nodes"], f"{context}.import_graph.nodes")
-    observed_node_names: list[str] = []
-    for index, raw_node in enumerate(nodes):
-        label = f"{context}.import_graph.nodes[{index}]"
-        node = _require_dict(raw_node, {"edges", "module", "path"}, label)
-        name = _require_string(node["module"], f"{label}.module")
-        path = _validate_path(node["path"], f"{label}.path")
-        edges = _validate_edge_records_v2(node["edges"], f"{label}.edges", known_modules)
-        if name not in known_modules or path != paths_by_module[name]:
-            raise ArchitectureInventoryError(f"{label} identity differs from module data")
-        if edges != edges_by_module[name]:
-            raise ArchitectureInventoryError(f"{label}.edges differs from module data")
-        observed_node_names.append(name)
-    if observed_node_names != sorted(known_modules):
-        raise ArchitectureInventoryError(
-            f"{context}.import_graph.nodes is incomplete or unsorted"
         )
     if _require_int(graph["edge_count"], f"{context}.import_graph.edge_count") != sum(
         len(edges) for edges in graph_sets.values()
     ):
         raise ArchitectureInventoryError(f"{context}.import_graph.edge_count is inconsistent")
     components = _strongly_connected_components(graph_sets)
-    if graph["strongly_connected_components"] != components:
-        raise ArchitectureInventoryError(
-            f"{context}.import_graph strongly connected components differ"
-        )
     cyclic = [
         component for component in components
         if len(component) > 1 or component[0] in graph_sets[component[0]]
     ]
-    if graph["cyclic_components"] != cyclic:
+    raw_cyclic = _require_list(
+        graph["cyclic_components"], f"{context}.import_graph.cyclic_components"
+    )
+    for index, raw_component in enumerate(raw_cyclic):
+        component = _validate_sorted_strings(
+            raw_component,
+            f"{context}.import_graph.cyclic_components[{index}]",
+        )
+        if not component or not set(component) <= known_modules:
+            raise ArchitectureInventoryError(
+                f"{context}.import_graph.cyclic_components[{index}] is invalid"
+            )
+    if raw_cyclic != cyclic:
         raise ArchitectureInventoryError(f"{context}.import_graph cyclic components differ")
     return known_modules
 
@@ -2680,12 +3535,12 @@ def _validate_rag_source_owner_v2(
         raise ArchitectureInventoryError(f"{context}.import_star is inconsistent")
 
 
-def _validate_runtime_contract_v2(value: object) -> None:
+def _validate_runtime_contract_v3(value: object) -> None:
     context = "rag_runtime_contract"
     contract = _require_dict(value, {
         "behavior", "callables", "dir_names", "import_star_names",
         "interpreter_variant_exclusions", "logger_name", "module_type",
-        "vars_names",
+        "platform_variant_bindings", "vars_names",
     }, context)
     expected_behaviors = {
         "dynamic_add_read", "dynamic_delete", "existing_assignment_restored",
@@ -2708,32 +3563,36 @@ def _validate_runtime_contract_v2(value: object) -> None:
         raise ArchitectureInventoryError(f"{context}.interpreter_variant_exclusions is invalid")
     _require_string(contract["logger_name"], f"{context}.logger_name")
     _require_string(contract["module_type"], f"{context}.module_type")
+    platform_variants = _require_list(
+        contract["platform_variant_bindings"],
+        f"{context}.platform_variant_bindings",
+    )
+    expected_platform_variants = [
+        {"name": name, "token": token}
+        for name, token in sorted(_PLATFORM_VARIANT_BINDINGS.items())
+    ]
+    for index, raw_variant in enumerate(platform_variants):
+        label = f"{context}.platform_variant_bindings[{index}]"
+        variant = _require_dict(raw_variant, {"name", "token"}, label)
+        _require_string(variant["name"], f"{label}.name")
+        _require_string(variant["token"], f"{label}.token")
+    if any(variant not in expected_platform_variants for variant in platform_variants):
+        raise ArchitectureInventoryError(
+            f"{context}.platform_variant_bindings is invalid"
+        )
     callables = _require_list(contract["callables"], f"{context}.callables")
     callable_names: list[str] = []
     for index, raw_callable in enumerate(callables):
         label = f"{context}.callables[{index}]"
         item = _require_dict(raw_callable, {
-            "kind", "module", "name", "pickle_identity", "qualname",
-            "runtime_signature_sha256", "runtime_signature_status",
-            "type_hints_sha256", "type_hints_status",
+            "contract_sha256", "kind", "module", "name", "qualname",
         }, label)
         if item["kind"] not in {"class", "function"}:
             raise ArchitectureInventoryError(f"{label}.kind is invalid")
         name = _require_string(item["name"], f"{label}.name")
         _require_string(item["module"], f"{label}.module")
         _require_string(item["qualname"], f"{label}.qualname")
-        if item["pickle_identity"] not in {"different", "same", "unsupported"}:
-            raise ArchitectureInventoryError(f"{label}.pickle_identity is invalid")
-        if item["runtime_signature_status"] not in {
-            "interpreter_owned", "ok", "unsupported",
-        }:
-            raise ArchitectureInventoryError(f"{label}.runtime_signature_status is invalid")
-        if item["type_hints_status"] not in {
-            "interpreter_owned", "ok", "unresolved",
-        }:
-            raise ArchitectureInventoryError(f"{label}.type_hints_status is invalid")
-        _validate_sha256(item["runtime_signature_sha256"], f"{label}.runtime_signature_sha256")
-        _validate_sha256(item["type_hints_sha256"], f"{label}.type_hints_sha256")
+        _validate_sha256(item["contract_sha256"], f"{label}.contract_sha256")
         callable_names.append(name)
     if callable_names != sorted(set(callable_names)):
         raise ArchitectureInventoryError(f"{context}.callables is not name-sorted/unique")
@@ -2870,11 +3729,11 @@ def _validate_consumers_v2(
 
 
 def validate_inventory(value: object) -> None:
-    """Validate schema v2 and all content-free cross-field invariants."""
+    """Validate schema v3 and all content-free cross-field invariants."""
     document = _require_dict(value, {
         "analysis_model", "consumers", "interpreter_normalization",
-        "rag_runtime_contract", "rag_source_owner", "schema_version",
-        "source_architecture", "tracked_sources",
+        "hash_domains", "rag_runtime_contract", "rag_source_owner",
+        "schema_version", "source_architecture", "tracked_sources",
     }, "inventory")
     if _require_int(document["schema_version"], "inventory.schema_version", 1) != SCHEMA_VERSION:
         raise ArchitectureInventoryError(
@@ -2888,16 +3747,21 @@ def validate_inventory(value: object) -> None:
         raise ArchitectureInventoryError(
             "inventory.interpreter_normalization is unsupported"
         )
+    hash_domains = _require_dict(
+        document["hash_domains"], set(HASH_DOMAINS), "inventory.hash_domains"
+    )
+    if hash_domains != HASH_DOMAINS:
+        raise ArchitectureInventoryError("inventory.hash_domains is unsupported")
     grouped_paths, tracked_paths = _validate_tracked_sources_v2(
         document["tracked_sources"]
     )
-    known_modules = _validate_source_architecture_v2(
+    known_modules = _validate_source_architecture_v3(
         document["source_architecture"], grouped_paths
     )
     _validate_rag_source_owner_v2(
         document["rag_source_owner"], grouped_paths, known_modules
     )
-    _validate_runtime_contract_v2(document["rag_runtime_contract"])
+    _validate_runtime_contract_v3(document["rag_runtime_contract"])
     _validate_consumers_v2(
         document["consumers"], tracked_paths, grouped_paths, known_modules
     )

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 from copy import deepcopy
 import json
 import os
@@ -180,8 +181,16 @@ def test_build_inventory_covers_metrics_graph_facade_and_consumers(tmp_path):
     ]
     script_edges = _module(value, "scripts.run")["import_edges"]
     assert script_edges == [
-        {"kinds": ["type_only"], "target": "consumer"},
-        {"kinds": ["dynamic_constant", "runtime"], "target": "pkg"},
+        {
+            "contexts": ["type_only"],
+            "origins": ["static"],
+            "target": "consumer",
+        },
+        {
+            "contexts": ["runtime"],
+            "origins": ["dynamic"],
+            "target": "pkg",
+        },
     ]
 
     rag_module = _module(value, "rag")
@@ -190,18 +199,9 @@ def test_build_inventory_covers_metrics_graph_facade_and_consumers(tmp_path):
         if item["name"] == "local"
     )
     assert local["scope"] == "top_level"
-    assert local["span"][1] - local["span"][0] + 1 == 3
-    parameters = local["signature"]["parameters"]
-    assert [(item["name"], item["kind"], item["has_default"]) for item in parameters] == [
-        ("a", "positional_only", False),
-        ("b", "positional_or_keyword", True),
-        ("args", "var_positional", False),
-        ("c", "keyword_only", False),
-        ("d", "keyword_only", True),
-        ("kwargs", "var_keyword", False),
-    ]
-    assert all(item["annotation_sha256"] for item in parameters)
-    assert local["signature"]["return_annotation_sha256"]
+    assert set(local) == {"kind", "name", "scope", "signature_sha256"}
+    assert len(local["signature_sha256"]) == 64
+    assert len(rag_module["definition_locations_sha256"]) == 64
     method = next(
         item for item in rag_module["functions"]
         if item["name"] == "Thing.method"
@@ -319,7 +319,7 @@ def test_check_rejects_noncanonical_or_tampered_baseline(tmp_path):
     path = root / baseline
 
     path.write_bytes(path.read_bytes().replace(b"\n", b"\r\n"))
-    assert inventory.check_baseline(root, baseline)["schema_version"] == 2
+    assert inventory.check_baseline(root, baseline)["schema_version"] == 3
 
     inventory.refresh_baseline(root, baseline)
     path.write_bytes(path.read_bytes() + b"\n")
@@ -377,6 +377,31 @@ def test_schema_rejects_counts_paths_order_and_graph_tampering(tmp_path):
     ):
         inventory.inventory_bytes(bad_graph)
 
+    bad_origin = deepcopy(value)
+    _module(bad_origin, "scripts.run")["import_edges"][0]["origins"] = [
+        "guessed"
+    ]
+    with pytest.raises(
+        inventory.ArchitectureInventoryError, match=r"origins is invalid"
+    ):
+        inventory.inventory_bytes(bad_origin)
+
+    bad_domain = deepcopy(value)
+    bad_domain["hash_domains"]["static_signature"] = "unreviewed"
+    with pytest.raises(
+        inventory.ArchitectureInventoryError, match=r"hash_domains is unsupported"
+    ):
+        inventory.inventory_bytes(bad_domain)
+
+    bad_contract = deepcopy(value)
+    bad_contract["rag_runtime_contract"]["callables"][0][
+        "contract_sha256"
+    ] = "short"
+    with pytest.raises(
+        inventory.ArchitectureInventoryError, match=r"contract_sha256"
+    ):
+        inventory.inventory_bytes(bad_contract)
+
 
 def test_signature_contract_detects_same_span_api_drift(tmp_path):
     root = _example_repository(tmp_path)
@@ -394,8 +419,10 @@ def test_signature_contract_detects_same_span_api_drift(tmp_path):
     before_local = next(item for item in before["functions"] if item["name"] == "local")
     after_local = next(item for item in after["functions"] if item["name"] == "local")
 
-    assert before_local["span"] == after_local["span"]
-    assert before_local["signature"] != after_local["signature"]
+    assert before["definition_locations_sha256"] == after[
+        "definition_locations_sha256"
+    ]
+    assert before_local["signature_sha256"] != after_local["signature_sha256"]
 
 
 @pytest.mark.parametrize(
@@ -406,6 +433,11 @@ def test_signature_contract_detects_same_span_api_drift(tmp_path):
         '__all__ = tuple(["PUBLIC"])\n',
         '(__all__ := ["PUBLIC"])\n',
         '__all__ = ["PUBLIC"]\n__all__.append("Thing")\n',
+        '__all__ = ["PUBLIC"]\n__all__[:] = ["Thing"]\n',
+        '__all__ = ["PUBLIC"]\ndel __all__[0]\n',
+        '__all__ = ["PUBLIC"]\nalias = __all__\nalias.append("Thing")\n',
+        '__all__ = ["PUBLIC"]\nmutate = __all__.append\nmutate("Thing")\n',
+        '__all__ = ["PUBLIC"]\nalias = __all__\nalias[:] += ["Thing"]\n',
     ],
 )
 def test_ambiguous_all_fails_closed(tmp_path, statement):
@@ -423,10 +455,14 @@ def test_ambiguous_all_fails_closed(tmp_path, statement):
 def test_module_binding_analysis_handles_annotations_walrus_and_delete(tmp_path):
     root = _example_repository(tmp_path)
     with (root / "rag.py").open("a", encoding="utf-8") as handle:
-        handle.write("\nGHOST: int\nif (WALRUS := 4):\n    pass\n")
+        handle.write(
+            "\nGHOST: int\nif (WALRUS := 4):\n    pass\n"
+            "[None for _ in range(1) if (COMP_WALRUS := True)]\n"
+        )
     bindings = inventory.build_inventory(root)["rag_source_owner"]["explicit_bindings"]
     assert "GHOST" not in bindings
     assert "WALRUS" in bindings
+    assert "COMP_WALRUS" in bindings
 
     with (root / "rag.py").open("a", encoding="utf-8") as handle:
         handle.write("TO_DELETE = 1\ndel TO_DELETE\n")
@@ -435,6 +471,124 @@ def test_module_binding_analysis_handles_annotations_walrus_and_delete(tmp_path)
         match="module-scope del requires explicit namespace analysis",
     ):
         inventory.build_inventory(root)
+
+
+def test_dynamic_import_edges_track_alias_flow_context_and_provenance():
+    tree = ast.parse(
+        """import importlib as il
+from importlib import import_module as load
+from typing import TYPE_CHECKING as TC
+import typing as t
+
+il.import_module("pkg")
+load(".child", __package__)
+
+class Eager:
+    plugin = load("eager")
+
+@load("decorator").decorate
+def work(value=load("defaults")):
+    load("conditional")
+
+if TC:
+    load("typed_direct")
+if t.TYPE_CHECKING:
+    load("typed_module")
+
+[load("comp_body") for load in load("comp_iter")]
+
+def local_shadow():
+    load("local_before_import")
+    from importlib import import_module as load
+
+object().import_module("ignored")
+il = object()
+il.import_module("ignored")
+load = object()
+load("ignored")
+"""
+    )
+    known = {
+        "comp_body", "comp_iter", "conditional", "decorator", "defaults",
+        "eager", "ignored", "local_before_import", "package.child",
+        "package.module", "pkg", "typed_direct", "typed_module",
+    }
+
+    edges = inventory._module_import_edges(
+        "package.module", Path("package/module.py"), tree, known
+    )
+
+    assert edges == {
+        "conditional": {("conditional", "dynamic")},
+        "comp_iter": {("runtime", "dynamic")},
+        "decorator": {("runtime", "dynamic")},
+        "defaults": {("runtime", "dynamic")},
+        "eager": {("runtime", "dynamic")},
+        "package.child": {("runtime", "dynamic")},
+        "pkg": {("runtime", "dynamic")},
+        "typed_direct": {("type_only", "dynamic")},
+        "typed_module": {("type_only", "dynamic")},
+    }
+
+
+def test_facade_aliases_are_flow_aware_and_comprehension_scoped():
+    path = Path("tests/test_alias_flow.py")
+    tree = ast.parse(
+        """import rag as facade
+from rag import operating as op
+before = op.getenv
+op = object()
+after = op.getenv
+op = facade.operating
+restored = op.getenv
+values = [op.getenv for op in op.environ]
+def shadow(op):
+    return op.getenv
+op.getenv = replacement
+del op.path
+monkeypatch.setattr(op, "getenv", replacement)
+class Container:
+    facade = object()
+    def method(self):
+        return facade._GLOBAL
+"""
+    )
+    analysis = inventory._FacadeAnalysis(tree, {})
+    accesses = inventory._facade_attribute_accesses(
+        tree, analysis, path.as_posix()
+    )
+    observed = {(item["line"], item["path"], item["context"]) for item in accesses}
+
+    assert (3, "operating.getenv", "load") in observed
+    assert (5, "operating.getenv", "load") not in observed
+    assert (7, "operating.getenv", "load") in observed
+    assert (8, "operating.environ", "load") in observed
+    assert (8, "operating.getenv", "load") not in observed
+    assert (10, "operating.getenv", "load") not in observed
+    assert (11, "operating.getenv", "store") in observed
+    assert (12, "operating.path", "del") in observed
+    assert (17, "_GLOBAL", "load") in observed
+
+    patches = inventory._patch_inventory({path: tree}, {})
+    assert [item["target"] for item in patches["nested"]] == [
+        "operating.getenv"
+    ]
+    mutations = inventory._direct_mutation_inventory({path: tree}, {})
+    assert [item["target"] for item in mutations["nested"]] == [
+        "operating.getenv", "operating.path",
+    ]
+
+
+def test_pep_695_type_alias_is_a_module_binding_when_supported(tmp_path):
+    if not hasattr(ast, "TypeAlias"):
+        pytest.skip("PEP 695 syntax requires Python 3.12+")
+    root = _example_repository(tmp_path)
+    with (root / "rag.py").open("a", encoding="utf-8") as handle:
+        handle.write("\ntype PublicAlias = int\n")
+
+    bindings = inventory.build_inventory(root)["rag_source_owner"]["explicit_bindings"]
+
+    assert "PublicAlias" in bindings
 
 
 def test_runtime_probe_scrubs_and_redirects_ambient_environment(
@@ -453,16 +607,18 @@ def test_runtime_probe_scrubs_and_redirects_ambient_environment(
     for name, value in secrets.items():
         monkeypatch.setenv(name, value)
     observed: dict[str, str] = {}
-    original_run = inventory.subprocess.run
+    original_run = inventory.process_supervision._run_cli_with_deadline
 
     def recording_run(*args, **kwargs):
-        observed.update(kwargs["env"])
+        observed.update(kwargs["environment_overrides"])
         return original_run(*args, **kwargs)
 
-    monkeypatch.setattr(inventory.subprocess, "run", recording_run)
+    monkeypatch.setattr(
+        inventory.process_supervision, "_run_cli_with_deadline", recording_run
+    )
     inventory._runtime_facade_contract(root)
 
-    assert "HOME" not in observed
+    assert observed["HOME"] is None
     assert not set(secrets.values()) & set(observed.values())
     for name in (
         "APPDATA", "LOCALAPPDATA", "RAG_LLM_CACHE_DIR",
@@ -475,13 +631,61 @@ def test_runtime_probe_scrubs_and_redirects_ambient_environment(
 def test_runtime_probe_failure_is_redacted(tmp_path, monkeypatch):
     root = _example_repository(tmp_path)
 
-    class Failed:
-        returncode = 1
-
-    monkeypatch.setattr(inventory.subprocess, "run", lambda *_args, **_kwargs: Failed())
+    monkeypatch.setattr(
+        inventory.process_supervision,
+        "_run_cli_with_deadline",
+        lambda *_args, **_kwargs: 1,
+    )
     with pytest.raises(inventory.ArchitectureInventoryError) as caught:
         inventory._runtime_facade_contract(root)
     assert str(caught.value) == "Isolated rag runtime probe failed (nonzero exit)"
+
+
+def test_runtime_probe_enforces_output_ceiling_during_supervision(
+    tmp_path, monkeypatch,
+):
+    root = _example_repository(tmp_path)
+
+    def overflow(*_args, **kwargs):
+        kwargs["stdout_target"].write(b"x" * (4 * 1024 * 1024 + 1))
+        kwargs["stdout_target"].flush()
+        kwargs["heartbeat"](None)
+        return 0
+
+    monkeypatch.setattr(
+        inventory.process_supervision, "_run_cli_with_deadline", overflow
+    )
+
+    with pytest.raises(
+        inventory.ArchitectureInventoryError, match="exceeded its output ceiling"
+    ):
+        inventory._runtime_facade_contract(root)
+
+
+def test_runtime_path_defaults_are_separator_neutral(tmp_path):
+    root = _example_repository(tmp_path)
+    rag_path = root / "rag.py"
+    source = rag_path.read_text(encoding="utf-8")
+    source += (
+        "\nfrom pathlib import Path\n"
+        "def path_default(value=Path(r'folder\\child')):\n"
+        "    return value\n"
+    )
+    _write(rag_path, source)
+    backslash_contract = inventory._runtime_facade_contract(root)
+    backslash = next(
+        item for item in backslash_contract["callables"]
+        if item["name"] == "path_default"
+    )
+
+    _write(rag_path, source.replace("r'folder\\\\child'", "'folder/child'"))
+    slash_contract = inventory._runtime_facade_contract(root)
+    slash = next(
+        item for item in slash_contract["callables"]
+        if item["name"] == "path_default"
+    )
+
+    assert backslash == slash
 
 
 def test_runtime_contract_preserves_generic_type_arguments(tmp_path):
@@ -511,9 +715,9 @@ def test_runtime_contract_preserves_generic_type_arguments(tmp_path):
 @pytest.mark.parametrize(
     "payload, message",
     [
-        ('{"schema_version": 2, "schema_version": 2}', "duplicate JSON field"),
+        ('{"schema_version": 3, "schema_version": 3}', "duplicate JSON field"),
         ('{"schema_version": NaN}', "non-standard JSON number"),
-        ('{"schema_version": 2}', "inventory fields differ"),
+        ('{"schema_version": 3}', "inventory fields differ"),
     ],
 )
 def test_load_inventory_rejects_non_strict_or_incomplete_json(
@@ -587,6 +791,7 @@ def test_repository_baseline_is_current_and_canonical():
     baseline = PROJECT_ROOT / inventory.DEFAULT_BASELINE
 
     assert baseline.read_bytes() == inventory.inventory_bytes(value)
+    assert baseline.stat().st_size <= 1_250_000
     assert value["source_architecture"]["import_graph"]["cyclic_components"] == []
     assert [
         item["module"] for item in value["consumers"]["production"]
@@ -605,6 +810,14 @@ def test_repository_rag_static_evidence_and_runtime_contract_are_separate():
 
     assert value["rag_runtime_contract"]["vars_names"] == runtime_names
     assert value["rag_runtime_contract"]["import_star_names"] == import_star_names
+    assert value["rag_runtime_contract"]["platform_variant_bindings"] == [{
+        "name": "getpass",
+        "token": "python-stdlib:getpass:platform-dispatch:v1",
+    }]
+    assert all(
+        set(item) == {"contract_sha256", "kind", "module", "name", "qualname"}
+        for item in value["rag_runtime_contract"]["callables"]
+    )
     assert set(value["rag_source_owner"]["explicit_bindings"]) <= set(runtime_names)
     assert all(value["rag_runtime_contract"]["behavior"].values())
 
