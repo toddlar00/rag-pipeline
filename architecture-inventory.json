@@ -596,7 +596,7 @@
             "target": "_embed_texts"
           },
           {
-            "locations_sha256": "7ff436ef51476e64ffc4c807d00db80f3dd46fb1b4bc861286c54a94ee1e412b",
+            "locations_sha256": "56019189b012d19e756f4b67c3c0eb21b20af46c6b3b10268ae44a8521256f60",
             "occurrence_count": 4,
             "operations": [
               "assign",
@@ -1217,7 +1217,7 @@
             "target": "requests.Session"
           },
           {
-            "locations_sha256": "c24e1255b6c5058f649f5f63dd52b0699a7873ca25fd09295221aa695435fb8f",
+            "locations_sha256": "57a9af2066b17eebdb7a148a53c1ef98a1826c7ade99017b784e22edb6510cff",
             "occurrence_count": 17,
             "operations": [
               "setattr"
@@ -1495,14 +1495,14 @@
             "target": "_AdaptiveThrottle"
           },
           {
-            "locations_sha256": "85c6370d676484ba7df0e877090a86abd56ba1931caf569517ccd5c8f36fff8d",
-            "occurrence_count": 3,
+            "locations_sha256": "f34f1fb6209c03545c8e6c0f3378be6fb134f12859168376b83bfe4c90c5dfce",
+            "occurrence_count": 4,
             "operations": [
               "setattr"
             ],
             "source_counts": [
               {
-                "count": 3,
+                "count": 4,
                 "path": "tests/test_scaffold_structure.py"
               }
             ],
@@ -1665,8 +1665,8 @@
             "target": "_analyze_pdf_images"
           },
           {
-            "locations_sha256": "8e1e8a509fa7a0efbb3774fdd62314165d6f003bd0ed2be0b29e60436d7d5161",
-            "occurrence_count": 4,
+            "locations_sha256": "9f750f9cc971ae24ecc1c146430a238083b79779eb7e65c59f0efa6979d1bea1",
+            "occurrence_count": 5,
             "operations": [
               "setattr"
             ],
@@ -1676,14 +1676,14 @@
                 "path": "tests/test_llm_gating.py"
               },
               {
-                "count": 3,
+                "count": 4,
                 "path": "tests/test_scaffold_structure.py"
               }
             ],
             "target": "_analyze_toc_layout"
           },
           {
-            "locations_sha256": "6e83d0649f308619e175882198763f6950f6ab8cedeb966fd4b1687dfe6ff44e",
+            "locations_sha256": "662cc79d7b62484259462c131d230edc4f12ec43d7adca168013a4cf901a4226",
             "occurrence_count": 10,
             "operations": [
               "setattr"
@@ -1745,7 +1745,7 @@
             "target": "_atomic_write_json"
           },
           {
-            "locations_sha256": "4f565e314f2e291ba3581c5706126aa9e2238359400b2ab171b98cffb036b98e",
+            "locations_sha256": "b326d45e78454858391295f610fd897e1f351d8a9911d2c970456e223942023d",
             "occurrence_count": 2,
             "operations": [
               "setattr"
@@ -1847,8 +1847,8 @@
             "target": "_cached_artifact_sha256"
           },
           {
-            "locations_sha256": "041112955ac7d1cff8513201af26c51152f671ac2208ad2204ba0e347038dd9c",
-            "occurrence_count": 3,
+            "locations_sha256": "90816420284c125fd2f1c3f057e8f463a08e0a1f61dc7b24cd8d65638ba83727",
+            "occurrence_count": 4,
             "operations": [
               "setattr"
             ],
@@ -1858,14 +1858,14 @@
                 "path": "tests/test_llm_gating.py"
               },
               {
-                "count": 2,
+                "count": 3,
                 "path": "tests/test_scaffold_structure.py"
               }
             ],
             "target": "_calculate_page_delta"
           },
           {
-            "locations_sha256": "b8d2cded179a4e53cd00f0c4c2cde8b28c781666cb671efdf2fd752374a3481a",
+            "locations_sha256": "bf2e554995e48393b69068b5defa7dc8cfffb987798a99657c40ea6cf22d2aea",
             "occurrence_count": 1,
             "operations": [
               "setattr"
@@ -1879,8 +1879,8 @@
             "target": "_call_gemini"
           },
           {
-            "locations_sha256": "93143ee1eb378047c17c494b7655b6c4986d9f3c27a52b1f4743eb8ba639fb74",
-            "occurrence_count": 19,
+            "locations_sha256": "06a489e93f6fcda149aa5103b2e78a1fc61a81fabe96a55e4f447709b30209cd",
+            "occurrence_count": 25,
             "operations": [
               "setattr"
             ],
@@ -1890,7 +1890,7 @@
                 "path": "tests/test_grounded_answers.py"
               },
               {
-                "count": 13,
+                "count": 19,
                 "path": "tests/test_llm_gating.py"
               },
               {
@@ -1905,14 +1905,14 @@
             "target": "_call_llm"
           },
           {
-            "locations_sha256": "fac6acfa0ba0aef2d99582f46ed196dd7aa985536cb168b0abe3de5fcb90c430",
-            "occurrence_count": 4,
+            "locations_sha256": "eb68cdfefa09b8ff073953fee08fa100c0316ff063b71b50254049fb39f31ca4",
+            "occurrence_count": 5,
             "operations": [
               "setattr"
             ],
             "source_counts": [
               {
-                "count": 2,
+                "count": 3,
                 "path": "tests/test_llm_gating.py"
               },
               {
@@ -1923,7 +1923,7 @@
             "target": "_call_ollama"
           },
           {
-            "locations_sha256": "3a3a7ebec5f6f8c4b4df94267fe4674b620c9d065bdfd66c7b96524e68b7ee8c",
+            "locations_sha256": "b7260f40da7942c8702f2b0f1c37c656a5d9bf05a9018fb4a8bfe14e46001893",
             "occurrence_count": 5,
             "operations": [
               "setattr"
@@ -2297,7 +2297,7 @@
             "target": "_get_throttle"
           },
           {
-            "locations_sha256": "2871c749aeb7a691490cb63208c07f913f1aacfbd88f8a18cdb8fccdeeac455f",
+            "locations_sha256": "92e569b1a61ace78c9dca6c1871b6ebea86923a6e04928af1900a07c0a18f42d",
             "occurrence_count": 1,
             "operations": [
               "setattr"
@@ -2473,8 +2473,8 @@
             "target": "_llm_kwargs_from_args"
           },
           {
-            "locations_sha256": "44682213fc787dbeedf5fce98c22fe921b66b7658125e2422338320f43f4e067",
-            "occurrence_count": 4,
+            "locations_sha256": "91a58d358ff567bcc279f89913caa4283517ab693715e51c34bbf58b7ffdf5e9",
+            "occurrence_count": 5,
             "operations": [
               "setattr"
             ],
@@ -2484,15 +2484,15 @@
                 "path": "tests/test_llm_gating.py"
               },
               {
-                "count": 3,
+                "count": 4,
                 "path": "tests/test_scaffold_structure.py"
               }
             ],
             "target": "_llm_parse_scaffold"
           },
           {
-            "locations_sha256": "d3f980aac2453cae8b9555aa8741703b029629dcfefb92da0fca918fef9b5762",
-            "occurrence_count": 8,
+            "locations_sha256": "893039628b4a0d79340c61cbd8472becaa513f0cf2cbc911a82703c70ff6b979",
+            "occurrence_count": 9,
             "operations": [
               "setattr"
             ],
@@ -2506,7 +2506,7 @@
                 "path": "tests/test_llm_adapters.py"
               },
               {
-                "count": 2,
+                "count": 3,
                 "path": "tests/test_llm_gating.py"
               },
               {
@@ -2653,7 +2653,7 @@
             "target": "_menu_yesno"
           },
           {
-            "locations_sha256": "3c2ae02f8026b4974887ec5e517aeee4be049c6f072d4398802395a1df7691a5",
+            "locations_sha256": "b281db9a8ddf1b63c26b6cd9264d859eab7d85e51e588ab9359a5f4f9e37605c",
             "occurrence_count": 4,
             "operations": [
               "setattr"
@@ -2757,7 +2757,7 @@
             "target": "_parse_index_records_strict"
           },
           {
-            "locations_sha256": "71d45631e71e2329bcf700da28656ff3644f5a7750a6ecadfcc832f1c3658702",
+            "locations_sha256": "481eefda79cbc326a36c92a81bc66876b5689b3ff3e8af06928323a90e2ea14f",
             "occurrence_count": 1,
             "operations": [
               "setattr"
@@ -2805,7 +2805,7 @@
             "target": "_post_cloud_with_policy"
           },
           {
-            "locations_sha256": "84ae22436abfef3587c09abc26fd2279eea82684e094a094094f6d0a3f01b39a",
+            "locations_sha256": "9fbb3f315106db87e98081bb091c8ec27eebb5930ae2fdb0c8df5a61eb1a3ac6",
             "occurrence_count": 6,
             "operations": [
               "setattr"
@@ -2911,7 +2911,7 @@
             "target": "_quality_report_complete"
           },
           {
-            "locations_sha256": "bff0d92d363a800529860ab9f6da4047d0c7c29adf79e5fd5ed6c89a300407f0",
+            "locations_sha256": "7f483721f37483627c0386bca8aa054eb0baaaab600a2b155706a73092a1ca89",
             "occurrence_count": 2,
             "operations": [
               "setattr"
@@ -3686,7 +3686,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "1e1a4bd61a3a00a617e5aa1855335debf01af8f83dc8850ed6635ee1d5585734",
+          "locations_sha256": "6db011ef5654dd51f1beea77996ea8e20fea1b0fbfd1d921075321f66d2330df",
           "name": "_AdaptiveThrottle",
           "occurrence_count": 3,
           "paths": [
@@ -3710,7 +3710,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "63ddeda80a8bac38483c8b1f9b261d89a3958a0b6fc3a198a0d90be458a9fba9",
+          "locations_sha256": "5c030d72066111940f2a3b5a04d5b256fd1859db6fd94c6c0a66c707bd33623f",
           "name": "_AgentTeam",
           "occurrence_count": 2,
           "paths": [
@@ -3730,7 +3730,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "3246c53a1a41026d3c282aff66b6d3582eb61d3626d3448b3dd4cf59f655ab35",
+          "locations_sha256": "d1e7f95da0dfee800a12892d3bcc77b63700f575b5a94f137a421db05b741c3a",
           "name": "_CLASSIFICATION_OUTPUT_CONTRACT",
           "occurrence_count": 3,
           "paths": [
@@ -4083,7 +4083,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "11183b46b9f9a95bb0af5cf2a62940960c523c6b1c261c7145b05fa3f98aa77f",
+          "locations_sha256": "696e2aa06f053d461c7e8ca30bf8a7b896631f4487ae5ca4e44de81f3f2965f8",
           "name": "_TOC_HIERARCHY_CONTRACT_PROMPT_JSON",
           "occurrence_count": 3,
           "paths": [
@@ -4107,7 +4107,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "fc99fc0efff0bd240d6c91f47d3be7fc49ddd2a6ca4d48958e1af62926e5cb02",
+          "locations_sha256": "c0a9ad44b991f51fcf92bed4c7b5c60d1d851254cfd506890bbd6dd4c409c234",
           "name": "_TOC_HIERARCHY_OUTPUT_CONTRACT",
           "occurrence_count": 2,
           "paths": [
@@ -4121,6 +4121,50 @@
             {
               "count": 1,
               "path": "tests/test_llm_runtime.py"
+            }
+          ]
+        },
+        {
+          "contexts": [
+            "load"
+          ],
+          "kinds": [
+            "attribute"
+          ],
+          "locations_sha256": "5f5d212c3af58dce38c556e8a5a3a0918af1a9fbb5c1beb4faa0e66300f6b0da",
+          "name": "_TOC_LAYOUT_CONTRACT_PROMPT_JSON",
+          "occurrence_count": 3,
+          "paths": [
+            "_TOC_LAYOUT_CONTRACT_PROMPT_JSON"
+          ],
+          "source_counts": [
+            {
+              "count": 2,
+              "path": "tests/test_llm_gating.py"
+            },
+            {
+              "count": 1,
+              "path": "tests/test_llm_runtime.py"
+            }
+          ]
+        },
+        {
+          "contexts": [
+            "load"
+          ],
+          "kinds": [
+            "attribute"
+          ],
+          "locations_sha256": "975db4ff215ded561bf14e6a775210b68803e47f72a4090a9c6a4f22120c4c8d",
+          "name": "_TOC_LAYOUT_OUTPUT_CONTRACT",
+          "occurrence_count": 1,
+          "paths": [
+            "_TOC_LAYOUT_OUTPUT_CONTRACT"
+          ],
+          "source_counts": [
+            {
+              "count": 1,
+              "path": "tests/test_llm_gating.py"
             }
           ]
         },
@@ -4291,6 +4335,26 @@
           "kinds": [
             "attribute"
           ],
+          "locations_sha256": "9906384ccc1fcefd72ba7251b302543ecf06ea8c7cddc78712a1cf550110516f",
+          "name": "_analyze_toc_layout",
+          "occurrence_count": 7,
+          "paths": [
+            "_analyze_toc_layout"
+          ],
+          "source_counts": [
+            {
+              "count": 7,
+              "path": "tests/test_llm_gating.py"
+            }
+          ]
+        },
+        {
+          "contexts": [
+            "load"
+          ],
+          "kinds": [
+            "attribute"
+          ],
           "locations_sha256": "cfa596f99d5a0bc017cc5dd9bd7d78bd275347d9f6dd2e91d7ce8c89dfa246df",
           "name": "_answer_search_results",
           "occurrence_count": 1,
@@ -4331,7 +4395,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "73cf7d62bc190413fbf66a69d688f04b40d7ae792a3f3c1b43fcd859972358d9",
+          "locations_sha256": "dd77dd7abb517b62614ec4cf52a89ccc3c551ae36a7b4e859b6c21df9dc6a23e",
           "name": "_artifact_completion_path",
           "occurrence_count": 15,
           "paths": [
@@ -4359,7 +4423,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "152a52e7cdca2d91a418ff43242e2948f964803656e26d965dd19385c754cf54",
+          "locations_sha256": "cd0b41b08d07a48ba8080131ebe6cb354dee5662d1164d58ba2dcfa560bccb74",
           "name": "_artifact_parameters_sha256",
           "occurrence_count": 7,
           "paths": [
@@ -4447,7 +4511,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "f475f196e2cda7c9a09ef13a96f950aa0ba8cda4a438b84f184ea4faef1c7ce6",
+          "locations_sha256": "65bb23075956e0f1ea2b61c85b955ef3fc2cd15c269822503631d7192a3938a4",
           "name": "_atomic_write_json",
           "occurrence_count": 22,
           "paths": [
@@ -4523,7 +4587,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "0aa0444dcd10b162b875c96d17c2e2a79dd3d231e0a681cd4c424e82888e886a",
+          "locations_sha256": "c2b05a904ebe4b80ec9bdb87350e8c82962add78929d52129bf05301331c1d07",
           "name": "_atomic_write_text",
           "occurrence_count": 7,
           "paths": [
@@ -4767,9 +4831,9 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "6e92010639779f555614258acb1fc38057c17227555fb28419508fa7f5cb134a",
+          "locations_sha256": "63307bb7145ed93966c8c59e93cc120d51f12eb9cf5d6b0ec98c900f863aa02e",
           "name": "_build_scaffold",
-          "occurrence_count": 8,
+          "occurrence_count": 9,
           "paths": [
             "_build_scaffold"
           ],
@@ -4779,7 +4843,7 @@
               "path": "tests/test_llm_gating.py"
             },
             {
-              "count": 7,
+              "count": 8,
               "path": "tests/test_scaffold_structure.py"
             }
           ]
@@ -4871,7 +4935,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "382c838fb46256aa93eed3a7ca6ee7a47193f4c3010771ee05221591af2e1792",
+          "locations_sha256": "5674a25fcdc1f223a9250b644068c8fa0813bf0aa795c49087ffcda704b1ecae",
           "name": "_call_llm",
           "occurrence_count": 3,
           "paths": [
@@ -4895,7 +4959,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "524f038708ef740dfba8cf004e9dd450230b53e51dece2f28d3df315df87f7e9",
+          "locations_sha256": "054225634878024e4136865569fa7801d120c9398579a45ebaada0511f5b2447",
           "name": "_call_llm_result",
           "occurrence_count": 10,
           "paths": [
@@ -4927,7 +4991,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "ccafce580adcc18f11d7e41c31c79ab0042a20f40d8b66ab62c8dc35f8691fd2",
+          "locations_sha256": "8631c90929af767aa90ee0bd49e5f400c294c506be7b0d4b2cee2e6eb0d29e73",
           "name": "_call_ollama",
           "occurrence_count": 1,
           "paths": [
@@ -4975,7 +5039,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "b5d861d1a9d865ad14402b7a1e7ec783bb309a1d48769e806822fe3d1e21fd89",
+          "locations_sha256": "b129ee16c05d6221dfe56f165e3e0f2ca49dea0f0d2e0747d51b4b625ced6f06",
           "name": "_call_openai_compatible",
           "occurrence_count": 6,
           "paths": [
@@ -5043,7 +5107,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "8428af9151e7fc2714fb09f4cdf2904122aa4e9472b1d14b38ae751de9988007",
+          "locations_sha256": "dbaab4a6895b34c8e43d1df18a9cc50336e768702fc17b4a3713f21973c008bf",
           "name": "_canonical_chapter_titles",
           "occurrence_count": 4,
           "paths": [
@@ -5283,15 +5347,15 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "850318365e7592f76e6b01195a2da567aa58db4e090051425f4e0941a14a4c58",
+          "locations_sha256": "4f5b4307e28f8a55b989c1112d761601a97f92cc1eba38c489b31b9f31a73971",
           "name": "_chunks_complete",
-          "occurrence_count": 15,
+          "occurrence_count": 18,
           "paths": [
             "_chunks_complete"
           ],
           "source_counts": [
             {
-              "count": 12,
+              "count": 15,
               "path": "tests/test_output_publication.py"
             },
             {
@@ -5351,7 +5415,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "318818eac5d8194a43a5fdc60b64681f706e4e2504c729c8d8997f71f0ca30e2",
+          "locations_sha256": "5d4a09f190a2b73e2d4e3a7e229b02af4d0e8221f9c9b8852ffbe6c99b3c4359",
           "name": "_coalesce_chunk_boundaries",
           "occurrence_count": 5,
           "paths": [
@@ -5587,7 +5651,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "088eff073099d0c62bec21998cf26de9d995c0228b692ef621d8e240986ad46a",
+          "locations_sha256": "f0270191c1ce782aead07a200cd7f676b63d63d35d7ae8c139b829b32ddb6626",
           "name": "_docling_lineage_catalog",
           "occurrence_count": 1,
           "paths": [
@@ -5607,7 +5671,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "97acc97c55df8075ad2844d28dcccc41f2528a5d3d4d04bf148de5efbdf23f30",
+          "locations_sha256": "38f0eb9e7e2f1509123a20baa2c1fda8a7da8e791562fcd588ba0bd3e5a6f05d",
           "name": "_document_profiles",
           "occurrence_count": 9,
           "paths": [
@@ -5781,7 +5845,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "fd4d67e06b991791d1136407aa526b9e555962fcc47891057a50dfea4e26035e",
+          "locations_sha256": "c8ff067c5ec0fd562b0c1448bdfb23c27278195c62cb0b25f03648916810a8d0",
           "name": "_generate_context",
           "occurrence_count": 1,
           "paths": [
@@ -5925,9 +5989,9 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "a5e24b47d5d388cef1ac8629c8d053384a60aad5bf82ab0a6e65e20f72d0ba5c",
+          "locations_sha256": "20ccfa3e02343234a6cf8d96841fd74e2cc442c5b156b213bd8897ca3db7bddb",
           "name": "_identify_book_sections",
-          "occurrence_count": 7,
+          "occurrence_count": 8,
           "paths": [
             "_identify_book_sections"
           ],
@@ -5937,7 +6001,7 @@
               "path": "tests/test_output_publication.py"
             },
             {
-              "count": 6,
+              "count": 7,
               "path": "tests/test_scaffold_structure.py"
             }
           ]
@@ -6250,7 +6314,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "6605efee2615088dab0fb97c796e69e92d842d082d219e04db3ef6ed4e8bcb80",
+          "locations_sha256": "1cd3513b73baa22139a6b5e23dc2700375b1863bf0e45b1012f9ba691a50f91e",
           "name": "_llm_classify",
           "occurrence_count": 5,
           "paths": [
@@ -6270,7 +6334,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "ae9b4286e112e2017e8ad44ee1b5c2c8f8a86cfa190fc8d45409318baec08a53",
+          "locations_sha256": "84f5a7f815173074c20bd44184d0f423d37dc31c4d0faf2d7ad01b5b3a1f228a",
           "name": "_llm_endpoint_id",
           "occurrence_count": 3,
           "paths": [
@@ -6318,20 +6382,23 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "4b5b29a95d9cf7723f5904240d044926fc86eccfe9fce7457e64ba2e029108bb",
+          "locations_sha256": "800706ca5c9ba5305616073c9b14b09d202cfc81951bda3a03ff6455de28a9fd",
           "name": "_llm_output_contracts",
-          "occurrence_count": 4,
+          "occurrence_count": 9,
           "paths": [
             "_llm_output_contracts.TOC_HIERARCHY_UNICODE_DATA_VERSION",
-            "_llm_output_contracts.TOC_HIERARCHY_UNICODE_DATA_VERSION.split"
+            "_llm_output_contracts.TOC_HIERARCHY_UNICODE_DATA_VERSION.split",
+            "_llm_output_contracts.TOC_LAYOUT_FALLBACK_ID",
+            "_llm_output_contracts.TOC_LAYOUT_UNICODE_DATA_VERSION",
+            "_llm_output_contracts.TOC_LAYOUT_UNICODE_DATA_VERSION.split"
           ],
           "source_counts": [
             {
-              "count": 1,
+              "count": 3,
               "path": "tests/test_llm_gating.py"
             },
             {
-              "count": 3,
+              "count": 6,
               "path": "tests/test_output_publication.py"
             }
           ]
@@ -6343,7 +6410,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "3710d8ec254bcc400fdf03b8430063b2750ef51efa2353cdc54ae5b5fdc59330",
+          "locations_sha256": "222e1f0ef5c9d257e706370a9e60ff4d78385f0695bb4af536947dee200003f0",
           "name": "_llm_parse_scaffold",
           "occurrence_count": 3,
           "paths": [
@@ -6363,7 +6430,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "87e09a16208309147c2f521c8dde4c8f665b8dc3fb457ffc54447e4690d040a1",
+          "locations_sha256": "3a8887e5f8d12e13e71491d5a81a223cd6035a40a9a9aea47bd2faef99876071",
           "name": "_llm_parse_toc",
           "occurrence_count": 1,
           "paths": [
@@ -6383,7 +6450,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "0a3063c35b636094602be9ff1edfdf904bd35bed37545f3d6b2e676d85755530",
+          "locations_sha256": "a5a0b90aa42ef89f6b0cafe4eaf4cf9c59c22ac1d14ef268b88a26f738ef005e",
           "name": "_llm_runtime",
           "occurrence_count": 8,
           "paths": [
@@ -6502,7 +6569,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "f2c63acc44fa579fcb751128b830aa56322a3c7165261ccc2101e71d25233e5c",
+          "locations_sha256": "e63c20a589486802f640388ae086a05966df1f47a286aa7ee78eb82d81416b30",
           "name": "_load_index_records_strict",
           "occurrence_count": 7,
           "paths": [
@@ -6526,7 +6593,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "707467d102097733080ae9e656ab7841c12545085e2913c2bfa0a1ff57b65f0c",
+          "locations_sha256": "24b0d5600e065924d8a5f5c1a01fbc26efecc5511c4967b58287e41602d5e61f",
           "name": "_load_index_snapshot_strict",
           "occurrence_count": 2,
           "paths": [
@@ -6590,7 +6657,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "992d7689f3e9fd6efa9f936275814fbb6988ddcab54bf764adb0b07e25221a08",
+          "locations_sha256": "0ae16bdb12d9d167d795c7f2ce1141c9476b28e8b6c327b3e721cb20966eaa34",
           "name": "_markdown_export_parameters",
           "occurrence_count": 3,
           "paths": [
@@ -6954,7 +7021,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "8b69d535b9f0c6473070606c9892bb99cc4764e6b926a568e1534fe02eb42b31",
+          "locations_sha256": "3904591ed6b1ed2df9d3bbe8793cac63912fbfcd418072e152fbb7bab99940ef",
           "name": "_parse_toc_tables",
           "occurrence_count": 6,
           "paths": [
@@ -7106,7 +7173,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "b95c147c61668c55b9cdd3fc5b4c2f056b8937fcc8684e81a2f715166b2486c5",
+          "locations_sha256": "05e3bec8c99595c0dad67f50bf6cce465cc8f8e75ae6d024534cdee579591739",
           "name": "_prepare_source_preserving_chunks",
           "occurrence_count": 6,
           "paths": [
@@ -7126,7 +7193,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "3fd70b86c318b5acf57b6ad7f024bdcfcd2563e6486d919e4a1c99dd762bc4b9",
+          "locations_sha256": "fcfb326e16eb93b988ed60f811e5cf7822fdc5cc21b5af93bc9e566d24bcc976",
           "name": "_prepend_source_table_captions",
           "occurrence_count": 1,
           "paths": [
@@ -7246,7 +7313,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "037a9cbdb9fe324795c6c637d4fdcfaadd26a048f773ef628f7c885e3141db81",
+          "locations_sha256": "062f9af59ee7d0c0fbca386cc98c86ce1daca13239930b32b733b1d47cf34f39",
           "name": "_publish_corpus_quality_report",
           "occurrence_count": 11,
           "paths": [
@@ -7410,7 +7477,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "e5ee8bfb33da3bd698b72455d8d8df3e895cdb0910e214dac640895381064a36",
+          "locations_sha256": "a131cc8bed4046c7e931cbd63ae964c318ab6400a3500ed0a4969c57ef568c8b",
           "name": "_quality_core",
           "occurrence_count": 12,
           "paths": [
@@ -7448,7 +7515,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "0d8f115703b44eb26c7392f68425c54860817f3f0464a6b455049e8f253a1c04",
+          "locations_sha256": "56f268065f7c7d6801a763c1fd3966ab932bd533603de122f08cc4e458dd3511",
           "name": "_quality_report_complete",
           "occurrence_count": 3,
           "paths": [
@@ -7556,7 +7623,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "0f2343ecf679419e25d8c1eff423a9c8d3af651e1c83f400047fbc85def17a8f",
+          "locations_sha256": "e162984b7f91972c587709931b5451985314121d06dbf3ab826e656b166d2b33",
           "name": "_raptor_output_complete",
           "occurrence_count": 2,
           "paths": [
@@ -7576,7 +7643,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "f8b0cdf7ef8ca550b037d6779436e8d570518f0a2bf8bf02823babe5403d5015",
+          "locations_sha256": "ea9b3f2f90bce47e6545f143aa982ce7c864a7ad0e1226043f132624080a1f9e",
           "name": "_raptor_parameters",
           "occurrence_count": 3,
           "paths": [
@@ -7640,7 +7707,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "0a9fdc8fefedd3d84ecf0ecb16a213cd357eb036ac906795108b9f057724501e",
+          "locations_sha256": "4b5c2cda256e02ac8f691caaf220c7e3efe36b9076c09e301234508e2dd11366",
           "name": "_reconstruct_heading",
           "occurrence_count": 3,
           "paths": [
@@ -7991,7 +8058,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "5a73f6f0d4a4c45b8c584e889d199ab38deda058faae11f731ac72ce97040aaa",
+          "locations_sha256": "24f087ecb07349e24b4a240133de51f866f2a3ac298de47f0a4f72990b3cfb41",
           "name": "_run_cli_with_deadline",
           "occurrence_count": 19,
           "paths": [
@@ -8175,7 +8242,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "19789f12dedfc9630bd858cc88f907b8e6c34728899a24f2f73bee2026672640",
+          "locations_sha256": "22befe23308f4e9c10bbf933a70e94bbc2a9eca64700f46e43af76102fbdf771",
           "name": "_source_lineage_for_items",
           "occurrence_count": 1,
           "paths": [
@@ -8195,7 +8262,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "70e114ffc0de66045fbc7a6c1e14450e8d9b9334878e86f706709c4b55f3c420",
+          "locations_sha256": "56d39cd02763b79328e7fc6262d807b57bd4c5fafbe344ed5307ef36f36e83ba",
           "name": "_source_table_needs_recovery",
           "occurrence_count": 2,
           "paths": [
@@ -8235,7 +8302,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "a2a7ee09120fa3c4998b49fe35311f5531e791a30a73cdce676cc39c3c2933f7",
+          "locations_sha256": "cb9536c0644fe9f2b65c9fda44c2daf8bcd5362f30614fc26f02bf0b6faec79f",
           "name": "_split_export_complete",
           "occurrence_count": 3,
           "paths": [
@@ -8255,7 +8322,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "6cc135f742221db2f3fdbb6c136376ed2f6f4e666d18478de635cdc66a322285",
+          "locations_sha256": "aff14483ace1a40d6bf1b9ccf794c2dd06d89d08035138ff7102c2ab7688d4f1",
           "name": "_split_markdown_table_by_rows",
           "occurrence_count": 3,
           "paths": [
@@ -8387,7 +8454,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "0c535dd1415bae02a2af03530819c2c240b4f32d03eeb8c5be034b476af5bd9d",
+          "locations_sha256": "9028e0dec1c74a21193f2f79a3aba58d3073d4958ab0cbf63b87283b6d498c51",
           "name": "_unified_export_complete",
           "occurrence_count": 3,
           "paths": [
@@ -8451,7 +8518,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "6ea4a6fff5954c1f01b2d79a20286f4f6303c3b1cfac7d6c4f517dd7d08ffc83",
+          "locations_sha256": "77a91a5f418b52861f5d1fc44cd24f1788e7c4cd6ac81cc679e6a4251091b9b9",
           "name": "_validate_chunk_structure_for_publication",
           "occurrence_count": 5,
           "paths": [
@@ -11560,11 +11627,18 @@
       "_TOC_HIERARCHY_PROMPT",
       "_TOC_HIERARCHY_PROMPT_VERSION",
       "_TOC_INPUT_POLICY_VERSION",
+      "_TOC_LAYOUT_CONTRACT_PROMPT_JSON",
       "_TOC_LAYOUT_HINT_JSON_MAX_BYTES",
       "_TOC_LAYOUT_HINT_MAX_CHARACTERS",
       "_TOC_LAYOUT_HINT_MAX_ITEMS",
+      "_TOC_LAYOUT_INPUT_POLICY_VERSION",
       "_TOC_LAYOUT_JSON_MAX_BYTES",
+      "_TOC_LAYOUT_MAX_TOKENS",
+      "_TOC_LAYOUT_OUTPUT_CONTRACT",
       "_TOC_LAYOUT_PROMPT",
+      "_TOC_LAYOUT_PROMPT_VERSION",
+      "_TOC_LAYOUT_SAMPLE_LINES",
+      "_TOC_LAYOUT_TIMEOUT_SECONDS",
       "_TOC_LINE_RE",
       "_TOC_PARSE_BATCH_LINES",
       "_TOC_PARSE_MAX_TOKENS",
@@ -12296,11 +12370,18 @@
       "_TOC_HIERARCHY_PROMPT",
       "_TOC_HIERARCHY_PROMPT_VERSION",
       "_TOC_INPUT_POLICY_VERSION",
+      "_TOC_LAYOUT_CONTRACT_PROMPT_JSON",
       "_TOC_LAYOUT_HINT_JSON_MAX_BYTES",
       "_TOC_LAYOUT_HINT_MAX_CHARACTERS",
       "_TOC_LAYOUT_HINT_MAX_ITEMS",
+      "_TOC_LAYOUT_INPUT_POLICY_VERSION",
       "_TOC_LAYOUT_JSON_MAX_BYTES",
+      "_TOC_LAYOUT_MAX_TOKENS",
+      "_TOC_LAYOUT_OUTPUT_CONTRACT",
       "_TOC_LAYOUT_PROMPT",
+      "_TOC_LAYOUT_PROMPT_VERSION",
+      "_TOC_LAYOUT_SAMPLE_LINES",
+      "_TOC_LAYOUT_TIMEOUT_SECONDS",
       "_TOC_LINE_RE",
       "_TOC_PARSE_BATCH_LINES",
       "_TOC_PARSE_MAX_TOKENS",
@@ -12752,7 +12833,7 @@
         "module": "ui"
       }
     ],
-    "explicit_binding_count": 592,
+    "explicit_binding_count": 599,
     "explicit_bindings": [
       "ARTIFACT_COMPLETION_SCHEMA_VERSION",
       "Any",
@@ -12915,11 +12996,18 @@
       "_TOC_HIERARCHY_PROMPT",
       "_TOC_HIERARCHY_PROMPT_VERSION",
       "_TOC_INPUT_POLICY_VERSION",
+      "_TOC_LAYOUT_CONTRACT_PROMPT_JSON",
       "_TOC_LAYOUT_HINT_JSON_MAX_BYTES",
       "_TOC_LAYOUT_HINT_MAX_CHARACTERS",
       "_TOC_LAYOUT_HINT_MAX_ITEMS",
+      "_TOC_LAYOUT_INPUT_POLICY_VERSION",
       "_TOC_LAYOUT_JSON_MAX_BYTES",
+      "_TOC_LAYOUT_MAX_TOKENS",
+      "_TOC_LAYOUT_OUTPUT_CONTRACT",
       "_TOC_LAYOUT_PROMPT",
+      "_TOC_LAYOUT_PROMPT_VERSION",
+      "_TOC_LAYOUT_SAMPLE_LINES",
+      "_TOC_LAYOUT_TIMEOUT_SECONDS",
       "_TOC_LINE_RE",
       "_TOC_PARSE_BATCH_LINES",
       "_TOC_PARSE_MAX_TOKENS",
@@ -13874,21 +13962,21 @@
     ],
     "initializer_bindings": [
       {
-        "assignment_line": 1561,
+        "assignment_line": 1577,
         "initializer": "_sync_vector_store_lock_facades",
-        "line": 1568,
+        "line": 1584,
         "name": "_vector_store_lock_local"
       },
       {
-        "assignment_line": 1561,
+        "assignment_line": 1577,
         "initializer": "_sync_vector_store_lock_facades",
-        "line": 1568,
+        "line": 1584,
         "name": "_vector_store_lock_states"
       },
       {
-        "assignment_line": 1561,
+        "assignment_line": 1577,
         "initializer": "_sync_vector_store_lock_facades",
-        "line": 1568,
+        "line": 1584,
         "name": "_vector_store_lock_states_guard"
       }
     ],
@@ -13945,445 +14033,421 @@
         "kind": "function",
         "name": "_is_deepseek_cloud",
         "span": [
-          362,
-          365
+          378,
+          381
         ]
       },
       {
         "kind": "function",
         "name": "_is_minimax_cloud",
         "span": [
-          368,
-          371
+          384,
+          387
         ]
       },
       {
         "kind": "function",
         "name": "_effective_chunk_token_limit",
         "span": [
-          374,
-          403
+          390,
+          419
         ]
       },
       {
         "kind": "function",
         "name": "_embedding_text",
         "span": [
-          406,
-          416
+          422,
+          432
         ]
       },
       {
         "kind": "function",
         "name": "_embedding_task_prefix",
         "span": [
-          419,
-          427
+          435,
+          443
         ]
       },
       {
         "kind": "function",
         "name": "_prepare_embedding_inputs",
         "span": [
-          430,
-          437
+          446,
+          453
         ]
       },
       {
         "kind": "function",
         "name": "_conservative_token_estimate",
         "span": [
-          440,
-          444
+          456,
+          460
         ]
       },
       {
         "kind": "function",
         "name": "_count_embedding_text_tokens",
         "span": [
-          447,
-          478
+          463,
+          494
         ]
       },
       {
         "kind": "function",
         "name": "_validate_embedding_token_counts",
         "span": [
-          481,
-          529
+          497,
+          545
         ]
       },
       {
         "kind": "function",
         "name": "_batch_index_records",
         "span": [
-          532,
-          566
+          548,
+          582
         ]
       },
       {
         "kind": "function",
         "name": "_pdf_ingestion_thresholds",
         "span": [
-          569,
-          578
+          585,
+          594
         ]
       },
       {
         "kind": "function",
         "name": "_pdf_page_text_is_usable",
         "span": [
-          581,
-          584
+          597,
+          600
         ]
       },
       {
         "kind": "function",
         "name": "_pdf_text_layer_is_usable",
         "span": [
-          587,
-          594
+          603,
+          610
         ]
       },
       {
         "kind": "function",
         "name": "_require_file",
         "span": [
-          607,
-          615
+          623,
+          631
         ]
       },
       {
         "kind": "function",
         "name": "_compile_watermark",
         "span": [
-          618,
-          622
+          634,
+          638
         ]
       },
       {
         "kind": "function",
         "name": "strip_watermark",
         "span": [
-          625,
-          629
+          641,
+          645
         ]
       },
       {
         "kind": "function",
         "name": "_validate_api_key",
         "span": [
-          632,
-          651
+          648,
+          667
         ]
       },
       {
         "kind": "function",
         "name": "_validated_embedding_vectors",
         "span": [
-          654,
-          682
+          670,
+          698
         ]
       },
       {
         "kind": "function",
         "name": "_data_embedding_vectors",
         "span": [
-          685,
-          706
+          701,
+          722
         ]
       },
       {
         "kind": "function",
         "name": "_get_embedding_fn",
         "span": [
-          709,
-          947
+          725,
+          963
         ]
       },
       {
         "kind": "function",
         "name": "_output_paths_for_name",
         "span": [
-          950,
-          965
+          966,
+          981
         ]
       },
       {
         "kind": "function",
         "name": "_output_run_number",
         "span": [
-          968,
-          979
+          984,
+          995
         ]
       },
       {
         "kind": "function",
         "name": "_existing_output_runs",
         "span": [
-          982,
-          1001
+          998,
+          1017
         ]
       },
       {
         "kind": "function",
         "name": "_derive_output_paths",
         "span": [
-          1004,
-          1015
+          1020,
+          1031
         ]
       },
       {
         "kind": "function",
         "name": "_derive_output_paths_existing",
         "span": [
-          1018,
-          1034
+          1034,
+          1050
         ]
       },
       {
         "kind": "function",
         "name": "_derive_output_paths_exact",
         "span": [
-          1037,
-          1053
+          1053,
+          1069
         ]
       },
       {
         "kind": "function",
         "name": "_file_exists_nonempty",
         "span": [
-          1056,
-          1064
+          1072,
+          1080
         ]
       },
       {
         "kind": "function",
         "name": "_json_file_is_valid",
         "span": [
-          1067,
-          1075
+          1083,
+          1091
         ]
       },
       {
         "kind": "function",
         "name": "_chroma_settings_kwargs",
         "span": [
-          1078,
-          1091
+          1094,
+          1107
         ]
       },
       {
         "kind": "function",
         "name": "_chunk_record_count",
         "span": [
-          1094,
-          1117
+          1110,
+          1133
         ]
       },
       {
         "kind": "function",
         "name": "_index_collection_count_impl",
         "span": [
-          1120,
-          1166
+          1136,
+          1182
         ]
       },
       {
         "kind": "function",
         "name": "_index_collection_count",
         "span": [
-          1169,
-          1189
+          1185,
+          1205
         ]
       },
       {
         "kind": "function",
         "name": "_index_has_data",
         "span": [
-          1192,
-          1202
+          1208,
+          1218
         ]
       },
       {
         "kind": "function",
         "name": "_provider_cli_defaults",
         "span": [
-          1205,
-          1215
+          1221,
+          1231
         ]
       },
       {
         "kind": "function",
         "name": "_resume_command_defaults",
         "span": [
-          1218,
-          1236
+          1234,
+          1252
         ]
       },
       {
         "kind": "function",
         "name": "_build_resume_cmd",
         "span": [
-          1239,
-          1242
+          1255,
+          1258
         ]
       },
       {
         "kind": "function",
         "name": "_load_jsonl",
         "span": [
-          1245,
-          1270
+          1261,
+          1286
         ]
       },
       {
         "kind": "function",
         "name": "_parse_index_records_strict",
         "span": [
-          1279,
-          1282
+          1295,
+          1298
         ]
       },
       {
         "kind": "function",
         "name": "_quality_report_required",
         "span": [
-          1285,
-          1294
+          1301,
+          1310
         ]
       },
       {
         "kind": "function",
         "name": "_load_index_chunk_completion_inputs",
         "span": [
-          1297,
-          1370
+          1313,
+          1386
         ]
       },
       {
         "kind": "function",
         "name": "_validated_quality_report_binding",
         "span": [
-          1373,
-          1428
+          1389,
+          1444
         ]
       },
       {
         "kind": "function",
         "name": "_load_index_snapshot_with_quality",
         "span": [
-          1431,
-          1448
+          1447,
+          1464
         ]
       },
       {
         "kind": "function",
         "name": "_load_index_snapshot_strict",
         "span": [
-          1451,
-          1457
+          1467,
+          1473
         ]
       },
       {
         "kind": "function",
         "name": "_load_index_records_strict",
         "span": [
-          1460,
-          1468
+          1476,
+          1484
         ]
       },
       {
         "kind": "class",
         "name": "_IndexOperationalTracker",
         "span": [
-          1471,
-          1510
+          1487,
+          1526
         ]
       },
       {
         "kind": "function",
         "name": "_put_unless_worker_failed",
         "span": [
-          1513,
-          1521
+          1529,
+          1537
         ]
       },
       {
         "kind": "function",
         "name": "_log_cleanup_error",
         "span": [
-          1524,
-          1537
+          1540,
+          1553
         ]
       },
       {
         "kind": "function",
         "name": "_observe_failed_index_operation",
         "span": [
-          1540,
-          1551
+          1556,
+          1567
         ]
       },
       {
         "kind": "function",
         "name": "_sync_vector_store_lock_facades",
         "span": [
-          1557,
-          1565
+          1573,
+          1581
         ]
       },
       {
         "kind": "function",
         "name": "_reset_rag_caches_after_fork",
         "span": [
-          1571,
-          1587
+          1587,
+          1603
         ]
       },
       {
         "kind": "function",
         "name": "_reset_vector_store_locks_after_fork",
         "span": [
-          1590,
-          1593
+          1606,
+          1609
         ]
       },
       {
         "kind": "function",
         "name": "_normalize_db_lock_timeout",
         "span": [
-          1601,
-          1603
-        ]
-      },
-      {
-        "kind": "function",
-        "name": "_strip_windows_extended_path_prefix",
-        "span": [
-          1606,
-          1608
-        ]
-      },
-      {
-        "kind": "function",
-        "name": "_resolved_vector_store_path",
-        "span": [
-          1611,
-          1613
-        ]
-      },
-      {
-        "kind": "function",
-        "name": "_vector_store_lock_identity",
-        "span": [
-          1616,
+          1617,
           1619
         ]
       },
       {
         "kind": "function",
-        "name": "_canonical_vector_store_key",
+        "name": "_strip_windows_extended_path_prefix",
         "span": [
           1622,
           1624
@@ -14391,7 +14455,7 @@
       },
       {
         "kind": "function",
-        "name": "_vector_store_lock_directory",
+        "name": "_resolved_vector_store_path",
         "span": [
           1627,
           1629
@@ -14399,1978 +14463,2002 @@
       },
       {
         "kind": "function",
-        "name": "_vector_store_lock_path",
+        "name": "_vector_store_lock_identity",
         "span": [
           1632,
-          1637
+          1635
+        ]
+      },
+      {
+        "kind": "function",
+        "name": "_canonical_vector_store_key",
+        "span": [
+          1638,
+          1640
+        ]
+      },
+      {
+        "kind": "function",
+        "name": "_vector_store_lock_directory",
+        "span": [
+          1643,
+          1645
+        ]
+      },
+      {
+        "kind": "function",
+        "name": "_vector_store_lock_path",
+        "span": [
+          1648,
+          1653
         ]
       },
       {
         "kind": "function",
         "name": "_vector_store_lock_state",
         "span": [
-          1640,
-          1641
+          1656,
+          1657
         ]
       },
       {
         "kind": "function",
         "name": "_try_vector_file_lock",
         "span": [
-          1644,
-          1646
+          1660,
+          1662
         ]
       },
       {
         "kind": "function",
         "name": "_unlock_vector_file",
         "span": [
-          1649,
-          1651
+          1665,
+          1667
         ]
       },
       {
         "kind": "function",
         "name": "_finish_vector_file_lock",
         "span": [
-          1654,
-          1665
+          1670,
+          1681
         ]
       },
       {
         "kind": "class",
         "name": "_VectorStoreLease",
         "span": [
-          1668,
-          1698
+          1684,
+          1714
         ]
       },
       {
         "kind": "function",
         "name": "_vector_store_lock",
         "span": [
-          1701,
-          1710
+          1717,
+          1726
         ]
       },
       {
         "kind": "function",
         "name": "_pipeline_job_lock",
         "span": [
-          1713,
-          1726
+          1729,
+          1742
         ]
       },
       {
         "kind": "function",
         "name": "_conversion_output_lease",
         "span": [
-          1729,
-          1748
+          1745,
+          1764
         ]
       },
       {
         "kind": "function",
         "name": "_chunk_output_lease",
         "span": [
-          1751,
-          1776
+          1767,
+          1792
         ]
       },
       {
         "kind": "function",
         "name": "_finish_executor_progress",
         "span": [
-          1779,
-          1820
+          1795,
+          1836
         ]
       },
       {
         "kind": "function",
         "name": "_finish_vector_client",
         "span": [
-          1823,
-          1855
+          1839,
+          1871
         ]
       },
       {
         "kind": "class",
         "name": "_VectorClientOwner",
         "span": [
-          1858,
-          1913
+          1874,
+          1929
         ]
       },
       {
         "kind": "function",
         "name": "_finish_queue_worker",
         "span": [
-          1916,
-          1980
+          1932,
+          1996
         ]
       },
       {
         "kind": "function",
         "name": "_decode_pua",
         "span": [
-          1988,
-          1992
+          2004,
+          2008
         ]
       },
       {
         "kind": "class",
         "name": "_AgentTeam",
         "span": [
-          2017,
-          2318
+          2033,
+          2334
         ]
       },
       {
         "kind": "function",
         "name": "_identify_book_sections",
         "span": [
-          2325,
-          2515
+          2341,
+          2531
         ]
       },
       {
         "kind": "function",
         "name": "_calculate_page_delta",
         "span": [
-          2518,
-          2587
+          2534,
+          2603
         ]
       },
       {
         "kind": "function",
         "name": "_toc_source_prompt_json",
         "span": [
-          2590,
-          2643
+          2606,
+          2659
         ]
       },
       {
         "kind": "function",
         "name": "_toc_layout_hint_prompt_value",
         "span": [
-          2646,
-          2672
+          2662,
+          2688
         ]
       },
       {
         "kind": "function",
         "name": "_toc_layout_prompt_json",
         "span": [
-          2675,
-          2743
+          2691,
+          2759
         ]
       },
       {
         "kind": "function",
         "name": "_analyze_toc_layout",
         "span": [
-          2796,
-          2841
+          2804,
+          2858
         ]
       },
       {
         "kind": "function",
         "name": "_verify_scaffold_against_pages",
         "span": [
-          2872,
-          3014
+          2889,
+          3031
         ]
       },
       {
         "kind": "function",
         "name": "_build_scaffold",
         "span": [
-          3017,
-          3317
+          3034,
+          3334
         ]
       },
       {
         "kind": "function",
         "name": "_llm_parse_scaffold",
         "span": [
-          3320,
-          3412
+          3337,
+          3429
         ]
       },
       {
         "kind": "function",
         "name": "_toc_visual_subrows",
         "span": [
-          3415,
-          3470
+          3432,
+          3487
         ]
       },
       {
         "kind": "function",
         "name": "_parse_toc_tables",
         "span": [
-          3473,
-          3729
+          3490,
+          3746
         ]
       },
       {
         "kind": "function",
         "name": "_merge_page_numbers",
         "span": [
-          3732,
-          3748
+          3749,
+          3765
         ]
       },
       {
         "kind": "function",
         "name": "_build_scaffold_lookup",
         "span": [
-          3751,
-          3792
+          3768,
+          3809
         ]
       },
       {
         "kind": "function",
         "name": "_canonical_chapter_titles",
         "span": [
-          3795,
-          3852
+          3812,
+          3869
         ]
       },
       {
         "kind": "function",
         "name": "_normalize_scaffold_metadata",
         "span": [
-          3855,
-          3876
+          3872,
+          3893
         ]
       },
       {
         "kind": "function",
         "name": "_validate_against_scaffold",
         "span": [
-          3883,
-          3988
+          3900,
+          4005
         ]
       },
       {
         "kind": "function",
         "name": "_build_chapter_map",
         "span": [
-          3991,
-          4020
+          4008,
+          4037
         ]
       },
       {
         "kind": "function",
         "name": "_build_chapter_map_from_document",
         "span": [
-          4023,
-          4118
+          4040,
+          4135
         ]
       },
       {
         "kind": "function",
         "name": "_build_toc_hierarchy",
         "span": [
-          4121,
-          4208
+          4138,
+          4225
         ]
       },
       {
         "kind": "function",
         "name": "_llm_parse_toc",
         "span": [
-          4232,
-          4307
+          4249,
+          4324
         ]
       },
       {
         "kind": "function",
         "name": "_build_section_lookup",
         "span": [
-          4310,
-          4381
+          4327,
+          4398
         ]
       },
       {
         "kind": "function",
         "name": "_assign_chapter_by_page",
         "span": [
-          4384,
-          4396
+          4401,
+          4413
         ]
       },
       {
         "kind": "function",
         "name": "_page_count",
         "span": [
-          4399,
-          4405
+          4416,
+          4422
         ]
       },
       {
         "kind": "function",
         "name": "_provider_token_count",
         "span": [
-          4416,
-          4419
+          4433,
+          4436
         ]
       },
       {
         "kind": "function",
         "name": "_provider_call_error",
         "span": [
-          4425,
-          4429
+          4442,
+          4446
         ]
       },
       {
         "kind": "function",
         "name": "_post_loopback_without_environment",
         "span": [
-          4432,
-          4445
+          4449,
+          4462
         ]
       },
       {
         "kind": "function",
         "name": "_effective_security_policy",
         "span": [
-          4451,
-          4459
+          4468,
+          4476
         ]
       },
       {
         "kind": "function",
         "name": "_post_cloud_with_policy",
         "span": [
-          4462,
-          4478
+          4479,
+          4495
         ]
       },
       {
         "kind": "function",
         "name": "_require_no_cloud_redirect",
         "span": [
-          4481,
-          4484
+          4498,
+          4501
         ]
       },
       {
         "kind": "function",
         "name": "_read_provider_json_response",
         "span": [
-          4487,
-          4501
+          4504,
+          4518
         ]
       },
       {
         "kind": "function",
         "name": "_require_endpoint_egress",
         "span": [
-          4504,
-          4515
+          4521,
+          4532
         ]
       },
       {
         "kind": "function",
         "name": "_call_ollama_result",
         "span": [
-          4518,
-          4541
+          4535,
+          4558
         ]
       },
       {
         "kind": "function",
         "name": "_call_ollama",
         "span": [
-          4544,
-          4565
+          4561,
+          4582
         ]
       },
       {
         "kind": "function",
         "name": "_gemini_content_filtered",
         "span": [
-          4574,
-          4576
+          4591,
+          4593
         ]
       },
       {
         "kind": "function",
         "name": "_load_gemini_client",
         "span": [
-          4579,
-          4635
+          4596,
+          4652
         ]
       },
       {
         "kind": "function",
         "name": "_call_gemini_result",
         "span": [
-          4638,
-          4661
+          4655,
+          4678
         ]
       },
       {
         "kind": "function",
         "name": "_call_gemini",
         "span": [
-          4664,
-          4686
+          4681,
+          4703
         ]
       },
       {
         "kind": "function",
         "name": "_get_throttle",
         "span": [
-          4699,
-          4707
+          4716,
+          4724
         ]
       },
       {
         "kind": "function",
         "name": "_call_openai_compatible_result",
         "span": [
-          4713,
-          4746
+          4730,
+          4763
         ]
       },
       {
         "kind": "function",
         "name": "_call_openai_compatible",
         "span": [
-          4749,
-          4774
+          4766,
+          4791
         ]
       },
       {
         "kind": "function",
         "name": "_call_llm_result",
         "span": [
-          4780,
-          4908
+          4797,
+          4925
         ]
       },
       {
         "kind": "function",
         "name": "_call_llm",
         "span": [
-          4911,
-          4942
+          4928,
+          4959
         ]
       },
       {
         "kind": "function",
         "name": "_llm_classify",
         "span": [
-          4985,
-          5024
+          5002,
+          5041
         ]
       },
       {
         "kind": "function",
         "name": "_zeroshot_classify",
         "span": [
-          5032,
-          5074
+          5049,
+          5091
         ]
       },
       {
         "kind": "function",
         "name": "_generate_context",
         "span": [
-          5089,
-          5120
+          5106,
+          5137
         ]
       },
       {
         "kind": "function",
         "name": "_reranker_document",
         "span": [
-          5137,
-          5157
+          5154,
+          5174
         ]
       },
       {
         "kind": "function",
         "name": "_get_reranker",
         "span": [
-          5160,
-          5181
+          5177,
+          5198
         ]
       },
       {
         "kind": "function",
         "name": "_validated_reranker_rows",
         "span": [
-          5184,
-          5214
+          5201,
+          5231
         ]
       },
       {
         "kind": "function",
         "name": "_rerank",
         "span": [
-          5217,
-          5319
+          5234,
+          5336
         ]
       },
       {
         "kind": "function",
         "name": "_normalize_text",
         "span": [
-          5322,
-          5332
+          5339,
+          5349
         ]
       },
       {
         "kind": "function",
         "name": "_strip_headers_footers",
         "span": [
-          5335,
-          5343
+          5352,
+          5360
         ]
       },
       {
         "kind": "function",
         "name": "_dedup_nearby_lines",
         "span": [
-          5346,
-          5348
+          5363,
+          5365
         ]
       },
       {
         "kind": "function",
         "name": "_deduplicate_chunks",
         "span": [
-          5373,
-          5420
+          5390,
+          5437
         ]
       },
       {
         "kind": "function",
         "name": "_inspect_page_background_images",
         "span": [
-          5430,
-          5435
+          5447,
+          5452
         ]
       },
       {
         "kind": "function",
         "name": "_page_background_images",
         "span": [
-          5438,
-          5446
+          5455,
+          5463
         ]
       },
       {
         "kind": "function",
         "name": "_analyze_pdf_images",
         "span": [
-          5449,
-          5472
+          5466,
+          5489
         ]
       },
       {
         "kind": "function",
         "name": "preprocess_pdf",
         "span": [
-          5475,
-          5628
+          5492,
+          5645
         ]
       },
       {
         "kind": "function",
         "name": "_detect_gpu",
         "span": [
-          5635,
-          5672
+          5652,
+          5689
         ]
       },
       {
         "kind": "function",
         "name": "_conversion_parameters",
         "span": [
-          5675,
-          5687
+          5692,
+          5704
         ]
       },
       {
         "kind": "function",
         "name": "_pin_docling_layout_revision",
         "span": [
-          5690,
-          5701
+          5707,
+          5718
         ]
       },
       {
         "kind": "function",
         "name": "_configure_docling_model_artifacts",
         "span": [
-          5704,
-          5749
+          5721,
+          5766
         ]
       },
       {
         "kind": "function",
         "name": "_converted_outputs_complete",
         "span": [
-          5752,
-          5769
+          5769,
+          5786
         ]
       },
       {
         "kind": "function",
         "name": "_converted_outputs_complete_locked",
         "span": [
-          5772,
-          5827
+          5789,
+          5844
         ]
       },
       {
         "kind": "function",
         "name": "convert_pdf",
         "span": [
-          5830,
-          5866
+          5847,
+          5883
         ]
       },
       {
         "kind": "function",
         "name": "_convert_pdf_locked",
         "span": [
-          5869,
-          5969
+          5886,
+          5986
         ]
       },
       {
         "kind": "function",
         "name": "_convert_pdf_generation",
         "span": [
-          5972,
-          6199
+          5989,
+          6216
         ]
       },
       {
         "kind": "function",
         "name": "classify_content_type",
         "span": [
-          6249,
-          6272
+          6266,
+          6289
         ]
       },
       {
         "kind": "function",
         "name": "enrich_chunk",
         "span": [
-          6284,
-          6417
+          6301,
+          6434
         ]
       },
       {
         "kind": "function",
         "name": "_chunk_heading_key",
         "span": [
-          6420,
-          6426
+          6437,
+          6443
         ]
       },
       {
         "kind": "function",
         "name": "_merge_enriched_chunk_group",
         "span": [
-          6429,
-          6486
+          6446,
+          6503
         ]
       },
       {
         "kind": "function",
         "name": "_coalesce_chunk_boundaries",
         "span": [
-          6489,
-          6636
+          6506,
+          6653
         ]
       },
       {
         "kind": "function",
         "name": "_validate_chunk_structure_for_publication",
         "span": [
-          6639,
-          6786
+          6656,
+          6803
         ]
       },
       {
         "kind": "function",
         "name": "_split_markdown_table_by_rows",
         "span": [
-          6789,
-          6821
+          6806,
+          6838
         ]
       },
       {
         "kind": "function",
         "name": "_doc_item_label",
         "span": [
-          6824,
-          6827
+          6841,
+          6844
         ]
       },
       {
         "kind": "function",
         "name": "_docling_lineage_catalog",
         "span": [
-          6830,
-          6862
+          6847,
+          6879
         ]
       },
       {
         "kind": "function",
         "name": "_finite_source_coordinate",
         "span": [
-          6865,
-          6872
+          6882,
+          6889
         ]
       },
       {
         "kind": "function",
         "name": "_source_lineage_for_items",
         "span": [
-          6875,
-          6924
+          6892,
+          6941
         ]
       },
       {
         "kind": "class",
         "name": "ConversionInputBinding",
         "span": [
-          6927,
-          6934
+          6944,
+          6951
         ]
       },
       {
         "kind": "class",
         "name": "ConversionSourceBinding",
         "span": [
-          6937,
-          6951
+          6954,
+          6968
         ]
       },
       {
         "kind": "class",
         "name": "TableRecoverySource",
         "span": [
-          6954,
-          6977
+          6971,
+          6994
         ]
       },
       {
         "kind": "function",
         "name": "_strict_json_object",
         "span": [
-          6980,
-          7003
+          6997,
+          7020
         ]
       },
       {
         "kind": "function",
         "name": "_valid_manifest_file_record",
         "span": [
-          7006,
-          7018
+          7023,
+          7035
         ]
       },
       {
         "kind": "function",
         "name": "_load_conversion_source_binding",
         "span": [
-          7021,
-          7125
+          7038,
+          7142
         ]
       },
       {
         "kind": "function",
         "name": "_conversion_source_identity",
         "span": [
-          7128,
-          7140
+          7145,
+          7157
         ]
       },
       {
         "kind": "function",
         "name": "_find_docling_source_pdf",
         "span": [
-          7143,
-          7170
+          7160,
+          7187
         ]
       },
       {
         "kind": "function",
         "name": "_open_docling_source_pdf_snapshot",
         "span": [
-          7173,
-          7207
+          7190,
+          7224
         ]
       },
       {
         "kind": "class",
         "name": "_SourceOutputAliasError",
         "span": [
-          7210,
-          7211
+          7227,
+          7228
         ]
       },
       {
         "kind": "function",
         "name": "_recover_bound_table_markdown",
         "span": [
-          7214,
-          7250
+          7231,
+          7267
         ]
       },
       {
         "kind": "function",
         "name": "_markdown_table_cell",
         "span": [
-          7253,
-          7264
+          7270,
+          7281
         ]
       },
       {
         "kind": "function",
         "name": "_source_table_needs_recovery",
         "span": [
-          7267,
-          7302
+          7284,
+          7319
         ]
       },
       {
         "kind": "function",
         "name": "_prepend_source_table_captions",
         "span": [
-          7305,
-          7319
+          7322,
+          7336
         ]
       },
       {
         "kind": "function",
         "name": "_recover_incomplete_table_markdown",
         "span": [
-          7322,
-          7409
+          7339,
+          7426
         ]
       },
       {
         "kind": "function",
         "name": "_prepare_source_preserving_chunks",
         "span": [
-          7412,
-          7823
+          7429,
+          7840
         ]
       },
       {
         "kind": "function",
         "name": "_reconstruct_heading",
         "span": [
-          7838,
-          7876
+          7855,
+          7893
         ]
       },
       {
         "kind": "function",
         "name": "_endpoint_parameter_binding",
         "span": [
-          7879,
-          7888
+          7896,
+          7905
         ]
       },
       {
         "kind": "function",
         "name": "_chunk_parameters",
         "span": [
-          7891,
-          7996
+          7908,
+          8029
         ]
       },
       {
         "kind": "function",
         "name": "_book_structural_ranges",
         "span": [
-          8004,
-          8025
+          8037,
+          8058
         ]
       },
       {
         "kind": "function",
         "name": "_load_chunk_completion_inputs",
         "span": [
-          8028,
-          8154
+          8061,
+          8187
         ]
       },
       {
         "kind": "function",
         "name": "_chunks_complete",
         "span": [
-          8157,
-          8166
+          8190,
+          8199
         ]
       },
       {
         "kind": "function",
         "name": "_chunks_complete_locked",
         "span": [
-          8169,
-          8195
+          8202,
+          8228
         ]
       },
       {
         "kind": "function",
         "name": "_quality_report_complete",
         "span": [
-          8198,
-          8203
+          8231,
+          8236
         ]
       },
       {
         "kind": "function",
         "name": "_quality_report_complete_locked",
         "span": [
-          8206,
-          8247
+          8239,
+          8280
         ]
       },
       {
         "kind": "function",
         "name": "_recovered_table_refs_from_records",
         "span": [
-          8250,
-          8261
+          8283,
+          8294
         ]
       },
       {
         "kind": "function",
         "name": "_publish_corpus_quality_report",
         "span": [
-          8264,
-          8282
+          8297,
+          8315
         ]
       },
       {
         "kind": "function",
         "name": "_publish_corpus_quality_report_locked",
         "span": [
-          8285,
-          8393
+          8318,
+          8426
         ]
       },
       {
         "kind": "function",
         "name": "_load_docling_document_snapshot",
         "span": [
-          8396,
-          8418
+          8429,
+          8451
         ]
       },
       {
         "kind": "function",
         "name": "chunk_document",
         "span": [
-          8421,
-          8489
+          8454,
+          8522
         ]
       },
       {
         "kind": "function",
         "name": "_chunk_document_locked",
         "span": [
-          8492,
-          9367
+          8525,
+          9400
         ]
       },
       {
         "kind": "function",
         "name": "_prepare_chroma_batch",
         "span": [
-          9374,
-          9420
+          9407,
+          9453
         ]
       },
       {
         "kind": "function",
         "name": "_chroma_exact_count",
         "span": [
-          9423,
-          9431
+          9456,
+          9464
         ]
       },
       {
         "kind": "function",
         "name": "_chroma_mutation_batch_size",
         "span": [
-          9434,
-          9451
+          9467,
+          9484
         ]
       },
       {
         "kind": "function",
         "name": "_chroma_stable_id_rows",
         "span": [
-          9454,
-          9510
+          9487,
+          9543
         ]
       },
       {
         "kind": "function",
         "name": "_require_chroma_stable_ids",
         "span": [
-          9513,
-          9552
+          9546,
+          9585
         ]
       },
       {
         "kind": "function",
         "name": "_new_vector_update_lifecycle",
         "span": [
-          9555,
-          9608
+          9588,
+          9641
         ]
       },
       {
         "kind": "function",
         "name": "_index_chunks_chroma_impl",
         "span": [
-          9611,
-          9894
+          9644,
+          9927
         ]
       },
       {
         "kind": "function",
         "name": "index_chunks",
         "span": [
-          9897,
-          9937
+          9930,
+          9970
         ]
       },
       {
         "kind": "function",
         "name": "_load_hash_index",
         "span": [
-          9978,
-          9996
+          10011,
+          10029
         ]
       },
       {
         "kind": "function",
         "name": "_save_hash_index",
         "span": [
-          9999,
-          10001
+          10032,
+          10034
         ]
       },
       {
         "kind": "function",
         "name": "_atomic_write_text",
         "span": [
-          10004,
-          10008
+          10037,
+          10041
         ]
       },
       {
         "kind": "function",
         "name": "_immutable_file_snapshot",
         "span": [
-          10020,
-          10026
+          10053,
+          10059
         ]
       },
       {
         "kind": "function",
         "name": "_write_artifact_completion",
         "span": [
-          10029,
-          10042
+          10062,
+          10075
         ]
       },
       {
         "kind": "function",
         "name": "_fixed_artifacts_complete",
         "span": [
-          10045,
-          10056
+          10078,
+          10089
         ]
       },
       {
         "kind": "function",
         "name": "_atomic_write_json",
         "span": [
-          10059,
-          10063
+          10092,
+          10096
         ]
       },
       {
         "kind": "function",
         "name": "_atomic_write_jsonl",
         "span": [
-          10066,
-          10070
+          10099,
+          10103
         ]
       },
       {
         "kind": "function",
         "name": "_index_update_marker_path",
         "span": [
-          10076,
-          10081
+          10109,
+          10114
         ]
       },
       {
         "kind": "function",
         "name": "_qdrant_update_marker_path",
         "span": [
-          10084,
-          10089
+          10117,
+          10122
         ]
       },
       {
         "kind": "function",
         "name": "_chroma_update_marker_path",
         "span": [
-          10092,
-          10097
+          10125,
+          10130
         ]
       },
       {
         "kind": "function",
         "name": "_begin_index_update",
         "span": [
-          10100,
-          10113
+          10133,
+          10146
         ]
       },
       {
         "kind": "function",
         "name": "_index_update_marker_owned_by",
         "span": [
-          10116,
-          10124
+          10149,
+          10157
         ]
       },
       {
         "kind": "function",
         "name": "_begin_qdrant_index_update",
         "span": [
-          10127,
-          10137
+          10160,
+          10170
         ]
       },
       {
         "kind": "function",
         "name": "_begin_chroma_index_update",
         "span": [
-          10140,
-          10150
+          10173,
+          10183
         ]
       },
       {
         "kind": "function",
         "name": "_finish_index_update",
         "span": [
-          10153,
-          10160
+          10186,
+          10193
         ]
       },
       {
         "kind": "function",
         "name": "_load_index_manifest",
         "span": [
-          10163,
-          10169
+          10196,
+          10202
         ]
       },
       {
         "kind": "function",
         "name": "_index_manifest_mismatch",
         "span": [
-          10172,
-          10183
+          10205,
+          10216
         ]
       },
       {
         "kind": "function",
         "name": "_resolve_incremental_index_state",
         "span": [
-          10186,
-          10208
+          10219,
+          10241
         ]
       },
       {
         "kind": "function",
         "name": "_save_index_manifest",
         "span": [
-          10211,
-          10234
+          10244,
+          10267
         ]
       },
       {
         "kind": "function",
         "name": "_query_manifest_dimension_impl",
         "span": [
-          10237,
-          10259
+          10270,
+          10292
         ]
       },
       {
         "kind": "function",
         "name": "_query_manifest_dimension",
         "span": [
-          10262,
-          10273
+          10295,
+          10306
         ]
       },
       {
         "kind": "function",
         "name": "_indexed_table_child_count",
         "span": [
-          10276,
-          10288
+          10309,
+          10321
         ]
       },
       {
         "kind": "function",
         "name": "_cached_artifact_sha256",
         "span": [
-          10302,
-          10325
+          10335,
+          10358
         ]
       },
       {
         "kind": "function",
         "name": "_require_hybrid_chunks_snapshot",
         "span": [
-          10328,
-          10337
+          10361,
+          10370
         ]
       },
       {
         "kind": "function",
         "name": "_embedding_dimension",
         "span": [
-          10344,
-          10356
+          10377,
+          10389
         ]
       },
       {
         "kind": "function",
         "name": "_qdrant_exact_count",
         "span": [
-          10359,
-          10368
+          10392,
+          10401
         ]
       },
       {
         "kind": "function",
         "name": "_require_qdrant_update_completed",
         "span": [
-          10371,
-          10377
+          10404,
+          10410
         ]
       },
       {
         "kind": "function",
         "name": "_qdrant_id_key",
         "span": [
-          10380,
-          10405
+          10413,
+          10438
         ]
       },
       {
         "kind": "function",
         "name": "_qdrant_stable_id_rows",
         "span": [
-          10408,
-          10464
+          10441,
+          10497
         ]
       },
       {
         "kind": "function",
         "name": "_qdrant_point_ids_for_stable_ids",
         "span": [
-          10467,
-          10483
+          10500,
+          10516
         ]
       },
       {
         "kind": "function",
         "name": "_require_qdrant_stable_ids",
         "span": [
-          10486,
-          10519
+          10519,
+          10552
         ]
       },
       {
         "kind": "function",
         "name": "_qdrant_point_id",
         "span": [
-          10522,
-          10524
+          10555,
+          10557
         ]
       },
       {
         "kind": "function",
         "name": "_qdrant_payload",
         "span": [
-          10527,
-          10533
+          10560,
+          10566
         ]
       },
       {
         "kind": "function",
         "name": "_embed_texts",
         "span": [
-          10536,
-          10554
+          10569,
+          10587
         ]
       },
       {
         "kind": "function",
         "name": "_index_chunks_qdrant_impl",
         "span": [
-          10557,
-          10838
+          10590,
+          10871
         ]
       },
       {
         "kind": "function",
         "name": "index_chunks_qdrant",
         "span": [
-          10841,
-          10882
+          10874,
+          10915
         ]
       },
       {
         "kind": "function",
         "name": "query_index_qdrant",
         "span": [
-          10885,
-          10950
+          10918,
+          10983
         ]
       },
       {
         "kind": "function",
         "name": "_bm25_search",
         "span": [
-          10962,
-          11045
+          10995,
+          11078
         ]
       },
       {
         "kind": "function",
         "name": "_record_search_warning",
         "span": [
-          11054,
-          11057
+          11087,
+          11090
         ]
       },
       {
         "kind": "function",
         "name": "_unpack_chroma_results",
         "span": [
-          11060,
-          11077
+          11093,
+          11110
         ]
       },
       {
         "kind": "function",
         "name": "_search_chroma_candidates_impl",
         "span": [
-          11080,
-          11177
+          11113,
+          11210
         ]
       },
       {
         "kind": "function",
         "name": "_search_chroma_candidates",
         "span": [
-          11180,
-          11215
+          11213,
+          11248
         ]
       },
       {
         "kind": "function",
         "name": "_search_qdrant_candidates",
         "span": [
-          11218,
-          11314
+          11251,
+          11347
         ]
       },
       {
         "kind": "function",
         "name": "_search_hit_source_id",
         "span": [
-          11317,
-          11320
+          11350,
+          11353
         ]
       },
       {
         "kind": "function",
         "name": "_search_index_impl",
         "span": [
-          11323,
-          11558
+          11356,
+          11591
         ]
       },
       {
         "kind": "function",
         "name": "search_index",
         "span": [
-          11561,
-          11616
+          11594,
+          11649
         ]
       },
       {
         "kind": "function",
         "name": "_grounded_sources",
         "span": [
-          11633,
-          11637
+          11666,
+          11670
         ]
       },
       {
         "kind": "function",
         "name": "_answer_search_results",
         "span": [
-          11646,
-          11683
+          11679,
+          11716
         ]
       },
       {
         "kind": "function",
         "name": "_write_search_output",
         "span": [
-          11686,
-          11810
+          11719,
+          11843
         ]
       },
       {
         "kind": "function",
         "name": "query_index",
         "span": [
-          11813,
-          11878
+          11846,
+          11911
         ]
       },
       {
         "kind": "function",
         "name": "_format_chunk",
         "span": [
-          11885,
-          11939
+          11918,
+          11972
         ]
       },
       {
         "kind": "function",
         "name": "_filter_chunk_records",
         "span": [
-          11942,
-          11967
+          11975,
+          12000
         ]
       },
       {
         "kind": "function",
         "name": "_load_and_filter_chunks",
         "span": [
-          11970,
-          11979
+          12003,
+          12012
         ]
       },
       {
         "kind": "function",
         "name": "_section_heading_level",
         "span": [
-          11982,
-          12000
+          12015,
+          12033
         ]
       },
       {
         "kind": "function",
         "name": "_display_division_title",
         "span": [
-          12003,
-          12013
+          12036,
+          12046
         ]
       },
       {
         "kind": "function",
         "name": "_assemble_markdown",
         "span": [
-          12016,
-          12063
+          12049,
+          12096
         ]
       },
       {
         "kind": "function",
         "name": "_export_plaintext",
         "span": [
-          12066,
-          12136
+          12099,
+          12169
         ]
       },
       {
         "kind": "function",
         "name": "_markdown_export_parameters",
         "span": [
-          12139,
-          12152
+          12172,
+          12185
         ]
       },
       {
         "kind": "function",
         "name": "_chunks_identity",
         "span": [
-          12155,
-          12160
+          12188,
+          12193
         ]
       },
       {
         "kind": "function",
         "name": "_unified_export_complete",
         "span": [
-          12163,
-          12173
+          12196,
+          12206
         ]
       },
       {
         "kind": "function",
         "name": "_owned_chapter_filename",
         "span": [
-          12176,
-          12179
+          12209,
+          12212
         ]
       },
       {
         "kind": "function",
         "name": "_split_export_complete",
         "span": [
-          12182,
-          12218
+          12215,
+          12251
         ]
       },
       {
         "kind": "function",
         "name": "export_markdown",
         "span": [
-          12221,
-          12400
+          12254,
+          12433
         ]
       },
       {
         "kind": "function",
         "name": "extract_questions",
         "span": [
-          12411,
-          12471
+          12444,
+          12504
         ]
       },
       {
         "kind": "function",
         "name": "generate_exam_questions",
         "span": [
-          12504,
-          12631
+          12537,
+          12664
         ]
       },
       {
         "kind": "function",
         "name": "build_citation_graph",
         "span": [
-          12656,
-          12783
+          12689,
+          12816
         ]
       },
       {
         "kind": "function",
         "name": "generate_briefs",
         "span": [
-          12803,
-          12899
+          12836,
+          12932
         ]
       },
       {
         "kind": "function",
         "name": "_score_chunk_quality",
         "span": [
-          12922,
-          12931
+          12955,
+          12964
         ]
       },
       {
         "kind": "function",
         "name": "_export_flashcards",
         "span": [
-          12950,
-          13044
+          12983,
+          13077
         ]
       },
       {
         "kind": "function",
         "name": "_cluster_embeddings",
         "span": [
-          13061,
-          13106
+          13094,
+          13139
         ]
       },
       {
         "kind": "function",
         "name": "_raptor_parameters",
         "span": [
-          13109,
-          13131
+          13142,
+          13164
         ]
       },
       {
         "kind": "function",
         "name": "_raptor_output_complete",
         "span": [
-          13134,
-          13199
+          13167,
+          13232
         ]
       },
       {
         "kind": "function",
         "name": "build_raptor_tree",
         "span": [
-          13202,
-          13432
+          13235,
+          13465
         ]
       },
       {
         "kind": "function",
         "name": "show_info",
         "span": [
-          13439,
-          13630
+          13472,
+          13663
         ]
       },
       {
         "kind": "class",
         "name": "_PipelineStageError",
         "span": [
-          13637,
-          13643
+          13670,
+          13676
         ]
       },
       {
         "kind": "function",
         "name": "_background_pipeline_plan",
         "span": [
-          13646,
-          13674
+          13679,
+          13707
         ]
       },
       {
         "kind": "function",
         "name": "_mark_background_pipeline_binding",
         "span": [
-          13677,
-          13703
+          13710,
+          13736
         ]
       },
       {
         "kind": "function",
         "name": "_resolve_cloud_endpoint",
         "span": [
-          13706,
-          13712
+          13739,
+          13745
         ]
       },
       {
         "kind": "function",
         "name": "_cloud_endpoint_arg",
         "span": [
-          13715,
-          13721
+          13748,
+          13754
         ]
       },
       {
         "kind": "function",
         "name": "_resolve_cloud_key",
         "span": [
-          13724,
-          13734
+          13757,
+          13767
         ]
       },
       {
         "kind": "function",
         "name": "_llm_kwargs_from_args",
         "span": [
-          13737,
-          13748
+          13770,
+          13781
         ]
       },
       {
         "kind": "function",
         "name": "_configure_llm_runtime_from_args",
         "span": [
-          13754,
-          13759
+          13787,
+          13792
         ]
       },
       {
         "kind": "function",
         "name": "_index_chunks_for_backend",
         "span": [
-          13762,
-          13801
+          13795,
+          13834
         ]
       },
       {
         "kind": "function",
         "name": "_query_index_for_backend",
         "span": [
-          13804,
-          13810
+          13837,
+          13843
         ]
       },
       {
         "kind": "function",
         "name": "_run_pipeline_stages",
         "span": [
-          13813,
-          14148
+          13846,
+          14181
         ]
       },
       {
         "kind": "function",
         "name": "_run_pipeline_job",
         "span": [
-          14151,
-          14244
+          14184,
+          14277
         ]
       },
       {
         "kind": "function",
         "name": "_normalize_operation_timeout",
         "span": [
-          14251,
-          14254
+          14284,
+          14287
         ]
       },
       {
         "kind": "function",
         "name": "_cli_operation_timeout",
         "span": [
-          14257,
-          14264
+          14290,
+          14297
         ]
       },
       {
         "kind": "function",
         "name": "_new_supervised_start_gate",
         "span": [
-          14274,
-          14277
+          14307,
+          14310
         ]
       },
       {
         "kind": "function",
         "name": "_supervision_config",
         "span": [
-          14280,
-          14288
+          14313,
+          14321
         ]
       },
       {
         "kind": "function",
         "name": "_terminate_supervised_process",
         "span": [
-          14291,
-          14297
+          14324,
+          14330
         ]
       },
       {
         "kind": "function",
         "name": "_supervised_telemetry_requested",
         "span": [
-          14300,
-          14304
+          14333,
+          14337
         ]
       },
       {
         "kind": "function",
         "name": "_finalize_supervised_run_telemetry",
         "span": [
-          14307,
-          14323
+          14340,
+          14356
         ]
       },
       {
         "kind": "function",
         "name": "_start_supervised_run_telemetry",
         "span": [
-          14326,
-          14332
+          14359,
+          14365
         ]
       },
       {
         "kind": "function",
         "name": "_run_cli_with_deadline",
         "span": [
-          14335,
-          14379
+          14368,
+          14412
         ]
       },
       {
         "kind": "function",
         "name": "_run_rag_entrypoint",
         "span": [
-          14386,
-          14403
+          14419,
+          14436
         ]
       },
       {
         "kind": "function",
         "name": "_render_storage_outcome",
         "span": [
-          14406,
-          14422
+          14439,
+          14455
         ]
       },
       {
         "kind": "function",
         "name": "_apply_pipeline_deletion_with_leases",
         "span": [
-          14425,
-          14451
+          14458,
+          14484
         ]
       },
       {
         "kind": "function",
         "name": "_run_storage_command",
         "span": [
-          14454,
-          14549
+          14487,
+          14582
         ]
       },
       {
         "kind": "function",
         "name": "_render_job_summaries",
         "span": [
-          14552,
-          14560
+          14585,
+          14593
         ]
       },
       {
         "kind": "function",
         "name": "_background_submit_tokens",
         "span": [
-          14563,
-          14577
+          14596,
+          14610
         ]
       },
       {
         "kind": "function",
         "name": "_canonical_background_security_argv",
         "span": [
-          14591,
-          14658
+          14624,
+          14691
         ]
       },
       {
         "kind": "function",
         "name": "_run_jobs_command",
         "span": [
-          14665,
-          14779
+          14698,
+          14812
         ]
       },
       {
         "kind": "class",
         "name": "_StrictArgumentParser",
         "span": [
-          14789,
-          14799
+          14822,
+          14832
         ]
       },
       {
         "kind": "function",
         "name": "main",
         "span": [
-          14802,
-          15915
+          14835,
+          15948
         ]
       },
       {
         "kind": "function",
         "name": "_menu_choose",
         "span": [
-          15918,
-          15944
+          15951,
+          15977
         ]
       },
       {
         "kind": "function",
         "name": "_menu_yesno",
         "span": [
-          15947,
-          15956
+          15980,
+          15989
         ]
       },
       {
         "kind": "function",
         "name": "_menu_file",
         "span": [
-          15959,
-          16032
+          15992,
+          16065
         ]
       },
       {
         "kind": "function",
         "name": "_menu_cloud_consent_args",
         "span": [
-          16038,
-          16049
+          16071,
+          16082
         ]
       },
       {
         "kind": "function",
         "name": "_menu_cache_namespace_args",
         "span": [
-          16052,
-          16062
+          16085,
+          16095
         ]
       },
       {
         "kind": "function",
         "name": "_menu_llm_provider_args",
         "span": [
-          16065,
-          16180
+          16098,
+          16213
         ]
       },
       {
         "kind": "function",
         "name": "_menu_secrets_to_environment",
         "span": [
-          16186,
-          16194
+          16219,
+          16227
         ]
       },
       {
         "kind": "function",
         "name": "_menu_structure_profile",
         "span": [
-          16197,
-          16202
+          16230,
+          16235
         ]
       },
       {
         "kind": "function",
         "name": "interactive_menu",
         "span": [
-          16205,
-          16570
+          16238,
+          16603
         ]
       }
     ],
@@ -16379,7 +16467,7 @@
   "schema_version": 3,
   "source_architecture": {
     "class_count": 192,
-    "function_count": 2020,
+    "function_count": 2021,
     "import_graph": {
       "cyclic_components": [],
       "edge_count": 147,
@@ -20444,8 +20532,8 @@
             "scope": "top_level"
           }
         ],
-        "definition_locations_sha256": "aebf4cb9ba8940c3d7b31adf6fe68bb1fc64c6b8c0902d7fd4202af3dd6e8b44",
-        "function_count": 19,
+        "definition_locations_sha256": "fdeb00f24c1248892d9953d9681c0c940278f699d8f69b9c39fa5cd065be5d3b",
+        "function_count": 20,
         "functions": [
           {
             "kind": "function",
@@ -20557,6 +20645,12 @@
           },
           {
             "kind": "function",
+            "name": "_validate_toc_layout",
+            "scope": "top_level",
+            "signature_sha256": "9625a420b53ca8e1e177067874ae5085353101f1797679bf7ca5cb1666a7b80d"
+          },
+          {
+            "kind": "function",
             "name": "exact_classification_contract",
             "scope": "top_level",
             "signature_sha256": "c72ee1894764c83737d12729019080a70716b84957a0745e2ceaa0cfaad8f085"
@@ -20564,10 +20658,10 @@
         ],
         "import_edges": [],
         "module": "llm_output_contracts",
-        "non_blank_lines": 403,
+        "non_blank_lines": 501,
         "path": "llm_output_contracts.py",
-        "physical_lines": 453,
-        "top_level_function_count": 8
+        "physical_lines": 561,
+        "top_level_function_count": 9
       },
       {
         "class_count": 11,
@@ -22518,7 +22612,7 @@
             "scope": "nested"
           }
         ],
-        "definition_locations_sha256": "f8c545f72be5f34944b378540082535881502db0b9db26c8619b638b7bbe9561",
+        "definition_locations_sha256": "36b913625f44c8845cb5803569147acf506c896ff276952d8be5ac9a27740260",
         "function_count": 429,
         "functions": [
           {
@@ -25351,9 +25445,9 @@
           }
         ],
         "module": "rag",
-        "non_blank_lines": 14790,
+        "non_blank_lines": 14830,
         "path": "rag.py",
-        "physical_lines": 16587,
+        "physical_lines": 16620,
         "top_level_function_count": 298
       },
       {
@@ -31667,13 +31761,13 @@
         "top_level_function_count": 2
       }
     ],
-    "physical_line_count": 63318,
+    "physical_line_count": 63459,
     "source_groups": [
       "production",
       "tools",
       "other"
     ],
-    "top_level_function_count": 1324
+    "top_level_function_count": 1325
   },
   "tracked_sources": {
     "count": 152,

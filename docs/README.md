@@ -62,6 +62,9 @@ material. When documents disagree, use the authority order below.
 - [TOC hierarchy output contract](architecture/decisions/toc-hierarchy-output-contract.md)
   — proposed exact hierarchy-array validation, untrusted TOC prompt framing,
   atomic multi-batch fallback, and opt-in chunk provenance.
+- [TOC layout output contract](architecture/decisions/toc-layout-output-contract.md)
+  — proposed exact layout-hint validation, bounded source framing,
+  content-free fallback, and conditional completion identity.
 - [Architecture and facade inventory policy](architecture/decisions/architecture-facade-inventory-policy.md)
   — schema-v3 static graph, facade/mutation characterization, normalized
   runtime contract, and reviewed baseline refreshes.

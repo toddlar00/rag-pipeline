@@ -74,6 +74,36 @@ def _toc_contract_request(*, failure_policy=None):
     )
 
 
+def _layout_contract_value():
+    return {
+        "page_number_format": "trailing Arabic number",
+        "division_pattern": "Part followed by Roman numeral",
+        "division_examples": ["Part I"],
+        "section_markers": ["A."],
+        "subsection_markers": ["1."],
+        "named_item_format": "indented title",
+        "hierarchy_order": ["Primary division", "Section", "Named item"],
+        "hierarchy_levels": {
+            "1": "Primary division", "2": "Section", "3": "Named item",
+            "4": "", "5": "",
+        },
+    }
+
+
+def _layout_contract_request(*, failure_policy=None):
+    return LLMRequest(
+        prompt=(
+            "analyze bounded TOC layout\n"
+            + rag._TOC_LAYOUT_CONTRACT_PROMPT_JSON),
+        operation="toc.layout",
+        prompt_version="2",
+        failure_policy=failure_policy,
+        output_contract_id=output_contracts.TOC_LAYOUT_CONTRACT_ID,
+        output_fallback_id=output_contracts.TOC_LAYOUT_FALLBACK_ID,
+        output_validator=output_contracts.TOC_LAYOUT_CONTRACT,
+    )
+
+
 def test_success_is_cached_and_warm_read_skips_provider(tmp_path):
     calls = 0
 
@@ -847,6 +877,90 @@ def test_toc_contract_rejection_is_content_free_in_best_effort_and_strict(
     assert caught.value.result.output_diagnostic_code == (
         output_contracts.JSON_SYNTAX)
     assert "MODEL_RESPONSE_CANARY" not in str(caught.value)
+
+
+def test_toc_layout_contract_canonicalizes_live_output_and_revalidates_cache(
+        tmp_path):
+    calls = 0
+    value = _layout_contract_value()
+    value["page_number_format"] = "  trailing Arabic number  "
+
+    def invoke(_request):
+        nonlocal calls
+        calls += 1
+        return " \n" + json.dumps(value, ensure_ascii=False) + "\t"
+
+    runtime = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="readwrite", cache_dir=tmp_path / "cache"))
+    request = _layout_contract_request()
+    provider = _provider(invoke)
+
+    live = runtime.execute(request, [provider])
+    cached = runtime.execute(request, [provider])
+    canonical = output_contracts.TOC_LAYOUT_CONTRACT(
+        json.dumps(value, ensure_ascii=False))
+
+    assert live.text == cached.text == canonical
+    assert live.output_contract_status == "accepted"
+    assert cached.output_contract_status == "accepted"
+    assert cached.cache_status == "hit"
+    assert calls == 1
+    assert output_contracts.TOC_LAYOUT_CONTRACT.parse(cached.text)[
+        "page_number_format"] == "trailing Arabic number"
+
+
+def test_toc_layout_rejection_is_content_free_in_best_effort_and_strict(
+        tmp_path):
+    response = "MODEL_RESPONSE_CANARY " + json.dumps(
+        _layout_contract_value())
+    provider = _provider(lambda _request: response)
+
+    best_effort = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="readwrite", cache_dir=tmp_path / "best-cache"))
+    result = best_effort.execute(_layout_contract_request(), [provider])
+
+    assert result.text == ""
+    assert result.error_category == "invalid_response"
+    assert result.output_contract_status == "rejected"
+    assert result.output_diagnostic_code == output_contracts.JSON_SYNTAX
+    assert result.output_fallback_id == output_contracts.TOC_LAYOUT_FALLBACK_ID
+    assert not list((tmp_path / "best-cache").rglob("*.json"))
+    assert "MODEL_RESPONSE_CANARY" not in json.dumps(
+        best_effort.report_payload())
+
+    strict = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="off", cache_dir=tmp_path / "strict-cache",
+        failure_policy="strict"))
+    with pytest.raises(LLMExecutionError) as caught:
+        strict.execute(_layout_contract_request(), [provider])
+    assert caught.value.result.output_diagnostic_code == (
+        output_contracts.JSON_SYNTAX)
+    assert "MODEL_RESPONSE_CANARY" not in str(caught.value)
+
+
+def test_toc_layout_semantic_rejection_does_not_delegate_provider_authority(
+        tmp_path):
+    secondary_calls = 0
+
+    def secondary(_request):
+        nonlocal secondary_calls
+        secondary_calls += 1
+        return json.dumps(_layout_contract_value())
+
+    runtime = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="off", cache_dir=tmp_path / "cache"))
+    result = runtime.execute(
+        _layout_contract_request(),
+        [
+            _provider(lambda _request: "{}"),
+            _provider(secondary, name="secondary", model="model-b"),
+        ],
+    )
+
+    assert result.error_category == "invalid_response"
+    assert result.output_diagnostic_code == output_contracts.JSON_SHAPE_MISMATCH
+    assert result.fallback_path == ("primary",)
+    assert secondary_calls == 0
 
 
 def test_toc_semantic_rejection_does_not_delegate_provider_authority(

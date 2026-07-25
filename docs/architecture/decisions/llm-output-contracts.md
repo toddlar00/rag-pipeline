@@ -120,12 +120,14 @@ report schemas 2-5 while new runtime reports write schema 5.
   operation; this avoids mixed-schema interpretation during review.
 - The shared `toc.scaffold`/`toc.parse` hierarchy array is addressed by the
   proposed successor [TOC hierarchy output contract](toc-hierarchy-output-contract.md).
-  That proposal does not broaden this decision: `toc.layout`, `toc.verify`,
-  every `agent_team.*` response, grounded-answer structure, case briefs,
-  questions, flashcards, summaries, context generation, heading reconstruction,
-  and numeric quality scores still need their own reviewed contracts. Scoped
-  egress and provider model-code qualification also remain separate roadmap
-  work; neither slice completes R0C.
+  Its upstream hint object is addressed separately by the proposed
+  [TOC layout output contract](toc-layout-output-contract.md). Neither proposal
+  broadens this classification decision: `toc.verify`, every `agent_team.*`
+  response, grounded-answer structure, case briefs, questions, flashcards,
+  summaries, context generation, heading reconstruction, and numeric quality
+  scores still need reviewed contracts. Scoped egress and provider model-code
+  qualification also remain separate roadmap work; none of these slices
+  completes R0C.
 
 ## Verification
 

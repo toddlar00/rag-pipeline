@@ -257,6 +257,40 @@ def test_chunk_completion_binds_source_options_model_lock_and_output(
                 rag._llm_output_contracts.TOC_HIERARCHY_UNICODE_DATA_VERSION
                 .split(".")[2]),
         },
+        "layout_analysis": {
+            "prompt_version": "2",
+            "input_policy_version": 1,
+            "max_output_tokens": 1200,
+            "timeout_seconds": 30,
+            "max_source_lines": 120,
+            "max_line_characters": 512,
+            "max_line_json_bytes": 2048,
+            "max_source_json_bytes": 262144,
+            "preserved_tail_characters": 128,
+            "output_contract": {
+                "policy_version": 1,
+                "contract_id": "toc-layout-v1",
+                "fallback_id": "use-no-generated-toc-layout-hints",
+                "max_bytes": 65536,
+                "max_depth": 2,
+                "max_integer_digits": 7,
+                "root_field_count": 8,
+                "max_string_chars": 512,
+                "max_string_bytes": 512,
+                "max_array_items": 16,
+                "max_hierarchy_order_items": 5,
+                "hierarchy_level_count": 5,
+                "unicode_data_major": int(
+                    rag._llm_output_contracts.TOC_LAYOUT_UNICODE_DATA_VERSION
+                    .split(".")[0]),
+                "unicode_data_minor": int(
+                    rag._llm_output_contracts.TOC_LAYOUT_UNICODE_DATA_VERSION
+                    .split(".")[1]),
+                "unicode_data_patch": int(
+                    rag._llm_output_contracts.TOC_LAYOUT_UNICODE_DATA_VERSION
+                    .split(".")[2]),
+            },
+        },
     }
     disabled = parameters(llm_classify=False)
     assert disabled["classification_prompt_version"] == 1
@@ -280,6 +314,21 @@ def test_chunk_completion_binds_source_options_model_lock_and_output(
         "max_depth"] = 3
     assert not rag._chunks_complete(
         document, chunks, parameters=changed_toc_contract)
+    changed_layout_prompt = json.loads(json.dumps(initial))
+    changed_layout_prompt["toc_scaffold_generation"]["layout_analysis"][
+        "prompt_version"] = "3"
+    assert not rag._chunks_complete(
+        document, chunks, parameters=changed_layout_prompt)
+    changed_layout_input = json.loads(json.dumps(initial))
+    changed_layout_input["toc_scaffold_generation"]["layout_analysis"][
+        "max_source_lines"] = 121
+    assert not rag._chunks_complete(
+        document, chunks, parameters=changed_layout_input)
+    changed_layout_contract = json.loads(json.dumps(initial))
+    changed_layout_contract["toc_scaffold_generation"]["layout_analysis"][
+        "output_contract"]["unicode_data_patch"] += 1
+    assert not rag._chunks_complete(
+        document, chunks, parameters=changed_layout_contract)
     changed_contract = json.loads(json.dumps(initial))
     changed_contract["classification_output_contract"]["max_bytes"] = 64
     assert not rag._chunks_complete(

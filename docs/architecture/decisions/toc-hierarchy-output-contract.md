@@ -97,8 +97,10 @@ and 2,048 encoded JSON bytes; the complete value is limited to 128 KiB.
 Non-string/non-list values and non-string list members are omitted. Those hints
 are labeled as untrusted generated data. This framing does not make the earlier
 layout response authoritative or give it the exact hierarchy-array contract.
-The separate `toc.layout` request still receives its own permissively framed
-sample and remains outside this proposal on both its input and output sides.
+The separate `toc.layout` request is addressed by the proposed successor
+[TOC layout output contract](toc-layout-output-contract.md), which gives that
+upstream response its own bounded input and exact eight-field schema without
+making its values authoritative hierarchy evidence.
 
 ### Atomic multi-batch fallback
 
@@ -152,14 +154,16 @@ change the global chunking or index schema.
 - Only synthetic fixtures and hostile canaries are used for verification. No
   private `Ethics` text, output, or corpus-derived judgment is embedded in the
   repository.
-- `toc.layout`, `toc.verify`, and every `agent_team.*` response remain
-  permissive and outside this decision. Grounded answers, case briefs,
-  questions, flashcards, summaries, contextual prefixes, reconstructed
-  headings, and quality scores also still need reviewed contracts.
-- Consequently, `toc_scaffold_generation` is hierarchy-step provenance, not a
-  complete identity for every permissive operation used by `--llm-scaffold`.
-  Until those remaining prompts and contracts are versioned, changes to them
-  require an explicit full reindex instead of relying on completion reuse.
+- `toc.layout` is addressed by a separate proposed contract. `toc.verify` and
+  every `agent_team.*` response remain permissive and outside this decision.
+  Grounded answers, case briefs, questions, flashcards, summaries, contextual
+  prefixes, reconstructed headings, and quality scores also still need
+  reviewed contracts.
+- With the proposed layout successor, `toc_scaffold_generation` binds the
+  contracted layout and hierarchy steps, but is still not complete identity for
+  every permissive operation used by `--llm-scaffold`. Until `toc.verify` and
+  `agent_team.*` prompts and contracts are versioned, changes to them require
+  an explicit full reindex instead of relying on completion reuse.
 - Provider model-code qualification, scoped egress, and the owner-pending
   semantic-rejection provider-chain rule remain separate release gates. This
   proposal is related to, but does not close, R0C issue #48.

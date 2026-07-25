@@ -37,6 +37,21 @@ _TOC_HIERARCHY_UNICODE_VERSION_PARTS = tuple(
     int(part) for part in TOC_HIERARCHY_UNICODE_DATA_VERSION.split("."))
 if len(_TOC_HIERARCHY_UNICODE_VERSION_PARTS) != 3:
     raise RuntimeError("unsupported Unicode data version format")
+TOC_LAYOUT_CONTRACT_ID = "toc-layout-v1"
+TOC_LAYOUT_FALLBACK_ID = "use-no-generated-toc-layout-hints"
+TOC_LAYOUT_MAX_BYTES = 64 * 1024
+TOC_LAYOUT_MAX_DEPTH = 2
+TOC_LAYOUT_MAX_INTEGER_DIGITS = 7
+TOC_LAYOUT_MAX_STRING_CHARS = 512
+TOC_LAYOUT_MAX_STRING_BYTES = 512
+TOC_LAYOUT_MAX_ARRAY_ITEMS = 16
+TOC_LAYOUT_MAX_HIERARCHY_ORDER_ITEMS = 5
+TOC_LAYOUT_HIERARCHY_LEVEL_COUNT = 5
+TOC_LAYOUT_UNICODE_DATA_VERSION = unicodedata.unidata_version
+_TOC_LAYOUT_UNICODE_VERSION_PARTS = tuple(
+    int(part) for part in TOC_LAYOUT_UNICODE_DATA_VERSION.split("."))
+if len(_TOC_LAYOUT_UNICODE_VERSION_PARTS) != 3:
+    raise RuntimeError("unsupported Unicode data version format")
 
 INVALID_TYPE = "llm-output-invalid-type"
 INVALID_ENCODING = "llm-output-invalid-encoding"
@@ -437,6 +452,99 @@ TOC_HIERARCHY_CONTRACT = ExactJSONContract(
         ("unicode_data_major", _TOC_HIERARCHY_UNICODE_VERSION_PARTS[0]),
         ("unicode_data_minor", _TOC_HIERARCHY_UNICODE_VERSION_PARTS[1]),
         ("unicode_data_patch", _TOC_HIERARCHY_UNICODE_VERSION_PARTS[2]),
+    ),
+)
+
+
+_TOC_LAYOUT_ROOT_FIELDS = frozenset({
+    "page_number_format",
+    "division_pattern",
+    "division_examples",
+    "section_markers",
+    "subsection_markers",
+    "named_item_format",
+    "hierarchy_order",
+    "hierarchy_levels",
+})
+_TOC_LAYOUT_SCALAR_FIELDS = (
+    "page_number_format",
+    "division_pattern",
+    "named_item_format",
+)
+_TOC_LAYOUT_ARRAY_FIELDS = (
+    "division_examples",
+    "section_markers",
+    "subsection_markers",
+)
+_TOC_LAYOUT_LEVEL_FIELDS = tuple(
+    str(level) for level in range(1, TOC_LAYOUT_HIERARCHY_LEVEL_COUNT + 1))
+
+
+def _validate_toc_layout(value: Any) -> dict[str, object]:
+    if not isinstance(value, dict) or set(value) != _TOC_LAYOUT_ROOT_FIELDS:
+        raise OutputContractRejected(JSON_SHAPE_MISMATCH)
+
+    canonical: dict[str, object] = {}
+    for field in _TOC_LAYOUT_SCALAR_FIELDS:
+        canonical[field] = _bounded_json_string(
+            value[field], max_chars=TOC_LAYOUT_MAX_STRING_CHARS,
+            max_bytes=TOC_LAYOUT_MAX_STRING_BYTES, allow_empty=True)
+
+    for field in _TOC_LAYOUT_ARRAY_FIELDS:
+        items = value[field]
+        if not isinstance(items, list):
+            raise OutputContractRejected(JSON_SHAPE_MISMATCH)
+        if len(items) > TOC_LAYOUT_MAX_ARRAY_ITEMS:
+            raise OutputContractRejected(JSON_ITEM_LIMIT)
+        canonical[field] = [
+            _bounded_json_string(
+                item, max_chars=TOC_LAYOUT_MAX_STRING_CHARS,
+                max_bytes=TOC_LAYOUT_MAX_STRING_BYTES, allow_empty=False)
+            for item in items
+        ]
+
+    hierarchy_order = value["hierarchy_order"]
+    if not isinstance(hierarchy_order, list):
+        raise OutputContractRejected(JSON_SHAPE_MISMATCH)
+    if len(hierarchy_order) > TOC_LAYOUT_MAX_HIERARCHY_ORDER_ITEMS:
+        raise OutputContractRejected(JSON_ITEM_LIMIT)
+    canonical["hierarchy_order"] = [
+        _bounded_json_string(
+            item, max_chars=TOC_LAYOUT_MAX_STRING_CHARS,
+            max_bytes=TOC_LAYOUT_MAX_STRING_BYTES, allow_empty=False)
+        for item in hierarchy_order
+    ]
+
+    hierarchy_levels = value["hierarchy_levels"]
+    if (not isinstance(hierarchy_levels, dict)
+            or set(hierarchy_levels) != set(_TOC_LAYOUT_LEVEL_FIELDS)):
+        raise OutputContractRejected(JSON_SHAPE_MISMATCH)
+    canonical["hierarchy_levels"] = {
+        level: _bounded_json_string(
+            hierarchy_levels[level], max_chars=TOC_LAYOUT_MAX_STRING_CHARS,
+            max_bytes=TOC_LAYOUT_MAX_STRING_BYTES, allow_empty=True)
+        for level in _TOC_LAYOUT_LEVEL_FIELDS
+    }
+    return canonical
+
+
+TOC_LAYOUT_CONTRACT = ExactJSONContract(
+    contract_id=TOC_LAYOUT_CONTRACT_ID,
+    max_bytes=TOC_LAYOUT_MAX_BYTES,
+    max_depth=TOC_LAYOUT_MAX_DEPTH,
+    schema_validator=_validate_toc_layout,
+    max_integer_digits=TOC_LAYOUT_MAX_INTEGER_DIGITS,
+    provenance_fields=(
+        ("root_field_count", len(_TOC_LAYOUT_ROOT_FIELDS)),
+        ("max_string_chars", TOC_LAYOUT_MAX_STRING_CHARS),
+        ("max_string_bytes", TOC_LAYOUT_MAX_STRING_BYTES),
+        ("max_array_items", TOC_LAYOUT_MAX_ARRAY_ITEMS),
+        ("max_hierarchy_order_items",
+         TOC_LAYOUT_MAX_HIERARCHY_ORDER_ITEMS),
+        ("hierarchy_level_count", TOC_LAYOUT_HIERARCHY_LEVEL_COUNT),
+        ("unicode_data_major", _TOC_LAYOUT_UNICODE_VERSION_PARTS[0]),
+        ("unicode_data_minor", _TOC_LAYOUT_UNICODE_VERSION_PARTS[1]),
+        ("unicode_data_patch", _TOC_LAYOUT_UNICODE_VERSION_PARTS[2]),
     ),
 )
 

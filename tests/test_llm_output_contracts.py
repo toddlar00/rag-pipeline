@@ -7,6 +7,26 @@ import pytest
 import llm_output_contracts as contracts
 
 
+def _toc_layout_value():
+    return {
+        "page_number_format": "trailing Arabic or Roman number",
+        "division_pattern": "Part followed by a Roman numeral",
+        "division_examples": ["Part I", "Part II"],
+        "section_markers": ["A.", "B."],
+        "subsection_markers": ["1.", "a."],
+        "named_item_format": "indented case or problem title",
+        "hierarchy_order": [
+            "Primary division", "Section", "Subsection", "Named item"],
+        "hierarchy_levels": {
+            "1": "Primary division",
+            "2": "Section",
+            "3": "Subsection",
+            "4": "Named item",
+            "5": "",
+        },
+    }
+
+
 def test_output_contract_module_is_a_dependency_light_leaf():
     result = subprocess.run(
         [
@@ -449,6 +469,253 @@ def test_toc_hierarchy_provenance_binds_schema_and_fallback_limits():
         "unicode_data_patch": int(
             contracts.TOC_HIERARCHY_UNICODE_DATA_VERSION.split(".")[2]),
     }
+
+
+def test_toc_layout_contract_canonicalizes_one_exact_object():
+    value = _toc_layout_value()
+    value["page_number_format"] = "  trailing Arabic or Roman number  "
+    value["hierarchy_levels"]["4"] = "Named item – Café"
+    response = " \n" + json.dumps(value, ensure_ascii=False) + "\t"
+
+    canonical = contracts.TOC_LAYOUT_CONTRACT(response)
+    parsed = contracts.TOC_LAYOUT_CONTRACT.parse(canonical)
+
+    assert canonical == json.dumps(
+        parsed, ensure_ascii=False, allow_nan=False,
+        separators=(",", ":"), sort_keys=True)
+    assert contracts.TOC_LAYOUT_CONTRACT(canonical) == canonical
+    assert parsed["page_number_format"] == "trailing Arabic or Roman number"
+    assert parsed["hierarchy_levels"]["4"] == "Named item – Café"
+
+
+def test_toc_layout_contract_accepts_all_observation_fields_empty():
+    value = _toc_layout_value()
+    for field in (
+            "page_number_format", "division_pattern", "named_item_format"):
+        value[field] = ""
+    for field in (
+            "division_examples", "section_markers", "subsection_markers",
+            "hierarchy_order"):
+        value[field] = []
+    value["hierarchy_levels"] = {
+        str(level): ""
+        for level in range(1, contracts.TOC_LAYOUT_HIERARCHY_LEVEL_COUNT + 1)
+    }
+
+    assert contracts.TOC_LAYOUT_CONTRACT.parse(json.dumps(value)) == value
+
+
+@pytest.mark.parametrize(("response", "diagnostic_code"), [
+    ("prefix {}", contracts.JSON_SYNTAX),
+    ("{} suffix", contracts.JSON_SYNTAX),
+    ("{} {}", contracts.JSON_SYNTAX),
+    ("```json\n{}\n```", contracts.JSON_SYNTAX),
+    ("<think>private</think>{}", contracts.JSON_SYNTAX),
+    ("[]", contracts.JSON_SHAPE_MISMATCH),
+    ('{"page_number_format":"a","page_number_format":"b"}',
+     contracts.JSON_DUPLICATE_KEY),
+    ('{"value":NaN}', contracts.JSON_NON_FINITE_NUMBER),
+    ('{"value":1e999}', contracts.JSON_NON_FINITE_NUMBER),
+    ('{"value":99999999}', contracts.JSON_VALUE_OUT_OF_RANGE),
+    ('{"value":{"nested":{"too":"deep"}}}',
+     contracts.JSON_DEPTH_EXCEEDED),
+])
+def test_toc_layout_contract_rejects_wrappers_and_invalid_json_semantics(
+        response, diagnostic_code):
+    with pytest.raises(contracts.OutputContractRejected) as caught:
+        contracts.TOC_LAYOUT_CONTRACT(response)
+
+    assert caught.value.diagnostic_code == diagnostic_code
+
+
+@pytest.mark.parametrize("mutation", [
+    lambda value: value.pop("named_item_format"),
+    lambda value: value.update(other_elements=[]),
+    lambda value: value.update(page_number_format=[]),
+    lambda value: value.update(division_examples="Part I"),
+    lambda value: value.update(hierarchy_order="Section"),
+    lambda value: value.update(hierarchy_levels=[]),
+    lambda value: value["hierarchy_levels"].pop("5"),
+    lambda value: value["hierarchy_levels"].update({"6": "Extra"}),
+    lambda value: value["hierarchy_levels"].update({"1": 1}),
+])
+def test_toc_layout_contract_rejects_missing_extra_and_coercive_fields(
+        mutation):
+    value = _toc_layout_value()
+    mutation(value)
+
+    with pytest.raises(contracts.OutputContractRejected) as caught:
+        contracts.TOC_LAYOUT_CONTRACT(json.dumps(value))
+
+    assert caught.value.diagnostic_code == contracts.JSON_SHAPE_MISMATCH
+
+
+@pytest.mark.parametrize(("field", "limit"), [
+    ("division_examples", contracts.TOC_LAYOUT_MAX_ARRAY_ITEMS),
+    ("section_markers", contracts.TOC_LAYOUT_MAX_ARRAY_ITEMS),
+    ("subsection_markers", contracts.TOC_LAYOUT_MAX_ARRAY_ITEMS),
+    ("hierarchy_order", contracts.TOC_LAYOUT_MAX_HIERARCHY_ORDER_ITEMS),
+])
+def test_toc_layout_contract_enforces_array_item_limits(field, limit):
+    value = _toc_layout_value()
+    value[field] = [f"item-{index}" for index in range(limit + 1)]
+
+    with pytest.raises(contracts.OutputContractRejected) as caught:
+        contracts.TOC_LAYOUT_CONTRACT(json.dumps(value))
+
+    assert caught.value.diagnostic_code == contracts.JSON_ITEM_LIMIT
+
+
+@pytest.mark.parametrize(("field", "unsafe", "diagnostic_code"), [
+    ("page_number_format", "x" * 513, contracts.JSON_STRING_LIMIT),
+    ("division_examples", "", contracts.JSON_SHAPE_MISMATCH),
+    ("section_markers", "   ", contracts.JSON_SHAPE_MISMATCH),
+    ("subsection_markers", "One\nTwo", contracts.CONTROL_CHARACTER),
+    ("hierarchy_order", "\tOne", contracts.CONTROL_CHARACTER),
+    ("division_pattern", "One\u2028Two", contracts.CONTROL_CHARACTER),
+    ("named_item_format", "One\u202eTwo", contracts.CONTROL_CHARACTER),
+    ("page_number_format", "\u00a0One", contracts.CONTROL_CHARACTER),
+    ("division_pattern", "\ue000", contracts.CONTROL_CHARACTER),
+    ("page_number_format", "\u0378", contracts.CONTROL_CHARACTER),
+    ("hierarchy_order", "\ud800", contracts.INVALID_ENCODING),
+    ("division_examples", "é" * 257, contracts.JSON_STRING_LIMIT),
+])
+def test_toc_layout_contract_rejects_unsafe_or_oversized_strings(
+        field, unsafe, diagnostic_code):
+    value = _toc_layout_value()
+    if field in {
+            "division_examples", "section_markers", "subsection_markers",
+            "hierarchy_order"}:
+        value[field] = [unsafe]
+    else:
+        value[field] = unsafe
+
+    with pytest.raises(contracts.OutputContractRejected) as caught:
+        contracts.TOC_LAYOUT_CONTRACT(
+            json.dumps(value, ensure_ascii=False))
+
+    assert caught.value.diagnostic_code == diagnostic_code
+
+
+def test_toc_layout_contract_accepts_utf8_boundary_and_preserves_normalization():
+    nfc = "Café"
+    nfd = "Cafe\u0301"
+    value = _toc_layout_value()
+    value["division_pattern"] = "é" * 256
+    value["division_examples"] = [nfc, nfd]
+
+    parsed = contracts.TOC_LAYOUT_CONTRACT.parse(
+        json.dumps(value, ensure_ascii=False))
+
+    assert len(parsed["division_pattern"].encode("utf-8")) == 512
+    assert nfc != nfd
+    assert parsed["division_examples"] == [nfc, nfd]
+
+
+def test_toc_layout_contract_maximum_shape_fits_canonical_response_ceiling():
+    worst_string = '\"\\' * 256
+    value = {
+        "page_number_format": worst_string,
+        "division_pattern": worst_string,
+        "division_examples": [
+            worst_string] * contracts.TOC_LAYOUT_MAX_ARRAY_ITEMS,
+        "section_markers": [
+            worst_string] * contracts.TOC_LAYOUT_MAX_ARRAY_ITEMS,
+        "subsection_markers": [
+            worst_string] * contracts.TOC_LAYOUT_MAX_ARRAY_ITEMS,
+        "named_item_format": worst_string,
+        "hierarchy_order": [
+            worst_string
+        ] * contracts.TOC_LAYOUT_MAX_HIERARCHY_ORDER_ITEMS,
+        "hierarchy_levels": {
+            str(level): worst_string
+            for level in range(
+                1, contracts.TOC_LAYOUT_HIERARCHY_LEVEL_COUNT + 1)
+        },
+    }
+    response = json.dumps(
+        value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+
+    assert len(response.encode("utf-8")) < contracts.TOC_LAYOUT_MAX_BYTES
+    canonical = contracts.TOC_LAYOUT_CONTRACT(response)
+    assert len(canonical.encode("utf-8")) < contracts.TOC_LAYOUT_MAX_BYTES
+    assert contracts.TOC_LAYOUT_CONTRACT(canonical) == canonical
+
+
+def test_toc_layout_contract_rejects_response_byte_overflow():
+    with pytest.raises(contracts.OutputContractRejected) as caught:
+        contracts.TOC_LAYOUT_CONTRACT(
+            "x" * (contracts.TOC_LAYOUT_MAX_BYTES + 1))
+
+    assert caught.value.diagnostic_code == contracts.BYTE_LIMIT_EXCEEDED
+
+
+@pytest.mark.parametrize("response", [
+    None,
+    b"{}",
+    bytearray(b"{}"),
+    _toc_layout_value(),
+    1,
+    True,
+])
+def test_toc_layout_contract_rejects_non_text_responses(response):
+    with pytest.raises(contracts.OutputContractRejected) as caught:
+        contracts.TOC_LAYOUT_CONTRACT(response)
+
+    assert caught.value.diagnostic_code == contracts.INVALID_TYPE
+
+
+def test_toc_layout_contract_rejects_whole_object_for_one_invalid_member():
+    value = _toc_layout_value()
+    value["division_examples"].append(1)
+
+    with pytest.raises(contracts.OutputContractRejected) as caught:
+        contracts.TOC_LAYOUT_CONTRACT(json.dumps(value))
+
+    assert caught.value.diagnostic_code == contracts.JSON_SHAPE_MISMATCH
+
+
+def test_toc_layout_provenance_binds_schema_and_fallback_limits():
+    provenance = contracts.TOC_LAYOUT_CONTRACT.provenance(
+        fallback_id=contracts.TOC_LAYOUT_FALLBACK_ID)
+
+    assert provenance == {
+        "policy_version": contracts.OUTPUT_CONTRACT_POLICY_VERSION,
+        "contract_id": contracts.TOC_LAYOUT_CONTRACT_ID,
+        "fallback_id": contracts.TOC_LAYOUT_FALLBACK_ID,
+        "max_bytes": contracts.TOC_LAYOUT_MAX_BYTES,
+        "max_depth": contracts.TOC_LAYOUT_MAX_DEPTH,
+        "max_integer_digits": contracts.TOC_LAYOUT_MAX_INTEGER_DIGITS,
+        "root_field_count": 8,
+        "max_string_chars": contracts.TOC_LAYOUT_MAX_STRING_CHARS,
+        "max_string_bytes": contracts.TOC_LAYOUT_MAX_STRING_BYTES,
+        "max_array_items": contracts.TOC_LAYOUT_MAX_ARRAY_ITEMS,
+        "max_hierarchy_order_items": (
+            contracts.TOC_LAYOUT_MAX_HIERARCHY_ORDER_ITEMS),
+        "hierarchy_level_count": contracts.TOC_LAYOUT_HIERARCHY_LEVEL_COUNT,
+        "unicode_data_major": int(
+            contracts.TOC_LAYOUT_UNICODE_DATA_VERSION.split(".")[0]),
+        "unicode_data_minor": int(
+            contracts.TOC_LAYOUT_UNICODE_DATA_VERSION.split(".")[1]),
+        "unicode_data_patch": int(
+            contracts.TOC_LAYOUT_UNICODE_DATA_VERSION.split(".")[2]),
+    }
+
+
+@pytest.mark.parametrize("response", [
+    "MODEL_RESPONSE_CANARY not json",
+    '{"page_number_format":"MODEL_RESPONSE_CANARY",',
+    '{"page_number_format":"\\ud800"}',
+])
+def test_toc_layout_rejection_has_no_response_or_decoder_exception_context(
+        response):
+    with pytest.raises(contracts.OutputContractRejected) as caught:
+        contracts.TOC_LAYOUT_CONTRACT(response)
+
+    assert "MODEL_RESPONSE_CANARY" not in str(caught.value)
+    assert "MODEL_RESPONSE_CANARY" not in repr(caught.value)
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
 
 
 @pytest.mark.parametrize("response", [
