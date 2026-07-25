@@ -64,4 +64,11 @@ evidence and requires regeneration from the replacement history.
 Gate-only checkpoint `144a434` establishes the local A0b candidate and passes
 both matching final-head local comparisons. A0b remains pending until one
 frozen publishable commit/tree passes both hosted CI jobs and retains their
-current-report artifacts.
+current-report artifacts. Each successful hosted cell strictly revalidates the
+generated report, requires its clean source identity to equal the exact job
+head, and builds a verified two-file evidence directory containing that report
+and a content-free `phase-a0-ci-attestation-v1` record. The attestation binds
+candidate and pre-gate commit/tree identities, baseline and current-report
+hashes, normalized platform, and sorted gate-only paths. CI checks the exact
+file set and copied-report hash immediately before upload; missing or extra
+evidence is an error, not a warning.

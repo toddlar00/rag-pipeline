@@ -87,6 +87,15 @@ matching baseline at one frozen final commit/tree and retain their reports.
 Until that exact-head evidence exists, Phase A0 does not authorize the R8
 ownership move.
 
+After a successful comparison, CI strictly revalidates the generated current
+report and requires its clean source commit to equal the job's exact `HEAD` and
+its platform to equal the matrix cell. It then emits a content-free schema-v1
+attestation binding the candidate and pre-gate commit/tree pairs, raw and
+embedded report hashes, platform, and sorted gate-only paths. CI copies the
+report and places the attestation in an exact two-file evidence directory,
+verifies the file set and copied-report hash, and retains that directory for 30
+days. A missing, extra, substituted, or non-regular file fails the cell.
+
 The source-delta check is intentionally ancestor-bound. The final candidate
 must reach `main` through a history-preserving merge that retains the pre-gate
 source commit. Squashing or rewriting that history invalidates the evidence and

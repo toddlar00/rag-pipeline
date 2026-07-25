@@ -324,13 +324,116 @@ jobs:
           python tools/benchmark_phase_a0.py --require-clean
           --check ${{ matrix.baseline }}
           --output phase-a0-current-${{ matrix.artifact }}.json
-      - name: Retain the Phase A0 current report
-        if: always()
+      - name: Build and attest the Phase A0 evidence
+        shell: bash
+        env:
+          PHASE_A0_BASELINE: ${{ matrix.baseline }}
+          PHASE_A0_CURRENT: phase-a0-current-${{ matrix.artifact }}.json
+          PHASE_A0_EVIDENCE_DIR: ${{ runner.temp }}/phase-a0-evidence-${{ matrix.artifact }}
+          PHASE_A0_PLATFORM: ${{ matrix.artifact }}
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import shutil
+          import subprocess
+
+          from tools import benchmark_phase_a0 as phase_a0
+
+          baseline_path = Path(os.environ["PHASE_A0_BASELINE"])
+          current_path = Path(os.environ["PHASE_A0_CURRENT"])
+          evidence_dir = Path(os.environ["PHASE_A0_EVIDENCE_DIR"])
+          expected_platform = os.environ["PHASE_A0_PLATFORM"]
+
+          baseline = phase_a0._read_report(baseline_path)
+          current = phase_a0._read_report(current_path)
+          phase_a0.compare_contracts(current, baseline)
+          baseline_file_sha256 = hashlib.sha256(
+              baseline_path.read_bytes()).hexdigest()
+          candidate_commit = subprocess.check_output(
+              ["git", "rev-parse", "HEAD"], text=True).strip()
+          candidate_tree = subprocess.check_output(
+              ["git", "rev-parse", "HEAD^{tree}"], text=True).strip()
+          pre_gate_commit = baseline["source"]["commit"]
+          pre_gate_tree = subprocess.check_output(
+              ["git", "rev-parse", f"{pre_gate_commit}^{{tree}}"],
+              text=True,
+          ).strip()
+          if current["source"] != {
+              "commit": candidate_commit,
+              "tracked_diff_sha256": phase_a0._sha256_bytes(b"\0"),
+              "worktree_clean": True,
+          }:
+              raise SystemExit("current report did not bind the clean exact head")
+          if current["profile"]["platform"] != expected_platform:
+              raise SystemExit("current report platform did not match the matrix")
+          gate_only_paths = sorted(subprocess.check_output(
+              ["git", "diff", "--name-only", pre_gate_commit, "HEAD"],
+              text=True,
+          ).splitlines())
+
+          def file_sha256(path):
+              return hashlib.sha256(path.read_bytes()).hexdigest()
+
+          evidence_dir.mkdir(parents=True, exist_ok=False)
+          report_path = evidence_dir / "current-report.json"
+          attestation_path = evidence_dir / "attestation.json"
+          shutil.copyfile(current_path, report_path)
+          copied_current = phase_a0._read_report(report_path)
+          if copied_current != current:
+              raise SystemExit("copied Phase A0 report did not match validation")
+          current_file_sha256 = file_sha256(report_path)
+          attestation = {
+              "baseline": {
+                  "report_sha256": baseline["report_sha256"],
+                  "sha256": baseline_file_sha256,
+              },
+              "candidate": {
+                  "commit": candidate_commit,
+                  "tree": candidate_tree,
+              },
+              "current_report": {
+                  "report_sha256": current["report_sha256"],
+                  "sha256": current_file_sha256,
+              },
+              "gate_only_paths": gate_only_paths,
+              "platform": expected_platform,
+              "pre_gate": {
+                  "commit": pre_gate_commit,
+                  "tree": pre_gate_tree,
+              },
+              "schema": "phase-a0-ci-attestation-v1",
+          }
+          attestation_path.write_text(
+              json.dumps(attestation, sort_keys=True, indent=2) + "\n",
+              encoding="utf-8",
+              newline="\n",
+          )
+          entries = list(evidence_dir.iterdir())
+          if ({entry.name for entry in entries}
+                  != {"attestation.json", "current-report.json"}
+                  or any(entry.is_symlink() or not entry.is_file()
+                         for entry in entries)
+                  or phase_a0._read_report(baseline_path) != baseline
+                  or file_sha256(baseline_path) != baseline_file_sha256
+                  or phase_a0._read_report(report_path) != current
+                  or file_sha256(report_path)
+                  != current_file_sha256
+                  or json.loads(attestation_path.read_text(encoding="utf-8"))
+                  != attestation):
+              raise SystemExit("Phase A0 evidence bundle was incomplete")
+          print(
+              f"Phase A0 report attested for {expected_platform}: "
+              f"{candidate_commit}")
+          PY
+      - name: Retain the Phase A0 evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: phase-a0-${{ matrix.artifact }}
-          path: phase-a0-current-${{ matrix.artifact }}.json
-          if-no-files-found: warn
+          path: ${{ runner.temp }}/phase-a0-evidence-${{ matrix.artifact }}
+          if-no-files-found: error
           retention-days: 30
 
   vector-store-smoke:
