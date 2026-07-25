@@ -1,10 +1,9 @@
 # Service HTTP boundary and lazy application composition
 
-- **Status:** Accepted; implementation included in cumulative draft PR #44
+- **Status:** Implemented in frozen draft PR #44; technical gates passed
 - **Decision date:** 2026-07-24
 - **Milestone:** R8c-5 service-adapter and composition-root inversion
-- **Integration state:** Not merged or human-reviewed; exact replacement-head
-  review and integration remain pending. Consult
+- **Integration state:** Not merged or human-reviewed. Consult
   [ROADMAP.md](../../../ROADMAP.md) for current validation and merge state
 
 ## Context

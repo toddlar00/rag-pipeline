@@ -33,6 +33,10 @@ python -m ruff check .
 python tools/check_python_sources.py
 python tools/check_dependency_policy.py
 python tools/check_model_artifacts.py
+python tools/check_ci_security.py
+python tools/check_architecture_inventory.py
+# Linux/Git Bash only; CI also syntax-checks the legacy CUDA helper
+bash -n setup_rtx5060.sh
 
 # Full CPU dev environment (exact hash-locked, Python 3.12)
 pip install --require-hashes -r requirements-lock-tools.lock
@@ -58,7 +62,7 @@ python rag.py full --pdf path/to/source.pdf   # end-to-end, per-run output dir
 python rag.py                                  # interactive menu
 ```
 
-Pytest config lives in `pyproject.toml`: `testpaths=["tests"]`, `pythonpath=["."]`, asyncio plugin disabled. CI (`.github/workflows/ci.yml`) runs lint + compile gates, the offline evaluation suites, unit tests on Linux 3.10-3.14 and Windows 3.12, service-API tests on both OSes, real Chroma/Qdrant smoke, and a full locked CPU integration job.
+Pytest config lives in `pyproject.toml`: `testpaths=["tests"]`, `pythonpath=["."]`, asyncio plugin disabled. CI (`.github/workflows/ci.yml`) runs lint + compile/policy/architecture gates, the offline evaluation suites, unit tests on Linux 3.10-3.14 and Windows 3.12, service-API tests on both OSes, real Chroma/Qdrant smoke, a full locked CPU integration job, and the retained Phase A0 Windows/Linux evidence cells.
 
 ## Architecture
 

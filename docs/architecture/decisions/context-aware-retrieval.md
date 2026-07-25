@@ -1,6 +1,7 @@
 # Context-aware retrieval assembly
 
-- **Status:** Accepted in draft implementation
+- **Status:** Implemented in frozen draft PR #44; technical gates passed; not
+  merged or human-reviewed
 - **Implementation:** PR #36 (`agent/context-aware-retrieval`)
 - **Historical input:** `docs/superpowers/plans/2026-07-23-codex-improvements-structure-profiles.md`
 

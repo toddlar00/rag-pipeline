@@ -1,5 +1,12 @@
 # Cross-Milestone Integration Audit
 
+> **Historical scope only.** This record covers PRs #1-#28 and does not attest
+> the current R1 candidate or PRs #31-#44. Use
+> [`ROADMAP.md`](ROADMAP.md), the maintained ADRs, and the
+> [2026-07-25 code/PR/documentation audit](docs/audits/2026-07-25-code-pr-documentation-audit.md)
+> for current status. A new exact-head review manifest and integration audit
+> are still required before R1 merges.
+
 Date: 2026-07-22
 
 ## Scope

@@ -1,9 +1,10 @@
 # Process-supervision extraction
 
-- **Status:** Accepted; implemented in draft PR
+- **Status:** Implemented in frozen draft PR #44; technical gates passed; not
+  merged or human-reviewed
 - **Decision date:** 2026-07-22
 - **Implementation:** [PR #33](https://github.com/toddlar00/rag-pipeline/pull/33)
-- **Integration state:** Included in the cumulative draft stack; consult
+- **Integration state:** Included in the frozen cumulative draft; consult
   [ROADMAP.md](../../../ROADMAP.md) for current merge status
 
 ## Context

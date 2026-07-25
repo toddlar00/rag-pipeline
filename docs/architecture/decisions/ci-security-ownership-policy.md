@@ -1,7 +1,7 @@
 # CI Security Ownership Policy
 
-- **Status:** Implementation included in cumulative draft PR #44; not merged or
-  human-reviewed, with exact replacement-head review and integration pending
+- **Status:** Implementation included in cumulative draft PR #44; frozen-head
+  technical gates passed; not merged or human-reviewed
 - **Milestone:** R7 quality gates
 - **Policy record:** [`ci-security-ownership.json`](../../../ci-security-ownership.json)
 

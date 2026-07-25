@@ -63,12 +63,12 @@ Windows and 2,236 tests with 4 skips on native Linux; the sole warning is the
 R2-owned Starlette/httpx dependency deprecation. The canonical architecture
 inventory records 1,981 functions and 377 compact runtime callables.
 
-The replacement reports above are local baseline candidates, and each passes an
-independent complete same-platform 9×5 comparison. The gate-only commit that
-contains these reports is the final local replacement candidate; its exact
-commit/tree must be recorded on PR #44 after creation. No successful hosted
-replacement run is claimed. A0b remains pending until both exact-head hosted
-cells pass and retain their successful evidence bundles.
+The reports above are the baselines in frozen gate head `ed2995e` / tree
+`c438c82`, and each passes an independent complete same-platform 9×5 comparison.
+Pull-request and direct-dispatch Windows/Linux hosted cells passed at that exact
+head. All four retained two-file evidence bundles were downloaded and
+independently verified. Human review and history-preserving integration remain
+pending; changing source or locks requires replacement baselines.
 
 ## Checking
 

@@ -1,8 +1,8 @@
 # Architecture and Facade Inventory Policy
 
-- **Status:** Implementation included in cumulative draft PR #44; replacement
-  compatibility refresh local and independently red-team-audited; not merged
-  or human-reviewed, with exact replacement-head review pending
+- **Status:** Implementation included in cumulative draft PR #44; frozen-head
+  hosted matrix and independent technical audit passed; not merged or
+  human-reviewed
 - **Milestones:** Minimum R7 inventory prerequisite for R8 ownership changes
 - **Schema:** `tracked-python-ast-v3`
 
@@ -74,8 +74,8 @@ does not prove runtime reachability.
 - First-party dependency invariants:
   [`tests/test_architecture.py`](../../../tests/test_architecture.py)
 
-Schema v3 was first accepted at `62cb574`. The replacement baseline prepared
-for the next frozen R1 pre-gate source checkpoint is 1,005,966 bytes with full
+Schema v3 was first implemented at `62cb574`. The replacement baseline bound to
+frozen R1 pre-gate source `fdb08d2` is 1,005,966 bytes with full
 inventory SHA-256
 `2b0e2b6d24f494f305c99a28e76e8146cf1f56987d8f859469db0506a8cf6b4d`.
 It records 150 tracked Python sources, 69 non-test modules, 1,981 functions,
@@ -89,5 +89,8 @@ pair-correlation collision. The replacement review additionally caught and
 rejected an over-broad tilde redirect before the baseline refresh, then exposed
 and closed CPython 3.13's private `Path` module identity without hiding spoofed
 or project-owned identities. These are bounded compatibility and isolation
-repairs, not an unreviewed relaxation of the architecture contract. The exact
-source commit/tree and hosted replacement evidence remain to be frozen.
+repairs, not an unreviewed relaxation of the architecture contract. Gate head
+`ed2995e` / tree `c438c82` preserves that source ancestry; pull-request and
+direct-dispatch Windows/Linux hosted evidence passed and all four retained A0
+bundles were independently verified. A named human reviewer is still required
+before integration or any later baseline refresh is accepted.

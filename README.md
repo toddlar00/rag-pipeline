@@ -11,6 +11,11 @@ contextual retrieval, optional row-level table retrieval, RAPTOR multi-level
 summaries, citation graph extraction, and source-grounded answer generation
 with explicit abstention.
 
+> **Educational and research use only.** This software does not provide legal
+> advice. Retrieval results, classifications, summaries, and generated answers
+> can be incomplete or wrong and require qualified human review against the
+> original source before they are relied on.
+
 See [`ROADMAP.md`](ROADMAP.md) for implemented hardening milestones, merge
 status, and the ordered improvement backlog. The historical #1-#28 integration
 findings and their disposition are recorded in
@@ -2759,6 +2764,7 @@ requirements-lock-tools.txt # Exact lockfile-generator pin
 requirements-*.lock     # Universal exact CPU locks with SHA-256 hashes
 dependency-license-policy.json # Denied licenses and reviewed exceptions
 dependency-vulnerability-policy.json # Expiring advisory exceptions and audit skips
+dependency-compatibility-domains.json # Exact non-overlapping upgrade groups
 scripts/                # Repository-local convenience launchers
 docs/                   # Maintained ADRs, governance proposals, and archived plans
 tools/                  # Source/policy checks, lock refresh, and operational drills
@@ -2822,6 +2828,10 @@ pip install --require-hashes -r requirements-test.lock
 python tools/check_python_sources.py
 python tools/check_dependency_policy.py
 python tools/check_model_artifacts.py
+python tools/check_ci_security.py
+python tools/check_architecture_inventory.py
+# Linux/Git Bash only; CI also syntax-checks the legacy CUDA helper
+bash -n setup_rtx5060.sh
 python -m ruff check .
 python -m pytest -q
 ```
@@ -2839,6 +2849,10 @@ Regenerate locks without changing compatible versions with
 for an intentional dependency refresh, then review and test the lockfile diff.
 Dependabot can propose direct-input changes but cannot regenerate these custom
 universal locks; refresh and commit the locks on each Dependabot dependency PR.
+Its pip proposals are split into six exact compatibility domains defined in
+`dependency-compatibility-domains.json`; the dependency-policy checker rejects
+wildcards, overlap, omissions, unknown packages, and drift from Dependabot's
+configuration. Qualify and merge one domain at a time.
 
 GitHub Actions runs that dependency-light suite across Python 3.10-3.14 and on
 Windows, exercises real local Chroma and Qdrant clients on Linux and Windows,

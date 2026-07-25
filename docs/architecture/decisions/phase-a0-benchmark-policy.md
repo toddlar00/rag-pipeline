@@ -1,7 +1,7 @@
 # Phase A0 Benchmark Policy
 
-- **Status:** A0a implemented locally; A0b replacement baselines and repaired
-  CI wiring implemented locally, hosted replacement frozen-head checkpoint
+- **Status:** A0a implemented; A0b pull-request and direct-dispatch Windows/Linux
+  technical gates passed at frozen head `ed2995e`; human review and integration
   pending
 - **Milestone:** R10 prerequisite for the R8 pipeline-ownership move
 - **Report schema:** `phase-a0` v3
@@ -88,12 +88,14 @@ normalization are already in `fdb08d2` and were exercised by generation and
 comparison. The following gate-only delta is
 limited to the two reports and their provenance/status documentation.
 
-A0b nevertheless remains pending. No local smoke report, subset, noncanonical
-interpreter, baseline copied between operating systems, or local-only
-comparison is authoritative. Both Tier-1 hosted jobs must pass against their
-matching baseline at one frozen final commit/tree and retain their reports.
-Until that exact-head evidence exists, Phase A0 does not authorize the R8
-ownership move.
+No local smoke report, subset, noncanonical interpreter, baseline copied between
+operating systems, or local-only comparison is authoritative. Gate-only commit
+`ed2995e4d5467a8999b3fa88634dc8af02d0e0f3` (tree
+`c438c82933ec4c68c1bf019d81588915801a2916`) passed both Tier-1 pull-request
+jobs and both direct-dispatch jobs against their matching baselines. All four
+retained two-file evidence bundles were downloaded and independently verified.
+The technical A0b prerequisite for the next R8 ownership move is satisfied;
+human review and history-preserving R1 integration are still required.
 
 The pull-request matrix explicitly checks out the exact PR head rather than the
 synthetic merge ref. Before comparison, the harness validates and publishes the
@@ -173,6 +175,8 @@ The Linux report is 48,488 bytes under CPython 3.12.3 (file SHA-256
 `3617fb7a90edabc6e45a6ef6ac694f093171188ea70fb3b6f456253d5119c799`;
 embedded report SHA-256
 `d24c4e3444f0c5afb11c76bac65d8148258d842b569dcdf4128b61ea2cb57147`).
-These are local replacement baseline candidates. The gate-only commit that
-contains them freezes the final local candidate; publishing its exact
-commit/tree plus hosted execution and review at that head remain outstanding.
+These are the baselines in frozen gate head `ed2995e` / tree `c438c82`.
+Pull-request and direct-dispatch Windows/Linux comparisons passed, and their
+four retained report/attestation bundles independently verify candidate,
+pre-gate, platform, path-set, and hash provenance. Human review and integration
+remain outstanding.

@@ -1,7 +1,7 @@
 # Table-family evaluation semantics
 
-- Status: Implementation included in cumulative draft PR #44; not merged or
-  human-reviewed, with exact replacement-head review and integration pending
+- Status: Implementation included in cumulative draft PR #44; frozen-head
+  technical gates passed; not merged or human-reviewed
 - Date: 2026-07-24
 - Milestone: R4
 

@@ -1,7 +1,7 @@
 # Evaluation input-contract dependency boundary
 
-- **Status:** Implementation included in cumulative draft PR #44; not merged or
-  human-reviewed, with exact replacement-head review and integration pending
+- **Status:** Implementation included in cumulative draft PR #44; frozen-head
+  technical gates passed; not merged or human-reviewed
 - **Decision date:** 2026-07-24
 - **Milestones:** R7 import-DAG gate and R8a/R8b evaluation inversion
 

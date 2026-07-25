@@ -1,8 +1,8 @@
 # Release Security Policy
 
-- **Status:** Implementation included in cumulative draft PR #44; not merged or
-  human-reviewed, with the security-owner decision, exact replacement-head
-  review, and integration pending
+- **Status:** Implementation included in frozen draft PR #44; exact-head
+  technical gates passed; not merged or human-reviewed; security-owner decision
+  pending
 - **Milestone:** R0B
 - **Policy schema:** `release-security/v1`
 - **Decision owner:** Repository owner for release and private-source policy

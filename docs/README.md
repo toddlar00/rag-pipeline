@@ -3,6 +3,9 @@
 This index separates current decisions and work from historical planning
 material. When documents disagree, use the authority order below.
 
+The current point-in-time examination is the
+[2026-07-25 code, PR, and documentation audit](audits/2026-07-25-code-pr-documentation-audit.md).
+
 ## Current sources of truth
 
 1. Approved governance decisions — owner-controlled policy boundaries that an
@@ -41,7 +44,7 @@ material. When documents disagree, use the authority order below.
   — the structural HTTP adapter, frozen HTTP policy, stable service facade,
   lazy one-generation service root, and residual pipeline-root work.
 - [Document-structure profiles](architecture/decisions/document-structure-profiles.md)
-  — immutable reviewed profiles and fail-closed evidence.
+  — immutable code-validated profiles and fail-closed evidence.
 - [Context-aware retrieval](architecture/decisions/context-aware-retrieval.md)
   — stable adjacency, bounded context, and independent citations.
 - [Table-family evaluation](architecture/decisions/table-family-evaluation.md)
@@ -52,20 +55,22 @@ material. When documents disagree, use the authority order below.
 - [CI security ownership policy](architecture/decisions/ci-security-ownership-policy.md)
   — security-workflow trigger ownership, pinned actions, checkout credential
   isolation, least privilege, and the residual secret-scan boundary.
+- [Dependency compatibility domains](architecture/decisions/dependency-compatibility-domains.md)
+  — exact non-overlapping upgrade groups, manifest coverage, lock refresh and
+  domain-specific qualification before dependency changes.
 - [Architecture and facade inventory policy](architecture/decisions/architecture-facade-inventory-policy.md)
   — schema-v3 static graph, facade/mutation characterization, normalized
   runtime contract, and reviewed baseline refreshes.
 - [Phase A0 benchmark policy](architecture/decisions/phase-a0-benchmark-policy.md)
-  — the cross-platform A0a harness contract, repaired local A0b replacement
-  candidates, the first hosted failure diagnosis, and the still-pending hosted
-  replacement frozen-head checkpoint.
+  — the cross-platform A0a harness contract, first hosted failure diagnosis,
+  repaired baselines, and passing frozen-head PR/direct evidence.
 
-With the local CI-ownership and Phase A0a decisions plus the implemented and
-independently audited architecture-inventory policy now maintained here, the
-roadmap's remaining missing ADR coverage is vector lifecycle, table-row
-retrieval/evaluation, immutable source generation, pipeline composition/facade
-semantics, and release platform/support tiers. Historical implementation plans
-are not substitutes for those records.
+With the CI-ownership and architecture-inventory decisions plus the passing
+frozen-head Phase A0 technical gate now maintained here, the roadmap's
+remaining missing ADR coverage is vector lifecycle, table-row
+generation/retrieval ownership, immutable source generation, pipeline
+composition/facade semantics, and release platform/support tiers. Historical
+implementation plans are not substitutes for those records.
 
 ## Governance
 
@@ -85,30 +90,26 @@ ADRs, and `ROADMAP.md` deliberately supersede them.
 
 ## Evidence and publication state
 
-[`INTEGRATION_AUDIT.md`](../INTEGRATION_AUDIT.md) is the historical exact-head
-record for PRs #1-#28. PRs #31-#43, the local R0/R0A/R0B/R4/R8/R10/R12
-changes, the accepted local R7 architecture-inventory gate and CI-security
-ownership gate, CI status, review state, and release gaps are summarized in
-`ROADMAP.md` until R12 moves
+[`INTEGRATION_AUDIT.md`](../INTEGRATION_AUDIT.md) is only the historical
+exact-head record for PRs #1-#28; it is not R1 evidence. PRs #31-#44, the
+R0/R0A/R0B/R4/R7/R8/R10/R12 changes, CI status, review state, and release gaps
+are summarized in `ROADMAP.md` until R12 moves
 point-in-time transcripts and test counts into an immutable `docs/evidence/`
 ledger keyed by commit and PR.
 
-The Phase A0a harness and its local tests are implementation evidence only. The
-first frozen A0b hosted attempt at `ba9c66d` exposed checkout-EOL drift in lock
-and architecture-inventory bytes plus host-dependent validation of the
-drive-relative path `C:escape.py`; it did not pass A0b. Replacement clean
-source `7594f8b` repairs those gates, publishes content-free candidate reports
-before comparison, and makes PR cells test the exact PR head. Final clean
-pre-gate source `fdb08d2` additionally normalizes the supported Python 3.10-3.14
-runtime-contract differences discovered during local matrix qualification,
-without weakening the probe's home/tilde denial. Separate
-CPython 3.12 x86-64 Windows/Linux baseline candidates now bind that source and
-the same eight LF/`HEAD`-identical inputs, and both matching local 9×5
-comparisons independently pass. The gate-only commit containing those reports
-is the final local R1 candidate; A0b still requires publishing its exact
-commit/tree, passing hosted comparisons on both operating systems, retaining
-successful evidence artifacts, and exact-head review. None of those hosted or
-review gates is implied by A0a, the failed first attempt, or a local-only result.
+The first frozen A0b hosted attempt at `ba9c66d` exposed checkout-EOL,
+drive-relative-path, and Windows inventory drift and correctly failed. Final
+clean pre-gate source `fdb08d2` (tree `d7e758c`) repairs those defects and the
+supported Python 3.10-3.14 runtime-contract differences without weakening the
+probe's isolation. Gate-only commit `ed2995e` (tree `c438c82`) is the frozen R1
+candidate. Pull-request and direct-dispatch Windows/Linux A0 cells passed at
+that exact head, and all four retained two-file evidence bundles were downloaded
+and independently verified. The broader exact-head CI, dependency, and
+supply-chain workflows also passed. Human review, the R0 privacy/history and
+no-license-state dispositions, an exact merge manifest, and a
+history-preserving merge remain pending for R1. R2 exception decisions and R3
+corpus review proceed in parallel as first-release/deadline or corpus-release
+gates; technical success is not approval.
 
 Ignored `output/` paths are not durable evidence in a fresh clone. A roadmap or
 PR claim that depends on private output must be backed by a tracked content-free

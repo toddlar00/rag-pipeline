@@ -1,10 +1,9 @@
 # Job-application binding and manager-shell isolation
 
-- **Status:** Accepted; implementation included in cumulative draft PR #44
+- **Status:** Implemented in frozen draft PR #44; technical gates passed
 - **Decision date:** 2026-07-24
 - **Milestone:** R8c-4 application-shell dependency inversion
-- **Integration state:** Not merged or human-reviewed; exact replacement-head
-  review and integration remain pending. Consult
+- **Integration state:** Not merged or human-reviewed. Consult
   [ROADMAP.md](../../../ROADMAP.md) for current validation and merge state
 
 ## Context
@@ -47,11 +46,13 @@ classification in `main`; a replacement default cannot be mixed into an
 in-flight command. The private command function also accepts an explicit
 binding for direct characterization.
 
-The UI resolves one binding after its shared-mode and configuration gates.
+The UI resolves one binding after its defensive legacy shared-state and
+configuration gates. The supported launcher has no public-share mode.
 Submit, cancel, and resume pass that same object into their nested refresh.
 Each store request still invokes the captured factory with the current
 `_config["job_root"]`, preserving fresh-store and call-time configuration
-semantics. Shared mode returns before binding resolution or storage access.
+semantics. The unreachable defensive shared-state branch returns before binding
+resolution or storage access.
 
 `job_manager.py` remains unchanged as the stable public/executable facade.
 No production Python module imports it. Detached children still execute its
@@ -74,7 +75,8 @@ and CLI.
 - UI refresh, reindex, cancel, and resume preserve their exact operation order,
   current-root lookup, fresh-store behavior, ready timeout, and type-name-only
   error rendering. Private arguments and exception messages are not rendered.
-- Publicly shared UI mode touches neither the binding nor durable storage.
+- The defensive legacy shared-state branch, which is unreachable from the
+  supported launcher, touches neither the binding nor durable storage.
 - CLI/UI job roots remain distinct from the service-owned job root and marker
   policy. No durable schema, service/OpenAPI schema, process command, or network
   authority changes.
@@ -106,8 +108,8 @@ children remain intentional process-entry shells.
 - Every CLI job action, one-generation lookup, exact polling/resume/timeout
   order, rollback and process-control failures, and redaction:
   [`tests/test_jobs_cli.py`](../../../tests/test_jobs_cli.py)
-- UI generation/store timing, reindex/cancel/resume/refresh order, shared-mode
-  isolation, launch failure, and redaction:
+- UI generation/store timing, reindex/cancel/resume/refresh order, defensive
+  shared-state isolation, launch failure, and redaction:
   [`tests/test_ui.py`](../../../tests/test_ui.py)
 - Manager facade alias, type, pickle, executable, and real detached continuity:
   [`tests/test_job_coordination_contracts.py`](../../../tests/test_job_coordination_contracts.py)

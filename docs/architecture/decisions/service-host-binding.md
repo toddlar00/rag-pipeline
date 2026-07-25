@@ -1,10 +1,9 @@
 # Service-host binding and isolated search composition
 
-- **Status:** Accepted; implementation included in cumulative draft PR #44
+- **Status:** Implemented in frozen draft PR #44; technical gates passed
 - **Decision date:** 2026-07-24
 - **Milestone:** R8c-2 service-host dependency inversion
-- **Integration state:** Not merged or human-reviewed; exact replacement-head
-  review and integration remain pending. Consult
+- **Integration state:** Not merged or human-reviewed. Consult
   [ROADMAP.md](../../../ROADMAP.md) for current validation and merge state
 
 ## Context

@@ -1,6 +1,7 @@
 # Document-structure profile boundary
 
-- **Status:** Accepted in draft implementation
+- **Status:** Implemented in frozen draft PR #44; technical gates passed; not
+  merged or human-reviewed
 - **Implementation:** PR #35 (`agent/document-structure-profiles`)
 - **Historical input:** `docs/superpowers/plans/2026-07-23-codex-improvements-structure-profiles.md`
 
