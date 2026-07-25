@@ -20,6 +20,7 @@ import math
 import os
 import platform
 import re
+import runpy
 import statistics
 import subprocess
 import sys
@@ -27,6 +28,7 @@ import tempfile
 import time
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 
@@ -47,7 +49,8 @@ SCENARIOS = (
     "cli_help",
     "cli_info_empty",
     "service_composition",
-    "worker_imports",
+    "worker_entrypoints",
+    "noop_resume",
     "offline_export_retrieval",
 )
 
@@ -55,7 +58,6 @@ _SAFE_CHILD_ENVIRONMENT = (
     "COMSPEC",
     "LANG",
     "LC_ALL",
-    "LD_LIBRARY_PATH",
     "PATH",
     "PATHEXT",
     "SYSTEMROOT",
@@ -319,9 +321,28 @@ def _probe_cold_import_rag() -> tuple[dict[str, object], dict[str, object]]:
 def _probe_rag_cli(
         arguments: Sequence[str], *, required_markers: Sequence[str],
 ) -> tuple[dict[str, object], dict[str, object]]:
-    rag = importlib.import_module("rag")
-    exit_code, stdout, stderr, _ = _capture(lambda: rag.main(list(arguments)))
+    rag_path = PROJECT_ROOT / "rag.py"
+    supervision = importlib.import_module("runtime_supervision")
+    supervised_child_env = supervision.SUPERVISED_CHILD_ENV
+    original_argv = sys.argv[:]
+    original_supervised_child = os.environ.get(supervised_child_env)
+
+    def run_entrypoint() -> object:
+        try:
+            sys.argv = [str(rag_path), *arguments]
+            os.environ[supervised_child_env] = "1"
+            return runpy.run_path(str(rag_path), run_name="__main__")
+        finally:
+            sys.argv = original_argv
+            if original_supervised_child is None:
+                os.environ.pop(supervised_child_env, None)
+            else:
+                os.environ[supervised_child_env] = original_supervised_child
+
+    exit_code, stdout, stderr, _ = _capture(run_entrypoint)
     contract = {
+        "entrypoint": rag_path.name,
+        "execution_mode": "supervised_child",
         "exit_code": exit_code,
         "stdout_present": bool(stdout),
         "stderr_empty": not bool(stderr),
@@ -372,17 +393,465 @@ def _probe_service_composition(
     return contract, _loaded_module_diagnostics()
 
 
-def _probe_worker_imports() -> tuple[dict[str, object], dict[str, object]]:
-    worker = importlib.import_module("service_search_worker")
-    ui = importlib.import_module("ui")
+def _read_generated_json(path: Path, *, max_bytes: int = 16_384) -> dict:
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise PhaseA0BenchmarkError(
+            "generated entrypoint returned no envelope") from exc
+    if not raw or len(raw) > max_bytes:
+        raise PhaseA0BenchmarkError(
+            "generated entrypoint envelope size was invalid")
+
+    def reject_constant(_value: str) -> None:
+        raise ValueError("non-standard JSON number")
+
+    def reject_duplicates(pairs: list[tuple[str, object]]) -> dict:
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError("duplicate JSON field")
+            value[key] = item
+        return value
+
+    try:
+        payload = json.loads(
+            raw.decode("utf-8"),
+            parse_constant=reject_constant,
+            object_pairs_hook=reject_duplicates,
+        )
+    except (UnicodeError, json.JSONDecodeError, ValueError) as exc:
+        raise PhaseA0BenchmarkError(
+            "generated entrypoint envelope was invalid") from exc
+    if not isinstance(payload, dict):
+        raise PhaseA0BenchmarkError(
+            "generated entrypoint envelope was not an object")
+    return payload
+
+
+def _launch_generated_entrypoint(
+        script_name: str, arguments: Sequence[str], *, cwd: Path,
+) -> int:
+    try:
+        completed = subprocess.run(
+            [sys.executable, str(PROJECT_ROOT / script_name), *arguments],
+            cwd=cwd,
+            env=dict(os.environ),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            timeout=DEFAULT_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise PhaseA0BenchmarkError(
+            "generated entrypoint launch failed") from exc
+    if (completed.stdout or completed.stderr
+            or len(completed.stdout) > MAX_PROBE_OUTPUT_BYTES
+            or len(completed.stderr) > MAX_PROBE_OUTPUT_BYTES):
+        raise PhaseA0BenchmarkError(
+            "generated entrypoint emitted unexpected console output")
+    return completed.returncode
+
+
+def _probe_worker_entrypoints(
+) -> tuple[dict[str, object], dict[str, object]]:
+    storage_policy = importlib.import_module("storage_policy")
+    fixture_root = Path.cwd() / "generated-worker-fixtures"
+    storage_policy.ensure_private_directory(fixture_root)
+
+    ui_request = fixture_root / "ui-request.json"
+    ui_result = fixture_root / "ui-result.json"
+    storage_policy.atomic_write_private_json(
+        ui_request,
+        {"action": "phase_a0_invalid", "config": {}},
+    )
+    ui_exit = _launch_generated_entrypoint(
+        "ui.py",
+        ("--vector-worker", str(ui_request), str(ui_result)),
+        cwd=fixture_root,
+    )
+    ui_envelope = _read_generated_json(ui_result)
+
+    service_request = fixture_root / "service-request.json"
+    service_result = fixture_root / "service-result.json"
+    storage_policy.atomic_write_private_json(service_request, {})
+    service_exit = _launch_generated_entrypoint(
+        "service_search_worker.py",
+        ("_search_worker", str(service_request), str(service_result)),
+        cwd=fixture_root,
+    )
+    service_envelope = _read_generated_json(service_result)
+
     contract = {
-        "worker_module": worker.__name__,
-        "ui_module": ui.__name__,
-        "worker_has_main": callable(getattr(worker, "main", None)),
-        "ui_has_vector_worker": callable(
-            getattr(ui, "_vector_worker_main", None)),
+        "ui": {
+            "entrypoint": "ui.py",
+            "exit_code": ui_exit,
+            "envelope": ui_envelope,
+        },
+        "service": {
+            "entrypoint": "service_search_worker.py",
+            "exit_code": service_exit,
+            "envelope": service_envelope,
+        },
     }
     return contract, _loaded_module_diagnostics()
+
+
+def _resume_probe_args(rag) -> SimpleNamespace:
+    return SimpleNamespace(
+        collection=None,
+        db_backend="chroma",
+        embedding_model="phase-a0-local",
+        structure_profile=rag.DEFAULT_STRUCTURE_PROFILE,
+        full_reindex=False,
+        batch_size=None,
+        backend="auto",
+        force=False,
+        no_preprocess=False,
+        max_tokens=512,
+        min_words=1,
+        dedup_threshold=0.9,
+        llm_classify=False,
+        zeroshot_classify=False,
+        contextualize=False,
+        reconstruct_headings=False,
+        quality_score=False,
+        cloud_url="",
+        cloud_model="",
+        cloud_key="",
+        ollama_url="",
+        ollama_model="",
+        gemini_key="",
+        llm_workers=1,
+        thinking=False,
+        split_chapters=False,
+        raptor=False,
+        db_lock_timeout=1.0,
+    )
+
+
+def _write_resume_conversion_fixture(
+        rag, *, pdf: Path, paths: Mapping[str, Path], args: SimpleNamespace,
+) -> dict:
+    document = {
+        "pages": {"1": {}},
+        "texts": [{
+            "self_ref": "#/texts/0",
+            "label": "text",
+            "content_layer": "body",
+            "text": "A generated discussion of synthetic procedure.",
+            "prov": [{"page_no": 1}],
+        }],
+    }
+    rag._atomic_write_json(paths["doc"], document)
+    rag._atomic_write_text(
+        paths["converted_markdown"], "# Generated conversion\n")
+    parameters = rag._conversion_parameters(
+        batch_size_override=args.batch_size,
+        backend=args.backend,
+        auto_preprocess=not args.no_preprocess,
+        ocr=None,
+        watermark=None,
+    )
+    source_sha256 = rag._cached_artifact_sha256(pdf)
+    source_size = pdf.stat().st_size
+    rag._write_artifact_completion(
+        rag._artifact_completion_path(paths["doc"], stage="conversion"),
+        stage="conversion",
+        source_sha256=source_sha256,
+        source_name=pdf.name,
+        source_record_count=None,
+        parameters=parameters,
+        outputs={
+            "docling_json": paths["doc"],
+            "docling_markdown": paths["converted_markdown"],
+        },
+        schema_version=rag.CONVERSION_COMPLETION_SCHEMA_VERSION,
+        extra_fields={
+            "source": {
+                "name": pdf.name,
+                "size": source_size,
+                "sha256": source_sha256,
+                "capture_policy": "stream-copy-v1",
+            },
+            "effective_input": {
+                "kind": "original",
+                "name": pdf.name,
+                "size": source_size,
+                "sha256": source_sha256,
+            },
+        },
+    )
+    return parameters
+
+
+def _resume_record(rag) -> dict:
+    record = {
+        "text": "A generated discussion of synthetic procedure.",
+        "metadata": {
+            "chunk_index": 0,
+            "source_file": "phase-a0.json",
+            "source_lineage_schema_version": 1,
+            "source_items": [{
+                "ref": "#/texts/0",
+                "label": "text",
+                "parent_refs": [],
+                "spans": [{"page": 1}],
+            }],
+            "page_start": 1,
+            "page_end": 1,
+            "page_range": "pp.1-1",
+            "chapter_num": 1,
+            "chapter_title": "Generated",
+            "section_path": "Chapter 1",
+            "content_type": "author_narrative",
+            "content_source": "body",
+            "token_count": 7,
+            "embedding_token_count": 7,
+            "case_names": [],
+            "primary_case": None,
+        },
+    }
+    rag._retrieval_core._attach_retrieval_linkage([record])
+    return record
+
+
+def _write_resume_chunk_fixture(
+        rag, *, pdf: Path, paths: Mapping[str, Path], args: SimpleNamespace,
+) -> dict:
+    llm_kwargs = rag._llm_kwargs_from_args(
+        args, include_workers=True, resolve_credentials=False)
+    llm_kwargs.setdefault(
+        "security_policy", rag._effective_security_policy(None))
+    profile = rag._document_profiles.get_profile(args.structure_profile)
+    parameters = rag._chunk_parameters(
+        embedding_model=args.embedding_model,
+        max_tokens=args.max_tokens,
+        min_words=args.min_words,
+        dedup_threshold=args.dedup_threshold,
+        watermark=None,
+        llm_classify=False,
+        zeroshot_classify=False,
+        contextualize=False,
+        reconstruct_headings=False,
+        quality_score=False,
+        llm_scaffold=False,
+        table_children=False,
+        structure_profile=profile,
+        **llm_kwargs,
+    )
+    rag._atomic_write_jsonl(paths["chunks"], [_resume_record(rag)])
+    document_raw = paths["doc"].read_bytes()
+    document_sha256 = _sha256_bytes(document_raw)
+    conversion = rag._load_conversion_source_binding(
+        paths["doc"],
+        document_sha256=document_sha256,
+        document_size=len(document_raw),
+    )
+    if conversion is None or not conversion.capture_verified:
+        raise PhaseA0BenchmarkError(
+            "generated conversion binding did not verify")
+    conversion_input = {
+        "name": conversion.manifest_path.name,
+        "sha256": conversion.manifest_sha256,
+        "schema_version": conversion.schema_version,
+    }
+    source_sha256 = rag._cached_artifact_sha256(pdf)
+    inputs = {
+        "docling_json": {
+            "name": paths["doc"].name,
+            "size": len(document_raw),
+            "sha256": document_sha256,
+        },
+        "conversion_manifest": conversion_input,
+        "table_recovery": {
+            "pdf": {
+                "name": pdf.name,
+                "size": pdf.stat().st_size,
+                "sha256": source_sha256,
+                "capture_policy": "stream-copy-v1",
+            },
+            "conversion_manifest": conversion_input,
+            "discovery": "explicit",
+        },
+    }
+    receipt = parameters["structure_profile"]
+    rag._write_artifact_completion(
+        rag._artifact_completion_path(paths["chunks"], stage="chunking"),
+        stage="chunking",
+        source_sha256=document_sha256,
+        source_record_count=None,
+        parameters=parameters,
+        outputs={"chunks_jsonl": paths["chunks"]},
+        schema_version=rag.CHUNK_COMPLETION_SCHEMA_VERSION,
+        extra_fields={
+            "inputs": inputs,
+            "structure_profile": receipt,
+            "structure_profile_parameters_sha256": (
+                rag._structure_profile_parameters_binding(
+                    rag._artifact_parameters_sha256(parameters), receipt)),
+        },
+    )
+    rag._publish_corpus_quality_report(
+        paths["doc"],
+        paths["chunks"],
+        parameters=parameters,
+        structural_ranges=set(),
+    )
+    rag.export_markdown(
+        paths["chunks"],
+        paths["export"],
+        security_policy=llm_kwargs["security_policy"],
+    )
+    return parameters
+
+
+def _resume_artifact_identity(rag, paths: Mapping[str, Path]) -> str:
+    artifacts = (
+        paths["doc"],
+        paths["converted_markdown"],
+        rag._artifact_completion_path(paths["doc"], stage="conversion"),
+        paths["chunks"],
+        rag._artifact_completion_path(paths["chunks"], stage="chunking"),
+        rag._quality_core.quality_report_path(paths["chunks"]),
+        paths["export"],
+        rag._artifact_completion_path(paths["export"], stage="unified_export"),
+    )
+    identities = [
+        _file_identity(path) for path in sorted(artifacts, key=lambda p: p.name)
+    ]
+    return _sha256_bytes(_canonical_bytes(identities))
+
+
+def _probe_noop_resume() -> tuple[dict[str, object], dict[str, object]]:
+    """Exercise completed-artifact resume without parsing, models, or vectors.
+
+    Production completion validators, collection locking, skip decisions, and
+    the mandatory index-revalidation call are exercised.  Physical vector
+    indexing is deliberately replaced by a dependency-free ``IndexOutcome``;
+    PDF conversion, chunk generation, partial repair, and model loading are not
+    part of this no-op fixture.
+    """
+    rag = importlib.import_module("rag")
+    operation_contracts = importlib.import_module("operation_contracts")
+    fixture_root = Path.cwd() / "generated-resume-fixture"
+    fixture_root.mkdir(mode=0o700)
+    pdf = fixture_root / "phase-a0.pdf"
+    pdf.write_bytes(b"%PDF-1.4\n% generated phase a0 fixture\n%%EOF\n")
+    args = _resume_probe_args(rag)
+    original_output_dir = rag.OUTPUT_DIR
+    originals = None
+    try:
+        rag.OUTPUT_DIR = fixture_root / "output"
+        paths = rag._output_paths_for_name("PhaseA0")
+        paths["doc"].parent.mkdir(parents=True)
+        conversion_parameters = _write_resume_conversion_fixture(
+            rag, pdf=pdf, paths=paths, args=args)
+        chunk_parameters = _write_resume_chunk_fixture(
+            rag, pdf=pdf, paths=paths, args=args)
+        export_parameters = rag._markdown_export_parameters(
+            include_types=None,
+            exclude_types=None,
+            chapters=None,
+            split_chapters=False,
+        )
+        if not (
+            rag._converted_outputs_complete(
+                pdf,
+                paths["doc"],
+                paths["converted_markdown"],
+                parameters=conversion_parameters,
+                preprocessed_output=paths["preprocessed"],
+            )
+            and rag._chunks_complete(
+                paths["doc"],
+                paths["chunks"],
+                parameters=chunk_parameters,
+                source_pdf_path=pdf,
+            )
+            and rag._quality_report_complete(
+                paths["doc"],
+                paths["chunks"],
+                parameters=chunk_parameters,
+            )
+            and rag._unified_export_complete(
+                paths["chunks"],
+                paths["export"],
+                parameters=export_parameters,
+            )
+        ):
+            raise PhaseA0BenchmarkError(
+                "generated resume fixture did not verify")
+
+        physical_calls = {
+            "convert": 0,
+            "chunk": 0,
+            "quality": 0,
+            "export": 0,
+            "index_revalidation": 0,
+        }
+        originals = (
+            rag.convert_pdf,
+            rag.chunk_document,
+            rag._publish_corpus_quality_report,
+            rag.export_markdown,
+            rag._index_chunks_for_backend,
+        )
+
+        def forbidden_stage(stage: str):
+            def fail(*_args, **_kwargs):
+                physical_calls[stage] += 1
+                raise PhaseA0BenchmarkError(
+                    "completed resume unexpectedly executed a physical stage")
+            return fail
+
+        def validate_index(*_args, **_kwargs):
+            physical_calls["index_revalidation"] += 1
+            return operation_contracts.IndexOutcome(
+                backend="chroma",
+                disposition="unchanged",
+                total_records=1,
+                changed_records=0,
+                unchanged_records=1,
+                removed_records=0,
+                upserted_records=0,
+                batch_count=0,
+                physical_count=1,
+                committed=True,
+            )
+
+        rag.convert_pdf = forbidden_stage("convert")
+        rag.chunk_document = forbidden_stage("chunk")
+        rag._publish_corpus_quality_report = forbidden_stage("quality")
+        rag.export_markdown = forbidden_stage("export")
+        rag._index_chunks_for_backend = validate_index
+        result = rag._run_pipeline_stages(
+            pdf, paths, args, resume=True, watermark=None)
+        outcome = result["index_outcome"]
+        contract = {
+            "record_count": 1,
+            "skipped_physical_calls": {
+                name: physical_calls[name]
+                for name in ("convert", "chunk", "quality", "export")
+            },
+            "index_revalidation_calls": physical_calls["index_revalidation"],
+            "index_disposition": outcome.disposition,
+            "artifact_set_sha256": _resume_artifact_identity(rag, paths),
+            "physical_indexing_exercised": False,
+            "partial_repair_exercised": False,
+        }
+        return contract, _loaded_module_diagnostics()
+    finally:
+        if originals is not None:
+            (
+                rag.convert_pdf,
+                rag.chunk_document,
+                rag._publish_corpus_quality_report,
+                rag.export_markdown,
+                rag._index_chunks_for_backend,
+            ) = originals
+        rag.OUTPUT_DIR = original_output_dir
 
 
 def _synthetic_record(text: str, index: int) -> dict[str, object]:
@@ -454,7 +923,8 @@ _PROBES: Mapping[
     "cli_help": _probe_cli_help,
     "cli_info_empty": _probe_cli_info_empty,
     "service_composition": _probe_service_composition,
-    "worker_imports": _probe_worker_imports,
+    "worker_entrypoints": _probe_worker_entrypoints,
+    "noop_resume": _probe_noop_resume,
     "offline_export_retrieval": _probe_offline_export_retrieval,
 }
 
@@ -493,7 +963,7 @@ def _validate_probe_diagnostics(value: object) -> None:
             frozenset(required), frozenset(required | {"output"})}:
         raise PhaseA0BenchmarkError("probe diagnostic fields were invalid")
     if (not _valid_count(value["loaded_module_count"], positive=True)
-            or not _valid_count(value["first_party_loaded_count"], positive=True)
+            or not _valid_count(value["first_party_loaded_count"])
             or _SHA256_RE.fullmatch(
                 str(value["first_party_loaded_sha256"])) is None
             or (value["peak_rss_bytes"] is not None
@@ -526,8 +996,10 @@ def _validate_contract(name: str, value: object) -> None:
         markers = value.get("required_markers")
         valid = (
             set(value) == {
-                "exit_code", "stdout_present", "stderr_empty",
-                "required_markers"}
+                "entrypoint", "execution_mode", "exit_code",
+                "stdout_present", "stderr_empty", "required_markers"}
+            and value["entrypoint"] == "rag.py"
+            and value["execution_mode"] == "supervised_child"
             and value["exit_code"] == 0
             and value["stdout_present"] is True
             and value["stderr_empty"] is True
@@ -544,13 +1016,46 @@ def _validate_contract(name: str, value: object) -> None:
             "eval_loaded": False,
             "ui_loaded": False,
         }
-    elif name == "worker_imports":
+    elif name == "worker_entrypoints":
         valid = value == {
-            "worker_module": "service_search_worker",
-            "ui_module": "ui",
-            "worker_has_main": True,
-            "ui_has_vector_worker": True,
+            "ui": {
+                "entrypoint": "ui.py",
+                "exit_code": 0,
+                "envelope": {
+                    "ok": False,
+                    "error_type": "ValueError",
+                    "message": (
+                        "Unsupported UI vector action: 'phase_a0_invalid'"),
+                },
+            },
+            "service": {
+                "entrypoint": "service_search_worker.py",
+                "exit_code": 1,
+                "envelope": {
+                    "schema_version": 2,
+                    "kind": "service_search_result",
+                    "ok": False,
+                    "error_code": "service_unavailable",
+                },
+            },
         }
+    elif name == "noop_resume":
+        valid = (
+            set(value) == {
+                "record_count", "skipped_physical_calls",
+                "index_revalidation_calls", "index_disposition",
+                "artifact_set_sha256", "physical_indexing_exercised",
+                "partial_repair_exercised"}
+            and value["record_count"] == 1
+            and value["skipped_physical_calls"] == {
+                "convert": 0, "chunk": 0, "quality": 0, "export": 0}
+            and value["index_revalidation_calls"] == 1
+            and value["index_disposition"] == "unchanged"
+            and _SHA256_RE.fullmatch(
+                str(value["artifact_set_sha256"])) is not None
+            and value["physical_indexing_exercised"] is False
+            and value["partial_repair_exercised"] is False
+        )
     elif name == "offline_export_retrieval":
         valid = (
             set(value) == {
@@ -619,7 +1124,17 @@ def _probe_main(name: str) -> int:
         print(json.dumps({"ok": False, "error_type": "UnknownScenario"}))
         return 2
     try:
-        contract, diagnostics = probe()
+        original_home = Path.__dict__["home"]
+
+        def reject_home_fallback(_path_type) -> Path:
+            raise PhaseA0BenchmarkError(
+                "probe attempted to resolve an operator home directory")
+
+        Path.home = classmethod(reject_home_fallback)  # type: ignore[method-assign]
+        try:
+            contract, diagnostics = probe()
+        finally:
+            Path.home = original_home  # type: ignore[method-assign]
         payload = {
             "ok": True,
             "scenario": name,
@@ -654,9 +1169,17 @@ def safe_child_environment(temporary_root: Path) -> dict[str, str]:
         "PYTHONNOUSERSITE": "1",
         "PYTHONPATH": str(PROJECT_ROOT),
         "PYTHONUTF8": "1",
+        "RAG_LLM_CACHE_DIR": str(temporary_root / "llm-cache"),
+        "RAG_MODEL_ARTIFACT_CACHE": str(
+            temporary_root / "model-artifacts"),
+        "RAG_PIPELINE_OUTPUT_ROOT": str(temporary_root / "output"),
         "TEMP": str(temporary_root),
         "TMP": str(temporary_root),
         "TMPDIR": str(temporary_root),
+        "XDG_CACHE_HOME": str(temporary_root / "xdg-cache"),
+        "XDG_CONFIG_HOME": str(temporary_root / "xdg-config"),
+        "XDG_DATA_HOME": str(temporary_root / "xdg-data"),
+        "XDG_STATE_HOME": str(temporary_root / "xdg-state"),
     })
     if os.name == "nt":
         environment.update({
@@ -766,6 +1289,13 @@ def summarize_runs(name: str, runs: Sequence[Mapping[str, Any]]) -> dict[str, An
     diagnostics = [run.get("diagnostics") for run in runs]
     if any(not isinstance(value, dict) for value in diagnostics):
         raise PhaseA0BenchmarkError("scenario diagnostics were invalid")
+    first_party_counts = [
+        value.get("first_party_loaded_count") for value in diagnostics]
+    if (any(not _valid_count(value) for value in first_party_counts)
+            or any(value != first_party_counts[0]
+                   for value in first_party_counts[1:])):
+        raise PhaseA0BenchmarkError(
+            "first-party import count changed between repetitions")
     outputs = [value.get("output") for value in diagnostics]
     output = None
     if any(value is not None for value in outputs):
@@ -803,10 +1333,12 @@ def summarize_runs(name: str, runs: Sequence[Mapping[str, Any]]) -> dict[str, An
             "output": output,
         },
     }
-    first_party_digests = {
-        value.get("first_party_loaded_sha256") for value in diagnostics}
-    if (len(first_party_digests) != 1
-            or _SHA256_RE.fullmatch(str(next(iter(first_party_digests)))) is None):
+    first_party_digests = [
+        value.get("first_party_loaded_sha256") for value in diagnostics]
+    if (any(_SHA256_RE.fullmatch(str(value)) is None
+            for value in first_party_digests)
+            or any(value != first_party_digests[0]
+                   for value in first_party_digests[1:])):
         raise PhaseA0BenchmarkError(
             "first-party import identity changed between repetitions")
     return result
@@ -954,17 +1486,29 @@ def validate_report(report: object) -> dict[str, Any]:
 
 
 def compare_contracts(report: object, baseline: object) -> None:
-    """Compare portable contracts and exact lock inputs, never timing values."""
+    """Compare portable deterministic evidence and exact lock inputs."""
     current = validate_report(report)
     expected = validate_report(baseline)
     if current["inputs"] != expected["inputs"]:
         raise PhaseA0BenchmarkError("benchmark lock identities changed")
-    current_contracts = {
-        item["name"]: item["contract"] for item in current["scenarios"]}
-    expected_contracts = {
-        item["name"]: item["contract"] for item in expected["scenarios"]}
-    if current_contracts != expected_contracts:
-        raise PhaseA0BenchmarkError("Phase A0 behavioral contract changed")
+
+    def portable_evidence(validated: Mapping[str, Any]) -> dict[str, object]:
+        evidence = {}
+        for item in validated["scenarios"]:
+            diagnostics = item["diagnostics"]
+            evidence[item["name"]] = {
+                "contract": item["contract"],
+                "first_party_loaded_count": diagnostics[
+                    "first_party_loaded_count"],
+                "first_party_loaded_sha256": diagnostics[
+                    "first_party_loaded_sha256"],
+                "output": diagnostics["output"],
+            }
+        return evidence
+
+    if portable_evidence(current) != portable_evidence(expected):
+        raise PhaseA0BenchmarkError(
+            "Phase A0 portable deterministic evidence changed")
 
 
 def _read_report(path: Path) -> dict[str, Any]:

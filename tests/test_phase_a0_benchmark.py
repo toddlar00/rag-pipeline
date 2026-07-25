@@ -29,6 +29,7 @@ def _diagnostics(
 def _valid_report(
         *, contract: dict | None = None, marker: str = "a",
         scenario_name: str = "cold_import_rag",
+        output: dict | None = None,
 ) -> dict:
     selected_contract = ({
         "module": "rag",
@@ -64,7 +65,7 @@ def _valid_report(
                 "p95": 2, "maximum": 2,
             },
             "first_party_loaded_sha256": "d" * 64,
-            "output": None,
+            "output": output,
         },
     }
     report = {
@@ -99,6 +100,14 @@ def _valid_report(
     report["report_sha256"] = benchmark._sha256_bytes(
         benchmark._canonical_bytes(report))
     return report
+
+
+def _rehash_report(report: dict) -> None:
+    for scenario in report["scenarios"]:
+        scenario["contract_sha256"] = benchmark._sha256_bytes(
+            benchmark._canonical_bytes(scenario["contract"]))
+    report["report_sha256"] = benchmark._sha256_bytes(
+        benchmark._canonical_bytes(benchmark._report_without_digest(report)))
 
 
 def test_numeric_summary_uses_nearest_rank_p95_and_rejects_bad_samples():
@@ -158,6 +167,12 @@ def test_summarize_runs_separates_contract_from_diagnostic_variability():
         peak_rss_bytes=None), "RSS availability"),
     (lambda runs: runs[1]["diagnostics"].update(
         first_party_loaded_sha256="f" * 64), "import identity"),
+    (lambda runs: runs[1]["diagnostics"].update(
+        first_party_loaded_sha256=[]), "import identity"),
+    (lambda runs: runs[1]["diagnostics"].update(
+        first_party_loaded_count=6), "import count"),
+    (lambda runs: runs[1]["diagnostics"].update(
+        first_party_loaded_count=[]), "import count"),
 ])
 def test_summarize_runs_fails_on_unstable_contract_evidence(mutation, message):
     runs = [
@@ -212,35 +227,61 @@ def test_contract_comparison_ignores_machine_timings_but_pins_inputs():
     current = deepcopy(baseline)
     current["runtime"]["python_version"] = "3.14.0"
     current["system"]["logical_cpu_count"] = 64
+    current["scenarios"][0]["diagnostics"]["loaded_module_count"] = {
+        "minimum": 400,
+        "median": 500,
+        "p95": 600,
+        "maximum": 700,
+    }
+    current["scenarios"][0]["diagnostics"]["peak_rss_bytes"] = {
+        "available": False,
+    }
     current["scenarios"][0]["diagnostics"]["wall_time_ms"] = {
         "minimum": 100.0,
         "median": 200.0,
         "p95": 300.0,
         "maximum": 400.0,
     }
-    current["report_sha256"] = benchmark._sha256_bytes(
-        benchmark._canonical_bytes(benchmark._report_without_digest(current)))
+    _rehash_report(current)
 
     benchmark.compare_contracts(current, baseline)
 
     changed_input = deepcopy(current)
     changed_input["inputs"][0]["sha256"] = "f" * 64
-    changed_input["report_sha256"] = benchmark._sha256_bytes(
-        benchmark._canonical_bytes(
-            benchmark._report_without_digest(changed_input)))
+    _rehash_report(changed_input)
     with pytest.raises(benchmark.PhaseA0BenchmarkError, match="lock identities"):
         benchmark.compare_contracts(changed_input, baseline)
 
     changed_contract = deepcopy(current)
     changed_contract["scenarios"][0]["contract"]["context_characters"] = 101
-    changed_contract["scenarios"][0]["contract_sha256"] = (
-        benchmark._sha256_bytes(benchmark._canonical_bytes(
-            changed_contract["scenarios"][0]["contract"])))
-    changed_contract["report_sha256"] = benchmark._sha256_bytes(
-        benchmark._canonical_bytes(
-            benchmark._report_without_digest(changed_contract)))
-    with pytest.raises(benchmark.PhaseA0BenchmarkError, match="behavioral"):
+    _rehash_report(changed_contract)
+    with pytest.raises(
+            benchmark.PhaseA0BenchmarkError,
+            match="portable deterministic evidence"):
         benchmark.compare_contracts(changed_contract, baseline)
+
+
+@pytest.mark.parametrize("mutation", [
+    lambda report: report["scenarios"][0]["diagnostics"].update(
+        first_party_loaded_count={
+            "minimum": 3, "median": 3, "p95": 3, "maximum": 3}),
+    lambda report: report["scenarios"][0]["diagnostics"].update(
+        first_party_loaded_sha256="f" * 64),
+    lambda report: report["scenarios"][0]["diagnostics"].update(output={
+        "stdout": {"bytes": 1, "lines": 1, "sha256": "1" * 64},
+        "stderr": {"bytes": 0, "lines": 0, "sha256": "2" * 64},
+    }),
+])
+def test_contract_comparison_rejects_portable_evidence_mutations(mutation):
+    baseline = _valid_report()
+    current = deepcopy(baseline)
+    mutation(current)
+    _rehash_report(current)
+
+    with pytest.raises(
+            benchmark.PhaseA0BenchmarkError,
+            match="portable deterministic evidence"):
+        benchmark.compare_contracts(current, baseline)
 
 
 def test_safe_child_environment_drops_credentials_proxies_and_user_cache(
@@ -248,6 +289,10 @@ def test_safe_child_environment_drops_credentials_proxies_and_user_cache(
     monkeypatch.setenv("GEMINI_API_KEY", "provider-secret")
     monkeypatch.setenv("HTTPS_PROXY", "https://private-proxy.example")
     monkeypatch.setenv("HF_HOME", str(tmp_path / "private-cache"))
+    monkeypatch.setenv("LD_LIBRARY_PATH", str(tmp_path / "private-libraries"))
+    monkeypatch.setenv("RAG_LLM_CACHE_DIR", str(tmp_path / "operator-llm-cache"))
+    monkeypatch.setenv(
+        "RAG_MODEL_ARTIFACT_CACHE", str(tmp_path / "operator-model-cache"))
     monkeypatch.setenv("PATH", "safe-path")
 
     environment = benchmark.safe_child_environment(tmp_path)
@@ -255,13 +300,43 @@ def test_safe_child_environment_drops_credentials_proxies_and_user_cache(
     assert environment["PATH"] == "safe-path"
     assert environment["PYTHONNOUSERSITE"] == "1"
     assert environment["TEMP"] == str(tmp_path)
+    assert environment["RAG_LLM_CACHE_DIR"] == str(tmp_path / "llm-cache")
+    assert environment["RAG_MODEL_ARTIFACT_CACHE"] == str(
+        tmp_path / "model-artifacts")
+    assert environment["RAG_PIPELINE_OUTPUT_ROOT"] == str(tmp_path / "output")
+    assert environment["XDG_CACHE_HOME"] == str(tmp_path / "xdg-cache")
+    assert environment["XDG_CONFIG_HOME"] == str(tmp_path / "xdg-config")
+    assert environment["XDG_DATA_HOME"] == str(tmp_path / "xdg-data")
+    assert environment["XDG_STATE_HOME"] == str(tmp_path / "xdg-state")
     assert "GEMINI_API_KEY" not in environment
     assert "HTTPS_PROXY" not in environment
     assert "HF_HOME" not in environment
+    assert "HOME" not in environment
+    assert "LD_LIBRARY_PATH" not in environment
     assert "provider-secret" not in json.dumps(environment)
     if os.name == "nt":
         assert environment["USERPROFILE"] == str(tmp_path)
         assert environment["LOCALAPPDATA"] == str(tmp_path)
+
+
+def test_probe_main_fails_closed_if_code_resolves_the_operator_home(
+        monkeypatch, capsys):
+    original_home = Path.home
+
+    def probe():
+        Path.home()
+        raise AssertionError("unreachable")
+
+    monkeypatch.setitem(benchmark._PROBES, "cold_import_rag", probe)
+
+    assert benchmark._probe_main("cold_import_rag") == 1
+
+    assert Path.home == original_home
+    envelope = json.loads(capsys.readouterr().out)
+    assert envelope == {
+        "error_type": "PhaseA0BenchmarkError",
+        "ok": False,
+    }
 
 
 def test_strict_probe_payload_rejects_raw_or_malformed_envelopes():
@@ -333,6 +408,8 @@ def test_real_child_probe_uses_empty_working_directory_and_safe_contract():
     result = benchmark.run_probe("cli_info_empty", timeout_seconds=30)
 
     assert result["contract"] == {
+        "entrypoint": "rag.py",
+        "execution_mode": "supervised_child",
         "exit_code": 0,
         "stdout_present": True,
         "stderr_empty": True,
@@ -345,14 +422,64 @@ def test_real_child_probe_uses_empty_working_directory_and_safe_contract():
     assert result["diagnostics"]["output"]["stderr"]["bytes"] == 0
 
 
+def test_real_worker_entrypoints_return_strict_generated_envelopes():
+    result = benchmark.run_probe("worker_entrypoints", timeout_seconds=30)
+
+    assert result["contract"] == {
+        "ui": {
+            "entrypoint": "ui.py",
+            "exit_code": 0,
+            "envelope": {
+                "ok": False,
+                "error_type": "ValueError",
+                "message": "Unsupported UI vector action: 'phase_a0_invalid'",
+            },
+        },
+        "service": {
+            "entrypoint": "service_search_worker.py",
+            "exit_code": 1,
+            "envelope": {
+                "schema_version": 2,
+                "kind": "service_search_result",
+                "ok": False,
+                "error_code": "service_unavailable",
+            },
+        },
+    }
+    assert "output" not in result["diagnostics"]
+
+
+def test_real_noop_resume_revalidates_without_physical_stages():
+    result = benchmark.run_probe("noop_resume", timeout_seconds=30)
+
+    assert result["contract"] == {
+        "record_count": 1,
+        "skipped_physical_calls": {
+            "convert": 0,
+            "chunk": 0,
+            "quality": 0,
+            "export": 0,
+        },
+        "index_revalidation_calls": 1,
+        "index_disposition": "unchanged",
+        "artifact_set_sha256": result["contract"]["artifact_set_sha256"],
+        "physical_indexing_exercised": False,
+        "partial_repair_exercised": False,
+    }
+    assert len(result["contract"]["artifact_set_sha256"]) == 64
+
+
 def test_repository_runner_publishes_five_repetition_content_free_report():
+    pytest.importorskip("fastapi")
     report = benchmark.run_benchmark(
-        scenarios=("cold_import_rag",), repetitions=5,
-        timeout_seconds=30)
+        scenarios=benchmark.SCENARIOS, repetitions=5,
+        timeout_seconds=45)
 
     assert benchmark.validate_report(report) is report
     assert report["repetitions"] == 5
-    assert report["scenarios"][0]["repetitions"] == 5
+    assert [scenario["name"] for scenario in report["scenarios"]] == list(
+        benchmark.SCENARIOS)
+    assert all(scenario["repetitions"] == 5 for scenario in report["scenarios"])
     assert report["scenarios"][0]["contract"]["required_symbols"] == {
         "PipelinePaths": True,
         "export_markdown": True,
