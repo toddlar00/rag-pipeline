@@ -10,11 +10,25 @@ on:
       - "model-artifact-policy.json"
       - "model-artifacts.lock.json"
       - "model_artifacts.py"
+      - "ci-security-ownership.json"
+      - "embedding_policy.py"
+      - "endpoint_policy.py"
+      - "index_state.py"
+      - "llm_adapters.py"
+      - "llm_runtime.py"
+      - "pipeline_runtime.py"
+      - "provider_transport.py"
       - "rag.py"
+      - "release_security.py"
+      - "resource_lease.py"
+      - "retrieval_core.py"
+      - "vector_lifecycle.py"
+      - "tools/check_ci_security.py"
       - "tools/check_licenses.py"
       - "tools/check_model_artifacts.py"
       - "tools/check_vulnerabilities.py"
       - "tools/refresh_model_artifacts.py"
+      - "tools/sync_model_artifacts.py"
       - ".github/workflows/security.yml"
   push:
     branches: [main]
@@ -26,11 +40,25 @@ on:
       - "model-artifact-policy.json"
       - "model-artifacts.lock.json"
       - "model_artifacts.py"
+      - "ci-security-ownership.json"
+      - "embedding_policy.py"
+      - "endpoint_policy.py"
+      - "index_state.py"
+      - "llm_adapters.py"
+      - "llm_runtime.py"
+      - "pipeline_runtime.py"
+      - "provider_transport.py"
       - "rag.py"
+      - "release_security.py"
+      - "resource_lease.py"
+      - "retrieval_core.py"
+      - "vector_lifecycle.py"
+      - "tools/check_ci_security.py"
       - "tools/check_licenses.py"
       - "tools/check_model_artifacts.py"
       - "tools/check_vulnerabilities.py"
       - "tools/refresh_model_artifacts.py"
+      - "tools/sync_model_artifacts.py"
       - ".github/workflows/security.yml"
   schedule:
     - cron: "43 8 * * 4"
@@ -55,6 +83,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -100,6 +130,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
