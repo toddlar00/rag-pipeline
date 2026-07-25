@@ -1,33 +1,37 @@
 # Phase A0 Baselines
 
 These files are the canonical per-platform Phase A0 baseline candidates for
-the R10/A0b architecture gate. They contain no private corpus content or
-credentials. Each report covers the complete nine-scenario set with five
-fresh-process repetitions.
+the current documentation-roadmap successor. They contain no private corpus
+content or credentials. Each report covers the complete nine-scenario set with
+five fresh-process repetitions. Because the report contract binds the complete
+clean source identity, a documentation-only successor still requires its own
+reports even though it does not change Python behavior.
 
-## Provenance
+## Current documentation-successor provenance
 
-Both replacement reports were generated from the clean pre-gate source
-checkpoint `fdb08d26e3fc9fd2b80b983eeab7b1f353b96707` (tree
-`d7e758c6002144acff0c8d58e54c9980a6ffd7c7`). The executing environments were
-synchronized with repository-pinned uv 0.11.31 against the exact CPU
-application/test lock union plus its retained bootstrapper:
+Both current reports were generated from the clean documentation-successor
+pre-gate checkpoint `c1161ed21d2f0815fa9d555faf7210cc3d6f6315` (tree
+`e6ac49dc865ca42bbe38e4cf25bb09abb06d0fe9`). That checkpoint descends from
+the frozen R1 candidate and reconciles the roadmap, audit, and status
+documentation without changing Python source, CI behavior, attributes, or any
+dependency/model lock. The executing environments were synchronized with
+repository-pinned uv 0.11.31 against the exact CPU application/test lock union
+plus its retained bootstrapper:
 
 - `requirements-full.lock`
 - `requirements-test.lock`
 - `requirements-lock-tools.lock`
 
-The Windows environment used a temporary direct, uv-managed CPython
-interpreter rather than a virtual-environment redirector so supervised-child
-parent identities remained exact. The Linux environment used a direct POSIX
-virtual-environment interpreter. `uv pip sync --strict --torch-backend cpu
---require-hashes` and `uv pip check` passed for 189 Windows and 187 Linux
-marker-resolved distributions before generation.
+Windows and Linux both used disposable, direct uv-managed CPython 3.12.13
+interpreters rather than virtual-environment redirectors, so supervised-child
+parent identities remained exact. Hash-locked `uv pip sync --strict
+--torch-backend cpu --require-hashes` and `uv pip check` passed for 189 Windows
+and 187 Linux marker-resolved distributions before generation.
 
 | Platform | Runtime | Report | Bytes | File SHA-256 | Embedded report SHA-256 |
 |---|---:|---|---:|---|---|
-| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 49,077 | `0363e499ab69570be978d7c714e3c3cf38adf955ad00720927d81b283f1d6ee5` | `3f76c476d2877537fe2da6dd334c40902146b2264d3f61ea5b3c8e7b57239db1` |
-| Linux x86-64 | CPython 3.12.3 | `phase-a0-linux-cpython312.json` | 48,488 | `3617fb7a90edabc6e45a6ef6ac694f093171188ea70fb3b6f456253d5119c799` | `d24c4e3444f0c5afb11c76bac65d8148258d842b569dcdf4128b61ea2cb57147` |
+| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 49,082 | `37e5ca7a7fd01d4b85295e008692fa4db138f63bbbd1419c25040bdeabe23474` | `fceda35dc18b999644f97d3e5e1a0893e399172460ef53870d71fa721799045d` |
+| Linux x86-64 (WSL2 kernel) | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 48,491 | `186b2dc2df21ea31b1bc8c0c0f251b943820ffb820e127b3aee5c12d8a919773` | `2fddf8cf432cbc22eacefaece7fe48afde50ea61ca2f684f2be832a8705d6830` |
 
 The reports attest the same source commit, clean-worktree state, tracked-diff
 digest, eight LF and `HEAD`-identical dependency/model-lock inputs, authoritative
@@ -38,7 +42,7 @@ locks, and architecture inventory so their reviewed bytes survive Windows and
 Linux checkouts unchanged. The harness independently rejects any lock input
 whose worktree bytes differ from the exact blob at `HEAD`.
 
-## Hosted diagnosis and replacement state
+## Frozen R1 publication record
 
 The first published frozen candidate, `ba9c66d`, did not satisfy A0b. Its hosted
 A0 cells exposed checkout line-ending drift in lock bytes; a Linux source-gate
@@ -63,26 +67,37 @@ Windows and 2,236 tests with 4 skips on native Linux; the sole warning is the
 R2-owned Starlette/httpx dependency deprecation. The canonical architecture
 inventory records 1,981 functions and 377 compact runtime callables.
 
-The reports above are the baselines in frozen gate head `ed2995e` / tree
-`c438c82`, and each passes an independent complete same-platform 9×5 comparison.
-Pull-request and direct-dispatch Windows/Linux hosted cells passed at that exact
-head. All four retained two-file evidence bundles were downloaded and
-independently verified. Human review and history-preserving integration remain
-pending; changing source or locks requires replacement baselines.
+The predecessor reports at these paths are preserved by Git in frozen R1 gate
+head `ed2995e` / tree `c438c82`. Each passed an independent complete
+same-platform 9×5 comparison, and pull-request plus direct-dispatch
+Windows/Linux hosted cells passed at that exact head. All four retained
+two-file evidence bundles were downloaded and independently verified. Human
+review and history-preserving R1 integration remain pending. The current files
+do not rewrite that evidence; they bind the documentation successor's distinct
+clean source identity.
+
+## Documentation-successor evidence state
+
+The current reports each passed complete 9×5 generation from pre-gate source
+`c1161ed`. The gate-only successor delta is limited to these two reports and
+their permitted provenance/status documentation. Independent same-platform
+comparison at the final candidate and exact-PR-head hosted Windows/Linux cells
+must pass before this successor can be integrated. Human review and a
+history-preserving merge remain required.
 
 ## Checking
 
 Provision the exact full/test CPU lock union on CPython 3.12 x86-64, then run
 the matching command from a clean checkout. The provisioning commands below
-are for an ephemeral CI or disposable managed interpreter only; do not use
-`--system` against a durable user Python installation.
+are for an ephemeral CI or disposable managed interpreter only; never pass
+`--break-system-packages` to a durable user Python installation.
 
 ```text
-python -m pip install --require-hashes -r requirements-lock-tools.lock
-uv pip sync --system --strict --torch-backend cpu --require-hashes requirements-full.lock requirements-test.lock requirements-lock-tools.lock
-uv pip check --system
-python tools/benchmark_phase_a0.py --require-clean --check benchmarks/phase-a0-linux-cpython312.json --output phase-a0-current-linux.json
-python tools/benchmark_phase_a0.py --require-clean --check benchmarks/phase-a0-windows-cpython312.json --output phase-a0-current-windows.json
+<disposable-python> -m pip install --require-hashes -r requirements-lock-tools.lock
+uv pip sync --python <disposable-python> --break-system-packages --strict --torch-backend cpu --require-hashes requirements-full.lock requirements-test.lock requirements-lock-tools.lock
+uv pip check --python <disposable-python>
+<disposable-python> tools/benchmark_phase_a0.py --require-clean --check benchmarks/phase-a0-linux-cpython312.json --output phase-a0-current-linux.json
+<disposable-python> tools/benchmark_phase_a0.py --require-clean --check benchmarks/phase-a0-windows-cpython312.json --output phase-a0-current-windows.json
 ```
 
 Use only the command matching the current operating system. Do not copy one
@@ -95,12 +110,12 @@ ancestor of the final head. Integrate a passing candidate with a
 history-preserving merge; a squash or history-rewriting rebase invalidates this
 evidence and requires regeneration from the replacement history.
 
-The replacement gate-only delta after `fdb08d2` is limited to the two reviewed
-reports and their provenance/status documentation. The repaired workflow,
-line-ending policy, and Python gates are already part of the pre-gate source and
-were exercised while generating and comparing the baselines. Each successful
-hosted cell strictly revalidates the generated report, requires its clean source
-identity to equal the exact job head, and builds a verified
+For the documentation successor, the gate-only delta after `c1161ed` is
+limited to the two reviewed reports and their provenance/status documentation.
+The repaired workflow, line-ending policy, and Python gates are already part of
+the pre-gate source and were exercised while generating the baselines. Each
+successful hosted cell strictly revalidates the generated report, requires its
+clean source identity to equal the exact job head, and builds a verified
 two-file evidence directory containing that report and a content-free
 `phase-a0-ci-attestation-v1` record. The attestation binds candidate and
 pre-gate commit/tree identities, baseline and current-report hashes, normalized

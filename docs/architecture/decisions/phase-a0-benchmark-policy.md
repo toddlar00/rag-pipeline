@@ -1,8 +1,9 @@
 # Phase A0 Benchmark Policy
 
-- **Status:** A0a implemented; A0b pull-request and direct-dispatch Windows/Linux
-  technical gates passed at frozen head `ed2995e`; human review and integration
-  pending
+- **Status:** A0a implemented; frozen R1 A0b pull-request and direct-dispatch
+  Windows/Linux technical gates passed at `ed2995e`; the documentation
+  successor has separate local baselines and still requires exact-head hosted
+  comparison, human review, and integration
 - **Milestone:** R10 prerequisite for the R8 pipeline-ownership move
 - **Report schema:** `phase-a0` v3
 
@@ -27,7 +28,7 @@ Phase A0 is intentionally split:
   generation. A following gate-only evidence commit may add only the two
   baselines and their provenance/status documentation, but no Python source,
   workflow, attribute policy, or dependency/model lock. CI and review bind the
-  resulting final R1 candidate commit/tree; any intervening source or lock
+  resulting final candidate commit/tree; any intervening source or lock
   change invalidates and regenerates both baselines.
 
 [`tools/benchmark_phase_a0.py`](../../../tools/benchmark_phase_a0.py) runs five
@@ -71,7 +72,7 @@ the inherited guard continues to reject home and tilde resolution. A contained
 regression probe asserts both that `sysconfig` uses the redirected user base and
 that `Path.home()` remains denied.
 
-## A0b publication gate
+## Frozen R1 A0b publication record
 
 The replacement gate uses clean pre-gate source
 `fdb08d26e3fc9fd2b80b983eeab7b1f353b96707` (tree
@@ -117,6 +118,27 @@ must reach `main` through a history-preserving merge that retains the pre-gate
 source commit. Squashing or rewriting that history invalidates the evidence and
 requires new baselines from the replacement source checkpoint.
 
+## Documentation-successor A0b evidence
+
+The roadmap/audit successor is documentation-only, but Phase A0 reports bind
+the complete clean source identity rather than only executable files. Its
+separate clean pre-gate checkpoint is
+`c1161ed21d2f0815fa9d555faf7210cc3d6f6315` (tree
+`e6ac49dc865ca42bbe38e4cf25bb09abb06d0fe9`). It descends from frozen R1 head
+`ed2995e` and does not change Python source, CI behavior, attributes, or any
+dependency/model lock.
+
+Fresh Windows and Linux reports were generated from that checkpoint with
+direct, disposable uv-managed CPython 3.12.13 interpreters, the exact
+hash-locked CPU full/test/lock-tools union, and repository-pinned uv 0.11.31.
+Synchronization and dependency-consistency checks passed for 189
+marker-resolved distributions on Windows and 187 on Linux. Both reports cover
+the authoritative nine-scenario set with five fresh-process repetitions. The
+following gate-only delta is restricted to the reports and allowed
+provenance/status documentation. Independent final-candidate comparisons,
+exact-PR-head hosted cells, human review, and history-preserving integration
+remain publication requirements.
+
 ## Boundaries
 
 Containment and the inherited guard are deterministic test controls, not a
@@ -133,7 +155,7 @@ B workloads.
   [`tests/test_phase_a0_benchmark.py`](../../../tests/test_phase_a0_benchmark.py)
 - Baseline provenance and checking procedure:
   [`benchmarks/README.md`](../../../benchmarks/README.md)
-- Windows and Linux canonical candidates:
+- Current documentation-successor Windows and Linux candidates:
   [`phase-a0-windows-cpython312.json`](../../../benchmarks/phase-a0-windows-cpython312.json)
   and
   [`phase-a0-linux-cpython312.json`](../../../benchmarks/phase-a0-linux-cpython312.json)
@@ -175,8 +197,19 @@ The Linux report is 48,488 bytes under CPython 3.12.3 (file SHA-256
 `3617fb7a90edabc6e45a6ef6ac694f093171188ea70fb3b6f456253d5119c799`;
 embedded report SHA-256
 `d24c4e3444f0c5afb11c76bac65d8148258d842b569dcdf4128b61ea2cb57147`).
-These are the baselines in frozen gate head `ed2995e` / tree `c438c82`.
-Pull-request and direct-dispatch Windows/Linux comparisons passed, and their
-four retained report/attestation bundles independently verify candidate,
-pre-gate, platform, path-set, and hash provenance. Human review and integration
-remain outstanding.
+Those historical files are the baselines in frozen gate head `ed2995e` / tree
+`c438c82`. Pull-request and direct-dispatch Windows/Linux comparisons passed,
+and their four retained report/attestation bundles independently verify
+candidate, pre-gate, platform, path-set, and hash provenance. Human review and
+integration remain outstanding. Git retains those exact R1 objects even though
+the current paths now contain the documentation successor's reports.
+
+The documentation-successor Windows report is 49,082 bytes under CPython
+3.12.13 (file SHA-256
+`37e5ca7a7fd01d4b85295e008692fa4db138f63bbbd1419c25040bdeabe23474`;
+embedded report SHA-256
+`fceda35dc18b999644f97d3e5e1a0893e399172460ef53870d71fa721799045d`).
+Its Linux report is 48,491 bytes under CPython 3.12.13 (file SHA-256
+`186b2dc2df21ea31b1bc8c0c0f251b943820ffb820e127b3aee5c12d8a919773`;
+embedded report SHA-256
+`2fddf8cf432cbc22eacefaece7fe48afde50ea61ca2f684f2be832a8705d6830`).
