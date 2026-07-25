@@ -1,9 +1,9 @@
 """Detached execution and conservative recovery for durable RAG jobs.
 
-The manager is intentionally a thin adapter over :mod:`job_runtime` and
-``rag._run_cli_with_deadline``.  It owns no pipeline logic: one manager holds
-the job lease, publishes private attempt metadata, and maps the supervised
-worker plus run telemetry into the durable job state machine.
+The manager is intentionally a thin adapter over :mod:`job_runtime` and a
+frozen :mod:`runtime_supervision` binding.  It owns no pipeline logic: one
+manager holds the job lease, publishes private attempt metadata, and maps the
+supervised worker plus run telemetry into the durable job state machine.
 """
 
 from __future__ import annotations
@@ -26,8 +26,8 @@ from uuid import uuid4
 
 import attempt_reporting
 import job_runtime
-import rag
 import run_telemetry
+import runtime_supervision
 import storage_policy
 
 
@@ -57,6 +57,7 @@ _TERMINAL_TELEMETRY = frozenset({
 _RUNTIME_PHASES = frozenset({
     "starting", "running", "terminal", "reconciled",
 })
+_default_runtime_binding = runtime_supervision.default_runtime_binding
 
 
 class JobManagerError(Exception):
@@ -734,10 +735,12 @@ def _inject_telemetry_arguments(
     return [execution.command, *arguments]
 
 
-def _operation_timeout(execution: job_runtime.JobExecution) -> float:
+def _operation_timeout(
+        execution: job_runtime.JobExecution,
+        runtime: runtime_supervision.PipelineRuntimeBinding) -> float:
     if execution.timeout_seconds is not None:
         return execution.timeout_seconds
-    return float(rag.DEFAULT_OPERATION_TIMEOUTS.get(
+    return float(runtime.operation_timeouts.get(
         execution.command, _GENERIC_BACKGROUND_TIMEOUT))
 
 
@@ -878,8 +881,12 @@ def run_job(
         supervisor: Callable[..., int] | None = None,
         ready_nonce: str | None = None) -> ManagerResult:
     """Run one queued attempt synchronously while holding its manager lease."""
-    script_path = Path(rag.__file__) if script_path is None else Path(script_path)
-    supervisor = rag._run_cli_with_deadline if supervisor is None else supervisor
+    runtime_binding = _default_runtime_binding()
+    script_path = (
+        runtime_binding.script_path
+        if script_path is None else Path(script_path))
+    supervisor = (
+        runtime_binding.supervisor if supervisor is None else supervisor)
     with store.lease(job_id, timeout=0) as lease:
         execution = store.load_execution(job_id, lease=lease)
         if execution.status != "queued":
@@ -1103,7 +1110,7 @@ def run_job(
                 exit_code = int(supervisor(
                     script_path, worker_argv,
                     operation=execution.command,
-                    timeout=_operation_timeout(execution),
+                    timeout=_operation_timeout(execution, runtime_binding),
                     working_directory=execution.working_directory,
                     environment_overrides=environment,
                     run_id=run_id,
@@ -1115,7 +1122,7 @@ def run_job(
                     stdout_target=log_handle,
                     stderr_target=log_handle,
                 ))
-        except rag._SupervisorCleanupError:
+        except runtime_binding.cleanup_error_type:
             manager_error = True
             supervisor_cleanup_unconfirmed = True
         except BaseException:
@@ -1252,7 +1259,10 @@ def launch_detached(
         raise JobManagerLaunchError(
             "background job submission roots failed validation "
             f"(job status {current.status})") from exc
-    script_path = Path(rag.__file__) if script_path is None else Path(script_path)
+    runtime_binding = _default_runtime_binding()
+    script_path = (
+        runtime_binding.script_path
+        if script_path is None else Path(script_path))
     paths = _attempt_paths(
         store, job_id, execution.attempt_number, create=False)
     nonce = uuid4().hex

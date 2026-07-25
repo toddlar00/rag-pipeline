@@ -25,6 +25,9 @@ material. When documents disagree, use the authority order below.
   loopback-only UI exposure boundary.
 - [Process-supervision extraction](architecture/decisions/process-supervision-extraction.md)
   — containment policy and the stable `rag.py` facade.
+- [Runtime-supervision binding](architecture/decisions/runtime-supervision-binding.md)
+  — the frozen production capability consumed by durable jobs, the removal of
+  the final import cycle, and the remaining service/composition-root work.
 - [Document-structure profiles](architecture/decisions/document-structure-profiles.md)
   — immutable reviewed profiles and fail-closed evidence.
 - [Context-aware retrieval](architecture/decisions/context-aware-retrieval.md)
@@ -33,8 +36,7 @@ material. When documents disagree, use the authority order below.
   — exact-once logical relevance and owner-selected child aliases.
 - [Evaluation input-contract dependency boundary](architecture/decisions/evaluation-input-contract.md)
   — strict shared review/release inputs, the shared query domain,
-  compatibility aliases, both evaluation-side R8 inversions, and the sole
-  explicitly gated runtime cycle.
+  compatibility aliases, and both evaluation-side R8 inversions.
 
 The roadmap tracks missing maintained ADR coverage for vector lifecycle,
 table-row retrieval, and immutable source-generation policy rather than using

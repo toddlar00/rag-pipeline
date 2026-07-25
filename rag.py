@@ -58,6 +58,7 @@ import release_security as _release_security
 import retention as _retention
 import retrieval_core as _retrieval_core
 import run_telemetry as _run_telemetry
+import runtime_supervision as _runtime_supervision
 import storage_policy as _storage_policy
 import table_retrieval_core as _table_retrieval_core
 import vector_lifecycle as _vector_lifecycle
@@ -100,15 +101,8 @@ DEFAULT_EMBEDDING_MODEL = DEFAULT_EMBEDDING_MODEL_GENERAL  # free, local GPU, no
 DEFAULT_MAX_TOKENS = 500
 DEFAULT_COLLECTION = "civpro"
 DEFAULT_DB_LOCK_TIMEOUT = 30.0
-DEFAULT_OPERATION_TIMEOUTS = {
-    "index": 7200.0,
-    "query": 300.0,
-    "info": 120.0,
-    "full": 14400.0,
-    "batch": 43200.0,
-    "evaluation": 14400.0,
-    "storage": 600.0,
-}
+DEFAULT_OPERATION_TIMEOUTS = dict(
+    _runtime_supervision.DEFAULT_OPERATION_TIMEOUTS)
 ARTIFACT_COMPLETION_SCHEMA_VERSION = 1
 CONVERSION_COMPLETION_SCHEMA_VERSION = 2
 CHUNK_COMPLETION_SCHEMA_VERSION = 3
@@ -116,11 +110,13 @@ _CONVERSION_CAPTURE_POLICY = "stream-copy-v1"
 _MAX_CONVERSION_MANIFEST_BYTES = 1024 * 1024
 _MAX_CHUNK_COMPLETION_BYTES = 1024 * 1024
 _SNAPSHOT_SCRATCH_ENV = "RAG_SNAPSHOT_SCRATCH"
-_SUPERVISED_CHILD_ENV = "RAG_PIPELINE_SUPERVISED_CHILD"
-_RUN_ID_ENV = "RAG_PIPELINE_RUN_ID"
-_SUPERVISED_TERMINATE_GRACE = 5.0
-_SUPERVISED_POLL_INTERVAL = 0.2
-_SUPERVISED_START_GATE_TIMEOUT = 60.0
+_SUPERVISED_CHILD_ENV = _runtime_supervision.SUPERVISED_CHILD_ENV
+_RUN_ID_ENV = _runtime_supervision.RUN_ID_ENV
+_SUPERVISED_TERMINATE_GRACE = (
+    _runtime_supervision.SUPERVISED_TERMINATE_GRACE)
+_SUPERVISED_POLL_INTERVAL = _runtime_supervision.SUPERVISED_POLL_INTERVAL
+_SUPERVISED_START_GATE_TIMEOUT = (
+    _runtime_supervision.SUPERVISED_START_GATE_TIMEOUT)
 
 
 def _structure_profile_parameters_binding(

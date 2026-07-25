@@ -152,19 +152,20 @@ produce their labelled `ValueError` contracts rather than leaking
 
 ## Enforcement and residual work
 
-The tracked-source AST gate fixes the current first-party SCC inventory at
-exactly `{rag, job_manager}`. It pins both shared domains' direct/transitive
-dependencies, the one-way release edge, and review's inability to reach
-`eval.py` transitively. Subprocess tests cover all evaluation-module import
-orders, eager-import isolation, helper compatibility, strict parsing, snapshot
-bounds/link rejection, and full review input validation without loading the
-evaluator. Characterization also fixes legacy loader bytes/types/errors/digest
-timing, eval-local validator injection, query non-mutation, the three corpus
-policies, and strict-versus-legacy duplicate-key behavior.
+The tracked-source AST gate now requires an acyclic first-party import graph.
+It pins both shared domains' direct/transitive dependencies, the one-way
+release edge, and review's inability to reach `eval.py` transitively.
+Subprocess tests cover all evaluation-module import orders, eager-import
+isolation, helper compatibility, strict parsing, snapshot bounds/link
+rejection, and full review input validation without loading the evaluator.
+Characterization also fixes legacy loader bytes/types/errors/digest timing,
+eval-local validator injection, query non-mutation, the three corpus policies,
+and strict-versus-legacy duplicate-key behavior.
 
 This completes the evaluation-side dependency inversion, not R7 or all of R8.
-`job_manager.py` still imports `rag.py`, `rag.py` lazily imports the manager,
-and `service_runtime.py` still depends on that facade. Coverage ratchets,
-typing, the broader architecture inventory, runtime protocols, and runtime
-composition inversion remain planned. This local decision has not been pushed,
-reviewed, merged, tagged, or released.
+The later R8c-1 runtime binding removes `job_manager.py`'s former `rag.py`
+import and therefore the last import cycle, but `service_runtime.py` still
+depends on the facade and application composition has not moved to one root.
+Coverage ratchets, typing, the broader architecture inventory, remaining
+runtime protocols, and service/root composition inversion remain planned. This
+local decision has not been pushed, reviewed, merged, tagged, or released.

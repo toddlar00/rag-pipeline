@@ -14,6 +14,7 @@ import pytest
 import attempt_reporting
 import job_manager
 import job_runtime
+import runtime_supervision
 import storage_policy
 
 
@@ -86,6 +87,122 @@ def _attempt_outcome(store, job_id):
         paths, execution=execution)
     assert report is not None
     return paths, report
+
+
+def _runtime_binding(
+        script_path: Path, supervisor, *, timeouts=None,
+        cleanup_error_type=runtime_supervision.SupervisorCleanupError):
+    return runtime_supervision.PipelineRuntimeBinding(
+        script_path=script_path,
+        supervisor=supervisor,
+        cleanup_error_type=cleanup_error_type,
+        operation_timeouts=(
+            runtime_supervision.DEFAULT_OPERATION_TIMEOUTS
+            if timeouts is None else timeouts),
+    )
+
+
+def test_operation_timeout_uses_persisted_override_policy_and_fallback(
+        tmp_path):
+    store = job_runtime.JobStore(tmp_path / "jobs")
+    policy_job = store.submit_job("full", [])
+    fallback_job = store.submit_job("export", [])
+    explicit_job = store.submit_job("index", [], timeout_seconds=17)
+    binding = _runtime_binding(
+        tmp_path / "pipeline.py",
+        lambda *_args, **_kwargs: 0,
+        timeouts={"full": 91},
+    )
+
+    assert job_manager._operation_timeout(
+        store.load_execution(policy_job.job_id), binding) == 91
+    assert job_manager._operation_timeout(
+        store.load_execution(fallback_job.job_id), binding) == (
+            job_manager._GENERIC_BACKGROUND_TIMEOUT)
+    assert job_manager._operation_timeout(
+        store.load_execution(explicit_job.job_id), binding) == 17
+
+
+def test_run_job_resolves_atomic_runtime_binding_at_call_time(
+        monkeypatch, tmp_path):
+    captured = {}
+    script = tmp_path / "bound-rag.py"
+
+    def supervisor(script_path, argv, **kwargs):
+        captured.update(
+            script_path=script_path,
+            argv=argv,
+            kwargs=kwargs,
+        )
+        return 1
+
+    binding = _runtime_binding(
+        script, supervisor, timeouts={"index": 37})
+    monkeypatch.setattr(
+        job_manager, "_default_runtime_binding", lambda: binding)
+    store = job_runtime.JobStore(tmp_path / "jobs")
+    submitted = store.submit_job("index", ["--full-reindex"])
+    execution = store.load_execution(submitted.job_id)
+
+    result = job_manager.run_job(store, submitted.job_id)
+
+    assert result.status == "failed"
+    assert captured["script_path"] == script
+    assert captured["argv"][0:2] == ["index", "--full-reindex"]
+    options = captured["kwargs"]
+    assert options["operation"] == "index"
+    assert options["timeout"] == 37
+    assert options["working_directory"] == execution.working_directory
+    assert options["environment_overrides"] == {
+        job_manager.JOB_ROOT_ENV: str(store.root),
+        job_manager.JOB_ID_ENV: submitted.job_id,
+        job_manager.JOB_ATTEMPT_TOKEN_ENV: execution.attempt_token,
+        job_manager.OUTPUT_ROOT_ENV: str(execution.output_root),
+        job_manager._READY_NONCE_ENV: None,
+    }
+    assert options["run_id"] == f"{submitted.job_id}.a1"
+    assert options["run_events"].name == "run.events.jsonl"
+    assert options["run_report"].name == "run.report.json"
+    assert callable(options["cancel_requested"])
+    assert callable(options["on_child_started"])
+    assert callable(options["heartbeat"])
+    assert options["stdout_target"] is options["stderr_target"]
+
+
+def test_detached_launch_resolves_bound_pipeline_script_at_call_time(
+        monkeypatch, tmp_path):
+    captured = {}
+    script = tmp_path / "bound-rag.py"
+    binding = _runtime_binding(
+        script, lambda *_args, **_kwargs: 0)
+    monkeypatch.setattr(
+        job_manager, "_default_runtime_binding", lambda: binding)
+
+    class PendingManager:
+        pid = os.getpid()
+
+        @staticmethod
+        def poll():
+            return None
+
+    def popen(command, **options):
+        captured.update(command=command, options=options)
+        return PendingManager()
+
+    monkeypatch.setattr(job_manager.subprocess, "Popen", popen)
+    monkeypatch.setattr(
+        job_manager, "_ready_matches", lambda *_args, **_kwargs: True)
+    store = job_runtime.JobStore(tmp_path / "jobs")
+    submitted = store.submit_job("export", [])
+
+    launched = job_manager.launch_detached(
+        store, submitted.job_id, ready_timeout=1)
+
+    assert launched.ready
+    script_index = captured["command"].index("--script") + 1
+    assert captured["command"][script_index] == str(script.resolve())
+    assert captured["options"]["cwd"] == str(
+        store.load_execution(submitted.job_id).working_directory)
 
 
 def test_run_job_success_persists_private_attempt_and_exact_worker_env(tmp_path):
@@ -484,7 +601,7 @@ def test_supervisor_cleanup_failure_is_persisted_as_nonresumable_orphan(
 
     def fail_cleanup(*_args, **kwargs):
         kwargs["on_child_started"](FakeProcess())
-        raise job_manager.rag._SupervisorCleanupError(
+        raise runtime_supervision.SupervisorCleanupError(
             "supervised worker tree cleanup could not be confirmed")
 
     monkeypatch.setattr(

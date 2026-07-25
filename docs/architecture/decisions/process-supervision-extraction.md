@@ -44,6 +44,12 @@ rewired as part of this decision. Dependency-direction cleanup is a separate
 milestone because it changes a consumer boundary rather than merely extracting
 deterministic supervision policy.
 
+The later
+[runtime-supervision binding decision](runtime-supervision-binding.md) performs
+the first such consumer migration. It gives `job_manager.py` a frozen concrete
+binding without routing it through `rag.py`; the facade path remains available
+for compatibility.
+
 ## Invariants
 
 - A timed-out or cancelled operation is not reported complete until direct
@@ -63,11 +69,14 @@ clocks, factories, and callbacks, while real-process characterization continues
 through `rag.py`. The facade is substantially smaller without forcing a broad
 consumer migration.
 
-The remaining `job_manager`/`service_runtime` to `rag` dependency direction is
-intentional compatibility debt, not evidence that supervision still belongs in
-the facade. A later change must characterize job recovery, service calls,
-cancellation, and platform cleanup before replacing that seam with a narrower
-protocol.
+The former `job_manager` to `rag` edge is resolved by the subsequent runtime
+binding decision, and the tracked first-party import graph is now acyclic.
+`service_runtime.py` still composes search and job operations through both
+modules, while `rag.py` retains lazy job CLI dispatch. That service/root
+composition is intentional compatibility debt, not evidence that supervision
+belongs in the facade. Later changes must characterize service calls, recovery,
+and platform cleanup before replacing the remaining seams with narrow
+protocols and one application root.
 
 ## Evidence and history
 

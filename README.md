@@ -145,9 +145,18 @@ output/artifact behavior.
 `process_supervision.py` is the standard-library-only deadline and containment
 runtime. It owns Windows Job Objects, POSIX process groups, same-PID startup
 gates, bounded termination confirmation, cancellation/deadline control, and the
-generic supervised entrypoint flow. `rag.py` snapshots its timing/environment
-configuration and late-binds telemetry and compatibility collaborators for
-each call, preserving the established facade and monkeypatch seams.
+generic supervised entrypoint flow. `runtime_supervision.py` binds that core to
+the production script path, deadlines, environment names, cleanup exception,
+and prompt-free telemetry as one frozen capability. `job_manager.py` consumes
+that binding without importing `rag.py`. The facade still snapshots its
+late-bound collaborators for direct compatibility callers and monkeypatch
+seams. See the
+[runtime-supervision binding ADR](docs/architecture/decisions/runtime-supervision-binding.md).
+
+The tracked first-party import graph is now acyclic. This does not complete the
+runtime inversion milestone: `service_runtime.py` still composes through both
+the facade and job manager, lazy job CLI dispatch remains in `rag.py`, and the
+service/search/index capabilities have not converged on one application root.
 
 `ingestion_core.py` is the standard-library-only PDF safety layer for text-layer
 quality, page-coverage-aware background detection, complete pre-mutation
@@ -2641,6 +2650,7 @@ rebuild with `--full-reindex` if needed.
 ```
 rag.py                  # Stable command/API facade and pipeline orchestration
 process_supervision.py  # Stdlib-only process containment and deadlines
+runtime_supervision.py  # Frozen production supervisor/runtime capability
 retrieval_core.py       # Stdlib-only retrieval models and pure algorithms
 table_retrieval_core.py # Stdlib-only table-row generation and family collapse
 artifact_io.py          # Stdlib-only strict reads and atomic publication

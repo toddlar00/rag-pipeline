@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+import subprocess
+import sys
 
 from tools.check_python_sources import tracked_python_paths
 
@@ -152,12 +154,53 @@ def _raw_import_roots(path: Path) -> set[str]:
     return imports
 
 
-def test_first_party_import_cycles_are_explicit_and_do_not_grow():
+def test_first_party_import_graph_is_acyclic():
     graph = _first_party_import_graph()
 
-    assert _cyclic_components(graph) == {
-        frozenset({"job_manager", "rag"}),
+    assert _cyclic_components(graph) == set()
+
+
+def test_job_manager_depends_on_runtime_binding_without_loading_rag():
+    graph = _first_party_import_graph()
+
+    assert "runtime_supervision" in graph["job_manager"]
+    assert "rag" not in graph["job_manager"]
+    assert "rag" not in _transitive_dependencies(graph, "job_manager")
+    assert graph["runtime_supervision"] == {
+        "cli_policy", "process_supervision", "run_telemetry",
     }
+    assert "runtime_supervision" in graph["rag"]
+    assert "rag" not in _transitive_dependencies(
+        graph, "runtime_supervision")
+    runtime_path = _application_modules()["runtime_supervision"]
+    assert _raw_import_roots(runtime_path) == {
+        "cli_policy", "collections", "dataclasses", "math", "pathlib",
+        "process_supervision", "run_telemetry", "sys", "threading",
+        "types", "typing",
+    }
+
+
+def test_job_manager_and_rag_import_cleanly_in_both_orders():
+    for imports in (
+        "import job_manager; assert 'rag' not in sys.modules; import rag",
+        "import rag; assert 'job_manager' not in sys.modules; "
+        "import job_manager",
+    ):
+        source = (
+            "import sys; "
+            f"sys.path.insert(0, {str(PROJECT_ROOT)!r}); "
+            f"{imports}"
+        )
+        result = subprocess.run(
+            [sys.executable, "-I", "-c", source],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
 
 
 def test_import_resolver_tracks_package_initializers_and_known_prefixes():

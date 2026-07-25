@@ -83,9 +83,10 @@ Current policy/runtime modules include:
 - `artifact_io`, `index_state`, and `vector_lifecycle` — strict artifact I/O,
   manifest decisions, guarded vector reconciliation, verification, and commit
   ordering.
-- `cli_policy`, `ingestion_core`, `process_supervision`, and
-  `operation_contracts` — CLI/resume policy, PDF-ingestion safety, process-tree
-  containment/deadlines, and committed operation outcomes.
+- `cli_policy`, `ingestion_core`, `process_supervision`,
+  `runtime_supervision`, and `operation_contracts` — CLI/resume policy,
+  PDF-ingestion safety, generic process-tree containment/deadlines, the frozen
+  production supervision binding, and committed operation outcomes.
 - `attempt_reporting`, `operational_metrics`, `operational_drills`,
   `run_telemetry`, `storage_policy`, and `retention` — durable redacted
   operational evidence and private artifact lifecycle policy.
@@ -111,13 +112,20 @@ supervision no longer live there, although their late-bound facade wrappers do.
 
 `process_supervision.py` owns the standard-library-only deadline loop, Windows
 job containment, POSIX/Windows start gates, verified termination, and generic
-entrypoint routing. `rag.py` retains late-bound wrappers so
-`job_manager.py`, `service_runtime.py`, and existing monkeypatch-based tests
-continue to use the established facade. `supervised_worker.py` remains the
-contained child's gate-wait bootstrap. The `job_manager`/`service_runtime` to
-`rag` dependency direction, combined with lazy job dispatch from `rag`, is a
-known residual seam and requires a separate behavior-characterized milestone.
-See the [process-supervision ADR](docs/architecture/decisions/process-supervision-extraction.md).
+entrypoint routing. `runtime_supervision.py` binds that core to the stable
+pipeline script, deadline map, environment/timing policy, cleanup exception,
+and telemetry callbacks as one frozen capability. `job_manager.py` snapshots
+that binding per operation and no longer imports `rag.py`; `rag.py` retains
+late-bound wrappers for direct compatibility callers and tests.
+`supervised_worker.py` remains the contained child's gate-wait bootstrap.
+
+The first-party import graph is acyclic, but R8 is not complete:
+`service_runtime.py` still imports both `rag` and `job_manager`, and lazy job
+CLI dispatch plus application composition remain in `rag.py`. Preserve the
+binding's atomic snapshot rule while service/search/index protocols and one
+composition root are introduced in later characterized slices. See the
+[process-supervision ADR](docs/architecture/decisions/process-supervision-extraction.md)
+and [runtime binding ADR](docs/architecture/decisions/runtime-supervision-binding.md).
 
 ### Evaluation contract layering
 
@@ -131,8 +139,8 @@ evidence binding. `eval.py` preserves the former private names as
 object-identical aliases and retains the legacy JSONL loader plus raw-byte
 digest cache; `evaluation_review.py` calls the query domain directly. Do not
 replace the legacy loader with the strict review parser without a separate
-input-policy decision. The evaluation graph is acyclic. The sole allowed SCC
-is `{rag, job_manager}`; a new or larger cycle is a test failure.
+input-policy decision. The evaluation graph and the full tracked first-party
+graph are acyclic; any new first-party import cycle is a test failure.
 
 ### Vector stores and safety invariants
 
