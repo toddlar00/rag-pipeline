@@ -57,8 +57,8 @@ material. When documents disagree, use the authority order below.
   domain-specific qualification before dependency changes.
 - [LLM output contracts](architecture/decisions/llm-output-contracts.md)
   — hostile generated-text validation, classification prompt framing,
-  cache/single-flight enforcement, fallback authority, and content-free
-  receipts.
+  cache/single-flight enforcement, the owner-pending semantic-rejection
+  fallback rule, and content-free receipts.
 - [Architecture and facade inventory policy](architecture/decisions/architecture-facade-inventory-policy.md)
   — schema-v3 static graph, facade/mutation characterization, normalized
   runtime contract, and reviewed baseline refreshes.
@@ -104,18 +104,18 @@ The Phase A0a harness and its local tests are implementation evidence only. The
 first frozen A0b hosted attempt at `ba9c66d` exposed checkout-EOL drift in lock
 and architecture-inventory bytes plus host-dependent validation of the
 drive-relative path `C:escape.py`; it did not pass A0b. Replacement clean
-source `7594f8b` repairs those gates, publishes content-free candidate reports
-before comparison, and makes PR cells test the exact PR head. Final clean
-pre-gate source `fdb08d2` additionally normalizes the supported Python 3.10-3.14
-runtime-contract differences discovered during local matrix qualification,
-without weakening the probe's home/tilde denial. Separate
-CPython 3.12 x86-64 Windows/Linux baseline candidates now bind that source and
-the same eight LF/`HEAD`-identical inputs, and both matching local 9×5
-comparisons independently pass. The gate-only commit containing those reports
-is the final local R1 candidate; A0b still requires publishing its exact
-commit/tree, passing hosted comparisons on both operating systems, retaining
-successful evidence artifacts, and exact-head review. None of those hosted or
-review gates is implied by A0a, the failed first attempt, or a local-only result.
+source `7594f8b` repaired those gates, and `fdb08d2` normalized the supported
+Python 3.10-3.14 runtime-contract differences without weakening the probe's
+home/tilde denial. Current clean pre-gate source `9ff159d` retains those controls
+and adds the strict LLM classification-output contract. Separate CPython
+3.12.13 x86-64 Windows/Linux baseline candidates bind that source, the same
+eight LF/`HEAD`-identical inputs, and the authoritative nine scenarios with
+five repetitions; both matching local comparisons independently pass. The
+gate-only commit containing those reports freezes the current local candidate.
+A0b still requires publishing its exact commit/tree, passing hosted comparisons
+on both operating systems, retaining successful evidence artifacts, and
+exact-head review. None of those hosted or review gates is implied by A0a, the
+failed first attempt, or a local-only result.
 
 Ignored `output/` paths are not durable evidence in a fresh clone. A roadmap or
 PR claim that depends on private output must be backed by a tracked content-free

@@ -8,8 +8,8 @@ fresh-process repetitions.
 ## Provenance
 
 Both replacement reports were generated from the clean pre-gate source
-checkpoint `fdb08d26e3fc9fd2b80b983eeab7b1f353b96707` (tree
-`d7e758c6002144acff0c8d58e54c9980a6ffd7c7`). The executing environments were
+checkpoint `9ff159d802e6a04eb64e45ccd0b5214f0c1128e5` (tree
+`1dcb9da69176d835583a37cef081c9b1b71fc306`). The executing environments were
 synchronized with repository-pinned uv 0.11.31 against the exact CPU
 application/test lock union plus its retained bootstrapper:
 
@@ -17,17 +17,20 @@ application/test lock union plus its retained bootstrapper:
 - `requirements-test.lock`
 - `requirements-lock-tools.lock`
 
-The Windows environment used a temporary direct, uv-managed CPython
-interpreter rather than a virtual-environment redirector so supervised-child
-parent identities remained exact. The Linux environment used a direct POSIX
-virtual-environment interpreter. `uv pip sync --strict --torch-backend cpu
---require-hashes` and `uv pip check` passed for 189 Windows and 187 Linux
-marker-resolved distributions before generation.
+Both environments used disposable direct uv-managed CPython interpreters
+rather than durable user installations. The Windows interpreter also avoids a
+virtual-environment redirector so supervised-child parent identities remain
+exact. Each disposable interpreter was targeted explicitly with `uv pip sync
+--python <path> --break-system-packages --strict --torch-backend cpu
+--require-hashes`; `uv pip check --python <path>` then passed for 189 Windows
+and 187 Linux marker-resolved distributions before generation. The
+`--break-system-packages` use was confined to these disposable uv-managed
+interpreters, which declare themselves externally managed.
 
 | Platform | Runtime | Report | Bytes | File SHA-256 | Embedded report SHA-256 |
 |---|---:|---|---:|---|---|
-| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 49,077 | `0363e499ab69570be978d7c714e3c3cf38adf955ad00720927d81b283f1d6ee5` | `3f76c476d2877537fe2da6dd334c40902146b2264d3f61ea5b3c8e7b57239db1` |
-| Linux x86-64 | CPython 3.12.3 | `phase-a0-linux-cpython312.json` | 48,488 | `3617fb7a90edabc6e45a6ef6ac694f093171188ea70fb3b6f456253d5119c799` | `d24c4e3444f0c5afb11c76bac65d8148258d842b569dcdf4128b61ea2cb57147` |
+| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 49,252 | `dce8fce1dd9118ed1856d28e39f3a0342b5f4cc54b3ef8b348c5ec62889ca6d4` | `0641184657305b05af735a081f1678fb24e667f51e4c08e1dbdd543b0683aa94` |
+| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 48,664 | `cd7cef15bbd287b6efb18fa0f9e1d43c4c766d08f3cb5a4e640e9f4d8eb6945e` | `73a044d8056e43bc194e6ea9c6f6e00e0699d8338df8dbf00dca25f8e040fac1` |
 
 The reports attest the same source commit, clean-worktree state, tracked-diff
 digest, eight LF and `HEAD`-identical dependency/model-lock inputs, authoritative
@@ -56,26 +59,30 @@ A0 jobs check out the exact PR head. Subsequent Python 3.10-3.14 qualification
 found additional interpreter-only drift in `ast.TryStar`, lazy `sysconfig`
 initialization, inherited `Path.home`, the public `pathlib.Path` identity,
 `typing.Any`, implicit optional annotations, and nested forward references.
-Pre-gate source `fdb08d2` closes those cases without weakening home/tilde
-denial. Its architecture baseline reproduces on Windows and Linux across
-Python 3.10-3.14. Fresh locked full suites pass 2,233 tests with 7 skips on
-Windows and 2,236 tests with 4 skips on native Linux; the sole warning is the
-R2-owned Starlette/httpx dependency deprecation. The canonical architecture
-inventory records 1,981 functions and 377 compact runtime callables.
+Pre-gate source `fdb08d2` closed those cases without weakening home/tilde
+denial, and its architecture baseline reproduced on Windows and Linux across
+Python 3.10-3.14. Current pre-gate source `9ff159d` retains those controls and
+adds the strict LLM classification-output contract. Its complete locked
+Windows suite passes 2,338 tests with 7 skips. All dependency, model-artifact,
+CI-security, architecture, Ruff, and tracked-source compilation gates pass.
+The refreshed canonical architecture inventory records 2,003 functions and
+377 compact runtime callables.
 
 The replacement reports above are local baseline candidates, and each passes an
 independent complete same-platform 9×5 comparison. The gate-only commit that
-contains these reports is the final local replacement candidate; its exact
-commit/tree must be recorded on PR #44 after creation. No successful hosted
+contains these reports freezes the final local replacement candidate; its exact
+commit/tree must be recorded on the stacked pull request. No successful hosted
 replacement run is claimed. A0b remains pending until both exact-head hosted
 cells pass and retain their successful evidence bundles.
 
 ## Checking
 
 Provision the exact full/test CPU lock union on CPython 3.12 x86-64, then run
-the matching command from a clean checkout. The provisioning commands below
-are for an ephemeral CI or disposable managed interpreter only; do not use
-`--system` against a durable user Python installation.
+the matching command from a clean checkout. The `--system` provisioning
+commands below are for an ephemeral hosted-CI interpreter only; do not run them
+against a durable user Python installation. For a disposable standalone
+uv-managed interpreter, target its path explicitly with the
+`--break-system-packages` command documented under Provenance above.
 
 ```text
 python -m pip install --require-hashes -r requirements-lock-tools.lock
@@ -95,7 +102,7 @@ ancestor of the final head. Integrate a passing candidate with a
 history-preserving merge; a squash or history-rewriting rebase invalidates this
 evidence and requires regeneration from the replacement history.
 
-The replacement gate-only delta after `fdb08d2` is limited to the two reviewed
+The replacement gate-only delta after `9ff159d` is limited to the two reviewed
 reports and their provenance/status documentation. The repaired workflow,
 line-ending policy, and Python gates are already part of the pre-gate source and
 were exercised while generating and comparing the baselines. Each successful
