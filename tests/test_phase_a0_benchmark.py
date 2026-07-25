@@ -727,6 +727,8 @@ time.sleep(60)
 
 def test_probe_main_fails_closed_if_code_resolves_the_operator_home(
         monkeypatch, capsys):
+    original_local_home = vars(Path).get("home")
+    home_was_local = "home" in vars(Path)
     original_home = Path.home
 
     def probe():
@@ -736,6 +738,34 @@ def test_probe_main_fails_closed_if_code_resolves_the_operator_home(
     monkeypatch.setitem(benchmark._PROBES, "cold_import_rag", probe)
     assert benchmark._probe_main("cold_import_rag") == 1
     assert Path.home == original_home
+    assert ("home" in vars(Path)) is home_was_local
+    if home_was_local:
+        assert vars(Path)["home"] is original_local_home
+    assert json.loads(capsys.readouterr().out) == {
+        "error_type": "PhaseA0BenchmarkError", "ok": False}
+
+
+def test_probe_main_restores_an_inherited_home_descriptor(monkeypatch, capsys):
+    class PathBase:
+        @classmethod
+        def home(cls):
+            return cls("operator-home")
+
+    class InheritedHomePath(PathBase):
+        pass
+
+    def probe():
+        benchmark.Path.home()
+        raise AssertionError("unreachable")
+
+    assert "home" not in vars(InheritedHomePath)
+    original_home = InheritedHomePath.home
+    monkeypatch.setattr(benchmark, "Path", InheritedHomePath)
+    monkeypatch.setitem(benchmark._PROBES, "cold_import_rag", probe)
+
+    assert benchmark._probe_main("cold_import_rag") == 1
+    assert "home" not in vars(InheritedHomePath)
+    assert InheritedHomePath.home == original_home
     assert json.loads(capsys.readouterr().out) == {
         "error_type": "PhaseA0BenchmarkError", "ok": False}
 

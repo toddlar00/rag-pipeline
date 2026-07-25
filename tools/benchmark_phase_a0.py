@@ -2316,7 +2316,8 @@ def _probe_main(name: str) -> int:
         print(json.dumps({"ok": False, "error_type": "UnknownScenario"}))
         return 2
     try:
-        original_home = Path.__dict__["home"]
+        missing_home = object()
+        original_home = vars(Path).get("home", missing_home)
 
         def reject_home_fallback(_path_type) -> Path:
             raise PhaseA0BenchmarkError(
@@ -2326,7 +2327,10 @@ def _probe_main(name: str) -> int:
         try:
             contract, diagnostics = probe()
         finally:
-            Path.home = original_home  # type: ignore[method-assign]
+            if original_home is missing_home:
+                del Path.home
+            else:
+                Path.home = original_home  # type: ignore[method-assign]
         payload = {
             "ok": True,
             "scenario": name,

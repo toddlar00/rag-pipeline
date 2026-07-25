@@ -11,10 +11,11 @@
 > [#38](https://github.com/toddlar00/rag-pipeline/pull/38), respectively.
 > [PR #43](https://github.com/toddlar00/rag-pipeline/pull/43) implements the
 > Ethics review/release machinery, but corpus-owner decisions remain pending.
-> Repository-hygiene mechanics are implemented locally in commit `88fd301`;
-> the private-source owner decision, publication, scoped static typing, README
-> decomposition, and the residual pipeline/UI/evaluator-to-`rag` composition
-> work remain open. R8c-1 through R8c-5 have since resolved the former
+> Repository-hygiene mechanics from commit `88fd301` are published in cumulative
+> draft PR #44; the private-source owner decision, exact-head review and
+> integration, scoped static typing, README decomposition, and the residual
+> pipeline/UI/evaluator-to-`rag` composition work remain open. R8c-1 through
+> R8c-5 have since resolved the former
 > job/manager dependency seam and established a lazy service-role composition
 > root; the broader pipeline/UI root remains future work.
 > The unchecked boxes, code sketches, branch instructions, baselines, and test
@@ -105,7 +106,7 @@ project brainstorm was lost once already — see `ROADMAP.md` preamble).
 
 | # | Improvement | Assessment | Disposition |
 |---|---|---|---|
-| 1 | Repo hygiene: stray root scripts, untracked `CLAUDE.md`/`docs/`, unignored `tmp/`, dangling spec link | Mechanical scope implemented and validated in local commit `88fd301`; owner privacy policy, publication, and PR disposition remain in current R0 | **Mechanics implemented locally; historical Task 1 is superseded** |
+| 1 | Repo hygiene: stray root scripts, untracked `CLAUDE.md`/`docs/`, unignored `tmp/`, dangling spec link | Mechanical scope from commit `88fd301` is published in cumulative draft PR #44; owner privacy policy, exact-head review, and integration remain in current R0 | **Mechanics included in draft PR #44; historical Task 1 is superseded** |
 | 2 | Configurable document-structure profiles (ROADMAP P2) | Implemented with an immutable explicit registry, strict receipts, and fail-closed layout validation rather than the mutable-active-profile sketch below | **Implemented in draft PR #35; Tasks 2–7 are superseded** |
 | 3 | Stable adjacency/parent identifiers + context-aware retrieval assembly (ROADMAP P2) | Stable linkage and bounded, independently citable context assembly are implemented; full owner-reviewed evaluation ablation remains follow-up evidence | **Implemented in draft PR #36** |
 | 4 | Table-specific retrieval (ROADMAP P2) | Caption/header-propagated row children and family collapse are implemented; family-aware judged evaluation remains a follow-up | **Implemented in draft PR #37** |
@@ -114,7 +115,7 @@ project brainstorm was lost once already — see `ROADMAP.md` preamble).
 | 7 | Ethics retrieval calibration (ROADMAP P1) | Review and release tooling is implemented, but **an agent must not fabricate expert judgments**; owner approval and final thresholds remain pending | **In progress in draft PR #43; owner decision required** |
 | 8 | Static typing gate (mypy/pyright on leaf modules only) | Worthwhile stretch; current lint gate (`E4,E7,E9,F`) is deliberate, so any broadening needs owner sign-off first | Optional, ask owner |
 | 9 | Split the large `README.md` into `docs/` pages | The README has grown beyond the size recorded by this plan; separating operator, architecture, evaluation, and migration guidance is now a maintainability improvement | Open follow-up |
-| 10 | `job_manager`/`service_runtime` ↔ `rag` circular import seam | Still present after supervision and vector-lifecycle extraction; changing it requires a separate characterization-first consumer-boundary milestone | Open follow-up |
+| 10 | `job_manager`/`service_runtime` ↔ `rag` circular import seam | The former seam is resolved by R8c-1 through R8c-5, including manager-shell isolation and a lazy service-role composition root; residual pipeline/UI/evaluator-to-`rag` composition remains open | **Former seam resolved; residual composition remains open** |
 
 ## Global Constraints
 

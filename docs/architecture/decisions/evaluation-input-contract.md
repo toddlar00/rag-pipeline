@@ -1,6 +1,7 @@
 # Evaluation input-contract dependency boundary
 
-- **Status:** Implemented locally; pending exact-head review and integration
+- **Status:** Implementation included in cumulative draft PR #44; not merged or
+  human-reviewed, with exact replacement-head review and integration pending
 - **Decision date:** 2026-07-24
 - **Milestones:** R7 import-DAG gate and R8a/R8b evaluation inversion
 
@@ -173,6 +174,7 @@ with no production Python-import consumers; detached execution intentionally
 still invokes it. R8c-5 then separates the structural HTTP adapter from its
 stable service facade and supplies a lazy one-generation outer root for the
 production service role. Coverage ratchets, typing, pipeline-facade extraction,
-the broader architecture inventory, and CLI/UI root convergence remain
-planned. This local decision has not been pushed, reviewed, merged, tagged, or
-released.
+and CLI/UI root convergence remain planned; the broader architecture inventory
+now exists as the minimum R7 characterization gate. This implementation is
+included in cumulative draft PR #44 but has not been human-reviewed, merged,
+tagged, or released.

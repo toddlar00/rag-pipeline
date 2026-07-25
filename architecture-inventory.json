@@ -552,7 +552,7 @@
         "dynamic_sites": [],
         "nested": [
           {
-            "locations_sha256": "5fb11596125bde21f986828b62c21cebccef63bcae1246b0ddbd560e2fc54bc9",
+            "locations_sha256": "689e7c5157d87700d3681af0163a5bf590eefadec24ae657dde024c32c9734e4",
             "occurrence_count": 1,
             "operations": [
               "assign"
@@ -566,7 +566,7 @@
             "target": "operating.getenv"
           },
           {
-            "locations_sha256": "4725a1bd30535ea72a54809245dec8b231cf3b43257019e77213602b74b283ed",
+            "locations_sha256": "456ada43b8bcc35d8be0ed10b3ab07caa82049b7f9099c67543fda7a6de77e0d",
             "occurrence_count": 1,
             "operations": [
               "delete"
@@ -946,7 +946,7 @@
             "source": "tests/test_architecture_inventory.py"
           },
           {
-            "line": 911,
+            "line": 941,
             "operation": "setattr",
             "source": "tests/test_phase_a0_benchmark.py"
           },
@@ -1159,7 +1159,7 @@
             "target": "log.warning"
           },
           {
-            "locations_sha256": "522a62cc892638e3ff7a30e3ffd575847e310e55cfe7c8f2793f62336c8ba3d1",
+            "locations_sha256": "db061f367d93890eb58e9efb38592f8def73e67df368cb5be4a663829fff9311",
             "occurrence_count": 2,
             "operations": [
               "setattr"
@@ -3141,7 +3141,7 @@
             "target": "_run_pipeline_job"
           },
           {
-            "locations_sha256": "7f266d464506fc75dfad6546997f1a00ffb662a687f1aed2536c46e9a982db8b",
+            "locations_sha256": "1b1c973d4881b063b764296dfb9e968831a8ab06b742ced17b90ab95b3d6c366",
             "occurrence_count": 9,
             "operations": [
               "setattr"
@@ -3369,7 +3369,7 @@
             "target": "_validate_embedding_token_counts"
           },
           {
-            "locations_sha256": "3bdb14846d6f48ac274706ac4aec5ab2611bb737e72b8e9eeb9b45ac43eac8a7",
+            "locations_sha256": "3d5ccbd2b25eacc11fa1ed467bf36a64790b0bf5e6797d4b1ad44c278b210d7c",
             "occurrence_count": 1,
             "operations": [
               "setattr"
@@ -5848,7 +5848,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "200745fd1e85999f4b0e33c7494707a4f31fbec7909be9d286f773a95d6f6407",
+          "locations_sha256": "42ac7e4d50ee7175c6c595dd9c214d05c1b33c9697e0e274756dfba1dc4cc24f",
           "name": "_index_chunks_for_backend",
           "occurrence_count": 1,
           "paths": [
@@ -8598,7 +8598,7 @@
     "runtime_symbol_contract": "rag-pipeline:architecture:runtime-symbol-contract:v1",
     "static_signature": "rag-pipeline:architecture:static-signature:v1"
   },
-  "interpreter_normalization": "cpython-3.12-3.14-platform-neutral-v2",
+  "interpreter_normalization": "cpython-3.10-3.14-platform-neutral-v3",
   "rag_runtime_contract": {
     "behavior": {
       "dynamic_add_read": true,
@@ -28069,7 +28069,7 @@
             "scope": "nested"
           }
         ],
-        "definition_locations_sha256": "21929bf6659c6a7e343808f7964613eef6b46279737a2299f4a5a324abb8088d",
+        "definition_locations_sha256": "730c1dbb88e7e406f8ed37e6fd05335217b292bde5e1f0a0dbc6829a71a7b393",
         "function_count": 91,
         "functions": [
           {
@@ -28703,9 +28703,9 @@
           }
         ],
         "module": "tools.benchmark_phase_a0",
-        "non_blank_lines": 2752,
+        "non_blank_lines": 2756,
         "path": "tools/benchmark_phase_a0.py",
-        "physical_lines": 2971,
+        "physical_lines": 2975,
         "top_level_function_count": 69
       },
       {
@@ -28736,7 +28736,7 @@
             "scope": "nested"
           }
         ],
-        "definition_locations_sha256": "20b09491d3123743a48d8b4ec2cfb8425ef68b4e7f554cc226e30db23101157f",
+        "definition_locations_sha256": "a0ff68f67870a5c8c40abab52a1d930f10dd937ecae284d597d6775d3f3129d6",
         "function_count": 210,
         "functions": [
           {
@@ -28893,7 +28893,7 @@
             "kind": "function",
             "name": "_FacadeAnalysis._visit_try",
             "scope": "class",
-            "signature_sha256": "cf9a5adec40c7e64f83998c91123babd187caf3160e0e2d980568f62f62d37a6"
+            "signature_sha256": "115bd4d1b010a19f0a6932362cdbdacc44c17526c34cb2255c9790dbd7deafbb"
           },
           {
             "kind": "function",
@@ -29067,7 +29067,7 @@
             "kind": "function",
             "name": "_FacadeAnalysis.visit_TryStar",
             "scope": "class",
-            "signature_sha256": "c4d783db3822aa16a84177012fcfa54156edd11d9e0b03293158572c36d6e4a0"
+            "signature_sha256": "d714b940ac8473494ee5efce8ae9114c0c479f077934d48581a1ba5af4ba1eda"
           },
           {
             "kind": "function",
@@ -29175,7 +29175,7 @@
             "kind": "function",
             "name": "_ImportEdgeVisitor._visit_uncertain_block",
             "scope": "class",
-            "signature_sha256": "6c59bb9ac554e3f2890c828dca81bf056f3465ec6af55362b923d64826d33397"
+            "signature_sha256": "532f1f637d14db7416666bccc33bcf3e9121568ca7f4c2cf6944e419034a3919"
           },
           {
             "kind": "function",
@@ -29319,7 +29319,7 @@
             "kind": "function",
             "name": "_ImportEdgeVisitor.visit_TryStar",
             "scope": "class",
-            "signature_sha256": "3d86f7746a0733407dae21583bbc790a3c278d0e872538ed610c1afbdeabf436"
+            "signature_sha256": "3414b780e5063a404fecaccfbe5386eaa60a59ae716604637104bb476e3eb12d"
           },
           {
             "kind": "function",
@@ -30030,9 +30030,9 @@
           }
         ],
         "module": "tools.check_architecture_inventory",
-        "non_blank_lines": 3667,
+        "non_blank_lines": 3782,
         "path": "tools/check_architecture_inventory.py",
-        "physical_lines": 4016,
+        "physical_lines": 4136,
         "top_level_function_count": 76
       },
       {
@@ -31133,7 +31133,7 @@
         "top_level_function_count": 2
       }
     ],
-    "physical_line_count": 61444,
+    "physical_line_count": 61568,
     "source_groups": [
       "production",
       "tools",

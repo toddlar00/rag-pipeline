@@ -1,7 +1,8 @@
 # Architecture and Facade Inventory Policy
 
-- **Status:** Implemented locally and independently audited; publication and
-  cumulative integration pending
+- **Status:** Implementation included in cumulative draft PR #44; replacement
+  compatibility refresh local and independently red-team-audited; not merged
+  or human-reviewed, with exact replacement-head review pending
 - **Milestones:** Minimum R7 inventory prerequisite for R8 ownership changes
 - **Schema:** `tracked-python-ast-v3`
 
@@ -39,11 +40,16 @@ semantics so a move and an interface change are not conflated.
 
 The runtime probe executes from an empty temporary working directory with
 credentials scrubbed and Python-level network, subprocess, home, and tilde
-access denied. Its output is strictly parsed, bounded, and normalized across
-supported CPython 3.12-3.14 interpreter differences. Windows and Linux fresh
-checkouts must reproduce the normalized baseline before it can authorize an R8
-facade move; any deliberate platform variance belongs in an explicit,
-non-gating field or a separately reviewed platform contract.
+access denied. An isolated `PYTHONUSERBASE` lets CPython initialize its own
+`sysconfig` state without resolving the operator's home or weakening those
+denials. Its output is strictly parsed, bounded, and normalized across
+supported CPython 3.10-3.14 interpreter differences. The exact public
+`pathlib.Path` object is recorded under its stable public identity even on
+CPython 3.13, where its implementation module is private; unrelated objects
+that merely claim the same private metadata are not normalized. Windows and
+Linux fresh checkouts must reproduce the normalized baseline before it can
+authorize an R8 facade move; any deliberate platform variance belongs in an
+explicit, non-gating field or a separately reviewed platform contract.
 
 The checked-in baseline must be strict canonical JSON with repository-relative
 paths and stable ordering. CI checks; it never refreshes automatically. A
@@ -68,13 +74,20 @@ does not prove runtime reachability.
 - First-party dependency invariants:
   [`tests/test_architecture.py`](../../../tests/test_architecture.py)
 
-Schema v3 was first accepted at `62cb574`. The current canonical checkpoint is
-`77a0f70` (tree `fc268e5`); its 1,005,471-byte baseline and full inventory
-SHA-256
-`6958fb5dd2de002ed3845d547bed008961fb84b29dc0c06ba7bf3c3951fd46ca`
-reproduce on Windows CPython 3.12 and 3.14 and WSL Ubuntu CPython 3.12. All 53
-focused tests pass. Independent review found and then verified closure of an
-origin/context pair-correlation collision; provenance is now stored and
-strictly validated as sorted pairs rather than independent sets. The later
-checkpoint is a required refresh for the tracked Phase A0 portability source
-and test change, not an unreviewed architecture-contract relaxation.
+Schema v3 was first accepted at `62cb574`. The replacement baseline prepared
+for the next frozen R1 pre-gate source checkpoint is 1,005,966 bytes with full
+inventory SHA-256
+`2b0e2b6d24f494f305c99a28e76e8146cf1f56987d8f859469db0506a8cf6b4d`.
+It records 150 tracked Python sources, 69 non-test modules, 1,981 functions,
+565 static and 573 runtime `rag` bindings, and 377 compact runtime callable
+records. The complete 43-test inventory suite passes on Windows and Linux
+CPython 3.12. The canonical baseline reproduces on Windows CPython
+3.10-3.14 and Linux CPython 3.10-3.14.
+
+Independent review previously found and verified closure of an origin/context
+pair-correlation collision. The replacement review additionally caught and
+rejected an over-broad tilde redirect before the baseline refresh, then exposed
+and closed CPython 3.13's private `Path` module identity without hiding spoofed
+or project-owned identities. These are bounded compatibility and isolation
+repairs, not an unreviewed relaxation of the architecture contract. The exact
+source commit/tree and hosted replacement evidence remain to be frozen.

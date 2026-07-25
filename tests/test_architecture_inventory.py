@@ -529,6 +529,65 @@ load("ignored")
     }
 
 
+def test_try_node_abstraction_is_cross_version():
+    tree = ast.parse(
+        "try:\n    PRIMARY = 1\nexcept Exception:\n    FALLBACK = 2\n"
+    )
+
+    assert isinstance(tree.body[0], inventory._TryNode)
+    assert {"PRIMARY", "FALLBACK"} <= set(
+        inventory._module_binding_origins(tree)
+    )
+    if not hasattr(ast, "TryStar"):
+        assert inventory._TryNode is ast.Try
+
+
+@pytest.mark.skipif(
+    not hasattr(ast, "TryStar"), reason="except* syntax requires Python 3.11+"
+)
+def test_try_star_branches_retain_all_architecture_analysis():
+    tree = ast.parse(
+        """import importlib
+import rag as facade
+
+try:
+    BODY = importlib.import_module("try_body")
+    body_value = facade.PUBLIC
+except* Exception:
+    HANDLER = importlib.import_module("try_handler")
+    handler_value = facade._PRIVATE
+else:
+    ELSE = importlib.import_module("try_else")
+    else_value = facade.PUBLIC
+finally:
+    FINAL = importlib.import_module("try_final")
+    final_value = facade.PUBLIC
+"""
+    )
+    known = {"try_body", "try_else", "try_final", "try_handler"}
+
+    edges = inventory._module_import_edges(
+        "consumer", Path("consumer.py"), tree, known
+    )
+    assert edges == {
+        name: {("conditional", "dynamic")} for name in known
+    }
+
+    origins = inventory._module_binding_origins(tree)
+    assert {"BODY", "ELSE", "FINAL", "HANDLER"} <= set(origins)
+
+    resolver = inventory._FacadeAnalysis(tree, {})
+    accesses = inventory._facade_attribute_accesses(
+        tree, resolver, "consumer.py"
+    )
+    assert {(item["line"], item["path"]) for item in accesses} == {
+        (6, "PUBLIC"),
+        (9, "_PRIVATE"),
+        (12, "PUBLIC"),
+        (15, "PUBLIC"),
+    }
+
+
 def test_compact_import_edges_preserve_context_origin_correlation():
     static_runtime_tree = ast.parse(
         "import importlib\nimport pkg\ndef f():\n importlib.import_module('pkg')\n"
@@ -618,6 +677,37 @@ def test_pep_695_type_alias_is_a_module_binding_when_supported(tmp_path):
     assert "PublicAlias" in bindings
 
 
+def test_runtime_probe_initializes_sysconfig_without_permitting_tilde_paths(
+    tmp_path,
+):
+    root = _example_repository(tmp_path)
+    with (root / "rag.py").open("a", encoding="utf-8") as handle:
+        handle.write(
+            """
+import os as probe_os
+import sysconfig as probe_sysconfig
+
+_PROBE_USER_BASE = probe_sysconfig.get_config_var("userbase")
+if probe_os.path.normcase(_PROBE_USER_BASE) != probe_os.path.normcase(
+    probe_os.environ["PYTHONUSERBASE"]
+):
+    raise RuntimeError("sysconfig did not use the isolated Python user base")
+try:
+    probe_os.path.expanduser("~/.operator-material")
+except RuntimeError:
+    _PROBE_TILDE_DENIED = True
+else:
+    raise RuntimeError("application tilde expansion was not disabled")
+"""
+        )
+
+    contract = inventory._runtime_facade_contract(root)
+
+    assert {"_PROBE_TILDE_DENIED", "_PROBE_USER_BASE"} <= set(
+        contract["vars_names"]
+    )
+
+
 def test_runtime_probe_scrubs_and_redirects_ambient_environment(
     tmp_path, monkeypatch,
 ):
@@ -629,6 +719,7 @@ def test_runtime_probe_scrubs_and_redirects_ambient_environment(
         "HOMEPATH": "/sensitive",
         "LANG": "private-locale",
         "LC_ALL": "private-locale",
+        "PYTHONUSERBASE": "C:/sensitive/python-user-base",
         "RAG_LLM_CACHE_DIR": "C:/sensitive/cache",
     }
     for name, value in secrets.items():
@@ -650,7 +741,8 @@ def test_runtime_probe_scrubs_and_redirects_ambient_environment(
     for name in (
         "APPDATA", "LOCALAPPDATA", "RAG_LLM_CACHE_DIR",
         "RAG_MODEL_ARTIFACT_CACHE", "RAG_PIPELINE_OUTPUT_ROOT", "TEMP",
-        "TMP", "USERPROFILE", "XDG_CACHE_HOME", "XDG_CONFIG_HOME",
+        "TMP", "PYTHONUSERBASE", "USERPROFILE", "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
     ):
         assert name in observed
 
@@ -737,6 +829,254 @@ def test_runtime_contract_preserves_generic_type_arguments(tmp_path):
         "runtime_signature_sha256"
     ]
     assert int_local["type_hints_sha256"] != str_local["type_hints_sha256"]
+
+
+def test_runtime_contract_normalizes_only_the_public_path_identity(tmp_path):
+    root = _example_repository(tmp_path)
+    with (root / "rag.py").open("a", encoding="utf-8") as handle:
+        handle.write(
+            """
+from pathlib import Path as PublicPath
+
+# Exercise CPython 3.13's private implementation identity on every supported
+# interpreter without changing the architecture probe process itself.
+PublicPath.__module__ = "pathlib._local"
+
+class ProjectPath:
+    pass
+
+class UnrelatedPath:
+    pass
+
+UnrelatedPath.__module__ = "pathlib._local"
+UnrelatedPath.__qualname__ = "Path"
+
+def public_path_annotation(
+    value: PublicPath,
+) -> tuple[PublicPath, list[PublicPath]]:
+    return value, [value]
+
+def project_path_annotation(
+    value: ProjectPath,
+) -> tuple[ProjectPath, list[ProjectPath]]:
+    return value, [value]
+
+def unrelated_path_annotation(
+    value: UnrelatedPath,
+) -> tuple[UnrelatedPath, list[UnrelatedPath]]:
+    return value, [value]
+"""
+        )
+
+    contract = inventory._runtime_facade_contract(root)
+    records = {item["name"]: item for item in contract["callables"]}
+
+    assert (records["PublicPath"]["module"], records["PublicPath"]["qualname"]) == (
+        "pathlib", "Path",
+    )
+    assert (
+        records["ProjectPath"]["module"], records["ProjectPath"]["qualname"]
+    ) == ("rag", "ProjectPath")
+    assert (
+        records["UnrelatedPath"]["module"],
+        records["UnrelatedPath"]["qualname"],
+    ) == ("pathlib._local", "Path")
+
+    annotation_records = [
+        records["public_path_annotation"],
+        records["project_path_annotation"],
+        records["unrelated_path_annotation"],
+    ]
+    assert len({item["runtime_signature_sha256"] for item in annotation_records}) == 3
+    assert len({item["type_hints_sha256"] for item in annotation_records}) == 3
+
+
+def test_runtime_contract_preserves_declared_optional_semantics(tmp_path):
+    root = _example_repository(tmp_path)
+    with (root / "rag.py").open("a", encoding="utf-8") as handle:
+        handle.write(
+            """
+from typing import Optional
+
+def declared_int(value: int) -> int:
+    return value
+
+def default_none_int(value: int = None) -> int:
+    return value
+
+def explicit_optional_int(value: Optional[int] = None) -> int:
+    return value
+"""
+        )
+
+    contract = inventory._runtime_facade_contract(root)
+    records = {item["name"]: item for item in contract["callables"]}
+    declared = records["declared_int"]
+    default_none = records["default_none_int"]
+    explicit_optional = records["explicit_optional_int"]
+
+    assert declared["type_hints_sha256"] == default_none["type_hints_sha256"]
+    assert declared["type_hints_sha256"] != explicit_optional["type_hints_sha256"]
+    assert (
+        declared["runtime_signature_sha256"]
+        != default_none["runtime_signature_sha256"]
+    )
+
+
+def test_runtime_contract_preserves_inherited_class_annotations(tmp_path):
+    root = _example_repository(tmp_path)
+    rag_path = root / "rag.py"
+    source = rag_path.read_text(encoding="utf-8") + """
+
+class PublicAnnotationBase:
+    inherited_value: int
+
+class PublicAnnotationChild(PublicAnnotationBase):
+    pass
+"""
+    _write(rag_path, source)
+    int_contract = inventory._runtime_facade_contract(root)
+    int_child = next(
+        item for item in int_contract["callables"]
+        if item["name"] == "PublicAnnotationChild"
+    )
+
+    _write(rag_path, source.replace("inherited_value: int", "inherited_value: bytes"))
+    bytes_contract = inventory._runtime_facade_contract(root)
+    bytes_child = next(
+        item for item in bytes_contract["callables"]
+        if item["name"] == "PublicAnnotationChild"
+    )
+
+    assert int_child["type_hints_status"] == "ok"
+    assert bytes_child["type_hints_status"] == "ok"
+    assert int_child["type_hints_sha256"] != bytes_child["type_hints_sha256"]
+
+
+def test_runtime_contract_resolves_nested_function_forward_references(tmp_path):
+    root = _example_repository(tmp_path)
+    with (root / "rag.py").open("a", encoding="utf-8") as handle:
+        handle.write(
+            """
+class ForwardTarget:
+    pass
+
+def nested_forward(value: list["ForwardTarget"]) -> list["ForwardTarget"]:
+    return value
+
+def nested_resolved(value: list[ForwardTarget]) -> list[ForwardTarget]:
+    return value
+"""
+        )
+
+    contract = inventory._runtime_facade_contract(root)
+    records = {item["name"]: item for item in contract["callables"]}
+
+    assert (
+        records["nested_forward"]["type_hints_sha256"]
+        == records["nested_resolved"]["type_hints_sha256"]
+    )
+
+
+def test_runtime_contract_resolves_nested_class_forward_references(tmp_path):
+    root = _example_repository(tmp_path)
+    with (root / "rag.py").open("a", encoding="utf-8") as handle:
+        handle.write(
+            """
+class NestedClassTarget:
+    pass
+
+class NestedForwardClass:
+    TargetAlias = NestedClassTarget
+    items: list["TargetAlias"]
+
+class NestedResolvedClass:
+    items: list[NestedClassTarget]
+"""
+        )
+
+    contract = inventory._runtime_facade_contract(root)
+    records = {item["name"]: item for item in contract["callables"]}
+
+    assert (
+        records["NestedForwardClass"]["type_hints_sha256"]
+        == records["NestedResolvedClass"]["type_hints_sha256"]
+    )
+
+
+def test_runtime_contract_resolves_inherited_nested_refs_with_owner_namespace(
+    tmp_path,
+):
+    root = _example_repository(tmp_path)
+    _write(
+        root / "hidden.py",
+        """class HiddenTarget:
+    pass
+
+class HiddenBase:
+    TargetAlias = HiddenTarget
+    base_items: list["TargetAlias"]
+    overridden_items: list["TargetAlias"]
+""",
+    )
+    with (root / "rag.py").open("a", encoding="utf-8") as handle:
+        handle.write(
+            """
+from hidden import HiddenBase, HiddenTarget
+
+class PublicTarget:
+    pass
+
+class PublicChild(HiddenBase):
+    TargetAlias = PublicTarget
+    overridden_items: list["TargetAlias"]
+
+class PublicResolved:
+    base_items: list[HiddenTarget]
+    overridden_items: list[PublicTarget]
+"""
+        )
+
+    contract = inventory._runtime_facade_contract(root)
+    records = {item["name"]: item for item in contract["callables"]}
+
+    assert (
+        records["PublicChild"]["type_hints_sha256"]
+        == records["PublicResolved"]["type_hints_sha256"]
+    )
+
+
+def test_runtime_contract_stabilizes_only_typing_any_classification(tmp_path):
+    root = _example_repository(tmp_path)
+    with (root / "rag.py").open("a", encoding="utf-8") as handle:
+        handle.write(
+            """
+from typing import Any as PublicAny
+
+class OrdinaryClass:
+    pass
+
+def ordinary_function():
+    pass
+
+class CallableObject:
+    def __call__(self):
+        pass
+
+unrelated_callable = CallableObject()
+"""
+        )
+
+    contract = inventory._runtime_facade_contract(root)
+    records = {item["name"]: item for item in contract["callables"]}
+
+    assert {
+        key: records["PublicAny"][key]
+        for key in ("kind", "module", "qualname")
+    } == {"kind": "class", "module": "typing", "qualname": "Any"}
+    assert records["OrdinaryClass"]["kind"] == "class"
+    assert records["ordinary_function"]["kind"] == "function"
+    assert "unrelated_callable" not in records
 
 
 @pytest.mark.parametrize(

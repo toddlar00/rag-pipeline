@@ -22,7 +22,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_BASELINE = Path("architecture-inventory.json")
 SCHEMA_VERSION = 3
 ANALYSIS_MODEL = "tracked-python-ast-v3"
-INTERPRETER_NORMALIZATION = "cpython-3.12-3.14-platform-neutral-v2"
+INTERPRETER_NORMALIZATION = "cpython-3.10-3.14-platform-neutral-v3"
 HASH_DOMAINS = {
     "definition_locations": "rag-pipeline:architecture:definition-locations:v1",
     "runtime_symbol_contract": "rag-pipeline:architecture:runtime-symbol-contract:v1",
@@ -39,6 +39,10 @@ _INTERPRETER_VARIANT_NAMES = (
     "__annotations__",
     "__conditional_annotations__",
 )
+# ``ast.TryStar`` was added in Python 3.11.  Keep one runtime-safe node
+# abstraction so Python 3.10 can import and execute the inventory while newer
+# interpreters still analyze every ``except*`` branch.
+_TryNode = ast.Try | getattr(ast, "TryStar", ast.Try)
 
 _RUNTIME_PROBE = r'''
 import hashlib
@@ -72,7 +76,13 @@ def denied_home(*_args, **_kwargs):
 
 def denied_expanduser(path):
     rendered = os.fspath(path)
-    if rendered == "~" or rendered.startswith(("~/", "~\\")):
+    if isinstance(rendered, bytes):
+        marker = b"~"
+        prefixes = (b"~/", b"~\\")
+    else:
+        marker = "~"
+        prefixes = ("~/", "~\\")
+    if rendered == marker or rendered.startswith(prefixes):
         raise RuntimeError("tilde expansion is disabled in the architecture probe")
     return rendered
 
@@ -106,6 +116,14 @@ def digest(value):
         separators=(",", ":"), sort_keys=True,
     ).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
+
+def stable_identity(value):
+    # CPython 3.13 defines the public ``pathlib.Path`` class in the private
+    # ``pathlib._local`` implementation module.  Match the imported public
+    # object itself so unrelated or project-owned lookalikes remain visible.
+    if value is Path:
+        return "pathlib", "Path"
+    return getattr(value, "__module__", None), getattr(value, "__qualname__", None)
 
 def value_identity(value):
     if value is inspect.Signature.empty or value is inspect.Parameter.empty:
@@ -160,8 +178,7 @@ def value_identity(value):
             "kind": "typing",
             "origin": value_identity(origin),
         }
-    module = getattr(value, "__module__", None)
-    qualname = getattr(value, "__qualname__", None)
+    module, qualname = stable_identity(value)
     if isinstance(module, str) and isinstance(qualname, str):
         return {"kind": "identity", "module": module, "qualname": qualname}
     rendered = re.sub(r"0x[0-9a-fA-F]+", "0xADDR", repr(value))
@@ -169,6 +186,98 @@ def value_identity(value):
         "kind": f"{type(value).__module__}.{type(value).__qualname__}",
         "repr_sha256": hashlib.sha256(rendered.encode("utf-8")).hexdigest(),
     }
+
+def annotation_identity(value):
+    # A bare ``None`` annotation denotes NoneType.  Keep that public semantic
+    # identity without allowing Python 3.10 to infer Optional from a default.
+    return value_identity(type(None) if value is None else value)
+
+def annotation_explicitly_allows_none(value):
+    if value is None or value is type(None):
+        return True
+    origin = typing.get_origin(value)
+    arguments = typing.get_args(value)
+    if origin in {typing.Union, types.UnionType}:
+        return type(None) in arguments
+    if origin is typing.Annotated and arguments:
+        return annotation_explicitly_allows_none(arguments[0])
+    return False
+
+def resolve_nested_pep585_forward_refs(value, globalns, localns):
+    # Python 3.10's get_type_hints leaves string arguments inside PEP 585
+    # aliases unresolved (for example ``list["Record"]``), unlike 3.11+.
+    # Strings in a GenericAlias argument position are forward references;
+    # Literal and Annotated metadata are different typing objects and are not
+    # traversed or reinterpreted here.
+    if not isinstance(value, types.GenericAlias):
+        return value
+    arguments = tuple(
+        eval(item, globalns, localns)
+        if isinstance(item, str)
+        else resolve_nested_pep585_forward_refs(item, globalns, localns)
+        for item in typing.get_args(value)
+    )
+    return types.GenericAlias(typing.get_origin(value), arguments)
+
+def resolved_type_hints(value):
+    # Retain get_type_hints' inherited-class and nested-forward-reference
+    # resolution.  Python 3.10 alone also inferred Optional[T] for a function
+    # parameter annotated T with a None default; remove only that inference.
+    hints = typing.get_type_hints(value)
+    if inspect.isfunction(value):
+        globalns = getattr(value, "__globals__", {})
+        localns = globalns
+    elif inspect.isclass(value):
+        owners = {}
+        for owner in reversed(getattr(value, "__mro__", (value,))):
+            annotations = vars(owner).get("__annotations__", {})
+            if isinstance(annotations, dict):
+                owners.update({name: owner for name in annotations})
+        resolved = {}
+        for name, hint in hints.items():
+            owner = owners.get(name, value)
+            defining_module = sys.modules.get(
+                getattr(owner, "__module__", "")
+            )
+            globalns = (
+                vars(defining_module) if defining_module is not None else {}
+            )
+            localns = dict(vars(owner))
+            localns.setdefault(getattr(owner, "__name__", ""), owner)
+            resolved[name] = resolve_nested_pep585_forward_refs(
+                hint, globalns, localns
+            )
+        return resolved
+    else:
+        return hints
+    hints = {
+        name: resolve_nested_pep585_forward_refs(hint, globalns, localns)
+        for name, hint in hints.items()
+    }
+    declared = inspect.get_annotations(value, eval_str=True)
+    try:
+        parameters = inspect.signature(value).parameters
+    except (TypeError, ValueError):
+        return hints
+    for name, parameter in parameters.items():
+        if (
+            parameter.default is not None
+            or name not in declared
+            or name not in hints
+            or annotation_explicitly_allows_none(declared[name])
+        ):
+            continue
+        hint = hints[name]
+        if typing.get_origin(hint) not in {typing.Union, types.UnionType}:
+            continue
+        remaining = tuple(
+            item for item in typing.get_args(hint) if item is not type(None)
+        )
+        if len(remaining) == 1:
+            hints[name] = remaining[0]
+        elif remaining:
+            hints[name] = typing.Union[remaining]
+    return hints
 
 def project_owned(value):
     try:
@@ -178,8 +287,7 @@ def project_owned(value):
         return False
 
 def callable_record(name, value):
-    module = getattr(value, "__module__", None)
-    qualname = getattr(value, "__qualname__", None)
+    module, qualname = stable_identity(value)
     if project_owned(value):
         try:
             signature = inspect.signature(value)
@@ -201,8 +309,8 @@ def callable_record(name, value):
             signature_status = "unsupported"
         try:
             hints = {
-                key: value_identity(item)
-                for key, item in sorted(typing.get_type_hints(value).items())
+                key: annotation_identity(item)
+                for key, item in sorted(resolved_type_hints(value).items())
             }
             hints_status = "ok"
         except Exception as exc:
@@ -222,7 +330,11 @@ def callable_record(name, value):
     except Exception:
         pickle_status = "unsupported"
     return {
-        "kind": "class" if inspect.isclass(value) else "function",
+        "kind": (
+            "class"
+            if inspect.isclass(value) or value is typing.Any
+            else "function"
+        ),
         "module": module,
         "name": name,
         "pickle_identity": pickle_status,
@@ -311,7 +423,14 @@ callables = [
     for name, value in sorted(vars(rag).items())
     if name not in variant_names
     and name not in platform_variant_tokens
-    and (inspect.isfunction(value) or inspect.isclass(value))
+    and (
+        inspect.isfunction(value)
+        or inspect.isclass(value)
+        # ``typing.Any`` became an inspectable class in Python 3.11.  Preserve
+        # that public facade record on 3.10 without broadening the filter to
+        # arbitrary callable instances.
+        or value is typing.Any
+    )
 ]
 
 result = {
@@ -847,10 +966,10 @@ class _ImportEdgeVisitor(ast.NodeVisitor):
     def visit_Try(self, node: ast.Try) -> None:
         self._visit_uncertain_block(node)
 
-    def visit_TryStar(self, node: ast.TryStar) -> None:
+    def visit_TryStar(self, node: _TryNode) -> None:
         self._visit_uncertain_block(node)
 
-    def _visit_uncertain_block(self, node: ast.Try | ast.TryStar) -> None:
+    def _visit_uncertain_block(self, node: _TryNode) -> None:
         starting = dict(self.aliases)
         branches = [
             self._visit_branch(node.body, self._conditional_context(), starting),
@@ -1322,7 +1441,7 @@ def _module_binding_origins(tree: ast.Module) -> dict[str, list[dict[str, object
                 if not is_main_guard(statement.test):
                     visit(statement.body)
                 visit(statement.orelse)
-            elif isinstance(statement, (ast.Try, ast.TryStar)):
+            elif isinstance(statement, _TryNode):
                 visit(statement.body)
                 for handler in statement.handlers:
                     visit(handler.body)
@@ -2094,10 +2213,10 @@ class _FacadeAnalysis(ast.NodeVisitor):
     def visit_Try(self, node: ast.Try) -> None:
         self._visit_try(node)
 
-    def visit_TryStar(self, node: ast.TryStar) -> None:
+    def visit_TryStar(self, node: _TryNode) -> None:
         self._visit_try(node)
 
-    def _visit_try(self, node: ast.Try | ast.TryStar) -> None:
+    def _visit_try(self, node: _TryNode) -> None:
         starting = self._copy_environment(self.environment)
         branches = [self._visit_branch(node.body, starting)]
         for handler in node.handlers:
@@ -2597,6 +2716,7 @@ def _runtime_facade_contract(root: Path) -> dict[str, object]:
         redirected = {
             "APPDATA": isolated_root / "profile" / "AppData" / "Roaming",
             "LOCALAPPDATA": isolated_root / "profile" / "AppData" / "Local",
+            "PYTHONUSERBASE": isolated_root / "python-user-base",
             "RAG_LLM_CACHE_DIR": isolated_root / "rag-llm-cache",
             "RAG_MODEL_ARTIFACT_CACHE": isolated_root / "rag-model-cache",
             "RAG_PIPELINE_OUTPUT_ROOT": isolated_root / "output",

@@ -1,9 +1,10 @@
 # Job-application binding and manager-shell isolation
 
-- **Status:** Accepted; implemented locally
+- **Status:** Accepted; implementation included in cumulative draft PR #44
 - **Decision date:** 2026-07-24
 - **Milestone:** R8c-4 application-shell dependency inversion
-- **Integration state:** Local and unpublished; consult
+- **Integration state:** Not merged or human-reviewed; exact replacement-head
+  review and integration remain pending. Consult
   [ROADMAP.md](../../../ROADMAP.md) for current validation and merge state
 
 ## Context

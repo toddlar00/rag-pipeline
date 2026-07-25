@@ -1,6 +1,7 @@
 # Local UI and LLM endpoint boundaries
 
-- Status: Accepted locally; pending review and integration
+- Status: Implementation included in cumulative draft PR #44; not merged or
+  human-reviewed, with exact replacement-head review and integration pending
 - Date: 2026-07-24
 - Milestone: R0A
 
