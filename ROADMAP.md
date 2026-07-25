@@ -1239,7 +1239,7 @@ stack whose middle cumulative PR stops before the current head.
 - Publish a review manifest that maps focused PR/commit ranges and file domains
   to named reviewer roles. Require separate privacy/security, migration/release,
   evaluation, and cross-stack delta sign-offs, all bound to the final commit, so
-  the current roughly 101,000-changed-line cumulative diff does not receive only
+  the current roughly 105,000-changed-line cumulative diff does not receive only
   nominal approval. Freeze the candidate before review; any later code change
   invalidates the exact-head sign-offs and affected workflow conclusions.
 - Preserve `INTEGRATION_AUDIT.md` as the historical #1-#28 record and publish a
