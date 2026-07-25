@@ -32,8 +32,9 @@ material. When documents disagree, use the authority order below.
 - [Table-family evaluation](architecture/decisions/table-family-evaluation.md)
   — exact-once logical relevance and owner-selected child aliases.
 - [Evaluation input-contract dependency boundary](architecture/decisions/evaluation-input-contract.md)
-  — strict shared review/release inputs, compatibility aliases, the first R8
-  dependency inversion, and the explicitly gated residual cycles.
+  — strict shared review/release inputs, the shared query domain,
+  compatibility aliases, both evaluation-side R8 inversions, and the sole
+  explicitly gated runtime cycle.
 
 The roadmap tracks missing maintained ADR coverage for vector lifecycle,
 table-row retrieval, and immutable source-generation policy rather than using

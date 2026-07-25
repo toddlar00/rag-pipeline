@@ -156,7 +156,6 @@ def test_first_party_import_cycles_are_explicit_and_do_not_grow():
     graph = _first_party_import_graph()
 
     assert _cyclic_components(graph) == {
-        frozenset({"eval", "evaluation_review"}),
         frozenset({"job_manager", "rag"}),
     }
 
@@ -206,4 +205,25 @@ def test_release_input_contract_has_one_way_dependency_direction():
     input_path = _application_modules()["evaluation_inputs"]
     assert _raw_import_roots(input_path) == {
         "artifact_io", "json", "math", "pathlib", "re", "storage_policy",
+    }
+
+
+def test_evaluation_query_domain_dissolves_the_application_cycle():
+    graph = _first_party_import_graph()
+
+    assert graph["evaluation_queries"] == {
+        "evaluation_contract", "retrieval_core", "table_retrieval_core",
+    }
+    assert _transitive_dependencies(graph, "evaluation_queries") == {
+        "evaluation_contract", "retrieval_core", "table_retrieval_core",
+    }
+    assert "evaluation_queries" in graph["eval"]
+    assert "evaluation_queries" in graph["evaluation_review"]
+    assert "eval" not in graph["evaluation_review"]
+    assert "eval" not in _transitive_dependencies(
+        graph, "evaluation_review")
+    query_path = _application_modules()["evaluation_queries"]
+    assert _raw_import_roots(query_path) == {
+        "evaluation_contract", "math", "re", "retrieval_core",
+        "table_retrieval_core",
     }

@@ -2,7 +2,7 @@
 
 - **Status:** Implemented locally; pending exact-head review and integration
 - **Decision date:** 2026-07-24
-- **Milestones:** R7 import-DAG gate and the first R8 evaluation slice
+- **Milestones:** R7 import-DAG gate and R8a/R8b evaluation inversion
 
 ## Context
 
@@ -20,9 +20,10 @@ eval --lazy--> evaluation_release --> evaluation_review --lazy--> eval
 
 That direction made a release-policy import load the private owner-review
 application and obscured which behavior was an input contract rather than a
-review workflow. A wholesale move of query validation would be a larger
-behavioral change, so this decision deliberately covers only the independently
-characterized input helpers.
+review workflow. A wholesale move of query validation was a larger behavioral
+change, so R8a first covered only the independently characterized input
+helpers. R8b followed after the legacy loader, query validation, corpus
+policies, and review consumers had explicit characterization coverage.
 
 ## Decision
 
@@ -44,14 +45,28 @@ imported eagerly, while calls resolve their attributes at runtime; existing
 failure injection can therefore replace those attributes without copying or
 bypassing the underlying security checks.
 
+R8b adds `evaluation_queries.py` as the dependency-closed query domain. It owns
+the query schema, finite-number helper, required/optional corpus-pin checks,
+snapshot comparison, judged-ID and table-family attestation, grounding-evidence
+binding, and their slug/answer/payload helpers. Its only first-party
+dependencies are `evaluation_contract`, `retrieval_core`, and
+`table_retrieval_core`; it does not import the evaluator, owner review, release
+policy, `rag`, model policy, orchestration, providers, or physical clients.
+
 The current dependency shape is:
 
 ```text
-eval --lazy--> evaluation_release ----\
-  |                                    +--> evaluation_inputs --> artifact_io
-  `--lazy--> evaluation_review --------/             |                |
-                 `--lazy--> eval                     |                v
-                                                     `------> storage_policy
+eval ----------------> evaluation_queries <------ evaluation_review
+ |                                                  |
+ |--lazy receipt----------------------------------->|
+ |                                                  v
+ `--lazy policy--> evaluation_release ------> evaluation_inputs
+                                                       |
+                                                       v
+                                                 artifact_io
+                                                       |
+                                                       v
+                                                 storage_policy
 ```
 
 `evaluation_release.py` therefore no longer imports
@@ -64,6 +79,19 @@ necessarily change, and patching a former review alias is not an injection
 mechanism for release-policy loading. The controlled rejection paths described
 below are deliberate hardening, not a claim of error-for-error compatibility
 for malformed inputs that previously escaped through incidental exceptions.
+
+`evaluation_review.py` no longer imports `eval.py`, even lazily. It calls the
+query domain for strict-record schema checks and full input/corpus validation.
+`eval.py` preserves all 13 moved private function names and five constants as
+object-identical aliases, while retaining evaluator/runtime composition. The
+legacy `load_queries` implementation and `_query_snapshot_sha256` cache remain
+in `eval.py`: successful loads still publish the SHA-256 of the exact raw bytes
+under the resolved path only after every row validates, and existing CLI tests
+can still replace the eval-local `load_queries` or `_validate_query` name.
+Nested calls inside the moved functions resolve sibling helpers in
+`evaluation_queries`; failure injection for those private internals must patch
+that owning module rather than rebinding a same-named `eval` alias. No tracked
+consumer depended on the former cross-helper rebinding seam.
 
 ## Strict and legacy parsing surfaces
 
@@ -83,10 +111,14 @@ These depth/numeric checks and controlled corpus-field type failures are the
 intentional input hardening in the slice; accepted finite values retain their
 normal `int` or `float` result types.
 
-`eval.load_queries` remains the legacy JSONL parser and then applies
-`eval._validate_query`. It is not silently described as strict and was not
-moved in this slice. Moving that parser and query/schema validation into a
-shared evaluation domain module is the next evaluation-side R8 boundary.
+`eval.load_queries` remains the legacy JSONL parser and then applies the
+`evaluation_queries._validate_query` compatibility alias. It is not
+silently described as strict and was not moved in R8b. It still performs direct
+raw-byte reads, UTF-8-SIG decoding, blank-line skipping with physical line
+numbers, ordinary `json.loads`, legacy-capitalized errors, and success-only
+digest publication. Duplicate-key and otherwise unused non-standard-number
+behavior therefore remains intentionally distinct from strict owner-review
+parsing. Any strictification requires a separate input-policy migration.
 Its relevance validator, the direct release-policy validator, and the baseline
 metric loader now use guarded finite conversion so oversized Python integers
 produce their labelled `ValueError` contracts rather than leaking
@@ -112,20 +144,27 @@ produce their labelled `ValueError` contracts rather than leaking
   instead of leaking incidental attribute/hash errors.
 - Compatibility aliases preserve the former `evaluation_review._...` call
   surface while new consumers import the leaf directly.
+- The three corpus policies remain separate: general query schema accepts a
+  digest, count, or both; required pin coverage demands both on every query;
+  owner review/release additionally requires one common digest, count, and ID
+  scheme. Validation is observational and does not normalize authored query
+  objects or their canonical bytes.
 
 ## Enforcement and residual work
 
 The tracked-source AST gate fixes the current first-party SCC inventory at
-exactly `{eval, evaluation_review}` and `{rag, job_manager}`. It also pins the
-leaf's direct/transitive dependencies and the one-way release edge. Subprocess
-tests cover all evaluation-module import orders, eager-import isolation, helper
-compatibility, strict parsing, snapshot bounds/link rejection, and corpus
-normalization/failures.
+exactly `{rag, job_manager}`. It pins both shared domains' direct/transitive
+dependencies, the one-way release edge, and review's inability to reach
+`eval.py` transitively. Subprocess tests cover all evaluation-module import
+orders, eager-import isolation, helper compatibility, strict parsing, snapshot
+bounds/link rejection, and full review input validation without loading the
+evaluator. Characterization also fixes legacy loader bytes/types/errors/digest
+timing, eval-local validator injection, query non-mutation, the three corpus
+policies, and strict-versus-legacy duplicate-key behavior.
 
-This is not completion of R7 or R8. `eval.py` and `evaluation_review.py` still
-form a lazy cycle until query validation moves inward. Separately,
+This completes the evaluation-side dependency inversion, not R7 or all of R8.
 `job_manager.py` still imports `rag.py`, `rag.py` lazily imports the manager,
 and `service_runtime.py` still depends on that facade. Coverage ratchets,
-typing, the broader architecture inventory, runtime protocols, and composition
-inversion remain planned. This local decision has not been pushed, reviewed,
-merged, tagged, or released.
+typing, the broader architecture inventory, runtime protocols, and runtime
+composition inversion remain planned. This local decision has not been pushed,
+reviewed, merged, tagged, or released.

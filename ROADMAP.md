@@ -43,7 +43,7 @@ Status terms:
 | Public UI and cloud-endpoint safety | Implemented locally | The R0A candidate removes the Gradio share path, binds `127.0.0.1` explicitly, centralizes versioned endpoint attestation before credential/cache/transport access, rejects redirects and ambiguous targets, isolates loopback proxies, prevents ambient `.netrc` credential replacement, and validates job persistence. It passes the full 1,678-test tree and an independent exploit-oriented audit |
 | Residual local/cloud trust boundary | Implemented locally | R0B adds versioned release-security policy v1 across CLI/Python/UI/service/evaluation/workers/jobs: trusted-single-user UI opt-in, local-only egress, release inline-secret rejection and cache-off default, opaque custom-gateway tenancy, cache-only model loading with explicit verified sync, pinned provider transports, bounded streamed JSON for every Requests-owned provider path, policy-controlled proxy/CA trust, disabled auxiliary telemetry, and strict provenance. The exact local tree passes 1,806 tests with 7 skips |
 | Offline model-sync planning and task presets | Implemented locally | A shared R10/R12 slice adds one lock-derived schema-v1 plan used by preflight and execution, presets for PDF ingestion/default retrieval/optional classification, explicit all-consumer selection, exact cache-aware byte and peak-space accounting, free-space refusal before transport/publication, full auxiliary/transform bundle identities, and explicit unsafe-pickle reporting. The exact local tree passes 1,839 tests with 7 platform skips; 72 focused tests and a separate adversarial audit cover the new boundary with no remaining material issue. It is local, not published, and does not complete either milestone |
-| Evaluation input boundary and import-DAG gate | Implemented locally | The first R7/R8 slice extracts strict snapshot, JSON-object, digest, and corpus contracts into dependency-light `evaluation_inputs.py`; release policy now imports that leaf directly while owner review preserves object-identical compatibility aliases. A tracked-source AST gate fixes the two residual SCCs and the leaf/release direction; 41 dedicated tests cover helper behavior, import isolation/order, aliases, resolver semantics, and the graph, with three additional regressions for oversized direct/legacy numeric inputs. Excessive nesting, numeric overflow, and malformed corpus-field types now fail closed with controlled errors. The full local tree passes 1,883 tests with 7 platform skips. The slice is local and does not complete R7 or R8 |
+| Evaluation contract boundaries and import-DAG gate | Implemented locally | R8a extracts strict snapshot/JSON/digest/corpus contracts into `evaluation_inputs.py`; R8b moves the exact 13-function query/schema/corpus/judgment/grounding closure into `evaluation_queries.py`. Release, review, and evaluator now depend one-way on those domains while old private eval/review names remain compatible. The tracked-source AST gate pins both domains and leaves only `{rag, job_manager}` cyclic. Dedicated tests characterize strict and legacy parsing, exact bytes/types/errors/digest timing, non-mutation, corpus-policy levels, aliases, review isolation, import order, and resolver semantics. The full local tree passes 1,915 tests with 7 platform skips. Evaluation-side R8 is complete locally; R7 and runtime-side R8 remain open and unpublished |
 | Ethics retrieval calibration | Owner review pending | [PR #43](https://github.com/toddlar00/rag-pipeline/pull/43): a current-schema clean-room rebuild preserved all 20 unique IDs behind 24 judgments in the exact 1,715-record corpus. A private owner packet now combines those judgments with 195 unique top-10 candidates across four modes, while a content-free receipt and strict four-mode release-policy contract make promotion explicit and review-bound. Actual owner decisions and final thresholds remain outstanding |
 | Process supervision extraction | Implemented (draft) | [PR #33](https://github.com/toddlar00/rag-pipeline/pull/33): deadline supervision, Windows/POSIX containment, startup gates, termination confirmation, and generic entrypoint policy moved to stdlib-only `process_supervision.py`; `rag.py` retains late-bound compatibility wrappers |
 | Vector-index lifecycle extraction | Implemented (draft) | [PR #38](https://github.com/toddlar00/rag-pipeline/pull/38): a standard-library-only policy layer owns deterministic reconciliation, dirty-marker ownership, mutation epochs, exact-ID verification, callback-reentry exclusion, legacy-hash repair, and close/manifest/marker commit ordering |
@@ -694,7 +694,7 @@ are a snapshot, not release claims:
 - The pre-R0A statement-coverage probe reported 75% over application and tool
   code when tests were omitted. That number is directional: branch coverage is
   disabled and separately launched workers are not automatically combined. CI
-  does not currently measure coverage. The current local tree passes 1,883 tests
+  does not currently measure coverage. The current local tree passes 1,915 tests
   with 7 platform skips. The run emits 429 dependency deprecation warnings on Python
   3.14, primarily from FastAPI/Starlette's `asyncio.iscoroutinefunction`
   compatibility path.
@@ -704,7 +704,7 @@ are a snapshot, not release claims:
   PR #43 `py_compile` list is stale, however: it omits several current modules.
   The current R0 branch replaces it with a tested, deterministic compile of all
   Git-tracked Python sources; the current exact inventory
-  contains 123 files.
+  contains 125 files.
 - Four supply-chain exceptions expire on 2026-08-31: the Chroma vulnerability
   exception, normalized Torch and Torchvision audit skips, the PyMuPDF license
   exception, and FlagEmbedding's missing wheel-license metadata allowance.
@@ -757,8 +757,8 @@ done separate; “code exists” does not imply “integrated” or “owner app
 | R4 table/context evaluation | Reusable exact semantics and CC0 CLI suite local | Portable baseline/gates pass | Not published | Private aliases/ablations require R3 owner labels | Run 0/1/2-context and table on/off four-mode study |
 | R5 release contract | Planned; migration rehearsal exists in #39 | No tag/release/manifest/rollback execution | None | Version, distribution, privacy, and release approval needed | Start only after R0-R4/R2 gates and R12 Phase A |
 | R6 vector-client debt | Windows Qdrant workaround exists in #39 stack | Reproducer and real-client evidence exist for pinned version | Draft stack | No policy decision unless workaround persists | Retest after R2; remove or isolate/version-gate |
-| R7 quality gates | Exhaustive compile/Ruff and the first tracked-source AST import-DAG gate exist locally; coverage/types and the broader architecture inventory do not | The gate fixes the exact residual SCCs, leaf dependencies, and release-input direction; point coverage remains non-gating and misses subprocesses | Not published | Maintainer selects ratchet/tool baseline | Add branch coverage, typed leaves, function/facade inventory, and changed-safety-code ratchets |
-| R8 dependency direction | First evaluation leaf/edge implemented locally | Direct helper/import-order tests and the AST gate cover the extracted boundary; `eval`↔`evaluation_review` and `rag`↔`job_manager` remain explicit SCCs | Not published | No owner decision | Move characterized query validation inward, then introduce runtime protocols one boundary at a time |
+| R7 quality gates | Exhaustive compile/Ruff and a tracked-source AST import-DAG gate exist locally; coverage/types and the broader architecture inventory do not | The gate fixes the sole residual SCC, both evaluation-domain dependencies, and one-way release/review/evaluator direction; point coverage remains non-gating and misses subprocesses | Not published | Maintainer selects ratchet/tool baseline | Add branch coverage, typed leaves, function/facade inventory, and changed-safety-code ratchets |
+| R8 dependency direction | Evaluation-side inversion implemented locally | Exact-function extraction, compatibility, parser/digest/non-mutation, clean-subprocess review, import-order, and AST tests cover the acyclic evaluation graph; only `rag`↔`job_manager` remains cyclic | Not published | No owner decision | Introduce characterized runtime protocols and composition one boundary at a time |
 | R9 orchestration decomposition | First policy leaves extracted; hot spots remain | Failure-injection suite provides characterization base | None | No owner decision | Wait for R7/R10A, then slice main/chunk/eval/OpenAPI |
 | R10 performance/capacity | Offline cache-aware model-sync byte/space planner implemented locally; runtime telemetry and queue metrics exist | Planner/preflight behavior is tested locally; no stable workload capacity budgets or hardware baselines | Not published | Authorized corpus/hardware/cost scope needed for Phase B | Establish small/medium CPU Phase A before R8/R9; retain the sync plan as its model-footprint input |
 | R11 corpus/profile breadth | Second profile and synthetic fixtures exist | No authorized real receipt for `roman-parts-book-v1` | None | Corpus authorization/qualification required | Add content-free profile diagnostics and real receipt |
@@ -766,20 +766,20 @@ done separate; “code exists” does not imply “integrated” or “owner app
 
 ## Architecture and risk map
 
-The proposed tree contains 123 Python files: 55 application/tool files
-(52,573 lines) and 68 test files (37,916 lines). Size is not itself a defect,
+The proposed tree contains 125 Python files: 56 application/tool files
+(52,616 lines) and 69 test files (38,277 lines). Size is not itself a defect,
 but it makes the remaining concentration and dependency risks measurable.
 
 | Surface | Current strength | Material remaining risk | Roadmap owner |
 |---|---|---|---|
 | Ingestion, source identity, and quality | PRs #31, #34, and #35 bind exact source generations, immutable structure profiles, recovered tables, lineage, and fail-closed quality receipts | The second profile is synthetic-only; `_chunk_document_locked` remains roughly 875 lines and `_prepare_source_preserving_chunks` roughly 410 | R9, R11 |
 | Retrieval and vector publication | PRs #36-#38 add bounded context, table rows, family collapse, and one guarded lifecycle for both stores | Production table/context benefit is not owner-calibrated; Windows local Qdrant still needs private-client detection plus forced garbage collection | R3, R4, R6 |
-| Evaluation and release | PRs #40/#43 plus local R4 bind judgments, grounding, review receipts, release modes, table policies, and portable baselines; local R8a adds a strict shared input leaf and removes release policy from the evaluation SCC | Owner approval and private four-mode ablations remain absent; `eval.py` and `evaluation_review.py` still form a lazy cycle because query validation remains in the evaluator | R3, R4, R8 |
+| Evaluation and release | PRs #40/#43 plus local R4 bind judgments, grounding, review receipts, release modes, table policies, and portable baselines; local R8a/R8b provide strict input and query-domain boundaries with an acyclic evaluator/review/release graph | Owner approval and private four-mode ablations remain absent; the legacy general-query parser remains intentionally permissive and needs a separate policy decision before any strictification | R3, R4, R8 |
 | LLM execution | Integrated budgets, single-flight caching, adapter extraction, artifact locks, and transport accounting; local R0A/R0B adds endpoint validation, local-only consent, cache/tenant isolation, pinned provider transports, explicit environment trust, cache-only models, and release-safe secret/cache defaults | Exact-head review/CI is absent; R2 dependency upgrades can change SDK/HTTP behavior; application code cannot enforce OS DNS/firewall or validate a deliberately trusted interception proxy | R1, R2, R5 |
 | Jobs, service, and recovery | Integrated durable jobs/service plus PRs #41/#42 provide containment, terminal evidence, cancellation, recovery, queue metrics, and real fault drills | `job_manager` imports `rag`, while `rag` lazily imports `job_manager`; POSIX descendants can deliberately escape the process group with `setsid()`, so worker extensions remain trusted code rather than sandboxed plugins | R5, R8 |
 | UI and exposure boundary | Local Search, Export, Info, and Jobs use bounded workers/private storage; local R0A removes public sharing and R0B refuses startup without explicit trusted-single-user acknowledgement | Shared-host or remote UI remains unsupported and needs principal authentication plus origin/session controls as a separate product | R1, R12 |
 | Supply chain | Universal hash locks, model byte locks, SBOM/ML-BOM, scheduled advisory/license checks, and real-client profiles are unusually strong | PR #30 is an unreviewable 13-package jump with stale locks; four policy exceptions expire 2026-08-31; Python 3.14 emits 429 dependency warnings | R2 |
-| Static quality and architecture | Extracted leaves, direct failure injection, 1,883 passing tests, exhaustive source compilation, a wide OS/Python matrix, and a local tracked-source SCC/dependency gate reduce regression risk | No branch/subprocess coverage ratchet or type checker; the AST gate does not yet inventory function spans/arity or private-facade references; `rag.main` remains too large | R7-R9 |
+| Static quality and architecture | Extracted leaves, direct failure injection, 1,915 passing tests, exhaustive source compilation, a wide OS/Python matrix, and a local tracked-source SCC/dependency gate reduce regression risk | No branch/subprocess coverage ratchet or type checker; the AST gate does not yet inventory function spans/arity or private-facade references; `rag.main` remains too large | R7-R9 |
 | Release and governance | The repository is private, PR evidence is detailed, and exact-head migration rehearsals exist | Thirteen project PRs (#31-#43) remain draft: twelve are stacked implementation PRs, while #32 is a superseded standalone design; the cumulative PR stops at #38, no review is submitted, no live issues/milestones exist, and there is no tag/release/rollback manifest | R0, R1, R5 |
 | Documentation and product entry | README, `docs/README.md`, developer guide, maintained ADRs, and clearly historical Claude plans expose most operator/design knowledge | The README exceeds 2,600 lines; point-in-time evidence bloats this roadmap; vector lifecycle/table retrieval/source generation still lack ADRs; private-source policy remains unresolved | R0, R12 |
 
@@ -813,7 +813,7 @@ and interface assumptions. They must not be executed or committed verbatim.
 | Ethics calibration | Review packet, receipt, and fail-closed four-mode release contract implemented by PR #43 | Corpus-owner relevance decisions and final thresholds remain R3 |
 | Leaf-module static typing | No mypy or Pyright configuration, dependency, or CI gate exists | Implement incrementally in R7 after branch convergence |
 | README split | Not implemented; the README has grown since the plan was written | Implement task-oriented documentation in R12 |
-| Dissolve runtime dependency seams | First evaluation slice is local: `evaluation_release.py` now depends on shared `evaluation_inputs.py`, outside the residual SCC. Still present: `job_manager.py` imports `rag`, while `rag.py` lazily imports `job_manager`; `service_runtime.py` depends on both; `eval.py` and `evaluation_review.py` remain reciprocal through lazy query/review imports | Retain the enforced two-SCC baseline and continue R8 one characterized boundary at a time |
+| Dissolve runtime dependency seams | Evaluation side is implemented locally: release/review use `evaluation_inputs.py`, evaluator/review use `evaluation_queries.py`, and no evaluation SCC remains. Still present: `job_manager.py` imports `rag`, while `rag.py` lazily imports `job_manager`; `service_runtime.py` depends on both | Retain the enforced one-SCC baseline and continue runtime-side R8 one characterized boundary at a time |
 
 The process-supervision plan links a specification that is absent from the
 current branch but present in standalone PR #32. PR #33 already implements that
@@ -1387,11 +1387,12 @@ a disruptive whole-repository rewrite.
   `evaluation_release`, and related policy records. Add security-critical
   `job_runtime` after its imported policy/storage layer is clean. Expand by
   dependency layer, not by blanket ignores.
-- **Implemented locally (first gate):** a deterministic tracked-source AST
-  import graph fixes the current SCCs at `{eval, evaluation_review}` and
-  `{rag, job_manager}`, pins the shared evaluation leaf's direct/transitive
-  dependencies, and prevents release policy from regaining an evaluator/review
-  edge. It scans root, tools, and script sources through the Git inventory.
+- **Implemented locally:** a deterministic tracked-source AST import graph
+  fixes the sole current SCC at `{rag, job_manager}`, pins both shared
+  evaluation domains' direct/transitive dependencies, proves review cannot
+  reach the evaluator, and prevents release policy from regaining an
+  evaluator/review edge. It scans root, tools, and script sources through the
+  Git inventory.
   Still generate the direct `rag._...` test-reference inventory so
   compatibility debt is reduced deliberately rather than broken accidentally.
 - Add a deterministic AST architecture inventory for tracked-source counts,
@@ -1450,11 +1451,13 @@ one-way application over shared contracts rather than a reciprocal import.
 - Define narrow runtime protocols for pipeline execution, search/index
   operations, storage/retention, and telemetry. Inject implementations into job
   and service layers instead of importing the `rag` module as a service locator.
-- Continue the evaluation inversion by moving the characterized legacy query
-  parser/schema validation and remaining review-packet domain contracts out of
-  `eval.py`. Let `eval.py` and `evaluation_review.py` depend one-way on that
-  domain instead of retaining their current two-module lazy cycle. Preserve CLI
-  wrappers and schema bytes through characterization tests.
+- **Implemented locally (R8b):** move the exact 13-function query schema,
+  corpus-pin/snapshot, judged-ID/table-family, and grounding-evidence closure
+  plus five constants into `evaluation_queries.py`. `eval.py` preserves
+  object-identical private aliases and its legacy loader/digest cache; review
+  calls the domain directly. Characterization fixes legacy bytes, types,
+  errors, physical line numbers, success-only digest publication, query
+  non-mutation, strict-parser separation, and all three corpus-policy levels.
 - Move application composition to one root module. Keep late-bound wrappers and
   re-exports until all tests and callers have migrated.
 - Enforce the target dependency graph in the R7 architecture test and delete
@@ -1467,15 +1470,15 @@ acyclic; existing CLI/service/Python surfaces remain compatible; direct
 protocol tests cover error propagation and recovery; and every supervision, evaluation, and
 real-client regression passes unchanged.
 
-**Delivered local slice.** Forty-one dedicated tests cover all four extracted
-helpers, compatibility identity, strict depth/numeric/type failures, every
-evaluation import order, eager-import isolation, resolver semantics, and the
-exact dependency graph; three cross-surface regressions cover oversized numeric
-inputs to direct release validation, legacy query validation, and baseline
-loading. The current full tree passes 1,883 tests with 7 skips.
-`evaluation_release` is outside the evaluation SCC. The remaining
-`eval`↔`evaluation_review` and `rag`↔`job_manager` SCCs are deliberately test
-gates, not completed work; R8 remains open and unpublished.
+**Delivered local slices.** Seventy-three dedicated boundary/architecture
+tests cover strict inputs, compatibility identity, depth/numeric/type failures,
+all four-module import orders, eager isolation, resolver semantics, legacy
+loader/query staging, and the exact acyclic evaluation graph; three additional
+cross-surface regressions cover oversized numeric inputs. Existing
+evaluator/review/grounding suites exercise the object-identical aliases. The
+current full tree passes 1,915 tests with 7 skips. Evaluation is acyclic;
+`{rag, job_manager}` is the sole deliberately gated SCC. R8 remains open and
+unpublished for runtime composition.
 
 ### R9 (P2, large in behavior-preserving slices): decompose orchestration hot spots
 
@@ -1656,7 +1659,7 @@ loopback or private-data boundaries.
 | 4 | R4 private-corpus ablations and expansion | Reusable semantics/CLI coverage are local; remaining evidence requires R3's frozen judgments |
 | 5 | R12 Phase A, R5 first versioned release, and R6 client-workaround decision | Requires R0B, R1-R4, R2 release locks, stable entry points, and minimum release docs |
 | 6 | R7 quality gates and R10 Phase A baselines | Establish both before architecture slices so correctness and performance are measurable |
-| 7 | Continue R8 dependency direction and begin R9 orchestration decomposition | The first evaluation leaf/DAG gate is local; remaining small, characterized slices still require the rest of R7 and the Phase A baselines |
+| 7 | Continue runtime-side R8 dependency direction and begin R9 orchestration decomposition | Evaluation-side R8 and the DAG gate are local; the remaining runtime composition slices still require the rest of R7 and the Phase A baselines |
 | 8 | R10 Phase B capacity, R11 corpus breadth, and R12 Phase B experience | Build on stable release contracts and approved privacy policy |
 
 After owner review of this roadmap, create one GitHub issue per R0, R0A, R0B,

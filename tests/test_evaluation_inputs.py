@@ -187,7 +187,8 @@ def test_corpus_contract_rejects_incomplete_or_inconsistent_declarations(
 
 @pytest.mark.parametrize(
     "order", itertools.permutations(
-        ("eval", "evaluation_review", "evaluation_release")),
+        ("eval", "evaluation_queries", "evaluation_review",
+         "evaluation_release")),
 )
 def test_evaluation_modules_import_cleanly_in_every_order(order):
     statement = "; ".join(f"import {module}" for module in order)
@@ -207,7 +208,7 @@ def test_evaluation_modules_import_cleanly_in_every_order(order):
     [
         (
             "evaluation_review",
-            {"evaluation_inputs"},
+            {"evaluation_inputs", "evaluation_queries"},
             {"eval", "evaluation_release"},
         ),
         (
@@ -217,7 +218,7 @@ def test_evaluation_modules_import_cleanly_in_every_order(order):
         ),
         (
             "eval",
-            set(),
+            {"evaluation_queries"},
             {"evaluation_review", "evaluation_release"},
         ),
     ],

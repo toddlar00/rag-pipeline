@@ -21,6 +21,7 @@ from pathlib import Path
 
 import artifact_io
 import evaluation_contract
+import evaluation_queries
 from evaluation_inputs import (
     _corpus_contract as _corpus_contract,
     _hex_digest as _hex_digest,
@@ -119,8 +120,6 @@ def _pretty_json_size(payload: object) -> int:
 
 
 def _parse_queries(raw: bytes, path: Path) -> list[dict]:
-    import eval as retrieval_eval
-
     try:
         text = raw.decode("utf-8-sig")
     except UnicodeError as exc:
@@ -134,7 +133,7 @@ def _parse_queries(raw: bytes, path: Path) -> list[dict]:
             label=f"evaluation query {line_number}",
             max_bytes=MAX_QUERIES_BYTES,
         )
-        retrieval_eval._validate_query(
+        evaluation_queries._validate_query(
             query, label=f"{path}:{line_number}")
         queries.append(query)
     if not queries:
@@ -176,8 +175,6 @@ def _load_inputs(
         required_status: str | None,
         validate_corpus_pin: bool = True,
         ) -> tuple[list[dict], str, list[dict], str]:
-    import eval as retrieval_eval
-
     query_raw, query_sha256 = _read_snapshot(
         queries_path, label="evaluation queries", max_bytes=MAX_QUERIES_BYTES)
     chunk_raw, chunk_sha256 = _read_snapshot(
@@ -186,14 +183,14 @@ def _load_inputs(
     records = artifact_io._parse_index_records_strict(
         chunk_raw, Path(chunks_path), chunk_id_fn=retrieval_core._chunk_id)
     _query_ids(queries)
-    retrieval_eval._validate_corpus_pin_coverage(queries, required=True)
+    evaluation_queries._validate_corpus_pin_coverage(queries, required=True)
     if validate_corpus_pin:
-        retrieval_eval._validate_declared_corpus_snapshot(
+        evaluation_queries._validate_declared_corpus_snapshot(
             queries, actual_hash=chunk_sha256, actual_count=len(records))
-    retrieval_eval._validate_judged_ids(
+    evaluation_queries._validate_judged_ids(
         queries, records, retrieval_core._chunk_id,
         corpus_sha256=chunk_sha256)
-    retrieval_eval._validate_grounding_evidence_ids(
+    evaluation_queries._validate_grounding_evidence_ids(
         queries, records, retrieval_core._chunk_id)
     if required_status is not None:
         wrong = [

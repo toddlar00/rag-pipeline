@@ -174,10 +174,13 @@ implements dry-run-first quarantine and deletion plans.
 owner review and release policy. It provides bounded duplicate-safe JSON-object
 parsing, exact link-aware snapshots, digest validation, and one normalized
 corpus binding. `evaluation_release.py` imports this leaf directly;
-`evaluation_review.py` retains object-identical compatibility aliases. The
-former three-module evaluation cycle is reduced, not eliminated:
-`eval.py` and `evaluation_review.py` still import each other lazily because
-query validation remains in the legacy evaluator. See the
+`evaluation_review.py` retains object-identical compatibility aliases.
+`evaluation_queries.py` separately owns the query schema, corpus-pin,
+judged-ID/table-family, and grounding-evidence contracts shared by the evaluator
+and owner review. `eval.py` preserves object-identical private aliases and its
+legacy `load_queries` facade, raw-byte digest cache, scoring, and CLI
+composition. Both applications now depend one-way on the shared domain; the
+evaluation/review/release graph is acyclic. See the
 [evaluation input-contract ADR](docs/architecture/decisions/evaluation-input-contract.md).
 
 ## Quick Start
@@ -2245,8 +2248,10 @@ ceiling.
 Review and release-policy objects use the strict shared parser: duplicate
 fields, invalid UTF-8, structures deeper than 64 levels, non-finite literals,
 and out-of-range numeric magnitudes such as `1e999` fail closed. The general
-`eval.load_queries` JSONL path remains the legacy parser for compatibility and
-is a separately gated R8 migration.
+`eval.load_queries` JSONL path deliberately remains the legacy parser for
+compatibility: R8b moved its query validation contracts, not its parsing,
+error, raw-byte digest, or mutation semantics. Any future strictification is a
+separate input-policy migration rather than dependency-direction work.
 
 Once every decision is `approve`, the corpus owner—not an automated agent—can
 promote the set and issue a content-free receipt:
@@ -2672,6 +2677,7 @@ model-artifacts.lock.json # Immutable revisions and per-file raw SHA-256 invento
 preprocess_pdf.py       # Standalone PDF preprocessing CLI facade
 eval.py                 # Relevance/safety evaluation, gates, and reports
 evaluation_inputs.py    # Strict shared snapshot/JSON/corpus input contracts
+evaluation_queries.py   # Shared query/schema/corpus/judgment domain contracts
 evaluation_contract.py  # Shared report/scorer/table-policy version contract
 evaluation_review.py    # Private owner-review packets and portable receipts
 evaluation_release.py   # Strict four-mode retrieval release-policy contract

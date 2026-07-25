@@ -89,10 +89,10 @@ Current policy/runtime modules include:
 - `attempt_reporting`, `operational_metrics`, `operational_drills`,
   `run_telemetry`, `storage_policy`, and `retention` — durable redacted
   operational evidence and private artifact lifecycle policy.
-- `evaluation_inputs`, `evaluation_contract`, `evaluation_metrics`,
+- `evaluation_inputs`, `evaluation_queries`, `evaluation_contract`, `evaluation_metrics`,
   `evaluation_review`, and `evaluation_release` — strict shared inputs,
-  versioned retrieval/grounding semantics, metrics, and review-bound
-  evaluation promotion. See the
+  query/corpus/judgment validation, versioned retrieval/grounding semantics,
+  metrics, and review-bound evaluation promotion. See the
   [evaluation input-contract ADR](docs/architecture/decisions/evaluation-input-contract.md)
   and the
   [table-family evaluation ADR](docs/architecture/decisions/table-family-evaluation.md).
@@ -119,18 +119,20 @@ contained child's gate-wait bootstrap. The `job_manager`/`service_runtime` to
 known residual seam and requires a separate behavior-characterized milestone.
 See the [process-supervision ADR](docs/architecture/decisions/process-supervision-extraction.md).
 
-### Evaluation input layering
+### Evaluation contract layering
 
 `evaluation_inputs.py` owns the strict snapshot, JSON-object, digest, and
 corpus-binding helpers. `evaluation_release.py` imports that leaf directly;
 `evaluation_review.py` re-exports the former private helper names for
 compatibility. Do not route release policy back through the review application
-or weaken the tracked-source architecture gate. The remaining lazy
-`eval`/`evaluation_review` cycle is explicit: `eval.load_queries` and query
-schema validation have not yet moved into the shared domain. Preserve legacy
-query behavior until that R8 slice has characterization coverage. The exact
-allowed SCCs are `{eval, evaluation_review}` and `{rag, job_manager}`; a new or
-larger cycle is a test failure.
+or weaken the tracked-source architecture gate. `evaluation_queries.py` owns
+the query schema, corpus pins, judged-ID/table-family validation, and grounding
+evidence binding. `eval.py` preserves the former private names as
+object-identical aliases and retains the legacy JSONL loader plus raw-byte
+digest cache; `evaluation_review.py` calls the query domain directly. Do not
+replace the legacy loader with the strict review parser without a separate
+input-policy decision. The evaluation graph is acyclic. The sole allowed SCC
+is `{rag, job_manager}`; a new or larger cycle is a test failure.
 
 ### Vector stores and safety invariants
 

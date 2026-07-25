@@ -73,6 +73,7 @@ def test_repository_gate_includes_modules_omitted_by_the_old_ci_list():
         "attempt_reporting.py",
         "document_profiles.py",
         "evaluation_inputs.py",
+        "evaluation_queries.py",
         "evaluation_release.py",
         "evaluation_review.py",
         "operational_drills.py",
