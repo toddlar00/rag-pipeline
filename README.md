@@ -170,9 +170,17 @@ or transitively loads the `job_manager` shell. Detached children still execute
 the stable `job_manager.py` path. See the
 [service job-coordination ADR](docs/architecture/decisions/service-job-coordination-binding.md).
 
-The tracked first-party import graph remains acyclic. R8 is still open: lazy
-job CLI dispatch remains in `rag.py`, and the service, UI, and CLI have not
-converged on one application composition root.
+`job_application.py` now freezes the job-store factory, launch, single/all-job
+reconciliation, and manager-error classification used by outer applications.
+The `rag.py jobs` command snapshots it once per command and each UI action uses
+one generation through any nested refresh. No production module imports
+`job_manager.py`; that module remains the stable public/executable facade. See
+the [job-application binding ADR](docs/architecture/decisions/job-application-binding.md).
+
+The tracked first-party import graph remains acyclic. R8 is still open because
+`rag.py` owns both pipeline implementation and its executable facade; the HTTP
+adapter and narrow pipeline implementations must be separated before one real
+outer application composition root can replace the remaining split roots.
 
 `ingestion_core.py` is the standard-library-only PDF safety layer for text-layer
 quality, page-coverage-aware background detection, complete pre-mutation
@@ -2695,6 +2703,7 @@ retention.py            # Ownership manifests and dry-run-first lifecycle plans
 job_runtime.py          # Durable private job schemas, bindings, transitions, leases
 job_coordination_contracts.py # Stable results, errors, and frozen service binding
 job_coordination.py     # Detached launch, supervision, cancellation, and recovery
+job_application.py      # Frozen CLI/UI store, launch, reconcile, and error capability
 job_manager.py          # Compatible durable-job import and executable facade
 supervised_worker.py    # Gated same-PID bootstrap for pre-execution containment
 service_contracts.py    # Dependency-free bounded/redacted local API contracts

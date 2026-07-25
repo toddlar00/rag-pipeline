@@ -29,7 +29,7 @@ os.environ["DO_NOT_TRACK"] = "1"
 # Import pipeline functions
 sys.path.insert(0, str(Path(__file__).parent))
 import rag
-import job_manager
+import job_application
 import job_runtime
 import release_security
 import storage_policy
@@ -59,6 +59,8 @@ _config = {
 
 _VECTOR_WORKER_FLAG = "--vector-worker"
 _UI_EXPORT_MARKER = ".rag-owned.json"
+_default_job_application_binding = (
+    job_application.default_job_application_binding)
 
 
 def _write_export_marker(
@@ -545,8 +547,10 @@ def _jobs_disabled() -> str | None:
     return None
 
 
-def _job_store() -> job_runtime.JobStore:
-    return job_runtime.JobStore(Path(_config["job_root"]))
+def _job_store(
+        binding: job_application.JobApplicationBinding,
+) -> job_runtime.JobStore:
+    return binding.job_store_factory(Path(_config["job_root"]))
 
 
 def _format_job_summaries(
@@ -563,16 +567,28 @@ def _format_job_summaries(
     return "\n".join(lines)
 
 
+def _jobs_refresh_with_binding(
+        binding: job_application.JobApplicationBinding,
+) -> str:
+    try:
+        store = _job_store(binding)
+        summaries = binding.reconcile_all_jobs(store)
+        return _format_job_summaries(summaries)
+    except Exception as exc:
+        return f"Job status unavailable ({type(exc).__name__})."
+
+
 def do_jobs_refresh():
     disabled = _jobs_disabled()
     if disabled is not None:
         return disabled
     try:
-        store = _job_store()
-        summaries = job_manager.reconcile_all_jobs(store)
-        return _format_job_summaries(summaries)
+        binding = _default_job_application_binding()
+        if not isinstance(binding, job_application.JobApplicationBinding):
+            raise TypeError("invalid job application binding")
     except Exception as exc:
         return f"Job status unavailable ({type(exc).__name__})."
+    return _jobs_refresh_with_binding(binding)
 
 
 def do_job_reindex(full_reindex):
@@ -610,17 +626,20 @@ def do_job_reindex(full_reindex):
     if full_reindex:
         arguments.append("--full-reindex")
     try:
-        store = _job_store()
+        binding = _default_job_application_binding()
+        if not isinstance(binding, job_application.JobApplicationBinding):
+            raise TypeError("invalid job application binding")
+        store = _job_store(binding)
         submitted = store.submit_job(
             "index", arguments,
             timeout_seconds=rag.DEFAULT_OPERATION_TIMEOUTS["index"],
             working_directory=Path.cwd(), output_root=rag.OUTPUT_DIR)
-        launched = job_manager.launch_detached(
+        launched = binding.launch_detached(
             store, submitted.job_id,
             ready_timeout=_config["job_ready_timeout"])
         return (
             f"Submitted `{submitted.job_id}` ({launched.status}).\n\n"
-            f"{do_jobs_refresh()}")
+            f"{_jobs_refresh_with_binding(binding)}")
     except Exception as exc:
         return f"Could not submit reindex job ({type(exc).__name__})."
 
@@ -630,9 +649,12 @@ def do_job_cancel(job_id):
     if disabled is not None:
         return disabled
     try:
-        store = _job_store()
+        binding = _default_job_application_binding()
+        if not isinstance(binding, job_application.JobApplicationBinding):
+            raise TypeError("invalid job application binding")
+        store = _job_store(binding)
         store.request_cancel(str(job_id).strip())
-        return do_jobs_refresh()
+        return _jobs_refresh_with_binding(binding)
     except Exception as exc:
         return f"Could not request cancellation ({type(exc).__name__})."
 
@@ -642,14 +664,17 @@ def do_job_resume(job_id):
     if disabled is not None:
         return disabled
     try:
-        store = _job_store()
+        binding = _default_job_application_binding()
+        if not isinstance(binding, job_application.JobApplicationBinding):
+            raise TypeError("invalid job application binding")
+        store = _job_store(binding)
         job_id = str(job_id).strip()
-        current = job_manager.reconcile_job(store, job_id)
+        current = binding.reconcile_job(store, job_id)
         store.prepare_resume(job_id, expected_revision=current.revision)
-        job_manager.launch_detached(
+        binding.launch_detached(
             store, job_id,
             ready_timeout=_config["job_ready_timeout"])
-        return do_jobs_refresh()
+        return _jobs_refresh_with_binding(binding)
     except Exception as exc:
         return f"Could not resume job ({type(exc).__name__})."
 

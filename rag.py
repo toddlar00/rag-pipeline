@@ -44,6 +44,7 @@ import embedding_policy as _embedding_policy
 import endpoint_policy as _endpoint_policy
 import ingestion_core as _ingestion_core
 import index_state as _index_state
+import job_application as _job_application
 import job_runtime as _job_runtime
 import llm_adapters as _llm_adapters
 import model_artifacts as _model_artifacts
@@ -14431,10 +14432,20 @@ def _canonical_background_security_argv(
     return cleaned + positional_suffix
 
 
-def _run_jobs_command(args) -> dict[str, int | bool]:
-    import job_manager as _job_manager
+_default_job_application_binding = (
+    _job_application.default_job_application_binding)
 
-    store = _job_runtime.JobStore(args.job_root)
+
+def _run_jobs_command(
+        args, *,
+        job_binding: _job_application.JobApplicationBinding | None = None,
+) -> dict[str, int | bool]:
+    binding = (
+        _default_job_application_binding()
+        if job_binding is None else job_binding)
+    if not isinstance(binding, _job_application.JobApplicationBinding):
+        raise TypeError("job_binding must be a JobApplicationBinding")
+    store = binding.job_store_factory(args.job_root)
     action = args.job_action
     payload: dict | list[dict]
     summaries: list[_job_runtime.JobSummary]
@@ -14448,7 +14459,7 @@ def _run_jobs_command(args) -> dict[str, int | bool]:
             timeout_seconds=args.timeout,
             working_directory=Path.cwd(), output_root=OUTPUT_DIR)
         try:
-            launch = _job_manager.launch_detached(
+            launch = binding.launch_detached(
                 store, submitted.job_id,
                 ready_timeout=args.ready_timeout)
         except BaseException as launch_error:
@@ -14469,29 +14480,29 @@ def _run_jobs_command(args) -> dict[str, int | bool]:
         payload = {"job": summary.as_dict(), "launch": launch.as_dict()}
         summaries = [summary]
     elif action == "list":
-        summaries = _job_manager.reconcile_all_jobs(store)
+        summaries = binding.reconcile_all_jobs(store)
         payload = [summary.as_dict() for summary in summaries]
     elif action == "status":
-        summary = _job_manager.reconcile_job(store, args.job_id)
+        summary = binding.reconcile_job(store, args.job_id)
         summaries = [summary]
         payload = summary.as_dict()
     elif action == "cancel":
         store.request_cancel(args.job_id)
         deadline = time.monotonic() + args.wait_timeout
-        summary = _job_manager.reconcile_job(store, args.job_id)
+        summary = binding.reconcile_job(store, args.job_id)
         while args.wait and not summary.terminal:
-            summary = _job_manager.reconcile_job(store, args.job_id)
+            summary = binding.reconcile_job(store, args.job_id)
             if summary.terminal or time.monotonic() >= deadline:
                 break
             time.sleep(0.1)
         summaries = [summary]
         payload = summary.as_dict()
     elif action == "resume":
-        current = _job_manager.reconcile_job(store, args.job_id)
+        current = binding.reconcile_job(store, args.job_id)
         resumed = store.prepare_resume(
             args.job_id, expected_revision=current.revision)
         try:
-            launch = _job_manager.launch_detached(
+            launch = binding.launch_detached(
                 store, args.job_id, ready_timeout=args.ready_timeout)
         except BaseException as launch_error:
             try:
@@ -15396,17 +15407,21 @@ def main(argv: list[str] | None = None):
             operation_metrics.update(_run_storage_command(args))
 
         elif args.command == "jobs":
-            import job_manager as _job_manager
-
             if hasattr(args, "wait_timeout"):
                 try:
                     args.wait_timeout = _normalize_operation_timeout(
                         args.wait_timeout)
                 except ValueError as exc:
                     parser.error(str(exc))
+            job_binding = _default_job_application_binding()
+            if not isinstance(
+                    job_binding, _job_application.JobApplicationBinding):
+                raise TypeError(
+                    "default job binding must be a JobApplicationBinding")
             try:
-                operation_metrics.update(_run_jobs_command(args))
-            except _job_manager.JobManagerError as exc:
+                operation_metrics.update(_run_jobs_command(
+                    args, job_binding=job_binding))
+            except job_binding.manager_error_type as exc:
                 raise _job_runtime.JobRuntimeError(str(exc)) from exc
 
         elif args.command == "full":

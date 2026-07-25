@@ -127,14 +127,17 @@ The first-party import graph is acyclic, but R8 is not complete.
 `service_search_worker.py` composes physical retrieval, so the host no longer
 imports `rag`. It also snapshots the frozen launch/reconcile/integrity binding
 from `job_coordination_contracts.py`; it does not import or transitively load
-the `job_manager` shell. Lazy job CLI dispatch and broader application
-composition remain in `rag.py`. Preserve all bindings' atomic snapshot rules
-while one application root is introduced in a later characterized slice. See
-the
+the `job_manager` shell. `job_application.py` provides one frozen store,
+launch, reconciliation, and manager-error generation to the `rag.py jobs`
+command and local UI. No production consumer imports `job_manager.py`; retain
+that stable import/executable facade and preserve every binding's atomic
+snapshot rule. A true outer root still requires separating pipeline and HTTP
+implementation ownership from their executable facades. See the
 [process-supervision ADR](docs/architecture/decisions/process-supervision-extraction.md),
 the [runtime binding ADR](docs/architecture/decisions/runtime-supervision-binding.md),
 the [service-host binding ADR](docs/architecture/decisions/service-host-binding.md),
-and the [service job-coordination ADR](docs/architecture/decisions/service-job-coordination-binding.md).
+the [service job-coordination ADR](docs/architecture/decisions/service-job-coordination-binding.md),
+and the [job-application binding ADR](docs/architecture/decisions/job-application-binding.md).
 
 ### Evaluation contract layering
 

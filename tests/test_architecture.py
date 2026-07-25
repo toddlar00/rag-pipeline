@@ -180,12 +180,22 @@ def test_first_party_import_graph_is_acyclic():
 def test_job_coordination_depends_inward_and_manager_is_only_a_facade():
     graph = _first_party_import_graph()
 
+    assert graph["job_application"] == {
+        "job_coordination", "job_coordination_contracts", "job_runtime"}
     assert graph["job_manager"] == {
         "job_coordination", "job_coordination_contracts"}
+    assert {
+        module for module, dependencies in graph.items()
+        if "job_manager" in dependencies
+    } == set()
+    for consumer in ("job_application", "rag", "service_runtime", "ui"):
+        assert "job_manager" not in _transitive_dependencies(graph, consumer)
     assert "runtime_supervision" in graph["job_coordination"]
     assert "rag" not in graph["job_manager"]
     assert "rag" not in _transitive_dependencies(graph, "job_manager")
     assert graph["job_coordination_contracts"] == set()
+    assert not ({"rag", "service_api", "service_runtime", "ui"}
+                & _transitive_dependencies(graph, "job_application"))
     assert graph["runtime_supervision"] == {
         "cli_policy", "process_supervision", "run_telemetry",
     }
@@ -205,6 +215,18 @@ def test_job_manager_and_rag_import_cleanly_in_both_orders():
         "import job_manager; assert 'rag' not in sys.modules; import rag",
         "import rag; assert 'job_manager' not in sys.modules; "
         "import job_manager",
+    ):
+        result = _run_isolated(imports)
+        assert result.returncode == 0, result.stderr
+
+
+def test_job_application_import_is_inward_and_facade_order_independent():
+    for imports in (
+        "import job_application; "
+        "assert 'job_manager' not in sys.modules; "
+        "assert 'rag' not in sys.modules; import job_manager; import rag",
+        "import rag; assert 'job_manager' not in sys.modules; "
+        "import job_application; import job_manager",
     ):
         result = _run_isolated(imports)
         assert result.returncode == 0, result.stderr
@@ -268,6 +290,10 @@ def test_service_runtime_boundary_raw_imports_are_pinned():
     }
     assert _raw_import_roots(modules["job_coordination_contracts"]) == {
         "collections", "dataclasses",
+    }
+    assert _raw_import_roots(modules["job_application"]) == {
+        "collections", "dataclasses", "job_coordination",
+        "job_coordination_contracts", "job_runtime",
     }
     assert _raw_import_roots(modules["service_runtime_binding"]) == {
         "collections", "dataclasses", "embedding_policy", "pathlib",

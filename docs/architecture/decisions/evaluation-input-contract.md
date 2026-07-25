@@ -167,7 +167,10 @@ The later R8c-1 runtime binding removes `job_manager.py`'s former `rag.py`
 import and therefore the last import cycle. R8c-2 subsequently removes the
 service host's facade dependency through a frozen binding and isolated search
 child. R8c-3 then moves the durable coordination engine inward, retains a
-compatible manager shell, and removes the service-to-manager edge. Application
-composition has not moved to one root. Coverage ratchets, typing, the broader
+compatible manager shell, and removes the service-to-manager edge. R8c-4 gives
+CLI/UI callers one inward job-application binding and leaves that manager shell
+with no production Python-import consumers; detached execution intentionally
+still invokes it. Application composition has not moved to one true outer root.
+Coverage ratchets, typing, facade extraction, the broader
 architecture inventory, and final root convergence remain planned. This local
 decision has not been pushed, reviewed, merged, tagged, or released.

@@ -37,7 +37,8 @@ functions, environment constants, process identity helpers, and CLI remain
 available at their previous names. Detached launch explicitly executes the
 stable sibling `job_manager.py` path; the shell delegates `_manage` and
 `reconcile` to the engine. Engine tests now patch the module that owns the
-implementation, while public CLI/UI tests continue through the facade.
+implementation. R8c-4 later gives CLI/UI callers an explicit complete binding
+seam instead of using the facade as a mutable service locator.
 
 [`job_coordination_contracts.py`](../../../job_coordination_contracts.py)
 contains the manager errors and redacted result records plus the frozen
@@ -96,12 +97,14 @@ names. Tests or unsupported callers that monkeypatch manager-private helpers
 must target `job_coordination`; the supported facade names remain aliases.
 
 This is R8c-3, not completion of R8. `service_runtime` still selects the
-production coordination generation for compatible direct construction,
-`rag.py` retains lazy manager CLI dispatch, and the service API, UI, and CLI
-remain separate construction sites. A later characterized slice must converge
-those application roots without removing proven facades prematurely. R12 must
-also replace or explicitly validate sibling-file entrypoints for an installed
-package.
+production coordination generation for compatible direct construction. The
+subsequent R8c-4
+[job-application binding](job-application-binding.md) removes the remaining
+`rag.py` and UI dependencies on the manager shell while preserving that facade.
+The service API, UI, and CLI still remain separate construction sites; later
+characterized slices must separate facade implementation ownership before a
+true outer root can converge them. R12 must also replace or explicitly validate
+sibling-file entrypoints for an installed package.
 
 ## Evidence
 

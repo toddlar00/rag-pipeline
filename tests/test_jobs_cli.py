@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 import json
@@ -6,6 +7,7 @@ import time
 
 import pytest
 
+import job_application
 import job_manager
 import job_runtime
 import rag
@@ -20,6 +22,14 @@ def _args(root: Path, action: str, **overrides):
     }
     values.update(overrides)
     return SimpleNamespace(**values)
+
+
+def _install_job_binding(monkeypatch, **overrides):
+    binding = replace(
+        job_application.default_job_application_binding(), **overrides)
+    monkeypatch.setattr(
+        rag, "_default_job_application_binding", lambda: binding)
+    return binding
 
 
 def test_background_submit_tokens_require_fresh_allowed_command():
@@ -68,7 +78,7 @@ def test_jobs_submit_persists_private_spec_and_prints_redacted_json(
             "job_id": job_id, "status": "starting", "ready": True,
         })
 
-    monkeypatch.setattr(job_manager, "launch_detached", fake_launch)
+    _install_job_binding(monkeypatch, launch_detached=fake_launch)
     metrics = rag._run_jobs_command(_args(
         tmp_path / "jobs", "submit", job_json=True,
         job_command=["--", "full", "--pdf", str(private_pdf)],
@@ -106,8 +116,8 @@ def test_jobs_list_reconciles_each_job_without_exposing_arguments(
         observed.extend(summary.job_id for summary in summaries)
         return summaries
 
-    monkeypatch.setattr(
-        job_manager, "reconcile_all_jobs", fake_reconcile_all)
+    _install_job_binding(
+        monkeypatch, reconcile_all_jobs=fake_reconcile_all)
 
     rag._run_jobs_command(_args(store.root, "list", job_json=True))
 
@@ -116,6 +126,71 @@ def test_jobs_list_reconciles_each_job_without_exposing_arguments(
     assert submitted.job_id in output
     assert str(private_pdf) not in output
     assert "--pdf" not in output
+
+
+def test_jobs_command_snapshots_one_complete_binding_generation(
+        monkeypatch, tmp_path, capsys):
+    store = job_runtime.JobStore(tmp_path / "jobs")
+    submitted = store.submit_job("export", ["--chunks", "Private.jsonl"])
+    events = []
+
+    def unexpected(*_args, **_kwargs):
+        pytest.fail("a later job-application generation was mixed in")
+
+    second = replace(
+        job_application.default_job_application_binding(),
+        reconcile_all_jobs=unexpected,
+    )
+
+    def first_reconcile_all(selected_store):
+        events.append(("first", selected_store.root))
+        monkeypatch.setattr(
+            rag, "_default_job_application_binding", lambda: second)
+        return selected_store.list_jobs()
+
+    first = replace(
+        job_application.default_job_application_binding(),
+        reconcile_all_jobs=first_reconcile_all,
+    )
+    resolutions = []
+    monkeypatch.setattr(
+        rag, "_default_job_application_binding",
+        lambda: resolutions.append(first) or first,
+    )
+
+    rag._run_jobs_command(_args(store.root, "list", job_json=True))
+
+    assert resolutions == [first]
+    assert events == [("first", store.root)]
+    assert submitted.job_id in capsys.readouterr().out
+
+
+def test_jobs_status_reconciles_exact_job_and_prints_only_redacted_summary(
+        monkeypatch, tmp_path, capsys):
+    store = job_runtime.JobStore(tmp_path / "jobs")
+    private_chunks = tmp_path / "Private chunks.jsonl"
+    submitted = store.submit_job(
+        "export", ["--chunks", str(private_chunks)])
+    observed = []
+
+    def fake_reconcile(selected_store, job_id):
+        observed.append((selected_store, job_id))
+        return selected_store.get_job(job_id)
+
+    _install_job_binding(monkeypatch, reconcile_job=fake_reconcile)
+
+    metrics = rag._run_jobs_command(_args(
+        store.root, "status", job_json=True,
+        job_id=submitted.job_id,
+    ))
+
+    output = capsys.readouterr().out
+    assert json.loads(output) == submitted.as_dict()
+    assert observed == [(observed[0][0], submitted.job_id)]
+    assert observed[0][0].root == store.root
+    assert str(private_chunks) not in output
+    assert "--chunks" not in output
+    assert metrics == {"jobs": 1, "terminal": 0, "applied": False}
 
 
 def test_jobs_list_holds_root_lease_across_reconciliation(
@@ -176,7 +251,7 @@ def test_main_parses_jobs_submit_remainder_without_normal_supervision(
     observed = {}
     monkeypatch.setattr(
         rag, "_run_jobs_command",
-        lambda args: observed.update(
+        lambda args, *, job_binding: observed.update(
             action=args.job_action,
             root=args.job_root,
             command=args.job_command,
@@ -193,6 +268,44 @@ def test_main_parses_jobs_submit_remainder_without_normal_supervision(
         "root": tmp_path / "jobs",
         "command": ["--", "full", "--pdf", "Book.pdf"],
     }
+
+
+def test_main_uses_same_binding_generation_for_manager_error_mapping(
+        monkeypatch, tmp_path):
+    class FirstManagerError(job_manager.JobManagerError):
+        pass
+
+    class SecondManagerError(job_manager.JobManagerError):
+        pass
+
+    first = replace(
+        job_application.default_job_application_binding(),
+        manager_error_type=FirstManagerError,
+    )
+    second = replace(first, manager_error_type=SecondManagerError)
+    resolutions = []
+    observed = []
+    monkeypatch.setattr(
+        rag, "_default_job_application_binding",
+        lambda: resolutions.append(first) or first,
+    )
+
+    def fail_command(_args, *, job_binding):
+        observed.append(job_binding)
+        monkeypatch.setattr(
+            rag, "_default_job_application_binding", lambda: second)
+        raise FirstManagerError("safe manager failure")
+
+    monkeypatch.setattr(rag, "_run_jobs_command", fail_command)
+
+    with pytest.raises(SystemExit) as raised:
+        rag.main([
+            "jobs", "list", "--job-root", str(tmp_path / "jobs"),
+        ])
+
+    assert raised.value.code == 1
+    assert resolutions == [first]
+    assert observed == [first]
 
 
 def test_jobs_submit_runs_real_detached_export_to_terminal_success(
@@ -276,3 +389,284 @@ def test_jobs_cancel_terminalizes_an_unstarted_queued_job(tmp_path, capsys):
     assert payload["status"] == "cancelled"
     assert store.get_job(submitted.job_id).status == "cancelled"
     assert metrics == {"jobs": 1, "terminal": 1, "applied": True}
+
+
+def test_jobs_cancel_wait_requests_first_and_reconciles_until_terminal(
+        monkeypatch, tmp_path, capsys):
+    store = job_runtime.JobStore(tmp_path / "jobs")
+    private_chunks = tmp_path / "Private chunks.jsonl"
+    submitted = store.submit_job(
+        "export", ["--chunks", str(private_chunks)])
+    execution = store.load_execution(submitted.job_id)
+    starting = store.transition_job(
+        submitted.job_id, "starting",
+        attempt_token=execution.attempt_token,
+        expected_revision=execution.revision)
+    running = store.transition_job(
+        submitted.job_id, "running",
+        attempt_token=execution.attempt_token,
+        expected_revision=starting.revision)
+    events = []
+    reconcile_statuses = [
+        ("cancel_requested", False),
+        ("cancel_requested", False),
+        ("cancelled", True),
+    ]
+    real_request_cancel = job_runtime.JobStore.request_cancel
+
+    def request_cancel(selected_store, job_id, **kwargs):
+        events.append(("request_cancel", selected_store, job_id, kwargs))
+        return real_request_cancel(selected_store, job_id, **kwargs)
+
+    def reconcile(selected_store, job_id):
+        events.append(("reconcile", selected_store, job_id))
+        status, expected_terminal = reconcile_statuses.pop(0)
+        summary = job_runtime.JobSummary(
+            job_id=job_id,
+            command=running.command,
+            status=status,
+            attempt_number=running.attempt_number,
+            revision=running.revision,
+            created_at=running.created_at,
+            updated_at=running.updated_at,
+        )
+        assert summary.terminal is expected_terminal
+        return summary
+
+    monkeypatch.setattr(
+        job_runtime.JobStore, "request_cancel", request_cancel)
+    _install_job_binding(monkeypatch, reconcile_job=reconcile)
+    monkeypatch.setattr(
+        rag.time, "sleep",
+        lambda seconds: events.append(("sleep", seconds)),
+    )
+
+    metrics = rag._run_jobs_command(_args(
+        store.root, "cancel", job_json=True,
+        job_id=submitted.job_id, wait=True, wait_timeout=30,
+    ))
+
+    output = capsys.readouterr().out
+    payload = json.loads(output)
+    selected_store = events[0][1]
+    assert events == [
+        ("request_cancel", selected_store, submitted.job_id, {}),
+        ("reconcile", selected_store, submitted.job_id),
+        ("reconcile", selected_store, submitted.job_id),
+        ("sleep", 0.1),
+        ("reconcile", selected_store, submitted.job_id),
+    ]
+    assert reconcile_statuses == []
+    assert selected_store.root == store.root
+    assert payload["status"] == "cancelled"
+    assert str(private_chunks) not in output
+    assert "--chunks" not in output
+    assert metrics == {"jobs": 1, "terminal": 1, "applied": True}
+
+
+def test_jobs_resume_reconciles_revision_before_launch_with_exact_timeout(
+        monkeypatch, tmp_path, capsys):
+    store = job_runtime.JobStore(tmp_path / "jobs")
+    private_chunks = tmp_path / "Private chunks.jsonl"
+    submitted = store.submit_job(
+        "export", ["--chunks", str(private_chunks)])
+    execution = store.load_execution(submitted.job_id)
+    starting = store.transition_job(
+        submitted.job_id, "starting",
+        attempt_token=execution.attempt_token,
+        expected_revision=execution.revision)
+    running = store.transition_job(
+        submitted.job_id, "running",
+        attempt_token=execution.attempt_token,
+        expected_revision=starting.revision)
+    failed = store.transition_job(
+        submitted.job_id, "failed",
+        attempt_token=execution.attempt_token,
+        expected_revision=running.revision)
+    events = []
+    real_prepare_resume = job_runtime.JobStore.prepare_resume
+
+    def reconcile(selected_store, job_id):
+        events.append(("reconcile", selected_store, job_id))
+        return selected_store.get_job(job_id)
+
+    def prepare_resume(selected_store, job_id, **kwargs):
+        events.append(("prepare_resume", selected_store, job_id, kwargs))
+        return real_prepare_resume(selected_store, job_id, **kwargs)
+
+    def launch(selected_store, job_id, *, ready_timeout):
+        events.append((
+            "launch", selected_store, job_id,
+            {"ready_timeout": ready_timeout},
+        ))
+        resumed_execution = selected_store.load_execution(job_id)
+        summary = selected_store.transition_job(
+            job_id, "starting",
+            attempt_token=resumed_execution.attempt_token,
+            expected_revision=resumed_execution.revision)
+        return job_manager.LaunchResult(
+            job_id=job_id,
+            status=summary.status,
+            attempt_number=summary.attempt_number,
+            ready=True,
+        )
+
+    monkeypatch.setattr(
+        job_runtime.JobStore, "prepare_resume", prepare_resume)
+    _install_job_binding(
+        monkeypatch, reconcile_job=reconcile, launch_detached=launch)
+
+    metrics = rag._run_jobs_command(_args(
+        store.root, "resume", job_json=True,
+        job_id=submitted.job_id, ready_timeout=4.25,
+    ))
+
+    output = capsys.readouterr().out
+    payload = json.loads(output)
+    selected_store = events[0][1]
+    assert events == [
+        ("reconcile", selected_store, submitted.job_id),
+        (
+            "prepare_resume", selected_store, submitted.job_id,
+            {"expected_revision": failed.revision},
+        ),
+        (
+            "launch", selected_store, submitted.job_id,
+            {"ready_timeout": 4.25},
+        ),
+    ]
+    assert selected_store.root == store.root
+    assert payload["resumed_from_revision"] == failed.revision
+    assert payload["job"]["status"] == "starting"
+    assert payload["job"]["attempt_number"] == 2
+    assert payload["launch"]["ready"] is True
+    assert str(private_chunks) not in output
+    assert "--chunks" not in output
+    assert metrics == {"jobs": 1, "terminal": 0, "applied": True}
+
+
+def test_jobs_submit_launch_baseexception_rolls_back_and_reraises_original(
+        monkeypatch, tmp_path, capsys):
+    class InjectedLaunchError(BaseException):
+        pass
+
+    private_pdf = tmp_path / "Private Casebook.pdf"
+    primary = InjectedLaunchError("injected primary launch failure")
+    observed = {}
+
+    def launch(selected_store, job_id, *, ready_timeout):
+        observed.update(
+            store=selected_store,
+            job_id=job_id,
+            ready_timeout=ready_timeout,
+        )
+        raise primary
+
+    _install_job_binding(monkeypatch, launch_detached=launch)
+
+    with pytest.raises(InjectedLaunchError) as raised:
+        rag._run_jobs_command(_args(
+            tmp_path / "jobs", "submit", job_json=True,
+            job_command=["--", "full", "--pdf", str(private_pdf)],
+            timeout=90, ready_timeout=2.5,
+        ))
+
+    assert raised.value is primary
+    assert observed["ready_timeout"] == 2.5
+    assert observed["store"].get_job(observed["job_id"]).status == "failed"
+    output = capsys.readouterr().out
+    assert output == ""
+    assert str(private_pdf) not in output
+
+
+def test_jobs_resume_launch_baseexception_fails_new_attempt_and_reraises(
+        monkeypatch, tmp_path, capsys):
+    class InjectedLaunchError(BaseException):
+        pass
+
+    store = job_runtime.JobStore(tmp_path / "jobs")
+    private_chunks = tmp_path / "Private chunks.jsonl"
+    submitted = store.submit_job(
+        "export", ["--chunks", str(private_chunks)])
+    execution = store.load_execution(submitted.job_id)
+    starting = store.transition_job(
+        submitted.job_id, "starting",
+        attempt_token=execution.attempt_token,
+        expected_revision=execution.revision)
+    running = store.transition_job(
+        submitted.job_id, "running",
+        attempt_token=execution.attempt_token,
+        expected_revision=starting.revision)
+    store.transition_job(
+        submitted.job_id, "failed",
+        attempt_token=execution.attempt_token,
+        expected_revision=running.revision)
+    primary = InjectedLaunchError("injected resume launch failure")
+
+    _install_job_binding(
+        monkeypatch,
+        reconcile_job=(
+            lambda selected_store, job_id: selected_store.get_job(job_id)),
+        launch_detached=(
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(primary)),
+    )
+
+    with pytest.raises(InjectedLaunchError) as raised:
+        rag._run_jobs_command(_args(
+            store.root, "resume", job_json=True,
+            job_id=submitted.job_id, ready_timeout=3,
+        ))
+
+    assert raised.value is primary
+    current = store.get_job(submitted.job_id)
+    assert current.status == "failed"
+    assert current.attempt_number == 2
+    output = capsys.readouterr().out
+    assert output == ""
+    assert str(private_chunks) not in output
+
+
+def test_jobs_launch_rollback_failure_never_replaces_primary_baseexception(
+        monkeypatch, tmp_path, capsys):
+    class InjectedLaunchError(BaseException):
+        pass
+
+    class InjectedRollbackError(BaseException):
+        pass
+
+    primary = InjectedLaunchError("injected primary launch failure")
+    rollback = InjectedRollbackError("injected rollback failure")
+    cleanup = {}
+
+    _install_job_binding(
+        monkeypatch,
+        launch_detached=(
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(primary)),
+    )
+    monkeypatch.setattr(
+        job_runtime.JobStore, "transition_job",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(rollback),
+    )
+    monkeypatch.setattr(
+        rag, "_log_cleanup_error",
+        lambda message, *args, error: cleanup.update(
+            message=message, args=args, error=error),
+    )
+
+    with pytest.raises(InjectedLaunchError) as raised:
+        rag._run_jobs_command(_args(
+            tmp_path / "jobs", "submit", job_json=True,
+            job_command=["--", "export", "--chunks", "Private.jsonl"],
+            timeout=90, ready_timeout=2,
+        ))
+
+    assert raised.value is primary
+    assert cleanup["error"] is rollback
+    assert cleanup["args"] == ()
+    assert cleanup["message"] == (
+        "Background launch-state update failed while preserving the launch "
+        "error")
+    jobs = job_runtime.JobStore(tmp_path / "jobs").list_jobs()
+    assert len(jobs) == 1
+    assert jobs[0].status == "queued"
+    assert capsys.readouterr().out == ""

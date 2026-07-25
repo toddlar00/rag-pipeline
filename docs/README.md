@@ -34,6 +34,9 @@ material. When documents disagree, use the authority order below.
 - [Service job-coordination binding](architecture/decisions/service-job-coordination-binding.md)
   — the inward durable engine, stable manager facade, frozen service
   launch/reconcile capability, and remaining application-root work.
+- [Job-application binding](architecture/decisions/job-application-binding.md)
+  — the frozen CLI/UI job capability, manager-shell isolation, atomic
+  per-action lookup, and the prerequisite facade work for a true outer root.
 - [Document-structure profiles](architecture/decisions/document-structure-profiles.md)
   — immutable reviewed profiles and fail-closed evidence.
 - [Context-aware retrieval](architecture/decisions/context-aware-retrieval.md)
