@@ -16124,7 +16124,7 @@
   "schema_version": 3,
   "source_architecture": {
     "class_count": 189,
-    "function_count": 1981,
+    "function_count": 1993,
     "import_graph": {
       "cyclic_components": [],
       "edge_count": 145,
@@ -30153,14 +30153,38 @@
       {
         "class_count": 0,
         "classes": [],
-        "definition_locations_sha256": "6acbc59dd2014af9e09cb0271b726be0b2fe74c2a558c0fa772b154b879f66ec",
-        "function_count": 6,
+        "definition_locations_sha256": "0ea0fb6ae0bdd42ee9755de8e663b1094d157e9660d87368cacddc4efa8bec5e",
+        "function_count": 18,
         "functions": [
+          {
+            "kind": "function",
+            "name": "_dependabot_pip_groups",
+            "scope": "top_level",
+            "signature_sha256": "98e8c4baa43dda31ab1feb409f56f8230c3fbf0e5008294662ab2971ce892e9e"
+          },
+          {
+            "kind": "function",
+            "name": "_direct_requirement_records",
+            "scope": "top_level",
+            "signature_sha256": "96e04fb22df2640cbfe48b6447ef774eee2d095044ec87733e14322742c3ad09"
+          },
+          {
+            "kind": "function",
+            "name": "_domain_assignments_from_text",
+            "scope": "top_level",
+            "signature_sha256": "52c88dad34238ddcd30db8e5732450bf29830148a015f0628e6e1ffc78ab8cc4"
+          },
           {
             "kind": "function",
             "name": "_include_target",
             "scope": "top_level",
             "signature_sha256": "b1a1c5036b85f312726c19ef5b0cd03389b1d59bc72eb0284d0acdbec2dc339b"
+          },
+          {
+            "kind": "function",
+            "name": "_load_dependency_domains",
+            "scope": "top_level",
+            "signature_sha256": "29efbf56bb0a0af76fd98d3bc79ea3aa2d04dd32db8a6431fb9ca370c2bb01f9"
           },
           {
             "kind": "function",
@@ -30170,15 +30194,39 @@
           },
           {
             "kind": "function",
+            "name": "_lock_requirement_records",
+            "scope": "top_level",
+            "signature_sha256": "216e1cbb2979c73da8af159cb29b227c27c0866966513ec4838229987873bde3"
+          },
+          {
+            "kind": "function",
             "name": "_logical_lines",
             "scope": "top_level",
             "signature_sha256": "9c8a853c73ed8ba3a361bebe7d5255bd0539310473035b10c9d617d2141bcb2c"
           },
           {
             "kind": "function",
+            "name": "_normalize_package",
+            "scope": "top_level",
+            "signature_sha256": "73ed70b3591be2f1547bfeae262165755ac74dba8e6ce5fa10dcff4ebd41e160"
+          },
+          {
+            "kind": "function",
+            "name": "_reject_duplicate_json_keys",
+            "scope": "top_level",
+            "signature_sha256": "0089b1b98092849c9f70198153c99b5b8d5a93d19122d63878fbdfcd00e3c0cf"
+          },
+          {
+            "kind": "function",
             "name": "_requirement",
             "scope": "top_level",
             "signature_sha256": "b02c68ae0d426e579452885371ce950cd7f58dac2aad47333e6c3e324acc2ba3"
+          },
+          {
+            "kind": "function",
+            "name": "_yaml_scalar",
+            "scope": "top_level",
+            "signature_sha256": "cb55d0a967cccf2f0ccec59883c2c5e83ef311ba41e55c80cbec924269360089"
           },
           {
             "kind": "function",
@@ -30191,14 +30239,38 @@
             "name": "validate",
             "scope": "top_level",
             "signature_sha256": "9b460776c821fcd406a81b0d35552ae91c36f3ad27bc7f1b190b74666390ba44"
+          },
+          {
+            "kind": "function",
+            "name": "validate_dependency_domain_diff",
+            "scope": "top_level",
+            "signature_sha256": "75317a726b8d548fdf5aa132ba11cb8a156c5748be41e5f62afd58087acfab8a"
+          },
+          {
+            "kind": "function",
+            "name": "validate_dependency_domain_diff.committed_object_id",
+            "scope": "nested",
+            "signature_sha256": "54bf54c49550b4b7a616a802403c38129d5221d233671eb49126e6f387b55fdd"
+          },
+          {
+            "kind": "function",
+            "name": "validate_dependency_domain_diff.committed_text",
+            "scope": "nested",
+            "signature_sha256": "c75731e317e0487b9c0c21234c5b3189865951205aa3f1b38caf9dec29238954"
+          },
+          {
+            "kind": "function",
+            "name": "validate_dependency_domains",
+            "scope": "top_level",
+            "signature_sha256": "0ec8a504fb0169ca5ca23e33ceb72eaeb787940d2869e383ac2c9147530ffdcd"
           }
         ],
         "import_edges": [],
         "module": "tools.check_dependency_policy",
-        "non_blank_lines": 316,
+        "non_blank_lines": 1071,
         "path": "tools/check_dependency_policy.py",
-        "physical_lines": 339,
-        "top_level_function_count": 6
+        "physical_lines": 1135,
+        "top_level_function_count": 16
       },
       {
         "class_count": 0,
@@ -31133,13 +31205,13 @@
         "top_level_function_count": 2
       }
     ],
-    "physical_line_count": 61568,
+    "physical_line_count": 62364,
     "source_groups": [
       "production",
       "tools",
       "other"
     ],
-    "top_level_function_count": 1302
+    "top_level_function_count": 1312
   },
   "tracked_sources": {
     "count": 150,

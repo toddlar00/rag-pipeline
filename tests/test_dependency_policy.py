@@ -2,6 +2,7 @@ import ast
 from datetime import date
 import json
 from pathlib import Path
+import subprocess
 
 from tools import (
     check_dependency_policy,
@@ -11,8 +12,81 @@ from tools import (
 )
 
 
+EXPECTED_DEPENDENCY_DOMAINS = {
+    "pdf-docling": ["docling", "docling-core", "pymupdf", "pypdfium2"],
+    "vector-stores": ["chromadb", "onnxruntime", "qdrant-client"],
+    "ml-runtime": [
+        "einops",
+        "flagembedding",
+        "numpy",
+        "rank-bm25",
+        "sentence-transformers",
+        "torch",
+        "torchvision",
+        "tqdm",
+    ],
+    "service-ui": ["fastapi", "gradio", "uvicorn"],
+    "provider-transport": ["google-genai", "requests"],
+    "test-audit-tooling": [
+        "pip",
+        "pip-audit",
+        "pip-licenses",
+        "pytest",
+        "ruff",
+        "uv",
+    ],
+}
+
+
 def _write(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
+
+
+def _git(root: Path, *args: str) -> str:
+    return subprocess.check_output(
+        ["git", "-C", str(root), *args], text=True,
+    ).strip()
+
+
+def _commit_policy_tree(root: Path, message: str) -> str:
+    if not (root / ".git").exists():
+        _git(root, "init", "-b", "main")
+        _git(root, "config", "user.name", "Dependency Policy Test")
+        _git(root, "config", "user.email", "dependency-policy@example.invalid")
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", message)
+    return _git(root, "rev-parse", "HEAD")
+
+
+def _split_fixture_domains(root: Path) -> None:
+    runtime = ["backend", "core", "extra"]
+    tooling = [
+        "fastapi", "pip-audit", "pytest", "qdrant-client", "tqdm", "uv",
+    ]
+    policy_path = root / "dependency-compatibility-domains.json"
+    _write(
+        policy_path,
+        json.dumps({
+            "schema_version": 1,
+            "domains": {"fixture-runtime": runtime, "fixture-tooling": tooling},
+        }, indent=2) + "\n",
+    )
+    dependabot_path = root / ".github" / "dependabot.yml"
+    original = dependabot_path.read_text(encoding="utf-8")
+    all_packages = sorted(runtime + tooling)
+    old = (
+        "      fixture-dependencies:\n"
+        f"        patterns: {json.dumps(all_packages)}\n"
+    )
+    new = (
+        "      fixture-runtime:\n"
+        f"        patterns: {json.dumps(runtime)}\n"
+        "      fixture-tooling:\n"
+        f"        patterns: {json.dumps(tooling)}\n"
+    )
+    assert old in original
+    _write(dependabot_path, original.replace(old, new, 1))
 
 
 def _valid_policy_tree(root: Path) -> None:
@@ -66,6 +140,55 @@ def _valid_policy_tree(root: Path) -> None:
     _write(
         root / "requirements-all.txt",
         "-r requirements.txt\n-r requirements-optional.txt\n",
+    )
+    packages = [
+        "backend",
+        "core",
+        "extra",
+        "fastapi",
+        "pip-audit",
+        "pytest",
+        "qdrant-client",
+        "tqdm",
+        "uv",
+    ]
+    _write(
+        root / "dependency-compatibility-domains.json",
+        json.dumps({
+            "schema_version": 1,
+            "domains": {"fixture-dependencies": packages},
+        }, indent=2) + "\n",
+    )
+    _write(
+        root / ".github" / "dependabot.yml",
+        "version: 2\n"
+        "updates:\n"
+        "  - package-ecosystem: pip\n"
+        "    directory: \"/\"\n"
+        "    schedule:\n"
+        "      interval: weekly\n"
+        "      day: monday\n"
+        "      time: \"08:00\"\n"
+        "      timezone: America/Denver\n"
+        "    open-pull-requests-limit: 10\n"
+        "    groups:\n"
+        "      fixture-dependencies:\n"
+        f"        patterns: {json.dumps(packages)}\n"
+        "    commit-message:\n"
+        "      prefix: deps\n"
+        "  - package-ecosystem: github-actions\n"
+        "    directory: \"/\"\n"
+        "    schedule:\n"
+        "      interval: weekly\n"
+        "      day: monday\n"
+        "      time: \"08:30\"\n"
+        "      timezone: America/Denver\n"
+        "    open-pull-requests-limit: 5\n"
+        "    groups:\n"
+        "      github-actions:\n"
+        "        patterns: [\"*\"]\n"
+        "    commit-message:\n"
+        "      prefix: ci\n",
     )
 
 
@@ -160,6 +283,545 @@ def test_dependency_policy_rejects_sdks_for_owned_provider_transports(tmp_path):
         "openai unexpectedly expands" in error
         for error in errors
     )
+
+
+def test_repository_dependency_domains_cover_every_direct_input_exactly():
+    root = Path(__file__).resolve().parents[1]
+
+    assert check_dependency_policy.validate_dependency_domains(root) == []
+    payload = json.loads(
+        (root / "dependency-compatibility-domains.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert payload["domains"] == EXPECTED_DEPENDENCY_DOMAINS
+    packages = [
+        package
+        for domain_packages in payload["domains"].values()
+        for package in domain_packages
+    ]
+    assert len(payload["domains"]) == 6
+    assert len(packages) == len(set(packages)) == 26
+
+
+def test_dependency_domains_reject_unassigned_direct_package(tmp_path):
+    _valid_policy_tree(tmp_path)
+    policy_path = tmp_path / "dependency-compatibility-domains.json"
+    policy = json.loads(policy_path.read_text(encoding="utf-8"))
+    policy["domains"]["fixture-dependencies"].remove("extra")
+    _write(policy_path, json.dumps(policy, indent=2) + "\n")
+
+    errors = check_dependency_policy.validate_dependency_domains(tmp_path)
+
+    assert any("unassigned direct dependencies: extra" in error for error in errors)
+
+
+def test_dependency_domains_reject_duplicate_assignment(tmp_path):
+    _valid_policy_tree(tmp_path)
+    policy_path = tmp_path / "dependency-compatibility-domains.json"
+    policy = json.loads(policy_path.read_text(encoding="utf-8"))
+    policy["domains"]["second-domain"] = ["core"]
+    _write(policy_path, json.dumps(policy, indent=2) + "\n")
+
+    errors = check_dependency_policy.validate_dependency_domains(tmp_path)
+
+    assert any("package 'core' is assigned more than once" in error for error in errors)
+
+
+def test_dependency_domains_reject_unknown_assignment(tmp_path):
+    _valid_policy_tree(tmp_path)
+    policy_path = tmp_path / "dependency-compatibility-domains.json"
+    policy = json.loads(policy_path.read_text(encoding="utf-8"))
+    policy["domains"]["fixture-dependencies"].append("unknown-package")
+    _write(policy_path, json.dumps(policy, indent=2) + "\n")
+
+    errors = check_dependency_policy.validate_dependency_domains(tmp_path)
+
+    assert any(
+        "unknown assigned dependencies: unknown-package" in error
+        for error in errors
+    )
+
+
+def test_dependency_domains_reject_wildcard_dependabot_group(tmp_path):
+    _valid_policy_tree(tmp_path)
+    path = tmp_path / ".github" / "dependabot.yml"
+    text = path.read_text(encoding="utf-8")
+    start = text.index("        patterns:")
+    end = text.index("\n", start)
+    _write(path, text[:start] + '        patterns: ["*"]' + text[end:])
+
+    errors = check_dependency_policy.validate_dependency_domains(tmp_path)
+
+    assert any("patterns must be exact package names" in error for error in errors)
+
+
+def test_dependency_domains_reject_malformed_policy(tmp_path):
+    _valid_policy_tree(tmp_path)
+    _write(tmp_path / "dependency-compatibility-domains.json", "{}\n")
+
+    errors = check_dependency_policy.validate_dependency_domains(tmp_path)
+
+    assert any("fields must be exactly" in error for error in errors)
+    assert any("domains must be a non-empty object" in error for error in errors)
+
+
+def test_dependency_domains_reject_noninteger_schema_versions(tmp_path):
+    _valid_policy_tree(tmp_path)
+    policy_path = tmp_path / "dependency-compatibility-domains.json"
+    for invalid in (True, 1.0):
+        policy = json.loads(policy_path.read_text(encoding="utf-8"))
+        policy["schema_version"] = invalid
+        _write(policy_path, json.dumps(policy, indent=2) + "\n")
+
+        errors = check_dependency_policy.validate_dependency_domains(tmp_path)
+
+        assert any("must be the integer 1" in error for error in errors)
+
+
+def test_dependency_domains_reject_duplicate_json_keys(tmp_path):
+    _valid_policy_tree(tmp_path)
+    policy_path = tmp_path / "dependency-compatibility-domains.json"
+    text = policy_path.read_text(encoding="utf-8")
+    _write(
+        policy_path,
+        text.replace(
+            '  "schema_version": 1,',
+            '  "schema_version": 1,\n  "schema_version": 1,',
+            1,
+        ),
+    )
+
+    errors = check_dependency_policy.validate_dependency_domains(tmp_path)
+
+    assert any("duplicate JSON key 'schema_version'" in error for error in errors)
+
+
+def test_dependency_domains_reject_dependabot_policy_drift(tmp_path):
+    _valid_policy_tree(tmp_path)
+    path = tmp_path / ".github" / "dependabot.yml"
+    _write(
+        path,
+        path.read_text(encoding="utf-8").replace('"extra"', '"surprise"'),
+    )
+
+    errors = check_dependency_policy.validate_dependency_domains(tmp_path)
+
+    assert any("pip groups differ" in error for error in errors)
+
+
+def test_dependency_domains_reject_second_flow_style_pip_update(tmp_path):
+    _valid_policy_tree(tmp_path)
+    path = tmp_path / ".github" / "dependabot.yml"
+    _write(
+        path,
+        path.read_text(encoding="utf-8")
+        + '  - {package-ecosystem: pip, directory: "/", '
+        + 'target-branch: legacy, groups: {all: {patterns: ["*"]}}}\n',
+    )
+
+    errors = check_dependency_policy.validate_dependency_domains(tmp_path)
+
+    assert any("unsupported YAML syntax" in error for error in errors)
+
+
+def test_dependency_domains_reject_reordered_update_keys(tmp_path):
+    _valid_policy_tree(tmp_path)
+    path = tmp_path / ".github" / "dependabot.yml"
+    text = path.read_text(encoding="utf-8")
+    _write(
+        path,
+        text.replace(
+            '  - package-ecosystem: pip\n    directory: "/"',
+            '  - directory: "/"\n    package-ecosystem: pip',
+            1,
+        ),
+    )
+
+    errors = check_dependency_policy.validate_dependency_domains(tmp_path)
+
+    assert any("canonical update item" in error for error in errors)
+
+
+def test_dependency_domains_reject_malformed_nonpip_block(tmp_path):
+    _valid_policy_tree(tmp_path)
+    path = tmp_path / ".github" / "dependabot.yml"
+    text = path.read_text(encoding="utf-8")
+    _write(
+        path,
+        text.replace(
+            '        patterns: ["*"]',
+            '        patterns: ["*"',
+            1,
+        ),
+    )
+
+    errors = check_dependency_policy.validate_dependency_domains(tmp_path)
+
+    assert any("inline JSON string list" in error for error in errors)
+
+
+def test_dependency_domains_reject_undeclared_dependabot_controls(tmp_path):
+    _valid_policy_tree(tmp_path)
+    path = tmp_path / ".github" / "dependabot.yml"
+    _write(
+        path,
+        path.read_text(encoding="utf-8").replace(
+            '      time: "08:30"', '      time: "23:59"', 1,
+        ),
+    )
+
+    errors = check_dependency_policy.validate_dependency_domains(tmp_path)
+
+    assert any("github-actions schedule differs" in error for error in errors)
+
+
+def test_dependency_domains_reject_quoted_pull_request_limit(tmp_path):
+    _valid_policy_tree(tmp_path)
+    path = tmp_path / ".github" / "dependabot.yml"
+    _write(
+        path,
+        path.read_text(encoding="utf-8").replace(
+            "    open-pull-requests-limit: 10",
+            '    open-pull-requests-limit: "10"',
+            1,
+        ),
+    )
+
+    errors = check_dependency_policy.validate_dependency_domains(tmp_path)
+
+    assert any("must be an unquoted positive integer" in error for error in errors)
+
+
+def test_dependency_domains_require_one_pip_and_one_actions_block(tmp_path):
+    _valid_policy_tree(tmp_path)
+    path = tmp_path / ".github" / "dependabot.yml"
+    original = path.read_text(encoding="utf-8")
+    for replacement in ("uv", "pip"):
+        _write(
+            path,
+            original.replace(
+                "package-ecosystem: github-actions",
+                f"package-ecosystem: {replacement}",
+                1,
+            ),
+        )
+
+        errors = check_dependency_policy.validate_dependency_domains(tmp_path)
+
+        assert any("exactly one pip and one github-actions" in error for error in errors)
+
+
+def test_dependency_domains_reject_duplicate_group_and_patterns(tmp_path):
+    _valid_policy_tree(tmp_path)
+    path = tmp_path / ".github" / "dependabot.yml"
+    original = path.read_text(encoding="utf-8")
+    pattern_line = (
+        '        patterns: ["backend", "core", "extra", "fastapi", '
+        '"pip-audit", "pytest", "qdrant-client", "tqdm", "uv"]'
+    )
+    _write(
+        path,
+        original.replace(pattern_line, pattern_line + "\n" + pattern_line, 1),
+    )
+    errors = check_dependency_policy.validate_dependency_domains(tmp_path)
+    assert any("repeats patterns" in error for error in errors)
+
+    _write(
+        path,
+        original.replace(
+            pattern_line,
+            pattern_line
+            + "\n      fixture-dependencies:\n"
+            + pattern_line,
+            1,
+        ),
+    )
+    errors = check_dependency_policy.validate_dependency_domains(tmp_path)
+    assert any("duplicate group" in error for error in errors)
+
+
+def test_dependency_domains_reject_missing_patterns_and_unknown_group_field(tmp_path):
+    _valid_policy_tree(tmp_path)
+    path = tmp_path / ".github" / "dependabot.yml"
+    original = path.read_text(encoding="utf-8")
+    pattern_line = (
+        '        patterns: ["backend", "core", "extra", "fastapi", '
+        '"pip-audit", "pytest", "qdrant-client", "tqdm", "uv"]'
+    )
+    _write(path, original.replace(pattern_line + "\n", "", 1))
+    errors = check_dependency_policy.validate_dependency_domains(tmp_path)
+    assert any("needs exactly one patterns field" in error for error in errors)
+
+    _write(path, original.replace("        patterns:", "        update-types:", 1))
+    errors = check_dependency_policy.validate_dependency_domains(tmp_path)
+    assert any("may contain only patterns" in error for error in errors)
+
+
+def test_dependency_domains_reject_invalid_names_and_sort_order(tmp_path):
+    _valid_policy_tree(tmp_path)
+    policy_path = tmp_path / "dependency-compatibility-domains.json"
+    policy = json.loads(policy_path.read_text(encoding="utf-8"))
+    policy["domains"] = {
+        "Invalid Domain": policy["domains"].pop("fixture-dependencies")
+    }
+    _write(policy_path, json.dumps(policy, indent=2) + "\n")
+    errors = check_dependency_policy.validate_dependency_domains(tmp_path)
+    assert any("invalid domain name" in error for error in errors)
+
+    _valid_policy_tree(tmp_path)
+    policy = json.loads(policy_path.read_text(encoding="utf-8"))
+    policy["domains"]["fixture-dependencies"] = list(
+        reversed(policy["domains"]["fixture-dependencies"])
+    )
+    _write(policy_path, json.dumps(policy, indent=2) + "\n")
+    errors = check_dependency_policy.validate_dependency_domains(tmp_path)
+    assert any("canonical sort order" in error for error in errors)
+
+
+def test_dependency_domain_diff_accepts_one_domain_with_lock_change(tmp_path):
+    _valid_policy_tree(tmp_path)
+    _split_fixture_domains(tmp_path)
+    base = _commit_policy_tree(tmp_path, "base")
+    _write(tmp_path / "requirements.txt", "core>=1.1,<2\n")
+    _write(tmp_path / "requirements-optional.txt", "extra>=2.1,<3\n")
+    core_lock = tmp_path / "requirements-core.lock"
+    _write(
+        core_lock,
+        core_lock.read_text(encoding="utf-8").replace("core==1.5", "core==1.6"),
+    )
+    full_lock = tmp_path / "requirements-full.lock"
+    _write(
+        full_lock,
+        full_lock.read_text(encoding="utf-8")
+        .replace("core==1.5", "core==1.6")
+        .replace("extra==2.5", "extra==2.6"),
+    )
+    _commit_policy_tree(tmp_path, "one runtime domain")
+
+    assert check_dependency_policy.validate_dependency_domain_diff(
+        base, tmp_path,
+    ) == []
+
+
+def test_dependency_domain_diff_accepts_policy_introduction(tmp_path):
+    _valid_policy_tree(tmp_path)
+    policy_path = tmp_path / "dependency-compatibility-domains.json"
+    policy_path.unlink()
+    base = _commit_policy_tree(tmp_path, "base without domain policy")
+    _valid_policy_tree(tmp_path)
+    _commit_policy_tree(tmp_path, "introduce domain policy")
+
+    assert check_dependency_policy.validate_dependency_domain_diff(
+        base, tmp_path,
+    ) == []
+
+
+def test_dependency_domain_diff_rejects_multiple_domains(tmp_path):
+    _valid_policy_tree(tmp_path)
+    _split_fixture_domains(tmp_path)
+    base = _commit_policy_tree(tmp_path, "base")
+    _write(tmp_path / "requirements.txt", "core>=1.1,<2\n")
+    _write(tmp_path / "requirements-test.txt", "pytest==9.2.0\n")
+    replacements = {
+        "requirements-core.lock": ("core==1.5", "core==1.6"),
+        "requirements-full.lock": ("core==1.5", "core==1.6"),
+        "requirements-test.lock": ("pytest==9.1.1", "pytest==9.2.0"),
+        "requirements-smoke.lock": ("pytest==9.1.1", "pytest==9.2.0"),
+    }
+    for filename, (before, after) in replacements.items():
+        path = tmp_path / filename
+        _write(path, path.read_text(encoding="utf-8").replace(before, after))
+    _commit_policy_tree(tmp_path, "cross-domain change")
+
+    errors = check_dependency_policy.validate_dependency_domain_diff(
+        base, tmp_path,
+    )
+
+    assert any("span more than one" in error for error in errors)
+    assert any("fixture-runtime" in error and "fixture-tooling" in error
+               for error in errors)
+
+
+def test_dependency_domain_diff_requires_changed_locks(tmp_path):
+    _valid_policy_tree(tmp_path)
+    _split_fixture_domains(tmp_path)
+    base = _commit_policy_tree(tmp_path, "base")
+    _write(tmp_path / "requirements.txt", "core>=1.1,<2\n")
+    _commit_policy_tree(tmp_path, "bound without lock")
+
+    errors = check_dependency_policy.validate_dependency_domain_diff(
+        base, tmp_path,
+    )
+
+    assert any("missing required regenerated lockfile changes" in error
+               for error in errors)
+    assert any("requirements-core.lock" in error
+               and "requirements-full.lock" in error for error in errors)
+
+
+def test_dependency_domain_diff_rejects_unrelated_lock_change(tmp_path):
+    _valid_policy_tree(tmp_path)
+    _split_fixture_domains(tmp_path)
+    base = _commit_policy_tree(tmp_path, "base")
+    _write(tmp_path / "requirements.txt", "core>=1.1,<2\n")
+    unrelated = tmp_path / "requirements-security.lock"
+    _write(
+        unrelated,
+        unrelated.read_text(encoding="utf-8") + "# unrelated\n",
+    )
+    _commit_policy_tree(tmp_path, "wrong lock")
+
+    errors = check_dependency_policy.validate_dependency_domain_diff(
+        base, tmp_path,
+    )
+
+    assert any("requirements-core.lock" in error
+               and "requirements-full.lock" in error for error in errors)
+
+
+def test_dependency_domain_diff_rejects_noop_bound_with_transitive_locks(
+    tmp_path,
+):
+    _valid_policy_tree(tmp_path)
+    _split_fixture_domains(tmp_path)
+    base = _commit_policy_tree(tmp_path, "base")
+    _write(tmp_path / "requirements.txt", "core>=1.1,<2\n")
+    transitive = f"transitive==9.9 --hash=sha256:{'1' * 64}\n"
+    for filename in ("requirements-core.lock", "requirements-full.lock"):
+        path = tmp_path / filename
+        _write(path, path.read_text(encoding="utf-8") + transitive)
+    _commit_policy_tree(tmp_path, "no-op bound with transitive lock changes")
+
+    errors = check_dependency_policy.validate_dependency_domain_diff(
+        base, tmp_path,
+    )
+
+    assert any("selected records unchanged in every mapped lock: core" in error
+               for error in errors)
+
+
+def test_dependency_domain_diff_rejects_mode_only_required_locks(tmp_path):
+    _valid_policy_tree(tmp_path)
+    _split_fixture_domains(tmp_path)
+    base = _commit_policy_tree(tmp_path, "base")
+    _write(tmp_path / "requirements.txt", "core>=1.1,<2\n")
+    _git(tmp_path, "add", ".")
+    for filename in ("requirements-core.lock", "requirements-full.lock"):
+        _git(tmp_path, "update-index", "--chmod=+x", filename)
+    _git(tmp_path, "commit", "-m", "mode-only lock changes")
+
+    for filename in ("requirements-core.lock", "requirements-full.lock"):
+        assert _git(tmp_path, "rev-parse", f"{base}:{filename}") == _git(
+            tmp_path, "rev-parse", f"HEAD:{filename}",
+        )
+        assert _git(tmp_path, "ls-tree", base, "--", filename).startswith(
+            "100644 "
+        )
+        assert _git(tmp_path, "ls-tree", "HEAD", "--", filename).startswith(
+            "100755 "
+        )
+
+    errors = check_dependency_policy.validate_dependency_domain_diff(
+        base, tmp_path,
+    )
+
+    assert any("missing required regenerated lockfile changes" in error
+               for error in errors)
+    assert any("requirements-core.lock" in error
+               and "requirements-full.lock" in error for error in errors)
+
+
+def test_dependency_domain_diff_accepts_lock_only_same_domain(tmp_path):
+    _valid_policy_tree(tmp_path)
+    _split_fixture_domains(tmp_path)
+    base = _commit_policy_tree(tmp_path, "base")
+    for filename in ("requirements-core.lock", "requirements-full.lock"):
+        path = tmp_path / filename
+        _write(
+            path,
+            path.read_text(encoding="utf-8").replace("core==1.5", "core==1.6"),
+        )
+    _commit_policy_tree(tmp_path, "lock-only runtime update")
+
+    assert check_dependency_policy.validate_dependency_domain_diff(
+        base, tmp_path,
+    ) == []
+
+
+def test_dependency_domain_diff_rejects_lock_only_cross_domain(tmp_path):
+    _valid_policy_tree(tmp_path)
+    _split_fixture_domains(tmp_path)
+    base = _commit_policy_tree(tmp_path, "base")
+    replacements = {
+        "requirements-core.lock": ("core==1.5", "core==1.6"),
+        "requirements-full.lock": ("core==1.5", "core==1.6"),
+        "requirements-test.lock": ("pytest==9.1.1", "pytest==9.2.0"),
+        "requirements-smoke.lock": ("pytest==9.1.1", "pytest==9.2.0"),
+    }
+    for filename, (before, after) in replacements.items():
+        path = tmp_path / filename
+        _write(path, path.read_text(encoding="utf-8").replace(before, after))
+    _commit_policy_tree(tmp_path, "lock-only cross-domain update")
+
+    errors = check_dependency_policy.validate_dependency_domain_diff(
+        base, tmp_path,
+    )
+
+    assert any("span more than one" in error for error in errors)
+    assert any("fixture-runtime" in error and "fixture-tooling" in error
+               for error in errors)
+
+
+def test_dependency_domain_diff_rejects_transitive_only_lock_change(tmp_path):
+    _valid_policy_tree(tmp_path)
+    _split_fixture_domains(tmp_path)
+    base = _commit_policy_tree(tmp_path, "base")
+    path = tmp_path / "requirements-core.lock"
+    _write(
+        path,
+        path.read_text(encoding="utf-8")
+        + f"transitive==9.9 --hash=sha256:{'1' * 64}\n",
+    )
+    _commit_policy_tree(tmp_path, "transitive-only lock change")
+
+    errors = check_dependency_policy.validate_dependency_domain_diff(
+        base, tmp_path,
+    )
+
+    assert any("not attributable to a changed governed direct dependency"
+               in error for error in errors)
+
+
+def test_dependency_domain_diff_rejects_comment_only_lock_change(tmp_path):
+    _valid_policy_tree(tmp_path)
+    _split_fixture_domains(tmp_path)
+    base = _commit_policy_tree(tmp_path, "base")
+    path = tmp_path / "requirements-core.lock"
+    _write(
+        path,
+        path.read_text(encoding="utf-8") + "# comment-only lock change\n",
+    )
+    _commit_policy_tree(tmp_path, "comment-only lock change")
+
+    errors = check_dependency_policy.validate_dependency_domain_diff(
+        base, tmp_path,
+    )
+
+    assert any("not attributable to a changed governed direct dependency"
+               in error for error in errors)
+
+
+def test_dependency_domain_diff_requires_exact_base_sha(tmp_path):
+    _valid_policy_tree(tmp_path)
+
+    errors = check_dependency_policy.validate_dependency_domain_diff(
+        "main", tmp_path,
+    )
+
+    assert errors == [
+        "--base-ref must be one exact lowercase 40-character commit SHA"
+    ]
 
 
 def test_lock_refresh_commands_cover_every_lock_and_cpu_runtime():
