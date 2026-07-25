@@ -41,6 +41,8 @@ jobs:
         run: python tools/check_model_artifacts.py
       - name: Check GitHub Actions security policy
         run: python tools/check_ci_security.py
+      - name: Check architecture and facade inventory
+        run: python tools/check_architecture_inventory.py
       - name: Lint
         run: python -m ruff check .
       - name: Compile Python sources
