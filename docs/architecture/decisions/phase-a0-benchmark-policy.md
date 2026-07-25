@@ -1,7 +1,8 @@
 # Phase A0 Benchmark Policy
 
-- **Status:** A0a implemented locally; A0b baselines and CI wiring implemented
-  locally, hosted frozen-head checkpoint pending
+- **Status:** A0a implemented locally; A0b replacement baselines and repaired
+  CI wiring implemented locally, hosted replacement frozen-head checkpoint
+  pending
 - **Milestone:** R10 prerequisite for the R8 pipeline-ownership move
 - **Report schema:** `phase-a0` v3
 
@@ -21,12 +22,13 @@ Phase A0 is intentionally split:
 - **A0b** is the later authoritative checkpoint: separate reviewed Windows and
   Linux baselines from a clean pre-gate source checkpoint, each generated on
   CPython 3.12 x86-64 with the locked CPU dependency profile, plus hosted CI
-  comparison and retained current-report artifacts. A following gate-only
-  evidence commit may add those baselines, CI wiring, evidence docs, and a
-  path-scoped LF rule that preserves canonical report bytes, but no Python
-  source or dependency/model lock. CI and review bind the resulting final R1
-  candidate commit/tree; any intervening source or lock change invalidates and
-  regenerates both baselines.
+  comparison and retained current-report artifacts. The clean pre-gate source
+  must already contain the reviewed harness, CI wiring, and LF policy used for
+  generation. A following gate-only evidence commit may add only the two
+  baselines and their provenance/status documentation, but no Python source,
+  workflow, attribute policy, or dependency/model lock. CI and review bind the
+  resulting final R1 candidate commit/tree; any intervening source or lock
+  change invalidates and regenerates both baselines.
 
 [`tools/benchmark_phase_a0.py`](../../../tools/benchmark_phase_a0.py) runs five
 or more repetitions of nine fresh-process scenarios:
@@ -71,14 +73,20 @@ that `Path.home()` remains denied.
 
 ## A0b publication gate
 
-The local gate candidate uses clean pre-gate source `0fe69f3` and separate
-Windows and Linux CPython 3.12 x86-64 reports. Both were generated under the
+The replacement gate uses clean pre-gate source
+`fdb08d26e3fc9fd2b80b983eeab7b1f353b96707` (tree
+`d7e758c6002144acff0c8d58e54c9980a6ffd7c7`) and separate Windows and Linux
+CPython 3.12 x86-64 reports. Both were generated under the
 exact `requirements-full.lock`, `requirements-test.lock`, and retained
 `requirements-lock-tools.lock` union after strict hash-locked synchronization
-and dependency-consistency checks; each passes an independent complete 9×5
-same-platform comparison. The gate-only candidate adds those reports, their
-path-scoped LF normalization, matching CI matrix cells, and 30-day
-current-report retention without changing Python or dependency/model locks.
+and dependency-consistency checks: 189 marker-resolved distributions on
+Windows and 187 on Linux. They bind one clean source, the same eight LF and
+`HEAD`-identical dependency/model inputs, and the complete 9×5 scenario
+contract. Each passes an independent complete same-platform comparison. The
+repaired CI matrix, LF policy, source gates, and Python 3.10-3.14 compatibility
+normalization are already in `fdb08d2` and were exercised by generation and
+comparison. The following gate-only delta is
+limited to the two reports and their provenance/status documentation.
 
 A0b nevertheless remains pending. No local smoke report, subset, noncanonical
 interpreter, baseline copied between operating systems, or local-only
@@ -86,6 +94,12 @@ comparison is authoritative. Both Tier-1 hosted jobs must pass against their
 matching baseline at one frozen final commit/tree and retain their reports.
 Until that exact-head evidence exists, Phase A0 does not authorize the R8
 ownership move.
+
+The pull-request matrix explicitly checks out the exact PR head rather than the
+synthetic merge ref. Before comparison, the harness validates and publishes the
+candidate report. Failures identify only a stable stage and content-free
+diagnostic code; raw paths, corpus material, exception text, and credentials are
+not logged. A failed comparison report is retained for 7 days for diagnosis.
 
 After a successful comparison, CI strictly revalidates the generated current
 report and requires its clean source commit to equal the job's exact `HEAD` and
@@ -129,9 +143,36 @@ WSL A0 set, and canonical architecture checks on Windows CPython 3.12/3.14 and
 WSL CPython 3.12 pass at that checkpoint. These results establish A0a only;
 they do not replace the separate A0b baselines and hosted exact-head checks.
 
-Gate-only checkpoint `144a434` passes both exact full-profile same-platform A0
-comparisons from a clean final head. Its cumulative local validation also
-passes 2,208 tests with 7 platform skips, Ruff, exhaustive compilation of all
-150 tracked Python sources, dependency and model-artifact policy, CI-security
-policy, and Windows/Linux architecture-inventory checks. Hosted execution and
-review at the frozen publishable head remain outstanding.
+The first frozen hosted attempt at `ba9c66d` was diagnostic, not passing A0b
+evidence. Both A0 cells found checkout-EOL lock-byte drift. The same hosted run
+also exposed POSIX acceptance of the adversarial Windows drive-relative source
+inventory path `C:escape.py` and CRLF drift in the Windows architecture
+inventory. Replacement source `7594f8b` closes those defects through
+platform-neutral lexical source validation, explicit LF attributes, a
+lock-versus-`HEAD` invariant, content-free staged diagnostics, pre-comparison
+candidate publication, 7-day failed-comparison retention, and exact-PR-head
+checkout. Cross-version qualification then exposed CPython 3.10's missing
+`ast.TryStar`, different `typing.Any` and default-`None` behavior, and nested
+PEP 585 forward-reference handling; CPython 3.13/3.14 lazy `sysconfig`
+initialization; and CPython 3.13's inherited `Path.home` descriptor and private
+implementation identity for public `pathlib.Path`. Final pre-gate source
+`fdb08d2` closes those cases, including inherited cross-module type hints,
+without permitting operator-home or tilde access.
+
+At the final pre-gate source checkpoint, all 56 A0 tests pass in each locked
+full suite. Fresh complete suites pass 2,233 tests with 7 skips on Windows and
+2,236 tests with 4 skips on native Linux. The sole warning is the R2-owned
+Starlette/httpx dependency deprecation. The canonical architecture inventory
+reports 1,981 functions and its runtime contract is identical across Windows
+and Linux CPython 3.10-3.14. The Windows replacement report is 49,077
+bytes under CPython 3.12.13 (file SHA-256
+`0363e499ab69570be978d7c714e3c3cf38adf955ad00720927d81b283f1d6ee5`;
+embedded report SHA-256
+`3f76c476d2877537fe2da6dd334c40902146b2264d3f61ea5b3c8e7b57239db1`).
+The Linux report is 48,488 bytes under CPython 3.12.3 (file SHA-256
+`3617fb7a90edabc6e45a6ef6ac694f093171188ea70fb3b6f456253d5119c799`;
+embedded report SHA-256
+`d24c4e3444f0c5afb11c76bac65d8148258d842b569dcdf4128b61ea2cb57147`).
+These are local replacement baseline candidates. The gate-only commit that
+contains them freezes the final local candidate; publishing its exact
+commit/tree plus hosted execution and review at that head remain outstanding.

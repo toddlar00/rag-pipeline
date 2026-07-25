@@ -56,8 +56,9 @@ material. When documents disagree, use the authority order below.
   — schema-v3 static graph, facade/mutation characterization, normalized
   runtime contract, and reviewed baseline refreshes.
 - [Phase A0 benchmark policy](architecture/decisions/phase-a0-benchmark-policy.md)
-  — the cross-platform A0a harness contract, local A0b canonical candidates,
-  and the still-pending hosted frozen-head checkpoint.
+  — the cross-platform A0a harness contract, repaired local A0b replacement
+  candidates, the first hosted failure diagnosis, and the still-pending hosted
+  replacement frozen-head checkpoint.
 
 With the local CI-ownership and Phase A0a decisions plus the implemented and
 independently audited architecture-inventory policy now maintained here, the
@@ -92,12 +93,22 @@ ownership gate, CI status, review state, and release gaps are summarized in
 point-in-time transcripts and test counts into an immutable `docs/evidence/`
 ledger keyed by commit and PR.
 
-The Phase A0a harness and its local tests are implementation evidence only.
-Phase A0b's separate clean pre-gate-source CPython 3.12 x86-64 Windows/Linux
-baseline candidates and matching CI wiring now exist locally. A0b still
-requires a source/lock-invariant frozen final R1 candidate, passing hosted
-comparisons on both operating systems, retained current-report artifacts, and
-exact-head review; none of those is implied by A0a or by a local-only result.
+The Phase A0a harness and its local tests are implementation evidence only. The
+first frozen A0b hosted attempt at `ba9c66d` exposed checkout-EOL drift in lock
+and architecture-inventory bytes plus host-dependent validation of the
+drive-relative path `C:escape.py`; it did not pass A0b. Replacement clean
+source `7594f8b` repairs those gates, publishes content-free candidate reports
+before comparison, and makes PR cells test the exact PR head. Final clean
+pre-gate source `fdb08d2` additionally normalizes the supported Python 3.10-3.14
+runtime-contract differences discovered during local matrix qualification,
+without weakening the probe's home/tilde denial. Separate
+CPython 3.12 x86-64 Windows/Linux baseline candidates now bind that source and
+the same eight LF/`HEAD`-identical inputs, and both matching local 9×5
+comparisons independently pass. The gate-only commit containing those reports
+is the final local R1 candidate; A0b still requires publishing its exact
+commit/tree, passing hosted comparisons on both operating systems, retaining
+successful evidence artifacts, and exact-head review. None of those hosted or
+review gates is implied by A0a, the failed first attempt, or a local-only result.
 
 Ignored `output/` paths are not durable evidence in a fresh clone. A roadmap or
 PR claim that depends on private output must be backed by a tracked content-free
