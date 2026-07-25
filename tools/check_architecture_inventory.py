@@ -11,15 +11,286 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
+import subprocess
 import sys
+import tempfile
+import textwrap
 from typing import Any
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_BASELINE = Path("architecture-inventory.json")
-SCHEMA_VERSION = 1
-ANALYSIS_MODEL = "tracked-python-ast-v1"
+SCHEMA_VERSION = 2
+ANALYSIS_MODEL = "tracked-python-ast-v2"
+INTERPRETER_NORMALIZATION = "cpython-3.12-3.14-semantic-v1"
 _GROUP_NAMES = ("production", "tests", "tools", "other")
+_INTERPRETER_VARIANT_NAMES = (
+    "__annotate__",
+    "__annotations__",
+    "__conditional_annotations__",
+)
+
+_RUNTIME_PROBE = r'''
+import hashlib
+import importlib
+import inspect
+import json
+import os
+import pickle
+from pathlib import Path
+import re
+import socket
+import ssl  # Import before replacing socket.socket so SSL class creation is complete.
+import subprocess as probe_subprocess
+import sys
+import types
+import typing
+
+root = sys.argv[1]
+sys.path.insert(0, root)
+sys.dont_write_bytecode = True
+
+def fresh_source_code(loader, fullname):
+    source_path = loader.get_filename(fullname)
+    source_bytes = loader.get_data(source_path)
+    return loader.source_to_code(source_bytes, source_path)
+
+importlib.machinery.SourceFileLoader.get_code = fresh_source_code
+
+def denied_home(*_args, **_kwargs):
+    raise RuntimeError("home lookup is disabled in the architecture probe")
+
+def denied_expanduser(path):
+    rendered = os.fspath(path)
+    if rendered == "~" or rendered.startswith(("~/", "~\\")):
+        raise RuntimeError("tilde expansion is disabled in the architecture probe")
+    return rendered
+
+class DeniedSocket(socket.socket):
+    def __new__(cls, *_args, **_kwargs):
+        raise RuntimeError("network access is disabled in the architecture probe")
+
+def denied_network(*_args, **_kwargs):
+    raise RuntimeError("network access is disabled in the architecture probe")
+
+Path.home = classmethod(denied_home)
+os.path.expanduser = denied_expanduser
+socket.socket = DeniedSocket
+socket.socketpair = denied_network
+socket.create_connection = denied_network
+socket.getaddrinfo = denied_network
+probe_subprocess.Popen = denied_network
+
+import rag
+
+variant_names = {"__annotate__", "__annotations__", "__conditional_annotations__"}
+
+def digest(value):
+    payload = json.dumps(
+        value, allow_nan=False, ensure_ascii=False,
+        separators=(",", ":"), sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+def value_identity(value):
+    if value is inspect.Signature.empty or value is inspect.Parameter.empty:
+        return {"kind": "empty"}
+    if value is None or isinstance(value, (bool, int, float, str, bytes)):
+        return {
+            "kind": f"{type(value).__module__}.{type(value).__qualname__}",
+            "value_sha256": hashlib.sha256(repr(value).encode("utf-8")).hexdigest(),
+        }
+    if isinstance(value, (list, tuple)):
+        return {
+            "items": [value_identity(item) for item in value],
+            "kind": f"sequence:{type(value).__name__}",
+        }
+    if isinstance(value, (set, frozenset)):
+        items = [value_identity(item) for item in value]
+        return {
+            "items": sorted(items, key=digest),
+            "kind": f"set:{type(value).__name__}",
+        }
+    if isinstance(value, dict):
+        items = [
+            [value_identity(key), value_identity(item)]
+            for key, item in value.items()
+        ]
+        return {"items": sorted(items, key=digest), "kind": "mapping"}
+    if isinstance(value, os.PathLike):
+        return {"kind": f"{type(value).__module__}.{type(value).__qualname__}"}
+    origin = typing.get_origin(value)
+    if origin is not None:
+        args = []
+        for item in typing.get_args(value):
+            if isinstance(item, (list, tuple)):
+                args.append({
+                    "items": [value_identity(nested) for nested in item],
+                    "kind": "callable_parameters",
+                })
+            else:
+                args.append(value_identity(item))
+        if origin in {typing.Union, types.UnionType}:
+            return {"args": sorted(args, key=digest), "kind": "union"}
+        return {
+            "args": args,
+            "kind": "typing",
+            "origin": value_identity(origin),
+        }
+    module = getattr(value, "__module__", None)
+    qualname = getattr(value, "__qualname__", None)
+    if isinstance(module, str) and isinstance(qualname, str):
+        return {"kind": "identity", "module": module, "qualname": qualname}
+    rendered = re.sub(r"0x[0-9a-fA-F]+", "0xADDR", repr(value))
+    return {
+        "kind": f"{type(value).__module__}.{type(value).__qualname__}",
+        "repr_sha256": hashlib.sha256(rendered.encode("utf-8")).hexdigest(),
+    }
+
+def project_owned(value):
+    try:
+        source = inspect.getsourcefile(value)
+        return Path(source).resolve().is_relative_to(Path(root).resolve())
+    except (OSError, TypeError, ValueError):
+        return False
+
+def callable_record(name, value):
+    module = getattr(value, "__module__", None)
+    qualname = getattr(value, "__qualname__", None)
+    if project_owned(value):
+        try:
+            signature = inspect.signature(value)
+            signature_shape = {
+                "parameters": [
+                    {
+                        "annotation": value_identity(parameter.annotation),
+                        "default": value_identity(parameter.default),
+                        "kind": parameter.kind.name,
+                        "name": parameter.name,
+                    }
+                    for parameter in signature.parameters.values()
+                ],
+                "return": value_identity(signature.return_annotation),
+            }
+            signature_status = "ok"
+        except (TypeError, ValueError) as exc:
+            signature_shape = {"error": type(exc).__name__}
+            signature_status = "unsupported"
+        try:
+            hints = {
+                key: value_identity(item)
+                for key, item in sorted(typing.get_type_hints(value).items())
+            }
+            hints_status = "ok"
+        except Exception as exc:
+            hints = {"error": type(exc).__name__}
+            hints_status = "unresolved"
+    else:
+        signature_shape = {
+            "kind": "interpreter_owned", "module": module, "qualname": qualname,
+        }
+        signature_status = "interpreter_owned"
+        hints = signature_shape
+        hints_status = "interpreter_owned"
+    try:
+        pickle_status = (
+            "same" if pickle.loads(pickle.dumps(value)) is value else "different"
+        )
+    except Exception:
+        pickle_status = "unsupported"
+    return {
+        "kind": "class" if inspect.isclass(value) else "function",
+        "module": module,
+        "name": name,
+        "pickle_identity": pickle_status,
+        "qualname": qualname,
+        "runtime_signature_sha256": digest(signature_shape),
+        "runtime_signature_status": signature_status,
+        "type_hints_sha256": digest(hints),
+        "type_hints_status": hints_status,
+    }
+
+behavior = {}
+dynamic_name = "_architecture_inventory_dynamic_probe"
+sentinel = object()
+setattr(rag, dynamic_name, sentinel)
+behavior["dynamic_add_read"] = (
+    getattr(rag, dynamic_name) is sentinel
+    and vars(rag)[dynamic_name] is sentinel
+    and dynamic_name in dir(rag)
+)
+delattr(rag, dynamic_name)
+behavior["dynamic_delete"] = (
+    not hasattr(rag, dynamic_name)
+    and dynamic_name not in vars(rag)
+    and dynamic_name not in dir(rag)
+)
+
+implementation_globals = rag._call_llm_result.__globals__
+original_runtime = rag._llm_runtime
+rag._llm_runtime = sentinel
+behavior["existing_assignment_visible"] = (
+    implementation_globals.get("_llm_runtime") is sentinel
+)
+rag._llm_runtime = original_runtime
+behavior["existing_assignment_restored"] = (
+    rag._llm_runtime is original_runtime
+    and implementation_globals.get("_llm_runtime") is original_runtime
+)
+del rag._llm_runtime
+behavior["existing_deletion_visible"] = (
+    "_llm_runtime" not in vars(rag)
+    and "_llm_runtime" not in implementation_globals
+)
+rag._llm_runtime = original_runtime
+behavior["existing_deletion_restored"] = (
+    rag._llm_runtime is original_runtime
+    and implementation_globals.get("_llm_runtime") is original_runtime
+)
+
+original_nested = rag.log.disabled
+rag.log.disabled = not original_nested
+behavior["nested_assignment_visible"] = rag.log.disabled is (not original_nested)
+rag.log.disabled = original_nested
+behavior["nested_assignment_restored"] = rag.log.disabled is original_nested
+
+setattr(rag, dynamic_name, sentinel)
+rag._llm_runtime = sentinel
+before_reload = rag
+reloaded = importlib.reload(rag)
+behavior["reload_same_module"] = reloaded is before_reload
+behavior["reload_preserves_dynamic"] = getattr(rag, dynamic_name, None) is sentinel
+behavior["reload_reexecutes_existing_binding"] = rag._llm_runtime is not sentinel
+delattr(rag, dynamic_name)
+
+namespace = {}
+exec("from rag import *", namespace)
+import_star_names = sorted(name for name in namespace if name != "__builtins__")
+vars_names = sorted(name for name in vars(rag) if name not in variant_names)
+dir_names = sorted(name for name in dir(rag) if name not in variant_names)
+callables = [
+    callable_record(name, value)
+    for name, value in sorted(vars(rag).items())
+    if name not in variant_names
+    and (inspect.isfunction(value) or inspect.isclass(value))
+]
+
+result = {
+    "behavior": behavior,
+    "callables": callables,
+    "dir_names": dir_names,
+    "import_star_names": import_star_names,
+    "interpreter_variant_exclusions": sorted(variant_names),
+    "logger_name": rag.log.name,
+    "module_type": f"{type(rag).__module__}.{type(rag).__qualname__}",
+    "vars_names": vars_names,
+}
+sys.stdout.write(json.dumps(
+    result, allow_nan=False, ensure_ascii=False,
+    separators=(",", ":"), sort_keys=True,
+))
+'''
 
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -73,7 +344,9 @@ def _source_group(path: Path) -> str:
 def _read_tree(root: Path, relative: Path) -> tuple[str, ast.Module]:
     try:
         source = (root / relative).read_text(encoding="utf-8-sig")
-        tree = ast.parse(source, filename=relative.as_posix())
+        tree = ast.parse(
+            source, filename=relative.as_posix(), type_comments=True
+        )
     except (OSError, SyntaxError, UnicodeError) as exc:
         raise ArchitectureInventoryError(
             f"Cannot parse tracked Python source {relative.as_posix()}: {exc}"
@@ -133,6 +406,115 @@ def _import_targets(
     return targets
 
 
+def _type_checking_guard(node: ast.AST) -> bool:
+    if isinstance(node, ast.Name):
+        return node.id == "TYPE_CHECKING"
+    chain = _attribute_chain(node)
+    return chain == ("typing", ["TYPE_CHECKING"])
+
+
+class _ImportEdgeVisitor(ast.NodeVisitor):
+    def __init__(
+        self, current: str, path: Path, known: set[str],
+    ) -> None:
+        self.current = current
+        self.path = path
+        self.known = known
+        self.context = "runtime"
+        self.edges: dict[str, set[str]] = defaultdict(set)
+
+    def _with_context(self, context: str, nodes: Iterable[ast.AST]) -> None:
+        previous = self.context
+        self.context = context
+        for node in nodes:
+            self.visit(node)
+        self.context = previous
+
+    def _add(self, targets: Iterable[str], *extra: str) -> None:
+        for target in targets:
+            self.edges[target].update((self.context, *extra))
+
+    def visit_Import(self, node: ast.Import) -> None:
+        self._add(_import_targets(self.current, self.path, node, self.known))
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        self._add(_import_targets(self.current, self.path, node, self.known))
+
+    def visit_Call(self, node: ast.Call) -> None:
+        dynamic_name: str | None = None
+        if (
+            isinstance(node.func, ast.Name)
+            and node.func.id == "__import__"
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)
+        ):
+            dynamic_name = node.args[0].value
+        elif (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr == "import_module"
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)
+        ):
+            dynamic_name = node.args[0].value
+        if dynamic_name:
+            self._add(
+                _known_prefixes(dynamic_name, self.known),
+                "dynamic_constant",
+            )
+        self.generic_visit(node)
+
+    def visit_If(self, node: ast.If) -> None:
+        self.visit(node.test)
+        if _type_checking_guard(node.test):
+            self._with_context("type_only", node.body)
+            self._with_context(self.context, node.orelse)
+            return
+        context = "type_only" if self.context == "type_only" else "conditional"
+        self._with_context(context, node.body)
+        self._with_context(context, node.orelse)
+
+    def _visit_conditional_body(self, node: ast.AST) -> None:
+        context = "type_only" if self.context == "type_only" else "conditional"
+        self._with_context(context, ast.iter_child_nodes(node))
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self._visit_conditional_body(node)
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self._visit_conditional_body(node)
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        self._visit_conditional_body(node)
+
+    def visit_For(self, node: ast.For) -> None:
+        self._visit_conditional_body(node)
+
+    def visit_AsyncFor(self, node: ast.AsyncFor) -> None:
+        self._visit_conditional_body(node)
+
+    def visit_While(self, node: ast.While) -> None:
+        self._visit_conditional_body(node)
+
+    def visit_Try(self, node: ast.Try) -> None:
+        self._visit_conditional_body(node)
+
+    def visit_TryStar(self, node: ast.TryStar) -> None:
+        self._visit_conditional_body(node)
+
+    def visit_Match(self, node: ast.Match) -> None:
+        self._visit_conditional_body(node)
+
+
+def _module_import_edges(
+    module: str, path: Path, tree: ast.Module, known: set[str],
+) -> dict[str, set[str]]:
+    visitor = _ImportEdgeVisitor(module, path, known)
+    visitor.visit(tree)
+    return visitor.edges
+
+
 def _strongly_connected_components(
     graph: Mapping[str, set[str]],
 ) -> list[list[str]]:
@@ -173,25 +555,83 @@ def _strongly_connected_components(
     return sorted(result, key=lambda component: tuple(component))
 
 
-def _parameter_inventory(arguments: ast.arguments) -> dict[str, object]:
-    positional = [*arguments.posonlyargs, *arguments.args]
-    required_positional = len(positional) - len(arguments.defaults)
-    required_keyword_only = sum(
-        default is None for default in arguments.kw_defaults
+def _canonical_ast_value(value: object) -> object:
+    if isinstance(value, ast.AST):
+        return {
+            "fields": [
+                [field, _canonical_ast_value(getattr(value, field))]
+                for field in value._fields
+            ],
+            "node": type(value).__name__,
+        }
+    if isinstance(value, list):
+        return [_canonical_ast_value(item) for item in value]
+    if value is Ellipsis:
+        return {"constant": "ellipsis"}
+    if isinstance(value, bytes):
+        return {"bytes_hex": value.hex()}
+    if isinstance(value, complex):
+        return {"complex": [value.real, value.imag]}
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    raise ArchitectureInventoryError(
+        f"unsupported AST scalar in signature: {type(value).__name__}"
     )
-    named = len(positional) + len(arguments.kwonlyargs)
+
+
+def _ast_identity(node: ast.AST | None) -> str | None:
+    if node is None:
+        return None
+    return _canonical_sha256(_canonical_ast_value(node))
+
+
+def _text_identity(value: str | None) -> str | None:
+    if value is None:
+        return None
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _signature_inventory(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> dict[str, object]:
+    arguments = node.args
+    positional = [*arguments.posonlyargs, *arguments.args]
+    positional_defaults: list[ast.AST | None] = [
+        *([None] * (len(positional) - len(arguments.defaults))),
+        *arguments.defaults,
+    ]
+    parameters: list[dict[str, object]] = []
+
+    def add(argument: ast.arg, kind: str, default: ast.AST | None) -> None:
+        parameters.append({
+            "annotation_sha256": _ast_identity(argument.annotation),
+            "default_sha256": _ast_identity(default),
+            "has_default": default is not None,
+            "kind": kind,
+            "name": argument.arg,
+        })
+
+    for index, argument in enumerate(arguments.posonlyargs):
+        add(argument, "positional_only", positional_defaults[index])
+    offset = len(arguments.posonlyargs)
+    for index, argument in enumerate(arguments.args):
+        add(
+            argument,
+            "positional_or_keyword",
+            positional_defaults[offset + index],
+        )
+    if arguments.vararg is not None:
+        add(arguments.vararg, "var_positional", None)
+    for argument, default in zip(
+        arguments.kwonlyargs, arguments.kw_defaults, strict=True
+    ):
+        add(argument, "keyword_only", default)
+    if arguments.kwarg is not None:
+        add(arguments.kwarg, "var_keyword", None)
     return {
-        "accepts_var_keyword": arguments.kwarg is not None,
-        "accepts_var_positional": arguments.vararg is not None,
-        "keyword_only": len(arguments.kwonlyargs),
-        "positional_only": len(arguments.posonlyargs),
-        "positional_or_keyword": len(arguments.args),
-        "required": required_positional + required_keyword_only,
-        "total": (
-            named
-            + int(arguments.vararg is not None)
-            + int(arguments.kwarg is not None)
-        ),
+        "parameters": parameters,
+        "return_annotation_sha256": _ast_identity(node.returns),
+        "type_comment_sha256": _text_identity(node.type_comment),
     }
 
 
@@ -224,10 +664,10 @@ class _DefinitionVisitor(ast.NodeVisitor):
         first_line = self._first_line(node)
         last_line = node.end_lineno or node.lineno
         self.functions.append({
-            "arity": _parameter_inventory(node.args),
             "kind": kind,
             "name": qualified,
             "scope": self._scope_kind(),
+            "signature": _signature_inventory(node),
             "span": [first_line, last_line],
         })
         self.scope.append((node.name, "function"))
@@ -329,8 +769,8 @@ def _module_binding_origins(tree: ast.Module) -> dict[str, list[dict[str, object
             self.generic_visit(node.value)
 
         def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
-            self._record(node.target, node.lineno)
             if node.value is not None:
+                self._record(node.target, node.lineno)
                 self.generic_visit(node.value)
 
         def visit_AugAssign(self, node: ast.AugAssign) -> None:
@@ -407,6 +847,8 @@ def _module_binding_origins(tree: ast.Module) -> dict[str, list[dict[str, object
             elif isinstance(statement, ast.ClassDef):
                 add(statement.name, "class_definition", statement.lineno)
             elif isinstance(statement, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+                if isinstance(statement, ast.AnnAssign) and statement.value is None:
+                    continue
                 targets = (
                     statement.targets
                     if isinstance(statement, ast.Assign)
@@ -460,6 +902,31 @@ def _module_binding_origins(tree: ast.Module) -> dict[str, list[dict[str, object
                     )
 
     visit(tree.body)
+    scope_map = _ScopeMap(tree)
+    parents = {
+        child: parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
+
+    def under_main_guard(node: ast.AST) -> bool:
+        current = parents.get(node)
+        while current is not None:
+            if isinstance(current, ast.If) and is_main_guard(current.test):
+                return True
+            current = parents.get(current)
+        return False
+
+    for node, scope in scope_map.node_scope.items():
+        if scope is not tree or under_main_guard(node):
+            continue
+        if isinstance(node, ast.NamedExpr):
+            for name in _target_names(node.target):
+                add(name, "named_expression", node.lineno)
+        elif isinstance(node, ast.Delete):
+            raise ArchitectureInventoryError(
+                "rag.py module-scope del requires explicit namespace analysis"
+            )
     return {
         name: sorted(
             records,
@@ -473,42 +940,68 @@ def _module_binding_origins(tree: ast.Module) -> dict[str, list[dict[str, object
 
 
 def _literal_all(tree: ast.Module) -> tuple[bool, list[str]]:
-    values: list[str] | None = None
-    for statement in tree.body:
+    scope_map = _ScopeMap(tree)
+    candidates: list[tuple[ast.AST, ast.AST | None]] = []
+    for node, scope in scope_map.node_scope.items():
+        if scope is not tree:
+            continue
         target: ast.AST | None = None
         value: ast.AST | None = None
-        if isinstance(statement, ast.Assign):
-            if any(
-                isinstance(item, ast.Name) and item.id == "__all__"
-                for item in statement.targets
-            ):
-                target = statement.targets[0]
-                value = statement.value
+        if isinstance(node, ast.Assign) and any(
+            isinstance(item, ast.Name) and item.id == "__all__"
+            for item in node.targets
+        ):
+            target, value = node, node.value
         elif (
-            isinstance(statement, ast.AnnAssign)
-            and isinstance(statement.target, ast.Name)
-            and statement.target.id == "__all__"
+            isinstance(node, (ast.AnnAssign, ast.AugAssign))
+            and isinstance(node.target, ast.Name)
+            and node.target.id == "__all__"
         ):
-            target = statement.target
-            value = statement.value
-        if target is None:
-            continue
-        try:
-            raw = ast.literal_eval(value) if value is not None else None
-        except (ValueError, TypeError, SyntaxError) as exc:
-            raise ArchitectureInventoryError(
-                "rag.__all__ must be one literal string list or tuple"
-            ) from exc
-        if (
-            not isinstance(raw, (list, tuple))
-            or not all(isinstance(item, str) and item for item in raw)
+            target = node
+            value = node.value if isinstance(node, ast.AnnAssign) else None
+        elif (
+            isinstance(node, ast.NamedExpr)
+            and isinstance(node.target, ast.Name)
+            and node.target.id == "__all__"
         ):
-            raise ArchitectureInventoryError(
-                "rag.__all__ must be one literal string list or tuple"
-            )
-        values = list(raw)
-    if values is None:
+            target, value = node, node.value
+        elif isinstance(node, ast.Delete) and any(
+            isinstance(item, ast.Name) and item.id == "__all__"
+            for item in node.targets
+        ):
+            target = node
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            chain = _attribute_chain(node.func)
+            if chain is not None and chain[0] == "__all__":
+                target = node
+        if target is not None:
+            candidates.append((target, value))
+    if not candidates:
         return False, []
+    target, value = candidates[0]
+    if (
+        len(candidates) != 1
+        or target not in tree.body
+        or not isinstance(target, (ast.Assign, ast.AnnAssign))
+        or value is None
+    ):
+        raise ArchitectureInventoryError(
+            "rag.__all__ must be one unconditional literal assignment"
+        )
+    try:
+        raw = ast.literal_eval(value)
+    except (ValueError, TypeError, SyntaxError) as exc:
+        raise ArchitectureInventoryError(
+            "rag.__all__ must be one unconditional literal string list or tuple"
+        ) from exc
+    if (
+        not isinstance(raw, (list, tuple))
+        or not all(isinstance(item, str) and item for item in raw)
+    ):
+        raise ArchitectureInventoryError(
+            "rag.__all__ must be one unconditional literal string list or tuple"
+        )
+    values = list(raw)
     if len(values) != len(set(values)):
         raise ArchitectureInventoryError("rag.__all__ contains duplicate names")
     return True, values
@@ -559,8 +1052,308 @@ def _rag_aliases(tree: ast.Module) -> tuple[set[str], list[dict[str, object]], l
     return aliases, sorted(imports, key=key), sorted(from_imports, key=lambda item: (item[2], item[0], item[1]))
 
 
-def _rag_attribute_references(
-    tree: ast.Module, aliases: set[str], path: str,
+class _ScopeMap(ast.NodeVisitor):
+    """Map syntax nodes to lexical scopes without leaking shadowed aliases."""
+
+    _COMPREHENSIONS = (
+        ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp,
+    )
+
+    def __init__(self, tree: ast.Module) -> None:
+        self.current: ast.AST = tree
+        self.node_scope: dict[ast.AST, ast.AST] = {tree: tree}
+        self.parent_scope: dict[ast.AST, ast.AST | None] = {tree: None}
+        self.scopes: list[ast.AST] = [tree]
+        self.visit(tree)
+
+    def visit(self, node: ast.AST) -> object:
+        self.node_scope.setdefault(node, self.current)
+        return super().visit(node)
+
+    def _visit_arguments_in_outer_scope(self, node: ast.arguments) -> None:
+        for argument in [
+            *node.posonlyargs, *node.args, *node.kwonlyargs,
+            *([node.vararg] if node.vararg else []),
+            *([node.kwarg] if node.kwarg else []),
+        ]:
+            if argument.annotation is not None:
+                self.visit(argument.annotation)
+        for default in [*node.defaults, *node.kw_defaults]:
+            if default is not None:
+                self.visit(default)
+
+    def _visit_function(
+        self, node: ast.FunctionDef | ast.AsyncFunctionDef,
+    ) -> None:
+        for decorator in node.decorator_list:
+            self.visit(decorator)
+        self._visit_arguments_in_outer_scope(node.args)
+        if node.returns is not None:
+            self.visit(node.returns)
+        outer = self.current
+        self.parent_scope[node] = outer
+        self.scopes.append(node)
+        self.current = node
+        for statement in node.body:
+            self.visit(statement)
+        self.current = outer
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self._visit_function(node)
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self._visit_function(node)
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        self._visit_arguments_in_outer_scope(node.args)
+        outer = self.current
+        self.parent_scope[node] = outer
+        self.scopes.append(node)
+        self.current = node
+        self.visit(node.body)
+        self.current = outer
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        for decorator in node.decorator_list:
+            self.visit(decorator)
+        for base in node.bases:
+            self.visit(base)
+        for keyword in node.keywords:
+            self.visit(keyword.value)
+        outer = self.current
+        self.parent_scope[node] = outer
+        self.scopes.append(node)
+        self.current = node
+        for statement in node.body:
+            self.visit(statement)
+        self.current = outer
+
+    def _visit_comprehension(self, node: ast.AST) -> None:
+        outer = self.current
+        self.parent_scope[node] = outer
+        self.scopes.append(node)
+        self.current = node
+        self.generic_visit(node)
+        self.current = outer
+
+    def visit_ListComp(self, node: ast.ListComp) -> None:
+        self._visit_comprehension(node)
+
+    def visit_SetComp(self, node: ast.SetComp) -> None:
+        self._visit_comprehension(node)
+
+    def visit_DictComp(self, node: ast.DictComp) -> None:
+        self._visit_comprehension(node)
+
+    def visit_GeneratorExp(self, node: ast.GeneratorExp) -> None:
+        self._visit_comprehension(node)
+
+
+class _FacadeAnalysis:
+    """Resolve direct, re-exported, propagated, and scope-safe rag aliases."""
+
+    def __init__(
+        self,
+        tree: ast.Module,
+        exposed_bindings: Mapping[str, set[str]],
+    ) -> None:
+        self.tree = tree
+        self.exposed_bindings = exposed_bindings
+        self.scope_map = _ScopeMap(tree)
+        self.names: dict[ast.AST, set[str]] = {}
+        self.prefixes: dict[
+            ast.AST, dict[str, set[tuple[str, ...]]]
+        ] = {}
+        self._build()
+
+    @staticmethod
+    def _arguments(scope: ast.AST) -> list[ast.arg]:
+        if not isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            return []
+        arguments = scope.args
+        return [
+            *arguments.posonlyargs, *arguments.args, *arguments.kwonlyargs,
+            *([arguments.vararg] if arguments.vararg else []),
+            *([arguments.kwarg] if arguments.kwarg else []),
+        ]
+
+    def _scope_bindings(
+        self, scope: ast.AST,
+    ) -> tuple[set[str], set[str], set[str]]:
+        bound = {argument.arg for argument in self._arguments(scope)}
+        globals_: set[str] = set()
+        nonlocals: set[str] = set()
+        for node, owner in self.scope_map.node_scope.items():
+            if owner is not scope:
+                continue
+            if isinstance(node, ast.Name) and isinstance(
+                node.ctx, (ast.Store, ast.Del)
+            ):
+                bound.add(node.id)
+            elif isinstance(node, (ast.Import, ast.ImportFrom)):
+                if isinstance(node, ast.Import):
+                    bound.update(
+                        alias.asname or alias.name.split(".", 1)[0]
+                        for alias in node.names
+                    )
+                else:
+                    bound.update(
+                        alias.asname or alias.name
+                        for alias in node.names
+                        if alias.name != "*"
+                    )
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                if self.scope_map.node_scope[node] is scope:
+                    bound.add(node.name)
+            elif isinstance(node, ast.Global):
+                globals_.update(node.names)
+            elif isinstance(node, ast.Nonlocal):
+                nonlocals.update(node.names)
+            elif isinstance(node, ast.ExceptHandler) and node.name:
+                bound.add(node.name)
+        bound.difference_update(globals_ | nonlocals)
+        return bound, globals_, nonlocals
+
+    def _lexical_parent(self, scope: ast.AST) -> ast.AST | None:
+        parent = self.scope_map.parent_scope[scope]
+        if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            while isinstance(parent, ast.ClassDef):
+                parent = self.scope_map.parent_scope[parent]
+        return parent
+
+    def _add_imports(
+        self,
+        scope: ast.AST,
+        names: set[str],
+        prefixes: dict[str, set[tuple[str, ...]]],
+    ) -> None:
+        for node, owner in self.scope_map.node_scope.items():
+            if owner is not scope:
+                continue
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name == "rag":
+                        names.add(alias.asname or "rag")
+                        continue
+                    exported = self.exposed_bindings.get(alias.name, set())
+                    if not exported:
+                        continue
+                    if alias.asname:
+                        binding = alias.asname
+                        module_prefix: tuple[str, ...] = ()
+                    else:
+                        parts = tuple(alias.name.split("."))
+                        binding = parts[0]
+                        module_prefix = parts[1:]
+                    for facade_binding in exported:
+                        prefixes[binding].add(
+                            (*module_prefix, facade_binding)
+                        )
+            elif isinstance(node, ast.ImportFrom) and node.level == 0:
+                exported = self.exposed_bindings.get(node.module or "", set())
+                for alias in node.names:
+                    if alias.name == "*":
+                        names.update(exported)
+                    elif alias.name in exported:
+                        names.add(alias.asname or alias.name)
+
+    @staticmethod
+    def _assignment_pairs(node: ast.AST) -> list[tuple[ast.AST, ast.AST]]:
+        if isinstance(node, ast.Assign):
+            result: list[tuple[ast.AST, ast.AST]] = []
+            for target in node.targets:
+                if (
+                    isinstance(target, (ast.Tuple, ast.List))
+                    and isinstance(node.value, (ast.Tuple, ast.List))
+                    and len(target.elts) == len(node.value.elts)
+                ):
+                    result.extend(zip(target.elts, node.value.elts))
+                else:
+                    result.append((target, node.value))
+            return result
+        if isinstance(node, ast.AnnAssign) and node.value is not None:
+            return [(node.target, node.value)]
+        if isinstance(node, ast.NamedExpr):
+            return [(node.target, node.value)]
+        return []
+
+    @staticmethod
+    def _resolve_with(
+        node: ast.AST,
+        names: set[str],
+        prefixes: Mapping[str, set[tuple[str, ...]]],
+    ) -> list[str] | None:
+        chain = _attribute_chain(node)
+        if chain is None:
+            return None
+        root, attributes = chain
+        if root in names:
+            return attributes
+        for prefix in sorted(
+            prefixes.get(root, set()),
+            key=lambda value: (-len(value), value),
+        ):
+            if tuple(attributes[:len(prefix)]) == prefix:
+                return attributes[len(prefix):]
+        return None
+
+    def _build(self) -> None:
+        for scope in self.scope_map.scopes:
+            parent = self._lexical_parent(scope)
+            names = set(self.names.get(parent, set()))
+            prefixes = defaultdict(set, {
+                name: set(values)
+                for name, values in self.prefixes.get(parent, {}).items()
+            })
+            bound, globals_, _nonlocals = self._scope_bindings(scope)
+            for name in bound:
+                names.discard(name)
+                prefixes.pop(name, None)
+            if scope is not self.tree:
+                for name in globals_:
+                    names.discard(name)
+                    prefixes.pop(name, None)
+                    if name in self.names[self.tree]:
+                        names.add(name)
+                    if name in self.prefixes[self.tree]:
+                        prefixes[name].update(self.prefixes[self.tree][name])
+            self._add_imports(scope, names, prefixes)
+            changed = True
+            while changed:
+                changed = False
+                for node, owner in self.scope_map.node_scope.items():
+                    if owner is not scope:
+                        continue
+                    for target, value in self._assignment_pairs(node):
+                        if self._resolve_with(value, names, prefixes) != []:
+                            continue
+                        for name in _target_names(target):
+                            if name not in names:
+                                names.add(name)
+                                changed = True
+            self.names[scope] = names
+            self.prefixes[scope] = dict(prefixes)
+
+    def resolve(self, node: ast.AST) -> list[str] | None:
+        scope = self.scope_map.node_scope.get(node, self.tree)
+        return self._resolve_with(
+            node, self.names.get(scope, set()), self.prefixes.get(scope, {})
+        )
+
+    def roots(self) -> list[str]:
+        roots: set[str] = set()
+        for scope in self.scope_map.scopes:
+            roots.update(self.names.get(scope, set()))
+            roots.update(
+                ".".join((name, *prefix))
+                for name, prefixes in self.prefixes.get(scope, {}).items()
+                for prefix in prefixes
+            )
+        return sorted(roots)
+
+
+def _facade_attribute_accesses(
+    tree: ast.Module, resolver: _FacadeAnalysis, path: str,
 ) -> list[dict[str, object]]:
     parents = {
         child: parent
@@ -574,16 +1367,16 @@ def _rag_attribute_references(
         parent = parents.get(node)
         if isinstance(parent, ast.Attribute) and parent.value is node:
             continue
-        chain = _attribute_chain(node)
-        if chain is None or chain[0] not in aliases or not chain[1]:
+        capability = resolver.resolve(node)
+        if not capability:
             continue
         context = type(node.ctx).__name__.lower()
         references.append({
             "context": context,
             "kind": "attribute",
             "line": node.lineno,
-            "name": chain[1][0],
-            "path": ".".join(chain[1]),
+            "name": capability[0],
+            "path": ".".join(capability),
             "source": path,
         })
     return sorted(
@@ -594,8 +1387,26 @@ def _rag_attribute_references(
     )
 
 
+def _literal_facade_target(
+    value: object,
+    exposed_bindings: Mapping[str, set[str]],
+) -> str | None:
+    if not isinstance(value, str):
+        return None
+    if value.startswith("rag."):
+        return value[4:]
+    for module, bindings in sorted(exposed_bindings.items()):
+        for binding in sorted(bindings):
+            prefix = f"{module}.{binding}."
+            if value.startswith(prefix):
+                return value[len(prefix):]
+    return None
+
+
 def _patch_target(
-    call: ast.Call, aliases: set[str],
+    call: ast.Call,
+    resolver: _FacadeAnalysis,
+    exposed_bindings: Mapping[str, set[str]],
 ) -> tuple[str, str] | None:
     function_name = (
         call.func.id
@@ -604,29 +1415,35 @@ def _patch_target(
         if isinstance(call.func, ast.Attribute)
         else ""
     )
-    if function_name in {"setattr", "delattr"}:
+    if (
+        function_name in {"setattr", "delattr"}
+        and isinstance(call.func, ast.Attribute)
+    ):
         if not call.args:
             return None
         first = call.args[0]
         if isinstance(first, ast.Constant) and isinstance(first.value, str):
-            if first.value.startswith("rag."):
-                return function_name, first.value[4:]
-            return None
-        chain = _attribute_chain(first)
-        if chain is None or chain[0] not in aliases:
+            target = _literal_facade_target(
+                first.value, exposed_bindings
+            )
+            return (function_name, target) if target else None
+        capability = resolver.resolve(first)
+        if capability is None:
             return None
         if len(call.args) < 2 or not isinstance(call.args[1], ast.Constant):
             return None
         attribute = call.args[1].value
         if not isinstance(attribute, str) or not attribute:
             return None
-        return function_name, ".".join([*chain[1], attribute])
+        return function_name, ".".join([*capability, attribute])
 
     if function_name == "patch":
         if call.args and isinstance(call.args[0], ast.Constant):
-            value = call.args[0].value
-            if isinstance(value, str) and value.startswith("rag."):
-                return "patch", value[4:]
+            target = _literal_facade_target(
+                call.args[0].value, exposed_bindings
+            )
+            if target:
+                return "patch", target
         return None
 
     if function_name == "object" and isinstance(call.func, ast.Attribute):
@@ -641,57 +1458,31 @@ def _patch_target(
         )
         if not is_patch_object or len(call.args) < 2:
             return None
-        target_chain = _attribute_chain(call.args[0])
+        capability = resolver.resolve(call.args[0])
         attribute = call.args[1]
         if (
-            target_chain is None
-            or target_chain[0] not in aliases
+            capability is None
             or not isinstance(attribute, ast.Constant)
             or not isinstance(attribute.value, str)
         ):
             return None
-        return "patch.object", ".".join([*target_chain[1], attribute.value])
+        return "patch.object", ".".join([*capability, attribute.value])
     return None
 
 
-def _patch_inventory(
-    trees: Mapping[Path, ast.Module],
-) -> dict[str, object]:
-    grouped: dict[str, list[dict[str, object]]] = defaultdict(list)
-    dynamic: list[dict[str, object]] = []
-    for relative in sorted(trees, key=lambda item: item.as_posix()):
-        tree = trees[relative]
-        aliases, _imports, _from_imports = _rag_aliases(tree)
-        if not aliases:
-            continue
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
-            target = _patch_target(node, aliases)
-            if target is not None:
-                operation, dotted = target
-                record = {
-                    "line": node.lineno,
-                    "operation": operation,
-                    "source": relative.as_posix(),
-                }
-                if record not in grouped[dotted]:
-                    grouped[dotted].append(record)
-                continue
-            function_name = (
-                node.func.attr if isinstance(node.func, ast.Attribute) else ""
-            )
-            if function_name not in {"setattr", "delattr"} or not node.args:
-                continue
-            chain = _attribute_chain(node.args[0])
-            if chain is None or chain[0] not in aliases:
-                continue
-            dynamic.append({
-                "line": node.lineno,
-                "operation": function_name,
-                "source": relative.as_posix(),
-            })
+def _source_counts(records: Iterable[Mapping[str, object]]) -> list[dict[str, object]]:
+    counts: dict[str, int] = defaultdict(int)
+    for record in records:
+        counts[str(record["source"])] += 1
+    return [
+        {"count": count, "path": path}
+        for path, count in sorted(counts.items())
+    ]
 
+
+def _target_inventory(
+    grouped: Mapping[str, list[dict[str, object]]],
+) -> dict[str, list[dict[str, object]]]:
     top_level: list[dict[str, object]] = []
     nested: list[dict[str, object]] = []
     for target, occurrences in sorted(grouped.items()):
@@ -703,18 +1494,148 @@ def _patch_inventory(
             "locations_sha256": _canonical_sha256(locations),
             "occurrence_count": len(locations),
             "operations": sorted({item["operation"] for item in occurrences}),
-            "sources": sorted({str(item["source"]) for item in occurrences}),
+            "source_counts": _source_counts(occurrences),
             "target": target,
         }
         (nested if "." in target else top_level).append(record)
-    return {
+    return {"nested": nested, "top_level": top_level}
+
+
+def _facade_tree_variants(
+    tree: ast.Module,
+) -> list[tuple[ast.Module, int, str]]:
+    """Return outer and explicitly rag-importing embedded Python trees.
+
+    Some isolation tests execute module-sized programs stored in literal
+    strings.  Those programs are an architectural consumer surface even
+    though the outer test process does not import the facade.
+    """
+    variants = [(tree, 0, "source")]
+    for node in ast.walk(tree):
+        if (
+            not isinstance(node, ast.Constant)
+            or not isinstance(node.value, str)
+            or len(node.value) > 1024 * 1024
+            or not re.search(r"(?m)^\s*(?:from\s+rag\s+import|import\s+rag\b)", node.value)
+        ):
+            continue
+        try:
+            embedded = ast.parse(textwrap.dedent(node.value), type_comments=True)
+        except (SyntaxError, ValueError, MemoryError):
+            continue
+        _aliases, imports, _from_imports = _rag_aliases(embedded)
+        if imports:
+            variants.append((embedded, node.lineno - 1, "embedded_python"))
+    return variants
+
+
+def _patch_inventory(
+    trees: Mapping[Path, ast.Module],
+    exposed_bindings: Mapping[str, set[str]],
+) -> dict[str, object]:
+    grouped: dict[str, list[dict[str, object]]] = defaultdict(list)
+    dynamic: list[dict[str, object]] = []
+    for relative in sorted(trees, key=lambda item: item.as_posix()):
+        for tree, line_offset, _source_kind in _facade_tree_variants(
+            trees[relative]
+        ):
+            resolver = _FacadeAnalysis(tree, exposed_bindings)
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                target = _patch_target(node, resolver, exposed_bindings)
+                if target is not None:
+                    operation, dotted = target
+                    record = {
+                        "line": node.lineno + line_offset,
+                        "operation": operation,
+                        "source": relative.as_posix(),
+                    }
+                    if record not in grouped[dotted]:
+                        grouped[dotted].append(record)
+                    continue
+                function_name = (
+                    node.func.attr if isinstance(node.func, ast.Attribute) else ""
+                )
+                if function_name not in {"setattr", "delattr"} or not node.args:
+                    continue
+                if resolver.resolve(node.args[0]) is None:
+                    continue
+                dynamic.append({
+                    "line": node.lineno + line_offset,
+                    "operation": function_name,
+                    "source": relative.as_posix(),
+                })
+
+    result: dict[str, object] = {
         "dynamic_sites": sorted(
             dynamic,
             key=lambda item: (item["source"], item["line"], item["operation"]),
         ),
-        "nested": nested,
-        "top_level": top_level,
     }
+    result.update(_target_inventory(grouped))
+    return result
+
+
+def _direct_mutation_inventory(
+    trees: Mapping[Path, ast.Module],
+    exposed_bindings: Mapping[str, set[str]],
+) -> dict[str, object]:
+    grouped: dict[str, list[dict[str, object]]] = defaultdict(list)
+    dynamic: list[dict[str, object]] = []
+    for relative in sorted(trees, key=lambda item: item.as_posix()):
+        source = relative.as_posix()
+        for tree, line_offset, _source_kind in _facade_tree_variants(
+            trees[relative]
+        ):
+            resolver = _FacadeAnalysis(tree, exposed_bindings)
+            for access in _facade_attribute_accesses(tree, resolver, source):
+                if access["context"] not in {"store", "del"}:
+                    continue
+                operation = "assign" if access["context"] == "store" else "delete"
+                grouped[str(access["path"])].append({
+                    "line": int(access["line"]) + line_offset,
+                    "operation": operation,
+                    "source": source,
+                })
+            for node in ast.walk(tree):
+                if (
+                    not isinstance(node, ast.Call)
+                    or not isinstance(node.func, ast.Name)
+                    or node.func.id not in {"setattr", "delattr"}
+                    or not node.args
+                ):
+                    continue
+                capability = resolver.resolve(node.args[0])
+                if capability is None:
+                    continue
+                operation = node.func.id
+                if (
+                    len(node.args) >= 2
+                    and isinstance(node.args[1], ast.Constant)
+                    and isinstance(node.args[1].value, str)
+                    and node.args[1].value
+                ):
+                    target = ".".join([*capability, node.args[1].value])
+                    grouped[target].append({
+                        "line": node.lineno + line_offset,
+                        "operation": operation,
+                        "source": source,
+                    })
+                else:
+                    dynamic.append({
+                        "line": node.lineno + line_offset,
+                        "operation": operation,
+                        "source": source,
+                    })
+    result: dict[str, object] = {
+        "dynamic_sites": sorted(
+            dynamic,
+            key=lambda item: (item["source"], item["line"], item["operation"]),
+        ),
+    }
+    result.update(_target_inventory(grouped))
+    return result
 
 
 def _reference_groups(
@@ -749,18 +1670,26 @@ def _reference_groups(
             "name": name,
             "occurrence_count": len(locations),
             "paths": sorted({str(item["path"]) for item in locations}),
-            "sources": sorted({str(item["source"]) for item in locations}),
+            "source_counts": _source_counts(locations),
         })
     return result
 
 
 def _consumer_inventory(
-    module: str, path: Path, tree: ast.Module,
+    module: str,
+    path: Path,
+    tree: ast.Module,
+    exposed_bindings: Mapping[str, set[str]],
 ) -> dict[str, object] | None:
-    aliases, imports, from_imports = _rag_aliases(tree)
-    if not imports:
-        return None
-    references = _rag_attribute_references(tree, aliases, path.as_posix())
+    _aliases, direct_imports, from_imports = _rag_aliases(tree)
+    analysis = _FacadeAnalysis(tree, exposed_bindings)
+    references = [
+        reference
+        for reference in _facade_attribute_accesses(
+            tree, analysis, path.as_posix()
+        )
+        if reference["context"] == "load"
+    ]
     for imported, _binding, line in from_imports:
         references.append({
             "context": "load",
@@ -776,8 +1705,11 @@ def _consumer_inventory(
             item["context"],
         )
     )
+    if not direct_imports and not references:
+        return None
     return {
-        "imports": imports,
+        "direct_imports": direct_imports,
+        "facade_roots": analysis.roots(),
         "module": module,
         "path": path.as_posix(),
         "references": _reference_groups(references),
@@ -803,6 +1735,121 @@ def _imported_binding_inventory(
     )
 
 
+def _facade_exports(
+    modules: Mapping[str, Path],
+    trees: Mapping[Path, ast.Module],
+) -> dict[str, set[str]]:
+    exports: dict[str, set[str]] = {module: set() for module in modules}
+    changed = True
+    while changed:
+        changed = False
+        for module, path in sorted(modules.items()):
+            if module == "rag":
+                continue
+            analysis = _FacadeAnalysis(trees[path], exports)
+            observed = analysis.names[trees[path]]
+            if not observed <= exports[module]:
+                exports[module].update(observed)
+                changed = True
+    return {
+        module: bindings
+        for module, bindings in sorted(exports.items())
+        if bindings
+    }
+
+
+def _runtime_facade_contract(root: Path) -> dict[str, object]:
+    allowed_environment = {
+        "COMSPEC", "PATH", "PATHEXT", "SYSTEMROOT", "WINDIR",
+    }
+    environment = {
+        name: value
+        for name, value in os.environ.items()
+        if name.upper() in allowed_environment
+    }
+    with tempfile.TemporaryDirectory(prefix="rag-architecture-probe-") as temporary:
+        isolated_root = Path(temporary)
+        redirected = {
+            "APPDATA": isolated_root / "profile" / "AppData" / "Roaming",
+            "LOCALAPPDATA": isolated_root / "profile" / "AppData" / "Local",
+            "RAG_LLM_CACHE_DIR": isolated_root / "rag-llm-cache",
+            "RAG_MODEL_ARTIFACT_CACHE": isolated_root / "rag-model-cache",
+            "RAG_PIPELINE_OUTPUT_ROOT": isolated_root / "output",
+            "TEMP": isolated_root / "tmp",
+            "TMP": isolated_root / "tmp",
+            "TMPDIR": isolated_root / "tmp",
+            "USERPROFILE": isolated_root / "profile",
+            "XDG_CACHE_HOME": isolated_root / "xdg" / "cache",
+            "XDG_CONFIG_HOME": isolated_root / "xdg" / "config",
+            "XDG_DATA_HOME": isolated_root / "xdg" / "data",
+            "XDG_STATE_HOME": isolated_root / "xdg" / "state",
+        }
+        for directory in redirected.values():
+            directory.mkdir(parents=True, exist_ok=True)
+        drive, tail = os.path.splitdrive(str(redirected["USERPROFILE"]))
+        environment.update({
+            **{name: str(path) for name, path in redirected.items()},
+            "HOMEDRIVE": drive,
+            "HOMEPATH": tail or os.sep,
+            "LANG": "C.UTF-8",
+            "LC_ALL": "C.UTF-8",
+            "PYTHONHASHSEED": "0",
+            "PYTHONIOENCODING": "utf-8",
+            "PYTHONNOUSERSITE": "1",
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PYTHONUTF8": "1",
+        })
+        stdout_path = isolated_root / "stdout.json"
+        stderr_path = isolated_root / "stderr.log"
+        try:
+            with stdout_path.open("wb") as stdout_file, stderr_path.open("wb") as stderr_file:
+                result = subprocess.run(
+                    [sys.executable, "-I", "-c", _RUNTIME_PROBE, str(root)],
+                    cwd=temporary,
+                    env=environment,
+                    stdin=subprocess.DEVNULL,
+                    stdout=stdout_file,
+                    stderr=stderr_file,
+                    timeout=90,
+                    check=False,
+                )
+        except subprocess.TimeoutExpired as exc:
+            raise ArchitectureInventoryError(
+                "Isolated rag runtime probe timed out"
+            ) from exc
+        stdout_size = stdout_path.stat().st_size
+        stderr_size = stderr_path.stat().st_size
+        if stdout_size > 4 * 1024 * 1024 or stderr_size > 4 * 1024 * 1024:
+            raise ArchitectureInventoryError(
+                "Isolated rag runtime probe exceeded its output ceiling"
+            )
+        if result.returncode != 0:
+            exit_kind = "signal" if result.returncode < 0 else "nonzero exit"
+            raise ArchitectureInventoryError(
+                f"Isolated rag runtime probe failed ({exit_kind})"
+            )
+        payload = stdout_path.read_bytes()
+    try:
+        value = json.loads(
+            payload.decode("utf-8"),
+            object_pairs_hook=_strict_pairs,
+            parse_constant=lambda token: (_ for _ in ()).throw(
+                ArchitectureInventoryError(
+                    f"runtime probe emitted non-standard number: {token}"
+                )
+            ),
+        )
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise ArchitectureInventoryError(
+            "Isolated rag runtime probe emitted invalid JSON"
+        ) from exc
+    if not isinstance(value, dict):
+        raise ArchitectureInventoryError(
+            "Isolated rag runtime probe did not emit an object"
+        )
+    return value
+
+
 def build_inventory(root: Path = PROJECT_ROOT) -> dict[str, object]:
     """Build the complete content-free AST inventory below *root*."""
     try:
@@ -826,13 +1873,16 @@ def build_inventory(root: Path = PROJECT_ROOT) -> dict[str, object]:
         sources[relative] = source
         trees[relative] = tree
 
-    production_paths = groups["production"]
+    architecture_groups = ("production", "tools", "other")
+    architecture_paths = [
+        path for group in architecture_groups for path in groups[group]
+    ]
     modules: dict[str, Path] = {}
-    for relative in production_paths:
+    for relative in architecture_paths:
         module = _module_name(relative)
         if module in modules:
             raise ArchitectureInventoryError(
-                f"Duplicate production module identity: {module}"
+                f"Duplicate architecture module identity: {module}"
             )
         modules[module] = relative
     if "rag" not in modules or modules["rag"].as_posix() != "rag.py":
@@ -840,22 +1890,24 @@ def build_inventory(root: Path = PROJECT_ROOT) -> dict[str, object]:
 
     known = set(modules)
     graph: dict[str, set[str]] = {module: set() for module in modules}
+    edge_kinds: dict[str, dict[str, set[str]]] = {}
     module_records: list[dict[str, object]] = []
     for module, relative in sorted(modules.items()):
         tree = trees[relative]
-        for node in ast.walk(tree):
-            if isinstance(node, (ast.Import, ast.ImportFrom)):
-                graph[module].update(
-                    _import_targets(module, relative, node, known)
-                )
+        edges = _module_import_edges(module, relative, tree, known)
+        edge_kinds[module] = edges
+        graph[module].update(edges)
         functions, classes = _definitions(tree)
         source = sources[relative]
         module_records.append({
             "class_count": len(classes),
             "classes": classes,
-            "direct_dependencies": sorted(graph[module]),
             "function_count": len(functions),
             "functions": functions,
+            "import_edges": [
+                {"kinds": sorted(kinds), "target": target}
+                for target, kinds in sorted(edges.items())
+            ],
             "module": module,
             "non_blank_lines": sum(bool(line.strip()) for line in source.splitlines()),
             "path": relative.as_posix(),
@@ -873,7 +1925,10 @@ def build_inventory(root: Path = PROJECT_ROOT) -> dict[str, object]:
     ]
     graph_nodes = [
         {
-            "dependencies": sorted(graph[module]),
+            "edges": [
+                {"kinds": sorted(kinds), "target": target}
+                for target, kinds in sorted(edge_kinds[module].items())
+            ],
             "module": module,
             "path": modules[module].as_posix(),
         }
@@ -918,11 +1973,14 @@ def build_inventory(root: Path = PROJECT_ROOT) -> dict[str, object]:
         key=lambda item: (item["span"][0], item["name"]),
     )
 
+    exposed_bindings = _facade_exports(modules, trees)
     production_consumers: list[dict[str, object]] = []
     for module, relative in sorted(modules.items()):
         if module == "rag":
             continue
-        consumer = _consumer_inventory(module, relative, trees[relative])
+        consumer = _consumer_inventory(
+            module, relative, trees[relative], exposed_bindings
+        )
         if consumer is not None:
             production_consumers.append(consumer)
 
@@ -930,20 +1988,18 @@ def build_inventory(root: Path = PROJECT_ROOT) -> dict[str, object]:
     private_references: list[dict[str, object]] = []
     test_trees = {path: trees[path] for path in groups["tests"]}
     for relative in sorted(groups["tests"], key=lambda item: item.as_posix()):
-        aliases, _imports, from_imports = _rag_aliases(trees[relative])
+        _aliases, _imports, from_imports = _rag_aliases(trees[relative])
         consumer = _consumer_inventory(
-            _module_name(relative), relative, trees[relative]
+            _module_name(relative), relative, trees[relative], exposed_bindings
         )
-        if consumer is None:
-            continue
-        test_consumers.append({
-            "imports": consumer["imports"],
-            "module": consumer["module"],
-            "path": consumer["path"],
-        })
-        direct_references = _rag_attribute_references(
-            trees[relative], aliases, relative.as_posix()
-        )
+        analysis = _FacadeAnalysis(trees[relative], exposed_bindings)
+        direct_references = [
+            reference
+            for reference in _facade_attribute_accesses(
+                trees[relative], analysis, relative.as_posix()
+            )
+            if reference["context"] == "load"
+        ]
         direct_references.extend({
             "context": "load",
             "kind": "from_import",
@@ -957,23 +2013,38 @@ def build_inventory(root: Path = PROJECT_ROOT) -> dict[str, object]:
             for reference in direct_references
             if reference["name"].startswith("_")
         )
+        if consumer is not None:
+            test_consumers.append({
+                "facade_roots": consumer["facade_roots"],
+                "module": consumer["module"],
+                "path": consumer["path"],
+            })
+
+    patches = _patch_inventory(test_trees, exposed_bindings)
+    direct_mutations = _direct_mutation_inventory(
+        test_trees, exposed_bindings
+    )
 
     inventory = {
         "analysis_model": ANALYSIS_MODEL,
         "consumers": {
             "production": production_consumers,
             "tests": {
-                "importing_module_count": len(test_consumers),
+                "using_module_count": len(test_consumers),
+                "direct_mutations": direct_mutations,
                 "modules": test_consumers,
-                "monkeypatch_seams": _patch_inventory(test_trees),
-                "private_references": _reference_groups(private_references),
+                "monkeypatch_seams": patches,
+                "private_read_references": _reference_groups(
+                    private_references
+                ),
             },
         },
-        "production": {
+        "source_architecture": {
             "class_count": sum(len(item["classes"]) for item in module_records),
             "function_count": sum(len(item["functions"]) for item in module_records),
             "import_graph": {
                 "cyclic_components": cyclic,
+                "edge_policy": "runtime+conditional+type-only+constant-dynamic",
                 "edge_count": sum(len(dependencies) for dependencies in graph.values()),
                 "nodes": graph_nodes,
                 "strongly_connected_components": components,
@@ -981,14 +2052,23 @@ def build_inventory(root: Path = PROJECT_ROOT) -> dict[str, object]:
             "module_count": len(module_records),
             "modules": module_records,
             "physical_line_count": sum(item["physical_lines"] for item in module_records),
+            "source_groups": list(architecture_groups),
             "top_level_function_count": sum(
                 item["top_level_function_count"] for item in module_records
             ),
         },
-        "rag_facade": {
+        "interpreter_normalization": INTERPRETER_NORMALIZATION,
+        "rag_runtime_contract": _runtime_facade_contract(resolved_root),
+        "rag_source_owner": {
+            "consumer_exports": [
+                {"bindings": sorted(bindings), "module": module}
+                for module, bindings in exposed_bindings.items()
+            ],
             "initializer_bindings": [
                 {
+                    "assignment_line": origin["assignment_line"],
                     "initializer": origin["initializer"],
+                    "line": origin["line"],
                     "name": name,
                 }
                 for name, origins in rag_origins.items()
@@ -1101,26 +2181,71 @@ def _validate_sha256(value: object, context: str) -> str:
     return text
 
 
-def _validate_parameters(value: object, context: str) -> None:
+def _validate_optional_sha256(value: object, context: str) -> None:
+    if value is not None:
+        _validate_sha256(value, context)
+
+
+def _validate_signature(value: object, context: str) -> None:
     record = _require_dict(value, {
-        "accepts_var_keyword", "accepts_var_positional", "keyword_only",
-        "positional_only", "positional_or_keyword", "required", "total",
+        "parameters", "return_annotation_sha256", "type_comment_sha256",
     }, context)
-    _require_bool(record["accepts_var_keyword"], f"{context}.accepts_var_keyword")
-    _require_bool(record["accepts_var_positional"], f"{context}.accepts_var_positional")
-    named = sum(
-        _require_int(record[name], f"{context}.{name}")
-        for name in ("keyword_only", "positional_only", "positional_or_keyword")
+    parameters = _require_list(record["parameters"], f"{context}.parameters")
+    names: set[str] = set()
+    kinds: list[str] = []
+    default_seen = False
+    positional_kinds = {"positional_only", "positional_or_keyword"}
+    rank = {
+        "positional_only": 0,
+        "positional_or_keyword": 1,
+        "var_positional": 2,
+        "keyword_only": 3,
+        "var_keyword": 4,
+    }
+    for index, raw_parameter in enumerate(parameters):
+        label = f"{context}.parameters[{index}]"
+        parameter = _require_dict(raw_parameter, {
+            "annotation_sha256", "default_sha256", "has_default", "kind",
+            "name",
+        }, label)
+        name = _require_string(parameter["name"], f"{label}.name")
+        if name in names:
+            raise ArchitectureInventoryError(f"{label}.name is duplicated")
+        names.add(name)
+        kind = _require_string(parameter["kind"], f"{label}.kind")
+        if kind not in rank:
+            raise ArchitectureInventoryError(f"{label}.kind is invalid")
+        kinds.append(kind)
+        has_default = _require_bool(
+            parameter["has_default"], f"{label}.has_default"
+        )
+        _validate_optional_sha256(
+            parameter["annotation_sha256"], f"{label}.annotation_sha256"
+        )
+        _validate_optional_sha256(
+            parameter["default_sha256"], f"{label}.default_sha256"
+        )
+        if has_default != (parameter["default_sha256"] is not None):
+            raise ArchitectureInventoryError(f"{label} default fields differ")
+        if kind in {"var_positional", "var_keyword"} and has_default:
+            raise ArchitectureInventoryError(f"{label} variadic default is invalid")
+        if kind in positional_kinds:
+            if default_seen and not has_default:
+                raise ArchitectureInventoryError(
+                    f"{context} positional defaults are not trailing"
+                )
+            default_seen = default_seen or has_default
+    if kinds != sorted(kinds, key=rank.__getitem__):
+        raise ArchitectureInventoryError(f"{context} parameter kinds are unordered")
+    if kinds.count("var_positional") > 1 or kinds.count("var_keyword") > 1:
+        raise ArchitectureInventoryError(f"{context} repeats a variadic parameter")
+    _validate_optional_sha256(
+        record["return_annotation_sha256"],
+        f"{context}.return_annotation_sha256",
     )
-    required = _require_int(record["required"], f"{context}.required")
-    total = _require_int(record["total"], f"{context}.total")
-    expected_total = (
-        named
-        + int(record["accepts_var_keyword"])
-        + int(record["accepts_var_positional"])
+    _validate_optional_sha256(
+        record["type_comment_sha256"], f"{context}.type_comment_sha256"
     )
-    if total != expected_total or required > named:
-        raise ArchitectureInventoryError(f"{context} arity totals are inconsistent")
 
 
 def _validate_definition(
@@ -1128,7 +2253,7 @@ def _validate_definition(
 ) -> None:
     keys = {"name", "scope", "span"}
     if function:
-        keys.update({"arity", "kind"})
+        keys.update({"kind", "signature"})
     record = _require_dict(value, keys, context)
     _require_string(record["name"], f"{context}.name")
     span = _require_list(record["span"], f"{context}.span")
@@ -1141,7 +2266,7 @@ def _validate_definition(
     if function:
         if record["kind"] not in {"function", "async_function"}:
             raise ArchitectureInventoryError(f"{context}.kind is invalid")
-        _validate_parameters(record["arity"], f"{context}.arity")
+        _validate_signature(record["signature"], f"{context}.signature")
 
 
 def _validate_import_record(value: object, context: str) -> None:
@@ -1166,7 +2291,7 @@ def _validate_reference_group(
 ) -> None:
     record = _require_dict(value, {
         "contexts", "kinds", "locations_sha256", "name",
-        "occurrence_count", "paths", "sources",
+        "occurrence_count", "paths", "source_counts",
     }, context)
     name = _require_string(record["name"], f"{context}.name")
     paths = _validate_sorted_strings(record["paths"], f"{context}.paths")
@@ -1175,26 +2300,42 @@ def _validate_reference_group(
     contexts = _validate_sorted_strings(
         record["contexts"], f"{context}.contexts"
     )
-    if not contexts or not set(contexts) <= {"load", "store", "del"}:
+    if contexts != ["load"]:
         raise ArchitectureInventoryError(f"{context}.contexts is invalid")
     if not _validate_sorted_strings(record["kinds"], f"{context}.kinds"):
         raise ArchitectureInventoryError(f"{context}.kinds cannot be empty")
-    _require_int(record["occurrence_count"], f"{context}.occurrence_count", 1)
+    occurrence_count = _require_int(
+        record["occurrence_count"], f"{context}.occurrence_count", 1
+    )
     _validate_sha256(record["locations_sha256"], f"{context}.locations_sha256")
-    sources = _validate_sorted_strings(record["sources"], f"{context}.sources")
-    if not sources:
-        raise ArchitectureInventoryError(f"{context}.sources cannot be empty")
-    for index, raw_source in enumerate(sources):
-        source = _validate_path(raw_source, f"{context}.sources[{index}]")
+    source_counts = _require_list(
+        record["source_counts"], f"{context}.source_counts"
+    )
+    observed_paths: list[str] = []
+    observed_count = 0
+    for index, raw_source in enumerate(source_counts):
+        label = f"{context}.source_counts[{index}]"
+        source_record = _require_dict(raw_source, {"count", "path"}, label)
+        source = _validate_path(source_record["path"], f"{label}.path")
         if source not in tracked_paths:
             raise ArchitectureInventoryError(
-                f"{context}.sources[{index}] is not tracked"
+                f"{label}.path is not tracked"
             )
+        observed_paths.append(source)
+        observed_count += _require_int(
+            source_record["count"], f"{label}.count", 1
+        )
+    if observed_paths != sorted(set(observed_paths)) or observed_count != occurrence_count:
+        raise ArchitectureInventoryError(
+            f"{context}.source_counts is inconsistent"
+        )
 
 
-def _validate_rag_imports(value: object, context: str) -> None:
+def _validate_rag_imports(
+    value: object, context: str, *, allow_empty: bool = False,
+) -> None:
     imports = _require_list(value, context)
-    if not imports:
+    if not imports and not allow_empty:
         raise ArchitectureInventoryError(f"{context} cannot be empty")
     for index, raw_import in enumerate(imports):
         label = f"{context}[{index}]"
@@ -1219,14 +2360,19 @@ def _validate_consumer(
     tracked_paths: set[str],
     known_modules: set[str] | None = None,
 ) -> None:
-    record = _require_dict(value, {"imports", "module", "path", "references"}, context)
+    record = _require_dict(value, {
+        "direct_imports", "facade_roots", "module", "path", "references",
+    }, context)
     module = _require_string(record["module"], f"{context}.module")
     if known_modules is not None and module not in known_modules:
-        raise ArchitectureInventoryError(f"{context}.module is not production")
+        raise ArchitectureInventoryError(f"{context}.module is not architectural")
     path = _validate_path(record["path"], f"{context}.path")
     if path not in tracked_paths:
         raise ArchitectureInventoryError(f"{context}.path is not tracked")
-    _validate_rag_imports(record["imports"], f"{context}.imports")
+    _validate_rag_imports(
+        record["direct_imports"], f"{context}.direct_imports", allow_empty=True
+    )
+    _validate_sorted_strings(record["facade_roots"], f"{context}.facade_roots")
     references = _require_list(record["references"], f"{context}.references")
     names: list[str] = []
     for index, reference in enumerate(references):
@@ -1238,6 +2384,8 @@ def _validate_consumer(
         raise ArchitectureInventoryError(
             f"{context}.references must be sorted by unique name"
         )
+    if not record["direct_imports"] and not references:
+        raise ArchitectureInventoryError(f"{context} has no facade evidence")
 
 
 def _validate_patch_occurrence(
@@ -1252,16 +2400,483 @@ def _validate_patch_occurrence(
         raise ArchitectureInventoryError(f"{context}.source is not a tracked test")
 
 
-def validate_inventory(value: object) -> None:
-    """Validate exact schema and all cross-field inventory invariants."""
-    document = _require_dict(value, {
-        "analysis_model", "consumers", "production", "rag_facade",
-        "schema_version", "tracked_sources",
-    }, "inventory")
-    schema_version = _require_int(
-        document["schema_version"], "inventory.schema_version", 1
+def _validate_tracked_sources_v2(
+    value: object,
+) -> tuple[dict[str, list[str]], set[str]]:
+    tracked = _require_dict(value, {"count", "groups"}, "tracked_sources")
+    groups = _require_list(tracked["groups"], "tracked_sources.groups")
+    if len(groups) != len(_GROUP_NAMES):
+        raise ArchitectureInventoryError("tracked_sources.groups is incomplete")
+    grouped: dict[str, list[str]] = {}
+    all_paths: list[str] = []
+    for index, expected_name in enumerate(_GROUP_NAMES):
+        context = f"tracked_sources.groups[{index}]"
+        group = _require_dict(groups[index], {"count", "name", "paths"}, context)
+        if group["name"] != expected_name:
+            raise ArchitectureInventoryError(f"{context}.name must be {expected_name}")
+        paths = _validate_sorted_strings(group["paths"], f"{context}.paths")
+        for path_index, path in enumerate(paths):
+            _validate_path(path, f"{context}.paths[{path_index}]")
+        if _require_int(group["count"], f"{context}.count") != len(paths):
+            raise ArchitectureInventoryError(f"{context}.count is inconsistent")
+        grouped[expected_name] = paths
+        all_paths.extend(paths)
+    if len(all_paths) != len(set(all_paths)):
+        raise ArchitectureInventoryError("tracked source paths are duplicated")
+    if _require_int(tracked["count"], "tracked_sources.count") != len(all_paths):
+        raise ArchitectureInventoryError("tracked_sources.count is inconsistent")
+    return grouped, set(all_paths)
+
+
+def _validate_edge_records_v2(
+    value: object, context: str, known_modules: set[str],
+) -> list[dict[str, Any]]:
+    raw_edges = _require_list(value, context)
+    edges: list[dict[str, Any]] = []
+    targets: list[str] = []
+    allowed_kinds = {"conditional", "dynamic_constant", "runtime", "type_only"}
+    for index, raw_edge in enumerate(raw_edges):
+        label = f"{context}[{index}]"
+        edge = _require_dict(raw_edge, {"kinds", "target"}, label)
+        target = _require_string(edge["target"], f"{label}.target")
+        if target not in known_modules:
+            raise ArchitectureInventoryError(f"{label}.target is not architectural")
+        kinds = _validate_sorted_strings(edge["kinds"], f"{label}.kinds")
+        if not kinds or not set(kinds) <= allowed_kinds:
+            raise ArchitectureInventoryError(f"{label}.kinds is invalid")
+        edges.append(edge)
+        targets.append(target)
+    if targets != sorted(set(targets)):
+        raise ArchitectureInventoryError(f"{context} must be target-sorted and unique")
+    return edges
+
+
+def _validate_source_architecture_v2(
+    value: object, grouped_paths: Mapping[str, list[str]],
+) -> set[str]:
+    context = "source_architecture"
+    architecture = _require_dict(value, {
+        "class_count", "function_count", "import_graph", "module_count",
+        "modules", "physical_line_count", "source_groups",
+        "top_level_function_count",
+    }, context)
+    if architecture["source_groups"] != ["production", "tools", "other"]:
+        raise ArchitectureInventoryError(
+            "source_architecture.source_groups must name every non-test group"
+        )
+    raw_modules = _require_list(architecture["modules"], f"{context}.modules")
+    preliminary: list[tuple[str, str, dict[str, Any]]] = []
+    for index, raw_module in enumerate(raw_modules):
+        label = f"{context}.modules[{index}]"
+        module = _require_dict(raw_module, {
+            "class_count", "classes", "function_count", "functions",
+            "import_edges", "module", "non_blank_lines", "path",
+            "physical_lines", "top_level_function_count",
+        }, label)
+        name = _require_string(module["module"], f"{label}.module")
+        path = _validate_path(module["path"], f"{label}.path")
+        preliminary.append((name, path, module))
+    module_names = [item[0] for item in preliminary]
+    module_paths = [item[1] for item in preliminary]
+    if module_names != sorted(set(module_names)):
+        raise ArchitectureInventoryError(
+            "source_architecture.modules must be module-sorted and unique"
+        )
+    architecture_paths = {
+        path
+        for group in ("production", "tools", "other")
+        for path in grouped_paths[group]
+    }
+    if set(module_paths) != architecture_paths or len(module_paths) != len(set(module_paths)):
+        raise ArchitectureInventoryError(
+            "source_architecture module/source paths differ"
+        )
+    known_modules = set(module_names)
+    paths_by_module: dict[str, str] = {}
+    edges_by_module: dict[str, list[dict[str, Any]]] = {}
+    graph_sets: dict[str, set[str]] = {}
+    function_total = 0
+    top_level_total = 0
+    class_total = 0
+    line_total = 0
+    for index, (name, path, module) in enumerate(preliminary):
+        label = f"{context}.modules[{index}]"
+        physical = _require_int(module["physical_lines"], f"{label}.physical_lines")
+        non_blank = _require_int(module["non_blank_lines"], f"{label}.non_blank_lines")
+        if non_blank > physical:
+            raise ArchitectureInventoryError(f"{label} line counts are inconsistent")
+        functions = _require_list(module["functions"], f"{label}.functions")
+        function_keys: list[tuple[int, str, str]] = []
+        for def_index, definition in enumerate(functions):
+            def_label = f"{label}.functions[{def_index}]"
+            _validate_definition(definition, def_label, function=True)
+            function_keys.append((
+                definition["span"][0], definition["name"], definition["kind"],
+            ))
+        if function_keys != sorted(function_keys):
+            raise ArchitectureInventoryError(f"{label}.functions is not source-sorted")
+        classes = _require_list(module["classes"], f"{label}.classes")
+        class_keys: list[tuple[int, str]] = []
+        for def_index, definition in enumerate(classes):
+            def_label = f"{label}.classes[{def_index}]"
+            _validate_definition(definition, def_label, function=False)
+            class_keys.append((definition["span"][0], definition["name"]))
+        if class_keys != sorted(class_keys):
+            raise ArchitectureInventoryError(f"{label}.classes is not source-sorted")
+        observed_top = sum(item["scope"] == "top_level" for item in functions)
+        if _require_int(module["function_count"], f"{label}.function_count") != len(functions):
+            raise ArchitectureInventoryError(f"{label}.function_count is inconsistent")
+        if _require_int(module["class_count"], f"{label}.class_count") != len(classes):
+            raise ArchitectureInventoryError(f"{label}.class_count is inconsistent")
+        if _require_int(
+            module["top_level_function_count"], f"{label}.top_level_function_count"
+        ) != observed_top:
+            raise ArchitectureInventoryError(
+                f"{label}.top_level_function_count is inconsistent"
+            )
+        edges = _validate_edge_records_v2(
+            module["import_edges"], f"{label}.import_edges", known_modules
+        )
+        paths_by_module[name] = path
+        edges_by_module[name] = edges
+        graph_sets[name] = {edge["target"] for edge in edges}
+        function_total += len(functions)
+        top_level_total += observed_top
+        class_total += len(classes)
+        line_total += physical
+    expected_totals = {
+        "module_count": len(preliminary),
+        "function_count": function_total,
+        "top_level_function_count": top_level_total,
+        "class_count": class_total,
+        "physical_line_count": line_total,
+    }
+    for field, expected in expected_totals.items():
+        if _require_int(architecture[field], f"{context}.{field}") != expected:
+            raise ArchitectureInventoryError(f"{context}.{field} is inconsistent")
+    graph = _require_dict(architecture["import_graph"], {
+        "cyclic_components", "edge_count", "edge_policy", "nodes",
+        "strongly_connected_components",
+    }, f"{context}.import_graph")
+    if graph["edge_policy"] != "runtime+conditional+type-only+constant-dynamic":
+        raise ArchitectureInventoryError(
+            f"{context}.import_graph.edge_policy is invalid"
+        )
+    nodes = _require_list(graph["nodes"], f"{context}.import_graph.nodes")
+    observed_node_names: list[str] = []
+    for index, raw_node in enumerate(nodes):
+        label = f"{context}.import_graph.nodes[{index}]"
+        node = _require_dict(raw_node, {"edges", "module", "path"}, label)
+        name = _require_string(node["module"], f"{label}.module")
+        path = _validate_path(node["path"], f"{label}.path")
+        edges = _validate_edge_records_v2(node["edges"], f"{label}.edges", known_modules)
+        if name not in known_modules or path != paths_by_module[name]:
+            raise ArchitectureInventoryError(f"{label} identity differs from module data")
+        if edges != edges_by_module[name]:
+            raise ArchitectureInventoryError(f"{label}.edges differs from module data")
+        observed_node_names.append(name)
+    if observed_node_names != sorted(known_modules):
+        raise ArchitectureInventoryError(
+            f"{context}.import_graph.nodes is incomplete or unsorted"
+        )
+    if _require_int(graph["edge_count"], f"{context}.import_graph.edge_count") != sum(
+        len(edges) for edges in graph_sets.values()
+    ):
+        raise ArchitectureInventoryError(f"{context}.import_graph.edge_count is inconsistent")
+    components = _strongly_connected_components(graph_sets)
+    if graph["strongly_connected_components"] != components:
+        raise ArchitectureInventoryError(
+            f"{context}.import_graph strongly connected components differ"
+        )
+    cyclic = [
+        component for component in components
+        if len(component) > 1 or component[0] in graph_sets[component[0]]
+    ]
+    if graph["cyclic_components"] != cyclic:
+        raise ArchitectureInventoryError(f"{context}.import_graph cyclic components differ")
+    return known_modules
+
+
+def _validate_rag_source_owner_v2(
+    value: object, grouped_paths: Mapping[str, list[str]], known_modules: set[str],
+) -> None:
+    context = "rag_source_owner"
+    owner = _require_dict(value, {
+        "consumer_exports", "explicit_binding_count", "explicit_bindings",
+        "import_star", "imported_bindings", "initializer_bindings",
+        "local_definitions", "path",
+    }, context)
+    if owner["path"] != "rag.py" or "rag.py" not in grouped_paths["production"]:
+        raise ArchitectureInventoryError(f"{context}.path must be tracked rag.py")
+    bindings = _validate_sorted_strings(owner["explicit_bindings"], f"{context}.explicit_bindings")
+    if _require_int(owner["explicit_binding_count"], f"{context}.explicit_binding_count") != len(bindings):
+        raise ArchitectureInventoryError(f"{context}.explicit_binding_count is inconsistent")
+    exports = _require_list(owner["consumer_exports"], f"{context}.consumer_exports")
+    export_modules: list[str] = []
+    for index, raw_export in enumerate(exports):
+        label = f"{context}.consumer_exports[{index}]"
+        export = _require_dict(raw_export, {"bindings", "module"}, label)
+        module = _require_string(export["module"], f"{label}.module")
+        if module not in known_modules or module == "rag":
+            raise ArchitectureInventoryError(f"{label}.module is invalid")
+        if not _validate_sorted_strings(export["bindings"], f"{label}.bindings"):
+            raise ArchitectureInventoryError(f"{label}.bindings cannot be empty")
+        export_modules.append(module)
+    if export_modules != sorted(set(export_modules)):
+        raise ArchitectureInventoryError(f"{context}.consumer_exports is not sorted/unique")
+    initializers = _require_list(owner["initializer_bindings"], f"{context}.initializer_bindings")
+    initializer_keys: list[tuple[str, int, str, int]] = []
+    for index, raw_initializer in enumerate(initializers):
+        label = f"{context}.initializer_bindings[{index}]"
+        initializer = _require_dict(raw_initializer, {
+            "assignment_line", "initializer", "line", "name",
+        }, label)
+        name = _require_string(initializer["name"], f"{label}.name")
+        if name not in bindings:
+            raise ArchitectureInventoryError(f"{label}.name is not a source binding")
+        called = _require_string(initializer["initializer"], f"{label}.initializer")
+        line = _require_int(initializer["line"], f"{label}.line", 1)
+        assignment_line = _require_int(
+            initializer["assignment_line"], f"{label}.assignment_line", 1
+        )
+        initializer_keys.append((name, line, called, assignment_line))
+    if initializer_keys != sorted(initializer_keys):
+        raise ArchitectureInventoryError(f"{context}.initializer_bindings is not sorted")
+    imported = _require_list(owner["imported_bindings"], f"{context}.imported_bindings")
+    import_keys: list[tuple[int, str, str, str, str]] = []
+    for index, raw_import in enumerate(imported):
+        label = f"{context}.imported_bindings[{index}]"
+        _validate_import_record(raw_import, label)
+        if raw_import["binding"] not in bindings:
+            raise ArchitectureInventoryError(f"{label}.binding is not a source binding")
+        import_keys.append((
+            raw_import["line"], raw_import["binding"], raw_import["kind"],
+            raw_import["source"], str(raw_import.get("imported", "")),
+        ))
+    if import_keys != sorted(import_keys):
+        raise ArchitectureInventoryError(f"{context}.imported_bindings is not source-sorted")
+    local = _require_list(owner["local_definitions"], f"{context}.local_definitions")
+    local_keys: list[tuple[int, str]] = []
+    for index, raw_definition in enumerate(local):
+        label = f"{context}.local_definitions[{index}]"
+        definition = _require_dict(raw_definition, {"kind", "name", "span"}, label)
+        if definition["kind"] not in {"async_function", "class", "function"}:
+            raise ArchitectureInventoryError(f"{label}.kind is invalid")
+        name = _require_string(definition["name"], f"{label}.name")
+        if name not in bindings:
+            raise ArchitectureInventoryError(f"{label}.name is not a source binding")
+        span = _require_list(definition["span"], f"{label}.span")
+        if len(span) != 2:
+            raise ArchitectureInventoryError(f"{label}.span must have two lines")
+        first = _require_int(span[0], f"{label}.span[0]", 1)
+        _require_int(span[1], f"{label}.span[1]", first)
+        local_keys.append((first, name))
+    if local_keys != sorted(local_keys):
+        raise ArchitectureInventoryError(f"{context}.local_definitions is not source-sorted")
+    import_star = _require_dict(owner["import_star"], {"names", "uses_explicit_all"}, f"{context}.import_star")
+    names = _validate_sorted_strings(import_star["names"], f"{context}.import_star.names")
+    uses_all = _require_bool(import_star["uses_explicit_all"], f"{context}.import_star.uses_explicit_all")
+    if not uses_all and names != [name for name in bindings if not name.startswith("_")]:
+        raise ArchitectureInventoryError(f"{context}.import_star is inconsistent")
+
+
+def _validate_runtime_contract_v2(value: object) -> None:
+    context = "rag_runtime_contract"
+    contract = _require_dict(value, {
+        "behavior", "callables", "dir_names", "import_star_names",
+        "interpreter_variant_exclusions", "logger_name", "module_type",
+        "vars_names",
+    }, context)
+    expected_behaviors = {
+        "dynamic_add_read", "dynamic_delete", "existing_assignment_restored",
+        "existing_assignment_visible", "existing_deletion_restored",
+        "existing_deletion_visible", "nested_assignment_restored",
+        "nested_assignment_visible", "reload_preserves_dynamic",
+        "reload_reexecutes_existing_binding", "reload_same_module",
+    }
+    behavior = _require_dict(contract["behavior"], expected_behaviors, f"{context}.behavior")
+    for name in sorted(expected_behaviors):
+        if not _require_bool(behavior[name], f"{context}.behavior.{name}"):
+            raise ArchitectureInventoryError(f"{context}.behavior.{name} must hold")
+    for field in ("dir_names", "import_star_names", "vars_names"):
+        _validate_sorted_strings(contract[field], f"{context}.{field}")
+    variants = _validate_sorted_strings(
+        contract["interpreter_variant_exclusions"],
+        f"{context}.interpreter_variant_exclusions",
     )
-    if schema_version != SCHEMA_VERSION:
+    if variants != sorted(_INTERPRETER_VARIANT_NAMES):
+        raise ArchitectureInventoryError(f"{context}.interpreter_variant_exclusions is invalid")
+    _require_string(contract["logger_name"], f"{context}.logger_name")
+    _require_string(contract["module_type"], f"{context}.module_type")
+    callables = _require_list(contract["callables"], f"{context}.callables")
+    callable_names: list[str] = []
+    for index, raw_callable in enumerate(callables):
+        label = f"{context}.callables[{index}]"
+        item = _require_dict(raw_callable, {
+            "kind", "module", "name", "pickle_identity", "qualname",
+            "runtime_signature_sha256", "runtime_signature_status",
+            "type_hints_sha256", "type_hints_status",
+        }, label)
+        if item["kind"] not in {"class", "function"}:
+            raise ArchitectureInventoryError(f"{label}.kind is invalid")
+        name = _require_string(item["name"], f"{label}.name")
+        _require_string(item["module"], f"{label}.module")
+        _require_string(item["qualname"], f"{label}.qualname")
+        if item["pickle_identity"] not in {"different", "same", "unsupported"}:
+            raise ArchitectureInventoryError(f"{label}.pickle_identity is invalid")
+        if item["runtime_signature_status"] not in {
+            "interpreter_owned", "ok", "unsupported",
+        }:
+            raise ArchitectureInventoryError(f"{label}.runtime_signature_status is invalid")
+        if item["type_hints_status"] not in {
+            "interpreter_owned", "ok", "unresolved",
+        }:
+            raise ArchitectureInventoryError(f"{label}.type_hints_status is invalid")
+        _validate_sha256(item["runtime_signature_sha256"], f"{label}.runtime_signature_sha256")
+        _validate_sha256(item["type_hints_sha256"], f"{label}.type_hints_sha256")
+        callable_names.append(name)
+    if callable_names != sorted(set(callable_names)):
+        raise ArchitectureInventoryError(f"{context}.callables is not name-sorted/unique")
+
+
+def _validate_operation_site_v2(
+    value: object, context: str, tracked_test_paths: set[str],
+    allowed_operations: set[str],
+) -> tuple[str, int, str]:
+    site = _require_dict(value, {"line", "operation", "source"}, context)
+    line = _require_int(site["line"], f"{context}.line", 1)
+    operation = _require_string(site["operation"], f"{context}.operation")
+    if operation not in allowed_operations:
+        raise ArchitectureInventoryError(f"{context}.operation is invalid")
+    source = _validate_path(site["source"], f"{context}.source")
+    if source not in tracked_test_paths:
+        raise ArchitectureInventoryError(f"{context}.source is not a tracked test")
+    return source, line, operation
+
+
+def _validate_target_inventory_v2(
+    value: object, context: str, tracked_test_paths: set[str],
+    allowed_operations: set[str],
+) -> None:
+    inventory = _require_dict(value, {"dynamic_sites", "nested", "top_level"}, context)
+    dynamic = _require_list(inventory["dynamic_sites"], f"{context}.dynamic_sites")
+    dynamic_keys = [
+        _validate_operation_site_v2(
+            site, f"{context}.dynamic_sites[{index}]", tracked_test_paths,
+            allowed_operations,
+        )
+        for index, site in enumerate(dynamic)
+    ]
+    if dynamic_keys != sorted(dynamic_keys):
+        raise ArchitectureInventoryError(f"{context}.dynamic_sites is not sorted")
+    all_targets: set[str] = set()
+    for category in ("top_level", "nested"):
+        entries = _require_list(inventory[category], f"{context}.{category}")
+        targets: list[str] = []
+        for index, raw_entry in enumerate(entries):
+            label = f"{context}.{category}[{index}]"
+            entry = _require_dict(raw_entry, {
+                "locations_sha256", "occurrence_count", "operations",
+                "source_counts", "target",
+            }, label)
+            target = _require_string(entry["target"], f"{label}.target")
+            parts = target.split(".")
+            if any(not part for part in parts) or ((len(parts) > 1) != (category == "nested")):
+                raise ArchitectureInventoryError(f"{label}.target depth is invalid")
+            operations = _validate_sorted_strings(entry["operations"], f"{label}.operations")
+            if not operations or not set(operations) <= allowed_operations:
+                raise ArchitectureInventoryError(f"{label}.operations is invalid")
+            occurrence_count = _require_int(entry["occurrence_count"], f"{label}.occurrence_count", 1)
+            _validate_sha256(entry["locations_sha256"], f"{label}.locations_sha256")
+            sources = _require_list(entry["source_counts"], f"{label}.source_counts")
+            source_keys: list[str] = []
+            observed_count = 0
+            for source_index, raw_source in enumerate(sources):
+                source_label = f"{label}.source_counts[{source_index}]"
+                source_record = _require_dict(raw_source, {"count", "path"}, source_label)
+                path = _validate_path(source_record["path"], f"{source_label}.path")
+                if path not in tracked_test_paths:
+                    raise ArchitectureInventoryError(f"{source_label}.path is not a tracked test")
+                source_keys.append(path)
+                observed_count += _require_int(source_record["count"], f"{source_label}.count", 1)
+            if source_keys != sorted(set(source_keys)) or observed_count != occurrence_count:
+                raise ArchitectureInventoryError(f"{label}.source_counts is inconsistent")
+            if target in all_targets:
+                raise ArchitectureInventoryError(f"{context} target is duplicated")
+            all_targets.add(target)
+            targets.append(target)
+        if targets != sorted(targets):
+            raise ArchitectureInventoryError(f"{context}.{category} is not sorted")
+
+
+def _validate_consumers_v2(
+    value: object, tracked_paths: set[str], grouped_paths: Mapping[str, list[str]],
+    known_modules: set[str],
+) -> None:
+    consumers = _require_dict(value, {"production", "tests"}, "consumers")
+    production = _require_list(consumers["production"], "consumers.production")
+    production_modules: list[str] = []
+    for index, consumer in enumerate(production):
+        _validate_consumer(
+            consumer, f"consumers.production[{index}]", tracked_paths,
+            known_modules,
+        )
+        production_modules.append(consumer["module"])
+    if production_modules != sorted(set(production_modules)) or "rag" in production_modules:
+        raise ArchitectureInventoryError("consumers.production is not sorted/unique")
+    tests = _require_dict(consumers["tests"], {
+        "direct_mutations", "modules", "monkeypatch_seams",
+        "private_read_references", "using_module_count",
+    }, "consumers.tests")
+    tracked_test_paths = set(grouped_paths["tests"])
+    modules = _require_list(tests["modules"], "consumers.tests.modules")
+    module_keys: list[tuple[str, str]] = []
+    for index, raw_module in enumerate(modules):
+        label = f"consumers.tests.modules[{index}]"
+        module = _require_dict(raw_module, {"facade_roots", "module", "path"}, label)
+        name = _require_string(module["module"], f"{label}.module")
+        path = _validate_path(module["path"], f"{label}.path")
+        if path not in tracked_test_paths:
+            raise ArchitectureInventoryError(f"{label}.path is not a tracked test")
+        _validate_sorted_strings(module["facade_roots"], f"{label}.facade_roots")
+        module_keys.append((name, path))
+    if module_keys != sorted(set(module_keys)):
+        raise ArchitectureInventoryError("consumers.tests.modules is not sorted/unique")
+    if _require_int(tests["using_module_count"], "consumers.tests.using_module_count") != len(modules):
+        raise ArchitectureInventoryError("consumers.tests.using_module_count is inconsistent")
+    private = _require_list(tests["private_read_references"], "consumers.tests.private_read_references")
+    private_names: list[str] = []
+    for index, reference in enumerate(private):
+        _validate_reference_group(
+            reference, f"consumers.tests.private_read_references[{index}]",
+            tracked_test_paths,
+        )
+        name = reference["name"]
+        if not name.startswith("_"):
+            raise ArchitectureInventoryError(
+                f"consumers.tests.private_read_references[{index}] is not private"
+            )
+        private_names.append(name)
+    if private_names != sorted(set(private_names)):
+        raise ArchitectureInventoryError("private read references are not sorted/unique")
+    _validate_target_inventory_v2(
+        tests["monkeypatch_seams"], "consumers.tests.monkeypatch_seams",
+        tracked_test_paths, {"delattr", "patch", "patch.object", "setattr"},
+    )
+    _validate_target_inventory_v2(
+        tests["direct_mutations"], "consumers.tests.direct_mutations",
+        tracked_test_paths, {"assign", "delattr", "delete", "setattr"},
+    )
+
+
+def validate_inventory(value: object) -> None:
+    """Validate schema v2 and all content-free cross-field invariants."""
+    document = _require_dict(value, {
+        "analysis_model", "consumers", "interpreter_normalization",
+        "rag_runtime_contract", "rag_source_owner", "schema_version",
+        "source_architecture", "tracked_sources",
+    }, "inventory")
+    if _require_int(document["schema_version"], "inventory.schema_version", 1) != SCHEMA_VERSION:
         raise ArchitectureInventoryError(
             f"inventory.schema_version must be {SCHEMA_VERSION}"
         )
@@ -1269,393 +2884,38 @@ def validate_inventory(value: object) -> None:
         raise ArchitectureInventoryError(
             f"inventory.analysis_model must be {ANALYSIS_MODEL}"
         )
-
-    tracked = _require_dict(
-        document["tracked_sources"], {"count", "groups"}, "tracked_sources"
-    )
-    tracked_count = _require_int(tracked["count"], "tracked_sources.count", 1)
-    raw_groups = _require_list(tracked["groups"], "tracked_sources.groups")
-    if len(raw_groups) != len(_GROUP_NAMES):
-        raise ArchitectureInventoryError("tracked_sources.groups is incomplete")
-    grouped_paths: dict[str, list[str]] = {}
-    all_paths: list[str] = []
-    for index, (raw_group, expected_name) in enumerate(zip(raw_groups, _GROUP_NAMES)):
-        context = f"tracked_sources.groups[{index}]"
-        group = _require_dict(raw_group, {"count", "name", "paths"}, context)
-        if group["name"] != expected_name:
-            raise ArchitectureInventoryError(f"{context}.name must be {expected_name}")
-        paths = _validate_sorted_strings(group["paths"], f"{context}.paths")
-        for path_index, path in enumerate(paths):
-            _validate_path(path, f"{context}.paths[{path_index}]")
-        group_count = _require_int(group["count"], f"{context}.count")
-        if group_count != len(paths):
-            raise ArchitectureInventoryError(f"{context}.count is inconsistent")
-        grouped_paths[expected_name] = paths
-        all_paths.extend(paths)
-    if len(all_paths) != len(set(all_paths)) or tracked_count != len(all_paths):
-        raise ArchitectureInventoryError("tracked source counts/paths are inconsistent")
-    tracked_paths = set(all_paths)
-
-    production = _require_dict(document["production"], {
-        "class_count", "function_count", "import_graph", "module_count",
-        "modules", "physical_line_count", "top_level_function_count",
-    }, "production")
-    raw_modules = _require_list(production["modules"], "production.modules")
-    expected_module_count = _require_int(
-        production["module_count"], "production.module_count", 1
-    )
-    expected_function_count = _require_int(
-        production["function_count"], "production.function_count"
-    )
-    expected_top_level_count = _require_int(
-        production["top_level_function_count"],
-        "production.top_level_function_count",
-    )
-    expected_class_count = _require_int(
-        production["class_count"], "production.class_count"
-    )
-    expected_line_count = _require_int(
-        production["physical_line_count"], "production.physical_line_count"
-    )
-    module_names: list[str] = []
-    module_paths: list[str] = []
-    function_count = 0
-    top_level_function_count = 0
-    class_count = 0
-    line_count = 0
-    direct_dependencies: dict[str, list[str]] = {}
-    for index, raw_module in enumerate(raw_modules):
-        context = f"production.modules[{index}]"
-        module = _require_dict(raw_module, {
-            "class_count", "classes", "direct_dependencies", "function_count",
-            "functions", "module", "non_blank_lines", "path",
-            "physical_lines", "top_level_function_count",
-        }, context)
-        name = _require_string(module["module"], f"{context}.module")
-        path = _validate_path(module["path"], f"{context}.path")
-        physical = _require_int(module["physical_lines"], f"{context}.physical_lines")
-        non_blank = _require_int(module["non_blank_lines"], f"{context}.non_blank_lines")
-        if non_blank > physical:
-            raise ArchitectureInventoryError(f"{context} line counts are inconsistent")
-        dependencies = _validate_sorted_strings(
-            module["direct_dependencies"], f"{context}.direct_dependencies"
-        )
-        functions = _require_list(module["functions"], f"{context}.functions")
-        for def_index, definition in enumerate(functions):
-            _validate_definition(
-                definition, f"{context}.functions[{def_index}]", function=True
-            )
-        classes = _require_list(module["classes"], f"{context}.classes")
-        for def_index, definition in enumerate(classes):
-            _validate_definition(
-                definition, f"{context}.classes[{def_index}]", function=False
-            )
-        observed_top_level = sum(
-            definition["scope"] == "top_level" for definition in functions
-        )
-        observed_function_count = _require_int(
-            module["function_count"], f"{context}.function_count"
-        )
-        observed_top_level_count = _require_int(
-            module["top_level_function_count"],
-            f"{context}.top_level_function_count",
-        )
-        observed_class_count = _require_int(
-            module["class_count"], f"{context}.class_count"
-        )
-        if observed_function_count != len(functions):
-            raise ArchitectureInventoryError(
-                f"{context}.function_count is inconsistent"
-            )
-        if observed_top_level_count != observed_top_level:
-            raise ArchitectureInventoryError(
-                f"{context}.top_level_function_count is inconsistent"
-            )
-        if observed_class_count != len(classes):
-            raise ArchitectureInventoryError(
-                f"{context}.class_count is inconsistent"
-            )
-        module_names.append(name)
-        module_paths.append(path)
-        direct_dependencies[name] = dependencies
-        function_count += len(functions)
-        top_level_function_count += observed_top_level
-        class_count += len(classes)
-        line_count += physical
-    if module_names != sorted(set(module_names)):
-        raise ArchitectureInventoryError("production.modules must be sorted and unique")
-    if set(module_paths) != set(grouped_paths["production"]):
-        raise ArchitectureInventoryError("production module/source paths differ")
-    if expected_module_count != len(raw_modules):
-        raise ArchitectureInventoryError("production.module_count is inconsistent")
-    if expected_function_count != function_count:
-        raise ArchitectureInventoryError("production.function_count is inconsistent")
-    if expected_top_level_count != top_level_function_count:
+    if document["interpreter_normalization"] != INTERPRETER_NORMALIZATION:
         raise ArchitectureInventoryError(
-            "production.top_level_function_count is inconsistent"
+            "inventory.interpreter_normalization is unsupported"
         )
-    if expected_class_count != class_count:
-        raise ArchitectureInventoryError("production.class_count is inconsistent")
-    if expected_line_count != line_count:
-        raise ArchitectureInventoryError("production.physical_line_count is inconsistent")
-    known_modules = set(module_names)
-    for module, dependencies in direct_dependencies.items():
-        if not set(dependencies) <= known_modules:
-            raise ArchitectureInventoryError(
-                f"production module {module} has an unknown dependency"
-            )
-
-    graph = _require_dict(production["import_graph"], {
-        "cyclic_components", "edge_count", "nodes",
-        "strongly_connected_components",
-    }, "production.import_graph")
-    nodes = _require_list(graph["nodes"], "production.import_graph.nodes")
-    observed_graph: dict[str, set[str]] = {}
-    for index, raw_node in enumerate(nodes):
-        context = f"production.import_graph.nodes[{index}]"
-        node = _require_dict(raw_node, {"dependencies", "module", "path"}, context)
-        name = _require_string(node["module"], f"{context}.module")
-        path = _validate_path(node["path"], f"{context}.path")
-        dependencies = _validate_sorted_strings(
-            node["dependencies"], f"{context}.dependencies"
-        )
-        if name in observed_graph or name not in known_modules:
-            raise ArchitectureInventoryError(f"{context}.module is invalid")
-        expected_path = module_paths[module_names.index(name)]
-        if path != expected_path or dependencies != direct_dependencies[name]:
-            raise ArchitectureInventoryError(f"{context} differs from module data")
-        observed_graph[name] = set(dependencies)
-    if list(observed_graph) != sorted(known_modules):
-        raise ArchitectureInventoryError("production.import_graph.nodes is incomplete")
-    edge_count = _require_int(
-        graph["edge_count"], "production.import_graph.edge_count"
+    grouped_paths, tracked_paths = _validate_tracked_sources_v2(
+        document["tracked_sources"]
     )
-    if edge_count != sum(len(items) for items in observed_graph.values()):
-        raise ArchitectureInventoryError("production.import_graph.edge_count is inconsistent")
-    expected_components = _strongly_connected_components(observed_graph)
-    if graph["strongly_connected_components"] != expected_components:
-        raise ArchitectureInventoryError(
-            "production.import_graph strongly connected components differ"
-        )
-    expected_cyclic = [
-        component
-        for component in expected_components
-        if len(component) > 1 or component[0] in observed_graph[component[0]]
-    ]
-    if graph["cyclic_components"] != expected_cyclic:
-        raise ArchitectureInventoryError(
-            "production.import_graph cyclic components differ"
-        )
-
-    facade = _require_dict(document["rag_facade"], {
-        "explicit_binding_count", "explicit_bindings", "import_star",
-        "imported_bindings", "initializer_bindings", "local_definitions",
-        "path",
-    }, "rag_facade")
-    if facade["path"] != "rag.py" or "rag.py" not in grouped_paths["production"]:
-        raise ArchitectureInventoryError("rag_facade.path must be tracked rag.py")
-    bindings = _validate_sorted_strings(
-        facade["explicit_bindings"], "rag_facade.explicit_bindings"
+    known_modules = _validate_source_architecture_v2(
+        document["source_architecture"], grouped_paths
     )
-    binding_count = _require_int(
-        facade["explicit_binding_count"], "rag_facade.explicit_binding_count"
+    _validate_rag_source_owner_v2(
+        document["rag_source_owner"], grouped_paths, known_modules
     )
-    if binding_count != len(bindings):
-        raise ArchitectureInventoryError("rag_facade.explicit_binding_count is inconsistent")
-    initializer_bindings = _require_list(
-        facade["initializer_bindings"], "rag_facade.initializer_bindings"
+    _validate_runtime_contract_v2(document["rag_runtime_contract"])
+    _validate_consumers_v2(
+        document["consumers"], tracked_paths, grouped_paths, known_modules
     )
-    initializer_names: list[str] = []
-    for index, raw_binding in enumerate(initializer_bindings):
-        context = f"rag_facade.initializer_bindings[{index}]"
-        binding = _require_dict(
-            raw_binding, {"initializer", "name"}, context
-        )
-        name = _require_string(binding["name"], f"{context}.name")
-        _require_string(binding["initializer"], f"{context}.initializer")
-        if name not in bindings:
-            raise ArchitectureInventoryError(f"{context}.name is not a binding")
-        initializer_names.append(name)
-    if initializer_names != sorted(set(initializer_names)):
-        raise ArchitectureInventoryError(
-            "rag_facade.initializer_bindings is not sorted/unique"
-        )
-    import_star = _require_dict(
-        facade["import_star"], {"names", "uses_explicit_all"},
-        "rag_facade.import_star",
-    )
-    uses_all = _require_bool(
-        import_star["uses_explicit_all"], "rag_facade.import_star.uses_explicit_all"
-    )
-    star_names = _validate_sorted_strings(
-        import_star["names"], "rag_facade.import_star.names"
-    )
-    if not uses_all and star_names != [name for name in bindings if not name.startswith("_")]:
-        raise ArchitectureInventoryError("rag_facade import-star surface is inconsistent")
-    imported = _require_list(facade["imported_bindings"], "rag_facade.imported_bindings")
-    for index, raw_import in enumerate(imported):
-        _validate_import_record(raw_import, f"rag_facade.imported_bindings[{index}]")
-    local_definitions = _require_list(
-        facade["local_definitions"], "rag_facade.local_definitions"
-    )
-    local_keys: list[tuple[int, str, str]] = []
-    for index, definition in enumerate(local_definitions):
-        context = f"rag_facade.local_definitions[{index}]"
-        record = _require_dict(
-            definition, {"kind", "name", "span"}, context
-        )
-        if record["kind"] not in {"function", "async_function", "class"}:
-            raise ArchitectureInventoryError(f"{context}.kind is invalid")
-        name = _require_string(record["name"], f"{context}.name")
-        if name not in bindings:
-            raise ArchitectureInventoryError(f"{context}.name is not a binding")
-        span = _require_list(record["span"], f"{context}.span")
-        if len(span) != 2:
-            raise ArchitectureInventoryError(f"{context}.span must have two lines")
-        first = _require_int(span[0], f"{context}.span[0]", 1)
-        _require_int(span[1], f"{context}.span[1]", first)
-        local_keys.append((first, name, record["kind"]))
-    if local_keys != sorted(local_keys):
-        raise ArchitectureInventoryError(
-            "rag_facade.local_definitions is not source-sorted"
-        )
-
-    consumers = _require_dict(
-        document["consumers"], {"production", "tests"}, "consumers"
-    )
-    production_consumers = _require_list(
-        consumers["production"], "consumers.production"
-    )
-    consumer_modules: list[str] = []
-    for index, consumer in enumerate(production_consumers):
-        _validate_consumer(
-            consumer, f"consumers.production[{index}]", tracked_paths,
-            known_modules,
-        )
-        consumer_modules.append(consumer["module"])
-    if consumer_modules != sorted(set(consumer_modules)) or "rag" in consumer_modules:
-        raise ArchitectureInventoryError("production consumers are not sorted/valid")
-
-    tests = _require_dict(consumers["tests"], {
-        "importing_module_count", "modules", "monkeypatch_seams",
-        "private_references",
-    }, "consumers.tests")
-    test_modules = _require_list(tests["modules"], "consumers.tests.modules")
-    observed_test_modules: list[str] = []
-    for index, raw_consumer in enumerate(test_modules):
-        context = f"consumers.tests.modules[{index}]"
-        consumer = _require_dict(
-            raw_consumer, {"imports", "module", "path"}, context
-        )
-        _validate_rag_imports(consumer["imports"], f"{context}.imports")
-        _require_string(consumer["module"], f"{context}.module")
-        path = _validate_path(consumer["path"], f"{context}.path")
-        if path not in grouped_paths["tests"]:
-            raise ArchitectureInventoryError(
-                f"consumers.tests.modules[{index}] is not a test source"
-            )
-        observed_test_modules.append(consumer["module"])
-    if observed_test_modules != sorted(set(observed_test_modules)):
-        raise ArchitectureInventoryError("test consumers are not sorted/unique")
-    importing_module_count = _require_int(
-        tests["importing_module_count"],
-        "consumers.tests.importing_module_count",
-    )
-    if importing_module_count != len(test_modules):
-        raise ArchitectureInventoryError(
-            "consumers.tests.importing_module_count is inconsistent"
-        )
-    private = _require_list(
-        tests["private_references"], "consumers.tests.private_references"
-    )
-    private_names: list[str] = []
-    for index, reference in enumerate(private):
-        _validate_reference_group(
-            reference, f"consumers.tests.private_references[{index}]", tracked_paths
-        )
-        name = reference["name"]
-        if not name.startswith("_"):
-            raise ArchitectureInventoryError(
-                f"consumers.tests.private_references[{index}] is not private"
-            )
-        private_names.append(name)
-    if private_names != sorted(set(private_names)):
-        raise ArchitectureInventoryError("private references are not sorted/unique")
-
-    patches = _require_dict(tests["monkeypatch_seams"], {
-        "dynamic_sites", "nested", "top_level",
-    }, "consumers.tests.monkeypatch_seams")
-    tracked_test_paths = set(grouped_paths["tests"])
-    dynamic = _require_list(
-        patches["dynamic_sites"], "consumers.tests.monkeypatch_seams.dynamic_sites"
-    )
-    for index, site in enumerate(dynamic):
-        _validate_patch_occurrence(
-            site,
-            f"consumers.tests.monkeypatch_seams.dynamic_sites[{index}]",
-            tracked_test_paths,
-        )
-    all_targets: set[str] = set()
-    for category in ("top_level", "nested"):
-        entries = _require_list(
-            patches[category], f"consumers.tests.monkeypatch_seams.{category}"
-        )
-        targets: list[str] = []
-        for index, raw_entry in enumerate(entries):
-            context = f"consumers.tests.monkeypatch_seams.{category}[{index}]"
-            entry = _require_dict(
-                raw_entry,
-                {
-                    "locations_sha256", "occurrence_count", "operations",
-                    "sources", "target",
-                },
-                context,
-            )
-            target = _require_string(entry["target"], f"{context}.target")
-            if ("." in target) != (category == "nested"):
-                raise ArchitectureInventoryError(f"{context}.target depth is inconsistent")
-            if target.startswith(".") or target.endswith(".") or ".." in target:
-                raise ArchitectureInventoryError(f"{context}.target is invalid")
-            operations = _validate_sorted_strings(
-                entry["operations"], f"{context}.operations"
-            )
-            if not operations or not set(operations) <= {
-                "setattr", "delattr", "patch", "patch.object",
-            }:
-                raise ArchitectureInventoryError(f"{context}.operations is invalid")
-            _require_int(
-                entry["occurrence_count"], f"{context}.occurrence_count", 1
-            )
-            _validate_sha256(
-                entry["locations_sha256"], f"{context}.locations_sha256"
-            )
-            sources = _validate_sorted_strings(
-                entry["sources"], f"{context}.sources"
-            )
-            if not sources:
-                raise ArchitectureInventoryError(f"{context}.sources cannot be empty")
-            for source_index, raw_source in enumerate(sources):
-                source = _validate_path(
-                    raw_source, f"{context}.sources[{source_index}]"
-                )
-                if source not in tracked_test_paths:
-                    raise ArchitectureInventoryError(
-                        f"{context}.sources[{source_index}] is not a tracked test"
-                    )
-            targets.append(target)
-            if target in all_targets:
-                raise ArchitectureInventoryError("monkeypatch target is duplicated")
-            all_targets.add(target)
-        if targets != sorted(targets):
-            raise ArchitectureInventoryError(
-                f"consumers.tests.monkeypatch_seams.{category} is not sorted"
-            )
 
 
 def inventory_bytes(value: object) -> bytes:
-    """Return canonical, newline-terminated UTF-8 inventory bytes."""
+    """Return reviewable canonical, newline-terminated UTF-8 inventory bytes."""
     validate_inventory(value)
-    return _canonical_json_bytes(value) + b"\n"
+    return (
+        json.dumps(
+            value,
+            allow_nan=False,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        ).encode("utf-8")
+        + b"\n"
+    )
 
 
 def _strict_pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -1736,7 +2996,8 @@ def check_baseline(
 ) -> dict[str, object]:
     """Validate *baseline* and require exact current canonical bytes."""
     path = _resolved_baseline(root, baseline)
-    expected = inventory_bytes(load_inventory(path))
+    baseline_value = load_inventory(path)
+    expected = inventory_bytes(baseline_value)
     try:
         observed_bytes = path.read_bytes()
     except OSError as exc:
@@ -1753,8 +3014,23 @@ def check_baseline(
         )
     current = build_inventory(root)
     if inventory_bytes(current) != expected:
+        changed_sections = [
+            section
+            for section in sorted(current)
+            if _canonical_sha256(current[section])
+            != _canonical_sha256(baseline_value[section])
+        ]
+        baseline_counts = _inventory_counts(baseline_value)
+        current_counts = _inventory_counts(current)
+        changed_counts = [
+            f"{name} {baseline_counts[name]}->{current_counts[name]}"
+            for name in baseline_counts
+            if baseline_counts[name] != current_counts[name]
+        ]
+        count_detail = "; ".join(changed_counts) or "aggregate counts unchanged"
         raise ArchitectureInventoryError(
             "Architecture inventory differs from the committed baseline; "
+            f"changed sections: {', '.join(changed_sections)}; {count_detail}; "
             "review the change and run with --refresh"
         )
     return current
@@ -1788,17 +3064,40 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _summary(value: Mapping[str, object]) -> str:
-    production = value["production"]
-    facade = value["rag_facade"]
+def _inventory_counts(value: Mapping[str, Any]) -> dict[str, int]:
+    architecture = value["source_architecture"]
+    owner = value["rag_source_owner"]
+    runtime = value["rag_runtime_contract"]
+    tests = value["consumers"]["tests"]
+    patches = tests["monkeypatch_seams"]
+    mutations = tests["direct_mutations"]
+    return {
+        "tracked_sources": value["tracked_sources"]["count"],
+        "architecture_modules": architecture["module_count"],
+        "architecture_functions": architecture["function_count"],
+        "architecture_classes": architecture["class_count"],
+        "rag_source_bindings": owner["explicit_binding_count"],
+        "rag_runtime_bindings": len(runtime["vars_names"]),
+        "rag_runtime_callables": len(runtime["callables"]),
+        "production_consumers": len(value["consumers"]["production"]),
+        "test_consumers": tests["using_module_count"],
+        "patch_targets": len(patches["top_level"]) + len(patches["nested"]),
+        "direct_mutation_targets": (
+            len(mutations["top_level"]) + len(mutations["nested"])
+        ),
+    }
+
+
+def _summary(value: Mapping[str, Any]) -> str:
+    counts = _inventory_counts(value)
     tests = value["consumers"]["tests"]
     patches = tests["monkeypatch_seams"]
     return (
-        f"{value['tracked_sources']['count']} tracked Python sources, "
-        f"{production['module_count']} production modules, "
-        f"{production['function_count']} functions "
-        f"({production['top_level_function_count']} top-level), "
-        f"{facade['explicit_binding_count']} rag bindings, "
+        f"{counts['tracked_sources']} tracked Python sources, "
+        f"{counts['architecture_modules']} non-test modules, "
+        f"{counts['architecture_functions']} functions, "
+        f"{counts['rag_source_bindings']} static and "
+        f"{counts['rag_runtime_bindings']} runtime rag bindings, "
         f"{len(patches['top_level'])} top-level and "
         f"{len(patches['nested'])} nested literal patch seams"
     )
