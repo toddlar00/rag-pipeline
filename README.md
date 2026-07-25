@@ -128,14 +128,17 @@ text after a provider envelope has been accepted. The classification contract
 accepts only one bounded ASCII chunk-classification label. The current review
 candidate adds the exact `toc-hierarchy-v1` array shared by `toc.scaffold` and
 `toc.parse`, plus the exact `toc-layout-v1` object used only as untrusted hints
-for scaffold parsing. Contracted live, shared, and cached results are validated
-before publication, and only content-free status and diagnostic receipts
-describe rejections. See the
+for scaffold parsing, and the exact Boolean-only `toc-verification-v1` object
+used for page spot-checks. Contracted live, shared, and cached results are
+validated before publication, and only content-free status and diagnostic
+receipts describe rejections. See the
 [LLM output-contract ADR](docs/architecture/decisions/llm-output-contracts.md),
 the proposed
 [TOC hierarchy output-contract ADR](docs/architecture/decisions/toc-hierarchy-output-contract.md),
 and the proposed
-[TOC layout output-contract ADR](docs/architecture/decisions/toc-layout-output-contract.md).
+[TOC layout output-contract ADR](docs/architecture/decisions/toc-layout-output-contract.md),
+and the proposed
+[TOC page-verification output-contract ADR](docs/architecture/decisions/toc-verification-output-contract.md).
 
 `endpoint_policy.py` is the standard-library-only trust boundary for custom
 LLM URLs. It canonicalizes approved targets before credential lookup, cache
@@ -1026,12 +1029,14 @@ Gemini (API) -> deterministic fallback where the feature supports one. A cloud
 provider is skipped when it has no key; transport failures and empty responses
 retain the ordered provider fallback. Features without a deterministic fallback
 return no LLM result after all configured providers fail. Under the current
-output-contract proposal, a non-empty classification, TOC-layout, or
-TOC-hierarchy response that violates its exact contract does not delegate
-authority to a later provider. In best-effort mode, classification preserves
-the deterministic content type, `toc.layout` omits generated layout hints while
-hierarchy generation may continue, and a rejected hierarchy preserves the
-deterministic TOC path. Strict mode raises a structured execution error.
+output-contract proposal, a non-empty classification, TOC-layout,
+TOC-hierarchy, or TOC-verification response that violates its exact contract
+does not delegate authority to a later provider. In best-effort mode,
+classification preserves the deterministic content type, `toc.layout` omits
+generated layout hints while hierarchy generation may continue, a rejected
+hierarchy preserves the deterministic TOC path, and rejected `toc.verify`
+output withholds verification credit and is counted as inconclusive. Strict
+mode raises a structured execution error.
 Stopping the provider chain on semantic rejection is still pending owner
 approval before merge.
 
@@ -1555,7 +1560,7 @@ deterministic and make no LLM calls unless an LLM feature flag is supplied.
 | Exam questions | `generate-questions` command | Issue-spotters, doctrinal, and policy questions |
 | Flashcard export | `export --format flashcards` | Anki-compatible Q&A pairs |
 | RAPTOR summaries | `raptor` command | 3-level recursive summary tree |
-| TOC scaffold review | `--llm-scaffold` | Adds exact layout-hint and hierarchy-array validation; rejected layout omits generated hints, while any failed hierarchy batch discards the full LLM hierarchy and uses deterministic TOC behavior |
+| TOC scaffold review | `--llm-scaffold` | Adds exact layout-hint, hierarchy-array, and Boolean page-verification contracts; rejected layout omits hints, any failed hierarchy batch discards the full LLM hierarchy, and unavailable/rejected model replies remain explicitly inconclusive |
 
 ### Vector Database (`--db-backend`)
 
@@ -1800,11 +1805,16 @@ The pipeline supports two TOC extraction methods:
    100-line batches). The proposed `toc-hierarchy-v1` contract accepts only
    1-100 exact `{level, title, page}` objects per response. If any hierarchy
    batch is missing or invalid, the whole LLM hierarchy is discarded and
-   deterministic parsing retains authority. Exact shape validation cannot
-   detect schema-valid but semantically wrong layout or hierarchy values;
-   inspect enriched structure before relying on it. The verification and
-   agent-team prompts remain permissive. Changes to those remaining operations
-   require a full enriched-artifact rebuild and reindex.
+   deterministic parsing retains authority. Page spot-checks frame the expected
+   entry and first 1,200 captured page characters as one bounded untrusted JSON
+   value. The proposed `toc-verification-v1` response accepts only
+   `{"verified": true|false}`; missing or rejected best-effort replies withhold
+   credit and are counted as inconclusive, while failures and logs contain only
+   fixed codes and aggregate counts. Exact shape validation cannot detect
+   schema-valid but semantically wrong layout, hierarchy, or verification
+   values; inspect enriched structure before relying on it. Agent-team prompts
+   remain permissive. Changes to those remaining operations require a full
+   enriched-artifact rebuild and reindex.
 
 This produces section paths like `Chapter 3 > B. Federalism > 2. Specific Jurisdiction`
 instead of flat `B` or `III`. In testing, TOC detection raised multi-level
@@ -2712,11 +2722,12 @@ rebuild with `--full-reindex` if needed.
   to inherit the Requests reader's guarantees.
 - Operation-specific output contracts treat accepted provider text, cache hits,
   and shared in-flight results as hostile until validation. The proposed TOC
-  layout and hierarchy contracts reject wrappers, coercive or extra fields,
-  unsafe strings, and partial authority without recording rejected text or
-  logging generated values. Exact shape does not establish semantic
-  correctness; `toc.verify` and `agent_team.*` outputs remain outside these
-  contracts.
+  layout, hierarchy, and page-verification contracts reject wrappers, coercive
+  or extra fields, unsafe generated strings, and partial authority without
+  recording rejected text or logging generated values. Verification accepts
+  only an exact Boolean field and labels unavailable/rejected model replies
+  inconclusive. Exact shape does not establish semantic correctness;
+  `agent_team.*` outputs remain outside these contracts.
 - API keys can come from environment variables or the interactive menu's hidden
   prompt; menu-entered keys are redacted from the displayed command, removed
   from child process arguments, scoped to the child environment, and not

@@ -176,9 +176,11 @@ it.
 - Only synthetic fixtures and hostile canaries are used for verification. No
   private `Ethics` text, output, or corpus-derived judgment is embedded in the
   repository.
-- `toc.verify` and every `agent_team.*` response remain permissive and outside
-  this decision. Full `--llm-scaffold` generation identity is therefore still
-  incomplete; changes to those operations require an explicit full reindex.
+- The later page spot-check is addressed by the proposed
+  [TOC page-verification output contract](toc-verification-output-contract.md).
+  Every `agent_team.*` response remains permissive and outside this decision.
+  Full `--llm-scaffold` generation identity is therefore still incomplete;
+  changes to those operations require an explicit full reindex.
 - Grounded answers, generated context, reconstructed headings, numeric scores,
   briefs, questions, flashcards, and summaries still need their own reviewed
   response contracts.

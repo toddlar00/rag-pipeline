@@ -154,16 +154,19 @@ change the global chunking or index schema.
 - Only synthetic fixtures and hostile canaries are used for verification. No
   private `Ethics` text, output, or corpus-derived judgment is embedded in the
   repository.
-- `toc.layout` is addressed by a separate proposed contract. `toc.verify` and
-  every `agent_team.*` response remain permissive and outside this decision.
+- `toc.layout` is addressed by a separate proposed contract, and the later
+  page spot-check is addressed by the proposed
+  [TOC page-verification output contract](toc-verification-output-contract.md).
+  Every `agent_team.*` response remains permissive and outside this decision.
   Grounded answers, case briefs, questions, flashcards, summaries, contextual
   prefixes, reconstructed headings, and quality scores also still need
   reviewed contracts.
-- With the proposed layout successor, `toc_scaffold_generation` binds the
-  contracted layout and hierarchy steps, but is still not complete identity for
-  every permissive operation used by `--llm-scaffold`. Until `toc.verify` and
-  `agent_team.*` prompts and contracts are versioned, changes to them require
-  an explicit full reindex instead of relying on completion reuse.
+- With the proposed layout and page-verification successors,
+  `toc_scaffold_generation` binds those three contracted operations but is
+  still not complete identity for every permissive operation used by
+  `--llm-scaffold`. Until `agent_team.*` prompts and contracts are versioned,
+  changes to them require an explicit full reindex instead of relying on
+  completion reuse.
 - Provider model-code qualification, scoped egress, and the owner-pending
   semantic-rejection provider-chain rule remain separate release gates. This
   proposal is related to, but does not close, R0C issue #48.

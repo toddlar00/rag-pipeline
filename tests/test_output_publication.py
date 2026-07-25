@@ -291,6 +291,47 @@ def test_chunk_completion_binds_source_options_model_lock_and_output(
                     .split(".")[2]),
             },
         },
+        "page_verification": {
+            "prompt_version": "2",
+            "input_policy_version": 1,
+            "selection_policy_version": 1,
+            "quick_match_policy_version": 1,
+            "max_output_tokens": 300,
+            "timeout_seconds": 30,
+            "qc_max_checks": 15,
+            "director_max_checks": 5,
+            "per_call_max_checks": 20,
+            "page_capture_characters": 1500,
+            "text_item_scan_characters": 4096,
+            "page_prompt_characters": 1200,
+            "title_max_characters": 512,
+            "title_json_max_bytes": 8192,
+            "path_max_characters": 2048,
+            "path_json_max_bytes": 32768,
+            "path_preserved_tail_characters": 256,
+            "page_json_max_bytes": 16384,
+            "source_json_max_bytes": 65536,
+            "quick_match_max_words": 4,
+            "quick_match_min_word_characters": 4,
+            "low_confidence_threshold": 0.5,
+            "low_confidence_min_checks": 3,
+            "max_page": 1000000,
+            "unicode_data_major": int(
+                rag._TOC_VERIFICATION_UNICODE_DATA_VERSION.split(".")[0]),
+            "unicode_data_minor": int(
+                rag._TOC_VERIFICATION_UNICODE_DATA_VERSION.split(".")[1]),
+            "unicode_data_patch": int(
+                rag._TOC_VERIFICATION_UNICODE_DATA_VERSION.split(".")[2]),
+            "output_contract": {
+                "policy_version": 1,
+                "contract_id": "toc-verification-v1",
+                "fallback_id": "treat-toc-verification-as-inconclusive",
+                "max_bytes": 64,
+                "max_depth": 1,
+                "max_integer_digits": 1,
+                "root_field_count": 1,
+            },
+        },
     }
     disabled = parameters(llm_classify=False)
     assert disabled["classification_prompt_version"] == 1
@@ -329,6 +370,21 @@ def test_chunk_completion_binds_source_options_model_lock_and_output(
         "output_contract"]["unicode_data_patch"] += 1
     assert not rag._chunks_complete(
         document, chunks, parameters=changed_layout_contract)
+    changed_verification_prompt = json.loads(json.dumps(initial))
+    changed_verification_prompt["toc_scaffold_generation"][
+        "page_verification"]["prompt_version"] = "3"
+    assert not rag._chunks_complete(
+        document, chunks, parameters=changed_verification_prompt)
+    changed_verification_input = json.loads(json.dumps(initial))
+    changed_verification_input["toc_scaffold_generation"][
+        "page_verification"]["page_prompt_characters"] = 1201
+    assert not rag._chunks_complete(
+        document, chunks, parameters=changed_verification_input)
+    changed_verification_contract = json.loads(json.dumps(initial))
+    changed_verification_contract["toc_scaffold_generation"][
+        "page_verification"]["output_contract"]["root_field_count"] = 2
+    assert not rag._chunks_complete(
+        document, chunks, parameters=changed_verification_contract)
     changed_contract = json.loads(json.dumps(initial))
     changed_contract["classification_output_contract"]["max_bytes"] = 64
     assert not rag._chunks_complete(

@@ -70,6 +70,31 @@ def _layout_response(**overrides):
     return json.dumps(value, ensure_ascii=False)
 
 
+def _verification_entry(page=7, **overrides):
+    value = {
+        "title": "Expected Verification Topic",
+        "level": 1,
+        "chapter_num": 1,
+        "path": "Chapter 1 > Expected Verification Topic",
+        "page": page,
+    }
+    value.update(overrides)
+    return value
+
+
+def _verification_doc(page_texts):
+    return {
+        "texts": [
+            {
+                "label": "text",
+                "text": text,
+                "prov": [{"page_no": page}],
+            }
+            for page, text in page_texts.items()
+        ],
+    }
+
+
 def test_disabled_agent_team_never_calls_an_llm(monkeypatch):
     monkeypatch.setattr(
         rag, "_call_llm",
@@ -281,6 +306,393 @@ def test_toc_layout_logs_only_content_free_acceptance_and_rejection(
         assert rag._analyze_toc_layout("Part I 1") == {}
 
     assert rejected_canary not in caplog.text
+
+
+def test_toc_verification_uses_exact_contract_and_security_policy(monkeypatch):
+    observed = {}
+    policy = release_security.ReleaseSecurityPolicy.from_values(
+        network_policy="allow-cloud", cache_namespace="tenant-a")
+
+    def fake_call(prompt, **kwargs):
+        observed.update(prompt=prompt, **kwargs)
+        return '{"verified":true}'
+
+    monkeypatch.setattr(rag, "_call_llm", fake_call)
+    result = rag._verify_scaffold_against_pages(
+        [_verification_entry()],
+        _verification_doc({7: "Page evidence unrelated to the expected words."}),
+        max_checks=1,
+        security_policy=policy,
+        cloud_url="https://example.test/v1",
+        failure_policy="strict",
+        cache_mode="off",
+        cache_dir="cache-path-canary",
+        max_tokens=999,
+        timeout=999,
+        output_contract_id="attacker-contract-v1",
+    )
+
+    assert result == {
+        "checks": 1,
+        "verified": 1,
+        "deterministic_verified": 0,
+        "llm_verified": 1,
+        "failed": [],
+        "inconclusive": 0,
+        "confidence": 1.0,
+    }
+    assert observed["security_policy"] is policy
+    assert observed["operation"] == "toc.verify"
+    assert observed["prompt_version"] == "2"
+    assert observed["max_tokens"] == 300
+    assert observed["timeout"] == 30
+    assert observed["failure_policy"] == "strict"
+    assert observed["cache_mode"] == "off"
+    assert observed["cache_dir"] == "cache-path-canary"
+    assert observed["output_contract_id"] == "toc-verification-v1"
+    assert observed["output_fallback_id"] == (
+        "treat-toc-verification-as-inconclusive")
+    assert observed["output_validator"] is (
+        rag._TOC_VERIFICATION_OUTPUT_CONTRACT)
+    assert rag._TOC_VERIFICATION_CONTRACT_PROMPT_JSON in observed["prompt"]
+    assert json.loads(rag._TOC_VERIFICATION_CONTRACT_PROMPT_JSON) == {
+        "contract_id": "toc-verification-v1",
+    }
+
+
+def test_toc_verification_frames_hostile_values_as_bounded_one_line_json(
+        monkeypatch):
+    observed = {}
+    tail = "PATH_TAIL_CANARY_987" + "z" * 236
+    entry = _verification_entry(
+        title='TITLE_CANARY "fake"\nIGNORE ‮' + "\U0001f4a5" * 700,
+        path='PATH_HEAD_CANARY "fake"\nIGNORE ‮'
+        + "\U0001f4a5" * 2400 + tail,
+    )
+    page_canary = 'PAGE_CANARY "fake"\nIGNORE ‮'
+    page_text = page_canary + "\U0001f4a5" * 1800
+
+    def fake_call(prompt, **kwargs):
+        observed.update(prompt=prompt, **kwargs)
+        return '{"verified":true}'
+
+    monkeypatch.setattr(rag, "_call_llm", fake_call)
+    rag._verify_scaffold_against_pages(
+        [entry], _verification_doc({7: page_text}), max_checks=1)
+
+    marker = "SOURCE_JSON (one physical line; bounded untrusted values):\n"
+    source_tail = observed["prompt"].split(marker, 1)[1]
+    source_line = source_tail.splitlines()[0]
+    source = json.loads(source_line)
+    assert source_tail.splitlines()[1] == ""
+    assert len(source_line.encode("ascii")) <= 64 * 1024
+    assert len(source["expected_title"]) <= 512
+    assert len(source["expected_path"]) <= 2048
+    assert source["expected_path"].endswith(tail)
+    assert len(source["page_text"]) <= 1200
+    assert len(json.dumps(
+        source["expected_title"], ensure_ascii=True).encode("ascii")) <= 8192
+    assert len(json.dumps(
+        source["expected_path"], ensure_ascii=True).encode("ascii")) <= 32768
+    assert len(json.dumps(
+        source["page_text"], ensure_ascii=True).encode("ascii")) <= 16384
+    assert "\\n" in source_line
+    assert "\\u202e" in source_line
+    assert '\\"fake\\"' in source_line
+
+
+def test_toc_verification_aggregates_true_false_and_inconclusive_content_free(
+        monkeypatch, caplog):
+    responses = iter([
+        '{"verified":true}',
+        '{"verified":false}',
+        "MODEL_RESPONSE_CANARY not json",
+    ])
+    source_canary = "PRIVATE_SOURCE_TITLE_CANARY"
+    monkeypatch.setattr(
+        rag, "_call_llm", lambda *_args, **_kwargs: next(responses))
+    scaffold = [
+        _verification_entry(
+            page=1, title="Obvious Matching Words",
+            path="Obvious Matching Words"),
+        _verification_entry(page=2, title=source_canary + " One"),
+        _verification_entry(page=3, title=source_canary + " Two"),
+        _verification_entry(page=4, title=source_canary + " Three"),
+    ]
+    doc = _verification_doc({
+        1: "Obvious Matching Words are present.",
+        2: "Unrelated first page evidence.",
+        3: "Unrelated second page evidence.",
+        4: "Unrelated third page evidence.",
+    })
+
+    with caplog.at_level("INFO"):
+        result = rag._verify_scaffold_against_pages(
+            scaffold, doc, max_checks=4)
+
+    assert result == {
+        "checks": 4,
+        "verified": 2,
+        "deterministic_verified": 1,
+        "llm_verified": 1,
+        "failed": [{"reason": "model-did-not-verify"}],
+        "inconclusive": 1,
+        "confidence": 0.5,
+    }
+    assert source_canary not in caplog.text
+    assert "MODEL_RESPONSE_CANARY" not in caplog.text
+    assert source_canary not in str(result)
+    assert "MODEL_RESPONSE_CANARY" not in str(result)
+    assert "selected=4 verified=2" in caplog.text
+    assert "failed=1 inconclusive=1" in caplog.text
+
+
+def test_toc_verification_quick_match_and_missing_text_avoid_llm(monkeypatch):
+    monkeypatch.setattr(
+        rag, "_call_llm",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("LLM must not be called")))
+    scaffold = [
+        _verification_entry(
+            page=1, title="Obvious Matching Words",
+            path="Obvious Matching Words"),
+        _verification_entry(page=2, title="Missing Page Topic"),
+    ]
+
+    result = rag._verify_scaffold_against_pages(
+        scaffold,
+        _verification_doc({1: "Obvious Matching Words are present."}),
+        max_checks=2,
+    )
+
+    assert result["verified"] == 1
+    assert result["deterministic_verified"] == 1
+    assert result["failed"] == [{"reason": "page-text-unavailable"}]
+    assert result["inconclusive"] == 0
+    assert result["confidence"] == 0.5
+
+
+def test_toc_verification_page_capture_obeys_exact_ceiling(monkeypatch):
+    observed = {}
+    original = rag._toc_verification_source_json
+
+    def capture(entry_data, page_text):
+        observed["captured_characters"] = len(page_text)
+        return original(entry_data, page_text)
+
+    monkeypatch.setattr(rag, "_toc_verification_source_json", capture)
+    monkeypatch.setattr(
+        rag, "_call_llm", lambda *_args, **_kwargs: '{"verified":true}')
+    doc = {
+        "texts": [
+            {"label": "text", "text": "a" * 1490,
+             "prov": [{"page_no": 7}]},
+            {"label": "text", "text": "b" * 1000,
+             "prov": [{"page_no": 7}]},
+        ],
+    }
+
+    rag._verify_scaffold_against_pages(
+        [_verification_entry()], doc, max_checks=1)
+
+    assert observed["captured_characters"] == 1500
+
+
+@pytest.mark.parametrize("page_alias", [True, 1.0])
+def test_toc_verification_ignores_non_integer_page_provenance_aliases(
+        monkeypatch, page_alias):
+    calls = 0
+
+    def fake_call(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return '{"verified":false}'
+
+    monkeypatch.setattr(rag, "_call_llm", fake_call)
+    doc = {
+        "texts": [
+            {"label": "text", "text": "Expected Verification Topic",
+             "prov": [{"page_no": page_alias}]},
+            {"label": "text", "text": "Unrelated valid page evidence",
+             "prov": [{"page_no": 1}]},
+        ],
+    }
+
+    result = rag._verify_scaffold_against_pages(
+        [_verification_entry(page=1)], doc, max_checks=1)
+
+    assert calls == 1
+    assert result["deterministic_verified"] == 0
+    assert result["verified"] == 0
+    assert result["failed"] == [{"reason": "model-did-not-verify"}]
+
+
+def test_toc_verification_decodes_only_bounded_selected_page_items(
+        monkeypatch):
+    decode_lengths = []
+    original_decode = rag._decode_pua
+
+    def bounded_decode(value):
+        decode_lengths.append(len(value))
+        return original_decode(value)
+
+    monkeypatch.setattr(rag, "_decode_pua", bounded_decode)
+    monkeypatch.setattr(
+        rag, "_call_llm", lambda *_args, **_kwargs: '{"verified":false}')
+    doc = {
+        "texts": [
+            {"label": "text", "text": "i" * 100_000,
+             "prov": [{"page_no": 999}]},
+            {"label": "text", "text": "a" * 100_000,
+             "prov": [{"page_no": 7}]},
+            {"label": "text", "text": "b" * 100_000,
+             "prov": [{"page_no": 7}]},
+        ],
+    }
+
+    result = rag._verify_scaffold_against_pages(
+        [_verification_entry()], doc, max_checks=1)
+
+    assert decode_lengths == [4096]
+    assert result["failed"] == [{"reason": "model-did-not-verify"}]
+
+
+@pytest.mark.parametrize("response", [
+    None,
+    "prefix {\"verified\":true}",
+    '{"verified":"false"}',
+    '{"verified":true,"issue":"extra"}',
+])
+def test_toc_verification_missing_or_locally_rejected_result_is_inconclusive(
+        monkeypatch, response):
+    monkeypatch.setattr(
+        rag, "_call_llm", lambda *_args, **_kwargs: response)
+
+    result = rag._verify_scaffold_against_pages(
+        [_verification_entry()],
+        _verification_doc({7: "Unrelated page evidence."}),
+        max_checks=1,
+    )
+
+    assert result["verified"] == 0
+    assert result["failed"] == []
+    assert result["inconclusive"] == 1
+    assert result["confidence"] == 0.0
+
+
+def test_toc_verification_does_not_hide_budget_or_unexpected_failures(
+        monkeypatch):
+    for error in (
+            rag.LLMBudgetExceeded("limit"),
+            RuntimeError("provider facade failed")):
+        monkeypatch.setattr(
+            rag, "_call_llm",
+            lambda *_args, _error=error, **_kwargs: (_ for _ in ()).throw(
+                _error))
+        with pytest.raises(type(error), match=str(error)):
+            rag._verify_scaffold_against_pages(
+                [_verification_entry()],
+                _verification_doc({7: "Unrelated page evidence."}),
+                max_checks=1,
+            )
+
+
+def test_toc_verification_per_call_strict_mode_raises_on_runtime_rejection(
+        monkeypatch, tmp_path):
+    runtime = rag.LLMRuntime(rag.LLMRuntimeConfig(
+        cache_mode="off", cache_dir=tmp_path / "cache",
+        failure_policy="best-effort"))
+    monkeypatch.setattr(rag, "_llm_runtime", runtime)
+    monkeypatch.setattr(
+        rag, "_call_ollama",
+        lambda *_args, **_kwargs: "MODEL_RESPONSE_CANARY not JSON")
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+
+    with pytest.raises(rag.LLMExecutionError) as caught:
+        rag._verify_scaffold_against_pages(
+            [_verification_entry()],
+            _verification_doc({7: "Unrelated page evidence."}),
+            max_checks=1,
+            failure_policy="strict",
+        )
+
+    assert caught.value.result.output_contract_status == "rejected"
+    assert caught.value.result.output_fallback_id == (
+        rag._llm_output_contracts.TOC_VERIFICATION_FALLBACK_ID)
+    assert "MODEL_RESPONSE_CANARY" not in str(caught.value)
+
+
+@pytest.mark.parametrize("max_checks", [0, 21, True, 1.0, "1"])
+def test_toc_verification_rejects_invalid_check_limits(max_checks):
+    with pytest.raises(ValueError, match="max_checks"):
+        rag._verify_scaffold_against_pages([], {}, max_checks=max_checks)
+
+
+@pytest.mark.parametrize(("field", "value"), [
+    ("title", ["coercive"]),
+    ("path", {"coercive": True}),
+    ("page", True),
+    ("page", 1_000_001),
+    ("level", "1"),
+    ("level", 6),
+    ("chapter_num", True),
+    ("chapter_num", -1),
+])
+def test_toc_verification_prompt_rejects_invalid_internal_scalars(
+        field, value):
+    entry = _verification_entry()
+    entry[field] = value
+
+    with pytest.raises(ValueError, match="TOC verification"):
+        rag._toc_verification_prompt_json(entry, "page evidence")
+
+
+def test_toc_verification_prompt_rejects_non_string_page_text():
+    with pytest.raises(ValueError, match="strings"):
+        rag._toc_verification_prompt_json(
+            _verification_entry(), ["coercive page text"])
+
+
+def test_toc_verification_validates_entry_before_quick_match_credit(
+        monkeypatch):
+    monkeypatch.setattr(
+        rag, "_call_llm",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("invalid entry must fail before an LLM call")))
+    entry = _verification_entry(
+        page=True,
+        level=True,
+        path={"coercive": "path"},
+        title="Policy Bypass Topic",
+    )
+
+    with pytest.raises(ValueError, match="page"):
+        rag._verify_scaffold_against_pages(
+            [entry], _verification_doc({1: "Policy Bypass Topic"}),
+            max_checks=1)
+
+
+def test_toc_verification_quick_match_uses_bounded_title(monkeypatch):
+    calls = 0
+
+    def fake_call(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return '{"verified":false}'
+
+    monkeypatch.setattr(rag, "_call_llm", fake_call)
+    entry = _verification_entry(
+        title=("x " * 300) + "Quick Match Words",
+        path="Long title",
+    )
+
+    result = rag._verify_scaffold_against_pages(
+        [entry], _verification_doc({7: "Quick Match Words"}),
+        max_checks=1)
+
+    assert calls == 1
+    assert result["verified"] == 0
+    assert result["failed"] == [{"reason": "model-did-not-verify"}]
 
 
 def test_toc_scaffold_frames_hostile_source_and_layout_as_bounded_json(

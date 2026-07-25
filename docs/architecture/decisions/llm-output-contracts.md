@@ -121,13 +121,14 @@ report schemas 2-5 while new runtime reports write schema 5.
 - The shared `toc.scaffold`/`toc.parse` hierarchy array is addressed by the
   proposed successor [TOC hierarchy output contract](toc-hierarchy-output-contract.md).
   Its upstream hint object is addressed separately by the proposed
-  [TOC layout output contract](toc-layout-output-contract.md). Neither proposal
-  broadens this classification decision: `toc.verify`, every `agent_team.*`
-  response, grounded-answer structure, case briefs, questions, flashcards,
-  summaries, context generation, heading reconstruction, and numeric quality
-  scores still need reviewed contracts. Scoped egress and provider model-code
-  qualification also remain separate roadmap work; none of these slices
-  completes R0C.
+  [TOC layout output contract](toc-layout-output-contract.md), and its later
+  page spot-check by the proposed
+  [TOC page-verification output contract](toc-verification-output-contract.md).
+  None broadens this classification decision: every `agent_team.*` response,
+  grounded-answer structure, case briefs, questions, flashcards, summaries,
+  context generation, heading reconstruction, and numeric quality scores still
+  need reviewed contracts. Scoped egress and provider model-code qualification
+  also remain separate roadmap work; none of these slices completes R0C.
 
 ## Verification
 

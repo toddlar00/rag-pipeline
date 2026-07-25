@@ -104,6 +104,20 @@ def _layout_contract_request(*, failure_policy=None):
     )
 
 
+def _verification_contract_request(*, failure_policy=None):
+    return LLMRequest(
+        prompt=(
+            "verify bounded TOC entry\n"
+            + rag._TOC_VERIFICATION_CONTRACT_PROMPT_JSON),
+        operation="toc.verify",
+        prompt_version="2",
+        failure_policy=failure_policy,
+        output_contract_id=output_contracts.TOC_VERIFICATION_CONTRACT_ID,
+        output_fallback_id=output_contracts.TOC_VERIFICATION_FALLBACK_ID,
+        output_validator=output_contracts.TOC_VERIFICATION_CONTRACT,
+    )
+
+
 def test_success_is_cached_and_warm_read_skips_provider(tmp_path):
     calls = 0
 
@@ -961,6 +975,142 @@ def test_toc_layout_semantic_rejection_does_not_delegate_provider_authority(
     assert result.output_diagnostic_code == output_contracts.JSON_SHAPE_MISMATCH
     assert result.fallback_path == ("primary",)
     assert secondary_calls == 0
+
+
+def test_toc_verification_contract_canonicalizes_live_and_cached_output(
+        tmp_path):
+    calls = 0
+
+    def invoke(_request):
+        nonlocal calls
+        calls += 1
+        return ' \n{ "verified" : true }\t'
+
+    runtime = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="readwrite", cache_dir=tmp_path / "cache"))
+    request = _verification_contract_request()
+    provider = _provider(invoke)
+
+    live = runtime.execute(request, [provider])
+    cached = runtime.execute(request, [provider])
+
+    assert live.text == cached.text == '{"verified":true}'
+    assert live.output_contract_status == "accepted"
+    assert cached.output_contract_status == "accepted"
+    assert cached.cache_status == "hit"
+    assert calls == 1
+    assert output_contracts.TOC_VERIFICATION_CONTRACT.parse(cached.text) == {
+        "verified": True,
+    }
+    cache_text = next((tmp_path / "cache").rglob("*.json")).read_text(
+        encoding="utf-8")
+    assert '{ \\"verified\\" : true }' not in cache_text
+
+
+def test_toc_verification_rejection_is_content_free_best_effort_and_strict(
+        tmp_path):
+    response = 'MODEL_RESPONSE_CANARY {"verified":true}'
+    provider = _provider(lambda _request: response)
+
+    best_effort = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="readwrite", cache_dir=tmp_path / "best-cache"))
+    result = best_effort.execute(
+        _verification_contract_request(), [provider])
+
+    assert result.text == ""
+    assert result.error_category == "invalid_response"
+    assert result.output_contract_status == "rejected"
+    assert result.output_diagnostic_code == output_contracts.JSON_SYNTAX
+    assert result.output_fallback_id == (
+        output_contracts.TOC_VERIFICATION_FALLBACK_ID)
+    assert not list((tmp_path / "best-cache").rglob("*.json"))
+    assert "MODEL_RESPONSE_CANARY" not in json.dumps(
+        best_effort.report_payload())
+
+    strict = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="off", cache_dir=tmp_path / "strict-cache",
+        failure_policy="strict"))
+    with pytest.raises(LLMExecutionError) as caught:
+        strict.execute(_verification_contract_request(), [provider])
+    assert caught.value.result.output_diagnostic_code == (
+        output_contracts.JSON_SYNTAX)
+    assert "MODEL_RESPONSE_CANARY" not in str(caught.value)
+
+
+def test_toc_verification_semantic_rejection_does_not_delegate_authority(
+        tmp_path):
+    secondary_calls = 0
+
+    def secondary(_request):
+        nonlocal secondary_calls
+        secondary_calls += 1
+        return '{"verified":true}'
+
+    runtime = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="off", cache_dir=tmp_path / "cache"))
+    result = runtime.execute(
+        _verification_contract_request(),
+        [
+            _provider(lambda _request: '{"verified":"true"}'),
+            _provider(secondary, name="secondary", model="model-b"),
+        ],
+    )
+
+    assert result.error_category == "invalid_response"
+    assert result.output_diagnostic_code == output_contracts.JSON_SHAPE_MISMATCH
+    assert result.fallback_path == ("primary",)
+    assert secondary_calls == 0
+
+
+def test_toc_verification_false_is_accepted_and_not_missing(tmp_path):
+    secondary_calls = 0
+
+    def secondary(_request):
+        nonlocal secondary_calls
+        secondary_calls += 1
+        return '{"verified":true}'
+
+    runtime = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="off", cache_dir=tmp_path / "cache"))
+    result = runtime.execute(
+        _verification_contract_request(),
+        [
+            _provider(lambda _request: '{"verified":false}'),
+            _provider(secondary, name="secondary", model="model-b"),
+        ],
+    )
+
+    assert result.succeeded is True
+    assert result.text == '{"verified":false}'
+    assert result.output_contract_status == "accepted"
+    assert result.fallback_path == ("primary",)
+    assert secondary_calls == 0
+
+
+def test_toc_verification_empty_response_can_use_ordered_provider_fallback(
+        tmp_path):
+    secondary_calls = 0
+
+    def secondary(_request):
+        nonlocal secondary_calls
+        secondary_calls += 1
+        return '{"verified":true}'
+
+    runtime = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="off", cache_dir=tmp_path / "cache"))
+    result = runtime.execute(
+        _verification_contract_request(),
+        [
+            _provider(lambda _request: ""),
+            _provider(secondary, name="secondary", model="model-b"),
+        ],
+    )
+
+    assert result.succeeded is True
+    assert result.text == '{"verified":true}'
+    assert result.output_contract_status == "accepted"
+    assert result.fallback_path == ("primary", "secondary")
+    assert secondary_calls == 1
 
 
 def test_toc_semantic_rejection_does_not_delegate_provider_authority(

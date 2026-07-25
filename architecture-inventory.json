@@ -596,7 +596,7 @@
             "target": "_embed_texts"
           },
           {
-            "locations_sha256": "56019189b012d19e756f4b67c3c0eb21b20af46c6b3b10268ae44a8521256f60",
+            "locations_sha256": "8fd86a64c460bab1737e1fd5169ac040508684e09d6b368f0bc254f77bfeaa69",
             "occurrence_count": 4,
             "operations": [
               "assign",
@@ -763,6 +763,8 @@
         },
         {
           "facade_roots": [
+            "original",
+            "original_decode",
             "rag"
           ],
           "module": "tests.test_llm_gating",
@@ -1217,7 +1219,7 @@
             "target": "requests.Session"
           },
           {
-            "locations_sha256": "57a9af2066b17eebdb7a148a53c1ef98a1826c7ade99017b784e22edb6510cff",
+            "locations_sha256": "f41b5031f616d6513309ac93c06874bda6b6127810e394e055f3c00aa5b2db44",
             "occurrence_count": 17,
             "operations": [
               "setattr"
@@ -1665,7 +1667,7 @@
             "target": "_analyze_pdf_images"
           },
           {
-            "locations_sha256": "9f750f9cc971ae24ecc1c146430a238083b79779eb7e65c59f0efa6979d1bea1",
+            "locations_sha256": "9f994b345943d01f5024308945c593df7bddfd35940ba76d88b9f396427855c8",
             "occurrence_count": 5,
             "operations": [
               "setattr"
@@ -1683,7 +1685,7 @@
             "target": "_analyze_toc_layout"
           },
           {
-            "locations_sha256": "662cc79d7b62484259462c131d230edc4f12ec43d7adca168013a4cf901a4226",
+            "locations_sha256": "acae5c0d0d24afa0dee35878a2ba1cff31c699aa934b5ed01f54f8fc0b17b752",
             "occurrence_count": 10,
             "operations": [
               "setattr"
@@ -1745,7 +1747,7 @@
             "target": "_atomic_write_json"
           },
           {
-            "locations_sha256": "b326d45e78454858391295f610fd897e1f351d8a9911d2c970456e223942023d",
+            "locations_sha256": "60246a36b121bbd5cd5099c9dc382def5834428f27642ff5026965f794f1e919",
             "occurrence_count": 2,
             "operations": [
               "setattr"
@@ -1847,7 +1849,7 @@
             "target": "_cached_artifact_sha256"
           },
           {
-            "locations_sha256": "90816420284c125fd2f1c3f057e8f463a08e0a1f61dc7b24cd8d65638ba83727",
+            "locations_sha256": "fb2306fab5def5fb2403fbac35e148aa737c73373f697cda775045e39f7a99b4",
             "occurrence_count": 4,
             "operations": [
               "setattr"
@@ -1865,7 +1867,7 @@
             "target": "_calculate_page_delta"
           },
           {
-            "locations_sha256": "bf2e554995e48393b69068b5defa7dc8cfffb987798a99657c40ea6cf22d2aea",
+            "locations_sha256": "97c25fb86cce6fed21244b7287d323db71bfdcb2a21675b31105bed3bc0f5509",
             "occurrence_count": 1,
             "operations": [
               "setattr"
@@ -1879,8 +1881,8 @@
             "target": "_call_gemini"
           },
           {
-            "locations_sha256": "06a489e93f6fcda149aa5103b2e78a1fc61a81fabe96a55e4f447709b30209cd",
-            "occurrence_count": 25,
+            "locations_sha256": "cae55fa7f8142c2377d5a80182548294e8965881b04c3127f62db744d89491ef",
+            "occurrence_count": 36,
             "operations": [
               "setattr"
             ],
@@ -1890,7 +1892,7 @@
                 "path": "tests/test_grounded_answers.py"
               },
               {
-                "count": 19,
+                "count": 30,
                 "path": "tests/test_llm_gating.py"
               },
               {
@@ -1905,14 +1907,14 @@
             "target": "_call_llm"
           },
           {
-            "locations_sha256": "eb68cdfefa09b8ff073953fee08fa100c0316ff063b71b50254049fb39f31ca4",
-            "occurrence_count": 5,
+            "locations_sha256": "8facd2b8c24b93f1d25c7932ab71fa3da462f6db093be3f95fe43063ee7c95ec",
+            "occurrence_count": 6,
             "operations": [
               "setattr"
             ],
             "source_counts": [
               {
-                "count": 3,
+                "count": 4,
                 "path": "tests/test_llm_gating.py"
               },
               {
@@ -1923,7 +1925,7 @@
             "target": "_call_ollama"
           },
           {
-            "locations_sha256": "b7260f40da7942c8702f2b0f1c37c656a5d9bf05a9018fb4a8bfe14e46001893",
+            "locations_sha256": "36c078f19ec977f48bdb5960c4ac6dc45eda53305772ae063331492ed6b56de1",
             "occurrence_count": 5,
             "operations": [
               "setattr"
@@ -2103,6 +2105,20 @@
               }
             ],
             "target": "_count_embedding_text_tokens"
+          },
+          {
+            "locations_sha256": "76687f4af08d57f0269a2cad96ae9bdb99a532b21975e2a62cbf96ca8cc40c9a",
+            "occurrence_count": 1,
+            "operations": [
+              "setattr"
+            ],
+            "source_counts": [
+              {
+                "count": 1,
+                "path": "tests/test_llm_gating.py"
+              }
+            ],
+            "target": "_decode_pua"
           },
           {
             "locations_sha256": "a4d8fb88bf5e4430a6a700f8bdbd7207391a67905bd037d5b8791ffab94524b7",
@@ -2297,7 +2313,7 @@
             "target": "_get_throttle"
           },
           {
-            "locations_sha256": "92e569b1a61ace78c9dca6c1871b6ebea86923a6e04928af1900a07c0a18f42d",
+            "locations_sha256": "30b7d8222a15fe84d5c3ecee5efe7d67d625a8acff3adb172ffaf61c80963411",
             "occurrence_count": 1,
             "operations": [
               "setattr"
@@ -2473,7 +2489,7 @@
             "target": "_llm_kwargs_from_args"
           },
           {
-            "locations_sha256": "91a58d358ff567bcc279f89913caa4283517ab693715e51c34bbf58b7ffdf5e9",
+            "locations_sha256": "b28980f8a789c5fbe3c3d16ef90a68d8bbca36c0e195baf4a1938a62371a8e7b",
             "occurrence_count": 5,
             "operations": [
               "setattr"
@@ -2491,8 +2507,8 @@
             "target": "_llm_parse_scaffold"
           },
           {
-            "locations_sha256": "893039628b4a0d79340c61cbd8472becaa513f0cf2cbc911a82703c70ff6b979",
-            "occurrence_count": 9,
+            "locations_sha256": "bd2c2be94864b9a9d164acd7726861fbda4e73d3d2a1a6ae3719fae3d3b560f6",
+            "occurrence_count": 10,
             "operations": [
               "setattr"
             ],
@@ -2506,7 +2522,7 @@
                 "path": "tests/test_llm_adapters.py"
               },
               {
-                "count": 3,
+                "count": 4,
                 "path": "tests/test_llm_gating.py"
               },
               {
@@ -2653,7 +2669,7 @@
             "target": "_menu_yesno"
           },
           {
-            "locations_sha256": "b281db9a8ddf1b63c26b6cd9264d859eab7d85e51e588ab9359a5f4f9e37605c",
+            "locations_sha256": "021ad9463b3dc589d72fc50d43a6450525861faad986ceefb60c095f9fb4acc5",
             "occurrence_count": 4,
             "operations": [
               "setattr"
@@ -2757,7 +2773,7 @@
             "target": "_parse_index_records_strict"
           },
           {
-            "locations_sha256": "481eefda79cbc326a36c92a81bc66876b5689b3ff3e8af06928323a90e2ea14f",
+            "locations_sha256": "a4eddbf5ce3e3c21777584e11a3e6d8cc91a9ee25d5ddd3b7314947a29c6a115",
             "occurrence_count": 1,
             "operations": [
               "setattr"
@@ -2805,7 +2821,7 @@
             "target": "_post_cloud_with_policy"
           },
           {
-            "locations_sha256": "9fbb3f315106db87e98081bb091c8ec27eebb5930ae2fdb0c8df5a61eb1a3ac6",
+            "locations_sha256": "792225b5bd7a590dec48f3b0dc34b9354b034223147438b6b209297a79dae6fd",
             "occurrence_count": 6,
             "operations": [
               "setattr"
@@ -2911,7 +2927,7 @@
             "target": "_quality_report_complete"
           },
           {
-            "locations_sha256": "7f483721f37483627c0386bca8aa054eb0baaaab600a2b155706a73092a1ca89",
+            "locations_sha256": "dfeb0a97d0504100fb4bda7c0ff53b906b10f5e845778148700ebab4a4b4c468",
             "occurrence_count": 2,
             "operations": [
               "setattr"
@@ -3271,6 +3287,20 @@
               }
             ],
             "target": "_text_fingerprint"
+          },
+          {
+            "locations_sha256": "fc7110ed4d0c475eda912af55df7f0617b4107aebbe9aab249365ea547e86ced",
+            "occurrence_count": 1,
+            "operations": [
+              "setattr"
+            ],
+            "source_counts": [
+              {
+                "count": 1,
+                "path": "tests/test_llm_gating.py"
+              }
+            ],
+            "target": "_toc_verification_source_json"
           },
           {
             "locations_sha256": "8088dffa06cebded2cfdff146ca221e6eca85e6bb8a0fe992acb4799f5f9ed87",
@@ -3686,7 +3716,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "6db011ef5654dd51f1beea77996ea8e20fea1b0fbfd1d921075321f66d2330df",
+          "locations_sha256": "b5461839c1cb1039ffee33a6db0308f64847923cabc9757db97e0e9d2c374c35",
           "name": "_AdaptiveThrottle",
           "occurrence_count": 3,
           "paths": [
@@ -3710,7 +3740,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "5c030d72066111940f2a3b5a04d5b256fd1859db6fd94c6c0a66c707bd33623f",
+          "locations_sha256": "85e0b19af857013ff7c2f447db21cac49eaa9ffdfc4fe08d7592950aeff1264c",
           "name": "_AgentTeam",
           "occurrence_count": 2,
           "paths": [
@@ -3730,7 +3760,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "d1e7f95da0dfee800a12892d3bcc77b63700f575b5a94f137a421db05b741c3a",
+          "locations_sha256": "18bed43843bb0ab199991dec65981e71db0a55379b90b17a87a69bf3e85edc3b",
           "name": "_CLASSIFICATION_OUTPUT_CONTRACT",
           "occurrence_count": 3,
           "paths": [
@@ -4083,7 +4113,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "696e2aa06f053d461c7e8ca30bf8a7b896631f4487ae5ca4e44de81f3f2965f8",
+          "locations_sha256": "fc81901a7c9dadef81adeea261d181db94990139f2e4ffb8982a80fce1ce3ddb",
           "name": "_TOC_HIERARCHY_CONTRACT_PROMPT_JSON",
           "occurrence_count": 3,
           "paths": [
@@ -4107,7 +4137,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "c0a9ad44b991f51fcf92bed4c7b5c60d1d851254cfd506890bbd6dd4c409c234",
+          "locations_sha256": "d487cfb50209682e50ffb0260fe4d0f37012c97b2c72758bb06a7d888982aba2",
           "name": "_TOC_HIERARCHY_OUTPUT_CONTRACT",
           "occurrence_count": 2,
           "paths": [
@@ -4131,7 +4161,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "5f5d212c3af58dce38c556e8a5a3a0918af1a9fbb5c1beb4faa0e66300f6b0da",
+          "locations_sha256": "7e549916f45688578de972200a36140d85143fced5fc6ac2853158b5e1caa9e0",
           "name": "_TOC_LAYOUT_CONTRACT_PROMPT_JSON",
           "occurrence_count": 3,
           "paths": [
@@ -4155,7 +4185,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "975db4ff215ded561bf14e6a775210b68803e47f72a4090a9c6a4f22120c4c8d",
+          "locations_sha256": "82e49a38734fa501da467b4b9e288cf0f545da95ed0c2389de7b8b4ea67c95dc",
           "name": "_TOC_LAYOUT_OUTPUT_CONTRACT",
           "occurrence_count": 1,
           "paths": [
@@ -4165,6 +4195,70 @@
             {
               "count": 1,
               "path": "tests/test_llm_gating.py"
+            }
+          ]
+        },
+        {
+          "contexts": [
+            "load"
+          ],
+          "kinds": [
+            "attribute"
+          ],
+          "locations_sha256": "811348eed2318ec5c5127445a204fe45e965e538561f4e9b60c24e03649e4443",
+          "name": "_TOC_VERIFICATION_CONTRACT_PROMPT_JSON",
+          "occurrence_count": 3,
+          "paths": [
+            "_TOC_VERIFICATION_CONTRACT_PROMPT_JSON"
+          ],
+          "source_counts": [
+            {
+              "count": 2,
+              "path": "tests/test_llm_gating.py"
+            },
+            {
+              "count": 1,
+              "path": "tests/test_llm_runtime.py"
+            }
+          ]
+        },
+        {
+          "contexts": [
+            "load"
+          ],
+          "kinds": [
+            "attribute"
+          ],
+          "locations_sha256": "0341f4b2f8a770c5edcda70fe544fe0bb7bef480430de45d0b7c4989b1787e2d",
+          "name": "_TOC_VERIFICATION_OUTPUT_CONTRACT",
+          "occurrence_count": 1,
+          "paths": [
+            "_TOC_VERIFICATION_OUTPUT_CONTRACT"
+          ],
+          "source_counts": [
+            {
+              "count": 1,
+              "path": "tests/test_llm_gating.py"
+            }
+          ]
+        },
+        {
+          "contexts": [
+            "load"
+          ],
+          "kinds": [
+            "attribute"
+          ],
+          "locations_sha256": "b3de1dc2f16b670c27ee2cacbbc25232e65187806c810e147393ecabee5f12ae",
+          "name": "_TOC_VERIFICATION_UNICODE_DATA_VERSION",
+          "occurrence_count": 3,
+          "paths": [
+            "_TOC_VERIFICATION_UNICODE_DATA_VERSION.split"
+          ],
+          "source_counts": [
+            {
+              "count": 3,
+              "path": "tests/test_output_publication.py"
             }
           ]
         },
@@ -4335,7 +4429,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "9906384ccc1fcefd72ba7251b302543ecf06ea8c7cddc78712a1cf550110516f",
+          "locations_sha256": "1452f386be59afdb3db812f5119d528e8f0186fe3bfcea6292e57785f45677c3",
           "name": "_analyze_toc_layout",
           "occurrence_count": 7,
           "paths": [
@@ -4395,7 +4489,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "dd77dd7abb517b62614ec4cf52a89ccc3c551ae36a7b4e859b6c21df9dc6a23e",
+          "locations_sha256": "3559c18c29fd369718ab2e97bd53c247d032f21a51a6e66926bb3d086dd3aec3",
           "name": "_artifact_completion_path",
           "occurrence_count": 15,
           "paths": [
@@ -4423,7 +4517,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "cd0b41b08d07a48ba8080131ebe6cb354dee5662d1164d58ba2dcfa560bccb74",
+          "locations_sha256": "106bf05b7589455482b44033045dd7027645a5af8386b9e55022c3620dbc0eda",
           "name": "_artifact_parameters_sha256",
           "occurrence_count": 7,
           "paths": [
@@ -4511,7 +4605,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "65bb23075956e0f1ea2b61c85b955ef3fc2cd15c269822503631d7192a3938a4",
+          "locations_sha256": "dab763a7bc18e024f864907ad25d0d0b19010c9545119368770f0b0d2f6716d9",
           "name": "_atomic_write_json",
           "occurrence_count": 22,
           "paths": [
@@ -4587,7 +4681,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "c2b05a904ebe4b80ec9bdb87350e8c82962add78929d52129bf05301331c1d07",
+          "locations_sha256": "077d805af33fbeb6864d7f26592cc2c68cc37e8c5f2bdc407292fda19794ac5b",
           "name": "_atomic_write_text",
           "occurrence_count": 7,
           "paths": [
@@ -4831,7 +4925,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "63307bb7145ed93966c8c59e93cc120d51f12eb9cf5d6b0ec98c900f863aa02e",
+          "locations_sha256": "89a1149d98c778c1953de439e448624f94f293c4d9935e287ddf5772316196ee",
           "name": "_build_scaffold",
           "occurrence_count": 9,
           "paths": [
@@ -4935,7 +5029,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "5674a25fcdc1f223a9250b644068c8fa0813bf0aa795c49087ffcda704b1ecae",
+          "locations_sha256": "5b8014da1b355635c439cba6c3da21776eabff73a3b55a6f129bd5882191a883",
           "name": "_call_llm",
           "occurrence_count": 3,
           "paths": [
@@ -4959,7 +5053,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "054225634878024e4136865569fa7801d120c9398579a45ebaada0511f5b2447",
+          "locations_sha256": "8f353352c84c2b8d6fd8585818158a1ae0ba1ae5ef26ad2a6013d3804aaa5a30",
           "name": "_call_llm_result",
           "occurrence_count": 10,
           "paths": [
@@ -4991,7 +5085,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "8631c90929af767aa90ee0bd49e5f400c294c506be7b0d4b2cee2e6eb0d29e73",
+          "locations_sha256": "b47509cca2256aa78d4ff59c679f9fb7cde3ce0e20e2cf6dd5b59eb28192db03",
           "name": "_call_ollama",
           "occurrence_count": 1,
           "paths": [
@@ -5039,7 +5133,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "b129ee16c05d6221dfe56f165e3e0f2ca49dea0f0d2e0747d51b4b625ced6f06",
+          "locations_sha256": "6d1d2010ce30ee44f7cf59d3fec6452845056d3652502b3fc8521c1bcc9f7e5a",
           "name": "_call_openai_compatible",
           "occurrence_count": 6,
           "paths": [
@@ -5347,15 +5441,15 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "4f5b4307e28f8a55b989c1112d761601a97f92cc1eba38c489b31b9f31a73971",
+          "locations_sha256": "ce00096b4e11b732fc65c0879c59431dab8988f5cdaf9ce9c9160f0132f6152b",
           "name": "_chunks_complete",
-          "occurrence_count": 18,
+          "occurrence_count": 21,
           "paths": [
             "_chunks_complete"
           ],
           "source_counts": [
             {
-              "count": 15,
+              "count": 18,
               "path": "tests/test_output_publication.py"
             },
             {
@@ -5583,6 +5677,26 @@
           "kinds": [
             "attribute"
           ],
+          "locations_sha256": "ee3ac112e9e18d14b88f104a1a52ed400572c5e367946b4c182d5ac85cdacebe",
+          "name": "_decode_pua",
+          "occurrence_count": 1,
+          "paths": [
+            "_decode_pua"
+          ],
+          "source_counts": [
+            {
+              "count": 1,
+              "path": "tests/test_llm_gating.py"
+            }
+          ]
+        },
+        {
+          "contexts": [
+            "load"
+          ],
+          "kinds": [
+            "attribute"
+          ],
           "locations_sha256": "8bf7d880547a8c1aeec049716024dc6bf0262590b84f8f027b572d7cc550b9fe",
           "name": "_deduplicate_chunks",
           "occurrence_count": 7,
@@ -5671,7 +5785,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "38f0eb9e7e2f1509123a20baa2c1fda8a7da8e791562fcd588ba0bd3e5a6f05d",
+          "locations_sha256": "451da2a2c0e713502c6c8de659fe8416451b94d4182fa22a06fdc18b65a069f6",
           "name": "_document_profiles",
           "occurrence_count": 9,
           "paths": [
@@ -5845,7 +5959,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "c8ff067c5ec0fd562b0c1448bdfb23c27278195c62cb0b25f03648916810a8d0",
+          "locations_sha256": "aeffdf771f3867afe78e8e997674e1efabcb9cfe721842f9f8adc6a7c17d9f39",
           "name": "_generate_context",
           "occurrence_count": 1,
           "paths": [
@@ -5989,7 +6103,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "20ccfa3e02343234a6cf8d96841fd74e2cc442c5b156b213bd8897ca3db7bddb",
+          "locations_sha256": "c0d2caa4acfa56a9fbd3283e769e9b426f3551bd48ca1e94fdacf4b7e5abce9e",
           "name": "_identify_book_sections",
           "occurrence_count": 8,
           "paths": [
@@ -6314,7 +6428,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "1cd3513b73baa22139a6b5e23dc2700375b1863bf0e45b1012f9ba691a50f91e",
+          "locations_sha256": "58e7384e3e3e7678a9d9080ef984cd0c65f514d9868d38c883eb2f0868caa85f",
           "name": "_llm_classify",
           "occurrence_count": 5,
           "paths": [
@@ -6334,7 +6448,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "84f5a7f815173074c20bd44184d0f423d37dc31c4d0faf2d7ad01b5b3a1f228a",
+          "locations_sha256": "ae0bbdad86a4414639e46597a292b9849181552121fc6e2e0233de32fbe7c1c7",
           "name": "_llm_endpoint_id",
           "occurrence_count": 3,
           "paths": [
@@ -6382,19 +6496,20 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "800706ca5c9ba5305616073c9b14b09d202cfc81951bda3a03ff6455de28a9fd",
+          "locations_sha256": "cba1d77f8d1c404fecb339f52803c0a08487e0422ed66de15a25402aa4d71fe6",
           "name": "_llm_output_contracts",
-          "occurrence_count": 9,
+          "occurrence_count": 10,
           "paths": [
             "_llm_output_contracts.TOC_HIERARCHY_UNICODE_DATA_VERSION",
             "_llm_output_contracts.TOC_HIERARCHY_UNICODE_DATA_VERSION.split",
             "_llm_output_contracts.TOC_LAYOUT_FALLBACK_ID",
             "_llm_output_contracts.TOC_LAYOUT_UNICODE_DATA_VERSION",
-            "_llm_output_contracts.TOC_LAYOUT_UNICODE_DATA_VERSION.split"
+            "_llm_output_contracts.TOC_LAYOUT_UNICODE_DATA_VERSION.split",
+            "_llm_output_contracts.TOC_VERIFICATION_FALLBACK_ID"
           ],
           "source_counts": [
             {
-              "count": 3,
+              "count": 4,
               "path": "tests/test_llm_gating.py"
             },
             {
@@ -6410,7 +6525,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "222e1f0ef5c9d257e706370a9e60ff4d78385f0695bb4af536947dee200003f0",
+          "locations_sha256": "13a7f29c2544ca4db1f358ee432a4b0b02bdcffbbc758e056a48c9545d8b4ac0",
           "name": "_llm_parse_scaffold",
           "occurrence_count": 3,
           "paths": [
@@ -6430,7 +6545,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "3a8887e5f8d12e13e71491d5a81a223cd6035a40a9a9aea47bd2faef99876071",
+          "locations_sha256": "bd268d0513bf063cf2ea900278539de6981ecee9c9cec9200a0fcc6267f87b10",
           "name": "_llm_parse_toc",
           "occurrence_count": 1,
           "paths": [
@@ -6450,7 +6565,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "a5a0b90aa42ef89f6b0cafe4eaf4cf9c59c22ac1d14ef268b88a26f738ef005e",
+          "locations_sha256": "eaa6db00e7b45967397a680cf469618d1a9ed6aeafa253c4c3944f03aa37ace2",
           "name": "_llm_runtime",
           "occurrence_count": 8,
           "paths": [
@@ -6569,7 +6684,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "e63c20a589486802f640388ae086a05966df1f47a286aa7ee78eb82d81416b30",
+          "locations_sha256": "b81b26cf2469931f5321c054c0a96929bbf1c5b6450ae037894d44f4ff01db18",
           "name": "_load_index_records_strict",
           "occurrence_count": 7,
           "paths": [
@@ -6593,7 +6708,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "24b0d5600e065924d8a5f5c1a01fbc26efecc5511c4967b58287e41602d5e61f",
+          "locations_sha256": "196a3d3afe8951a0612dd6f1b74489ea11a2f0145e035ac51228e4e4ea02251f",
           "name": "_load_index_snapshot_strict",
           "occurrence_count": 2,
           "paths": [
@@ -6657,7 +6772,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "0ae16bdb12d9d167d795c7f2ce1141c9476b28e8b6c327b3e721cb20966eaa34",
+          "locations_sha256": "24698634f6296cfb51cd90d523e72411fee6017eefd29193efb4d934f4c2f654",
           "name": "_markdown_export_parameters",
           "occurrence_count": 3,
           "paths": [
@@ -7313,7 +7428,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "062f9af59ee7d0c0fbca386cc98c86ce1daca13239930b32b733b1d47cf34f39",
+          "locations_sha256": "bb3bac6c48dd343b4121fde079ddbeb2a84c267788729a326511d14476e4a33d",
           "name": "_publish_corpus_quality_report",
           "occurrence_count": 11,
           "paths": [
@@ -7477,7 +7592,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "a131cc8bed4046c7e931cbd63ae964c318ab6400a3500ed0a4969c57ef568c8b",
+          "locations_sha256": "c0b7a84df807abca5cc946b3288864f368cb6c1ba57a28ce423d34d10e492ed4",
           "name": "_quality_core",
           "occurrence_count": 12,
           "paths": [
@@ -7515,7 +7630,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "56f268065f7c7d6801a763c1fd3966ab932bd533603de122f08cc4e458dd3511",
+          "locations_sha256": "585bd1b273e5bb4a82d6f6200582ce78a274f0d12c3bde577ca7c6be235705a9",
           "name": "_quality_report_complete",
           "occurrence_count": 3,
           "paths": [
@@ -7623,7 +7738,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "e162984b7f91972c587709931b5451985314121d06dbf3ab826e656b166d2b33",
+          "locations_sha256": "168f5b7e4d17af127228b0c2f87633a286aba12bec8a5b639ba23217c9445bb9",
           "name": "_raptor_output_complete",
           "occurrence_count": 2,
           "paths": [
@@ -7643,7 +7758,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "ea9b3f2f90bce47e6545f143aa982ce7c864a7ad0e1226043f132624080a1f9e",
+          "locations_sha256": "d5a70fd9969b1cf39036a9034d4d089ec0a7ee12677a3ce6c91417f2d4e09cd9",
           "name": "_raptor_parameters",
           "occurrence_count": 3,
           "paths": [
@@ -8058,7 +8173,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "24f087ecb07349e24b4a240133de51f866f2a3ac298de47f0a4f72990b3cfb41",
+          "locations_sha256": "afabdf8b1e7591a6b22f6ae1fbe745a537fc1bf71da2750ac36e91d257791aba",
           "name": "_run_cli_with_deadline",
           "occurrence_count": 19,
           "paths": [
@@ -8302,7 +8417,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "cb9536c0644fe9f2b65c9fda44c2daf8bcd5362f30614fc26f02bf0b6faec79f",
+          "locations_sha256": "969aa0c54494b38578e9918e2269be680bf92054445ada6d34547e8c2fe37fbd",
           "name": "_split_export_complete",
           "occurrence_count": 3,
           "paths": [
@@ -8430,6 +8545,46 @@
           "kinds": [
             "attribute"
           ],
+          "locations_sha256": "c79ed41d8f3d793e3a21248dd32302a5e14e106bab15e69fb9901f74e1b0c81c",
+          "name": "_toc_verification_prompt_json",
+          "occurrence_count": 2,
+          "paths": [
+            "_toc_verification_prompt_json"
+          ],
+          "source_counts": [
+            {
+              "count": 2,
+              "path": "tests/test_llm_gating.py"
+            }
+          ]
+        },
+        {
+          "contexts": [
+            "load"
+          ],
+          "kinds": [
+            "attribute"
+          ],
+          "locations_sha256": "1acfbd7b6bda9c714c87e4369e727a169e73b75ae8dbd5e5db2b47cca0055e9d",
+          "name": "_toc_verification_source_json",
+          "occurrence_count": 1,
+          "paths": [
+            "_toc_verification_source_json"
+          ],
+          "source_counts": [
+            {
+              "count": 1,
+              "path": "tests/test_llm_gating.py"
+            }
+          ]
+        },
+        {
+          "contexts": [
+            "load"
+          ],
+          "kinds": [
+            "attribute"
+          ],
           "locations_sha256": "e771bfd14a66ee0a3b7d84724f5de7d16433107890d8a3281f59f748a4fec370",
           "name": "_try_vector_file_lock",
           "occurrence_count": 2,
@@ -8454,7 +8609,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "9028e0dec1c74a21193f2f79a3aba58d3073d4958ab0cbf63b87283b6d498c51",
+          "locations_sha256": "3b747f849df3a4768ea75f0ab4c926492e524d7891f3ba412c84c144853e734a",
           "name": "_unified_export_complete",
           "occurrence_count": 3,
           "paths": [
@@ -8708,6 +8863,26 @@
             {
               "count": 7,
               "path": "tests/test_vector_store_concurrency.py"
+            }
+          ]
+        },
+        {
+          "contexts": [
+            "load"
+          ],
+          "kinds": [
+            "attribute"
+          ],
+          "locations_sha256": "42dda4102baaf9355929405a42d076f773e4c2ee14524db6cdeed31319d89002",
+          "name": "_verify_scaffold_against_pages",
+          "occurrence_count": 13,
+          "paths": [
+            "_verify_scaffold_against_pages"
+          ],
+          "source_counts": [
+            {
+              "count": 13,
+              "path": "tests/test_llm_gating.py"
             }
           ]
         },
@@ -11094,6 +11269,34 @@
         "qualname": "_toc_source_prompt_json"
       },
       {
+        "contract_sha256": "836e19934c143595bb8955353f63af90b18b86f451a16b178a2fcdde89d27a78",
+        "kind": "function",
+        "module": "rag",
+        "name": "_toc_verification_bounded_string",
+        "qualname": "_toc_verification_bounded_string"
+      },
+      {
+        "contract_sha256": "d8012af6eea780da108bd0facbb0929d13bdeb8d49b6836f55270330813228bb",
+        "kind": "function",
+        "module": "rag",
+        "name": "_toc_verification_entry_prompt_data",
+        "qualname": "_toc_verification_entry_prompt_data"
+      },
+      {
+        "contract_sha256": "4a6d0edc7d351d9adca639127011f376c6911c955be645765701a5e5c93e68b8",
+        "kind": "function",
+        "module": "rag",
+        "name": "_toc_verification_prompt_json",
+        "qualname": "_toc_verification_prompt_json"
+      },
+      {
+        "contract_sha256": "69c0738d56fc825964ccd9422e95ec2b9b66f02f2cd819d353d9079f3a59ee3e",
+        "kind": "function",
+        "module": "rag",
+        "name": "_toc_verification_source_json",
+        "qualname": "_toc_verification_source_json"
+      },
+      {
         "contract_sha256": "7dbd537d181562531d6ef05d75b68606525ee7899152d6f35d0a024127d71816",
         "kind": "function",
         "module": "rag",
@@ -11651,6 +11854,34 @@
       "_TOC_SOURCE_LINE_MAX_CHARACTERS",
       "_TOC_SOURCE_LINE_TAIL_CHARACTERS",
       "_TOC_SOURCE_TRUNCATION_MARKER",
+      "_TOC_VERIFICATION_CONTRACT_PROMPT_JSON",
+      "_TOC_VERIFICATION_DIRECTOR_CHECKS",
+      "_TOC_VERIFICATION_INPUT_POLICY_VERSION",
+      "_TOC_VERIFICATION_LOW_CONFIDENCE_MIN_CHECKS",
+      "_TOC_VERIFICATION_LOW_CONFIDENCE_THRESHOLD",
+      "_TOC_VERIFICATION_MAX_CHECKS",
+      "_TOC_VERIFICATION_MAX_PAGE",
+      "_TOC_VERIFICATION_MAX_TOKENS",
+      "_TOC_VERIFICATION_OUTPUT_CONTRACT",
+      "_TOC_VERIFICATION_PAGE_CAPTURE_CHARACTERS",
+      "_TOC_VERIFICATION_PAGE_JSON_MAX_BYTES",
+      "_TOC_VERIFICATION_PAGE_PROMPT_CHARACTERS",
+      "_TOC_VERIFICATION_PATH_JSON_MAX_BYTES",
+      "_TOC_VERIFICATION_PATH_MAX_CHARACTERS",
+      "_TOC_VERIFICATION_PATH_TAIL_CHARACTERS",
+      "_TOC_VERIFICATION_PROMPT_VERSION",
+      "_TOC_VERIFICATION_QC_CHECKS",
+      "_TOC_VERIFICATION_QUICK_MATCH_MAX_WORDS",
+      "_TOC_VERIFICATION_QUICK_MATCH_MIN_WORD_CHARACTERS",
+      "_TOC_VERIFICATION_QUICK_MATCH_POLICY_VERSION",
+      "_TOC_VERIFICATION_SELECTION_POLICY_VERSION",
+      "_TOC_VERIFICATION_SOURCE_JSON_MAX_BYTES",
+      "_TOC_VERIFICATION_TEXT_ITEM_SCAN_CHARACTERS",
+      "_TOC_VERIFICATION_TIMEOUT_SECONDS",
+      "_TOC_VERIFICATION_TITLE_JSON_MAX_BYTES",
+      "_TOC_VERIFICATION_TITLE_MAX_CHARACTERS",
+      "_TOC_VERIFICATION_UNICODE_DATA_VERSION",
+      "_TOC_VERIFICATION_UNICODE_VERSION_PARTS",
       "_UNSUPPORTED_API_EMBEDDING_MODEL_PREFIXES",
       "_VERIFY_PROMPT",
       "_VOYAGE_EMBEDDINGS_URL",
@@ -11999,6 +12230,10 @@
       "_toc_layout_hint_prompt_value",
       "_toc_layout_prompt_json",
       "_toc_source_prompt_json",
+      "_toc_verification_bounded_string",
+      "_toc_verification_entry_prompt_data",
+      "_toc_verification_prompt_json",
+      "_toc_verification_source_json",
       "_toc_visual_subrows",
       "_try_vector_file_lock",
       "_unified_export_complete",
@@ -12072,6 +12307,7 @@
       "subprocess",
       "sys",
       "time",
+      "unicodedata",
       "uuid4"
     ],
     "import_star_names": [
@@ -12193,6 +12429,7 @@
       "subprocess",
       "sys",
       "time",
+      "unicodedata",
       "uuid4"
     ],
     "interpreter_variant_exclusions": [
@@ -12394,6 +12631,34 @@
       "_TOC_SOURCE_LINE_MAX_CHARACTERS",
       "_TOC_SOURCE_LINE_TAIL_CHARACTERS",
       "_TOC_SOURCE_TRUNCATION_MARKER",
+      "_TOC_VERIFICATION_CONTRACT_PROMPT_JSON",
+      "_TOC_VERIFICATION_DIRECTOR_CHECKS",
+      "_TOC_VERIFICATION_INPUT_POLICY_VERSION",
+      "_TOC_VERIFICATION_LOW_CONFIDENCE_MIN_CHECKS",
+      "_TOC_VERIFICATION_LOW_CONFIDENCE_THRESHOLD",
+      "_TOC_VERIFICATION_MAX_CHECKS",
+      "_TOC_VERIFICATION_MAX_PAGE",
+      "_TOC_VERIFICATION_MAX_TOKENS",
+      "_TOC_VERIFICATION_OUTPUT_CONTRACT",
+      "_TOC_VERIFICATION_PAGE_CAPTURE_CHARACTERS",
+      "_TOC_VERIFICATION_PAGE_JSON_MAX_BYTES",
+      "_TOC_VERIFICATION_PAGE_PROMPT_CHARACTERS",
+      "_TOC_VERIFICATION_PATH_JSON_MAX_BYTES",
+      "_TOC_VERIFICATION_PATH_MAX_CHARACTERS",
+      "_TOC_VERIFICATION_PATH_TAIL_CHARACTERS",
+      "_TOC_VERIFICATION_PROMPT_VERSION",
+      "_TOC_VERIFICATION_QC_CHECKS",
+      "_TOC_VERIFICATION_QUICK_MATCH_MAX_WORDS",
+      "_TOC_VERIFICATION_QUICK_MATCH_MIN_WORD_CHARACTERS",
+      "_TOC_VERIFICATION_QUICK_MATCH_POLICY_VERSION",
+      "_TOC_VERIFICATION_SELECTION_POLICY_VERSION",
+      "_TOC_VERIFICATION_SOURCE_JSON_MAX_BYTES",
+      "_TOC_VERIFICATION_TEXT_ITEM_SCAN_CHARACTERS",
+      "_TOC_VERIFICATION_TIMEOUT_SECONDS",
+      "_TOC_VERIFICATION_TITLE_JSON_MAX_BYTES",
+      "_TOC_VERIFICATION_TITLE_MAX_CHARACTERS",
+      "_TOC_VERIFICATION_UNICODE_DATA_VERSION",
+      "_TOC_VERIFICATION_UNICODE_VERSION_PARTS",
       "_UNSUPPORTED_API_EMBEDDING_MODEL_PREFIXES",
       "_VERIFY_PROMPT",
       "_VOYAGE_EMBEDDINGS_URL",
@@ -12742,6 +13007,10 @@
       "_toc_layout_hint_prompt_value",
       "_toc_layout_prompt_json",
       "_toc_source_prompt_json",
+      "_toc_verification_bounded_string",
+      "_toc_verification_entry_prompt_data",
+      "_toc_verification_prompt_json",
+      "_toc_verification_source_json",
       "_toc_visual_subrows",
       "_try_vector_file_lock",
       "_unified_export_complete",
@@ -12815,6 +13084,7 @@
       "subprocess",
       "sys",
       "time",
+      "unicodedata",
       "uuid4"
     ]
   },
@@ -12833,7 +13103,7 @@
         "module": "ui"
       }
     ],
-    "explicit_binding_count": 599,
+    "explicit_binding_count": 632,
     "explicit_bindings": [
       "ARTIFACT_COMPLETION_SCHEMA_VERSION",
       "Any",
@@ -13020,6 +13290,34 @@
       "_TOC_SOURCE_LINE_MAX_CHARACTERS",
       "_TOC_SOURCE_LINE_TAIL_CHARACTERS",
       "_TOC_SOURCE_TRUNCATION_MARKER",
+      "_TOC_VERIFICATION_CONTRACT_PROMPT_JSON",
+      "_TOC_VERIFICATION_DIRECTOR_CHECKS",
+      "_TOC_VERIFICATION_INPUT_POLICY_VERSION",
+      "_TOC_VERIFICATION_LOW_CONFIDENCE_MIN_CHECKS",
+      "_TOC_VERIFICATION_LOW_CONFIDENCE_THRESHOLD",
+      "_TOC_VERIFICATION_MAX_CHECKS",
+      "_TOC_VERIFICATION_MAX_PAGE",
+      "_TOC_VERIFICATION_MAX_TOKENS",
+      "_TOC_VERIFICATION_OUTPUT_CONTRACT",
+      "_TOC_VERIFICATION_PAGE_CAPTURE_CHARACTERS",
+      "_TOC_VERIFICATION_PAGE_JSON_MAX_BYTES",
+      "_TOC_VERIFICATION_PAGE_PROMPT_CHARACTERS",
+      "_TOC_VERIFICATION_PATH_JSON_MAX_BYTES",
+      "_TOC_VERIFICATION_PATH_MAX_CHARACTERS",
+      "_TOC_VERIFICATION_PATH_TAIL_CHARACTERS",
+      "_TOC_VERIFICATION_PROMPT_VERSION",
+      "_TOC_VERIFICATION_QC_CHECKS",
+      "_TOC_VERIFICATION_QUICK_MATCH_MAX_WORDS",
+      "_TOC_VERIFICATION_QUICK_MATCH_MIN_WORD_CHARACTERS",
+      "_TOC_VERIFICATION_QUICK_MATCH_POLICY_VERSION",
+      "_TOC_VERIFICATION_SELECTION_POLICY_VERSION",
+      "_TOC_VERIFICATION_SOURCE_JSON_MAX_BYTES",
+      "_TOC_VERIFICATION_TEXT_ITEM_SCAN_CHARACTERS",
+      "_TOC_VERIFICATION_TIMEOUT_SECONDS",
+      "_TOC_VERIFICATION_TITLE_JSON_MAX_BYTES",
+      "_TOC_VERIFICATION_TITLE_MAX_CHARACTERS",
+      "_TOC_VERIFICATION_UNICODE_DATA_VERSION",
+      "_TOC_VERIFICATION_UNICODE_VERSION_PARTS",
       "_UNSUPPORTED_API_EMBEDDING_MODEL_PREFIXES",
       "_VERIFY_PROMPT",
       "_VOYAGE_EMBEDDINGS_URL",
@@ -13360,6 +13658,10 @@
       "_toc_layout_hint_prompt_value",
       "_toc_layout_prompt_json",
       "_toc_source_prompt_json",
+      "_toc_verification_bounded_string",
+      "_toc_verification_entry_prompt_data",
+      "_toc_verification_prompt_json",
+      "_toc_verification_source_json",
       "_toc_visual_subrows",
       "_try_vector_file_lock",
       "_unified_export_complete",
@@ -13433,6 +13735,7 @@
       "subprocess",
       "sys",
       "time",
+      "unicodedata",
       "uuid4"
     ],
     "import_star": {
@@ -13555,6 +13858,7 @@
         "subprocess",
         "sys",
         "time",
+        "unicodedata",
         "uuid4"
       ],
       "uses_explicit_all": false
@@ -13672,311 +13976,317 @@
         "source": "time"
       },
       {
+        "binding": "unicodedata",
+        "kind": "import",
+        "line": 34,
+        "source": "unicodedata"
+      },
+      {
         "binding": "dataclass",
         "imported": "dataclass",
         "kind": "from_import",
-        "line": 34,
+        "line": 35,
         "source": "dataclasses"
       },
       {
         "binding": "field",
         "imported": "field",
         "kind": "from_import",
-        "line": 34,
+        "line": 35,
         "source": "dataclasses"
       },
       {
         "binding": "Path",
         "imported": "Path",
         "kind": "from_import",
-        "line": 35,
+        "line": 36,
         "source": "pathlib"
       },
       {
         "binding": "Any",
         "imported": "Any",
         "kind": "from_import",
-        "line": 36,
+        "line": 37,
         "source": "typing"
       },
       {
         "binding": "Callable",
         "imported": "Callable",
         "kind": "from_import",
-        "line": 36,
+        "line": 37,
         "source": "typing"
       },
       {
         "binding": "Optional",
         "imported": "Optional",
         "kind": "from_import",
-        "line": 36,
+        "line": 37,
         "source": "typing"
       },
       {
         "binding": "TypedDict",
         "imported": "TypedDict",
         "kind": "from_import",
-        "line": 36,
+        "line": 37,
         "source": "typing"
       },
       {
         "binding": "UUID",
         "imported": "UUID",
         "kind": "from_import",
-        "line": 37,
+        "line": 38,
         "source": "uuid"
       },
       {
         "binding": "uuid4",
         "imported": "uuid4",
         "kind": "from_import",
-        "line": 37,
+        "line": 38,
         "source": "uuid"
       },
       {
         "binding": "_artifact_io",
         "kind": "import",
-        "line": 39,
+        "line": 40,
         "source": "artifact_io"
       },
       {
         "binding": "_chunking_core",
         "kind": "import",
-        "line": 40,
+        "line": 41,
         "source": "chunking_core"
       },
       {
         "binding": "_cli_policy",
         "kind": "import",
-        "line": 41,
+        "line": 42,
         "source": "cli_policy"
       },
       {
         "binding": "_document_profiles",
         "kind": "import",
-        "line": 42,
+        "line": 43,
         "source": "document_profiles"
       },
       {
         "binding": "_embedding_policy",
         "kind": "import",
-        "line": 43,
+        "line": 44,
         "source": "embedding_policy"
       },
       {
         "binding": "_endpoint_policy",
         "kind": "import",
-        "line": 44,
+        "line": 45,
         "source": "endpoint_policy"
       },
       {
         "binding": "_ingestion_core",
         "kind": "import",
-        "line": 45,
+        "line": 46,
         "source": "ingestion_core"
       },
       {
         "binding": "_index_state",
         "kind": "import",
-        "line": 46,
+        "line": 47,
         "source": "index_state"
       },
       {
         "binding": "_job_application",
         "kind": "import",
-        "line": 47,
+        "line": 48,
         "source": "job_application"
       },
       {
         "binding": "_job_runtime",
         "kind": "import",
-        "line": 48,
+        "line": 49,
         "source": "job_runtime"
       },
       {
         "binding": "_llm_adapters",
         "kind": "import",
-        "line": 49,
+        "line": 50,
         "source": "llm_adapters"
       },
       {
         "binding": "_llm_output_contracts",
         "kind": "import",
-        "line": 50,
+        "line": 51,
         "source": "llm_output_contracts"
       },
       {
         "binding": "_model_artifacts",
         "kind": "import",
-        "line": 51,
+        "line": 52,
         "source": "model_artifacts"
       },
       {
         "binding": "_operation_contracts",
         "kind": "import",
-        "line": 52,
+        "line": 53,
         "source": "operation_contracts"
       },
       {
         "binding": "_operational_metrics",
         "kind": "import",
-        "line": 53,
+        "line": 54,
         "source": "operational_metrics"
       },
       {
         "binding": "_process_supervision",
         "kind": "import",
-        "line": 54,
+        "line": 55,
         "source": "process_supervision"
       },
       {
         "binding": "_provider_transport",
         "kind": "import",
-        "line": 55,
+        "line": 56,
         "source": "provider_transport"
       },
       {
         "binding": "_quality_core",
         "kind": "import",
-        "line": 56,
+        "line": 57,
         "source": "quality_core"
       },
       {
         "binding": "_release_security",
         "kind": "import",
-        "line": 57,
+        "line": 58,
         "source": "release_security"
       },
       {
         "binding": "_resource_lease",
         "kind": "import",
-        "line": 58,
+        "line": 59,
         "source": "resource_lease"
       },
       {
         "binding": "_retention",
         "kind": "import",
-        "line": 59,
+        "line": 60,
         "source": "retention"
       },
       {
         "binding": "_retrieval_core",
         "kind": "import",
-        "line": 60,
+        "line": 61,
         "source": "retrieval_core"
       },
       {
         "binding": "_run_telemetry",
         "kind": "import",
-        "line": 61,
+        "line": 62,
         "source": "run_telemetry"
       },
       {
         "binding": "_runtime_supervision",
         "kind": "import",
-        "line": 62,
+        "line": 63,
         "source": "runtime_supervision"
       },
       {
         "binding": "_storage_policy",
         "kind": "import",
-        "line": 63,
+        "line": 64,
         "source": "storage_policy"
       },
       {
         "binding": "_table_retrieval_core",
         "kind": "import",
-        "line": 64,
+        "line": 65,
         "source": "table_retrieval_core"
       },
       {
         "binding": "_vector_lifecycle",
         "kind": "import",
-        "line": 65,
+        "line": 66,
         "source": "vector_lifecycle"
       },
       {
         "binding": "LLMBudgetExceeded",
         "imported": "LLMBudgetExceeded",
         "kind": "from_import",
-        "line": 67,
+        "line": 68,
         "source": "llm_runtime"
       },
       {
         "binding": "LLMExecutionError",
         "imported": "LLMExecutionError",
         "kind": "from_import",
-        "line": 67,
+        "line": 68,
         "source": "llm_runtime"
       },
       {
         "binding": "LLMRequest",
         "imported": "LLMRequest",
         "kind": "from_import",
-        "line": 67,
+        "line": 68,
         "source": "llm_runtime"
       },
       {
         "binding": "LLMResult",
         "imported": "LLMResult",
         "kind": "from_import",
-        "line": 67,
+        "line": 68,
         "source": "llm_runtime"
       },
       {
         "binding": "LLMRuntime",
         "imported": "LLMRuntime",
         "kind": "from_import",
-        "line": 67,
+        "line": 68,
         "source": "llm_runtime"
       },
       {
         "binding": "LLMRuntimeConfig",
         "imported": "LLMRuntimeConfig",
         "kind": "from_import",
-        "line": 67,
+        "line": 68,
         "source": "llm_runtime"
       },
       {
         "binding": "ProviderCallError",
         "imported": "ProviderCallError",
         "kind": "from_import",
-        "line": 67,
+        "line": 68,
         "source": "llm_runtime"
       },
       {
         "binding": "ProviderResponse",
         "imported": "ProviderResponse",
         "kind": "from_import",
-        "line": 67,
+        "line": 68,
         "source": "llm_runtime"
       },
       {
         "binding": "ProviderSpec",
         "imported": "ProviderSpec",
         "kind": "from_import",
-        "line": 67,
+        "line": 68,
         "source": "llm_runtime"
       }
     ],
     "initializer_bindings": [
       {
-        "assignment_line": 1577,
+        "assignment_line": 1615,
         "initializer": "_sync_vector_store_lock_facades",
-        "line": 1584,
+        "line": 1622,
         "name": "_vector_store_lock_local"
       },
       {
-        "assignment_line": 1577,
+        "assignment_line": 1615,
         "initializer": "_sync_vector_store_lock_facades",
-        "line": 1584,
+        "line": 1622,
         "name": "_vector_store_lock_states"
       },
       {
-        "assignment_line": 1577,
+        "assignment_line": 1615,
         "initializer": "_sync_vector_store_lock_facades",
-        "line": 1584,
+        "line": 1622,
         "name": "_vector_store_lock_states_guard"
       }
     ],
@@ -13985,525 +14295,469 @@
         "kind": "function",
         "name": "_structure_profile_parameters_binding",
         "span": [
-          123,
-          134
+          124,
+          135
         ]
       },
       {
         "kind": "function",
         "name": "_model_artifact_lock_sha256",
         "span": [
-          175,
-          177
+          176,
+          178
         ]
       },
       {
         "kind": "function",
         "name": "_model_download_transport",
         "span": [
-          180,
-          189
+          181,
+          190
         ]
       },
       {
         "kind": "function",
         "name": "_model_loader_source",
         "span": [
-          192,
-          241
+          193,
+          242
         ]
       },
       {
         "kind": "class",
         "name": "PipelinePaths",
         "span": [
-          244,
-          256
+          245,
+          257
         ]
       },
       {
         "kind": "class",
         "name": "VectorStoreBusyError",
         "span": [
-          259,
-          260
+          260,
+          261
         ]
       },
       {
         "kind": "function",
         "name": "_is_deepseek_cloud",
         "span": [
-          378,
-          381
+          416,
+          419
         ]
       },
       {
         "kind": "function",
         "name": "_is_minimax_cloud",
         "span": [
-          384,
-          387
+          422,
+          425
         ]
       },
       {
         "kind": "function",
         "name": "_effective_chunk_token_limit",
         "span": [
-          390,
-          419
+          428,
+          457
         ]
       },
       {
         "kind": "function",
         "name": "_embedding_text",
         "span": [
-          422,
-          432
+          460,
+          470
         ]
       },
       {
         "kind": "function",
         "name": "_embedding_task_prefix",
         "span": [
-          435,
-          443
+          473,
+          481
         ]
       },
       {
         "kind": "function",
         "name": "_prepare_embedding_inputs",
         "span": [
-          446,
-          453
+          484,
+          491
         ]
       },
       {
         "kind": "function",
         "name": "_conservative_token_estimate",
         "span": [
-          456,
-          460
+          494,
+          498
         ]
       },
       {
         "kind": "function",
         "name": "_count_embedding_text_tokens",
         "span": [
-          463,
-          494
+          501,
+          532
         ]
       },
       {
         "kind": "function",
         "name": "_validate_embedding_token_counts",
         "span": [
-          497,
-          545
+          535,
+          583
         ]
       },
       {
         "kind": "function",
         "name": "_batch_index_records",
         "span": [
-          548,
-          582
+          586,
+          620
         ]
       },
       {
         "kind": "function",
         "name": "_pdf_ingestion_thresholds",
         "span": [
-          585,
-          594
+          623,
+          632
         ]
       },
       {
         "kind": "function",
         "name": "_pdf_page_text_is_usable",
         "span": [
-          597,
-          600
+          635,
+          638
         ]
       },
       {
         "kind": "function",
         "name": "_pdf_text_layer_is_usable",
         "span": [
-          603,
-          610
+          641,
+          648
         ]
       },
       {
         "kind": "function",
         "name": "_require_file",
         "span": [
-          623,
-          631
+          661,
+          669
         ]
       },
       {
         "kind": "function",
         "name": "_compile_watermark",
         "span": [
-          634,
-          638
+          672,
+          676
         ]
       },
       {
         "kind": "function",
         "name": "strip_watermark",
         "span": [
-          641,
-          645
+          679,
+          683
         ]
       },
       {
         "kind": "function",
         "name": "_validate_api_key",
         "span": [
-          648,
-          667
+          686,
+          705
         ]
       },
       {
         "kind": "function",
         "name": "_validated_embedding_vectors",
         "span": [
-          670,
-          698
+          708,
+          736
         ]
       },
       {
         "kind": "function",
         "name": "_data_embedding_vectors",
         "span": [
-          701,
-          722
+          739,
+          760
         ]
       },
       {
         "kind": "function",
         "name": "_get_embedding_fn",
         "span": [
-          725,
-          963
+          763,
+          1001
         ]
       },
       {
         "kind": "function",
         "name": "_output_paths_for_name",
         "span": [
-          966,
-          981
+          1004,
+          1019
         ]
       },
       {
         "kind": "function",
         "name": "_output_run_number",
         "span": [
-          984,
-          995
+          1022,
+          1033
         ]
       },
       {
         "kind": "function",
         "name": "_existing_output_runs",
         "span": [
-          998,
-          1017
+          1036,
+          1055
         ]
       },
       {
         "kind": "function",
         "name": "_derive_output_paths",
         "span": [
-          1020,
-          1031
+          1058,
+          1069
         ]
       },
       {
         "kind": "function",
         "name": "_derive_output_paths_existing",
         "span": [
-          1034,
-          1050
+          1072,
+          1088
         ]
       },
       {
         "kind": "function",
         "name": "_derive_output_paths_exact",
         "span": [
-          1053,
-          1069
+          1091,
+          1107
         ]
       },
       {
         "kind": "function",
         "name": "_file_exists_nonempty",
         "span": [
-          1072,
-          1080
+          1110,
+          1118
         ]
       },
       {
         "kind": "function",
         "name": "_json_file_is_valid",
         "span": [
-          1083,
-          1091
+          1121,
+          1129
         ]
       },
       {
         "kind": "function",
         "name": "_chroma_settings_kwargs",
         "span": [
-          1094,
-          1107
+          1132,
+          1145
         ]
       },
       {
         "kind": "function",
         "name": "_chunk_record_count",
         "span": [
-          1110,
-          1133
+          1148,
+          1171
         ]
       },
       {
         "kind": "function",
         "name": "_index_collection_count_impl",
         "span": [
-          1136,
-          1182
+          1174,
+          1220
         ]
       },
       {
         "kind": "function",
         "name": "_index_collection_count",
         "span": [
-          1185,
-          1205
+          1223,
+          1243
         ]
       },
       {
         "kind": "function",
         "name": "_index_has_data",
         "span": [
-          1208,
-          1218
+          1246,
+          1256
         ]
       },
       {
         "kind": "function",
         "name": "_provider_cli_defaults",
         "span": [
-          1221,
-          1231
+          1259,
+          1269
         ]
       },
       {
         "kind": "function",
         "name": "_resume_command_defaults",
         "span": [
-          1234,
-          1252
+          1272,
+          1290
         ]
       },
       {
         "kind": "function",
         "name": "_build_resume_cmd",
         "span": [
-          1255,
-          1258
+          1293,
+          1296
         ]
       },
       {
         "kind": "function",
         "name": "_load_jsonl",
         "span": [
-          1261,
-          1286
+          1299,
+          1324
         ]
       },
       {
         "kind": "function",
         "name": "_parse_index_records_strict",
         "span": [
-          1295,
-          1298
+          1333,
+          1336
         ]
       },
       {
         "kind": "function",
         "name": "_quality_report_required",
         "span": [
-          1301,
-          1310
+          1339,
+          1348
         ]
       },
       {
         "kind": "function",
         "name": "_load_index_chunk_completion_inputs",
         "span": [
-          1313,
-          1386
+          1351,
+          1424
         ]
       },
       {
         "kind": "function",
         "name": "_validated_quality_report_binding",
         "span": [
-          1389,
-          1444
+          1427,
+          1482
         ]
       },
       {
         "kind": "function",
         "name": "_load_index_snapshot_with_quality",
         "span": [
-          1447,
-          1464
+          1485,
+          1502
         ]
       },
       {
         "kind": "function",
         "name": "_load_index_snapshot_strict",
         "span": [
-          1467,
-          1473
+          1505,
+          1511
         ]
       },
       {
         "kind": "function",
         "name": "_load_index_records_strict",
         "span": [
-          1476,
-          1484
+          1514,
+          1522
         ]
       },
       {
         "kind": "class",
         "name": "_IndexOperationalTracker",
         "span": [
-          1487,
-          1526
+          1525,
+          1564
         ]
       },
       {
         "kind": "function",
         "name": "_put_unless_worker_failed",
         "span": [
-          1529,
-          1537
+          1567,
+          1575
         ]
       },
       {
         "kind": "function",
         "name": "_log_cleanup_error",
         "span": [
-          1540,
-          1553
+          1578,
+          1591
         ]
       },
       {
         "kind": "function",
         "name": "_observe_failed_index_operation",
         "span": [
-          1556,
-          1567
+          1594,
+          1605
         ]
       },
       {
         "kind": "function",
         "name": "_sync_vector_store_lock_facades",
         "span": [
-          1573,
-          1581
+          1611,
+          1619
         ]
       },
       {
         "kind": "function",
         "name": "_reset_rag_caches_after_fork",
         "span": [
-          1587,
-          1603
+          1625,
+          1641
         ]
       },
       {
         "kind": "function",
         "name": "_reset_vector_store_locks_after_fork",
         "span": [
-          1606,
-          1609
+          1644,
+          1647
         ]
       },
       {
         "kind": "function",
         "name": "_normalize_db_lock_timeout",
         "span": [
-          1617,
-          1619
-        ]
-      },
-      {
-        "kind": "function",
-        "name": "_strip_windows_extended_path_prefix",
-        "span": [
-          1622,
-          1624
-        ]
-      },
-      {
-        "kind": "function",
-        "name": "_resolved_vector_store_path",
-        "span": [
-          1627,
-          1629
-        ]
-      },
-      {
-        "kind": "function",
-        "name": "_vector_store_lock_identity",
-        "span": [
-          1632,
-          1635
-        ]
-      },
-      {
-        "kind": "function",
-        "name": "_canonical_vector_store_key",
-        "span": [
-          1638,
-          1640
-        ]
-      },
-      {
-        "kind": "function",
-        "name": "_vector_store_lock_directory",
-        "span": [
-          1643,
-          1645
-        ]
-      },
-      {
-        "kind": "function",
-        "name": "_vector_store_lock_path",
-        "span": [
-          1648,
-          1653
-        ]
-      },
-      {
-        "kind": "function",
-        "name": "_vector_store_lock_state",
-        "span": [
-          1656,
+          1655,
           1657
         ]
       },
       {
         "kind": "function",
-        "name": "_try_vector_file_lock",
+        "name": "_strip_windows_extended_path_prefix",
         "span": [
           1660,
           1662
@@ -14511,7 +14765,7 @@
       },
       {
         "kind": "function",
-        "name": "_unlock_vector_file",
+        "name": "_resolved_vector_store_path",
         "span": [
           1665,
           1667
@@ -14519,1946 +14773,2034 @@
       },
       {
         "kind": "function",
-        "name": "_finish_vector_file_lock",
+        "name": "_vector_store_lock_identity",
         "span": [
           1670,
-          1681
+          1673
+        ]
+      },
+      {
+        "kind": "function",
+        "name": "_canonical_vector_store_key",
+        "span": [
+          1676,
+          1678
+        ]
+      },
+      {
+        "kind": "function",
+        "name": "_vector_store_lock_directory",
+        "span": [
+          1681,
+          1683
+        ]
+      },
+      {
+        "kind": "function",
+        "name": "_vector_store_lock_path",
+        "span": [
+          1686,
+          1691
+        ]
+      },
+      {
+        "kind": "function",
+        "name": "_vector_store_lock_state",
+        "span": [
+          1694,
+          1695
+        ]
+      },
+      {
+        "kind": "function",
+        "name": "_try_vector_file_lock",
+        "span": [
+          1698,
+          1700
+        ]
+      },
+      {
+        "kind": "function",
+        "name": "_unlock_vector_file",
+        "span": [
+          1703,
+          1705
+        ]
+      },
+      {
+        "kind": "function",
+        "name": "_finish_vector_file_lock",
+        "span": [
+          1708,
+          1719
         ]
       },
       {
         "kind": "class",
         "name": "_VectorStoreLease",
         "span": [
-          1684,
-          1714
+          1722,
+          1752
         ]
       },
       {
         "kind": "function",
         "name": "_vector_store_lock",
         "span": [
-          1717,
-          1726
+          1755,
+          1764
         ]
       },
       {
         "kind": "function",
         "name": "_pipeline_job_lock",
         "span": [
-          1729,
-          1742
+          1767,
+          1780
         ]
       },
       {
         "kind": "function",
         "name": "_conversion_output_lease",
         "span": [
-          1745,
-          1764
+          1783,
+          1802
         ]
       },
       {
         "kind": "function",
         "name": "_chunk_output_lease",
         "span": [
-          1767,
-          1792
+          1805,
+          1830
         ]
       },
       {
         "kind": "function",
         "name": "_finish_executor_progress",
         "span": [
-          1795,
-          1836
+          1833,
+          1874
         ]
       },
       {
         "kind": "function",
         "name": "_finish_vector_client",
         "span": [
-          1839,
-          1871
+          1877,
+          1909
         ]
       },
       {
         "kind": "class",
         "name": "_VectorClientOwner",
         "span": [
-          1874,
-          1929
+          1912,
+          1967
         ]
       },
       {
         "kind": "function",
         "name": "_finish_queue_worker",
         "span": [
-          1932,
-          1996
+          1970,
+          2034
         ]
       },
       {
         "kind": "function",
         "name": "_decode_pua",
         "span": [
-          2004,
-          2008
+          2042,
+          2046
         ]
       },
       {
         "kind": "class",
         "name": "_AgentTeam",
         "span": [
-          2033,
-          2334
+          2071,
+          2372
         ]
       },
       {
         "kind": "function",
         "name": "_identify_book_sections",
         "span": [
-          2341,
-          2531
+          2379,
+          2569
         ]
       },
       {
         "kind": "function",
         "name": "_calculate_page_delta",
         "span": [
-          2534,
-          2603
+          2572,
+          2641
         ]
       },
       {
         "kind": "function",
         "name": "_toc_source_prompt_json",
         "span": [
-          2606,
-          2659
+          2644,
+          2697
         ]
       },
       {
         "kind": "function",
         "name": "_toc_layout_hint_prompt_value",
         "span": [
-          2662,
-          2688
+          2700,
+          2726
         ]
       },
       {
         "kind": "function",
         "name": "_toc_layout_prompt_json",
         "span": [
-          2691,
-          2759
+          2729,
+          2797
         ]
       },
       {
         "kind": "function",
         "name": "_analyze_toc_layout",
         "span": [
-          2804,
-          2858
+          2842,
+          2896
+        ]
+      },
+      {
+        "kind": "function",
+        "name": "_toc_verification_bounded_string",
+        "span": [
+          2921,
+          2971
+        ]
+      },
+      {
+        "kind": "function",
+        "name": "_toc_verification_entry_prompt_data",
+        "span": [
+          2974,
+          3009
+        ]
+      },
+      {
+        "kind": "function",
+        "name": "_toc_verification_source_json",
+        "span": [
+          3012,
+          3036
+        ]
+      },
+      {
+        "kind": "function",
+        "name": "_toc_verification_prompt_json",
+        "span": [
+          3039,
+          3042
         ]
       },
       {
         "kind": "function",
         "name": "_verify_scaffold_against_pages",
         "span": [
-          2889,
-          3031
+          3045,
+          3253
         ]
       },
       {
         "kind": "function",
         "name": "_build_scaffold",
         "span": [
-          3034,
-          3334
+          3256,
+          3573
         ]
       },
       {
         "kind": "function",
         "name": "_llm_parse_scaffold",
         "span": [
-          3337,
-          3429
+          3576,
+          3668
         ]
       },
       {
         "kind": "function",
         "name": "_toc_visual_subrows",
         "span": [
-          3432,
-          3487
+          3671,
+          3726
         ]
       },
       {
         "kind": "function",
         "name": "_parse_toc_tables",
         "span": [
-          3490,
-          3746
+          3729,
+          3985
         ]
       },
       {
         "kind": "function",
         "name": "_merge_page_numbers",
         "span": [
-          3749,
-          3765
+          3988,
+          4004
         ]
       },
       {
         "kind": "function",
         "name": "_build_scaffold_lookup",
         "span": [
-          3768,
-          3809
+          4007,
+          4048
         ]
       },
       {
         "kind": "function",
         "name": "_canonical_chapter_titles",
         "span": [
-          3812,
-          3869
+          4051,
+          4108
         ]
       },
       {
         "kind": "function",
         "name": "_normalize_scaffold_metadata",
         "span": [
-          3872,
-          3893
+          4111,
+          4132
         ]
       },
       {
         "kind": "function",
         "name": "_validate_against_scaffold",
         "span": [
-          3900,
-          4005
+          4139,
+          4244
         ]
       },
       {
         "kind": "function",
         "name": "_build_chapter_map",
         "span": [
-          4008,
-          4037
+          4247,
+          4276
         ]
       },
       {
         "kind": "function",
         "name": "_build_chapter_map_from_document",
         "span": [
-          4040,
-          4135
+          4279,
+          4374
         ]
       },
       {
         "kind": "function",
         "name": "_build_toc_hierarchy",
         "span": [
-          4138,
-          4225
+          4377,
+          4464
         ]
       },
       {
         "kind": "function",
         "name": "_llm_parse_toc",
         "span": [
-          4249,
-          4324
+          4488,
+          4563
         ]
       },
       {
         "kind": "function",
         "name": "_build_section_lookup",
         "span": [
-          4327,
-          4398
+          4566,
+          4637
         ]
       },
       {
         "kind": "function",
         "name": "_assign_chapter_by_page",
         "span": [
-          4401,
-          4413
+          4640,
+          4652
         ]
       },
       {
         "kind": "function",
         "name": "_page_count",
         "span": [
-          4416,
-          4422
+          4655,
+          4661
         ]
       },
       {
         "kind": "function",
         "name": "_provider_token_count",
         "span": [
-          4433,
-          4436
+          4672,
+          4675
         ]
       },
       {
         "kind": "function",
         "name": "_provider_call_error",
         "span": [
-          4442,
-          4446
+          4681,
+          4685
         ]
       },
       {
         "kind": "function",
         "name": "_post_loopback_without_environment",
         "span": [
-          4449,
-          4462
+          4688,
+          4701
         ]
       },
       {
         "kind": "function",
         "name": "_effective_security_policy",
         "span": [
-          4468,
-          4476
+          4707,
+          4715
         ]
       },
       {
         "kind": "function",
         "name": "_post_cloud_with_policy",
         "span": [
-          4479,
-          4495
+          4718,
+          4734
         ]
       },
       {
         "kind": "function",
         "name": "_require_no_cloud_redirect",
         "span": [
-          4498,
-          4501
+          4737,
+          4740
         ]
       },
       {
         "kind": "function",
         "name": "_read_provider_json_response",
         "span": [
-          4504,
-          4518
+          4743,
+          4757
         ]
       },
       {
         "kind": "function",
         "name": "_require_endpoint_egress",
         "span": [
-          4521,
-          4532
+          4760,
+          4771
         ]
       },
       {
         "kind": "function",
         "name": "_call_ollama_result",
         "span": [
-          4535,
-          4558
+          4774,
+          4797
         ]
       },
       {
         "kind": "function",
         "name": "_call_ollama",
         "span": [
-          4561,
-          4582
+          4800,
+          4821
         ]
       },
       {
         "kind": "function",
         "name": "_gemini_content_filtered",
         "span": [
-          4591,
-          4593
+          4830,
+          4832
         ]
       },
       {
         "kind": "function",
         "name": "_load_gemini_client",
         "span": [
-          4596,
-          4652
+          4835,
+          4891
         ]
       },
       {
         "kind": "function",
         "name": "_call_gemini_result",
         "span": [
-          4655,
-          4678
+          4894,
+          4917
         ]
       },
       {
         "kind": "function",
         "name": "_call_gemini",
         "span": [
-          4681,
-          4703
+          4920,
+          4942
         ]
       },
       {
         "kind": "function",
         "name": "_get_throttle",
         "span": [
-          4716,
-          4724
+          4955,
+          4963
         ]
       },
       {
         "kind": "function",
         "name": "_call_openai_compatible_result",
         "span": [
-          4730,
-          4763
+          4969,
+          5002
         ]
       },
       {
         "kind": "function",
         "name": "_call_openai_compatible",
         "span": [
-          4766,
-          4791
+          5005,
+          5030
         ]
       },
       {
         "kind": "function",
         "name": "_call_llm_result",
         "span": [
-          4797,
-          4925
+          5036,
+          5164
         ]
       },
       {
         "kind": "function",
         "name": "_call_llm",
         "span": [
-          4928,
-          4959
+          5167,
+          5198
         ]
       },
       {
         "kind": "function",
         "name": "_llm_classify",
         "span": [
-          5002,
-          5041
+          5241,
+          5280
         ]
       },
       {
         "kind": "function",
         "name": "_zeroshot_classify",
         "span": [
-          5049,
-          5091
+          5288,
+          5330
         ]
       },
       {
         "kind": "function",
         "name": "_generate_context",
         "span": [
-          5106,
-          5137
+          5345,
+          5376
         ]
       },
       {
         "kind": "function",
         "name": "_reranker_document",
         "span": [
-          5154,
-          5174
+          5393,
+          5413
         ]
       },
       {
         "kind": "function",
         "name": "_get_reranker",
         "span": [
-          5177,
-          5198
+          5416,
+          5437
         ]
       },
       {
         "kind": "function",
         "name": "_validated_reranker_rows",
         "span": [
-          5201,
-          5231
+          5440,
+          5470
         ]
       },
       {
         "kind": "function",
         "name": "_rerank",
         "span": [
-          5234,
-          5336
+          5473,
+          5575
         ]
       },
       {
         "kind": "function",
         "name": "_normalize_text",
         "span": [
-          5339,
-          5349
+          5578,
+          5588
         ]
       },
       {
         "kind": "function",
         "name": "_strip_headers_footers",
         "span": [
-          5352,
-          5360
+          5591,
+          5599
         ]
       },
       {
         "kind": "function",
         "name": "_dedup_nearby_lines",
         "span": [
-          5363,
-          5365
+          5602,
+          5604
         ]
       },
       {
         "kind": "function",
         "name": "_deduplicate_chunks",
         "span": [
-          5390,
-          5437
+          5629,
+          5676
         ]
       },
       {
         "kind": "function",
         "name": "_inspect_page_background_images",
         "span": [
-          5447,
-          5452
+          5686,
+          5691
         ]
       },
       {
         "kind": "function",
         "name": "_page_background_images",
         "span": [
-          5455,
-          5463
+          5694,
+          5702
         ]
       },
       {
         "kind": "function",
         "name": "_analyze_pdf_images",
         "span": [
-          5466,
-          5489
+          5705,
+          5728
         ]
       },
       {
         "kind": "function",
         "name": "preprocess_pdf",
         "span": [
-          5492,
-          5645
+          5731,
+          5884
         ]
       },
       {
         "kind": "function",
         "name": "_detect_gpu",
         "span": [
-          5652,
-          5689
+          5891,
+          5928
         ]
       },
       {
         "kind": "function",
         "name": "_conversion_parameters",
         "span": [
-          5692,
-          5704
+          5931,
+          5943
         ]
       },
       {
         "kind": "function",
         "name": "_pin_docling_layout_revision",
         "span": [
-          5707,
-          5718
+          5946,
+          5957
         ]
       },
       {
         "kind": "function",
         "name": "_configure_docling_model_artifacts",
         "span": [
-          5721,
-          5766
+          5960,
+          6005
         ]
       },
       {
         "kind": "function",
         "name": "_converted_outputs_complete",
         "span": [
-          5769,
-          5786
+          6008,
+          6025
         ]
       },
       {
         "kind": "function",
         "name": "_converted_outputs_complete_locked",
         "span": [
-          5789,
-          5844
+          6028,
+          6083
         ]
       },
       {
         "kind": "function",
         "name": "convert_pdf",
         "span": [
-          5847,
-          5883
+          6086,
+          6122
         ]
       },
       {
         "kind": "function",
         "name": "_convert_pdf_locked",
         "span": [
-          5886,
-          5986
+          6125,
+          6225
         ]
       },
       {
         "kind": "function",
         "name": "_convert_pdf_generation",
         "span": [
-          5989,
-          6216
+          6228,
+          6455
         ]
       },
       {
         "kind": "function",
         "name": "classify_content_type",
         "span": [
-          6266,
-          6289
+          6505,
+          6528
         ]
       },
       {
         "kind": "function",
         "name": "enrich_chunk",
         "span": [
-          6301,
-          6434
+          6540,
+          6673
         ]
       },
       {
         "kind": "function",
         "name": "_chunk_heading_key",
         "span": [
-          6437,
-          6443
+          6676,
+          6682
         ]
       },
       {
         "kind": "function",
         "name": "_merge_enriched_chunk_group",
         "span": [
-          6446,
-          6503
+          6685,
+          6742
         ]
       },
       {
         "kind": "function",
         "name": "_coalesce_chunk_boundaries",
         "span": [
-          6506,
-          6653
+          6745,
+          6892
         ]
       },
       {
         "kind": "function",
         "name": "_validate_chunk_structure_for_publication",
         "span": [
-          6656,
-          6803
+          6895,
+          7042
         ]
       },
       {
         "kind": "function",
         "name": "_split_markdown_table_by_rows",
         "span": [
-          6806,
-          6838
+          7045,
+          7077
         ]
       },
       {
         "kind": "function",
         "name": "_doc_item_label",
         "span": [
-          6841,
-          6844
+          7080,
+          7083
         ]
       },
       {
         "kind": "function",
         "name": "_docling_lineage_catalog",
         "span": [
-          6847,
-          6879
+          7086,
+          7118
         ]
       },
       {
         "kind": "function",
         "name": "_finite_source_coordinate",
         "span": [
-          6882,
-          6889
+          7121,
+          7128
         ]
       },
       {
         "kind": "function",
         "name": "_source_lineage_for_items",
         "span": [
-          6892,
-          6941
+          7131,
+          7180
         ]
       },
       {
         "kind": "class",
         "name": "ConversionInputBinding",
         "span": [
-          6944,
-          6951
+          7183,
+          7190
         ]
       },
       {
         "kind": "class",
         "name": "ConversionSourceBinding",
         "span": [
-          6954,
-          6968
+          7193,
+          7207
         ]
       },
       {
         "kind": "class",
         "name": "TableRecoverySource",
         "span": [
-          6971,
-          6994
+          7210,
+          7233
         ]
       },
       {
         "kind": "function",
         "name": "_strict_json_object",
         "span": [
-          6997,
-          7020
+          7236,
+          7259
         ]
       },
       {
         "kind": "function",
         "name": "_valid_manifest_file_record",
         "span": [
-          7023,
-          7035
+          7262,
+          7274
         ]
       },
       {
         "kind": "function",
         "name": "_load_conversion_source_binding",
         "span": [
-          7038,
-          7142
+          7277,
+          7381
         ]
       },
       {
         "kind": "function",
         "name": "_conversion_source_identity",
         "span": [
-          7145,
-          7157
+          7384,
+          7396
         ]
       },
       {
         "kind": "function",
         "name": "_find_docling_source_pdf",
         "span": [
-          7160,
-          7187
+          7399,
+          7426
         ]
       },
       {
         "kind": "function",
         "name": "_open_docling_source_pdf_snapshot",
         "span": [
-          7190,
-          7224
+          7429,
+          7463
         ]
       },
       {
         "kind": "class",
         "name": "_SourceOutputAliasError",
         "span": [
-          7227,
-          7228
+          7466,
+          7467
         ]
       },
       {
         "kind": "function",
         "name": "_recover_bound_table_markdown",
         "span": [
-          7231,
-          7267
+          7470,
+          7506
         ]
       },
       {
         "kind": "function",
         "name": "_markdown_table_cell",
         "span": [
-          7270,
-          7281
+          7509,
+          7520
         ]
       },
       {
         "kind": "function",
         "name": "_source_table_needs_recovery",
         "span": [
-          7284,
-          7319
+          7523,
+          7558
         ]
       },
       {
         "kind": "function",
         "name": "_prepend_source_table_captions",
         "span": [
-          7322,
-          7336
+          7561,
+          7575
         ]
       },
       {
         "kind": "function",
         "name": "_recover_incomplete_table_markdown",
         "span": [
-          7339,
-          7426
+          7578,
+          7665
         ]
       },
       {
         "kind": "function",
         "name": "_prepare_source_preserving_chunks",
         "span": [
-          7429,
-          7840
+          7668,
+          8079
         ]
       },
       {
         "kind": "function",
         "name": "_reconstruct_heading",
         "span": [
-          7855,
-          7893
+          8094,
+          8132
         ]
       },
       {
         "kind": "function",
         "name": "_endpoint_parameter_binding",
         "span": [
-          7896,
-          7905
+          8135,
+          8144
         ]
       },
       {
         "kind": "function",
         "name": "_chunk_parameters",
         "span": [
-          7908,
-          8029
+          8147,
+          8320
         ]
       },
       {
         "kind": "function",
         "name": "_book_structural_ranges",
         "span": [
-          8037,
-          8058
+          8328,
+          8349
         ]
       },
       {
         "kind": "function",
         "name": "_load_chunk_completion_inputs",
         "span": [
-          8061,
-          8187
+          8352,
+          8478
         ]
       },
       {
         "kind": "function",
         "name": "_chunks_complete",
         "span": [
-          8190,
-          8199
+          8481,
+          8490
         ]
       },
       {
         "kind": "function",
         "name": "_chunks_complete_locked",
         "span": [
-          8202,
-          8228
+          8493,
+          8519
         ]
       },
       {
         "kind": "function",
         "name": "_quality_report_complete",
         "span": [
-          8231,
-          8236
+          8522,
+          8527
         ]
       },
       {
         "kind": "function",
         "name": "_quality_report_complete_locked",
         "span": [
-          8239,
-          8280
+          8530,
+          8571
         ]
       },
       {
         "kind": "function",
         "name": "_recovered_table_refs_from_records",
         "span": [
-          8283,
-          8294
+          8574,
+          8585
         ]
       },
       {
         "kind": "function",
         "name": "_publish_corpus_quality_report",
         "span": [
-          8297,
-          8315
+          8588,
+          8606
         ]
       },
       {
         "kind": "function",
         "name": "_publish_corpus_quality_report_locked",
         "span": [
-          8318,
-          8426
+          8609,
+          8717
         ]
       },
       {
         "kind": "function",
         "name": "_load_docling_document_snapshot",
         "span": [
-          8429,
-          8451
+          8720,
+          8742
         ]
       },
       {
         "kind": "function",
         "name": "chunk_document",
         "span": [
-          8454,
-          8522
+          8745,
+          8813
         ]
       },
       {
         "kind": "function",
         "name": "_chunk_document_locked",
         "span": [
-          8525,
-          9400
+          8816,
+          9691
         ]
       },
       {
         "kind": "function",
         "name": "_prepare_chroma_batch",
         "span": [
-          9407,
-          9453
+          9698,
+          9744
         ]
       },
       {
         "kind": "function",
         "name": "_chroma_exact_count",
         "span": [
-          9456,
-          9464
+          9747,
+          9755
         ]
       },
       {
         "kind": "function",
         "name": "_chroma_mutation_batch_size",
         "span": [
-          9467,
-          9484
+          9758,
+          9775
         ]
       },
       {
         "kind": "function",
         "name": "_chroma_stable_id_rows",
         "span": [
-          9487,
-          9543
+          9778,
+          9834
         ]
       },
       {
         "kind": "function",
         "name": "_require_chroma_stable_ids",
         "span": [
-          9546,
-          9585
+          9837,
+          9876
         ]
       },
       {
         "kind": "function",
         "name": "_new_vector_update_lifecycle",
         "span": [
-          9588,
-          9641
+          9879,
+          9932
         ]
       },
       {
         "kind": "function",
         "name": "_index_chunks_chroma_impl",
         "span": [
-          9644,
-          9927
+          9935,
+          10218
         ]
       },
       {
         "kind": "function",
         "name": "index_chunks",
         "span": [
-          9930,
-          9970
+          10221,
+          10261
         ]
       },
       {
         "kind": "function",
         "name": "_load_hash_index",
         "span": [
-          10011,
-          10029
+          10302,
+          10320
         ]
       },
       {
         "kind": "function",
         "name": "_save_hash_index",
         "span": [
-          10032,
-          10034
+          10323,
+          10325
         ]
       },
       {
         "kind": "function",
         "name": "_atomic_write_text",
         "span": [
-          10037,
-          10041
+          10328,
+          10332
         ]
       },
       {
         "kind": "function",
         "name": "_immutable_file_snapshot",
         "span": [
-          10053,
-          10059
+          10344,
+          10350
         ]
       },
       {
         "kind": "function",
         "name": "_write_artifact_completion",
         "span": [
-          10062,
-          10075
+          10353,
+          10366
         ]
       },
       {
         "kind": "function",
         "name": "_fixed_artifacts_complete",
         "span": [
-          10078,
-          10089
+          10369,
+          10380
         ]
       },
       {
         "kind": "function",
         "name": "_atomic_write_json",
         "span": [
-          10092,
-          10096
+          10383,
+          10387
         ]
       },
       {
         "kind": "function",
         "name": "_atomic_write_jsonl",
         "span": [
-          10099,
-          10103
+          10390,
+          10394
         ]
       },
       {
         "kind": "function",
         "name": "_index_update_marker_path",
         "span": [
-          10109,
-          10114
+          10400,
+          10405
         ]
       },
       {
         "kind": "function",
         "name": "_qdrant_update_marker_path",
         "span": [
-          10117,
-          10122
+          10408,
+          10413
         ]
       },
       {
         "kind": "function",
         "name": "_chroma_update_marker_path",
         "span": [
-          10125,
-          10130
+          10416,
+          10421
         ]
       },
       {
         "kind": "function",
         "name": "_begin_index_update",
         "span": [
-          10133,
-          10146
+          10424,
+          10437
         ]
       },
       {
         "kind": "function",
         "name": "_index_update_marker_owned_by",
         "span": [
-          10149,
-          10157
+          10440,
+          10448
         ]
       },
       {
         "kind": "function",
         "name": "_begin_qdrant_index_update",
         "span": [
-          10160,
-          10170
+          10451,
+          10461
         ]
       },
       {
         "kind": "function",
         "name": "_begin_chroma_index_update",
         "span": [
-          10173,
-          10183
+          10464,
+          10474
         ]
       },
       {
         "kind": "function",
         "name": "_finish_index_update",
         "span": [
-          10186,
-          10193
+          10477,
+          10484
         ]
       },
       {
         "kind": "function",
         "name": "_load_index_manifest",
         "span": [
-          10196,
-          10202
+          10487,
+          10493
         ]
       },
       {
         "kind": "function",
         "name": "_index_manifest_mismatch",
         "span": [
-          10205,
-          10216
+          10496,
+          10507
         ]
       },
       {
         "kind": "function",
         "name": "_resolve_incremental_index_state",
         "span": [
-          10219,
-          10241
+          10510,
+          10532
         ]
       },
       {
         "kind": "function",
         "name": "_save_index_manifest",
         "span": [
-          10244,
-          10267
+          10535,
+          10558
         ]
       },
       {
         "kind": "function",
         "name": "_query_manifest_dimension_impl",
         "span": [
-          10270,
-          10292
+          10561,
+          10583
         ]
       },
       {
         "kind": "function",
         "name": "_query_manifest_dimension",
         "span": [
-          10295,
-          10306
+          10586,
+          10597
         ]
       },
       {
         "kind": "function",
         "name": "_indexed_table_child_count",
         "span": [
-          10309,
-          10321
+          10600,
+          10612
         ]
       },
       {
         "kind": "function",
         "name": "_cached_artifact_sha256",
         "span": [
-          10335,
-          10358
+          10626,
+          10649
         ]
       },
       {
         "kind": "function",
         "name": "_require_hybrid_chunks_snapshot",
         "span": [
-          10361,
-          10370
+          10652,
+          10661
         ]
       },
       {
         "kind": "function",
         "name": "_embedding_dimension",
         "span": [
-          10377,
-          10389
+          10668,
+          10680
         ]
       },
       {
         "kind": "function",
         "name": "_qdrant_exact_count",
         "span": [
-          10392,
-          10401
+          10683,
+          10692
         ]
       },
       {
         "kind": "function",
         "name": "_require_qdrant_update_completed",
         "span": [
-          10404,
-          10410
+          10695,
+          10701
         ]
       },
       {
         "kind": "function",
         "name": "_qdrant_id_key",
         "span": [
-          10413,
-          10438
+          10704,
+          10729
         ]
       },
       {
         "kind": "function",
         "name": "_qdrant_stable_id_rows",
         "span": [
-          10441,
-          10497
+          10732,
+          10788
         ]
       },
       {
         "kind": "function",
         "name": "_qdrant_point_ids_for_stable_ids",
         "span": [
-          10500,
-          10516
+          10791,
+          10807
         ]
       },
       {
         "kind": "function",
         "name": "_require_qdrant_stable_ids",
         "span": [
-          10519,
-          10552
+          10810,
+          10843
         ]
       },
       {
         "kind": "function",
         "name": "_qdrant_point_id",
         "span": [
-          10555,
-          10557
+          10846,
+          10848
         ]
       },
       {
         "kind": "function",
         "name": "_qdrant_payload",
         "span": [
-          10560,
-          10566
+          10851,
+          10857
         ]
       },
       {
         "kind": "function",
         "name": "_embed_texts",
         "span": [
-          10569,
-          10587
+          10860,
+          10878
         ]
       },
       {
         "kind": "function",
         "name": "_index_chunks_qdrant_impl",
         "span": [
-          10590,
-          10871
+          10881,
+          11162
         ]
       },
       {
         "kind": "function",
         "name": "index_chunks_qdrant",
         "span": [
-          10874,
-          10915
+          11165,
+          11206
         ]
       },
       {
         "kind": "function",
         "name": "query_index_qdrant",
         "span": [
-          10918,
-          10983
+          11209,
+          11274
         ]
       },
       {
         "kind": "function",
         "name": "_bm25_search",
         "span": [
-          10995,
-          11078
+          11286,
+          11369
         ]
       },
       {
         "kind": "function",
         "name": "_record_search_warning",
         "span": [
-          11087,
-          11090
+          11378,
+          11381
         ]
       },
       {
         "kind": "function",
         "name": "_unpack_chroma_results",
         "span": [
-          11093,
-          11110
+          11384,
+          11401
         ]
       },
       {
         "kind": "function",
         "name": "_search_chroma_candidates_impl",
         "span": [
-          11113,
-          11210
+          11404,
+          11501
         ]
       },
       {
         "kind": "function",
         "name": "_search_chroma_candidates",
         "span": [
-          11213,
-          11248
+          11504,
+          11539
         ]
       },
       {
         "kind": "function",
         "name": "_search_qdrant_candidates",
         "span": [
-          11251,
-          11347
+          11542,
+          11638
         ]
       },
       {
         "kind": "function",
         "name": "_search_hit_source_id",
         "span": [
-          11350,
-          11353
+          11641,
+          11644
         ]
       },
       {
         "kind": "function",
         "name": "_search_index_impl",
         "span": [
-          11356,
-          11591
+          11647,
+          11882
         ]
       },
       {
         "kind": "function",
         "name": "search_index",
         "span": [
-          11594,
-          11649
+          11885,
+          11940
         ]
       },
       {
         "kind": "function",
         "name": "_grounded_sources",
         "span": [
-          11666,
-          11670
+          11957,
+          11961
         ]
       },
       {
         "kind": "function",
         "name": "_answer_search_results",
         "span": [
-          11679,
-          11716
+          11970,
+          12007
         ]
       },
       {
         "kind": "function",
         "name": "_write_search_output",
         "span": [
-          11719,
-          11843
+          12010,
+          12134
         ]
       },
       {
         "kind": "function",
         "name": "query_index",
         "span": [
-          11846,
-          11911
+          12137,
+          12202
         ]
       },
       {
         "kind": "function",
         "name": "_format_chunk",
         "span": [
-          11918,
-          11972
+          12209,
+          12263
         ]
       },
       {
         "kind": "function",
         "name": "_filter_chunk_records",
         "span": [
-          11975,
-          12000
+          12266,
+          12291
         ]
       },
       {
         "kind": "function",
         "name": "_load_and_filter_chunks",
         "span": [
-          12003,
-          12012
+          12294,
+          12303
         ]
       },
       {
         "kind": "function",
         "name": "_section_heading_level",
         "span": [
-          12015,
-          12033
+          12306,
+          12324
         ]
       },
       {
         "kind": "function",
         "name": "_display_division_title",
         "span": [
-          12036,
-          12046
+          12327,
+          12337
         ]
       },
       {
         "kind": "function",
         "name": "_assemble_markdown",
         "span": [
-          12049,
-          12096
+          12340,
+          12387
         ]
       },
       {
         "kind": "function",
         "name": "_export_plaintext",
         "span": [
-          12099,
-          12169
+          12390,
+          12460
         ]
       },
       {
         "kind": "function",
         "name": "_markdown_export_parameters",
         "span": [
-          12172,
-          12185
+          12463,
+          12476
         ]
       },
       {
         "kind": "function",
         "name": "_chunks_identity",
         "span": [
-          12188,
-          12193
+          12479,
+          12484
         ]
       },
       {
         "kind": "function",
         "name": "_unified_export_complete",
         "span": [
-          12196,
-          12206
+          12487,
+          12497
         ]
       },
       {
         "kind": "function",
         "name": "_owned_chapter_filename",
         "span": [
-          12209,
-          12212
+          12500,
+          12503
         ]
       },
       {
         "kind": "function",
         "name": "_split_export_complete",
         "span": [
-          12215,
-          12251
+          12506,
+          12542
         ]
       },
       {
         "kind": "function",
         "name": "export_markdown",
         "span": [
-          12254,
-          12433
+          12545,
+          12724
         ]
       },
       {
         "kind": "function",
         "name": "extract_questions",
         "span": [
-          12444,
-          12504
+          12735,
+          12795
         ]
       },
       {
         "kind": "function",
         "name": "generate_exam_questions",
         "span": [
-          12537,
-          12664
+          12828,
+          12955
         ]
       },
       {
         "kind": "function",
         "name": "build_citation_graph",
         "span": [
-          12689,
-          12816
+          12980,
+          13107
         ]
       },
       {
         "kind": "function",
         "name": "generate_briefs",
         "span": [
-          12836,
-          12932
+          13127,
+          13223
         ]
       },
       {
         "kind": "function",
         "name": "_score_chunk_quality",
         "span": [
-          12955,
-          12964
+          13246,
+          13255
         ]
       },
       {
         "kind": "function",
         "name": "_export_flashcards",
         "span": [
-          12983,
-          13077
+          13274,
+          13368
         ]
       },
       {
         "kind": "function",
         "name": "_cluster_embeddings",
         "span": [
-          13094,
-          13139
+          13385,
+          13430
         ]
       },
       {
         "kind": "function",
         "name": "_raptor_parameters",
         "span": [
-          13142,
-          13164
+          13433,
+          13455
         ]
       },
       {
         "kind": "function",
         "name": "_raptor_output_complete",
         "span": [
-          13167,
-          13232
+          13458,
+          13523
         ]
       },
       {
         "kind": "function",
         "name": "build_raptor_tree",
         "span": [
-          13235,
-          13465
+          13526,
+          13756
         ]
       },
       {
         "kind": "function",
         "name": "show_info",
         "span": [
-          13472,
-          13663
+          13763,
+          13954
         ]
       },
       {
         "kind": "class",
         "name": "_PipelineStageError",
         "span": [
-          13670,
-          13676
+          13961,
+          13967
         ]
       },
       {
         "kind": "function",
         "name": "_background_pipeline_plan",
         "span": [
-          13679,
-          13707
+          13970,
+          13998
         ]
       },
       {
         "kind": "function",
         "name": "_mark_background_pipeline_binding",
         "span": [
-          13710,
-          13736
+          14001,
+          14027
         ]
       },
       {
         "kind": "function",
         "name": "_resolve_cloud_endpoint",
         "span": [
-          13739,
-          13745
+          14030,
+          14036
         ]
       },
       {
         "kind": "function",
         "name": "_cloud_endpoint_arg",
         "span": [
-          13748,
-          13754
+          14039,
+          14045
         ]
       },
       {
         "kind": "function",
         "name": "_resolve_cloud_key",
         "span": [
-          13757,
-          13767
+          14048,
+          14058
         ]
       },
       {
         "kind": "function",
         "name": "_llm_kwargs_from_args",
         "span": [
-          13770,
-          13781
+          14061,
+          14072
         ]
       },
       {
         "kind": "function",
         "name": "_configure_llm_runtime_from_args",
         "span": [
-          13787,
-          13792
+          14078,
+          14083
         ]
       },
       {
         "kind": "function",
         "name": "_index_chunks_for_backend",
         "span": [
-          13795,
-          13834
+          14086,
+          14125
         ]
       },
       {
         "kind": "function",
         "name": "_query_index_for_backend",
         "span": [
-          13837,
-          13843
+          14128,
+          14134
         ]
       },
       {
         "kind": "function",
         "name": "_run_pipeline_stages",
         "span": [
-          13846,
-          14181
+          14137,
+          14472
         ]
       },
       {
         "kind": "function",
         "name": "_run_pipeline_job",
         "span": [
-          14184,
-          14277
+          14475,
+          14568
         ]
       },
       {
         "kind": "function",
         "name": "_normalize_operation_timeout",
         "span": [
-          14284,
-          14287
+          14575,
+          14578
         ]
       },
       {
         "kind": "function",
         "name": "_cli_operation_timeout",
         "span": [
-          14290,
-          14297
+          14581,
+          14588
         ]
       },
       {
         "kind": "function",
         "name": "_new_supervised_start_gate",
         "span": [
-          14307,
-          14310
+          14598,
+          14601
         ]
       },
       {
         "kind": "function",
         "name": "_supervision_config",
         "span": [
-          14313,
-          14321
+          14604,
+          14612
         ]
       },
       {
         "kind": "function",
         "name": "_terminate_supervised_process",
         "span": [
-          14324,
-          14330
+          14615,
+          14621
         ]
       },
       {
         "kind": "function",
         "name": "_supervised_telemetry_requested",
         "span": [
-          14333,
-          14337
+          14624,
+          14628
         ]
       },
       {
         "kind": "function",
         "name": "_finalize_supervised_run_telemetry",
         "span": [
-          14340,
-          14356
+          14631,
+          14647
         ]
       },
       {
         "kind": "function",
         "name": "_start_supervised_run_telemetry",
         "span": [
-          14359,
-          14365
+          14650,
+          14656
         ]
       },
       {
         "kind": "function",
         "name": "_run_cli_with_deadline",
         "span": [
-          14368,
-          14412
+          14659,
+          14703
         ]
       },
       {
         "kind": "function",
         "name": "_run_rag_entrypoint",
         "span": [
-          14419,
-          14436
+          14710,
+          14727
         ]
       },
       {
         "kind": "function",
         "name": "_render_storage_outcome",
         "span": [
-          14439,
-          14455
+          14730,
+          14746
         ]
       },
       {
         "kind": "function",
         "name": "_apply_pipeline_deletion_with_leases",
         "span": [
-          14458,
-          14484
+          14749,
+          14775
         ]
       },
       {
         "kind": "function",
         "name": "_run_storage_command",
         "span": [
-          14487,
-          14582
+          14778,
+          14873
         ]
       },
       {
         "kind": "function",
         "name": "_render_job_summaries",
         "span": [
-          14585,
-          14593
+          14876,
+          14884
         ]
       },
       {
         "kind": "function",
         "name": "_background_submit_tokens",
         "span": [
-          14596,
-          14610
+          14887,
+          14901
         ]
       },
       {
         "kind": "function",
         "name": "_canonical_background_security_argv",
         "span": [
-          14624,
-          14691
+          14915,
+          14982
         ]
       },
       {
         "kind": "function",
         "name": "_run_jobs_command",
         "span": [
-          14698,
-          14812
+          14989,
+          15103
         ]
       },
       {
         "kind": "class",
         "name": "_StrictArgumentParser",
         "span": [
-          14822,
-          14832
+          15113,
+          15123
         ]
       },
       {
         "kind": "function",
         "name": "main",
         "span": [
-          14835,
-          15948
+          15126,
+          16239
         ]
       },
       {
         "kind": "function",
         "name": "_menu_choose",
         "span": [
-          15951,
-          15977
+          16242,
+          16268
         ]
       },
       {
         "kind": "function",
         "name": "_menu_yesno",
         "span": [
-          15980,
-          15989
+          16271,
+          16280
         ]
       },
       {
         "kind": "function",
         "name": "_menu_file",
         "span": [
-          15992,
-          16065
+          16283,
+          16356
         ]
       },
       {
         "kind": "function",
         "name": "_menu_cloud_consent_args",
         "span": [
-          16071,
-          16082
+          16362,
+          16373
         ]
       },
       {
         "kind": "function",
         "name": "_menu_cache_namespace_args",
         "span": [
-          16085,
-          16095
+          16376,
+          16386
         ]
       },
       {
         "kind": "function",
         "name": "_menu_llm_provider_args",
         "span": [
-          16098,
-          16213
+          16389,
+          16504
         ]
       },
       {
         "kind": "function",
         "name": "_menu_secrets_to_environment",
         "span": [
-          16219,
-          16227
+          16510,
+          16518
         ]
       },
       {
         "kind": "function",
         "name": "_menu_structure_profile",
         "span": [
-          16230,
-          16235
+          16521,
+          16526
         ]
       },
       {
         "kind": "function",
         "name": "interactive_menu",
         "span": [
-          16238,
-          16603
+          16529,
+          16894
         ]
       }
     ],
@@ -16467,7 +16809,7 @@
   "schema_version": 3,
   "source_architecture": {
     "class_count": 192,
-    "function_count": 2021,
+    "function_count": 2027,
     "import_graph": {
       "cyclic_components": [],
       "edge_count": 147,
@@ -20532,8 +20874,8 @@
             "scope": "top_level"
           }
         ],
-        "definition_locations_sha256": "fdeb00f24c1248892d9953d9681c0c940278f699d8f69b9c39fa5cd065be5d3b",
-        "function_count": 20,
+        "definition_locations_sha256": "0c9d5e308fbd3cd6a1b7c44c2d8a4ed40b6dcc9940106ad23bb401c6085ebadd",
+        "function_count": 21,
         "functions": [
           {
             "kind": "function",
@@ -20651,6 +20993,12 @@
           },
           {
             "kind": "function",
+            "name": "_validate_toc_verification",
+            "scope": "top_level",
+            "signature_sha256": "62aa7af52b1f2c364b241a3bad9e5fa6be44fa1d57d7c748831b7727687ab4fa"
+          },
+          {
+            "kind": "function",
             "name": "exact_classification_contract",
             "scope": "top_level",
             "signature_sha256": "c72ee1894764c83737d12729019080a70716b84957a0745e2ceaa0cfaad8f085"
@@ -20658,10 +21006,10 @@
         ],
         "import_edges": [],
         "module": "llm_output_contracts",
-        "non_blank_lines": 501,
+        "non_blank_lines": 520,
         "path": "llm_output_contracts.py",
-        "physical_lines": 561,
-        "top_level_function_count": 9
+        "physical_lines": 584,
+        "top_level_function_count": 10
       },
       {
         "class_count": 11,
@@ -22612,8 +22960,8 @@
             "scope": "nested"
           }
         ],
-        "definition_locations_sha256": "36b913625f44c8845cb5803569147acf506c896ff276952d8be5ac9a27740260",
-        "function_count": 429,
+        "definition_locations_sha256": "36066ef6fdbf8eb76bf76da7a7dfbddbacd26d1acd8f2cc325743322a33d4472",
+        "function_count": 434,
         "functions": [
           {
             "kind": "function",
@@ -24807,6 +25155,36 @@
           },
           {
             "kind": "function",
+            "name": "_toc_verification_bounded_string",
+            "scope": "top_level",
+            "signature_sha256": "30916dc5cb4db6896add383f559e704d02f3489197dedc10202cd26a915519d4"
+          },
+          {
+            "kind": "function",
+            "name": "_toc_verification_bounded_string.encoded_size",
+            "scope": "nested",
+            "signature_sha256": "c8b70aa2f8b7d70f80ce802cb64596b15868990bb957adc53fab6c170825f3d0"
+          },
+          {
+            "kind": "function",
+            "name": "_toc_verification_entry_prompt_data",
+            "scope": "top_level",
+            "signature_sha256": "e81dcaad423f7ebe101b9807f92b8ba9fde67761f06edf6d3df1f59570b4bdfa"
+          },
+          {
+            "kind": "function",
+            "name": "_toc_verification_prompt_json",
+            "scope": "top_level",
+            "signature_sha256": "ee6be6fa827502d01f895baf21811204d0bf48e5cc904a0652569e5d72ec10bc"
+          },
+          {
+            "kind": "function",
+            "name": "_toc_verification_source_json",
+            "scope": "top_level",
+            "signature_sha256": "f37875e699eb1bc46c94470a1f28e8189f42c1f93bb3d9a35b6ff1f37eb18aa0"
+          },
+          {
+            "kind": "function",
             "name": "_toc_visual_subrows",
             "scope": "top_level",
             "signature_sha256": "3629d1bb7436e02ac79cf801cdf0e721c479014f23e6bac4c862cded856e08a5"
@@ -25445,10 +25823,10 @@
           }
         ],
         "module": "rag",
-        "non_blank_lines": 14830,
+        "non_blank_lines": 15109,
         "path": "rag.py",
-        "physical_lines": 16620,
-        "top_level_function_count": 298
+        "physical_lines": 16911,
+        "top_level_function_count": 302
       },
       {
         "class_count": 2,
@@ -31761,13 +32139,13 @@
         "top_level_function_count": 2
       }
     ],
-    "physical_line_count": 63459,
+    "physical_line_count": 63773,
     "source_groups": [
       "production",
       "tools",
       "other"
     ],
-    "top_level_function_count": 1325
+    "top_level_function_count": 1330
   },
   "tracked_sources": {
     "count": 152,

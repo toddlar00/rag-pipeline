@@ -702,6 +702,118 @@ def test_toc_layout_provenance_binds_schema_and_fallback_limits():
     }
 
 
+@pytest.mark.parametrize(("response", "expected"), [
+    ('{"verified":true}', {"verified": True}),
+    (' \t{"verified":false}\r\n', {"verified": False}),
+])
+def test_toc_verification_contract_canonicalizes_exact_boolean_object(
+        response, expected):
+    canonical = contracts.TOC_VERIFICATION_CONTRACT(response)
+
+    assert canonical == json.dumps(
+        expected, ensure_ascii=False, allow_nan=False,
+        separators=(",", ":"), sort_keys=True)
+    assert contracts.TOC_VERIFICATION_CONTRACT.parse(canonical) == expected
+    assert contracts.TOC_VERIFICATION_CONTRACT(canonical) == canonical
+
+
+@pytest.mark.parametrize(("response", "diagnostic_code"), [
+    ("prefix {\"verified\":true}", contracts.JSON_SYNTAX),
+    ("{\"verified\":true} suffix", contracts.JSON_SYNTAX),
+    ("{\"verified\":true}{}", contracts.JSON_SYNTAX),
+    ("```json\n{\"verified\":true}\n```", contracts.JSON_SYNTAX),
+    ("<think>private</think>{\"verified\":true}", contracts.JSON_SYNTAX),
+    ('{"verified":true,"verified":false}',
+     contracts.JSON_DUPLICATE_KEY),
+    ('{"verified":NaN}', contracts.JSON_NON_FINITE_NUMBER),
+    ('{"verified":{"nested":true}}', contracts.JSON_DEPTH_EXCEEDED),
+    ('{"verified":[]}', contracts.JSON_DEPTH_EXCEEDED),
+    ('{"verified":99}', contracts.JSON_VALUE_OUT_OF_RANGE),
+])
+def test_toc_verification_contract_rejects_wrappers_and_invalid_json(
+        response, diagnostic_code):
+    with pytest.raises(contracts.OutputContractRejected) as caught:
+        contracts.TOC_VERIFICATION_CONTRACT(response)
+
+    assert caught.value.diagnostic_code == diagnostic_code
+
+
+@pytest.mark.parametrize("response", [
+    "true",
+    "false",
+    "null",
+    "[]",
+    "{}",
+    '{"verified":true,"extra":false}',
+    '{"verified":1}',
+    '{"verified":0}',
+    '{"verified":1.0}',
+    '{"verified":"false"}',
+    '{"verified":null}',
+])
+def test_toc_verification_contract_rejects_missing_extra_and_coercive_shapes(
+        response):
+    with pytest.raises(contracts.OutputContractRejected) as caught:
+        contracts.TOC_VERIFICATION_CONTRACT(response)
+
+    assert caught.value.diagnostic_code == contracts.JSON_SHAPE_MISMATCH
+
+
+def test_toc_verification_contract_enforces_raw_response_byte_ceiling():
+    with pytest.raises(contracts.OutputContractRejected) as caught:
+        contracts.TOC_VERIFICATION_CONTRACT(
+            "x" * (contracts.TOC_VERIFICATION_MAX_BYTES + 1))
+
+    assert caught.value.diagnostic_code == contracts.BYTE_LIMIT_EXCEEDED
+
+
+@pytest.mark.parametrize("response", [
+    None,
+    b'{"verified":true}',
+    bytearray(b'{"verified":true}'),
+    {"verified": True},
+    True,
+    1,
+])
+def test_toc_verification_contract_rejects_non_text_responses(response):
+    with pytest.raises(contracts.OutputContractRejected) as caught:
+        contracts.TOC_VERIFICATION_CONTRACT(response)
+
+    assert caught.value.diagnostic_code == contracts.INVALID_TYPE
+
+
+def test_toc_verification_provenance_binds_exact_schema_and_fallback():
+    provenance = contracts.TOC_VERIFICATION_CONTRACT.provenance(
+        fallback_id=contracts.TOC_VERIFICATION_FALLBACK_ID)
+
+    assert provenance == {
+        "policy_version": contracts.OUTPUT_CONTRACT_POLICY_VERSION,
+        "contract_id": contracts.TOC_VERIFICATION_CONTRACT_ID,
+        "fallback_id": contracts.TOC_VERIFICATION_FALLBACK_ID,
+        "max_bytes": contracts.TOC_VERIFICATION_MAX_BYTES,
+        "max_depth": contracts.TOC_VERIFICATION_MAX_DEPTH,
+        "max_integer_digits": (
+            contracts.TOC_VERIFICATION_MAX_INTEGER_DIGITS),
+        "root_field_count": 1,
+    }
+
+
+@pytest.mark.parametrize("response", [
+    "MODEL_RESPONSE_CANARY",
+    '{"verified":"MODEL_RESPONSE_CANARY"}',
+    '{"verified":"\ud800"}',
+])
+def test_toc_verification_rejection_has_no_response_or_decoder_context(
+        response):
+    with pytest.raises(contracts.OutputContractRejected) as caught:
+        contracts.TOC_VERIFICATION_CONTRACT(response)
+
+    assert "MODEL_RESPONSE_CANARY" not in str(caught.value)
+    assert "MODEL_RESPONSE_CANARY" not in repr(caught.value)
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+
+
 @pytest.mark.parametrize("response", [
     "MODEL_RESPONSE_CANARY not json",
     '{"page_number_format":"MODEL_RESPONSE_CANARY",',

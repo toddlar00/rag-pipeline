@@ -52,6 +52,11 @@ _TOC_LAYOUT_UNICODE_VERSION_PARTS = tuple(
     int(part) for part in TOC_LAYOUT_UNICODE_DATA_VERSION.split("."))
 if len(_TOC_LAYOUT_UNICODE_VERSION_PARTS) != 3:
     raise RuntimeError("unsupported Unicode data version format")
+TOC_VERIFICATION_CONTRACT_ID = "toc-verification-v1"
+TOC_VERIFICATION_FALLBACK_ID = "treat-toc-verification-as-inconclusive"
+TOC_VERIFICATION_MAX_BYTES = 64
+TOC_VERIFICATION_MAX_DEPTH = 1
+TOC_VERIFICATION_MAX_INTEGER_DIGITS = 1
 
 INVALID_TYPE = "llm-output-invalid-type"
 INVALID_ENCODING = "llm-output-invalid-encoding"
@@ -546,6 +551,24 @@ TOC_LAYOUT_CONTRACT = ExactJSONContract(
         ("unicode_data_minor", _TOC_LAYOUT_UNICODE_VERSION_PARTS[1]),
         ("unicode_data_patch", _TOC_LAYOUT_UNICODE_VERSION_PARTS[2]),
     ),
+)
+
+
+def _validate_toc_verification(value: Any) -> dict[str, bool]:
+    if (not isinstance(value, dict)
+            or set(value) != {"verified"}
+            or type(value["verified"]) is not bool):
+        raise OutputContractRejected(JSON_SHAPE_MISMATCH)
+    return {"verified": value["verified"]}
+
+
+TOC_VERIFICATION_CONTRACT = ExactJSONContract(
+    contract_id=TOC_VERIFICATION_CONTRACT_ID,
+    max_bytes=TOC_VERIFICATION_MAX_BYTES,
+    max_depth=TOC_VERIFICATION_MAX_DEPTH,
+    schema_validator=_validate_toc_verification,
+    max_integer_digits=TOC_VERIFICATION_MAX_INTEGER_DIGITS,
+    provenance_fields=(("root_field_count", 1),),
 )
 
 
