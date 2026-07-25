@@ -119,3 +119,10 @@ environments. The complete 104-test Windows architecture/A0 set, the 51-test
 WSL A0 set, and canonical architecture checks on Windows CPython 3.12/3.14 and
 WSL CPython 3.12 pass at that checkpoint. These results establish A0a only;
 they do not replace the separate A0b baselines and hosted exact-head checks.
+
+Gate-only checkpoint `144a434` passes both exact full-profile same-platform A0
+comparisons from a clean final head. Its cumulative local validation also
+passes 2,208 tests with 7 platform skips, Ruff, exhaustive compilation of all
+150 tracked Python sources, dependency and model-artifact policy, CI-security
+policy, and Windows/Linux architecture-inventory checks. Hosted execution and
+review at the frozen publishable head remain outstanding.

@@ -61,6 +61,7 @@ ancestor of the final head. Integrate a passing candidate with a
 history-preserving merge; a squash or history-rewriting rebase invalidates this
 evidence and requires regeneration from the replacement history.
 
-These checked-in candidates establish local A0b evidence. A0b remains pending
-until the following gate-only commit passes both matching hosted CI jobs at one
-frozen final commit/tree and retains their current-report artifacts.
+Gate-only checkpoint `144a434` establishes the local A0b candidate and passes
+both matching final-head local comparisons. A0b remains pending until one
+frozen publishable commit/tree passes both hosted CI jobs and retains their
+current-report artifacts.
