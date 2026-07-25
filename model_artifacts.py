@@ -23,7 +23,7 @@ import time
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Literal, Mapping, Sequence
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urljoin, urlsplit
 from urllib.request import Request, urlopen
@@ -104,6 +104,52 @@ class PinnedModelArtifact:
             "pkg:huggingface/"
             f"{quote(namespace, safe='')}/{quote(name, safe='')}@{self.revision}"
         )
+
+
+RuntimeConsumerClassification = Literal[
+    "safe-primary", "dependency-only", "unsafe-pickle"]
+
+
+@dataclass(frozen=True)
+class RuntimeBundleFile:
+    """One exact file in a published runtime model bundle."""
+
+    path: str
+    size: int
+    content_sha256: str
+
+
+@dataclass(frozen=True)
+class RuntimeBundleSpec:
+    """Authoritative source, transform, and destination contract for a bundle."""
+
+    model_id: str
+    revision: str
+    consumer: str
+    identity_sha256: str
+    target: Path
+    primary_files: tuple[ModelArtifactFile, ...]
+    transforms: tuple[RuntimeTransform, ...]
+    auxiliary_model_id: str | None
+    auxiliary_revision: str | None
+    auxiliary_consumer: str | None
+    auxiliary_files: tuple[ModelArtifactFile, ...]
+    expected_files: tuple[RuntimeBundleFile, ...]
+    primary_download_bytes: int
+    primary_runtime_bytes: int
+    auxiliary_download_bytes: int
+    auxiliary_runtime_bytes: int
+    transformed_bytes_removed: int
+
+    @property
+    def download_bytes(self) -> int:
+        """Return source bytes required when the bundle is absent."""
+        return self.primary_download_bytes + self.auxiliary_download_bytes
+
+    @property
+    def runtime_bytes(self) -> int:
+        """Return bytes retained in the published runtime bundle."""
+        return self.primary_runtime_bytes + self.auxiliary_runtime_bytes
 
 
 @dataclass(frozen=True)
@@ -1324,6 +1370,11 @@ def _verify_runtime_tree(
     if not root.is_dir() or _is_link_or_reparse(root):
         raise ModelArtifactError(f"runtime model root is unsafe: {root}")
     observed: dict[str, Path] = {}
+    allowed_directories = {
+        ancestor.as_posix()
+        for relative in expected
+        for ancestor in tuple(PurePosixPath(relative).parents)[:-1]
+    }
     casefolded: set[str] = set()
     try:
         entries = tuple(root.rglob("*"))
@@ -1340,6 +1391,10 @@ def _verify_runtime_tree(
             raise ModelArtifactError(
                 f"runtime model tree contains a link or reparse point: {relative}")
         if path.is_dir():
+            if relative not in allowed_directories:
+                raise ModelArtifactError(
+                    "runtime model tree contains an unexpected directory: "
+                    f"{relative}")
             continue
         if not path.is_file():
             raise ModelArtifactError(
@@ -1399,6 +1454,11 @@ def _runtime_cache_root(cache_root: Path | None) -> Path:
     if configured:
         return Path(configured).expanduser().resolve()
     return (Path.home() / ".cache" / "rag-pipeline" / "model-artifacts").resolve()
+
+
+def model_artifact_cache_root(cache_root: Path | None = None) -> Path:
+    """Return the resolved runtime model cache without creating it."""
+    return _runtime_cache_root(cache_root)
 
 
 _TRANSFORMERS_MODULE_CACHE_LOCK = threading.Lock()
@@ -1472,10 +1532,20 @@ def _runtime_bundle_identity(
         transform for transform in artifact.runtime_transforms
         if transform.consumer == consumer
     ]
-    code_revision = None
+    code = None
     if transforms and artifact.code_model_id is not None:
         code_artifact = model_artifact(artifact.code_model_id)
-        code_revision = code_artifact.revision if code_artifact else None
+        if code_artifact is not None:
+            code_consumer = f"{consumer}_remote_code"
+            code = {
+                "model_id": code_artifact.model_id,
+                "revision": code_artifact.revision,
+                "consumer": code_consumer,
+                "files": [
+                    [file.path, file.size, file.content_sha256]
+                    for file in code_artifact.files_for(code_consumer)
+                ],
+            }
     payload = {
         "model_id": artifact.model_id,
         "revision": artifact.revision,
@@ -1484,11 +1554,191 @@ def _runtime_bundle_identity(
             [file.path, file.size, file.content_sha256] for file in approved
         ],
         "transforms": [transform.__dict__ for transform in transforms],
-        "code_revision": code_revision,
     }
+    if transforms:
+        payload["identity_schema_version"] = 2
+        payload["auxiliary"] = code
+    else:
+        # Preserve existing targets for self-contained bundles. Identity v2 is
+        # needed only where the former payload underbound auxiliary code files.
+        payload["code_revision"] = None
     return hashlib.sha256(json.dumps(
         payload, sort_keys=True, separators=(",", ":"),
     ).encode("utf-8")).hexdigest()
+
+
+def classify_runtime_consumer(
+        artifact: PinnedModelArtifact, consumer: str,
+) -> RuntimeConsumerClassification:
+    """Classify one reviewed consumer for independent runtime publication."""
+    approved = artifact.files_for(consumer)
+    if consumer.endswith("_remote_code"):
+        return "dependency-only"
+    if any(file.path.casefold().endswith(".bin") for file in approved):
+        return "unsafe-pickle"
+    return "safe-primary"
+
+
+def _validate_runtime_bundle_topology(files: Sequence[RuntimeBundleFile]) -> None:
+    """Reject path collisions that cannot form one unambiguous file tree."""
+    folded_files: dict[str, str] = {}
+    folded_directories: dict[str, str] = {}
+    for file in files:
+        folded = file.path.casefold()
+        previous = folded_files.get(folded)
+        if previous is not None:
+            raise ModelArtifactError(
+                "runtime bundle has a case-folded path collision: "
+                f"{previous}, {file.path}")
+        folded_files[folded] = file.path
+    for file in files:
+        for ancestor in tuple(PurePosixPath(file.path).parents)[:-1]:
+            ancestor_text = ancestor.as_posix()
+            folded_ancestor = ancestor_text.casefold()
+            previous = folded_files.get(folded_ancestor)
+            if previous is not None:
+                raise ModelArtifactError(
+                    "runtime bundle has a file/directory path collision: "
+                    f"{previous}, {file.path}")
+            previous_directory = folded_directories.get(folded_ancestor)
+            if (
+                previous_directory is not None
+                and previous_directory != ancestor_text
+            ):
+                raise ModelArtifactError(
+                    "runtime bundle has a case-folded directory collision: "
+                    f"{previous_directory}, {ancestor_text}")
+            folded_directories[folded_ancestor] = ancestor_text
+
+
+def runtime_bundle_spec(
+        model_id: str, consumer: str, *, cache_root: Path | None = None,
+) -> RuntimeBundleSpec:
+    """Build the exact reviewed contract for one independently safe bundle."""
+    artifact = model_artifact(model_id)
+    if artifact is None:
+        raise ModelArtifactError(f"model is not in the reviewed lock: {model_id}")
+    classification = classify_runtime_consumer(artifact, consumer)
+    if classification == "dependency-only":
+        raise ModelArtifactError(
+            f"remote code is dependency-only for {artifact.model_id}:{consumer}")
+    if classification == "unsafe-pickle":
+        pickle_files = sorted(
+            file.path for file in artifact.files_for(consumer)
+            if file.path.casefold().endswith(".bin")
+        )
+        raise ModelArtifactError(
+            f"unsafe pickle model weights are blocked for {artifact.model_id}: "
+            + ", ".join(pickle_files))
+
+    primary_files = artifact.files_for(consumer)
+    transforms = tuple(
+        transform for transform in artifact.runtime_transforms
+        if transform.consumer == consumer
+    )
+    transform_by_path = {transform.path: transform for transform in transforms}
+    expected: list[RuntimeBundleFile] = []
+    primary_runtime_bytes = 0
+    transformed_bytes_removed = 0
+    for file in primary_files:
+        transform = transform_by_path.get(file.path)
+        if transform is None:
+            runtime_size = file.size
+            checksum = file.content_sha256
+        else:
+            removed = (
+                transform.expected_occurrences
+                * len(transform.argument.encode("utf-8"))
+            )
+            runtime_size = file.size - removed
+            if runtime_size < 0:
+                raise ModelArtifactError(
+                    f"runtime transform has an invalid size for {file.path}")
+            transformed_bytes_removed += removed
+            checksum = transform.output_sha256
+        primary_runtime_bytes += runtime_size
+        expected.append(RuntimeBundleFile(
+            path=file.path,
+            size=runtime_size,
+            content_sha256=checksum,
+        ))
+
+    auxiliary_model_id = None
+    auxiliary_revision = None
+    auxiliary_consumer = None
+    auxiliary_files: tuple[ModelArtifactFile, ...] = ()
+    if transforms:
+        if artifact.code_model_id is None:
+            raise ModelArtifactError(
+                "runtime transform has no reviewed code model")
+        code_artifact = model_artifact(artifact.code_model_id)
+        if code_artifact is None:
+            raise ModelArtifactError("remote code artifact is missing")
+        auxiliary_consumer = f"{consumer}_remote_code"
+        auxiliary_files = code_artifact.files_for(auxiliary_consumer)
+        unsafe_code = sorted(
+            file.path for file in auxiliary_files
+            if file.path.casefold().endswith(".bin")
+        )
+        if unsafe_code:
+            raise ModelArtifactError(
+                "unsafe pickle dependency weights are blocked for "
+                f"{code_artifact.model_id}: " + ", ".join(unsafe_code))
+        auxiliary_model_id = code_artifact.model_id
+        auxiliary_revision = code_artifact.revision
+        expected_paths = {file.path.casefold() for file in expected}
+        for file in auxiliary_files:
+            if file.path.casefold() in expected_paths:
+                raise ModelArtifactError(
+                    "remote code path collides in runtime bundle: "
+                    f"{file.path}")
+            expected_paths.add(file.path.casefold())
+            expected.append(RuntimeBundleFile(
+                path=file.path,
+                size=file.size,
+                content_sha256=file.content_sha256,
+            ))
+
+    _validate_runtime_bundle_topology(expected)
+
+    identity = _runtime_bundle_identity(artifact, consumer)
+    safe_name = artifact.model_id.replace("/", "--")
+    target = _runtime_cache_root(cache_root) / (
+        f"{safe_name}--{consumer}--{identity[:20]}")
+    auxiliary_bytes = sum(file.size for file in auxiliary_files)
+    return RuntimeBundleSpec(
+        model_id=artifact.model_id,
+        revision=artifact.revision,
+        consumer=consumer,
+        identity_sha256=identity,
+        target=target,
+        primary_files=primary_files,
+        transforms=transforms,
+        auxiliary_model_id=auxiliary_model_id,
+        auxiliary_revision=auxiliary_revision,
+        auxiliary_consumer=auxiliary_consumer,
+        auxiliary_files=auxiliary_files,
+        expected_files=tuple(expected),
+        primary_download_bytes=sum(file.size for file in primary_files),
+        primary_runtime_bytes=primary_runtime_bytes,
+        auxiliary_download_bytes=auxiliary_bytes,
+        auxiliary_runtime_bytes=auxiliary_bytes,
+        transformed_bytes_removed=transformed_bytes_removed,
+    )
+
+
+def verify_cached_runtime_bundle(spec: RuntimeBundleSpec) -> bool:
+    """Verify a present runtime bundle; return false without creating a miss."""
+    if not isinstance(spec, RuntimeBundleSpec):
+        raise TypeError("runtime bundle verification requires a bundle spec")
+    if not spec.target.exists():
+        return False
+    expected = {
+        file.path: (file.size, file.content_sha256)
+        for file in spec.expected_files
+    }
+    _verify_runtime_tree(spec.target, expected)
+    return True
 
 
 def _validated_hub_endpoint(endpoint: str) -> str:
@@ -1679,50 +1929,19 @@ def verified_model_directory(
     ):
         raise ModelArtifactError(
             "a custom model endpoint requires explicit environment trust")
-    artifact = model_artifact(model_id)
-    if artifact is None:
-        raise ModelArtifactError(f"model is not in the reviewed lock: {model_id}")
-    approved = artifact.files_for(consumer)
-    pickle_files = [file.path for file in approved if file.path.endswith(".bin")]
-    if pickle_files:
+    spec = runtime_bundle_spec(model_id, consumer, cache_root=cache_root)
+    artifact = model_artifact(spec.model_id)
+    if artifact is None:  # Guard a replaced lock generation after planning.
         raise ModelArtifactError(
-            f"unsafe pickle model weights are blocked for {artifact.model_id}: "
-            + ", ".join(pickle_files))
-    transforms = {
-        transform.path: transform
-        for transform in artifact.runtime_transforms
-        if transform.consumer == consumer
+            f"model is not in the reviewed lock: {spec.model_id}")
+    approved = spec.primary_files
+    transforms = {transform.path: transform for transform in spec.transforms}
+    expected = {
+        file.path: (file.size, file.content_sha256)
+        for file in spec.expected_files
     }
-    expected: dict[str, tuple[int, str]] = {}
-    for file in approved:
-        transform = transforms.get(file.path)
-        if transform is None:
-            expected[file.path] = (file.size, file.content_sha256)
-        else:
-            output_size = (
-                file.size
-                - transform.expected_occurrences
-                * len(transform.argument.encode("utf-8"))
-            )
-            if output_size < 0:
-                raise ModelArtifactError(
-                    f"runtime transform has an invalid size for {file.path}")
-            expected[file.path] = (output_size, transform.output_sha256)
-    # Transformed sizes are calculated from the verified input below. The lock
-    # pins their output checksum and deterministic occurrence count.
-    identity = _runtime_bundle_identity(artifact, consumer)
-    safe_name = artifact.model_id.replace("/", "--")
-    target = _runtime_cache_root(cache_root) / (
-        f"{safe_name}--{consumer}--{identity[:20]}")
-    if target.exists():
-        code_expected: dict[str, tuple[int, str]] = {}
-        if transforms and artifact.code_model_id is not None:
-            code_artifact = model_artifact(artifact.code_model_id)
-            if code_artifact is None:
-                raise ModelArtifactError("remote code artifact is missing")
-            for file in code_artifact.files_for(f"{consumer}_remote_code"):
-                code_expected[file.path] = (file.size, file.content_sha256)
-        _verify_runtime_tree(target, expected | code_expected)
+    target = spec.target
+    if verify_cached_runtime_bundle(spec):
         return target
 
     if not allow_download:
@@ -1738,7 +1957,7 @@ def verified_model_directory(
     target.parent.mkdir(parents=True, exist_ok=True)
     download_stage = Path(tempfile.mkdtemp(
         prefix=f".{target.name}.download.", dir=target.parent))
-    code_files: tuple[ModelArtifactFile, ...] = ()
+    code_files = spec.auxiliary_files
     code_root: Path | None = None
     try:
         source_root = Path(_snapshot_model_repository(
@@ -1755,18 +1974,12 @@ def verified_model_directory(
             _verify_source_file(
                 source_root / Path(*PurePosixPath(file.path).parts), file)
 
-        if transforms:
-            if artifact.code_model_id is None:
-                raise ModelArtifactError(
-                    "runtime transform has no reviewed code model")
-            code_artifact = model_artifact(artifact.code_model_id)
-            if code_artifact is None:
-                raise ModelArtifactError("remote code artifact is missing")
-            code_consumer = f"{consumer}_remote_code"
-            code_files = code_artifact.files_for(code_consumer)
+        if code_files:
+            if spec.auxiliary_model_id is None or spec.auxiliary_revision is None:
+                raise ModelArtifactError("remote code artifact is incomplete")
             code_root = Path(_snapshot_model_repository(
-                repo_id=code_artifact.model_id,
-                revision=code_artifact.revision,
+                repo_id=spec.auxiliary_model_id,
+                revision=spec.auxiliary_revision,
                 allow_patterns=[file.path for file in code_files],
                 endpoint=download_endpoint,
                 trust_environment_network=trust_environment_network,
@@ -1811,9 +2024,6 @@ def verified_model_directory(
         if code_root is not None:
             for file in code_files:
                 destination = stage / Path(*PurePosixPath(file.path).parts)
-                if destination.exists():
-                    raise ModelArtifactError(
-                        f"remote code path collides in runtime bundle: {file.path}")
                 _copy_regular_file(
                     code_root / Path(*PurePosixPath(file.path).parts), destination)
                 expected[file.path] = (file.size, file.content_sha256)

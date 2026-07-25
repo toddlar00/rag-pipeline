@@ -38,7 +38,7 @@ Policy version 1 has these defaults:
 | Control | `release` default | Explicit alternative |
 |---|---|---|
 | Provider/data network | `local-only` | `--network-policy allow-cloud` |
-| Reviewed model artifacts | `cache-only` | pre-sync with `tools/sync_model_artifacts.py`, or explicitly select `allow-reviewed-sync` |
+| Reviewed model artifacts | `cache-only` | inspect an offline task/model plan, then pre-sync that explicit selection with `tools/sync_model_artifacts.py`; or explicitly select `allow-reviewed-sync` |
 | LLM response cache | `off` | an explicit cache mode; the current store is plaintext |
 | Inline key arguments | rejected | development profile only; still discouraged |
 | Custom gateway tenant identity | required, nonsecret | `--llm-cache-namespace LABEL`; only its SHA-256 identity persists |
@@ -77,6 +77,7 @@ receipts are containment and consistency mechanisms, not a sandbox.
 |---|---|---|---|---|
 | Deterministic conversion/chunk/export | none | local files only | default | artifact receipts bind policy where it changes output |
 | Local embeddings/reranker/zero-shot models | none at runtime | verified local model tree | default `cache-only` | model-lock digest binds generated artifacts |
+| Offline model-sync planning | none | reviewed lock, local cache, and local filesystem-capacity metadata | default; no network policy opt-in | schema-v1 plan binds the lock, selection, bundle identities/statuses, blocked consumers, and space contract |
 | Reviewed model synchronization | reviewed public model IDs and file requests; no corpus text | official Hugging Face or explicitly reviewed mirror plus required CDN redirects | explicit reviewed sync; reviewed environment trust when overrides exist | bytes are size-bounded, allowlisted, hash-verified, and atomically published |
 | Voyage/OpenAI/Cohere embeddings | full chunk text during indexing; query text during search | literal reviewed provider origin | `allow-cloud` | policy receipt binds jobs/evaluation; no provider SDK endpoint selection; MiniMax embedding IDs fail closed pending a reviewed current contract |
 | Cohere/Jina reranking | query plus bounded candidate text and metadata | literal reviewed provider origin | `allow-cloud` | reranker response is not separately cached |
@@ -181,24 +182,54 @@ remains dry-run-first.
 
 Runtime model loading is cache-only by default and verifies every selected byte
 against `model-artifacts.lock.json` before loading. A cache miss fails before
-constructing a model network transport and directs the operator to:
+constructing a model network transport. For the normal first full run, the
+operator first inspects the offline PDF-ingestion plus default-retrieval plan,
+then synchronizes that same explicit task selection:
 
 ```bash
-python tools/sync_model_artifacts.py --model MODEL_ID
+python tools/sync_model_artifacts.py \
+  --task pdf-ingestion --task default-retrieval --plan
+python tools/sync_model_artifacts.py \
+  --task pdf-ingestion --task default-retrieval
 ```
 
-The sync tool selects only reviewed consumers, exact revisions, and exact file
-allowlists; blocks pickle-only weights; verifies source and transformed bytes;
-and publishes an isolated byte-verified cache tree atomically. Reviewed synchronization
-does not use the Hugging Face SDK: an owned Requests session sends no ambient
-Hub/netrc authorization, uses a fixed non-identifying user agent, explicitly
-binds the official or operator-reviewed Hub endpoint, maps environment trust to
-`trust_env`, performs no automatic retries, uses one top-level transfer per file
-with 10/60-second connect/read deadlines, caps
+`pdf-ingestion` selects the reviewed Docling layout/table and Nomic tokenizer
+consumers. `default-retrieval` adds the Nomic embedding/token-counter and BGE
+reranker consumers. `classification` is a separate optional BART preset, and
+individual reviewed model IDs remain selectable with repeatable `--model`.
+Selections are canonicalized and deduplicated in lock order. Synchronizing all
+independently safe consumers is an explicit `--all` operation; it does not
+override a blocked consumer.
+
+Planning is offline: it resolves the current lock, verifies selected local
+cache bundles, and reads filesystem capacity without constructing a downloader,
+changing telemetry environment state, or sending a request. Text output reports
+exact per-bundle and aggregate byte counts, already-present runtime bytes, peak
+simultaneous staging/destination space, margin, and free-space sufficiency.
+`--plan --json` emits the same decision as a content-free schema-v1 record with
+the model-lock and plan SHA-256 identities. The plan fails nonzero when space is
+insufficient. Execution revalidates the lock, cache identities, and free space
+before transport, and repeats the capacity check before each missing bundle is
+published.
+
+The plan and executor select only reviewed consumers, exact revisions, and
+exact file allowlists; block pickle-only weights; verify source and transformed
+bytes; and publish isolated byte-verified cache trees atomically. LegalBERT's
+pickle-only embedding consumer is reported as `unsafe-pickle` and never
+downloaded. Any independently safe consumer remains a separate bundle.
+Plan totals cover synchronizer-created reviewed Hub runtime bundles only; they
+exclude derived Docling composite caches and RapidOCR assets supplied and
+verified by the installed package.
+
+Reviewed synchronization does not use the Hugging Face SDK: an owned Requests
+session sends no ambient Hub/netrc authorization, uses a fixed non-identifying
+user agent, explicitly binds the official or operator-reviewed Hub endpoint,
+maps environment trust to `trust_env`, performs no automatic retries, uses one
+top-level transfer per file with 10/60-second connect/read deadlines, caps
 redirects at five, rejects any redirect or final destination that is not
 credential-free HTTPS, and enforces each locked size while streaming. Required
-HTTPS Hub CDN redirects remain enabled; exact hashes still decide acceptance. Run the
-sync before opening private documents. `--model-download-policy
+HTTPS Hub CDN redirects remain enabled; exact hashes still decide acceptance.
+Run the sync before opening private documents. `--model-download-policy
 allow-reviewed-sync` is an explicit runtime convenience for the same
 reviewed-byte path, not the default.
 
@@ -227,7 +258,12 @@ with old defaults.
 - Cloud commands must add `--network-policy allow-cloud` and may need
   `--trust-environment-network` after reviewing active proxy/CA configuration.
 - UI commands must add `--trust-local-user`.
-- Local models must be synchronized explicitly before first private-data use.
+- Local models must be planned offline and synchronized by explicit task/model
+  selection (or explicit `--all`) before first private-data use.
+- Runtime-bundle identity schema v2 binds the complete primary, transform, and
+  auxiliary inventory. Older Nomic directories whose paths use the former
+  partial identity are treated as cache misses; resynchronize the relevant task
+  preset. This migration sends no source or private-corpus data.
 - Release inline key arguments no longer work; move keys to the environment or
   hidden interactive prompt.
 - Legacy ambiguous LLM cache records fail closed. No automatic tenant guess is

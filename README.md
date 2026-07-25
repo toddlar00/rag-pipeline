@@ -187,26 +187,39 @@ pip install "torch>=2.7,<3" --index-url https://download.pytorch.org/whl/cu128
 # 2. Install the core dependencies
 pip install -r requirements.txt
 
-# 3. Synchronize only the reviewed bundles needed by the first full run
+# 3. Inspect the exact offline plan for PDF ingestion plus default retrieval
 python tools/sync_model_artifacts.py \
-  --model docling-project/docling-layout-heron \
-  --model docling-project/docling-models \
-  --model nomic-ai/nomic-embed-text-v2-moe
+  --task pdf-ingestion \
+  --task default-retrieval \
+  --plan
 
-# 4. Full pipeline -- one command
+# 4. If the byte and free-space preflight is acceptable, synchronize that selection
+python tools/sync_model_artifacts.py \
+  --task pdf-ingestion \
+  --task default-retrieval
+
+# 5. Full pipeline -- one command
 python rag.py full --pdf Civil_procedure.pdf --force
 
 # Experimental profile qualification; not yet production-supported
 python rag.py full --pdf Scholarly_book.pdf \
   --structure-profile roman-parts-book-v1
 
-# 5. Interactive menu (no arguments)
+# 6. Interactive menu (no arguments)
 python rag.py
 ```
 
-The three first-run bundles total roughly 2.2 GiB under the current lock. A
-bare sync command selects every safe reviewed consumer and totals roughly
-7.5 GiB. Synchronization sends only public model IDs and file requests, never
+Use the plan's exact integer-byte totals instead of a documentation estimate:
+they are derived from the current reviewed lock and the verified contents of
+the selected cache. The plan reports required downloads, already-present
+runtime bytes, peak additional staging/destination space, its safety margin,
+and whether the filesystem currently has enough free space. It performs no
+network access or download. Add `--task classification` to both commands only
+when the zero-shot classifier is needed. Use `--all` explicitly to select every
+independently syncable safe bundle, and add `--json` to `--plan` for the
+schema-v1 machine-readable result.
+
+Synchronization sends only reviewed public model IDs and file requests, never
 corpus text. It uses the official Hugging Face endpoint unless a reviewed
 `HF_ENDPOINT`, proxy, or custom CA is explicitly accepted with
 `--trust-environment-network`.
@@ -1346,24 +1359,71 @@ explicitly synchronize the reviewed models the run will need into
 `RAG_MODEL_ARTIFACT_CACHE`):
 
 ```bash
+# Offline: resolve the lock, verify any existing bundles, and preflight space
 python tools/sync_model_artifacts.py \
-  --model docling-project/docling-layout-heron \
-  --model docling-project/docling-models \
-  --model nomic-ai/nomic-embed-text-v2-moe \
-  --model BAAI/bge-reranker-v2-m3
+  --task pdf-ingestion \
+  --task default-retrieval \
+  --plan
+
+# Networked: synchronize the same first-full-run task selection
+python tools/sync_model_artifacts.py \
+  --task pdf-ingestion \
+  --task default-retrieval
+
+# Optional zero-shot classification; add this task to both commands above
+python tools/sync_model_artifacts.py --task classification --plan
+python tools/sync_model_artifacts.py --task classification
+
+# Machine-readable offline plan for automation
+python tools/sync_model_artifacts.py \
+  --task pdf-ingestion \
+  --task default-retrieval \
+  --plan --json
+
+# Intentionally inspect, then synchronize, every independently safe consumer
+python tools/sync_model_artifacts.py --all --plan
+python tools/sync_model_artifacts.py --all
 ```
 
-The Docling and Nomic selections support PDF conversion plus default embedding;
-BGE is needed for default reranked queries. Omit `--model` to synchronize every
-safe reviewed runtime consumer (roughly 7.5 GiB under the current lock). The tool
-fetches exact revisions and allowlisted files, then verifies raw and transformed
-bytes before atomic publication. A runtime cache miss fails before Hub import
-or transport; `--model-download-policy allow-reviewed-sync` is an explicit
-convenience, not the release default. Delete a corrupt cache entry and rerun the
-sync tool; never edit a published cache tree in place. Each process keeps one
-validated registry snapshot so loader records and provenance cannot cross lock
-generations; restart long-running processes after intentionally replacing the
-policy/lock.
+`pdf-ingestion` selects the reviewed Docling layout/table bundles and Nomic
+chunk tokenizer. `default-retrieval` adds Nomic embedding/token counting and
+the BGE reranker; combine those two presets for the first full run.
+`classification` adds BART only when zero-shot classification is enabled.
+Repeated `--task` and `--model` selections are canonicalized and deduplicated,
+so `--model` remains available for a narrower expert-selected plan without
+making an unqualified synchronization command mean “everything.”
+
+The offline plan obtains every byte count from `model-artifacts.lock.json` and
+reports each independently published runtime bundle as `missing` or
+`verified-present`. Its totals distinguish the selected uncached download,
+the download still required after local verification, already-present runtime
+bytes, additional runtime bytes, peak simultaneous staging/destination space,
+and a free-space margin. `--plan --json` emits the same decision as schema-v1
+JSON with the model-lock and plan SHA-256 identities. A plan exits nonzero when
+space is insufficient; execution revalidates the lock, cache state, and free
+space before transport and again before each missing bundle is published.
+
+LegalBERT remains in the reviewed provenance inventory, but the planner marks
+its pickle-only embedding consumer `unsafe-pickle` and never downloads that
+weight; any independently safe tokenizer consumers remain separate bundles.
+`--all` means all independently syncable safe bundles, not an override of this
+block. Plan totals cover only synchronizer-created reviewed Hub runtime
+bundles. They intentionally exclude derived Docling composite caches and
+RapidOCR assets supplied and verified from the installed package, so those
+separate local footprints are not part of the reported sync requirement.
+
+The tool fetches exact revisions and allowlisted files, then verifies raw and
+transformed bytes before atomic publication. A runtime cache miss fails before
+Hub import or transport; `--model-download-policy allow-reviewed-sync` is an
+explicit convenience, not the release default. Delete a corrupt cache entry
+and rerun the sync tool; never edit a published cache tree in place. Runtime
+bundle identity schema v2 binds the full primary, transformation, and auxiliary
+inventory. An older Nomic directory named with the former partial identity is
+therefore a cache miss and should be resynchronized with the relevant task;
+this migration involves no source or private-corpus data. Each process keeps
+one validated registry snapshot so loader records and provenance cannot cross
+lock generations; restart long-running processes after intentionally replacing
+the policy/lock.
 
 ### Cross-Encoder Reranker
 

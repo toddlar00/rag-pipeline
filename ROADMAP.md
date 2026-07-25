@@ -42,6 +42,7 @@ Status terms:
 | Table-family evaluation correctness | Implemented locally | Commits `e6c91c7` and `b1c7dd1` add explicit owner-selected child aliases, a sealed corpus-bound attestation API, exact-once logical-qrel scoring, exact/accepted-child match provenance, grounding isolation, packet-size preflight, schema-v6 reports/baselines, and a 10-record/6-query CC0 CLI suite with hard-negative upper and lower gates. The actual Ethics table/context ablations and owner approval remain outstanding |
 | Public UI and cloud-endpoint safety | Implemented locally | The R0A candidate removes the Gradio share path, binds `127.0.0.1` explicitly, centralizes versioned endpoint attestation before credential/cache/transport access, rejects redirects and ambiguous targets, isolates loopback proxies, prevents ambient `.netrc` credential replacement, and validates job persistence. It passes the full 1,678-test tree and an independent exploit-oriented audit |
 | Residual local/cloud trust boundary | Implemented locally | R0B adds versioned release-security policy v1 across CLI/Python/UI/service/evaluation/workers/jobs: trusted-single-user UI opt-in, local-only egress, release inline-secret rejection and cache-off default, opaque custom-gateway tenancy, cache-only model loading with explicit verified sync, pinned provider transports, bounded streamed JSON for every Requests-owned provider path, policy-controlled proxy/CA trust, disabled auxiliary telemetry, and strict provenance. The exact local tree passes 1,806 tests with 7 skips |
+| Offline model-sync planning and task presets | Implemented locally | A shared R10/R12 slice adds one lock-derived schema-v1 plan used by preflight and execution, presets for PDF ingestion/default retrieval/optional classification, explicit all-consumer selection, exact cache-aware byte and peak-space accounting, free-space refusal before transport/publication, full auxiliary/transform bundle identities, and explicit unsafe-pickle reporting. The exact local tree passes 1,839 tests with 7 platform skips; 72 focused tests and a separate adversarial audit cover the new boundary with no remaining material issue. It is local, not published, and does not complete either milestone |
 | Ethics retrieval calibration | Owner review pending | [PR #43](https://github.com/toddlar00/rag-pipeline/pull/43): a current-schema clean-room rebuild preserved all 20 unique IDs behind 24 judgments in the exact 1,715-record corpus. A private owner packet now combines those judgments with 195 unique top-10 candidates across four modes, while a content-free receipt and strict four-mode release-policy contract make promotion explicit and review-bound. Actual owner decisions and final thresholds remain outstanding |
 | Process supervision extraction | Implemented (draft) | [PR #33](https://github.com/toddlar00/rag-pipeline/pull/33): deadline supervision, Windows/POSIX containment, startup gates, termination confirmation, and generic entrypoint policy moved to stdlib-only `process_supervision.py`; `rag.py` retains late-bound compatibility wrappers |
 | Vector-index lifecycle extraction | Implemented (draft) | [PR #38](https://github.com/toddlar00/rag-pipeline/pull/38): a standard-library-only policy layer owns deterministic reconciliation, dirty-marker ownership, mutation epochs, exact-ID verification, callback-reentry exclusion, legacy-hash repair, and close/manifest/marker commit ordering |
@@ -758,9 +759,9 @@ done separate; “code exists” does not imply “integrated” or “owner app
 | R7 quality gates | Exhaustive compile/Ruff exist; coverage/types/DAG do not | Point coverage probe is non-gating and misses subprocesses | None | Maintainer selects ratchet/tool baseline | Add architecture inventory, branch coverage, typed leaves |
 | R8 dependency direction | Planned | Current import cycles are directly observed | None | No owner decision | Characterize consumers, then invert one boundary per PR |
 | R9 orchestration decomposition | First policy leaves extracted; hot spots remain | Failure-injection suite provides characterization base | None | No owner decision | Wait for R7/R10A, then slice main/chunk/eval/OpenAPI |
-| R10 performance/capacity | Telemetry and queue metrics exist | No stable capacity budgets or hardware baselines | None | Authorized corpus/hardware/cost scope needed for Phase B | Establish small/medium CPU Phase A before R8/R9 |
+| R10 performance/capacity | Offline cache-aware model-sync byte/space planner implemented locally; runtime telemetry and queue metrics exist | Planner/preflight behavior is tested locally; no stable workload capacity budgets or hardware baselines | Not published | Authorized corpus/hardware/cost scope needed for Phase B | Establish small/medium CPU Phase A before R8/R9; retain the sync plan as its model-footprint input |
 | R11 corpus/profile breadth | Second profile and synthetic fixtures exist | No authorized real receipt for `roman-parts-book-v1` | None | Corpus authorization/qualification required | Add content-free profile diagnostics and real receipt |
-| R12 packaging/docs/UX | Security ADR and docs index started; packaging/split not done | Examples are not yet parser-executed in CI | None | Product language and remote-scope decisions remain | Complete console entry points and short release guides before R5 |
+| R12 packaging/docs/UX | Task-oriented model-sync presets, offline plan output, and plan-based first-run guidance implemented locally; packaging/README split not done | Planner behavior is tested locally; documentation examples are not yet parser-executed in CI | Not published | Product language and remote-scope decisions remain | Add stable console entry points and short parser-checked release guides before R5 |
 
 ## Architecture and risk map
 
@@ -1512,10 +1513,14 @@ than descriptive data with no release ceiling.
 - Record wall time, p50/p95 latency, peak memory, queue wait/saturation, vector
   mutations, storage growth, token reservations/use, cache behavior, and
   caller-priced cost under pinned hardware/model/dependency identities.
-- Add an offline, lock-derived model-sync plan that reports per-bundle and
-  aggregate download bytes, already-present bytes, peak staging/destination
-  space, and free-space preflight. Baseline the minimal PDF plus default
-  embedding selection separately from the roughly 7.5-GiB all-consumer set.
+- **Implemented locally (shared R10/R12 slice):** the offline, lock-derived
+  schema-v1 model-sync plan reports per-bundle and aggregate uncached/required
+  download bytes, verified already-present runtime bytes, additional runtime
+  bytes, peak staging/destination space, margin, and free-space sufficiency.
+  Execution consumes the same canonical selection and rechecks capacity before
+  transport and each publication. Retain PDF-ingestion plus default-retrieval
+  as the first-full-run footprint baseline and compare it with explicit
+  `--all`; derive every value from the current plan rather than a prose size.
 - Add generous regression budgets first, normalize noisy measurements, and keep
   cost/network benchmarks opt-in unless credentials and spend ceilings are
   explicit. Exercise bounded overload and cancellation rather than only the
@@ -1576,10 +1581,14 @@ a multi-thousand-line README or invoking repository-internal script paths.
   focused operator, ingestion, retrieval, evaluation, service, security/privacy,
   migration, and contributor guides. Generate or test command examples against
   the real parsers to prevent documentation drift.
-- Promote model synchronization to a stable entry point with `--plan`/dry-run
-  size output and task presets (PDF ingestion, default retrieval,
-  classification) so first-run instructions do not silently download every
-  reviewed model and hard-coded documentation sizes cannot drift.
+- **Implemented locally (shared R10/R12 slice):** the repository sync tool now
+  has offline `--plan` and schema-v1 JSON output, canonical task presets for PDF
+  ingestion, default retrieval, and optional classification, explicit `--all`,
+  exact cache-aware byte/space preflight, and blocked-consumer reporting. The
+  README now plans before synchronizing and contains no hard-coded model total.
+  Promotion from `tools/sync_model_artifacts.py` to a stable installed console
+  entry point, parser-executed documentation examples, review, and publication
+  remain Phase A work.
 - Audit product language around “grounded” answers. Runtime validation proves
   citation identity, citation placement, quote fidelity, and deterministic
   labeled fixtures; it is not a general semantic-entailment verifier for live

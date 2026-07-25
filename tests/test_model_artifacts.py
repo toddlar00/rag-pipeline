@@ -3,6 +3,7 @@ import hashlib
 import io
 import json
 import os
+from dataclasses import replace
 import subprocess
 import sys
 from types import ModuleType, SimpleNamespace
@@ -576,6 +577,110 @@ def test_verified_model_directory_builds_offline_remote_code_bundle(
     assert again == result
 
 
+def test_runtime_bundle_spec_is_the_shared_source_and_destination_contract(
+        monkeypatch, tmp_path):
+    main, code, _roots, derived = _synthetic_artifacts(tmp_path)
+    artifacts = {main.model_id: main, code.model_id: code}
+    monkeypatch.setattr(
+        model_artifacts, "model_artifact",
+        lambda model_id, **_kwargs: artifacts.get(model_id))
+
+    spec = model_artifacts.runtime_bundle_spec(
+        main.model_id, "embedding", cache_root=tmp_path / "cache")
+
+    assert spec.model_id == main.model_id
+    assert spec.auxiliary_model_id == code.model_id
+    assert spec.auxiliary_consumer == "embedding_remote_code"
+    assert spec.primary_download_bytes == sum(file.size for file in main.files)
+    assert spec.primary_runtime_bytes == len(derived) + main.files[1].size
+    assert spec.auxiliary_download_bytes == sum(file.size for file in code.files)
+    assert spec.auxiliary_runtime_bytes == spec.auxiliary_download_bytes
+    assert spec.transformed_bytes_removed == (
+        main.files[0].size - len(derived))
+    assert spec.runtime_bytes == sum(file.size for file in spec.expected_files)
+    assert len(spec.identity_sha256) == 64
+    assert model_artifacts.verify_cached_runtime_bundle(spec) is False
+    assert not (tmp_path / "cache").exists()
+
+
+def test_runtime_identity_v2_binds_auxiliary_code_inventory(
+        monkeypatch, tmp_path):
+    main, code, _roots, _derived = _synthetic_artifacts(tmp_path)
+    artifacts = {main.model_id: main, code.model_id: code}
+    monkeypatch.setattr(
+        model_artifacts, "model_artifact",
+        lambda model_id, **_kwargs: artifacts.get(model_id))
+    first = model_artifacts.runtime_bundle_spec(
+        main.model_id, "embedding", cache_root=tmp_path / "cache")
+
+    changed_file = replace(code.files[0], content_sha256="f" * 64)
+    artifacts[code.model_id] = replace(
+        code, files=(changed_file, *code.files[1:]))
+    second = model_artifacts.runtime_bundle_spec(
+        main.model_id, "embedding", cache_root=tmp_path / "cache")
+
+    assert first.primary_files == second.primary_files
+    assert first.transforms == second.transforms
+    assert first.identity_sha256 != second.identity_sha256
+    assert first.target != second.target
+
+
+def test_runtime_bundle_spec_rejects_unsafe_or_ambiguous_auxiliary_files(
+        monkeypatch, tmp_path):
+    main, code, _roots, _derived = _synthetic_artifacts(tmp_path)
+    artifacts = {main.model_id: main, code.model_id: code}
+    monkeypatch.setattr(
+        model_artifacts, "model_artifact",
+        lambda model_id, **_kwargs: artifacts.get(model_id))
+
+    unsafe = _model_file("helper.BIN", b"pickle")
+    artifacts[code.model_id] = replace(
+        code,
+        runtime_files=(("embedding_remote_code", (unsafe.path,)),),
+        files=(unsafe,),
+    )
+    with pytest.raises(model_artifacts.ModelArtifactError, match="dependency"):
+        model_artifacts.runtime_bundle_spec(main.model_id, "embedding")
+
+    colliding = _model_file("config.json", b"collision")
+    artifacts[code.model_id] = replace(
+        code,
+        runtime_files=(("embedding_remote_code", (colliding.path,)),),
+        files=(colliding,),
+    )
+    with pytest.raises(model_artifacts.ModelArtifactError, match="collides"):
+        model_artifacts.runtime_bundle_spec(main.model_id, "embedding")
+
+    descendant = _model_file("config.json/helper.py", b"collision")
+    artifacts[code.model_id] = replace(
+        code,
+        runtime_files=(("embedding_remote_code", (descendant.path,)),),
+        files=(descendant,),
+    )
+    with pytest.raises(model_artifacts.ModelArtifactError, match="file/directory"):
+        model_artifacts.runtime_bundle_spec(main.model_id, "embedding")
+
+    with pytest.raises(
+            model_artifacts.ModelArtifactError,
+            match="case-folded directory collision"):
+        model_artifacts._validate_runtime_bundle_topology((
+            model_artifacts.RuntimeBundleFile("Code/one.py", 1, "1" * 64),
+            model_artifacts.RuntimeBundleFile("code/two.py", 1, "2" * 64),
+        ))
+
+
+def test_runtime_bundle_spec_rejects_dependency_only_consumer(
+        monkeypatch, tmp_path):
+    _main, code, _roots, _derived = _synthetic_artifacts(tmp_path)
+    monkeypatch.setattr(
+        model_artifacts, "model_artifact",
+        lambda model_id, **_kwargs: code if model_id == code.model_id else None)
+
+    with pytest.raises(model_artifacts.ModelArtifactError, match="dependency-only"):
+        model_artifacts.runtime_bundle_spec(
+            code.model_id, "embedding_remote_code")
+
+
 def test_verified_model_directory_is_cache_only_until_explicit_sync(
         monkeypatch, tmp_path):
     main, code, roots, _derived = _synthetic_artifacts(tmp_path)
@@ -798,6 +903,26 @@ def test_verified_model_directory_rejects_tampering_and_pickle(
         model_artifacts.verified_model_directory(
             legal.model_id, "embedding", cache_root=tmp_path / "legal",
             snapshot_download_fn=lambda **_kwargs: pytest.fail("must block first"))
+
+
+def test_cached_runtime_bundle_rejects_unexpected_empty_directory(
+        monkeypatch, tmp_path):
+    main, code, roots, _derived = _synthetic_artifacts(tmp_path)
+    artifacts = {main.model_id: main, code.model_id: code}
+    monkeypatch.setattr(
+        model_artifacts, "model_artifact",
+        lambda model_id, **_kwargs: artifacts.get(model_id))
+    result = model_artifacts.verified_model_directory(
+        main.model_id, "embedding", cache_root=tmp_path / "cache",
+        allow_download=True, authorize_download_fn=lambda: None,
+        snapshot_download_fn=lambda **kwargs: str(roots[kwargs["repo_id"]]))
+    (result / "unexpected-empty").mkdir()
+
+    spec = model_artifacts.runtime_bundle_spec(
+        main.model_id, "embedding", cache_root=tmp_path / "cache")
+    with pytest.raises(
+            model_artifacts.ModelArtifactError, match="unexpected directory"):
+        model_artifacts.verify_cached_runtime_bundle(spec)
 
 
 def test_verified_installed_package_model_checks_version_and_bytes(
