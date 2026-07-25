@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 import attempt_reporting
-import job_manager
+import job_coordination as job_manager
 import job_runtime
 import runtime_supervision
 import storage_policy
@@ -1526,14 +1526,21 @@ def test_detached_early_exit_is_a_terminal_launch_error(
         def poll():
             return 1
 
-    monkeypatch.setattr(
-        job_manager.subprocess, "Popen", lambda *args, **kwargs: ExitedManager())
+    observed = {}
+
+    def launch(command, **options):
+        observed.update(command=command, options=options)
+        return ExitedManager()
+
+    monkeypatch.setattr(job_manager.subprocess, "Popen", launch)
 
     with pytest.raises(
             job_manager.JobManagerLaunchError, match="before its ready"):
         job_manager.launch_detached(
             store, submitted.job_id, ready_timeout=0.1)
     assert store.get_job(submitted.job_id).status == "failed"
+    assert Path(observed["command"][2]).resolve() == (
+        job_manager.MANAGER_SCRIPT_PATH)
 
 
 def test_detached_spawn_failure_is_a_terminal_launch_error(

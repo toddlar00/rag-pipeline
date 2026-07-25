@@ -73,12 +73,12 @@ The former `job_manager` to `rag` edge is resolved by the subsequent runtime
 binding decision, and the tracked first-party import graph is now acyclic. The
 later [service-host binding decision](service-host-binding.md) also removes the
 service host's `rag` dependency by moving physical retrieval composition to a
-dedicated child. `service_runtime.py` still composes job operations through
-`job_manager`, while `rag.py` retains lazy job CLI dispatch. That root
-composition is intentional compatibility debt, not evidence that supervision
-belongs in the facade. Later changes must characterize job coordination and
-recovery before replacing the remaining seam with narrow protocols and one
-application root.
+dedicated child. The subsequent
+[service job-coordination decision](service-job-coordination-binding.md) moves
+the durable engine inward, retains `job_manager.py` as its executable/import
+facade, and removes the service-to-manager edge. `rag.py` still retains lazy job
+CLI dispatch, and the split application roots remain intentional compatibility
+debt rather than evidence that supervision belongs in the facade.
 
 ## Evidence and history
 

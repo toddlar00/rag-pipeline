@@ -177,12 +177,15 @@ def test_first_party_import_graph_is_acyclic():
     assert _cyclic_components(graph) == set()
 
 
-def test_job_manager_depends_on_runtime_binding_without_loading_rag():
+def test_job_coordination_depends_inward_and_manager_is_only_a_facade():
     graph = _first_party_import_graph()
 
-    assert "runtime_supervision" in graph["job_manager"]
+    assert graph["job_manager"] == {
+        "job_coordination", "job_coordination_contracts"}
+    assert "runtime_supervision" in graph["job_coordination"]
     assert "rag" not in graph["job_manager"]
     assert "rag" not in _transitive_dependencies(graph, "job_manager")
+    assert graph["job_coordination_contracts"] == set()
     assert graph["runtime_supervision"] == {
         "cli_policy", "process_supervision", "run_telemetry",
     }
@@ -210,10 +213,9 @@ def test_job_manager_and_rag_import_cleanly_in_both_orders():
 def test_service_runtime_uses_inward_binding_without_loading_rag():
     graph = _first_party_import_graph()
 
-    # ``job_manager`` is intentionally still a host dependency. Removing that
-    # remaining composition edge belongs to a later R8 milestone.
     assert graph["service_runtime"] == {
-        "job_manager",
+        "job_coordination",
+        "job_coordination_contracts",
         "job_runtime",
         "release_security",
         "retention",
@@ -221,6 +223,8 @@ def test_service_runtime_uses_inward_binding_without_loading_rag():
         "service_runtime_binding",
         "storage_policy",
     }
+    assert "job_manager" not in _transitive_dependencies(
+        graph, "service_runtime")
     assert "rag" not in _transitive_dependencies(graph, "service_runtime")
     assert graph["service_runtime_binding"] == {
         "embedding_policy",
@@ -256,10 +260,14 @@ def test_service_runtime_boundary_raw_imports_are_pinned():
     modules = _application_modules()
 
     assert _raw_import_roots(modules["service_runtime"]) == {
-        "dataclasses", "hashlib", "job_manager", "job_runtime", "json",
-        "os", "pathlib", "release_security", "retention",
+        "dataclasses", "hashlib", "job_coordination",
+        "job_coordination_contracts", "job_runtime", "json", "os",
+        "pathlib", "release_security", "retention",
         "service_contracts", "service_runtime_binding", "stat",
         "storage_policy", "tempfile", "threading", "typing",
+    }
+    assert _raw_import_roots(modules["job_coordination_contracts"]) == {
+        "collections", "dataclasses",
     }
     assert _raw_import_roots(modules["service_runtime_binding"]) == {
         "collections", "dataclasses", "embedding_policy", "pathlib",
@@ -281,8 +289,8 @@ def test_service_runtime_boundary_raw_imports_are_pinned():
 def test_service_runtime_isolated_import_avoids_rag_and_heavy_backends():
     result = _run_isolated(
         "import service_runtime; "
-        "forbidden = ('rag', 'qdrant', 'qdrant_client', 'chromadb', 'torch', "
-        "'transformers', 'docling'); "
+        "forbidden = ('job_manager', 'rag', 'qdrant', 'qdrant_client', "
+        "'chromadb', 'torch', 'transformers', 'docling'); "
         "loaded = tuple(sys.modules); "
         "assert not {root: [name for name in loaded if name == root or "
         "name.startswith(root + '.')] for root in forbidden "

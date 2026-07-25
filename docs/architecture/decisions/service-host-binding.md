@@ -90,11 +90,13 @@ the service without loading `rag` or optional vector/ML clients. Physical
 search composition is visible at one small child boundary, and the shared
 lease module prevents a split-lock migration.
 
-This is R8c-2, not completion of R8. `service_runtime.py` still imports
-`job_manager` for launch/reconcile composition; `service_api.main`, the UI,
-and the `rag.py` CLI still construct concrete applications separately. A later
-characterized slice must introduce job coordination ports and converge those
-roots without weakening the service ownership, idempotency, recovery, or
+This is R8c-2, not completion of R8. The subsequent
+[service job-coordination decision](service-job-coordination-binding.md)
+removes the service's direct and transitive `job_manager` shell dependency by
+moving the durable engine inward and snapshotting one frozen capability.
+`service_api.main`, the UI, and the `rag.py` CLI still construct concrete
+applications separately. A later characterized slice must converge those roots
+without weakening the service ownership, idempotency, recovery, or
 process-containment contracts. R12 packaging must also replace or explicitly
 validate sibling-file worker paths when installed console entry points exist.
 

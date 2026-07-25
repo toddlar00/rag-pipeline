@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+import job_coordination
 import job_manager
 import job_runtime
 import retention
@@ -66,6 +67,13 @@ def _runtime_binding(**changes):
     )
 
 
+def _coordination_binding(**changes):
+    return replace(
+        job_coordination.default_service_job_coordination_binding(),
+        **changes,
+    )
+
+
 _SERVICE_HOLDER_SCRIPT = textwrap.dedent(
     """
     from pathlib import Path
@@ -73,6 +81,9 @@ _SERVICE_HOLDER_SCRIPT = textwrap.dedent(
 
     import service_contracts
     import service_runtime
+
+    assert "job_manager" not in sys.modules
+    assert "rag" not in sys.modules
 
     root = Path(sys.argv[1]).resolve()
     config = service_contracts.CorpusConfig(
@@ -89,7 +100,11 @@ _SERVICE_HOLDER_SCRIPT = textwrap.dedent(
         output_root=root / "output",
         service_state_root=root / "service-state",
     )
+    assert "job_manager" not in sys.modules
+    assert "rag" not in sys.modules
     service.start()
+    assert "job_manager" not in sys.modules
+    assert "rag" not in sys.modules
     print("ACQUIRED", flush=True)
     sys.stdin.readline()
     service.close()
@@ -116,7 +131,7 @@ def _launch_starting(store, job_id, *, ready_timeout):
 
 
 def _service(tmp_path, *, search_runner=None, launcher=_launch_starting,
-             state_name="service-state", max_searches=2):
+             job_binding=None, state_name="service-state", max_searches=2):
     config = _config(tmp_path)
     options = {}
     if search_runner is not None:
@@ -128,6 +143,7 @@ def _service(tmp_path, *, search_runner=None, launcher=_launch_starting,
         output_root=tmp_path / "output",
         service_state_root=tmp_path / state_name,
         max_concurrent_searches=max_searches,
+        job_coordination_binding=job_binding,
         launcher=launcher,
         **options,
     )
@@ -534,6 +550,182 @@ def test_service_snapshots_one_complete_runtime_binding_at_construction(
     ]
 
 
+def test_service_snapshots_job_coordination_and_explicit_launcher_wins(
+        monkeypatch, tmp_path):
+    events = []
+
+    class FirstCorrupt(job_manager.JobManagerCorruptError):
+        pass
+
+    class SecondCorrupt(job_manager.JobManagerCorruptError):
+        pass
+
+    def first_reconcile(store, job_id, **kwargs):
+        events.append(("reconcile", store, job_id, kwargs))
+        raise FirstCorrupt("first generation")
+
+    def unexpected(*_args, **_kwargs):
+        pytest.fail("a replaced coordination generation was mixed in")
+
+    first_binding = _coordination_binding(
+        launch_detached=unexpected,
+        reconcile_job=first_reconcile,
+        corrupt_error_type=FirstCorrupt,
+    )
+    second_binding = _coordination_binding(
+        launch_detached=unexpected,
+        reconcile_job=unexpected,
+        corrupt_error_type=SecondCorrupt,
+    )
+    monkeypatch.setattr(
+        service_runtime,
+        "_default_service_job_coordination_binding",
+        lambda: first_binding,
+    )
+
+    config = _config(tmp_path)
+
+    def explicit_launch(store, job_id, *, ready_timeout):
+        events.append(("launch", store, job_id, ready_timeout))
+        return _launch_starting(
+            store, job_id, ready_timeout=ready_timeout)
+
+    service = service_runtime.RagApplicationService(
+        {config.corpus_id: config},
+        job_root=tmp_path / "jobs",
+        working_directory=tmp_path,
+        output_root=tmp_path / "output",
+        service_state_root=tmp_path / "service-state",
+        launcher=explicit_launch,
+    )
+    monkeypatch.setattr(
+        service_runtime,
+        "_default_service_job_coordination_binding",
+        lambda: second_binding,
+    )
+
+    service.start()
+    try:
+        created = service.reindex(
+            "property", service_contracts.ReindexRequest(),
+            idempotency_key="coordination-snapshot-1234")
+        current = service.store.get_job(created.job["job_id"])
+        with pytest.raises(service_runtime.ServiceRuntimeError) as raised:
+            service.cancel_job(
+                current.job_id,
+                attempt_number=current.attempt_number,
+                revision=current.revision,
+            )
+        assert raised.value.fatal is True
+        assert not service.healthy
+    finally:
+        service.close()
+
+    assert service._job_coordination is first_binding
+    assert events[0] == (
+        "launch", service.store, created.job["job_id"],
+        service.ready_timeout_seconds)
+    assert events[1] == (
+        "reconcile", service.store, created.job["job_id"], {})
+
+
+def test_service_omitted_launcher_delegates_to_bound_generation_exactly(
+        tmp_path):
+    calls = []
+
+    def bound_launch(store, job_id, *, ready_timeout):
+        calls.append((store, job_id, ready_timeout))
+        return _launch_starting(
+            store, job_id, ready_timeout=ready_timeout)
+
+    config = _config(tmp_path)
+    service = service_runtime.RagApplicationService(
+        {config.corpus_id: config},
+        job_root=tmp_path / "jobs",
+        working_directory=tmp_path,
+        output_root=tmp_path / "output",
+        service_state_root=tmp_path / "service-state",
+        job_coordination_binding=_coordination_binding(
+            launch_detached=bound_launch),
+    )
+    service.start()
+    try:
+        created = service.reindex(
+            "property", service_contracts.ReindexRequest(),
+            idempotency_key="bound-default-launch-1234")
+    finally:
+        service.close()
+
+    assert calls == [(
+        service.store,
+        created.job["job_id"],
+        service.ready_timeout_seconds,
+    )]
+
+
+def test_service_reconciliation_passes_exact_active_lease_and_queue_policy(
+        tmp_path):
+    calls = []
+
+    def reconcile(store, job_id, **kwargs):
+        calls.append((store, job_id, kwargs.copy()))
+        lease = kwargs["lease"]
+        assert lease.active
+        store.load_execution(job_id, lease=lease)
+        return store.get_job(job_id)
+
+    service = _service(
+        tmp_path,
+        job_binding=_coordination_binding(reconcile_job=reconcile),
+    )
+    try:
+        submitted = _submit_service_job(service)
+        service._launching_job_ids.add(submitted.job_id)
+        service._reconcile_service_jobs(fail_queued=True)
+        service._launching_job_ids.clear()
+        service._reconcile_service_jobs(fail_queued=True)
+    finally:
+        service.close()
+
+    assert len(calls) == 2
+    assert calls[0][0:2] == (service.store, submitted.job_id)
+    assert calls[0][2]["fail_queued"] is False
+    assert calls[1][2]["fail_queued"] is True
+    assert calls[0][2]["lease"] is not calls[1][2]["lease"]
+    assert not calls[0][2]["lease"].active
+    assert not calls[1][2]["lease"].active
+
+
+def test_service_reconciliation_skips_terminal_and_foreign_jobs(tmp_path):
+    calls = []
+
+    def reconcile(store, job_id, **kwargs):
+        calls.append((store, job_id, kwargs.copy()))
+        return store.get_job(job_id)
+
+    service = _service(
+        tmp_path,
+        job_binding=_coordination_binding(reconcile_job=reconcile),
+    )
+    try:
+        active = _submit_service_job(service)
+        terminal = _submit_service_job(service)
+        terminal = _advance_failed(service.store, terminal.job_id)
+        foreign = service.store.submit_job(
+            "export", ["--chunks", "private.jsonl"])
+
+        results = service._reconcile_service_jobs(fail_queued=False)
+    finally:
+        service.close()
+
+    assert [call[1] for call in calls] == [active.job_id]
+    assert calls[0][2]["fail_queued"] is False
+    assert not calls[0][2]["lease"].active
+    assert {result.job_id for result in results} == {
+        active.job_id, terminal.job_id}
+    assert foreign.job_id not in {result.job_id for result in results}
+
+
 def test_service_releases_instance_lease_after_startup_failure(
         monkeypatch, tmp_path):
     events = []
@@ -772,14 +964,14 @@ def test_retryable_job_listing_contention_does_not_poison_health(
         service.close()
 
 
-def test_expected_job_contention_does_not_poison_health(
-        monkeypatch, tmp_path):
-    service = _service(tmp_path)
+def test_expected_job_contention_does_not_poison_health(tmp_path):
+    service = _service(
+        tmp_path,
+        job_binding=_coordination_binding(
+            reconcile_job=lambda *_args, **_kwargs: (
+                _ for _ in ()).throw(job_runtime.JobBusyError("busy"))),
+    )
     submitted = _submit_service_job(service)
-    monkeypatch.setattr(
-        service_runtime.job_manager, "reconcile_job",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            job_runtime.JobBusyError("busy")))
     try:
         with pytest.raises(service_runtime.ServiceRuntimeError) as raised:
             service.cancel_job(
@@ -789,6 +981,45 @@ def test_expected_job_contention_does_not_poison_health(
         assert raised.value.code == "service_unavailable"
         assert raised.value.fatal is False
         assert service.healthy
+    finally:
+        service.close()
+
+
+@pytest.mark.parametrize(
+    ("failure_type", "code", "fatal", "healthy"),
+    [
+        (job_runtime.JobNotFoundError, "not_found", False, True),
+        (job_runtime.JobBusyError, "service_unavailable", False, True),
+        (job_runtime.JobStateError, "service_unavailable", False, True),
+        (job_runtime.JobValidationError,
+         "service_unavailable", False, True),
+        (job_runtime.JobCorruptError,
+         "service_unavailable", True, False),
+        (job_manager.JobManagerCorruptError,
+         "service_unavailable", True, False),
+    ],
+)
+def test_expected_job_maps_every_coordination_error_stably(
+        tmp_path, failure_type, code, fatal, healthy):
+    def fail(*_args, **_kwargs):
+        raise failure_type("private coordination detail")
+
+    service = _service(
+        tmp_path,
+        job_binding=_coordination_binding(reconcile_job=fail),
+    )
+    submitted = _submit_service_job(service)
+    try:
+        with pytest.raises(service_runtime.ServiceRuntimeError) as raised:
+            service.cancel_job(
+                submitted.job_id,
+                attempt_number=submitted.attempt_number,
+                revision=submitted.revision,
+            )
+        assert raised.value.code == code
+        assert raised.value.fatal is fatal
+        assert service.healthy is healthy
+        assert "private coordination detail" not in str(raised.value)
     finally:
         service.close()
 
@@ -1150,9 +1381,120 @@ def test_reindex_is_structured_idempotent_and_detects_key_reuse(tmp_path):
         service.close()
 
 
-def test_reindex_replay_maps_manager_corruption_to_fatal_unavailability(
+def test_queued_reindex_replay_uses_explicit_fail_queued_coordination(
+        tmp_path):
+    calls = []
+
+    def reconcile(store, job_id, **kwargs):
+        calls.append((store, job_id, kwargs.copy()))
+        return store.get_job(job_id)
+
+    service = _service(
+        tmp_path,
+        job_binding=_coordination_binding(reconcile_job=reconcile),
+    )
+    try:
+        config = service.corpora["property"]
+        request = service_contracts.ReindexRequest()
+        job_id = service_contracts.job_id_for_idempotency(
+            "property", "exact-replay-1234")
+        service.store.submit_job(
+            "index", service._reindex_argv(config, request),
+            timeout_seconds=config.reindex_timeout_seconds,
+            job_id=job_id,
+            working_directory=service.working_directory,
+            output_root=service.output_root,
+        )
+
+        result = service.reindex(
+            "property", request,
+            idempotency_key="exact-replay-1234")
+    finally:
+        service.close()
+
+    assert result.idempotent_replay is True
+    assert calls == [
+        (service.store, job_id, {"fail_queued": True}),
+    ]
+
+
+def test_launch_failure_terminalizes_job_and_returns_stable_error(tmp_path):
+    def fail_launch(*_args, **_kwargs):
+        raise RuntimeError("private launch detail")
+
+    service = _service(tmp_path, launcher=fail_launch)
+    try:
+        with pytest.raises(service_runtime.ServiceRuntimeError) as raised:
+            service.reindex(
+                "property", service_contracts.ReindexRequest(),
+                idempotency_key="launch-failure-1234")
+
+        assert raised.value.code == "service_unavailable"
+        assert raised.value.fatal is False
+        assert raised.value.job_id is not None
+        assert service.store.get_job(raised.value.job_id).status == "failed"
+        assert service.healthy
+        assert "private launch detail" not in str(raised.value)
+    finally:
+        service.close()
+
+
+def test_launch_failure_terminalization_failure_is_fatal_and_unhealthy(
         monkeypatch, tmp_path):
-    service = _service(tmp_path)
+    def fail_launch(*_args, **_kwargs):
+        raise RuntimeError("private launch detail")
+
+    service = _service(tmp_path, launcher=fail_launch)
+    monkeypatch.setattr(
+        service.store,
+        "transition_job",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            job_runtime.JobBusyError("private terminalization detail")),
+    )
+    try:
+        with pytest.raises(service_runtime.ServiceRuntimeError) as raised:
+            service.reindex(
+                "property", service_contracts.ReindexRequest(),
+                idempotency_key="terminalization-failure-1234")
+
+        assert raised.value.code == "service_unavailable"
+        assert raised.value.fatal is True
+        assert raised.value.job_id is not None
+        assert not service.healthy
+        assert service.store.get_job(raised.value.job_id).status == "queued"
+    finally:
+        service.close()
+
+
+def test_process_control_exception_is_not_swallowed_as_launch_failure(
+        tmp_path):
+    def interrupt(*_args, **_kwargs):
+        raise KeyboardInterrupt()
+
+    service = _service(tmp_path, launcher=interrupt)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            service.reindex(
+                "property", service_contracts.ReindexRequest(),
+                idempotency_key="interrupt-launch-1234")
+        jobs = service.store.list_jobs()
+        assert len(jobs) == 1
+        assert jobs[0].status == "queued"
+        assert service.healthy
+        assert service._launching_job_ids == set()
+    finally:
+        service.close()
+
+
+def test_reindex_replay_maps_manager_corruption_to_fatal_unavailability(
+        tmp_path):
+    service = _service(
+        tmp_path,
+        job_binding=_coordination_binding(
+            reconcile_job=lambda *_args, **_kwargs: (
+                _ for _ in ()).throw(
+                    job_manager.JobManagerCorruptError("corrupt"))),
+    )
     config = service.corpora["property"]
     request = service_contracts.ReindexRequest()
     job_id = service_contracts.job_id_for_idempotency(
@@ -1164,10 +1506,6 @@ def test_reindex_replay_maps_manager_corruption_to_fatal_unavailability(
         working_directory=service.working_directory,
         output_root=service.output_root,
     )
-    monkeypatch.setattr(
-        service_runtime.job_manager, "reconcile_job",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            service_runtime.job_manager.JobManagerCorruptError("corrupt")))
     try:
         with pytest.raises(service_runtime.ServiceRuntimeError) as raised:
             service.reindex(
@@ -1181,8 +1519,13 @@ def test_reindex_replay_maps_manager_corruption_to_fatal_unavailability(
 
 
 def test_reindex_replay_contention_is_retryable_without_poisoning_health(
-        monkeypatch, tmp_path):
-    service = _service(tmp_path)
+        tmp_path):
+    service = _service(
+        tmp_path,
+        job_binding=_coordination_binding(
+            reconcile_job=lambda *_args, **_kwargs: (
+                _ for _ in ()).throw(job_runtime.JobBusyError("busy"))),
+    )
     config = service.corpora["property"]
     request = service_contracts.ReindexRequest()
     job_id = service_contracts.job_id_for_idempotency(
@@ -1194,10 +1537,6 @@ def test_reindex_replay_contention_is_retryable_without_poisoning_health(
         working_directory=service.working_directory,
         output_root=service.output_root,
     )
-    monkeypatch.setattr(
-        service_runtime.job_manager, "reconcile_job",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            job_runtime.JobBusyError("busy")))
     try:
         with pytest.raises(service_runtime.ServiceRuntimeError) as raised:
             service.reindex(
@@ -1206,6 +1545,50 @@ def test_reindex_replay_contention_is_retryable_without_poisoning_health(
         assert raised.value.code == "service_unavailable"
         assert raised.value.fatal is False
         assert service.healthy
+    finally:
+        service.close()
+
+
+@pytest.mark.parametrize(
+    ("failure_type", "code", "fatal", "healthy"),
+    [
+        (job_runtime.JobNotFoundError, "not_found", False, True),
+        (job_runtime.JobStateError, "conflict", False, True),
+        (job_runtime.JobValidationError,
+         "service_unavailable", False, True),
+        (job_runtime.JobCorruptError,
+         "service_unavailable", True, False),
+    ],
+)
+def test_reindex_replay_maps_remaining_coordination_errors(
+        tmp_path, failure_type, code, fatal, healthy):
+    def fail(*_args, **_kwargs):
+        raise failure_type("private replay detail")
+
+    service = _service(
+        tmp_path,
+        job_binding=_coordination_binding(reconcile_job=fail),
+    )
+    config = service.corpora["property"]
+    request = service_contracts.ReindexRequest()
+    job_id = service_contracts.job_id_for_idempotency(
+        "property", "mapped-replay-1234")
+    service.store.submit_job(
+        "index", service._reindex_argv(config, request),
+        timeout_seconds=config.reindex_timeout_seconds,
+        job_id=job_id,
+        working_directory=service.working_directory,
+        output_root=service.output_root,
+    )
+    try:
+        with pytest.raises(service_runtime.ServiceRuntimeError) as raised:
+            service.reindex(
+                "property", request,
+                idempotency_key="mapped-replay-1234")
+        assert raised.value.code == code
+        assert raised.value.fatal is fatal
+        assert service.healthy is healthy
+        assert "private replay detail" not in str(raised.value)
     finally:
         service.close()
 
@@ -1290,19 +1673,18 @@ def test_concurrent_idempotent_reindex_launches_exactly_once(tmp_path):
         service.close()
 
 
-def test_job_listing_is_redacted_cursor_paginated_and_read_only(
-        monkeypatch, tmp_path):
-    service = _service(tmp_path)
+def test_job_listing_is_redacted_cursor_paginated_and_read_only(tmp_path):
+    service = _service(
+        tmp_path,
+        job_binding=_coordination_binding(
+            reconcile_job=lambda *_args, **_kwargs: pytest.fail(
+                "GET listing must not reconcile")),
+    )
     try:
         ids = []
         for _index in range(3):
             summary = _submit_service_job(service)
             ids.append(summary.job_id)
-        monkeypatch.setattr(
-            service_runtime.job_manager, "reconcile_job",
-            lambda *_args, **_kwargs: pytest.fail(
-                "GET listing must not reconcile"))
-
         first = service.list_jobs(limit=2)
         assert len(first["items"]) == 2
         assert first["next_cursor"]
@@ -1449,6 +1831,42 @@ def test_active_job_deletion_plan_is_conflict_without_poisoning_health(
         assert raised.value.code == "conflict"
         assert raised.value.fatal is False
         assert service.healthy
+    finally:
+        service.close()
+
+
+@pytest.mark.parametrize(
+    ("failure_type", "code", "fatal", "healthy"),
+    [
+        (job_runtime.JobNotFoundError, "not_found", False, True),
+        (job_runtime.JobStateError, "conflict", False, True),
+        (job_runtime.JobBusyError, "service_unavailable", False, True),
+        (job_runtime.JobValidationError,
+         "service_unavailable", False, True),
+        (job_runtime.JobCorruptError,
+         "service_unavailable", True, False),
+        (job_manager.JobManagerCorruptError,
+         "service_unavailable", True, False),
+    ],
+)
+def test_deletion_plan_maps_every_coordination_error_stably(
+        tmp_path, failure_type, code, fatal, healthy):
+    def fail(*_args, **_kwargs):
+        raise failure_type("private deletion detail")
+
+    service = _service(
+        tmp_path,
+        job_binding=_coordination_binding(reconcile_job=fail),
+    )
+    submitted = _submit_service_job(service)
+    _advance_failed(service.store, submitted.job_id)
+    try:
+        with pytest.raises(service_runtime.ServiceRuntimeError) as raised:
+            service.deletion_plan(submitted.job_id)
+        assert raised.value.code == code
+        assert raised.value.fatal is fatal
+        assert service.healthy is healthy
+        assert "private deletion detail" not in str(raised.value)
     finally:
         service.close()
 

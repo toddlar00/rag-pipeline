@@ -38,10 +38,11 @@ binds the generic process loop to:
 
 The frozen `PipelineRuntimeBinding` carries the script path, supervisor
 callable, cleanup exception type, and an immutable copied timeout mapping.
-`default_runtime_binding()` exposes the production value. `job_manager.py`
-resolves exactly one binding at the start of each run or detached launch and
-uses fields from that snapshot together. Its existing explicit method
-overrides continue to take precedence.
+`default_runtime_binding()` exposes the production value. The durable engine
+now owned by `job_coordination.py` resolves exactly one binding at the start of
+each run or detached launch and uses fields from that snapshot together. At the
+time of this decision that implementation lived in `job_manager.py`; the later
+facade split preserves its public surface and explicit override precedence.
 
 `runtime_supervision.py` imports the narrow policy/core modules it composes and
 does not import `rag`, `job_manager`, or the service layer. `rag.py` imports
@@ -52,8 +53,8 @@ does not duplicate or move that loop.
 
 ## Invariants
 
-- `job_manager.py` must not import `rag.py`, directly or transitively through
-  the runtime binding.
+- The durable engine and `job_manager.py` facade must not import `rag.py`,
+  directly or transitively through the runtime binding.
 - One job attempt uses one binding snapshot for its entrypoint, supervisor,
   timeout policy, and cleanup exception handling.
 - Binding construction rejects a non-callable supervisor, a cleanup type that
@@ -78,11 +79,13 @@ loading the large pipeline facade.
 This decision is R8c-1, not completion of R8. The later
 [service-host binding decision](service-host-binding.md) removes
 `service_runtime.py`'s `rag` dependency and gives physical search a dedicated
-child composition shell. The service still imports `job_manager`; application
-composition remains split between `rag.py`, the service modules, the UI, and
-their CLIs; and `rag.py` retains lazy job dispatch for compatibility. Later
-slices must characterize job coordination and root construction before
-introducing one application root or removing facade aliases.
+child composition shell. The subsequent
+[service job-coordination decision](service-job-coordination-binding.md) moves
+the engine to `job_coordination.py`, leaves `job_manager.py` as its stable
+shell, and removes the service-to-manager edge. Application composition remains
+split between `rag.py`, the service modules, the UI, and their CLIs; `rag.py`
+retains lazy job dispatch for compatibility. A later slice must introduce one
+application root before removing any proven facade aliases.
 
 The sibling-file entrypoint is correct for the current flat repository. R12
 packaging work must deliberately replace or validate that assumption when
@@ -103,3 +106,5 @@ stable installed console entry points are introduced.
   [Process-supervision extraction](process-supervision-extraction.md)
 - Subsequent service decision:
   [Service-host binding and isolated search composition](service-host-binding.md)
+- Subsequent job-coordination decision:
+  [Service job-coordination binding and manager facade](service-job-coordination-binding.md)

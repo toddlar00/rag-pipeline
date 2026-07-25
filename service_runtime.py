@@ -17,7 +17,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-import job_manager
+import job_coordination
+import job_coordination_contracts
 import job_runtime
 import release_security
 import retention
@@ -44,6 +45,9 @@ _ACTIVE_SERVICE_GUARD = threading.Lock()
 _ACTIVE_SERVICE_KEYS: set[tuple[int, str]] = set()
 _default_service_runtime_binding = (
     service_runtime_binding.default_service_runtime_binding)
+_default_service_job_coordination_binding = (
+    job_coordination.default_service_job_coordination_binding)
+_LAUNCHER_UNSET = object()
 
 
 class ServiceRuntimeError(RuntimeError):
@@ -546,12 +550,14 @@ class RagApplicationService:
                 release_security.ReleaseSecurityPolicy | None) = None,
             runtime_binding: (
                 service_runtime_binding.ServiceRuntimeBinding | None) = None,
+            job_coordination_binding: (
+                job_coordination_contracts.ServiceJobCoordinationBinding
+                | None) = None,
             search_runner: Callable[[
                 service_contracts.CorpusConfig,
                 service_contracts.SearchRequest, str], dict[str, Any]
             ] = supervised_search,
-            launcher: Callable[..., job_manager.LaunchResult] =
-            job_manager.launch_detached,
+            launcher: Callable[..., object] | object = _LAUNCHER_UNSET,
     ):
         if (not isinstance(corpora, Mapping) or not corpora
                 or len(corpora) > MAX_CORPORA):
@@ -574,6 +580,14 @@ class RagApplicationService:
         if not isinstance(
                 self._runtime_binding,
                 service_runtime_binding.ServiceRuntimeBinding):
+            raise service_contracts.ServiceContractError()
+        self._job_coordination = (
+            _default_service_job_coordination_binding()
+            if job_coordination_binding is None
+            else job_coordination_binding)
+        if not isinstance(
+                self._job_coordination,
+                job_coordination_contracts.ServiceJobCoordinationBinding):
             raise service_contracts.ServiceContractError()
         for config in checked.values():
             if self._runtime_binding.is_api_embedding_model(
@@ -653,7 +667,9 @@ class RagApplicationService:
                     runtime_binding=self._runtime_binding))
         else:
             self._search_runner = search_runner
-        self._launcher = launcher
+        self._launcher = (
+            self._job_coordination.launch_detached
+            if launcher is _LAUNCHER_UNSET else launcher)
         self._search_slots = threading.BoundedSemaphore(
             max_concurrent_searches)
         self._state_lock = threading.Lock()
@@ -875,7 +891,7 @@ class RagApplicationService:
                             snapshot.job_id, lease=lease)
                         if not self._execution_is_service_reindex(execution):
                             continue
-                        results.append(job_manager.reconcile_job(
+                        results.append(self._job_coordination.reconcile_job(
                             self.store, snapshot.job_id,
                             fail_queued=(
                                 fail_queued
@@ -889,7 +905,7 @@ class RagApplicationService:
                     continue
             return results
         except (job_runtime.JobCorruptError,
-                job_manager.JobManagerCorruptError) as exc:
+                self._job_coordination.corrupt_error_type) as exc:
             self.mark_unhealthy()
             raise ServiceRuntimeError(
                 "service_unavailable", fatal=True) from exc
@@ -905,9 +921,10 @@ class RagApplicationService:
                 summaries = self._reconcile_service_jobs(fail_queued=True)
             return [service_contracts.public_job(item) for item in summaries]
         except (job_runtime.JobCorruptError,
-                job_manager.JobManagerCorruptError) as exc:
+                self._job_coordination.corrupt_error_type) as exc:
             self.mark_unhealthy()
-            raise ServiceRuntimeError("service_unavailable") from exc
+            raise ServiceRuntimeError(
+                "service_unavailable", fatal=True) from exc
         except job_runtime.JobRuntimeError as exc:
             raise ServiceRuntimeError("service_unavailable") from exc
 
@@ -1034,16 +1051,19 @@ class RagApplicationService:
         self._require_job_root_owned()
         self._require_service_execution(job_id)
         try:
-            current = job_manager.reconcile_job(self.store, job_id)
+            current = self._job_coordination.reconcile_job(
+                self.store, job_id)
         except job_runtime.JobNotFoundError as exc:
             raise ServiceRuntimeError("not_found") from exc
         except job_runtime.JobBusyError as exc:
             raise ServiceRuntimeError("service_unavailable") from exc
         except (job_runtime.JobCorruptError,
-                job_manager.JobManagerCorruptError) as exc:
+                self._job_coordination.corrupt_error_type) as exc:
             self.mark_unhealthy()
             raise ServiceRuntimeError(
                 "service_unavailable", fatal=True) from exc
+        except job_runtime.JobRuntimeError as exc:
+            raise ServiceRuntimeError("service_unavailable") from exc
         if (current.attempt_number != attempt_number
                 or current.revision != revision):
             raise ServiceRuntimeError("precondition_failed")
@@ -1100,17 +1120,17 @@ class RagApplicationService:
                     expected_revision=execution.revision,
                     lease_timeout=0,
                 )
-        except BaseException as exc:
+        except Exception as exc:
             self.mark_unhealthy()
             raise ServiceRuntimeError(
-                "service_unavailable", job_id=job_id) from exc
+                "service_unavailable", job_id=job_id, fatal=True) from exc
 
     def _launch_job(self, job_id: str) -> None:
         try:
             self._launcher(
                 self.store, job_id,
                 ready_timeout=self.ready_timeout_seconds)
-        except BaseException as exc:
+        except Exception as exc:
             try:
                 self._mark_launch_failed(job_id)
             except ServiceRuntimeError:
@@ -1187,10 +1207,10 @@ class RagApplicationService:
                     summary = self.store.get_job(job_id)
                     if (summary.status == "queued"
                             and job_id not in self._launching_job_ids):
-                        summary = job_manager.reconcile_job(
+                        summary = self._job_coordination.reconcile_job(
                             self.store, job_id, fail_queued=True)
                 except (job_runtime.JobCorruptError,
-                        job_manager.JobManagerCorruptError) as exc:
+                        self._job_coordination.corrupt_error_type) as exc:
                     self.mark_unhealthy()
                     raise ServiceRuntimeError(
                         "service_unavailable", fatal=True) from exc
@@ -1200,6 +1220,9 @@ class RagApplicationService:
                     raise ServiceRuntimeError("service_unavailable") from exc
                 except job_runtime.JobStateError as exc:
                     raise ServiceRuntimeError("conflict") from exc
+                except job_runtime.JobRuntimeError as exc:
+                    raise ServiceRuntimeError(
+                        "service_unavailable") from exc
                 replay = True
             except job_runtime.JobBusyError as exc:
                 raise ServiceRuntimeError("service_unavailable") from exc
@@ -1262,7 +1285,8 @@ class RagApplicationService:
             self._require_job_root_owned()
             self._require_service_execution(job_id)
             try:
-                summary = job_manager.reconcile_job(self.store, job_id)
+                summary = self._job_coordination.reconcile_job(
+                    self.store, job_id)
                 plan = retention.plan_background_job_deletion(
                     self.store.root, job_id)
             except job_runtime.JobNotFoundError as exc:
@@ -1274,10 +1298,12 @@ class RagApplicationService:
             except retention.RetentionError as exc:
                 self._raise_retention_failure(exc, state_code="conflict")
             except (job_runtime.JobCorruptError,
-                    job_manager.JobManagerCorruptError) as exc:
+                    self._job_coordination.corrupt_error_type) as exc:
                 self.mark_unhealthy()
                 raise ServiceRuntimeError(
                     "service_unavailable", fatal=True) from exc
+            except job_runtime.JobRuntimeError as exc:
+                raise ServiceRuntimeError("service_unavailable") from exc
         return {
             "schema_version": service_contracts.SERVICE_SCHEMA_VERSION,
             "job": service_contracts.public_job(summary),

@@ -30,7 +30,10 @@ material. When documents disagree, use the authority order below.
   the final import cycle, and the later service-host boundary it enabled.
 - [Service-host binding and isolated search composition](architecture/decisions/service-host-binding.md)
   — the frozen service-host capabilities, shared path lease and embedding
-  policy, hidden retrieval child, and remaining job/root composition work.
+  policy, hidden retrieval child, and later job/root composition work.
+- [Service job-coordination binding](architecture/decisions/service-job-coordination-binding.md)
+  — the inward durable engine, stable manager facade, frozen service
+  launch/reconcile capability, and remaining application-root work.
 - [Document-structure profiles](architecture/decisions/document-structure-profiles.md)
   — immutable reviewed profiles and fail-closed evidence.
 - [Context-aware retrieval](architecture/decisions/context-aware-retrieval.md)

@@ -116,21 +116,25 @@ although their late-bound facade wrappers do.
 job containment, POSIX/Windows start gates, verified termination, and generic
 entrypoint routing. `runtime_supervision.py` binds that core to the stable
 pipeline script, deadline map, environment/timing policy, cleanup exception,
-and telemetry callbacks as one frozen capability. `job_manager.py` snapshots
-that binding per operation and no longer imports `rag.py`; `rag.py` retains
-late-bound wrappers for direct compatibility callers and tests.
+and telemetry callbacks as one frozen capability. `job_coordination.py`
+snapshots that binding per operation and no longer imports `rag.py`;
+`job_manager.py` is the compatible import/executable facade, and `rag.py`
+retains late-bound wrappers for direct compatibility callers and tests.
 `supervised_worker.py` remains the contained child's gate-wait bootstrap.
 
 The first-party import graph is acyclic, but R8 is not complete.
 `service_runtime.py` now snapshots a frozen host binding and the isolated
 `service_search_worker.py` composes physical retrieval, so the host no longer
-imports `rag`. It still imports `job_manager`, while lazy job CLI dispatch and
-broader application composition remain in `rag.py`. Preserve both bindings'
-atomic snapshot rules while job coordination and one composition root are
-introduced in later characterized slices. See the
+imports `rag`. It also snapshots the frozen launch/reconcile/integrity binding
+from `job_coordination_contracts.py`; it does not import or transitively load
+the `job_manager` shell. Lazy job CLI dispatch and broader application
+composition remain in `rag.py`. Preserve all bindings' atomic snapshot rules
+while one application root is introduced in a later characterized slice. See
+the
 [process-supervision ADR](docs/architecture/decisions/process-supervision-extraction.md),
 the [runtime binding ADR](docs/architecture/decisions/runtime-supervision-binding.md),
-and the [service-host binding ADR](docs/architecture/decisions/service-host-binding.md).
+the [service-host binding ADR](docs/architecture/decisions/service-host-binding.md),
+and the [service job-coordination ADR](docs/architecture/decisions/service-job-coordination-binding.md).
 
 ### Evaluation contract layering
 
@@ -167,7 +171,10 @@ against them.
 (authenticated loopback-only FastAPI adapter). `service_runtime_binding.py`
 supplies the frozen host capability, while `service_search_worker.py` is the
 only child composition shell that imports both the runtime contract and
-`rag.py`. `service-openapi-v1.json` is a committed static contract snapshot.
+`rag.py`. `job_coordination_contracts.py` supplies the frozen service job
+capability, `job_coordination.py` owns the engine, and `job_manager.py` remains
+the legacy shell. `service-openapi-v1.json` is a committed static contract
+snapshot.
 
 ## Conventions
 

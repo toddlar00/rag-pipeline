@@ -166,8 +166,8 @@ This completes the evaluation-side dependency inversion, not R7 or all of R8.
 The later R8c-1 runtime binding removes `job_manager.py`'s former `rag.py`
 import and therefore the last import cycle. R8c-2 subsequently removes the
 service host's facade dependency through a frozen binding and isolated search
-child, but `service_runtime.py` still depends on `job_manager` and application
+child. R8c-3 then moves the durable coordination engine inward, retains a
+compatible manager shell, and removes the service-to-manager edge. Application
 composition has not moved to one root. Coverage ratchets, typing, the broader
-architecture inventory, job protocols, and service/root composition inversion
-remain planned. This local decision has not been pushed, reviewed, merged,
-tagged, or released.
+architecture inventory, and final root convergence remain planned. This local
+decision has not been pushed, reviewed, merged, tagged, or released.

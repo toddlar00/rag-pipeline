@@ -149,10 +149,10 @@ runtime. It owns Windows Job Objects, POSIX process groups, same-PID startup
 gates, bounded termination confirmation, cancellation/deadline control, and the
 generic supervised entrypoint flow. `runtime_supervision.py` binds that core to
 the production script path, deadlines, environment names, cleanup exception,
-and prompt-free telemetry as one frozen capability. `job_manager.py` consumes
-that binding without importing `rag.py`. The facade still snapshots its
-late-bound collaborators for direct compatibility callers and monkeypatch
-seams. See the
+and prompt-free telemetry as one frozen capability. The durable engine in
+`job_coordination.py` consumes that binding without importing `rag.py`.
+`job_manager.py` is now the stable executable/import facade; its public
+results, errors, launch, recovery, and CLI surfaces remain compatible. See the
 [runtime-supervision binding ADR](docs/architecture/decisions/runtime-supervision-binding.md).
 
 `service_runtime_binding.py` freezes the service worker path, supervisor,
@@ -163,10 +163,16 @@ the service request contract with `rag.search_index`. `embedding_policy.py`
 keeps remote-model classification identical across the host and facade. See
 the [service-host binding ADR](docs/architecture/decisions/service-host-binding.md).
 
-The tracked first-party import graph remains acyclic. This R8 slice does not
-complete runtime inversion: `service_runtime.py` still composes through
-`job_manager`, lazy job CLI dispatch remains in `rag.py`, and the service, UI,
-and CLI have not converged on one application root.
+`job_coordination_contracts.py` keeps the manager result/error identities and
+one frozen launch/reconcile/integrity capability together. The service snapshots
+that binding once, honors an explicit launcher override, and no longer imports
+or transitively loads the `job_manager` shell. Detached children still execute
+the stable `job_manager.py` path. See the
+[service job-coordination ADR](docs/architecture/decisions/service-job-coordination-binding.md).
+
+The tracked first-party import graph remains acyclic. R8 is still open: lazy
+job CLI dispatch remains in `rag.py`, and the service, UI, and CLI have not
+converged on one application composition root.
 
 `ingestion_core.py` is the standard-library-only PDF safety layer for text-layer
 quality, page-coverage-aware background detection, complete pre-mutation
@@ -2687,11 +2693,13 @@ attempt_reporting.py    # Redacted manager-owned job-attempt outcome reports
 storage_policy.py       # Owner-only DACL/mode and atomic publication policy
 retention.py            # Ownership manifests and dry-run-first lifecycle plans
 job_runtime.py          # Durable private job schemas, bindings, transitions, leases
-job_manager.py          # Detached supervision, cancellation, and restart recovery
+job_coordination_contracts.py # Stable results, errors, and frozen service binding
+job_coordination.py     # Detached launch, supervision, cancellation, and recovery
+job_manager.py          # Compatible durable-job import and executable facade
 supervised_worker.py    # Gated same-PID bootstrap for pre-execution containment
 service_contracts.py    # Dependency-free bounded/redacted local API contracts
 service_runtime_binding.py # Frozen service-host capability composition
-service_runtime.py      # Qdrant search isolation and durable service job facade
+service_runtime.py      # Search isolation and binding-driven durable job facade
 service_search_worker.py # Hidden physical-search child composition shell
 service_api.py          # Authenticated loopback-only FastAPI/CLI adapter
 service-openapi-v1.json # Committed static OpenAPI 3.1 contract snapshot
