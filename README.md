@@ -170,6 +170,16 @@ and interrupted-worker recovery contract used by the CLI and LLM runtime.
 publication layer. `retention.py` validates pipeline/UI/cache ownership and
 implements dry-run-first quarantine and deletion plans.
 
+`evaluation_inputs.py` is the dependency-light input-contract leaf shared by
+owner review and release policy. It provides bounded duplicate-safe JSON-object
+parsing, exact link-aware snapshots, digest validation, and one normalized
+corpus binding. `evaluation_release.py` imports this leaf directly;
+`evaluation_review.py` retains object-identical compatibility aliases. The
+former three-module evaluation cycle is reduced, not eliminated:
+`eval.py` and `evaluation_review.py` still import each other lazily because
+query validation remains in the legacy evaluator. See the
+[evaluation input-contract ADR](docs/architecture/decisions/evaluation-input-contract.md).
+
 ## Quick Start
 
 The portable command-line and CPU dependency profiles are tested on CPython
@@ -2232,6 +2242,12 @@ Preparation computes the exact indented UTF-8 payload size before publication
 and fails without creating the output when the packet would exceed its parser
 ceiling.
 
+Review and release-policy objects use the strict shared parser: duplicate
+fields, invalid UTF-8, structures deeper than 64 levels, non-finite literals,
+and out-of-range numeric magnitudes such as `1e999` fail closed. The general
+`eval.load_queries` JSONL path remains the legacy parser for compatibility and
+is a separately gated R8 migration.
+
 Once every decision is `approve`, the corpus owner—not an automated agent—can
 promote the set and issue a content-free receipt:
 
@@ -2655,6 +2671,7 @@ model-artifact-policy.json # Reviewed models, consumers, files, code, and licens
 model-artifacts.lock.json # Immutable revisions and per-file raw SHA-256 inventory
 preprocess_pdf.py       # Standalone PDF preprocessing CLI facade
 eval.py                 # Relevance/safety evaluation, gates, and reports
+evaluation_inputs.py    # Strict shared snapshot/JSON/corpus input contracts
 evaluation_contract.py  # Shared report/scorer/table-policy version contract
 evaluation_review.py    # Private owner-review packets and portable receipts
 evaluation_release.py   # Strict four-mode retrieval release-policy contract

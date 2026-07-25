@@ -118,6 +118,16 @@ _EXPECTED_GROUNDED_PROMPT_PREFIX = (
 )
 
 
+def _finite_float(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        numeric = float(value)
+    except (OverflowError, TypeError, ValueError):
+        return None
+    return numeric if math.isfinite(numeric) else None
+
+
 def load_queries(path: Path) -> list[dict]:
     """Load and validate evaluation queries from JSONL."""
     raw = Path(path).read_bytes()
@@ -673,18 +683,17 @@ def _validate_query(query: dict, *, label: str = "query") -> None:
                 raise ValueError(
                     f"{judgment_label} fields do not match the judgment schema")
             relevance = judgment.get("relevance")
-            if (isinstance(relevance, bool)
-                    or not isinstance(relevance, (int, float))
-                    or not math.isfinite(float(relevance))
-                    or not 0 <= relevance <= 100):
+            numeric_relevance = _finite_float(relevance)
+            if (numeric_relevance is None
+                    or not 0 <= numeric_relevance <= 100):
                 raise ValueError(
                     f"{judgment_label} 'relevance' must be a finite number "
                     "from 0 to 100")
-            if family is not None and relevance <= 0:
+            if family is not None and numeric_relevance <= 0:
                 raise ValueError(
                     f"{judgment_label} table-family aliases require positive "
                     "relevance")
-            has_positive = has_positive or relevance > 0
+            has_positive = has_positive or numeric_relevance > 0
             judgment_id_types.add(id_field)
             for satisfying_id in satisfying_ids:
                 judgment_id = (id_field, satisfying_id)
@@ -2178,10 +2187,11 @@ def _load_baseline_metrics(path: Path, *,
     numeric_metrics = {}
     for key, value in metrics.items():
         if isinstance(value, (int, float)) and not isinstance(value, bool):
-            if not math.isfinite(float(value)):
+            numeric = _finite_float(value)
+            if numeric is None:
                 raise ValueError(
                     f"Baseline metric {key!r} must be finite: {path}")
-            numeric_metrics[key] = float(value)
+            numeric_metrics[key] = numeric
     return numeric_metrics
 
 
@@ -2235,8 +2245,7 @@ def _threshold_failures(metrics: dict, minimums: dict[str, float], *,
 
 
 def _finite_metric(value) -> bool:
-    return (isinstance(value, (int, float)) and not isinstance(value, bool)
-            and math.isfinite(float(value)))
+    return _finite_float(value) is not None
 
 
 def _write_report(path: Path, payload: dict) -> None:

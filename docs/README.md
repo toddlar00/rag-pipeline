@@ -31,6 +31,9 @@ material. When documents disagree, use the authority order below.
   — stable adjacency, bounded context, and independent citations.
 - [Table-family evaluation](architecture/decisions/table-family-evaluation.md)
   — exact-once logical relevance and owner-selected child aliases.
+- [Evaluation input-contract dependency boundary](architecture/decisions/evaluation-input-contract.md)
+  — strict shared review/release inputs, compatibility aliases, the first R8
+  dependency inversion, and the explicitly gated residual cycles.
 
 The roadmap tracks missing maintained ADR coverage for vector lifecycle,
 table-row retrieval, and immutable source-generation policy rather than using
@@ -55,8 +58,9 @@ ADRs, and `ROADMAP.md` deliberately supersede them.
 ## Evidence and publication state
 
 [`INTEGRATION_AUDIT.md`](../INTEGRATION_AUDIT.md) is the historical exact-head
-record for PRs #1-#28. PRs #31-#43, the local R0/R0A/R0B/R4 changes, CI status,
-review state, and release gaps are summarized in `ROADMAP.md` until R12 moves
+record for PRs #1-#28. PRs #31-#43, the local R0/R0A/R0B/R4/R8/R10/R12
+changes, CI status, review state, and release gaps are summarized in
+`ROADMAP.md` until R12 moves
 point-in-time transcripts and test counts into an immutable `docs/evidence/`
 ledger keyed by commit and PR.
 

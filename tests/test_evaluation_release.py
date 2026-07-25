@@ -115,6 +115,9 @@ def test_release_policy_requires_exact_four_mode_threshold_contract(tmp_path):
      "k_values"),
     (lambda value: value["configuration"].update(dense_weight=float("inf")),
      "finite number"),
+    (lambda value: value["configuration"].update(
+        dense_weight=int("9" * 400)),
+     "finite number"),
     (lambda value: value["scoring"].update(judgment_scorer_version=999),
      "incompatible"),
     (lambda value: value["scoring"].pop("table_retrieval_policy"),

@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 import evaluation_contract
-import evaluation_review
+import evaluation_inputs
 import model_artifacts
 import retrieval_core
 
@@ -87,12 +87,17 @@ def _positive_int(value: object, *, label: str, maximum: int | None = None) -> i
 def _finite_number(
         value: object, *, label: str, minimum: float,
         maximum: float) -> float:
-    if (isinstance(value, bool) or not isinstance(value, (int, float))
-            or not math.isfinite(float(value))
-            or not minimum <= float(value) <= maximum):
-        raise ValueError(
-            f"{label} must be a finite number from {minimum} through {maximum}")
-    return float(value)
+    message = (
+        f"{label} must be a finite number from {minimum} through {maximum}")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(message)
+    try:
+        numeric = float(value)
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise ValueError(message) from exc
+    if not math.isfinite(numeric) or not minimum <= numeric <= maximum:
+        raise ValueError(message)
+    return numeric
 
 
 def _thresholds(value: object, *, label: str, expected: frozenset[str]) -> dict:
@@ -268,9 +273,9 @@ def validate_release_policy(policy: object) -> dict:
 
 
 def load_release_policy(path: Path) -> tuple[dict, dict]:
-    raw, policy_sha256 = evaluation_review._read_snapshot(
+    raw, policy_sha256 = evaluation_inputs._read_snapshot(
         path, label="release policy", max_bytes=MAX_RELEASE_POLICY_BYTES)
-    payload = evaluation_review._strict_json_bytes(
+    payload = evaluation_inputs._strict_json_bytes(
         raw, label="release policy", max_bytes=MAX_RELEASE_POLICY_BYTES)
     policy = validate_release_policy(payload)
     return policy, {
@@ -358,7 +363,7 @@ def validate_release_policy_runtime(
             "record_count": len(queries),
             }:
         raise ValueError("release policy does not bind the approved query set")
-    corpus = evaluation_review._corpus_contract(queries)
+    corpus = evaluation_inputs._corpus_contract(queries)
     if policy["corpus"] != corpus:
         raise ValueError("release policy does not bind the query corpus")
     if policy["review"] != {

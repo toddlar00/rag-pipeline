@@ -21,6 +21,12 @@ from pathlib import Path
 
 import artifact_io
 import evaluation_contract
+from evaluation_inputs import (
+    _corpus_contract as _corpus_contract,
+    _hex_digest as _hex_digest,
+    _read_snapshot as _read_snapshot,
+    _strict_json_bytes as _strict_json_bytes,
+)
 import retrieval_core
 import storage_policy
 import table_retrieval_core
@@ -42,7 +48,6 @@ OWNER_ATTESTATION = (
     "I reviewed every query and judgment against the pinned corpus"
 )
 
-_HEX64_RE = re.compile(r"[0-9a-f]{64}")
 _UTC_TIMESTAMP_RE = re.compile(
     r"(?:20[0-9]{2})-(?:0[1-9]|1[0-2])-"
     r"(?:0[1-9]|[12][0-9]|3[01])T"
@@ -113,48 +118,6 @@ def _pretty_json_size(payload: object) -> int:
     return len(serialized.encode("utf-8"))
 
 
-def _hex_digest(value: object, *, label: str) -> str:
-    if not isinstance(value, str) or _HEX64_RE.fullmatch(value) is None:
-        raise ValueError(f"{label} must be a lowercase SHA-256 digest")
-    return value
-
-
-def _strict_json_bytes(raw: bytes, *, label: str, max_bytes: int) -> dict:
-    if len(raw) > max_bytes:
-        raise ValueError(f"{label} exceeds {max_bytes} bytes")
-
-    def reject_duplicate_keys(pairs):
-        result = {}
-        for key, value in pairs:
-            if key in result:
-                raise ValueError(f"{label} contains duplicate field {key!r}")
-            result[key] = value
-        return result
-
-    def reject_constant(value):
-        raise ValueError(f"{label} contains non-finite number {value}")
-
-    try:
-        payload = json.loads(
-            raw.decode("utf-8-sig"),
-            object_pairs_hook=reject_duplicate_keys,
-            parse_constant=reject_constant,
-        )
-    except (UnicodeError, json.JSONDecodeError) as exc:
-        raise ValueError(f"{label} is not valid UTF-8 JSON") from exc
-    if not isinstance(payload, dict):
-        raise ValueError(f"{label} must be one JSON object")
-    return payload
-
-
-def _read_snapshot(path: Path, *, label: str, max_bytes: int) -> tuple[bytes, str]:
-    path = Path(path)
-    storage_policy.assert_no_link_components(path)
-    raw, digest, _ = artifact_io._read_index_artifact_snapshot(
-        path, max_bytes=max_bytes)
-    return raw, digest
-
-
 def _parse_queries(raw: bytes, path: Path) -> list[dict]:
     import eval as retrieval_eval
 
@@ -193,30 +156,6 @@ def _query_ids(queries: list[dict]) -> list[str]:
 
 def _query_id_root(queries: list[dict]) -> str:
     return _canonical_sha256(_query_ids(queries))
-
-
-def _corpus_contract(queries: list[dict]) -> dict:
-    declarations = [query.get("corpus") for query in queries]
-    if any(not isinstance(value, dict) for value in declarations):
-        raise ValueError("owner review requires every query to pin one corpus")
-    digests = {value.get("sha256", "").lower() for value in declarations}
-    counts = {value.get("record_count") for value in declarations}
-    schemes = {value.get("id_scheme") for value in declarations}
-    if (len(digests) != 1 or len(counts) != 1 or len(schemes) != 1):
-        raise ValueError(
-            "owner review queries must share one corpus digest, count, and ID scheme")
-    digest = _hex_digest(next(iter(digests)), label="corpus SHA-256")
-    count = next(iter(counts))
-    scheme = next(iter(schemes))
-    if isinstance(count, bool) or not isinstance(count, int) or count < 1:
-        raise ValueError("corpus record count must be a positive integer")
-    if not isinstance(scheme, str) or not scheme.strip():
-        raise ValueError("corpus ID scheme must be a non-empty string")
-    return {
-        "sha256": digest,
-        "record_count": count,
-        "id_scheme": scheme.strip(),
-    }
 
 
 def _coverage(queries: list[dict]) -> dict:

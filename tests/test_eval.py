@@ -148,6 +148,16 @@ def test_load_queries_accepts_legacy_and_graded_schemas(tmp_path):
     assert queries[1]["judgments"][0]["relevance"] == 3
 
 
+def test_load_queries_rejects_huge_relevance_with_controlled_error(tmp_path):
+    query = _judged_query()
+    query["judgments"][0]["relevance"] = int("9" * 400)
+    path = tmp_path / "queries.jsonl"
+    path.write_text(json.dumps(query) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="finite number from 0 to 100"):
+        retrieval_eval.load_queries(path)
+
+
 def test_declared_corpus_fingerprint_rejects_stale_judgments(tmp_path):
     chunks = tmp_path / "chunks.jsonl"
     chunks.write_text('{"text":"current"}\n', encoding="utf-8")
@@ -2199,6 +2209,16 @@ def test_baseline_rejects_nonfinite_metrics(tmp_path):
     baseline = tmp_path / "nonfinite.json"
     baseline.write_text(
         '{"metrics":{"mrr":NaN}}', encoding="utf-8")
+
+    with pytest.raises(ValueError, match="must be finite"):
+        retrieval_eval._load_baseline_metrics(baseline)
+
+
+def test_baseline_rejects_huge_integer_metrics_with_controlled_error(tmp_path):
+    baseline = tmp_path / "huge-metric.json"
+    baseline.write_text(json.dumps({
+        "metrics": {"mrr": int("9" * 400)},
+    }), encoding="utf-8")
 
     with pytest.raises(ValueError, match="must be finite"):
         retrieval_eval._load_baseline_metrics(baseline)
