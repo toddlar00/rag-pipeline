@@ -182,13 +182,11 @@ def test_build_inventory_covers_metrics_graph_facade_and_consumers(tmp_path):
     script_edges = _module(value, "scripts.run")["import_edges"]
     assert script_edges == [
         {
-            "contexts": ["type_only"],
-            "origins": ["static"],
+            "evidence": [{"context": "type_only", "origin": "static"}],
             "target": "consumer",
         },
         {
-            "contexts": ["runtime"],
-            "origins": ["dynamic"],
+            "evidence": [{"context": "runtime", "origin": "dynamic"}],
             "target": "pkg",
         },
     ]
@@ -378,11 +376,11 @@ def test_schema_rejects_counts_paths_order_and_graph_tampering(tmp_path):
         inventory.inventory_bytes(bad_graph)
 
     bad_origin = deepcopy(value)
-    _module(bad_origin, "scripts.run")["import_edges"][0]["origins"] = [
-        "guessed"
-    ]
+    _module(bad_origin, "scripts.run")["import_edges"][0]["evidence"][0][
+        "origin"
+    ] = "guessed"
     with pytest.raises(
-        inventory.ArchitectureInventoryError, match=r"origins is invalid"
+        inventory.ArchitectureInventoryError, match=r"origin is invalid"
     ):
         inventory.inventory_bytes(bad_origin)
 
@@ -529,6 +527,35 @@ load("ignored")
         "typed_direct": {("type_only", "dynamic")},
         "typed_module": {("type_only", "dynamic")},
     }
+
+
+def test_compact_import_edges_preserve_context_origin_correlation():
+    static_runtime_tree = ast.parse(
+        "import importlib\nimport pkg\ndef f():\n importlib.import_module('pkg')\n"
+    )
+    dynamic_runtime_tree = ast.parse(
+        "import importlib\nimportlib.import_module('pkg')\ndef f():\n import pkg\n"
+    )
+    known = {"consumer", "pkg"}
+    static_runtime = inventory._compact_import_edges(
+        inventory._module_import_edges(
+            "consumer", Path("consumer.py"), static_runtime_tree, known
+        )
+    )
+    dynamic_runtime = inventory._compact_import_edges(
+        inventory._module_import_edges(
+            "consumer", Path("consumer.py"), dynamic_runtime_tree, known
+        )
+    )
+
+    assert static_runtime != dynamic_runtime
+    assert static_runtime == [{
+        "evidence": [
+            {"context": "conditional", "origin": "dynamic"},
+            {"context": "runtime", "origin": "static"},
+        ],
+        "target": "pkg",
+    }]
 
 
 def test_facade_aliases_are_flow_aware_and_comprehension_scoped():

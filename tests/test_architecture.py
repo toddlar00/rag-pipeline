@@ -192,7 +192,7 @@ def test_inventory_static_edges_exactly_match_independent_ast_graph():
         module["module"]: {
             edge["target"]
             for edge in module["import_edges"]
-            if "static" in edge["origins"]
+            if any(item["origin"] == "static" for item in edge["evidence"])
         }
         for module in value["source_architecture"]["modules"]
     }

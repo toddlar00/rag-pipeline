@@ -552,7 +552,7 @@
         "dynamic_sites": [],
         "nested": [
           {
-            "locations_sha256": "4f6673bd90194eb784f8de7d55e3b7c1d666655a8b0579d7c35945139e6b5620",
+            "locations_sha256": "5fb11596125bde21f986828b62c21cebccef63bcae1246b0ddbd560e2fc54bc9",
             "occurrence_count": 1,
             "operations": [
               "assign"
@@ -566,7 +566,7 @@
             "target": "operating.getenv"
           },
           {
-            "locations_sha256": "d0fd35c6a30cc6f8d3e8ed6515f64335bad8692a3e1d2d66bfcfd6bbc9319813",
+            "locations_sha256": "4725a1bd30535ea72a54809245dec8b231cf3b43257019e77213602b74b283ed",
             "occurrence_count": 1,
             "operations": [
               "delete"
@@ -1159,7 +1159,7 @@
             "target": "log.warning"
           },
           {
-            "locations_sha256": "02eed2507b25606c8024ce77fd841bf9360ea08c68ba8e101ceef8c43ae87f34",
+            "locations_sha256": "522a62cc892638e3ff7a30e3ffd575847e310e55cfe7c8f2793f62336c8ba3d1",
             "occurrence_count": 2,
             "operations": [
               "setattr"
@@ -16124,7 +16124,7 @@
   "schema_version": 3,
   "source_architecture": {
     "class_count": 189,
-    "function_count": 1978,
+    "function_count": 1979,
     "import_graph": {
       "cyclic_components": [],
       "edge_count": 145,
@@ -16188,38 +16188,38 @@
         ],
         "import_edges": [
           {
-            "contexts": [
-              "conditional"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "conditional",
+                "origin": "static"
+              }
             ],
             "target": "job_coordination"
           },
           {
-            "contexts": [
-              "conditional"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "conditional",
+                "origin": "static"
+              }
             ],
             "target": "service_http"
           },
           {
-            "contexts": [
-              "conditional"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "conditional",
+                "origin": "static"
+              }
             ],
             "target": "service_runtime"
           },
           {
-            "contexts": [
-              "conditional"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "conditional",
+                "origin": "static"
+              }
             ],
             "target": "service_runtime_binding"
           }
@@ -16536,11 +16536,11 @@
         ],
         "import_edges": [
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "storage_policy"
           }
@@ -16625,11 +16625,11 @@
         ],
         "import_edges": [
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "storage_policy"
           }
@@ -16866,20 +16866,20 @@
         ],
         "import_edges": [
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "endpoint_policy"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "release_security"
           }
@@ -17429,102 +17429,105 @@
         ],
         "import_edges": [
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "evaluation_contract"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "evaluation_metrics"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "evaluation_queries"
           },
           {
-            "contexts": [
-              "conditional"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "conditional",
+                "origin": "static"
+              }
             ],
             "target": "evaluation_release"
           },
           {
-            "contexts": [
-              "conditional"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "conditional",
+                "origin": "static"
+              }
             ],
             "target": "evaluation_review"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "model_artifacts"
           },
           {
-            "contexts": [
-              "conditional"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "conditional",
+                "origin": "static"
+              }
             ],
             "target": "offline_retrieval"
           },
           {
-            "contexts": [
-              "conditional"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "conditional",
+                "origin": "static"
+              }
             ],
             "target": "rag"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "release_security"
           },
           {
-            "contexts": [
-              "conditional",
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "conditional",
+                "origin": "static"
+              },
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "retrieval_core"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "table_retrieval_core"
           }
@@ -17573,11 +17576,11 @@
         ],
         "import_edges": [
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "table_retrieval_core"
           }
@@ -17651,20 +17654,20 @@
         ],
         "import_edges": [
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "artifact_io"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "storage_policy"
           }
@@ -17887,29 +17890,29 @@
         ],
         "import_edges": [
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "evaluation_contract"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "retrieval_core"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "table_retrieval_core"
           }
@@ -18007,38 +18010,38 @@
         ],
         "import_edges": [
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "evaluation_contract"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "evaluation_inputs"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "model_artifacts"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "retrieval_core"
           }
@@ -18238,65 +18241,65 @@
         ],
         "import_edges": [
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "artifact_io"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "evaluation_contract"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "evaluation_inputs"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "evaluation_queries"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "retrieval_core"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "storage_policy"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "table_retrieval_core"
           }
@@ -18731,29 +18734,29 @@
         ],
         "import_edges": [
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "job_coordination"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "job_coordination_contracts"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "job_runtime"
           }
@@ -19152,56 +19155,56 @@
         ],
         "import_edges": [
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "attempt_reporting"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "job_coordination_contracts"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "job_runtime"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "run_telemetry"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "runtime_supervision"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "storage_policy"
           }
@@ -19288,20 +19291,20 @@
         ],
         "import_edges": [
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "job_coordination"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "job_coordination_contracts"
           }
@@ -19882,29 +19885,29 @@
         ],
         "import_edges": [
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "cli_policy"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "endpoint_policy"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "storage_policy"
           }
@@ -20137,29 +20140,29 @@
         ],
         "import_edges": [
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "endpoint_policy"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "llm_runtime"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "provider_transport"
           }
@@ -20470,20 +20473,20 @@
         ],
         "import_edges": [
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "run_telemetry"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "storage_policy"
           }
@@ -21003,20 +21006,20 @@
         ],
         "import_edges": [
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "retrieval_core"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "table_retrieval_core"
           }
@@ -21264,29 +21267,29 @@
         ],
         "import_edges": [
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "process_supervision"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "run_telemetry"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "storage_policy"
           }
@@ -21443,20 +21446,20 @@
         ],
         "import_edges": [
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "ingestion_core"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "storage_policy"
           }
@@ -21990,20 +21993,20 @@
         ],
         "import_edges": [
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "retrieval_core"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "table_retrieval_core"
           }
@@ -24642,245 +24645,245 @@
         ],
         "import_edges": [
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "artifact_io"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "chunking_core"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "cli_policy"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "document_profiles"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "embedding_policy"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "endpoint_policy"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "index_state"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "ingestion_core"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "job_application"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "job_runtime"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "llm_adapters"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "llm_runtime"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "model_artifacts"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "operation_contracts"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "operational_metrics"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "process_supervision"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "provider_transport"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "quality_core"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "release_security"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "resource_lease"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "retention"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "retrieval_core"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "run_telemetry"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "runtime_supervision"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "storage_policy"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "table_retrieval_core"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "vector_lifecycle"
           }
@@ -25164,20 +25167,20 @@
         ],
         "import_edges": [
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "retention"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "storage_policy"
           }
@@ -25436,20 +25439,20 @@
         ],
         "import_edges": [
           {
-            "contexts": [
-              "conditional"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "conditional",
+                "origin": "static"
+              }
             ],
             "target": "job_runtime"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "storage_policy"
           }
@@ -25728,11 +25731,11 @@
         ],
         "import_edges": [
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "table_retrieval_core"
           }
@@ -25991,11 +25994,11 @@
         ],
         "import_edges": [
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "storage_policy"
           }
@@ -26074,29 +26077,29 @@
         ],
         "import_edges": [
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "cli_policy"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "process_supervision"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "run_telemetry"
           }
@@ -26205,11 +26208,11 @@
         ],
         "import_edges": [
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "storage_policy"
           }
@@ -26329,56 +26332,56 @@
         ],
         "import_edges": [
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "application_composition"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "release_security"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "service_contracts"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "service_http"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "service_runtime"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "storage_policy"
           }
@@ -27020,11 +27023,11 @@
         ],
         "import_edges": [
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "service_contracts"
           }
@@ -27393,74 +27396,74 @@
         ],
         "import_edges": [
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "job_coordination"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "job_coordination_contracts"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "job_runtime"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "release_security"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "retention"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "service_contracts"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "service_runtime_binding"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "storage_policy"
           }
@@ -27503,29 +27506,29 @@
         ],
         "import_edges": [
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "embedding_policy"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "resource_lease"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "runtime_supervision"
           }
@@ -27557,20 +27560,20 @@
         ],
         "import_edges": [
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "rag"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "service_runtime"
           }
@@ -28612,83 +28615,83 @@
         ],
         "import_edges": [
           {
-            "contexts": [
-              "conditional"
-            ],
-            "origins": [
-              "dynamic"
+            "evidence": [
+              {
+                "context": "conditional",
+                "origin": "dynamic"
+              }
             ],
             "target": "application_composition"
           },
           {
-            "contexts": [
-              "conditional"
-            ],
-            "origins": [
-              "dynamic"
+            "evidence": [
+              {
+                "context": "conditional",
+                "origin": "dynamic"
+              }
             ],
             "target": "operation_contracts"
           },
           {
-            "contexts": [
-              "conditional"
-            ],
-            "origins": [
-              "dynamic"
+            "evidence": [
+              {
+                "context": "conditional",
+                "origin": "dynamic"
+              }
             ],
             "target": "process_supervision"
           },
           {
-            "contexts": [
-              "conditional"
-            ],
-            "origins": [
-              "dynamic"
+            "evidence": [
+              {
+                "context": "conditional",
+                "origin": "dynamic"
+              }
             ],
             "target": "rag"
           },
           {
-            "contexts": [
-              "conditional"
-            ],
-            "origins": [
-              "dynamic"
+            "evidence": [
+              {
+                "context": "conditional",
+                "origin": "dynamic"
+              }
             ],
             "target": "retrieval_core"
           },
           {
-            "contexts": [
-              "conditional"
-            ],
-            "origins": [
-              "dynamic"
+            "evidence": [
+              {
+                "context": "conditional",
+                "origin": "dynamic"
+              }
             ],
             "target": "runtime_supervision"
           },
           {
-            "contexts": [
-              "conditional"
-            ],
-            "origins": [
-              "dynamic"
+            "evidence": [
+              {
+                "context": "conditional",
+                "origin": "dynamic"
+              }
             ],
             "target": "service_search_worker"
           },
           {
-            "contexts": [
-              "conditional"
-            ],
-            "origins": [
-              "dynamic"
+            "evidence": [
+              {
+                "context": "conditional",
+                "origin": "dynamic"
+              }
             ],
             "target": "storage_policy"
           },
           {
-            "contexts": [
-              "conditional"
-            ],
-            "origins": [
-              "dynamic"
+            "evidence": [
+              {
+                "context": "conditional",
+                "origin": "dynamic"
+              }
             ],
             "target": "ui"
           }
@@ -28727,8 +28730,8 @@
             "scope": "nested"
           }
         ],
-        "definition_locations_sha256": "3cf60ad6d51ebaf4a280617a92a6ed03bc090c36823542080581c50a3d378da5",
-        "function_count": 209,
+        "definition_locations_sha256": "20b09491d3123743a48d8b4ec2cfb8425ef68b4e7f554cc226e30db23101157f",
+        "function_count": 210,
         "functions": [
           {
             "kind": "function",
@@ -29452,6 +29455,12 @@
           },
           {
             "kind": "function",
+            "name": "_compact_import_edges",
+            "scope": "top_level",
+            "signature_sha256": "89e2ec81c186e8ddf8b7dcb6aaf6312436c1995aa4cdcf2da0b8180ee8b94890"
+          },
+          {
+            "kind": "function",
             "name": "_compact_runtime_contract",
             "scope": "top_level",
             "signature_sha256": "e4b407b792c84e7d1784e89b71a721eb79ff3c26c454edd9ae613998623f922d"
@@ -29987,38 +29996,38 @@
         ],
         "import_edges": [
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "process_supervision"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "tools"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "tools.check_python_sources"
           }
         ],
         "module": "tools.check_architecture_inventory",
-        "non_blank_lines": 3644,
+        "non_blank_lines": 3667,
         "path": "tools/check_architecture_inventory.py",
-        "physical_lines": 3991,
-        "top_level_function_count": 75
+        "physical_lines": 4016,
+        "top_level_function_count": 76
       },
       {
         "class_count": 1,
@@ -30250,11 +30259,11 @@
         ],
         "import_edges": [
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "model_artifacts"
           }
@@ -30391,20 +30400,20 @@
         ],
         "import_edges": [
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "run_telemetry"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "storage_policy"
           }
@@ -30468,11 +30477,11 @@
         ],
         "import_edges": [
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "model_artifacts"
           }
@@ -30504,11 +30513,11 @@
         ],
         "import_edges": [
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "operational_drills"
           }
@@ -30683,20 +30692,20 @@
         ],
         "import_edges": [
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "model_artifacts"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "release_security"
           }
@@ -30847,47 +30856,47 @@
         ],
         "import_edges": [
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "job_application"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "job_runtime"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "rag"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "release_security"
           },
           {
-            "contexts": [
-              "runtime"
-            ],
-            "origins": [
-              "static"
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
             ],
             "target": "storage_policy"
           }
@@ -31112,13 +31121,13 @@
         "top_level_function_count": 2
       }
     ],
-    "physical_line_count": 61329,
+    "physical_line_count": 61354,
     "source_groups": [
       "production",
       "tools",
       "other"
     ],
-    "top_level_function_count": 1300
+    "top_level_function_count": 1301
   },
   "tracked_sources": {
     "count": 150,

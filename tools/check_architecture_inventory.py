@@ -886,6 +886,22 @@ def _module_import_edges(
     return visitor.edges
 
 
+def _compact_import_edges(
+    edges: Mapping[str, set[tuple[str, str]]],
+) -> list[dict[str, object]]:
+    """Serialize each import edge without losing context/origin correlation."""
+    return [
+        {
+            "evidence": [
+                {"context": context, "origin": origin}
+                for context, origin in sorted(evidence)
+            ],
+            "target": target,
+        }
+        for target, evidence in sorted(edges.items())
+    ]
+
+
 def _strongly_connected_components(
     graph: Mapping[str, set[str]],
 ) -> list[list[str]]:
@@ -2770,14 +2786,7 @@ def build_inventory(root: Path = PROJECT_ROOT) -> dict[str, object]:
             "definition_locations_sha256": definition_locations_sha256,
             "function_count": len(functions),
             "functions": functions,
-            "import_edges": [
-                {
-                    "contexts": sorted({context for context, _origin in evidence}),
-                    "origins": sorted({origin for _context, origin in evidence}),
-                    "target": target,
-                }
-                for target, evidence in sorted(edges.items())
-            ],
+            "import_edges": _compact_import_edges(edges),
             "module": module,
             "non_blank_lines": sum(bool(line.strip()) for line in source.splitlines()),
             "path": relative.as_posix(),
@@ -3292,20 +3301,36 @@ def _validate_edge_records_v3(
     targets: list[str] = []
     for index, raw_edge in enumerate(raw_edges):
         label = f"{context}[{index}]"
-        edge = _require_dict(
-            raw_edge, {"contexts", "origins", "target"}, label
-        )
+        edge = _require_dict(raw_edge, {"evidence", "target"}, label)
         target = _require_string(edge["target"], f"{label}.target")
         if target not in known_modules:
             raise ArchitectureInventoryError(f"{label}.target is not architectural")
-        contexts = _validate_sorted_strings(
-            edge["contexts"], f"{label}.contexts"
-        )
-        origins = _validate_sorted_strings(edge["origins"], f"{label}.origins")
-        if not contexts or not set(contexts) <= set(_EDGE_CONTEXTS):
-            raise ArchitectureInventoryError(f"{label}.contexts is invalid")
-        if not origins or not set(origins) <= set(_EDGE_ORIGINS):
-            raise ArchitectureInventoryError(f"{label}.origins is invalid")
+        raw_evidence = _require_list(edge["evidence"], f"{label}.evidence")
+        evidence: list[tuple[str, str]] = []
+        for evidence_index, raw_item in enumerate(raw_evidence):
+            evidence_label = f"{label}.evidence[{evidence_index}]"
+            item = _require_dict(
+                raw_item, {"context", "origin"}, evidence_label
+            )
+            edge_context = _require_string(
+                item["context"], f"{evidence_label}.context"
+            )
+            origin = _require_string(
+                item["origin"], f"{evidence_label}.origin"
+            )
+            if edge_context not in _EDGE_CONTEXTS:
+                raise ArchitectureInventoryError(
+                    f"{evidence_label}.context is invalid"
+                )
+            if origin not in _EDGE_ORIGINS:
+                raise ArchitectureInventoryError(
+                    f"{evidence_label}.origin is invalid"
+                )
+            evidence.append((edge_context, origin))
+        if not evidence or evidence != sorted(set(evidence)):
+            raise ArchitectureInventoryError(
+                f"{label}.evidence must be sorted and unique"
+            )
         edges.append(edge)
         targets.append(target)
     if targets != sorted(set(targets)):
