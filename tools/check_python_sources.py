@@ -10,7 +10,7 @@ import subprocess
 import sys
 import tempfile
 from collections.abc import Iterable, Sequence
-from pathlib import Path
+from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -18,6 +18,25 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 class SourceGateError(RuntimeError):
     """A tracked-source inventory or compilation invariant failed."""
+
+
+def _has_unsafe_cross_platform_path_semantics(
+        path_text: str, *, reject_backslash: bool = False,
+) -> bool:
+    """Return whether either supported path flavor can escape the worktree."""
+    if reject_backslash and "\\" in path_text:
+        return True
+    candidates: tuple[PurePath, ...] = (
+        PurePosixPath(path_text),
+        PureWindowsPath(path_text),
+    )
+    return any(
+        bool(candidate.drive)
+        or bool(candidate.root)
+        or not candidate.parts
+        or any(part in {"", ".", ".."} for part in candidate.parts)
+        for candidate in candidates
+    )
 
 
 def parse_tracked_python_paths(output: bytes) -> tuple[Path, ...]:
@@ -35,10 +54,8 @@ def parse_tracked_python_paths(output: bytes) -> tuple[Path, ...]:
         relative_text = os.fsdecode(raw_path)
         relative = Path(relative_text)
         if (
-            relative.is_absolute()
-            or bool(relative.drive)
-            or not relative.parts
-            or any(part in {"", ".", ".."} for part in relative.parts)
+            _has_unsafe_cross_platform_path_semantics(
+                relative_text, reject_backslash=True)
             or relative.suffix != ".py"
         ):
             raise SourceGateError(
@@ -79,11 +96,7 @@ def validate_source_paths(root: Path, relative_paths: Iterable[Path]) -> tuple[P
     validated: list[Path] = []
     resolved_sources: set[Path] = set()
     for relative in relative_paths:
-        if (
-            relative.is_absolute()
-            or bool(relative.drive)
-            or any(part == ".." for part in relative.parts)
-        ):
+        if _has_unsafe_cross_platform_path_semantics(os.fspath(relative)):
             raise SourceGateError(f"Python source escapes the repository: {relative}")
         source = root / relative
         try:

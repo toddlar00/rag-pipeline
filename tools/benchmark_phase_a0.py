@@ -82,6 +82,16 @@ _COMMIT_RE = re.compile(r"[0-9a-f]{40}")
 class PhaseA0BenchmarkError(RuntimeError):
     """A probe, report, or comparison invariant failed."""
 
+    def __init__(
+            self, message: str, *, diagnostic_code: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        if (diagnostic_code is not None
+                and re.fullmatch(r"phase-a0-[a-z0-9]+(?:-[a-z0-9]+)*",
+                                 diagnostic_code) is None):
+            raise ValueError("invalid Phase A0 diagnostic code")
+        self.diagnostic_code = diagnostic_code
+
 
 def _canonical_bytes(value: object) -> bytes:
     return json.dumps(
@@ -369,7 +379,19 @@ def dependency_identities(root: Path = PROJECT_ROOT) -> list[dict[str, object]]:
     names = [path.name for path in paths]
     if len(names) != len(set(names)):
         raise PhaseA0BenchmarkError("duplicate lock names were found")
-    return [_file_identity(path) for path in paths]
+    identities = [_file_identity(path) for path in paths]
+    for path, identity in zip(paths, identities, strict=True):
+        blob = _run_git(root, ("show", f"HEAD:{path.name}"))
+        head_identity = {
+            "name": path.name,
+            "bytes": len(blob),
+            "sha256": _sha256_bytes(blob),
+        }
+        if identity != head_identity:
+            raise PhaseA0BenchmarkError(
+                "dependency or model lock bytes did not match HEAD",
+                diagnostic_code="phase-a0-noncanonical-input-bytes")
+    return identities
 
 
 def _run_git(root: Path, arguments: Sequence[str]) -> bytes:
@@ -2416,18 +2438,23 @@ def run_probe(
             )
         except PhaseA0BenchmarkError:
             raise PhaseA0BenchmarkError(
-                "probe failed with contained cleanup") from None
+                "probe failed with contained cleanup",
+                diagnostic_code="phase-a0-probe-cleanup-failure") from None
         wall_time_ms = (time.perf_counter_ns() - started) / 1_000_000
         if result.returncode == 124:
-            raise PhaseA0BenchmarkError("probe exceeded its deadline")
+            raise PhaseA0BenchmarkError(
+                "probe exceeded its deadline",
+                diagnostic_code="phase-a0-probe-timeout")
         if result.returncode != 0 or result.stderr:
             raise PhaseA0BenchmarkError(
-                "probe failed without publishing evidence")
+                "probe failed without publishing evidence",
+                diagnostic_code="phase-a0-probe-process-failure")
         events = _read_guard_trace(trace_path)
         if (len(events) != 1 or events[0]["role"] != "benchmark-probe"
                 or events[0]["production_supervised"] is not False):
             raise PhaseA0BenchmarkError(
-                "probe isolation guard attestation failed")
+                "probe isolation guard attestation failed",
+                diagnostic_code="phase-a0-probe-attestation-failure")
         payload = _strict_probe_payload(result.stdout, scenario=scenario)
         payload["diagnostics"]["wall_time_ms"] = round(wall_time_ms, 3)
         return payload
@@ -2746,20 +2773,26 @@ def compare_contracts(report: object, baseline: object) -> None:
     if (current["scenario_set"] != authoritative_set
             or expected["scenario_set"] != authoritative_set):
         raise PhaseA0BenchmarkError(
-            "Phase A0 comparison requires the authoritative scenario set")
+            "Phase A0 comparison requires the authoritative scenario set",
+            diagnostic_code="phase-a0-authoritative-scenarios-required")
     if (current["profile"]["canonical"] is not True
             or expected["profile"]["canonical"] is not True):
         raise PhaseA0BenchmarkError(
-            "Phase A0 comparison requires the canonical CPython 3.12 profile")
+            "Phase A0 comparison requires the canonical CPython 3.12 profile",
+            diagnostic_code="phase-a0-canonical-profile-required")
     if current["profile"]["platform"] != expected["profile"]["platform"]:
         raise PhaseA0BenchmarkError(
-            "Phase A0 comparison requires the same normalized platform")
+            "Phase A0 comparison requires the same normalized platform",
+            diagnostic_code="phase-a0-platform-comparison-mismatch")
     if (current["source"]["worktree_clean"] is not True
             or expected["source"]["worktree_clean"] is not True):
         raise PhaseA0BenchmarkError(
-            "Phase A0 comparison requires clean current and baseline source")
+            "Phase A0 comparison requires clean current and baseline source",
+            diagnostic_code="phase-a0-clean-source-required")
     if current["inputs"] != expected["inputs"]:
-        raise PhaseA0BenchmarkError("benchmark lock identities changed")
+        raise PhaseA0BenchmarkError(
+            "benchmark lock identities changed",
+            diagnostic_code="phase-a0-lock-drift")
 
     def portable_evidence(validated: Mapping[str, Any]) -> dict[str, object]:
         evidence = {}
@@ -2785,7 +2818,8 @@ def compare_contracts(report: object, baseline: object) -> None:
 
     if portable_evidence(current) != portable_evidence(expected):
         raise PhaseA0BenchmarkError(
-            "Phase A0 portable deterministic evidence changed")
+            "Phase A0 portable deterministic evidence changed",
+            diagnostic_code="phase-a0-portable-evidence-drift")
 
 
 def _read_report(path: Path) -> dict[str, Any]:
@@ -2839,34 +2873,64 @@ def main(argv: Sequence[str] | None = None) -> int:
     if len(arguments) == 2 and arguments[0] == "--_probe":
         return _probe_main(arguments[1])
     args = _parser().parse_args(arguments)
+    stage = "argument validation"
     try:
+        if args.check is not None and args.output is not None:
+            try:
+                paths_alias = (
+                    args.check.resolve(strict=False)
+                    == args.output.resolve(strict=False)
+                    or (
+                        args.check.exists()
+                        and args.output.exists()
+                        and os.path.samefile(args.check, args.output)
+                    )
+                )
+            except (OSError, RuntimeError) as exc:
+                raise PhaseA0BenchmarkError(
+                    "baseline and output paths could not be validated",
+                    diagnostic_code=(
+                        "phase-a0-report-path-validation-failure"),
+                ) from exc
+            if paths_alias:
+                raise PhaseA0BenchmarkError(
+                    "baseline and output paths must be distinct",
+                    diagnostic_code="phase-a0-report-path-alias")
         selected = tuple(args.scenario) if args.scenario else SCENARIOS
         baseline = None
         if args.check is not None:
+            stage = "baseline preflight"
             current_profile = execution_profile()
             if selected != SCENARIOS:
                 raise PhaseA0BenchmarkError(
-                    "baseline comparison requires every Phase A0 scenario")
+                    "baseline comparison requires every Phase A0 scenario",
+                    diagnostic_code="phase-a0-partial-scenario-set")
             if current_profile["canonical"] is not True:
                 raise PhaseA0BenchmarkError(
-                    "baseline comparison requires the canonical profile")
+                    "baseline comparison requires the canonical profile",
+                    diagnostic_code="phase-a0-noncanonical-profile")
             if not repository_identity()["worktree_clean"]:
                 raise PhaseA0BenchmarkError(
                     "baseline comparison requires no staged, unstaged, or "
-                    "untracked changes")
+                    "untracked changes",
+                    diagnostic_code="phase-a0-dirty-worktree")
             baseline = _read_report(args.check)
             if (baseline["profile"]["canonical"] is not True
                     or baseline["scenario_set"]
                     != _scenario_set_identity(SCENARIOS)):
                 raise PhaseA0BenchmarkError(
-                    "baseline was not authoritative canonical evidence")
+                    "baseline was not authoritative canonical evidence",
+                    diagnostic_code="phase-a0-invalid-baseline")
             if baseline["profile"]["platform"] != current_profile["platform"]:
                 raise PhaseA0BenchmarkError(
-                    "baseline platform did not match the current platform")
+                    "baseline platform did not match the current platform",
+                    diagnostic_code="phase-a0-platform-mismatch")
             if baseline["source"]["worktree_clean"] is not True:
                 raise PhaseA0BenchmarkError(
                     "baseline source included staged, unstaged, or untracked "
-                    "changes")
+                    "changes",
+                    diagnostic_code="phase-a0-dirty-baseline")
+        stage = "benchmark execution"
         report = run_benchmark(
             scenarios=selected,
             repetitions=args.repetitions,
@@ -2875,18 +2939,30 @@ def main(argv: Sequence[str] | None = None) -> int:
         if ((args.require_clean or args.check is not None)
                 and not report["source"]["worktree_clean"]):
             raise PhaseA0BenchmarkError(
-                "worktree has staged, unstaged, or untracked changes")
+                "worktree has staged, unstaged, or untracked changes",
+                diagnostic_code="phase-a0-report-worktree-dirty")
+        if args.output is not None:
+            stage = "candidate report publication"
+            _write_report(args.output, report)
         if baseline is not None:
+            stage = "baseline comparison"
             compare_contracts(report, baseline)
         if args.output is None:
+            stage = "report publication"
             sys.stdout.buffer.write(_canonical_bytes(report) + b"\n")
         else:
-            _write_report(args.output, report)
             print(
                 f"Phase A0 benchmark passed: {len(report['scenarios'])} "
                 f"scenarios x {report['repetitions']} repetitions.")
-    except (OSError, ValueError, PhaseA0BenchmarkError):
-        print("Phase A0 benchmark failed.", file=sys.stderr)
+    except PhaseA0BenchmarkError as exc:
+        diagnostic = (
+            f" ({exc.diagnostic_code})" if exc.diagnostic_code else "")
+        print(
+            f"Phase A0 benchmark failed during {stage}{diagnostic}.",
+            file=sys.stderr)
+        return 1
+    except (OSError, ValueError):
+        print(f"Phase A0 benchmark failed during {stage}.", file=sys.stderr)
         return 1
     return 0
 

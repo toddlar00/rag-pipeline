@@ -246,6 +246,7 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -320,10 +321,19 @@ jobs:
       - name: Verify installed dependency consistency
         run: uv pip check --system
       - name: Check the Phase A0 architecture baseline
+        id: phase_a0_check
         run: >-
           python tools/benchmark_phase_a0.py --require-clean
           --check ${{ matrix.baseline }}
           --output phase-a0-current-${{ matrix.artifact }}.json
+      - name: Retain a failed Phase A0 comparison report
+        if: failure() && steps.phase_a0_check.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: phase-a0-failure-${{ matrix.artifact }}-${{ github.run_attempt }}
+          path: phase-a0-current-${{ matrix.artifact }}.json
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Build and attest the Phase A0 evidence
         shell: bash
         env:

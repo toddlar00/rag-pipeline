@@ -1037,7 +1037,9 @@ def test_check_preflight_requires_clean_worktree_before_running(
         lambda **_kwargs: pytest.fail("dirty preflight must not run benchmark"))
 
     assert benchmark.main(["--check", str(tmp_path / "baseline.json")]) == 1
-    assert capsys.readouterr().err == "Phase A0 benchmark failed.\n"
+    assert capsys.readouterr().err == (
+        "Phase A0 benchmark failed during baseline preflight "
+        "(phase-a0-dirty-worktree).\n")
 
 
 @pytest.mark.parametrize("invalid_baseline", ["dirty", "cross_platform"])
@@ -1067,7 +1069,13 @@ def test_check_preflight_rejects_non_authoritative_baseline_before_running(
             "invalid baseline preflight must not run benchmark"))
 
     assert benchmark.main(["--check", str(tmp_path / "baseline.json")]) == 1
-    assert capsys.readouterr().err == "Phase A0 benchmark failed.\n"
+    expected_code = {
+        "dirty": "phase-a0-dirty-baseline",
+        "cross_platform": "phase-a0-platform-mismatch",
+    }[invalid_baseline]
+    assert capsys.readouterr().err == (
+        "Phase A0 benchmark failed during baseline preflight "
+        f"({expected_code}).\n")
 
 
 def test_cli_rejects_under_sampled_evidence_without_writing(tmp_path, capsys):
@@ -1078,7 +1086,74 @@ def test_cli_rejects_under_sampled_evidence_without_writing(tmp_path, capsys):
         "--output", str(output),
     ]) == 1
     assert not output.exists()
-    assert capsys.readouterr().err == "Phase A0 benchmark failed.\n"
+    assert capsys.readouterr().err == (
+        "Phase A0 benchmark failed during benchmark execution.\n")
+
+
+def test_cli_rejects_baseline_output_alias_without_overwriting(
+        monkeypatch, tmp_path, capsys):
+    baseline = tmp_path / "baseline.json"
+    original = b"owner-approved baseline\n"
+    baseline.write_bytes(original)
+    monkeypatch.setattr(
+        benchmark, "run_benchmark",
+        lambda **_kwargs: pytest.fail("aliased paths must fail before running"))
+
+    assert benchmark.main([
+        "--check", str(baseline), "--output", str(baseline),
+    ]) == 1
+    assert baseline.read_bytes() == original
+    assert capsys.readouterr().err == (
+        "Phase A0 benchmark failed during argument validation "
+        "(phase-a0-report-path-alias).\n")
+
+
+def test_failed_comparison_retains_content_free_candidate_report(
+        monkeypatch, tmp_path, capsys):
+    baseline = _valid_report(authoritative=True)
+    candidate = deepcopy(baseline)
+    output = tmp_path / "candidate.json"
+    monkeypatch.setattr(
+        benchmark, "execution_profile", lambda: baseline["profile"])
+    monkeypatch.setattr(
+        benchmark, "repository_identity", lambda: baseline["source"])
+    monkeypatch.setattr(benchmark, "_read_report", lambda _path: baseline)
+    monkeypatch.setattr(
+        benchmark, "run_benchmark", lambda **_kwargs: candidate)
+
+    def reject_comparison(_current, _baseline):
+        raise benchmark.PhaseA0BenchmarkError(
+            "private internal comparison detail",
+            diagnostic_code="phase-a0-portable-evidence-drift")
+
+    monkeypatch.setattr(benchmark, "compare_contracts", reject_comparison)
+
+    assert benchmark.main([
+        "--check", str(tmp_path / "baseline.json"),
+        "--output", str(output),
+    ]) == 1
+    published = json.loads(output.read_text(encoding="utf-8"))
+    assert benchmark.validate_report(published) == candidate
+    stderr = capsys.readouterr().err
+    assert stderr == (
+        "Phase A0 benchmark failed during baseline comparison "
+        "(phase-a0-portable-evidence-drift).\n")
+    assert "private internal comparison detail" not in stderr
+
+
+def test_cli_failure_does_not_expose_raw_exception_text(
+        monkeypatch, tmp_path, capsys):
+    private_detail = str(tmp_path / "private-corpus" / "ethics.pdf")
+
+    def fail_benchmark(**_kwargs):
+        raise OSError(private_detail)
+
+    monkeypatch.setattr(benchmark, "run_benchmark", fail_benchmark)
+
+    assert benchmark.main(["--output", str(tmp_path / "report.json")]) == 1
+    stderr = capsys.readouterr().err
+    assert stderr == "Phase A0 benchmark failed during benchmark execution.\n"
+    assert private_detail not in stderr
 
 
 def test_require_clean_help_mentions_untracked_changes():
@@ -1102,3 +1177,18 @@ def test_dependency_identities_are_sorted_basename_only():
     assert all(Path(name).name == name for name in names)
     assert all(item["bytes"] > 0 for item in identities)
     assert all(len(item["sha256"]) == 64 for item in identities)
+
+
+def test_dependency_identities_reject_worktree_bytes_that_differ_from_head(
+        monkeypatch, tmp_path):
+    lock = tmp_path / "requirements-core.lock"
+    lock.write_bytes(b"distribution==1.0\r\n")
+    monkeypatch.setattr(
+        benchmark, "_run_git",
+        lambda _root, _arguments: b"distribution==1.0\n")
+
+    with pytest.raises(benchmark.PhaseA0BenchmarkError) as raised:
+        benchmark.dependency_identities(tmp_path)
+
+    assert raised.value.diagnostic_code == (
+        "phase-a0-noncanonical-input-bytes")

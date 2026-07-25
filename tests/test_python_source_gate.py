@@ -17,8 +17,15 @@ def test_parse_tracked_python_paths_is_sorted_and_exact():
     [
         (b"", "no tracked Python"),
         (b"rag.py", "not NUL-terminated"),
+        (b"/escape.py\0", "invalid Python source path"),
         (b"../escape.py\0", "invalid Python source path"),
         (b"C:escape.py\0", "invalid Python source path"),
+        (b"C:/escape.py\0", "invalid Python source path"),
+        (b"C:\\escape.py\0", "invalid Python source path"),
+        (b"\\escape.py\0", "invalid Python source path"),
+        (b"\\\\server\\share\\escape.py\0", "invalid Python source path"),
+        (b"nested\\file.py\0", "invalid Python source path"),
+        (b"nested\\..\\escape.py\0", "invalid Python source path"),
         (b"README.md\0", "invalid Python source path"),
         (b"rag.py\0rag.py\0", "duplicate Python source path"),
     ],
@@ -63,6 +70,19 @@ def test_validate_source_paths_rejects_missing_and_duplicate_targets(tmp_path):
         check_python_sources.validate_source_paths(
             tmp_path, (Path("source.py"), Path("source.py"))
         )
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [
+        Path("C:escape.py"),
+        Path("/escape.py"),
+        Path(r"nested\..\escape.py"),
+    ],
+)
+def test_validate_source_paths_rejects_cross_platform_escapes(tmp_path, relative):
+    with pytest.raises(check_python_sources.SourceGateError, match="escapes"):
+        check_python_sources.validate_source_paths(tmp_path, (relative,))
 
 
 def test_repository_gate_includes_modules_omitted_by_the_old_ci_list():

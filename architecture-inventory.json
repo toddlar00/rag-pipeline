@@ -16124,7 +16124,7 @@
   "schema_version": 3,
   "source_architecture": {
     "class_count": 189,
-    "function_count": 1979,
+    "function_count": 1981,
     "import_graph": {
       "cyclic_components": [],
       "edge_count": 145,
@@ -28069,9 +28069,15 @@
             "scope": "nested"
           }
         ],
-        "definition_locations_sha256": "f30a61545018be5c84b91d4f0c469350daec3316d6189dad28912fbf26d90fb1",
-        "function_count": 90,
+        "definition_locations_sha256": "21929bf6659c6a7e343808f7964613eef6b46279737a2299f4a5a324abb8088d",
+        "function_count": 91,
         "functions": [
+          {
+            "kind": "function",
+            "name": "PhaseA0BenchmarkError.__init__",
+            "scope": "class",
+            "signature_sha256": "bbd4735019c3fd7c28ca68ff172e8ac2a50a81d986d327da0c887be00dc533d7"
+          },
           {
             "kind": "function",
             "name": "_bounded_public_text",
@@ -28697,9 +28703,9 @@
           }
         ],
         "module": "tools.benchmark_phase_a0",
-        "non_blank_lines": 2677,
+        "non_blank_lines": 2752,
         "path": "tools/benchmark_phase_a0.py",
-        "physical_lines": 2895,
+        "physical_lines": 2971,
         "top_level_function_count": 69
       },
       {
@@ -30282,9 +30288,15 @@
             "scope": "top_level"
           }
         ],
-        "definition_locations_sha256": "62bdac2a22cb323b2db4fe0de7bf8e7822338f0d704a316a12fdc4c0a0717332",
-        "function_count": 7,
+        "definition_locations_sha256": "38b1ecf5bd021d6abbd52f5cc3ee988bbf773336cf7268b8486a0de783b2e93f",
+        "function_count": 8,
         "functions": [
+          {
+            "kind": "function",
+            "name": "_has_unsafe_cross_platform_path_semantics",
+            "scope": "top_level",
+            "signature_sha256": "a15cbfaf2b71c0f215115c2e495235127bf3ec0db9414cac493c24c2758a5127"
+          },
           {
             "kind": "function",
             "name": "_parser",
@@ -30330,10 +30342,10 @@
         ],
         "import_edges": [],
         "module": "tools.check_python_sources",
-        "non_blank_lines": 138,
+        "non_blank_lines": 149,
         "path": "tools/check_python_sources.py",
-        "physical_lines": 162,
-        "top_level_function_count": 7
+        "physical_lines": 175,
+        "top_level_function_count": 8
       },
       {
         "class_count": 0,
@@ -31121,13 +31133,13 @@
         "top_level_function_count": 2
       }
     ],
-    "physical_line_count": 61355,
+    "physical_line_count": 61444,
     "source_groups": [
       "production",
       "tools",
       "other"
     ],
-    "top_level_function_count": 1301
+    "top_level_function_count": 1302
   },
   "tracked_sources": {
     "count": 150,
