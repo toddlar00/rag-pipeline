@@ -49,10 +49,22 @@ material. When documents disagree, use the authority order below.
 - [Evaluation input-contract dependency boundary](architecture/decisions/evaluation-input-contract.md)
   — strict shared review/release inputs, the shared query domain,
   compatibility aliases, and both evaluation-side R8 inversions.
+- [CI security ownership policy](architecture/decisions/ci-security-ownership-policy.md)
+  — security-workflow trigger ownership, pinned actions, checkout credential
+  isolation, least privilege, and the residual secret-scan boundary.
+- [Architecture and facade inventory policy](architecture/decisions/architecture-facade-inventory-policy.md)
+  — schema-v3 static graph, facade/mutation characterization, normalized
+  runtime contract, and reviewed baseline refreshes.
+- [Phase A0 benchmark policy](architecture/decisions/phase-a0-benchmark-policy.md)
+  — the local A0a harness contract and the separate pending A0b per-platform
+  canonical baseline and CI checkpoint.
 
-The roadmap tracks missing maintained ADR coverage for vector lifecycle,
-table-row retrieval, and immutable source-generation policy rather than using
-historical implementation plans as substitutes.
+With the local CI-ownership and Phase A0a decisions plus the implemented and
+independently audited architecture-inventory policy now maintained here, the
+roadmap's remaining missing ADR coverage is vector lifecycle, table-row
+retrieval/evaluation, immutable source generation, pipeline composition/facade
+semantics, and release platform/support tiers. Historical implementation plans
+are not substitutes for those records.
 
 ## Governance
 
@@ -74,10 +86,17 @@ ADRs, and `ROADMAP.md` deliberately supersede them.
 
 [`INTEGRATION_AUDIT.md`](../INTEGRATION_AUDIT.md) is the historical exact-head
 record for PRs #1-#28. PRs #31-#43, the local R0/R0A/R0B/R4/R8/R10/R12
-changes, CI status, review state, and release gaps are summarized in
+changes, the accepted local R7 architecture-inventory gate and CI-security
+ownership gate, CI status, review state, and release gaps are summarized in
 `ROADMAP.md` until R12 moves
 point-in-time transcripts and test counts into an immutable `docs/evidence/`
 ledger keyed by commit and PR.
+
+The Phase A0a harness and its local tests are implementation evidence only.
+Phase A0b still requires clean pre-gate-source CPython 3.12 x86-64 baselines for
+Windows and Linux, a following source/lock-invariant final R1 candidate, hosted
+CI comparisons, and retained current-report artifacts; none of those is implied
+by A0a or by a local smoke report.
 
 Ignored `output/` paths are not durable evidence in a fresh clone. A roadmap or
 PR claim that depends on private output must be backed by a tracked content-free

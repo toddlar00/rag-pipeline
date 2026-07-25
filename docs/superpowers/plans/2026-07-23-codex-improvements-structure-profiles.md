@@ -14,8 +14,9 @@
 > Repository-hygiene mechanics are implemented locally in commit `88fd301`;
 > the private-source owner decision, publication, scoped static typing, README
 > decomposition, and the residual pipeline/UI/evaluator-to-`rag` composition
-> work remain open. R8c-1 through R8c-4 have since resolved the former
-> job/manager dependency seam.
+> work remain open. R8c-1 through R8c-5 have since resolved the former
+> job/manager dependency seam and established a lazy service-role composition
+> root; the broader pipeline/UI root remains future work.
 > The unchecked boxes, code sketches, branch instructions, baselines, and test
 > counts below are retained as historical design context, not live execution
 > instructions. [ROADMAP.md](../../../ROADMAP.md) is the status authority.
