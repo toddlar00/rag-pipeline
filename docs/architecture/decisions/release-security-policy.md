@@ -171,7 +171,9 @@ therefore requires an operator-declared, nonsecret tenant/trust label even when
 the response cache is off. The raw label is validated, hashed, and discarded;
 its opaque identity participates in LLM cache keys, single-flight identity,
 events, reports, and resume/job provenance. Different identities cannot share
-results. Cache schema v3 and key schema v2 reject ambiguous legacy records.
+results. Cache-record schema v4 and cache-key schema v3 reject ambiguous legacy
+records. Versioned contract and deterministic-fallback IDs participate in the
+key, and a contracted cache hit is accepted only after revalidation.
 
 The current LLM cache is a private-permission plaintext store, not encrypted
 storage. Release CLI calls default it to `off`, and development CLI calls
@@ -270,6 +272,10 @@ with old defaults.
   hidden interactive prompt.
 - Legacy ambiguous LLM cache records fail closed. No automatic tenant guess is
   attempted.
+- Generated classification text is treated as hostile until it satisfies the
+  reviewed exact-label contract. Events and reports retain only the bounded
+  contract/fallback IDs, status, and stable diagnostic code; rejected text and
+  validator exceptions are not retained.
 - Durable jobs and worker messages carry an exact versioned receipt; an older
   worker cannot silently accept a newer policy.
 - Historical evaluation reports without this optional comparison key remain

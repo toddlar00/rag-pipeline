@@ -77,6 +77,23 @@ def test_repository_workflows_satisfy_ci_security_policy():
     assert check_ci_security.validate() == []
 
 
+def test_llm_output_contract_owner_cannot_be_removed(tmp_path):
+    policy, _workflow_path = _valid_tree(tmp_path)
+    policy["current_implementation_owners"]["provider_runtime"].remove(
+        "llm_output_contracts.py")
+    _write(
+        tmp_path / check_ci_security.POLICY_PATH,
+        json.dumps(policy, indent=2) + "\n",
+    )
+
+    errors = check_ci_security.validate(tmp_path)
+
+    assert any(
+        "missing required current owner: llm_output_contracts.py" in error
+        for error in errors
+    )
+
+
 def test_checkout_must_disable_persisted_credentials(tmp_path):
     _policy_data, workflow_path = _valid_tree(tmp_path)
     workflow_path.write_text(

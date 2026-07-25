@@ -32,6 +32,7 @@ _REQUIRED_CURRENT_OWNERS = frozenset({
     "endpoint_policy.py",
     "index_state.py",
     "llm_adapters.py",
+    "llm_output_contracts.py",
     "llm_runtime.py",
     "model_artifacts.py",
     "provider_transport.py",

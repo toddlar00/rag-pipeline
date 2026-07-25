@@ -210,9 +210,25 @@ def test_chunk_completion_binds_source_options_model_lock_and_output(
 
     initial = parameters()
     assert initial["max_llm_transport_attempts"] == 3
+    assert initial["chunking_policy_version"] == 23
+    assert initial["classification_prompt_version"] == 2
+    assert initial["classification_output_contract"] == {
+        "policy_version": 1,
+        "contract_id": "chunk-classification-v2",
+        "fallback_id": "preserve-deterministic-content-type",
+        "max_bytes": 128,
+        "allowed_values": list(rag._CONTENT_LABELS),
+    }
+    disabled = parameters(llm_classify=False)
+    assert disabled["classification_prompt_version"] == 1
+    assert "classification_output_contract" not in disabled
     _write_chunk_completion(document, chunks, initial)
 
     assert rag._chunks_complete(document, chunks, parameters=initial)
+    changed_contract = json.loads(json.dumps(initial))
+    changed_contract["classification_output_contract"]["max_bytes"] = 64
+    assert not rag._chunks_complete(
+        document, chunks, parameters=changed_contract)
     assert "secret-a" not in str(initial)
     assert "secret-b" not in str(initial)
     assert "127.0.0.1" not in str(initial)

@@ -9,6 +9,7 @@
       "embedding_policy.py",
       "provider_transport.py",
       "llm_adapters.py",
+      "llm_output_contracts.py",
       "llm_runtime.py"
     ],
     "model_supply_chain": [

@@ -123,6 +123,13 @@ responses into the typed, provider-neutral contracts in `llm_runtime.py`.
 Gemini remains lazily imported, while `rag.py` retains provider selection,
 runtime composition, mutable caches/throttles, and the compatibility facades.
 
+`llm_output_contracts.py` is the dependency-light authority boundary for model
+text after a provider envelope has been accepted. The first reviewed contract
+accepts only one bounded ASCII chunk-classification label, validates live and
+shared/cache results before publication, and retains only content-free status
+and diagnostic receipts. See the
+[LLM output-contract ADR](docs/architecture/decisions/llm-output-contracts.md).
+
 `endpoint_policy.py` is the standard-library-only trust boundary for custom
 LLM URLs. It canonicalizes approved targets before credential lookup, cache
 lookup, job persistence, artifact binding, or transport; classifies official
@@ -681,8 +688,9 @@ batch, physically verified record counts, exact physical mutation calls, and
 bounded-queue pressure. A failed index stage instead records separately named
 content-free attempted delete/create/upsert/queue counts with
 `committed=false`; it does not mislabel partial physical work as a committed
-outcome. LLM observations aggregate calls, attempts, retries, latency, and
-exact/estimated tokens.
+outcome. LLM observations aggregate calls, attempts, retries, latency,
+exact/estimated tokens, and output-contract acceptance, rejection,
+not-evaluated, and deterministic-fallback counts.
 
 Each invocation replaces the supplied run-event/report files with its current
 run. Run and LLM event/report outputs must resolve to pairwise distinct files;
@@ -1010,7 +1018,10 @@ parsing/review (`--llm-scaffold`).
 Gemini (API) -> deterministic fallback where the feature supports one. A cloud
 provider is skipped when it has no key; a failed or empty response falls through
 to the next provider. Features without a deterministic fallback return no LLM
-result after all configured providers fail.
+result after all configured providers fail. A non-empty classification response
+that violates its exact output contract does not delegate classification
+authority to a later provider; best-effort mode preserves the deterministic
+content type, while strict mode raises a structured execution error.
 
 ### Reproducible LLM execution
 
@@ -1051,16 +1062,26 @@ an explicit `cache_mode`; changing only the security profile does not rewrite
 an already configured runtime. A cache key covers the exact prompt digest,
 operation and prompt
 versions, generation settings, timeout, fallback policy, ordered
-provider/model/endpoint identities, and opaque trust/tenant namespace.
+provider/model/endpoint identities, opaque trust/tenant namespace, and any
+versioned output-contract and deterministic-fallback identities.
 Prompts, API keys, raw endpoints, and raw namespace labels are not stored in the
 key or record: reviewed official targets use a versioned canonical identity,
 while custom/rejected targets and namespaces use opaque SHA-256 identities.
-Enabled endpoints are validated before cache lookup. Only non-empty successful
-responses are cached, and entries use unkeyed integrity hashes plus atomic
-replacement so truncated, malformed, hash-inconsistent, or ambiguous legacy
+Enabled endpoints are validated before cache lookup. Only successful non-empty
+text is cached; contracted text must additionally be accepted and canonical.
+Contracted cache hits and
+same-key in-flight results are revalidated before use. Entries use unkeyed
+integrity hashes plus atomic replacement so truncated, malformed,
+hash-inconsistent, noncanonical, contract-incompatible, or ambiguous legacy
 records fail closed and are repaired only by a later explicitly cache-enabled
 successful call. This detects damage; it is not cryptographic protection from
 a trusted local writer.
+
+LLM events and reports never retain rejected response text or validator
+exceptions. They use bounded contract/fallback IDs, the status `accepted`,
+`rejected`, or `not_evaluated`, stable diagnostic codes, and aggregate fallback
+counts. A budget-exhausted request is not labeled as a deterministic fallback
+because budget exhaustion is always raised to the caller.
 
 The cache itself contains successful response text in plaintext. Treat its
 directory as sensitive when textbook excerpts, client facts, or other private
@@ -1512,7 +1533,7 @@ deterministic and make no LLM calls unless an LLM feature flag is supplied.
 
 | Feature | Flag / Command | What it does |
 |---------|---------------|--------------|
-| Content classification | `--llm-classify` | Replaces regex type detection with LLM inference per chunk |
+| Content classification | `--llm-classify` | Accepts one exact bounded label per chunk; invalid model text preserves the deterministic type in best-effort mode |
 | Contextual retrieval | `--contextualize` | Generates 1-2 sentence context prefix per chunk (Anthropic pattern) |
 | Neighbor assembly | `query --context-window N` | Adds manifest-bound adjacent evidence after ranking while preserving independent citations |
 | Heading reconstruction | `--reconstruct-headings` | Infers full section paths for bare headings ("B", "III") |
@@ -2699,6 +2720,7 @@ quality_core.py         # Stdlib-only corpus quality reports and bindings
 index_state.py          # Stdlib-only index manifests and compatibility policy
 vector_lifecycle.py     # Stdlib-only guarded vector mutation and commit policy
 llm_adapters.py         # Typed LLM provider transport adapters
+llm_output_contracts.py # Bounded exact contracts for generated model text
 llm_runtime.py          # Reproducible caching, fallback, budgets, and reports
 provider_transport.py   # Bounded streaming provider-response reader
 endpoint_policy.py      # Canonical cloud/loopback endpoint trust boundary

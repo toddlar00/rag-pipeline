@@ -4,6 +4,12 @@ import os
 import pytest
 
 import evaluation_metrics
+from llm_runtime import (
+    LLMRequest,
+    LLMRuntime,
+    LLMRuntimeConfig,
+    ProviderSpec,
+)
 
 
 def test_token_estimate_and_percentiles_are_deterministic():
@@ -109,6 +115,27 @@ def test_parse_llm_report_and_project_explicit_rates(tmp_path):
     assert costs["embedding"]["projected_usd"] == 0.000006
     assert costs["llm"]["status"] == "estimated"
     assert costs["llm"]["projected_usd"] == 0.0006
+
+
+def test_current_runtime_report_is_accepted_by_evaluation_parser(tmp_path):
+    report = tmp_path / "llm-report.json"
+    runtime = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="off", cache_dir=tmp_path / "cache",
+        report_path=report))
+    runtime.execute(
+        LLMRequest(prompt="abcd", operation="test.eval_report"),
+        [ProviderSpec(
+            name="test", model="model", endpoint_id="test-endpoint",
+            invoke=lambda _request: "answer")],
+    )
+    runtime.write_report()
+
+    usage = evaluation_metrics.parse_llm_usage_report(report)
+
+    assert evaluation_metrics.LLM_RUNTIME_REPORT_SCHEMA_VERSION == 5
+    assert usage["input_tokens"] > 0
+    assert usage["output_tokens"] > 0
+    assert usage["estimated_usage_attempts"] == 1
 
 
 def test_costs_are_null_without_rates_and_offline_embeddings_are_not_used():
