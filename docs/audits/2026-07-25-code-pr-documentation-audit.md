@@ -573,9 +573,8 @@ Each successor PR should:
 
 ### Required split of the current local review tree
 
-The current uncommitted review tree combines two workstreams only so their
-contracts can be audited together. It is not an acceptable single PR. Publish
-them from the frozen R1 ancestor as two independent successors:
+The work was reviewed together so its contracts could be reconciled, then split
+before publication into two independent successors from the frozen R1 ancestor:
 
 1. **R2b-0 dependency policy:** `.github/dependabot.yml`,
    `.github/workflows/dependency-compatibility.yml`,

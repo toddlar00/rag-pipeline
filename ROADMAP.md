@@ -2273,9 +2273,8 @@ must enumerate and qualify both deltas explicitly. Any R1
 source correction requires replacement commit/tree and A0 evidence. This freeze
 does not declare broader R7 or R10 complete.
 
-The present local review tree temporarily contains two owner-independent
-workstreams. Before publication they must become two independently reviewable
-successors from the frozen R1 ancestor:
+The combined review tree was intentionally divided before publication into two
+independently reviewable successors from the frozen R1 ancestor:
 
 1. **R2b-0 policy PR:** only the six-domain Dependabot configuration, manifest,
    fail-closed checker, workflow, adversarial tests, architecture-inventory

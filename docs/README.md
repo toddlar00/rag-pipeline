@@ -55,9 +55,6 @@ The current point-in-time examination is the
 - [CI security ownership policy](architecture/decisions/ci-security-ownership-policy.md)
   — security-workflow trigger ownership, pinned actions, checkout credential
   isolation, least privilege, and the residual secret-scan boundary.
-- [Dependency compatibility domains](architecture/decisions/dependency-compatibility-domains.md)
-  — exact non-overlapping upgrade groups, manifest coverage, lock refresh and
-  domain-specific qualification before dependency changes.
 - [Architecture and facade inventory policy](architecture/decisions/architecture-facade-inventory-policy.md)
   — schema-v3 static graph, facade/mutation characterization, normalized
   runtime contract, and reviewed baseline refreshes.
