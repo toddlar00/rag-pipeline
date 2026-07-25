@@ -946,7 +946,7 @@
             "source": "tests/test_architecture_inventory.py"
           },
           {
-            "line": 868,
+            "line": 911,
             "operation": "setattr",
             "source": "tests/test_phase_a0_benchmark.py"
           },
@@ -3141,7 +3141,7 @@
             "target": "_run_pipeline_job"
           },
           {
-            "locations_sha256": "6dc66acc34e0fa9c47b62d3a5ebb1285c311cfc1a48f0a72e85a350d2f37dca8",
+            "locations_sha256": "7f266d464506fc75dfad6546997f1a00ffb662a687f1aed2536c46e9a982db8b",
             "occurrence_count": 9,
             "operations": [
               "setattr"
@@ -3369,7 +3369,7 @@
             "target": "_validate_embedding_token_counts"
           },
           {
-            "locations_sha256": "d4d9eaeed0b11d0541c634a222700dd15bf29ae2367b19ee95c1ea1d19241ace",
+            "locations_sha256": "3bdb14846d6f48ac274706ac4aec5ab2611bb737e72b8e9eeb9b45ac43eac8a7",
             "occurrence_count": 1,
             "operations": [
               "setattr"
@@ -5848,7 +5848,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "7db2d7c46f976010a6dc4deca1ec2d94ccc29abd29ea7690bdfb565fb60fc363",
+          "locations_sha256": "200745fd1e85999f4b0e33c7494707a4f31fbec7909be9d286f773a95d6f6407",
           "name": "_index_chunks_for_backend",
           "occurrence_count": 1,
           "paths": [
@@ -28069,7 +28069,7 @@
             "scope": "nested"
           }
         ],
-        "definition_locations_sha256": "18198a2a5192559cdba78f1bd15decbb14b383ff55b4b166109ca2fe0893d54e",
+        "definition_locations_sha256": "f30a61545018be5c84b91d4f0c469350daec3316d6189dad28912fbf26d90fb1",
         "function_count": 90,
         "functions": [
           {
@@ -28697,9 +28697,9 @@
           }
         ],
         "module": "tools.benchmark_phase_a0",
-        "non_blank_lines": 2676,
+        "non_blank_lines": 2677,
         "path": "tools/benchmark_phase_a0.py",
-        "physical_lines": 2894,
+        "physical_lines": 2895,
         "top_level_function_count": 69
       },
       {
@@ -31121,7 +31121,7 @@
         "top_level_function_count": 2
       }
     ],
-    "physical_line_count": 61354,
+    "physical_line_count": 61355,
     "source_groups": [
       "production",
       "tools",

@@ -2345,6 +2345,7 @@ def safe_child_environment(
         "PYTHONPATH": os.pathsep.join(
             [str(sitecustomize_root), str(PROJECT_ROOT)]
             if sitecustomize_root is not None else [str(PROJECT_ROOT)]),
+        "PYTHONUSERBASE": str(temporary_root / "python-user-base"),
         "PYTHONUTF8": "1",
         "RAG_LLM_CACHE_DIR": str(temporary_root / "llm-cache"),
         "RAG_MODEL_ARTIFACT_CACHE": str(

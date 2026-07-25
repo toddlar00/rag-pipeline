@@ -585,6 +585,7 @@ def test_safe_child_environment_is_fixed_and_drops_ambient_state(
     monkeypatch.setenv("HTTPS_PROXY", "https://private-proxy.example")
     monkeypatch.setenv("HF_HOME", str(tmp_path / "private-cache"))
     monkeypatch.setenv("LD_LIBRARY_PATH", str(tmp_path / "private-libraries"))
+    monkeypatch.setenv("PYTHONUSERBASE", str(tmp_path / "private-user-base"))
     monkeypatch.setenv("RAG_LLM_CACHE_DIR", str(tmp_path / "operator-llm-cache"))
     monkeypatch.setenv("PATH", "safe-path")
     guard = tmp_path / "guard"
@@ -599,6 +600,7 @@ def test_safe_child_environment_is_fixed_and_drops_ambient_state(
     assert environment["PYTHONIOENCODING"] == "utf-8"
     assert environment["PYTHONPATH"] == os.pathsep.join(
         [str(guard), str(benchmark.PROJECT_ROOT)])
+    assert environment["PYTHONUSERBASE"] == str(tmp_path / "python-user-base")
     assert environment["RAG_LLM_CACHE_DIR"] == str(tmp_path / "llm-cache")
     assert environment["RAG_MODEL_ARTIFACT_CACHE"] == str(
         tmp_path / "model-artifacts")
@@ -612,9 +614,50 @@ def test_safe_child_environment_is_fixed_and_drops_ambient_state(
         "ld_library_path"}
     assert not {name.casefold() for name in environment}.intersection(forbidden)
     assert "provider-secret" not in json.dumps(environment)
+    assert "private-user-base" not in json.dumps(environment)
     if os.name == "nt":
         assert environment["USERPROFILE"] == str(tmp_path)
         assert environment["LOCALAPPDATA"] == str(tmp_path)
+
+
+def test_guarded_environment_imports_sysconfig_without_home_resolution(tmp_path):
+    script = tmp_path / "sysconfig_probe.py"
+    benchmark._write_private_generated_text(script, """\
+import json
+import os
+from pathlib import Path
+import sysconfig
+
+try:
+    Path.home()
+except RuntimeError:
+    home_denied = True
+else:
+    home_denied = False
+
+print(json.dumps({
+    "home_denied": home_denied,
+    "sysconfig_loaded": bool(sysconfig.get_paths()),
+    "user_base_redirected": (
+        sysconfig.get_config_var("userbase") == os.environ["PYTHONUSERBASE"]),
+}, sort_keys=True, separators=(",", ":")))
+""")
+    guard = benchmark._install_sitecustomize_guard(tmp_path)
+    environment = benchmark._guarded_child_environment(
+        tmp_path, guard, trace_path=tmp_path / "trace.jsonl",
+        role="sysconfig-probe")
+
+    result = benchmark._run_contained_process(
+        script, (), cwd=tmp_path, environment=environment,
+        timeout_seconds=10)
+
+    assert result.returncode == 0
+    assert result.stderr == b""
+    assert json.loads(result.stdout) == {
+        "home_denied": True,
+        "sysconfig_loaded": True,
+        "user_base_redirected": True,
+    }
 
 
 def test_contained_runner_uses_exact_environment_and_bounded_files(
