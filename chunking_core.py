@@ -287,12 +287,19 @@ def _strip_headers_footers(text: str) -> str:
 
 
 def _dedup_nearby_lines(text: str, window: int = 5) -> str:
-    """Remove lines that duplicate another line within *window* lines above."""
+    """Remove lines that duplicate another line within *window* lines above.
+
+    The rule targets repeated page furniture in extracted prose.  Markdown
+    table rows are exempt: a table may legitimately repeat a data row, and two
+    adjacent tables repeat their header and separator, so applying the rule
+    there deleted real cells and merged a following table into the previous
+    one's body.
+    """
     lines = text.split("\n")
     out: list[str] = []
     for line in lines:
         stripped = line.strip()
-        if not stripped:
+        if not stripped or stripped.startswith("|"):
             out.append(line)
             continue
         start = max(0, len(out) - window)

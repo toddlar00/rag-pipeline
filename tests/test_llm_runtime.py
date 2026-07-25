@@ -219,6 +219,36 @@ def test_tampered_cache_is_missed_and_repaired(tmp_path):
     assert runtime.report_payload()["counts"]["cache_corrupt"] == 1
 
 
+def test_deeply_nested_cache_record_is_corrupt_not_fatal(tmp_path):
+    """A small, deeply nested cache file must not poison every later call."""
+    calls = 0
+
+    def invoke(_request):
+        nonlocal calls
+        calls += 1
+        return f"answer-{calls}"
+
+    cache_dir = tmp_path / "cache"
+    runtime = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="readwrite", cache_dir=cache_dir))
+    request = LLMRequest(prompt="prompt", operation="test.nesting")
+    provider = _provider(invoke)
+    assert runtime.execute(request, [provider]).text == "answer-1"
+
+    # Deep enough to exceed the interpreter recursion limit on CPython 3.10-
+    # 3.13 and the C stack guard on 3.14, while staying far below the 32 MiB
+    # cache-record ceiling that would have rejected the file first.
+    depth = 200_000
+    cache_path = next(cache_dir.rglob("*.json"))
+    cache_path.write_text(
+        "[" * depth + "]" * depth, encoding="utf-8")
+
+    assert runtime.execute(request, [provider]).cache_status == "miss"
+    assert calls == 2
+    assert runtime.report_payload()["counts"]["cache_corrupt"] == 1
+    assert runtime.execute(request, [provider]).cache_status == "hit"
+
+
 def test_failed_results_are_not_cached(tmp_path):
     responses = iter([None, "recovered"])
     calls = 0

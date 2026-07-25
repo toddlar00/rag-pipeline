@@ -15,6 +15,7 @@ import pytest
 import job_coordination
 import job_manager
 import job_runtime
+import resource_lease
 import retention
 import release_security
 import retrieval_core
@@ -1049,6 +1050,41 @@ def test_search_is_bounded_by_nonblocking_concurrency(tmp_path):
             assert first.result(timeout=2)["request_id"] == "req-1"
     finally:
         release.set()
+        service.close()
+
+
+@pytest.mark.parametrize(
+    ("failure", "healthy"),
+    [
+        (OSError("temporary root is busy"), True),
+        (resource_lease.PathLeaseBusyError("lease held"), True),
+        (storage_policy.StoragePolicyError("private root changed"), True),
+        (RuntimeError("unclassified"), False),
+    ],
+)
+def test_search_environment_failures_stay_retryable(
+        tmp_path, failure, healthy):
+    """A transient filesystem failure must not take the service down."""
+    def runner(*_args, **_kwargs):
+        raise failure
+
+    service = _service(tmp_path, search_runner=runner)
+    request = service_contracts.SearchRequest("minimum contacts")
+    try:
+        with pytest.raises(service_runtime.ServiceRuntimeError) as raised:
+            service.search("property", request, "req-1")
+        assert raised.value.code == "service_unavailable"
+        assert raised.value.fatal is False
+        assert str(failure) not in str(raised.value)
+        assert service.healthy is healthy
+        if healthy:
+            # A later successful search must still be served.
+            service._search_runner = (
+                lambda config, request, request_id:
+                _empty_search_response(config, request, request_id))
+            assert service.search(
+                "property", request, "req-2")["request_id"] == "req-2"
+    finally:
         service.close()
 
 

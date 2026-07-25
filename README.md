@@ -1077,7 +1077,7 @@ default location is the platform user-cache directory
 | `--network-policy local-only|allow-cloud` | Consent before private text can reach a cloud provider |
 | `--model-download-policy cache-only|allow-reviewed-sync` | Keep runtime offline by default or explicitly permit reviewed model sync |
 | `--llm-cache-namespace LABEL` | Nonsecret custom-gateway trust/tenant label; only its digest persists |
-| `--trust-environment-network` | Accept reviewed proxy/custom-CA routing and an explicit `HF_ENDPOINT` for model sync |
+| `--trust-environment-network` | Accept reviewed proxy/custom-CA/TLS-key-logging settings and an explicit `HF_ENDPOINT` for model sync |
 | `--llm-cache-mode readwrite|readonly|refresh|off` | Read/write policy; `refresh` bypasses a hit and replaces it after live success |
 | `--llm-cache-dir PATH` | Override the machine-local response-cache directory |
 | `--llm-events PATH` | Append one prompt-free JSONL event per logical request |
@@ -2658,10 +2658,13 @@ rebuild with `--full-reindex` if needed.
   retries are disabled. Custom release gateways also require a nonsecret cache
   namespace whose opaque digest binds cache, single-flight, report, and resume
   identity.
-- Cloud transports ignore ambient proxy, custom-CA, and SDK endpoint settings
-  by default. Release mode reads values only to identify non-empty override
-  variable names, never persisting, echoing, or reporting those values, and
-  requires `--trust-environment-network` after review.
+- Cloud transports ignore ambient proxy, custom-CA, TLS key-logging, and SDK
+  endpoint settings by default. Release mode reads values only to identify
+  non-empty override variable names, never persisting, echoing, or reporting
+  those values, and requires `--trust-environment-network` after review.
+  `SSLKEYLOGFILE` is refused on policy alone because the HTTP stacks read it
+  when they build an SSL context, so a per-session `trust_env = False` does not
+  disable it.
   This does not replace OS DNS, firewall, or egress controls.
 - Requests-based provider responses are MIME-, framing-, deadline-, depth-, and
   decoded-byte-bounded before JSON parsing. Fixed diagnostics never include the

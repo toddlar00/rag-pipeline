@@ -129,6 +129,47 @@ def test_atomic_text_failure_preserves_previous_bytes(monkeypatch, tmp_path):
     assert list(tmp_path.glob(".book.md.*.tmp")) == []
 
 
+def test_plaintext_export_offsets_index_the_published_bytes(tmp_path):
+    """char_start/char_end are a citation contract against the .txt file."""
+    chunks = [
+        _record(0, 1, "Duties", "First passage.\nSecond line of the first."),
+        _record(1, 1, "Duties", "Another passage.\nWith its own line."),
+        _record(2, 2, "Fees", "Third passage."),
+    ]
+    export_path = tmp_path / "book"
+
+    rag._export_plaintext(chunks, export_path)
+
+    published = (tmp_path / "book.txt").read_bytes().decode("utf-8")
+    records = json.loads(
+        (tmp_path / "book.metadata.json").read_text(encoding="utf-8"))
+
+    assert b"\r\n" not in (tmp_path / "book.txt").read_bytes()
+    assert len(records) == len(chunks)
+    for record, chunk in zip(records, chunks):
+        block = published[record["char_start"]:record["char_end"]]
+        assert block.endswith(chunk["text"])
+        assert block.startswith("[CHUNK ")
+    assert records[-1]["char_end"] == len(published)
+
+
+def test_atomic_exact_utf8_failure_preserves_previous_bytes(
+        monkeypatch, tmp_path):
+    target = tmp_path / "export.txt"
+    original = b"previous complete output\n"
+    target.write_bytes(original)
+    monkeypatch.setattr(
+        rag.os, "replace",
+        lambda *_args: (_ for _ in ()).throw(OSError("replace failed")),
+    )
+
+    with pytest.raises(OSError, match="replace failed"):
+        rag._atomic_write_exact_utf8(target, "partial\nreplacement")
+
+    assert target.read_bytes() == original
+    assert list(tmp_path.glob(".export.txt.*.tmp")) == []
+
+
 def test_conversion_completion_requires_both_untampered_outputs(
         monkeypatch, tmp_path):
     source = tmp_path / "book.pdf"

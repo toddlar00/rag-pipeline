@@ -79,6 +79,43 @@ def test_classifier_uses_current_rag_structural_helper(monkeypatch):
     assert observed["args"] == ("ordinary prose", ["A heading"])
 
 
+def test_nearby_dedup_never_drops_markdown_table_structure():
+    """Repeated table rows and adjacent table headers are real content."""
+    repeated_row = "\n".join([
+        "| Year | Men | Women |",
+        "| --- | --- | --- |",
+        "| 2019 | 50 | 50 |",
+        "| 2020 | 51 | 49 |",
+        "| 2019 | 50 | 50 |",
+        "| 2021 | 52 | 48 |",
+    ])
+    assert chunking_core._dedup_nearby_lines(repeated_row) == repeated_row
+
+    adjacent_tables = "\n".join([
+        "| A | B |", "| --- | --- |", "| 1 | 2 |",
+        "",
+        "| A | B |", "| --- | --- |", "| 3 | 4 |",
+    ])
+    assert chunking_core._dedup_nearby_lines(
+        adjacent_tables) == adjacent_tables
+    assert rag._normalize_text(repeated_row) == repeated_row
+
+
+def test_nearby_dedup_still_removes_repeated_prose_furniture():
+    text = "\n".join([
+        "CHAPTER 4 — PROFESSIONAL RESPONSIBILITY",
+        "Substantive first paragraph.",
+        "CHAPTER 4 — PROFESSIONAL RESPONSIBILITY",
+        "Substantive second paragraph.",
+    ])
+
+    assert chunking_core._dedup_nearby_lines(text) == "\n".join([
+        "CHAPTER 4 — PROFESSIONAL RESPONSIBILITY",
+        "Substantive first paragraph.",
+        "Substantive second paragraph.",
+    ])
+
+
 def test_dedup_uses_current_rag_helpers_and_logger(monkeypatch):
     fingerprint_calls = []
     trigram_calls = []

@@ -162,6 +162,23 @@ def test_load_manifest_uses_current_path_and_warning(monkeypatch, tmp_path):
     assert warnings[0][1] == manifest_path
 
 
+def test_load_manifest_rebuilds_safely_on_undecodable_bytes(
+        monkeypatch, tmp_path):
+    """A torn or partially synced manifest must trigger the safe rebuild."""
+    manifest_path = tmp_path / "torn.json"
+    manifest_path.write_bytes(b'{"schema_version": 8, "name": "\xff\xfe"}')
+    warnings = []
+
+    monkeypatch.setattr(
+        rag, "_index_manifest_path", lambda *args, **kwargs: manifest_path)
+    monkeypatch.setattr(rag.log, "warning", lambda *args: warnings.append(args))
+
+    assert rag._load_index_manifest(
+        tmp_path, backend="chroma", collection_name="cases") is None
+    assert warnings
+    assert warnings[0][1] == manifest_path
+
+
 def test_resolver_uses_current_rag_collaborators(monkeypatch, tmp_path):
     marker = tmp_path / "marker.json"
     marker.write_text("{}", encoding="utf-8")

@@ -844,6 +844,65 @@ done separate; “code exists” does not imply “integrated” or “owner app
 | R11 corpus/profile breadth | Second profile and synthetic fixtures exist | No authorized real receipt for `roman-parts-book-v1` | None | Corpus authorization/qualification required | Add content-free profile diagnostics and real receipt |
 | R12 packaging/docs/UX | Task-oriented model-sync presets, offline plan output, and plan-based first-run guidance are in draft #44; packaging/README split is not done | Planner behavior is tested; documentation examples are not yet parser-executed in CI | Draft PR #44 | Product language and remote-scope decisions remain | Add stable console entry points and short parser-checked release guides before R5 |
 
+## 2026-07-25 defect remediation pass
+
+An adversarial source audit ran eight domain-scoped finders across the tracked
+first-party sources, then had an independent skeptic attempt to refute each
+finding against the real execution path. Twenty-four raw findings yielded nine
+confirmed defects and five traced refutations; two further defects were found
+outside that audit. The refutations are recorded below so they are not
+re-reported.
+
+Every correction is a release-blocking or correctness-preserving source fix
+that satisfies the change freeze's explicit exception. Each carries a
+regression test that was observed failing against the pre-fix source and
+passing after it. The set was validated together against the full suite, Ruff,
+the 150-source compilation gate, the dependency, model-artifact, CI-security,
+and architecture-inventory gates, and all three offline evaluation suites.
+
+| Defect | Surface | Correction |
+|---|---|---|
+| `rag storage --delete-run` re-derived a stem from the manifest's already-stemmed `job_scope`, so a run whose scope contains a dot took a different lease than the pipeline holding it and deleted a live run directory mid-write | `rag.py` | `_pipeline_job_lock` takes an explicit `scope_name`; both sides now derive one lease identity |
+| A chunk containing U+0085, U+2028, or U+2029 was written literally by `ensure_ascii=False` and then torn by `str.splitlines`, so the pipeline produced a chunks artifact it could not read back | `storage_policy.py`, `artifact_io.py`, `eval.py`, `evaluation_review.py`, `offline_retrieval.py`, `run_telemetry.py` | One `jsonl_lines` reader beside the writer recognizes only the terminators `atomic_write_private` can emit |
+| `_dedup_nearby_lines` deleted repeated Markdown table rows and an adjacent table's header/separator, silently losing cells and merging one table into another | `chunking_core.py` | Table rows are exempt from the duplicate test; prose page-furniture removal is unchanged |
+| `preprocess --force` had no input/output aliasing check, so an aliased `-o` replaced the private source PDF with its own stripped output | `rag.py` | Publication is refused by the existing `validate_distinct_output_paths` contract before any analysis |
+| Plaintext-export `char_start`/`char_end`, documented as a citation contract, indexed an in-memory string while text-mode publication translated `\n` to `\r\n` on Windows | `rag.py` | The `.txt` is published as exact UTF-8 bytes through `_atomic_write_exact_utf8` |
+| `SSLKEYLOGFILE` was absent from the ambient-network override list; unlike every other entry it is read directly by urllib3/httpx when building an SSL context, so `trust_env = False` did not disable TLS session-key export of private corpus text and credentials | `release_security.py` | The variable fails closed on policy alone unless `--trust-environment-network` is passed |
+| Any non-`ServiceRuntimeError` from the search path marked the service permanently unhealthy, so one transient filesystem or busy-lease failure took it down until restart | `service_runtime.py` | `OSError`/`StoragePolicyError` map to a retryable `service_unavailable`; unclassified exceptions still fail closed |
+| The unauthenticated `/health/ready` probe ran its blocking filesystem walk on the asyncio event loop | `service_http.py` | The probe is offloaded with `asyncio.to_thread`, matching every other handler |
+| A corrupt cancel marker aborted `run_job` after the terminal transition had committed, losing the terminal attempt report and the manager result | `job_coordination.py` | The tolerant recovery-evidence reader is used; the damaged marker is left for reconciliation, which owns the repair fields a non-recovery report may not carry |
+| `_load_index_manifest` omitted `UnicodeError`, so a torn manifest crashed indexing instead of triggering the documented safe rebuild | `index_state.py` | The handler matches its sibling reader in the same module |
+| A small but deeply nested cache record raised `RecursionError` out of `_read_cache`, making every later `execute()` fail | `llm_runtime.py` | The record is counted as `cache_corrupt` and missed, as for every other corruption class |
+
+**Refuted with a traced path** (do not re-report): structural page ranges do
+not leak for boundary-straddling chunks, because items are split per source
+item before enrichment; `--max-regression` is a one-directional drop detector
+by specification and lower-is-better rates are gated by `--fail-over`;
+`classify_runtime_consumer`'s `.bin` test is a reporting classifier, not the
+load-time safety control; and `tools/check_licenses.py` returning zero
+violations on an empty report is not reachable as a release gate.
+
+**Deferred defects** — real, but each changes published artifact content or
+needs evidence this pass did not produce:
+
+- `enrich_chunk` publishes `table_rows` counted from non-separator lines, so it
+  includes the header and any preamble and disagrees with the authoritative
+  `table_retrieval_core` parse used for parents. Confirmed. Fixing it changes
+  published chunk metadata and therefore every corpus digest, so it needs a
+  schema/migration decision rather than an in-freeze correction.
+- The Docling progress log handler and `tqdm` bar are not released when a
+  conversion fails, so later batch items inherit them. Reported, not
+  independently verified.
+- `validate_model_artifact_lock` raises a bare `KeyError` instead of
+  `ModelArtifactError` when the lock omits an optional field the policy
+  declares. Reported, not independently verified.
+
+**Migration note.** The chunking correction changes future chunking output only
+for corpora that actually contain repeated table rows or adjacent tables.
+Existing artifacts and their recorded hashes are untouched, but a corpus must
+be re-chunked to gain the recovered cells, and its chunks SHA-256 will change
+when it is.
+
 ## Architecture and risk map
 
 The proposed tree already contains dozens of application/tool modules and test

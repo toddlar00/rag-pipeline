@@ -577,7 +577,7 @@ class LLMRuntime:
                 self._counts["cache_read_errors"] += 1
             return None
         except (UnicodeError, json.JSONDecodeError, KeyError,
-                TypeError, ValueError):
+                TypeError, ValueError, RecursionError):
             with self._lock:
                 self._counts["cache_corrupt"] += 1
             return None

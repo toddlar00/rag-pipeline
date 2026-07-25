@@ -969,6 +969,12 @@ class RagApplicationService:
             if exc.fatal:
                 self.mark_unhealthy()
             raise
+        except (OSError, storage_policy.StoragePolicyError) as exc:
+            # Environmental failures — a busy lease, a synced-folder sharing
+            # violation, an exhausted temporary root — are retryable. Poisoning
+            # health here would take the service down until restart for a
+            # condition that resolves on its own.
+            raise ServiceRuntimeError("service_unavailable") from exc
         except BaseException as exc:
             self.mark_unhealthy()
             raise ServiceRuntimeError("service_unavailable") from exc

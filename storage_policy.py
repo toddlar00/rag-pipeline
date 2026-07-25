@@ -854,6 +854,18 @@ def atomic_write_private_json(
         cleanup_error_fn=cleanup_error_fn)
 
 
+def jsonl_lines(contents: str) -> list[str]:
+    """Split one decoded JSONL artifact into its physical records.
+
+    ``str.splitlines`` also breaks on U+0085, U+2028, and U+2029, which JSON
+    treats as ordinary string characters and which ``json.dumps`` leaves
+    literal under ``ensure_ascii=False``.  Splitting there would tear a record
+    that this module itself wrote, so the reader recognizes only the ``\\r\\n``
+    and ``\\n`` terminators that :func:`atomic_write_private` can emit.
+    """
+    return contents.replace("\r\n", "\n").split("\n")
+
+
 def atomic_write_private_jsonl(
         path: Path, records: Iterable[dict], *,
         replace_fn: ReplaceFn | None = None,

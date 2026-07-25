@@ -174,7 +174,7 @@ def _load_index_manifest(
         return None
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         warning_fn(
             "Index manifest is unreadable (%s); collection will be "
             "rebuilt safely: %s", path, exc)

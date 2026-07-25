@@ -30,6 +30,7 @@ from storage_policy import (
     atomic_write_private_text,
     enforce_private_path,
     ensure_private_directory,
+    jsonl_lines,
     path_is_link_like,
 )
 
@@ -1280,7 +1281,7 @@ def _parse_index_records_strict(
             continue
 
         records = []
-        for line_number, line in enumerate(contents.splitlines(), 1):
+        for line_number, line in enumerate(jsonl_lines(contents), 1):
             if not line.strip():
                 continue
             try:

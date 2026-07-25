@@ -143,9 +143,13 @@ private reasoning field. M2.x cannot honor disabled thinking and is rejected in
 that configuration; explicitly enabled M2.x calls receive a completion floor
 before runtime budget admission.
 
-Known proxy, CA, model-hub endpoint, and provider SDK endpoint/mode environment
-variables are checked for non-empty values without persisting, echoing, or
-reporting those values.
+Known proxy, CA, TLS key-logging, model-hub endpoint, and provider SDK
+endpoint/mode environment variables are checked for non-empty values without
+persisting, echoing, or reporting those values. `SSLKEYLOGFILE` is included
+because urllib3 and httpx read it directly from the process environment when
+constructing an SSL context: a per-session `trust_env = False` suppresses the
+proxy, CA, and `.netrc` variables but not TLS session-key export, so policy is
+its only control point.
 Release cloud/model synchronization refuses them unless the operator passes
 `--trust-environment-network`. When the flag is absent, direct cloud sessions
 also set `trust_env=False`; loopback always bypasses ambient proxy and netrc

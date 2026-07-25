@@ -1128,8 +1128,13 @@ def run_job(
             trigger = "manager_error"
         else:
             trigger = "normal"
-        final_cancel_requested_at = store.cancel_requested_at(
-            job_id, execution.attempt_token)
+        # The terminal transition and runtime write above have already
+        # committed. Damaged cancellation evidence must not abort the attempt
+        # report and the manager result; the marker stays on disk and is
+        # reported by the next reconciliation, which owns the repair fields
+        # this non-recovery report is not permitted to carry.
+        final_cancel_requested_at, _cancel_evidence_corrupt = (
+            _recovery_cancel_evidence(store, execution))
         finished = max(finished, final_cancel_requested_at or 0.0)
         cancel_requested = (
             attempt_report.cancel_requested

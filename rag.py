@@ -1676,17 +1676,27 @@ def _vector_store_lock(
 
 
 def _pipeline_job_lock(
-        pdf_path: Path, *, timeout: float = DEFAULT_DB_LOCK_TIMEOUT,
+        pdf_path: Path | None = None, *,
+        scope_name: str | None = None,
+        timeout: float = DEFAULT_DB_LOCK_TIMEOUT,
         output_root: Path | None = None,
 ) -> _VectorStoreLease:
-    """Serialize output-run allocation and execution for one PDF stem."""
+    """Serialize output-run allocation and execution for one PDF stem.
+
+    Callers that already hold the manifest's ``job_scope`` pass it as
+    ``scope_name``.  Re-deriving a stem from it would truncate at a dot and
+    silently produce a different lease than the running pipeline holds.
+    """
+    if (pdf_path is None) == (scope_name is None):
+        raise ValueError("exactly one of pdf_path or scope_name is required")
+    stem = scope_name if scope_name is not None else Path(pdf_path).stem
     root = Path(OUTPUT_DIR) if output_root is None else Path(output_root)
-    scope = root / f".pipeline-job-{Path(pdf_path).stem}"
+    scope = root / f".pipeline-job-{stem}"
     return _VectorStoreLease(
-        scope, backend="pipeline", collection_name=Path(pdf_path).stem,
+        scope, backend="pipeline", collection_name=stem,
         operation="pipeline output allocation and execution",
         timeout=timeout,
-        resource_description=f"pipeline outputs for '{Path(pdf_path).stem}'",
+        resource_description=f"pipeline outputs for '{stem}'",
         timeout_option="--db-lock-timeout",
     )
 
@@ -5293,6 +5303,14 @@ def preprocess_pdf(input_path: Path, output_path: Path, *,
     from tqdm import tqdm
 
     _require_file(input_path, "PDF file")
+    if not analyze_only:
+        # Publication replaces the output pathname, so an aliased target would
+        # destroy the private source PDF that this repository treats as an
+        # irreplaceable input.
+        _run_telemetry.validate_distinct_output_paths({
+            "source PDF": input_path,
+            "preprocessed PDF output": output_path,
+        })
 
     # --- Analyze ---
     if _analysis_cache is not None:
@@ -9782,6 +9800,19 @@ def _atomic_write_text(path: Path, content: str) -> None:
         cleanup_error_fn=_log_cleanup_error)
 
 
+def _atomic_write_exact_utf8(path: Path, content: str) -> None:
+    """Publish *content* so the file holds exactly its characters.
+
+    Text-mode publication translates ``\\n`` to ``\\r\\n`` on Windows. An
+    artifact whose companion records character offsets into it must therefore
+    be written as bytes, or every offset after the first newline is wrong.
+    """
+    encoded = content.encode("utf-8")
+    _storage_policy.atomic_write_private(
+        path, lambda handle: handle.write(encoded), text=False,
+        replace_fn=os.replace, cleanup_error_fn=_log_cleanup_error)
+
+
 _artifact_parameters_sha256 = _artifact_io._artifact_parameters_sha256
 
 
@@ -11900,7 +11931,9 @@ def _export_plaintext(chunks: list[dict], export_path: Path) -> None:
         })
 
     full_text = "".join(text_parts)
-    _atomic_write_text(txt_path, full_text)
+    # The sidecar's char_start/char_end index this exact string, so the
+    # published file must contain exactly these characters.
+    _atomic_write_exact_utf8(txt_path, full_text)
     _atomic_write_text(
         meta_path,
         json.dumps(metadata_records, indent=2, ensure_ascii=False),
@@ -14201,7 +14234,7 @@ def _apply_pipeline_deletion_with_leases(
     context = plan.context
     job_scope = context["job_scope"]
     with _pipeline_job_lock(
-            Path(job_scope), timeout=args.db_lock_timeout,
+            scope_name=job_scope, timeout=args.db_lock_timeout,
             output_root=plan.root):
         with ExitStack() as leases:
             stores = sorted(

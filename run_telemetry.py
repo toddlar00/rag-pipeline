@@ -22,6 +22,7 @@ from uuid import uuid4
 from storage_policy import (
     atomic_write_private_json,
     atomic_write_private_jsonl,
+    jsonl_lines,
 )
 
 
@@ -314,7 +315,7 @@ def _load_recovery_events(path: Path, *, operation: str,
         raise ValueError("run event stream exceeds its recovery size limit")
     events = []
     for line_number, line in enumerate(
-            path.read_text(encoding="utf-8").splitlines(), 1):
+            jsonl_lines(path.read_text(encoding="utf-8")), 1):
         if not line.strip():
             continue
         if len(events) >= _MAX_RECOVERY_EVENTS:

@@ -19,6 +19,7 @@ from retrieval_core import (
     _legal_search_tokens,
     _lexical_document_text,
 )
+import storage_policy
 import table_retrieval_core
 
 
@@ -104,7 +105,7 @@ class OfflineBM25Index:
         source_sha256 = hashlib.sha256(raw).hexdigest()
         records = []
         for line_number, line in enumerate(
-                raw.decode("utf-8-sig").splitlines(), 1):
+                storage_policy.jsonl_lines(raw.decode("utf-8-sig")), 1):
             if not line.strip():
                 continue
             try:
