@@ -1,7 +1,7 @@
 # Phase A0 Benchmark Policy
 
 - **Status:** A0a implemented locally; A0b baselines regenerated for the strict
-  LLM output-contract checkpoint, hosted exact-head checkpoint pending
+  TOC hierarchy output-contract checkpoint, hosted exact-head checkpoint pending
 - **Milestone:** R10 prerequisite for the R8 pipeline-ownership move
 - **Report schema:** `phase-a0` v3
 
@@ -73,8 +73,8 @@ that `Path.home()` remains denied.
 ## A0b publication gate
 
 The replacement gate uses clean pre-gate source
-`9ff159d802e6a04eb64e45ccd0b5214f0c1128e5` (tree
-`1dcb9da69176d835583a37cef081c9b1b71fc306`) and separate Windows and Linux
+`6d9e814a9e5c1f071214f42d69ee4b0623e799a7` (tree
+`b33fa91b3aac80ae14084c54dbf6059176213723`) and separate Windows and Linux
 CPython 3.12 x86-64 reports. Both were generated under the
 exact `requirements-full.lock`, `requirements-test.lock`, and retained
 `requirements-lock-tools.lock` union after strict hash-locked synchronization
@@ -82,7 +82,7 @@ and dependency-consistency checks: 189 marker-resolved distributions on
 Windows and 187 on Linux. They bind one clean source, the same eight LF and
 `HEAD`-identical dependency/model inputs, and the complete 9×5 scenario
 contract. Each passes an independent complete same-platform comparison. The
-repaired CI matrix, LF policy, and source gates are inherited by `9ff159d` and
+repaired CI matrix, LF policy, and source gates are inherited by `6d9e814` and
 were exercised by generation and comparison. The Python 3.10-3.14
 normalization qualified at the earlier R1 checkpoint is also inherited; this
 regeneration itself used the canonical CPython 3.12.13 profile. The following
@@ -160,21 +160,22 @@ implementation identity for public `pathlib.Path`. The R1 pre-gate source
 `fdb08d2` closed those cases, including inherited cross-module type hints,
 without permitting operator-home or tilde access.
 
-Current clean pre-gate source `9ff159d` retains the qualified A0 controls and
-adds the strict LLM classification-output contract. Its complete locked
-Windows suite passes 2,338 tests with 7 skips, and all dependency,
-model-artifact, CI-security, architecture, Ruff, and tracked-source compilation
-gates pass. The canonical architecture inventory records 2,003 functions and
-377 compact runtime callables. The Windows replacement report is 49,252 bytes
+Current clean pre-gate source `6d9e814` retains the qualified A0 controls and
+strict classification contract, then adds the strict shared TOC hierarchy
+output contract. Its complete locked Windows suite passes 2,425 tests with 7
+skips, and all dependency, model-artifact, CI-security, architecture, Ruff, and
+tracked-source compilation gates pass. The canonical architecture inventory
+records 2,020 functions and 380 compact runtime callables. The Windows
+replacement report is 49,245 bytes
 under CPython
 3.12.13 (file SHA-256
-`dce8fce1dd9118ed1856d28e39f3a0342b5f4cc54b3ef8b348c5ec62889ca6d4`;
+`4529674ebee037be5b627a725dbd824ebd88ce7a34d12b82267aeda52e18a6b3`;
 embedded report SHA-256
-`0641184657305b05af735a081f1678fb24e667f51e4c08e1dbdd543b0683aa94`).
-The Linux report is 48,664 bytes under CPython 3.12.13 (file SHA-256
-`cd7cef15bbd287b6efb18fa0f9e1d43c4c766d08f3cb5a4e640e9f4d8eb6945e`;
+`caeff095147e9e0a9275d27fad97d6281e769c556b6ed982078ab0584795862e`).
+The Linux report is 48,657 bytes under CPython 3.12.13 (file SHA-256
+`6cfa3c933b6d8fcf7e9955373e9174bee567cb98a50bb0b07bc23754f2881735`;
 embedded report SHA-256
-`73a044d8056e43bc194e6ea9c6f6e00e0699d8338df8dbf00dca25f8e040fac1`).
+`567679c11b3bfeb9db64e6d0552fe38ef6ff706809d2df70fd277e2edd24813c`).
 Both pass independent complete same-platform 9×5 comparisons. These are local
 replacement baseline candidates. The gate-only commit that contains them
 freezes the final local candidate; publishing its exact commit/tree plus hosted
