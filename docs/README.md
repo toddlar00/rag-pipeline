@@ -36,7 +36,10 @@ material. When documents disagree, use the authority order below.
   launch/reconcile capability, and remaining application-root work.
 - [Job-application binding](architecture/decisions/job-application-binding.md)
   — the frozen CLI/UI job capability, manager-shell isolation, atomic
-  per-action lookup, and the prerequisite facade work for a true outer root.
+  per-action lookup, and the prerequisite consumed by the service-role root.
+- [Service HTTP boundary and lazy application composition](architecture/decisions/service-application-composition.md)
+  — the structural HTTP adapter, frozen HTTP policy, stable service facade,
+  lazy one-generation service root, and residual pipeline-root work.
 - [Document-structure profiles](architecture/decisions/document-structure-profiles.md)
   — immutable reviewed profiles and fail-closed evidence.
 - [Context-aware retrieval](architecture/decisions/context-aware-retrieval.md)

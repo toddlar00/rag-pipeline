@@ -101,10 +101,12 @@ production coordination generation for compatible direct construction. The
 subsequent R8c-4
 [job-application binding](job-application-binding.md) removes the remaining
 `rag.py` and UI dependencies on the manager shell while preserving that facade.
-The service API, UI, and CLI still remain separate construction sites; later
-characterized slices must separate facade implementation ownership before a
-true outer root can converge them. R12 must also replace or explicitly validate
-sibling-file entrypoints for an installed package.
+R8c-5 then separates the HTTP implementation and routes the service executable
+through a lazy outer root. Direct `RagApplicationService` construction remains
+supported; the service role is converged, while `rag.py` and the UI still own
+separate pipeline composition. Later characterized slices must separate that
+facade implementation ownership before widening the root. R12 must also replace
+or explicitly validate sibling-file entrypoints for an installed package.
 
 ## Evidence
 

@@ -173,14 +173,26 @@ the stable `job_manager.py` path. See the
 `job_application.py` now freezes the job-store factory, launch, single/all-job
 reconciliation, and manager-error classification used by outer applications.
 The `rag.py jobs` command snapshots it once per command and each UI action uses
-one generation through any nested refresh. No production module imports
-`job_manager.py`; that module remains the stable public/executable facade. See
-the [job-application binding ADR](docs/architecture/decisions/job-application-binding.md).
+one generation through any nested refresh. No production Python module imports
+`job_manager.py`; detached execution still invokes that stable public and
+executable facade. See the
+[job-application binding ADR](docs/architecture/decisions/job-application-binding.md).
+
+`service_http.py` owns the authenticated FastAPI implementation behind a
+structural runtime port and one frozen error/paging-policy binding. It imports
+only `service_contracts.py` from the first-party graph.
+`application_composition.py` executes only standard-library imports when cold
+imported, then lazily captures the concrete runtime, host, job-coordination,
+and HTTP capabilities and constructs the production service from one
+generation. `service_api.py` remains the stable token/CLI/import facade,
+including its direct embedded-app surface. See the
+[service application-composition ADR](docs/architecture/decisions/service-application-composition.md).
 
 The tracked first-party import graph remains acyclic. R8 is still open because
-`rag.py` owns both pipeline implementation and its executable facade; the HTTP
-adapter and narrow pipeline implementations must be separated before one real
-outer application composition root can replace the remaining split roots.
+`rag.py` still owns both pipeline implementation and its executable facade,
+and the UI/CLI roles still compose through it. R8c-5 supplies a real outer root
+for the service role only; the narrow pipeline implementation must be
+separated before that root can compose the remaining application roles.
 
 `ingestion_core.py` is the standard-library-only PDF safety layer for text-layer
 quality, page-coverage-aware background detection, complete pre-mutation
@@ -469,11 +481,13 @@ status/logs and provider usage before choosing `jobs resume`.
 ### Authenticated local service (draft v1)
 
 `service_api.py` exposes a stable, authenticated application boundary for one
-local OS user. It is deliberately smaller than the CLI: clients can inspect
-configured corpora, retrieve bounded Qdrant search hits, and manage durable
-reindex jobs. It does not expose conversion, arbitrary commands, filesystem
-paths, job arguments or logs, provider identities, raw exceptions, reranking,
-or LLM answer generation.
+local OS user. It is the token/CLI/import facade; `service_http.py` implements
+the authenticated adapter, and `application_composition.py` lazily constructs
+the concrete runtime and adapter as one frozen service generation. The service
+is deliberately smaller than the CLI: clients can inspect configured corpora,
+retrieve bounded Qdrant search hits, and manage durable reindex jobs. It does
+not expose conversion, arbitrary commands, filesystem paths, job arguments or
+logs, provider identities, raw exceptions, reranking, or LLM answer generation.
 
 Create an isolated environment and install the exact narrow service runtime.
 Contributors can add the separately locked test tools after verifying the
@@ -2710,7 +2724,9 @@ service_contracts.py    # Dependency-free bounded/redacted local API contracts
 service_runtime_binding.py # Frozen service-host capability composition
 service_runtime.py      # Search isolation and binding-driven durable job facade
 service_search_worker.py # Hidden physical-search child composition shell
-service_api.py          # Authenticated loopback-only FastAPI/CLI adapter
+service_http.py         # Structural authenticated loopback HTTP implementation
+application_composition.py # Lazy frozen outer root for the service role
+service_api.py          # Stable service token/import/executable facade
 service-openapi-v1.json # Committed static OpenAPI 3.1 contract snapshot
 service-config.example.json # Credential-free private registry template
 model-artifact-policy.json # Reviewed models, consumers, files, code, and licenses

@@ -170,7 +170,9 @@ child. R8c-3 then moves the durable coordination engine inward, retains a
 compatible manager shell, and removes the service-to-manager edge. R8c-4 gives
 CLI/UI callers one inward job-application binding and leaves that manager shell
 with no production Python-import consumers; detached execution intentionally
-still invokes it. Application composition has not moved to one true outer root.
-Coverage ratchets, typing, facade extraction, the broader
-architecture inventory, and final root convergence remain planned. This local
-decision has not been pushed, reviewed, merged, tagged, or released.
+still invokes it. R8c-5 then separates the structural HTTP adapter from its
+stable service facade and supplies a lazy one-generation outer root for the
+production service role. Coverage ratchets, typing, pipeline-facade extraction,
+the broader architecture inventory, and CLI/UI root convergence remain
+planned. This local decision has not been pushed, reviewed, merged, tagged, or
+released.

@@ -94,9 +94,12 @@ This is R8c-2, not completion of R8. The subsequent
 [service job-coordination decision](service-job-coordination-binding.md)
 removes the service's direct and transitive `job_manager` shell dependency by
 moving the durable engine inward and snapshotting one frozen capability.
-`service_api.main`, the UI, and the `rag.py` CLI still construct concrete
-applications separately. A later characterized slice must converge those roots
-without weakening the service ownership, idempotency, recovery, or
+R8c-4 then gives the CLI and UI an inward job-application binding, and R8c-5
+routes `service_api.main` through a lazy outer root after separating the HTTP
+implementation. Direct `RagApplicationService` construction remains supported.
+The UI and `rag.py` CLI still compose pipeline behavior through the facade; a
+later characterized slice must separate that implementation ownership and
+widen the root without weakening service ownership, idempotency, recovery, or
 process-containment contracts. R12 packaging must also replace or explicitly
 validate sibling-file worker paths when installed console entry points exist.
 

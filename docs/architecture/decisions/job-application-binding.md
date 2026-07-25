@@ -53,9 +53,10 @@ Each store request still invokes the captured factory with the current
 semantics. Shared mode returns before binding resolution or storage access.
 
 `job_manager.py` remains unchanged as the stable public/executable facade.
-No production module imports it. Detached children still execute its exact
-sibling path and it continues to expose object-identical functions, results,
-errors, process helpers, environment constants, pickle identities, and CLI.
+No production Python module imports it. Detached children still execute its
+exact sibling path and it continues to expose object-identical functions,
+results, errors, process helpers, environment constants, pickle identities,
+and CLI.
 
 ## Invariants
 
@@ -88,13 +89,13 @@ the manager facade retain the same aliases.
 
 This is R8c-4, not completion of R8. It removes the remaining production
 manager-shell import/service-locator edges and prepares a real outer composition
-root. A root cannot
-honestly import the current `rag.py` implementation and also be consumed by
-that same executable facade without a cycle. The next slices must separate the
-HTTP adapter and the narrow pipeline implementations from their executable
-facades before `application_composition.py` can be the sole outer constructor.
-The physical search, manager, and supervision children remain intentional
-process-entry shells.
+root. The subsequent R8c-5
+[service application-composition decision](service-application-composition.md)
+separates the HTTP adapter and makes `application_composition.py` the outer
+constructor for the production service role. It is not the sole or universal
+root: `rag.py` still owns pipeline implementation and its executable facade,
+and the UI composes through it. The physical search, manager, and supervision
+children remain intentional process-entry shells.
 
 ## Evidence
 
@@ -110,6 +111,6 @@ process-entry shells.
 - Manager facade alias, type, pickle, executable, and real detached continuity:
   [`tests/test_job_coordination_contracts.py`](../../../tests/test_job_coordination_contracts.py)
   and [`tests/test_job_manager.py`](../../../tests/test_job_manager.py)
-- Exact dependency direction, zero manager import consumers, raw imports,
-  acyclicity, and fresh-process import order:
+- Exact dependency direction, zero manager Python-import consumers, raw
+  imports, acyclicity, and fresh-process import order:
   [`tests/test_architecture.py`](../../../tests/test_architecture.py)

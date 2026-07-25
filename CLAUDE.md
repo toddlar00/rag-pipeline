@@ -129,15 +129,20 @@ imports `rag`. It also snapshots the frozen launch/reconcile/integrity binding
 from `job_coordination_contracts.py`; it does not import or transitively load
 the `job_manager` shell. `job_application.py` provides one frozen store,
 launch, reconciliation, and manager-error generation to the `rag.py jobs`
-command and local UI. No production consumer imports `job_manager.py`; retain
-that stable import/executable facade and preserve every binding's atomic
-snapshot rule. A true outer root still requires separating pipeline and HTTP
-implementation ownership from their executable facades. See the
+command and local UI. No production Python consumer imports `job_manager.py`;
+detached execution still invokes that stable executable facade. Preserve every
+binding's atomic snapshot rule. `service_http.py` now owns the FastAPI adapter
+behind a structural runtime port, and dependency-light
+`application_composition.py` is the lazy outer root for the production service
+role. `service_api.py` remains its compatible token/CLI/import facade. R8 still
+requires separating narrow pipeline implementation ownership from `rag.py`
+before CLI or UI composition can move to that root. See the
 [process-supervision ADR](docs/architecture/decisions/process-supervision-extraction.md),
 the [runtime binding ADR](docs/architecture/decisions/runtime-supervision-binding.md),
 the [service-host binding ADR](docs/architecture/decisions/service-host-binding.md),
 the [service job-coordination ADR](docs/architecture/decisions/service-job-coordination-binding.md),
-and the [job-application binding ADR](docs/architecture/decisions/job-application-binding.md).
+the [job-application binding ADR](docs/architecture/decisions/job-application-binding.md),
+and the [service application-composition ADR](docs/architecture/decisions/service-application-composition.md).
 
 ### Evaluation contract layering
 
@@ -169,15 +174,15 @@ against them.
 
 ### Service layer
 
-`service_contracts.py` (dependency-free v1 contract) → `service_runtime.py`
-(Qdrant search isolation and durable job facade) → `service_api.py`
-(authenticated loopback-only FastAPI adapter). `service_runtime_binding.py`
-supplies the frozen host capability, while `service_search_worker.py` is the
-only child composition shell that imports both the runtime contract and
-`rag.py`. `job_coordination_contracts.py` supplies the frozen service job
-capability, `job_coordination.py` owns the engine, and `job_manager.py` remains
-the legacy shell. `service-openapi-v1.json` is a committed static contract
-snapshot.
+`service_contracts.py` is the dependency-free v1 contract. Both
+`service_runtime.py` (Qdrant search isolation and durable jobs) and
+`service_http.py` (authenticated loopback FastAPI adapter) depend inward on
+that contract, not on each other. `application_composition.py` lazily binds
+them with the frozen host and job-coordination capabilities; `service_api.py`
+is the compatible executable/import facade. `service_search_worker.py` remains
+the only child composition shell that imports both the runtime contract and
+`rag.py`; `job_manager.py` remains the intentional detached-job shell.
+`service-openapi-v1.json` is the committed static contract snapshot.
 
 ## Conventions
 

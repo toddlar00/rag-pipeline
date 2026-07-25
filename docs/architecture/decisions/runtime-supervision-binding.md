@@ -71,10 +71,11 @@ does not duplicate or move that loop.
 
 ## Consequences and residual work
 
-The tracked first-party import graph is now acyclic: `rag.py` may lazily call
-the manager, but the manager points inward to the runtime binding instead of
-back to the facade. The manager can also be imported and characterized without
-loading the large pipeline facade.
+The tracked first-party import graph is now acyclic. The manager points inward
+to the runtime binding instead of back to the facade and can be imported and
+characterized without loading the large pipeline facade. The later R8c-4
+application binding removes the CLI/UI manager Python-import edge entirely;
+detached execution still invokes the stable manager path.
 
 This decision is R8c-1, not completion of R8. The later
 [service-host binding decision](service-host-binding.md) removes
@@ -82,10 +83,12 @@ This decision is R8c-1, not completion of R8. The later
 child composition shell. The subsequent
 [service job-coordination decision](service-job-coordination-binding.md) moves
 the engine to `job_coordination.py`, leaves `job_manager.py` as its stable
-shell, and removes the service-to-manager edge. Application composition remains
-split between `rag.py`, the service modules, the UI, and their CLIs; `rag.py`
-retains lazy job dispatch for compatibility. A later slice must introduce one
-application root before removing any proven facade aliases.
+shell, and removes the service-to-manager edge. The subsequent R8c-4
+[job-application decision](job-application-binding.md) removes remaining
+manager-shell Python imports, and R8c-5 supplies a lazy outer root for the
+production service role. `rag.py` still owns pipeline implementation and its
+CLI facade, while the UI composes through it; later slices must separate that
+ownership before widening the root or removing any proven facade aliases.
 
 The sibling-file entrypoint is correct for the current flat repository. R12
 packaging work must deliberately replace or validate that assumption when

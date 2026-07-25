@@ -1,14 +1,21 @@
 from __future__ import annotations
 
 import ast
+import importlib.util
 from pathlib import Path
 import subprocess
 import sys
+
+import pytest
 
 from tools.check_python_sources import tracked_python_paths
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+REQUIRES_SERVICE_HTTP = pytest.mark.skipif(
+    importlib.util.find_spec("fastapi") is None,
+    reason="service HTTP dependencies are not installed",
+)
 
 
 def _application_modules() -> dict[str, Path]:
@@ -263,6 +270,63 @@ def test_service_runtime_uses_inward_binding_without_loading_rag():
     assert result.returncode == 0, result.stderr
 
 
+def test_service_http_and_outer_root_have_exact_one_way_dependencies():
+    graph = _first_party_import_graph()
+    inbound = {
+        dependency: {
+            module for module, dependencies in graph.items()
+            if dependency in dependencies
+        }
+        for dependency in graph
+    }
+
+    assert graph["service_http"] == {"service_contracts"}
+    assert graph["application_composition"] == {
+        "job_coordination",
+        "service_http",
+        "service_runtime",
+        "service_runtime_binding",
+    }
+    assert graph["service_api"] == {
+        "application_composition",
+        "release_security",
+        "service_contracts",
+        "service_http",
+        "service_runtime",
+        "storage_policy",
+    }
+    assert inbound["service_api"] == set()
+    assert inbound["application_composition"] == {"service_api"}
+    assert inbound["service_http"] == {
+        "application_composition", "service_api"}
+    assert _transitive_dependencies(graph, "service_http") == {
+        "service_contracts"}
+    assert not ({"service_api", "rag", "job_manager"}
+                & _transitive_dependencies(
+                    graph, "application_composition"))
+
+
+def test_service_http_root_and_facade_raw_imports_are_pinned():
+    modules = _application_modules()
+
+    assert _raw_import_roots(modules["service_http"]) == {
+        "asyncio", "contextlib", "dataclasses", "fastapi", "hmac",
+        "ipaddress", "re", "service_contracts", "starlette",
+        "threading", "typing", "uuid",
+    }
+    assert _raw_import_roots(modules["application_composition"]) == {
+        "collections", "dataclasses", "job_coordination",
+        "service_http", "service_runtime", "service_runtime_binding",
+        "threading", "typing",
+    }
+    assert _raw_import_roots(modules["service_api"]) == {
+        "application_composition", "argparse", "ipaddress", "os",
+        "pathlib", "release_security", "secrets", "service_contracts",
+        "service_http", "service_runtime", "stat", "storage_policy",
+        "typing", "uvicorn",
+    }
+
+
 def test_service_search_worker_is_the_only_rag_service_composition_shell():
     graph = _first_party_import_graph()
 
@@ -315,8 +379,10 @@ def test_service_runtime_boundary_raw_imports_are_pinned():
 def test_service_runtime_isolated_import_avoids_rag_and_heavy_backends():
     result = _run_isolated(
         "import service_runtime; "
-        "forbidden = ('job_manager', 'rag', 'qdrant', 'qdrant_client', "
-        "'chromadb', 'torch', 'transformers', 'docling'); "
+        "forbidden = ('application_composition', 'service_http', "
+        "'service_api', 'fastapi', 'starlette', 'job_manager', 'rag', "
+        "'qdrant', 'qdrant_client', 'chromadb', 'torch', 'transformers', "
+        "'docling'); "
         "loaded = tuple(sys.modules); "
         "assert not {root: [name for name in loaded if name == root or "
         "name.startswith(root + '.')] for root in forbidden "
@@ -324,6 +390,94 @@ def test_service_runtime_isolated_import_avoids_rag_and_heavy_backends():
         "for name in loaded)}"
     )
     assert result.returncode == 0, result.stderr
+
+
+@REQUIRES_SERVICE_HTTP
+def test_service_http_isolated_import_avoids_runtime_and_heavy_backends():
+    result = _run_isolated(
+        "import service_http; "
+        "forbidden = ('application_composition', 'service_api', "
+        "'service_runtime', 'job_manager', 'rag', 'qdrant', "
+        "'qdrant_client', 'chromadb', 'torch', 'transformers', 'docling'); "
+        "loaded = tuple(sys.modules); "
+        "assert not {root: [name for name in loaded if name == root or "
+        "name.startswith(root + '.')] for root in forbidden "
+        "if any(name == root or name.startswith(root + '.') "
+        "for name in loaded)}"
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_outer_root_import_is_lazy_and_dependency_light():
+    lazy = _run_isolated(
+        "import application_composition as root; "
+        "forbidden = ('fastapi', 'starlette', 'service_http', "
+        "'service_runtime', 'service_runtime_binding', 'job_coordination', "
+        "'service_api', 'uvicorn', 'rag', 'job_manager'); "
+        "assert not [name for name in sys.modules if any(name == item or "
+        "name.startswith(item + '.') for item in forbidden)]; "
+        "assert root._DEFAULT_SERVICE_APPLICATION_COMPOSITION is None"
+    )
+    assert lazy.returncode == 0, lazy.stderr
+
+
+@REQUIRES_SERVICE_HTTP
+def test_default_root_resolution_avoids_facades_and_heavy_backends():
+    resolved = _run_isolated(
+        "import application_composition as root; "
+        "value = root.default_service_application_composition(); "
+        "assert value is root.default_service_application_composition(); "
+        "forbidden = ('service_api', 'uvicorn', 'rag', 'job_manager', "
+        "'qdrant', 'qdrant_client', 'chromadb', 'torch', 'transformers', "
+        "'docling'); loaded = tuple(sys.modules); "
+        "assert not [name for name in loaded if any(name == item or "
+        "name.startswith(item + '.') for item in forbidden)]"
+    )
+    assert resolved.returncode == 0, resolved.stderr
+
+
+@REQUIRES_SERVICE_HTTP
+def test_service_facade_import_is_lazy_and_aliases_survive_both_orders():
+    for imports in (
+        "import service_http; import service_api",
+        "import service_api; import service_http",
+    ):
+        result = _run_isolated(
+            f"{imports}; import application_composition as root; "
+            "assert service_api.ServiceCredentials is "
+            "service_http.ServiceCredentials; "
+            "assert service_api.require_reader is service_http.require_reader; "
+            "assert service_api.require_admin is service_http.require_admin; "
+            "assert service_api.service_openapi_document is "
+            "service_http.service_openapi_document; "
+            "assert service_http.ServiceCredentials.__module__ == "
+            "'service_api'; assert 'uvicorn' not in sys.modules; "
+            "assert 'rag' not in sys.modules; "
+            "assert 'job_manager' not in sys.modules; "
+            "assert root._DEFAULT_SERVICE_APPLICATION_COMPOSITION is None"
+        )
+        assert result.returncode == 0, result.stderr
+
+    pickled = _run_isolated(
+        "import pickle, service_http; "
+        "value = service_http.ServiceCredentials('r' * 48, 'a' * 48); "
+        "restored = pickle.loads(pickle.dumps(value)); "
+        "import service_api; "
+        "assert type(restored) is service_api.ServiceCredentials"
+    )
+    assert pickled.returncode == 0, pickled.stderr
+
+
+@REQUIRES_SERVICE_HTTP
+def test_service_http_and_runtime_import_cleanly_in_both_orders():
+    for imports in (
+        "import service_http; assert 'service_runtime' not in sys.modules; "
+        "import service_runtime",
+        "import service_runtime; assert 'service_http' not in sys.modules; "
+        "import service_http",
+    ):
+        result = _run_isolated(imports)
+        assert result.returncode == 0, result.stderr
 
 
 def test_service_runtime_and_rag_import_cleanly_in_both_orders():

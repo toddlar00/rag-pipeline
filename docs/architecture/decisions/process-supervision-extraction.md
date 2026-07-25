@@ -76,9 +76,12 @@ service host's `rag` dependency by moving physical retrieval composition to a
 dedicated child. The subsequent
 [service job-coordination decision](service-job-coordination-binding.md) moves
 the durable engine inward, retains `job_manager.py` as its executable/import
-facade, and removes the service-to-manager edge. `rag.py` still retains lazy job
-CLI dispatch, and the split application roots remain intentional compatibility
-debt rather than evidence that supervision belongs in the facade.
+facade, and removes the service-to-manager edge. R8c-4 subsequently routes the
+CLI and UI through `job_application.py`, leaving no manager-shell Python import
+consumer while retaining detached execution of that shell. R8c-5 supplies a
+lazy outer root for the production service role. Pipeline and UI composition
+through `rag.py` remain intentional compatibility debt rather than evidence
+that supervision belongs in the facade.
 
 ## Evidence and history
 
