@@ -99,16 +99,16 @@ ledger keyed by commit and PR.
 The Phase A0a harness and its local tests are implementation evidence only. The
 first frozen A0b hosted attempt at `ba9c66d` exposed checkout-EOL drift in lock
 and architecture-inventory bytes plus host-dependent validation of the
-drive-relative path `C:escape.py`; it did not pass A0b. Replacement clean
-source `7594f8b` repairs those gates, publishes content-free candidate reports
-before comparison, and makes PR cells test the exact PR head. Final clean
-pre-gate source `fdb08d2` additionally normalizes the supported Python 3.10-3.14
-runtime-contract differences discovered during local matrix qualification,
-without weakening the probe's home/tilde denial. Separate
-CPython 3.12 x86-64 Windows/Linux baseline candidates now bind that source and
-the same eight LF/`HEAD`-identical inputs, and both matching local 9×5
-comparisons independently pass. The gate-only commit containing those reports
-is the final local R1 candidate; A0b still requires publishing its exact
+drive-relative path `C:escape.py`; it did not pass A0b. Replacement source
+`7594f8b` repaired those gates, and `fdb08d2` normalized the supported Python
+3.10-3.14 runtime-contract differences without weakening the probe's home/tilde
+denial. Gate-only `ed2995e` froze those candidates; R2 source `537f72b` and
+gate-only refresh `b813aa7` followed. The source-changing defect corrections in
+`c1bc042` invalidated both earlier report pairs, so fresh CPython 3.12 x86-64
+Windows/Linux candidates now bind `c1bc042`, the same eight LF/`HEAD`-identical
+inputs, and the complete 9×5 contract. Both matching local comparisons
+independently pass. The following reports-and-documentation-only commit freezes
+the current local candidate; A0b still requires publishing its exact
 commit/tree, passing hosted comparisons on both operating systems, retaining
 successful evidence artifacts, and exact-head review. None of those hosted or
 review gates is implied by A0a, the failed first attempt, or a local-only result.

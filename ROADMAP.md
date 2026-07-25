@@ -31,6 +31,14 @@ CPython 3.10-3.14 normalization defects. Final pre-gate source `fdb08d2` (tree
 Windows and Linux across Python 3.10-3.14, and independently passes both local
 9×5 comparisons. The replacement hosted exact-head checkpoint remains
 deliberately distinct and pending.
+A later R2 preparation checkpoint `537f72b` and gate-only refresh `b813aa7`
+superseded that report pair. The 2026-07-25 release-defect corrections then
+changed Python source and invalidated the R2 reports in turn. Current clean
+pre-gate source `c1bc042` (tree `4a37989`) records 1,995 functions and 378
+compact runtime callables; fresh locked Windows/Linux candidates bind that
+source and each independently passes its complete same-platform 9×5
+comparison. The following reports-and-documentation-only commit freezes the
+new local candidate. Hosted exact-head evidence and review remain pending.
 
 Status terms:
 
@@ -53,10 +61,10 @@ Status terms:
 | Milestone | Status | Durable result |
 |---|---|---|
 | Foundation | Baseline | End-to-end PDF ingestion, enriched chunking, shared LLM runtime, grounded answers, hybrid retrieval/reranking, evaluation harness, Chroma/Qdrant indexing, CLI, UI, docs, and tests |
-| Repository truth and exhaustive source gate | Implemented in draft #44; owner decision pending | Commit `88fd301` relocates and tests the two local launchers, ignores `tmp/` and `.worktrees/`, replaces the stale compile list with deterministic Git-index discovery, curates the Claude plans and developer guide, adds the process-supervision ADR, and records the unresolved private-source policy as an explicit owner decision. The implementation is published at `ba9c66d`; final replacement source-gate checkpoint `fdb08d2` remains local pending the next #44 head |
+| Repository truth and exhaustive source gate | Implemented in draft #44; owner decision pending | Commit `88fd301` relocates and tests the two local launchers, ignores `tmp/` and `.worktrees/`, replaces the stale compile list with deterministic Git-index discovery, curates the Claude plans and developer guide, adds the process-supervision ADR, and records the unresolved private-source policy as an explicit owner decision. The implementation is published at `ba9c66d`; the current replacement source-gate checkpoint is local `c1bc042`, pending the next #44 head |
 | CI security ownership and workflow invariants | Implemented in draft #44 | Commit `17bdff7` adds a machine-readable map of current, reserved, and governance owners; a general CI gate proves symmetric security-workflow coverage, full-SHA action pinning, checkout credential isolation, and repository-wide read-only permissions. The implementation is present in draft #44; content-aware secret scanning remains a separate R7 item |
-| Deterministic architecture and `rag` facade inventory | Implemented in draft #44; replacement refresh local | Schema-v3 was introduced at `62cb574`; the published `ba9c66d` inventory records the tracked-source graph, definition and signature hashes, paired contextual import provenance, production/test facade consumers, private reads, mutation seams, and an isolated runtime contract. Final pre-gate source `fdb08d2` records 1,981 functions and 377 compact runtime callables; the baseline reproduces on Windows/Linux across CPython 3.10-3.14. Broader R7 coverage, typing, lint, and static security work remain open |
-| Phase A0 architecture benchmark | A0a implemented; A0b replacement local candidate complete, hosted replacement gate pending | Commit `64843d1` introduced nine contained fresh-process scenarios run five times; portability closure `77a0f70` redirects Linux's standard-library user base into the run-local temporary root without setting `HOME` or `CODEX_HOME`. The first hosted frozen head `ba9c66d` exposed checkout-EOL lock and inventory drift plus POSIX acceptance of the adversarial drive-relative path `C:escape.py`; it did not pass A0b. Intermediate repair `7594f8b` closes those hosted defects. Final clean source `fdb08d2` also closes CPython 3.10-3.14 AST, `sysconfig`, `Path`, and typing-normalization drift without weakening isolation. Separate CPython 3.12 x86-64 Windows/Linux baselines share eight LF/`HEAD`-identical inputs and the full 9×5 contract; both matching local comparisons independently pass. The gate-only commit containing these reports is the final local candidate. Successful hosted evidence remains strict and retained for 30 days. A0b still requires both hosted jobs to pass at that exact published commit/tree before it can gate R8 |
+| Deterministic architecture and `rag` facade inventory | Implemented in draft #44; replacement refresh local | Schema-v3 was introduced at `62cb574`; the published `ba9c66d` inventory records the tracked-source graph, definition and signature hashes, paired contextual import provenance, production/test facade consumers, private reads, mutation seams, and an isolated runtime contract. Historical source `fdb08d2` records 1,981 functions and reproduced across Windows/Linux CPython 3.10-3.14; current clean source `c1bc042` records 1,995 functions and 378 compact runtime callables. Broader R7 coverage, typing, lint, and static security work remain open |
+| Phase A0 architecture benchmark | A0a implemented; A0b replacement local candidate complete, hosted replacement gate pending | Commit `64843d1` introduced nine contained fresh-process scenarios run five times; portability closure `77a0f70` redirects Linux's standard-library user base into the run-local temporary root without setting `HOME` or `CODEX_HOME`. The first hosted frozen head `ba9c66d` exposed checkout-EOL lock and inventory drift plus POSIX acceptance of the adversarial drive-relative path `C:escape.py`; it did not pass A0b. Repairs `7594f8b` and `fdb08d2` close the hosted and CPython 3.10-3.14 normalization defects. After interim R2 refresh `b813aa7`, source-changing defect corrections required the current clean checkpoint `c1bc042`. Separate CPython 3.12 x86-64 Windows/Linux baselines bind that source, share eight LF/`HEAD`-identical inputs and the full 9×5 contract, and each passes an independent matching local comparison. The following reports/docs-only commit is the new local candidate. Successful hosted evidence remains strict and retained for 30 days. A0b still requires both hosted jobs to pass at that exact published commit/tree before it can gate R8 |
 | Ethics corpus coherence and publication quality | Implemented (draft) | [PR #31](https://github.com/toddlar00/rag-pipeline/pull/31): canonical scaffold reconstruction, exact source identity, complete tables and nested footnotes, exact embedding budgets, regenerated exports, and an exactly reconciled 1,715-record Chroma index |
 | Machine-readable corpus quality attestation | Implemented (draft) | [PR #31](https://github.com/toddlar00/rag-pipeline/pull/31): schema-v1 report binds the exact Docling source, chunks bytes, parameters, source-lineage coverage, tables, normalization, classification, entities, token budgets, and stable/hash roots; resume, export, retrieval, and index publication fail closed on missing, stale, malformed, or mismatched evidence |
 | Synced-folder publication and read resilience | Implemented (draft) | [PR #31](https://github.com/toddlar00/rag-pipeline/pull/31): bounded Windows sharing-violation retries republish only a pinned staging file; marker and exact artifact reads retry only content-identical ctime churn while failing closed on content-generation changes; exact hashes bypass unsafe stat caching on Windows |
@@ -710,10 +718,10 @@ are a snapshot, not release claims:
   [#44](https://github.com/toddlar00/rag-pipeline/pull/44) published the first
   cumulative frozen head `ba9c66d` on `agent/r1-cumulative-gate`, 66 commits and
   177 changed files ahead of `main`. Its hosted checks are diagnostic evidence,
-  not a passing release gate. The final clean pre-gate source checkpoint is
-  `fdb08d26e3fc9fd2b80b983eeab7b1f353b96707` (tree
-  `d7e758c6002144acff0c8d58e54c9980a6ffd7c7`), 68 commits and 177 changed files
-  ahead of `main`, with 99,670 insertions and 6,185 deletions. The large
+  not a passing release gate. The current clean pre-gate source checkpoint is
+  `c1bc042c862c42964e6084967f57987944e29f6a` (tree
+  `4a37989c32d2a6743ccdef47bfe20460d165af32`), 73 commits and 181 changed files
+  ahead of `main`, with 102,182 insertions and 6,205 deletions. The large
   insertion count includes the canonical architecture inventory and should not
   be mistaken for equivalent executable-code growth. This aggregation includes
   the R0/R0A/R0B, R4, R7, R8, R10, and R12 slices after PR #43. Replacement
@@ -744,18 +752,21 @@ are a snapshot, not release claims:
   inventory drift in the Windows full unit cell. Intermediate source `7594f8b`
   repairs that hosted defect set. Local Python 3.10-3.14 qualification then
   exposed AST, lazy-`sysconfig`, inherited-`Path.home`, public-`Path` identity,
-  `typing.Any`, implicit-optional, and nested-forward-reference drift. Final
-  source `fdb08d2` closes those cases. Fresh locked complete suites pass 2,233
-  tests with 7 skips on Windows and 2,236 tests with 4 skips on native Linux;
-  the sole warning is the R2-owned Starlette/httpx deprecation. Both regenerated
-  exact full-profile A0 comparisons independently pass locally. This is
-  replacement local evidence, not a successful hosted replacement checkpoint.
+  `typing.Any`, implicit-optional, and nested-forward-reference drift. Earlier
+  source `fdb08d2` closes those cases; its locked suites passed 2,233 tests with
+  7 skips on Windows and 2,236 tests with 4 skips on native Linux, and its
+  architecture contract reproduced across all ten OS/version cells. R2 source
+  `537f72b` and gate-only refresh `b813aa7` followed. Current source `c1bc042`
+  passes the exact locked Windows suite with 2,287 tests, 7 skips, and the known
+  Starlette/httpx warning. Both newly regenerated exact full-profile A0
+  comparisons independently pass locally. This is replacement local evidence,
+  not a successful hosted replacement checkpoint.
 - Schema-v3 was introduced at `62cb574`; the replacement checkpoint preserves
   an inventory of 150 tracked Python files: 53 production,
   81 test, 14 tool, and two script files. The non-test architecture surface has
-  69 modules, 61,444 physical lines, 1,981 functions (1,302 top-level), 189
-  classes, and 145 first-party edges. `rag.py` owns 16,353 lines, 425 functions
-  (295 top-level), 17 classes, and 27 direct first-party dependencies. The
+  69 modules, 62,441 physical lines, 1,995 functions (1,314 top-level), 189
+  classes, and 145 first-party edges. `rag.py` owns 16,386 lines, 426 functions
+  (296 top-level), 17 classes, and 27 direct first-party dependencies. The
   largest already-measured risks remain
   `rag.main` (1,106 lines), `_chunk_document_locked` (876),
   `quality_core.validate_quality_report` (441),
@@ -789,8 +800,8 @@ are a snapshot, not release claims:
   P0-P3 labels, and the `first-release` milestone now exist. PR #30 is open and
   non-draft; PRs #31-#44 are open drafts, and the implementation stack still has
   no submitted review. The cumulative branch is publishable, but its remote
-  `ba9c66d` head is superseded for gate purposes by final local source
-  `fdb08d2`. This
+  `ba9c66d` head is superseded for gate purposes by current local source
+  `c1bc042`. This
   is a pending replacement-publication and review condition, not permission to
   weaken the exact-head or owner gates.
 - At the audited PR #43 head, `_run_civpro.py` and `_resume_civpro.py` remained
@@ -813,7 +824,7 @@ are a snapshot, not release claims:
 | [#39](https://github.com/toddlar00/rag-pipeline/pull/39) | Open draft cumulative PR to `main`, but only through #38 | Valuable migration rehearsal, not the current integration candidate |
 | [#40](https://github.com/toddlar00/rag-pipeline/pull/40)-[#43](https://github.com/toddlar00/rag-pipeline/pull/43) | Open drafts stacked after #39; #43 is the last published/CI-green head | Include in the new R1 cumulative PR after owner/privacy and R0A/R0B gates |
 | [#44](https://github.com/toddlar00/rag-pipeline/pull/44) | Open cumulative draft; remote head `ba9c66d` ran hosted checks and exposed A0/source/inventory checkout defects | Preserve the hosted diagnosis, but do not treat this superseded head as passing A0b evidence |
-| Final pre-gate source `fdb08d2` | Platform-neutral source validation, LF and lock-blob invariants, safe A0 diagnostics/artifacts, exact-PR-head checkout, cross-version runtime normalization, and a refreshed 1,981-function/377-callable inventory; fresh Windows/Linux suites and both independent local A0 comparisons pass | Publish the gate-only child containing the reviewed reports/docs, record its exact commit/tree pair on #44, and require both replacement hosted A0 cells plus broader checks |
+| Current pre-gate source `c1bc042` | Preserves the platform-neutral source validation, LF and lock-blob invariants, safe A0 diagnostics/artifacts, exact-PR-head checkout, and cross-version runtime normalization from `7594f8b`/`fdb08d2`; adds the reviewed release-defect corrections and a refreshed 1,995-function/378-callable inventory. The exact locked Windows suite and both independent local A0 comparisons pass | Publish the reports/docs-only child, record its exact commit/tree pair on #44, and require both replacement hosted A0 cells plus broader checks |
 
 No open project PR has a submitted GitHub review. “Mergeable” and self-audit
 comments are not approval, and green checks on different stacked heads do not
@@ -831,16 +842,16 @@ done separate; “code exists” does not imply “integrated” or “owner app
 | R0A endpoint/exposure | Implemented in draft #44 from `db029ce` | 1,678-test checkpoint plus later full-tree evidence | Draft PR #44 | Exact replacement-head security review absent | Preserve unchanged in the R1 candidate |
 | R0B release security | Implemented in draft #44 | 1,806-test checkpoint; dedicated hostile transport/policy coverage plus later full-tree evidence | Draft PR #44 | Exact replacement-head security review absent | Complete R1 review, then replay in R2 |
 | R0C least-privilege egress/enrichment | Planned follow-up | Existing budgets and byte-pinned model code provide substrate; provider/data consent, strict ingestion schemas, preflight, and model-code confinement evidence do not exist | None | Owner must define supported cloud/model-code tier | Complete before advertising those paths as release-qualified, or mark them experimental/unsupported in R5 |
-| R1 convergence | Cumulative draft #44 exists; final replacement gate head is local and unpublished | The remote `ba9c66d` run diagnosed three gate defects and is not passing evidence. Final source `fdb08d2` additionally closes supported-interpreter drift; full locked suites pass 2,233/7-skipped Windows and 2,236/4-skipped native Linux, the architecture gate reproduces across all ten OS/version cells, and both regenerated A0 comparisons independently pass | Draft PR #44; its remote head is superseded for gate purposes | Independent named review and history-preserving manual merge gate required | Publish the local replacement head, then require both hosted A0 cells plus the broader workflows |
+| R1 convergence | Cumulative draft #44 exists; final replacement gate head is local and unpublished | The remote `ba9c66d` run diagnosed three gate defects and is not passing evidence. Historical source `fdb08d2` closes supported-interpreter drift and reproduced across all ten OS/version cells. Current source `c1bc042` adds the release-defect corrections; its exact locked Windows suite passes 2,287 tests with 7 skips, and both regenerated A0 comparisons independently pass | Draft PR #44; its remote head is superseded for gate purposes | Independent named review and history-preserving manual merge gate required | Publish the local replacement head, then require both hosted A0 cells plus the broader workflows |
 | R2 dependencies/licenses | PR #30 is an unsuitable bulk proposal | Universal-lock check fails; five policy records across four exception families expire 2026-08-31 | Separate open PR, excluded from R1 | PyMuPDF/repository/license decisions need owner | Split by compatibility domain, relock, replay transports |
 | R3 Ethics calibration | Review/receipt machinery in #43 | Content-free receipt path is tested; private decisions absent | Draft PR #43 | Corpus owner must decide judgments/abstention/thresholds | Complete owner review without agent-fabricated approval |
 | R4 table/context evaluation | Reusable exact semantics and CC0 CLI suite in draft #44 | Portable baseline/gates pass | Draft PR #44 | Private aliases/ablations require R3 owner labels | Run 0/1/2-context and table on/off four-mode study |
 | R5 release contract | Planned; migration rehearsal exists in #39 | No tag/release/manifest/rollback execution | None | Version, distribution, privacy, cloud/model-code tier, and release approval needed | Start only after R0-R4/R2 gates, R0C disposition, and R12 Phase A |
 | R6 vector-client debt | Windows Qdrant workaround exists in #39 stack | Reproducer and real-client evidence exist for pinned version | Draft stack | No policy decision unless workaround persists | Retest after R2; remove or isolate/version-gate |
-| R7 quality gates | Exhaustive compile/Ruff, security-workflow ownership, and schema-v3 architecture/facade gates are in draft #44; final cross-version inventory refresh `fdb08d2` remains local. Branch coverage, typing, expanded lint, and static secret/security scans do not exist | The canonical inventory covers all tracked sources, paired import provenance, spans/arity, definitions, production/test consumers, private reads, mutation seams, and isolated runtime behavior; it reproduces across Windows/Linux CPython 3.10-3.14 and has an independent no-blocker audit. Point coverage remains non-gating and misses subprocesses | Draft PR #44 plus local replacement refresh | Baseline changes require a named reason/reviewer; maintainer still selects coverage/type/lint ratchets | Publish and preserve the accepted inventory; next add branch/subprocess coverage, typed leaves, staged lint, content-aware secret scanning, and changed-safety-code ratchets |
+| R7 quality gates | Exhaustive compile/Ruff, security-workflow ownership, and schema-v3 architecture/facade gates are in draft #44; current 1,995-function/378-callable inventory refresh `c1bc042` remains local. Branch coverage, typing, expanded lint, and static secret/security scans do not exist | The canonical inventory covers all tracked sources, paired import provenance, spans/arity, definitions, production/test consumers, private reads, mutation seams, and isolated runtime behavior. The earlier `fdb08d2` contract reproduced across Windows/Linux CPython 3.10-3.14; the current inventory passes its deterministic gate and an independent no-blocker audit but has not repeated that ten-cell matrix. Point coverage remains non-gating and misses subprocesses | Draft PR #44 plus local replacement refresh | Baseline changes require a named reason/reviewer; maintainer still selects coverage/type/lint ratchets | Publish and preserve the accepted inventory; next add branch/subprocess coverage, typed leaves, staged lint, content-aware secret scanning, and changed-safety-code ratchets |
 | R8 dependency direction | Evaluation inversion, durable supervision binding, service-host/search inversion, service job coordination, CLI/UI job-application inversion, HTTP implementation extraction, and a service-role outer root are implemented in draft #44 | Exact-function extraction, facade/type/pickle compatibility, import order/isolation, atomic bindings/root construction, cleanup/failure propagation, exact job/search/HTTP wiring, shell isolation, shared lock identity, live Uvicorn, and cross-process tests cover an acyclic first-party graph | Draft PR #44 | No owner decision | Carry the accepted R7 facade inventory through A0b and final R1 convergence; then move pipeline implementation ownership behind the stable `rag.py` facade, migrating the search child, UI/CLI, and evaluator in separate slices without absorbing intentional child shells |
 | R9 orchestration decomposition | First policy leaves extracted; hot spots remain | Failure-injection suite provides characterization base | None | No owner decision | Wait for broader R7 and R10 Phase A1, then slice main/chunk/eval/OpenAPI |
-| R10 performance/capacity | Offline cache-aware model-sync planning, the nine-scenario Phase A0a harness, and repaired local A0b replacement candidates are implemented; runtime telemetry and queue metrics exist | A0a's containment, deterministic contracts, negative controls, real completion validators, lock contention, and Linux user-base isolation pass focused review. Replacement clean-source Windows/Linux full-profile baselines bind `fdb08d2`, share eight exact inputs and the full 9×5 contract, and each independently passes its local same-platform comparison. The first hosted attempt failed on diagnosed gate/checkout defects, the replacement hosted matrix is pending, and no later capacity budget exists | Final pre-gate source is local; cumulative draft #44 still points at the superseded first attempt | A0b needs both retained hosted reports and exact-head review; authorized corpus/hardware/cost scope is still required for Phase B | Publish the replacement gate-only head, require both hosted A0b jobs before R8c-6, then implement the separately gated A1a/A1b/A1c groups before corresponding R9 slices |
+| R10 performance/capacity | Offline cache-aware model-sync planning, the nine-scenario Phase A0a harness, and repaired local A0b replacement candidates are implemented; runtime telemetry and queue metrics exist | A0a's containment, deterministic contracts, negative controls, real completion validators, lock contention, and Linux user-base isolation pass focused review. Replacement clean-source Windows/Linux full-profile baselines bind `c1bc042`, share eight exact inputs and the full 9×5 contract, and each independently passes its local same-platform comparison. The first hosted attempt failed on diagnosed gate/checkout defects, the replacement hosted matrix is pending, and no later capacity budget exists | Final pre-gate source is local; cumulative draft #44 still points at the superseded first attempt | A0b needs both retained hosted reports and exact-head review; authorized corpus/hardware/cost scope is still required for Phase B | Publish the replacement gate-only head, require both hosted A0b jobs before R8c-6, then implement the separately gated A1a/A1b/A1c groups before corresponding R9 slices |
 | R11 corpus/profile breadth | Second profile and synthetic fixtures exist | No authorized real receipt for `roman-parts-book-v1` | None | Corpus authorization/qualification required | Add content-free profile diagnostics and real receipt |
 | R12 packaging/docs/UX | Task-oriented model-sync presets, offline plan output, and plan-based first-run guidance are in draft #44; packaging/README split is not done | Planner behavior is tested; documentation examples are not yet parser-executed in CI | Draft PR #44 | Product language and remote-scope decisions remain | Add stable console entry points and short parser-checked release guides before R5 |
 
@@ -859,6 +870,16 @@ regression test that was observed failing against the pre-fix source and
 passing after it. The set was validated together against the full suite, Ruff,
 the 150-source compilation gate, the dependency, model-artifact, CI-security,
 and architecture-inventory gates, and all three offline evaluation suites.
+
+Because the pass changes Python source, clean checkpoint `c1bc042` invalidates
+the preceding A0 reports. The exact locked Windows suite passes 2,287 tests
+with 7 skips and the one known Starlette/httpx warning. Strictly synchronized
+189-package Windows and 187-package Linux CPU environments produced paired
+clean-source baselines with the same eight exact inputs and complete 9×5
+contract; each passed a second independent same-platform comparison. The
+following reports/docs-only commit is the required local gate candidate.
+Hosted comparisons, retained hosted evidence, and exact-head review remain
+pending and are not implied by these local results.
 
 | Defect | Surface | Correction |
 |---|---|---|
@@ -1701,7 +1722,8 @@ a disruptive whole-repository rewrite.
   `vector_lifecycle`, evaluation contracts, and the runtime bindings. Add
   security-critical `job_runtime` only after its imported policy/storage layer
   is clean. Expand by dependency layer, not by blanket ignores.
-- **Implemented in draft #44; final normalization refresh at `fdb08d2`:** the
+- **Implemented in draft #44; normalization established at `fdb08d2`, current
+  inventory refreshed at `c1bc042`:** the
   schema-v3 tracked-source architecture/facade
   inventory subsumes the earlier AST import-DAG gate. It requires the
   first-party graph to remain acyclic, pins both shared evaluation domains and
@@ -1710,9 +1732,11 @@ a disruptive whole-repository rewrite.
   private facade reads, re-exported aliases, direct/nested/dynamic patch seams,
   assignment/deletion, namespace/import-star behavior, type hints,
   module/type/pickle identity, and reload/restoration behavior. The isolated
-  runtime probe is supervised and output-bounded. Its compact canonical JSON
-  reproduces byte-identically across Windows and Linux CPython 3.10-3.14, and
-  an independent AST graph must exactly match every static edge.
+  runtime probe is supervised and output-bounded. The `fdb08d2` snapshot
+  reproduced byte-identically across Windows and Linux CPython 3.10-3.14; the
+  current `c1bc042` snapshot passes its deterministic local gate but has not
+  repeated that ten-cell matrix. An independent AST graph must exactly match
+  every static edge.
 - Preserve the architecture/facade baseline as canonical, reviewable JSON with
   repository-relative paths and stable ordering. A failed check must print a
   bounded semantic summary—section counts plus added/removed/changed modules,
@@ -2037,19 +2061,21 @@ than descriptive data with no release ceiling.
   every dependency/model input to equal its `HEAD` blob, and makes PR A0 jobs
   check out the exact PR head. Python 3.10-3.14 qualification then found and
   closed interpreter-specific AST, `sysconfig`, `Path`, and typing drift in
-  clean final pre-gate source `fdb08d26e3fc9fd2b80b983eeab7b1f353b96707`
-  (tree `d7e758c6002144acff0c8d58e54c9980a6ffd7c7`). Its fresh locked suites pass
-  2,233 tests with 7 skips on Windows and 2,236 tests with 4 skips on native
-  Linux; the architecture inventory records 1,981 functions and 377 compact
-  runtime callables and reproduces across all ten supported OS/version cells.
-  Replacement Windows
-  CPython 3.12.13 and Linux CPython 3.12.3 reports share eight exact inputs and
-  the full nine-scenario/five-repetition contract, and both matching local
-  comparisons independently pass. The gate-only delta after `fdb08d2` is
-  limited to those two reports and provenance/status documentation; the
-  workflow, LF policy, and executable gates are already in the source
-  checkpoint and were exercised during generation. The gate-only commit that
-  contains these reports freezes the final local R1 candidate; publish it and
+  historical source `fdb08d2`; its 1,981-function/377-callable inventory
+  reproduced across all ten supported OS/version cells. Gate-only `ed2995e`
+  froze those reports, followed by R2 source `537f72b` and refresh `b813aa7`.
+  Release-defect source `c1bc042c862c42964e6084967f57987944e29f6a`
+  (tree `4a37989c32d2a6743ccdef47bfe20460d165af32`) then changed Python and required
+  another paired refresh. Its exact locked Windows suite passes 2,287 tests
+  with 7 skips, and its inventory records 1,995 functions and 378 compact
+  runtime callables. Replacement Windows CPython 3.12.13 and Linux CPython
+  3.12.3 reports share eight exact inputs and the full
+  nine-scenario/five-repetition contract, and both matching local comparisons
+  independently pass. The gate-only delta after `c1bc042` is limited to those
+  two reports and provenance/status documentation; the workflow, LF policy,
+  and executable gates are already in the source checkpoint and were exercised
+  during generation. The following reports/docs-only commit freezes the final
+  local R1 candidate; publish it and
   require both replacement hosted cells before authorizing
   R8c-6. Any source/lock change regenerates both baselines. Deterministic
   operation counts, output bytes, import classes, and serialized identities
@@ -2288,7 +2314,7 @@ does not declare R7 or A0 complete.
 | Sequence | Workstream | Dependency or gate |
 |---|---|---|
 | 1 | Immediate scope freeze, issue/milestone creation, R0 private-source decision/audit, and R3 corpus-owner review | Human decisions and tracking proceed while the already-started R7/A0 gate work finishes; no new feature slice starts |
-| 2 | R1 exact-head convergence including R0A/R0B plus the reviewable R7/A0 gate-only slice | Requires R0's integration policy and both safety fixes; excludes dependency PR #30; publish only the gate-only child containing the replacement reports/provenance after `fdb08d2`, record its exact commit/tree pair on #44, then require the replacement hosted gates |
+| 2 | R1 exact-head convergence including R0A/R0B plus the reviewable R7/A0 gate-only slice | Requires R0's integration policy and both safety fixes; excludes dependency PR #30; publish only the reports/provenance child after `c1bc042`, record its exact commit/tree pair on #44, then require the replacement hosted gates |
 | 3 | R2a decisions/evidence now; R2b dependency compatibility after R1 freeze | Keep R2a from changing R1 dependencies, split R2b by compatibility domain, replay R0A/R0B transports, escalate unresolved exceptions on 2026-08-15, and finish before 2026-08-31 |
 | 4 | R0C cloud/model-code qualification or explicit deferral | Required before the release advertises cloud-assisted ingestion or trusted remote model code as supported; policy/schema/model isolation work can proceed beside owner-led R3/R4 evidence |
 | 5 | R4 private-corpus ablations and expansion | Reusable semantics/CLI coverage are local; remaining evidence requires R3's frozen judgments |
