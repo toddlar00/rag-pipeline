@@ -56,8 +56,8 @@ material. When documents disagree, use the authority order below.
   — schema-v3 static graph, facade/mutation characterization, normalized
   runtime contract, and reviewed baseline refreshes.
 - [Phase A0 benchmark policy](architecture/decisions/phase-a0-benchmark-policy.md)
-  — the local A0a harness contract and the separate pending A0b per-platform
-  canonical baseline and CI checkpoint.
+  — the local cross-platform A0a harness contract and the separate pending A0b
+  per-platform canonical baseline and CI checkpoint.
 
 With the local CI-ownership and Phase A0a decisions plus the implemented and
 independently audited architecture-inventory policy now maintained here, the

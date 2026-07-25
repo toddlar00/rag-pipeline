@@ -60,6 +60,14 @@ wrong call wiring, failed containment, or altered isolation cannot pass. The
 no-op resume scenario delegates to real completion validators and exercises
 real interprocess vector-lock contention both while held and after release.
 
+Linux's standard-library `sysconfig` can otherwise resolve `~/.local` while
+third-party service dependencies import. The child environment therefore
+replaces any ambient `PYTHONUSERBASE` with a run-local temporary directory and
+sets `PYTHONNOUSERSITE=1`. It does not set or repurpose `HOME` or `CODEX_HOME`;
+the inherited guard continues to reject home and tilde resolution. A contained
+regression probe asserts both that `sysconfig` uses the redirected user base and
+that `Path.home()` remains denied.
+
 ## A0b publication gate
 
 A0b remains pending. No local smoke report, subset, noncanonical interpreter,
@@ -83,3 +91,10 @@ B workloads.
 - Harness: [`tools/benchmark_phase_a0.py`](../../../tools/benchmark_phase_a0.py)
 - Schema, containment, negative-control, and contract tests:
   [`tests/test_phase_a0_benchmark.py`](../../../tests/test_phase_a0_benchmark.py)
+
+A0a was introduced at `64843d1`; the cross-platform user-base isolation closure
+is `77a0f70`. All 51 A0a tests pass under the locked Windows and WSL Linux test
+environments. The complete 104-test Windows architecture/A0 set, the 51-test
+WSL A0 set, and canonical architecture checks on Windows CPython 3.12/3.14 and
+WSL CPython 3.12 pass at that checkpoint. These results establish A0a only;
+they do not replace the separate A0b baselines and hosted exact-head checks.

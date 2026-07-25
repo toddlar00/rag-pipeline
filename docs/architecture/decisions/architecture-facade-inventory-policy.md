@@ -68,10 +68,13 @@ does not prove runtime reachability.
 - First-party dependency invariants:
   [`tests/test_architecture.py`](../../../tests/test_architecture.py)
 
-The accepted local checkpoint is `62cb574`. Its 1,005,471-byte canonical
-baseline and full inventory SHA-256
-`d3aea6ab563b609369f9566c17d6f4bc170ecbbf1e7bc58f294ad1e7290ba1ab`
+Schema v3 was first accepted at `62cb574`. The current canonical checkpoint is
+`77a0f70` (tree `fc268e5`); its 1,005,471-byte baseline and full inventory
+SHA-256
+`6958fb5dd2de002ed3845d547bed008961fb84b29dc0c06ba7bf3c3951fd46ca`
 reproduce on Windows CPython 3.12 and 3.14 and WSL Ubuntu CPython 3.12. All 53
-focused tests pass. Independent review found and then verified closure of
-an origin/context pair-correlation collision; provenance is now stored and
-strictly validated as sorted pairs rather than independent sets.
+focused tests pass. Independent review found and then verified closure of an
+origin/context pair-correlation collision; provenance is now stored and
+strictly validated as sorted pairs rather than independent sets. The later
+checkpoint is a required refresh for the tracked Phase A0 portability source
+and test change, not an unreviewed architecture-contract relaxation.

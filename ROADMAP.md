@@ -43,8 +43,8 @@ Status terms:
 | Foundation | Baseline | End-to-end PDF ingestion, enriched chunking, shared LLM runtime, grounded answers, hybrid retrieval/reranking, evaluation harness, Chroma/Qdrant indexing, CLI, UI, docs, and tests |
 | Repository truth and exhaustive source gate | Implemented locally | Local commit `88fd301` relocates and tests the two local launchers, ignores `tmp/` and `.worktrees/`, replaces the stale compile list with deterministic Git-index discovery, curates the Claude plans and developer guide, adds the process-supervision ADR, and records the unresolved private-source policy as an explicit owner decision. Its exact tree passes 1,507 tests with 7 skips |
 | CI security ownership and workflow invariants | Implemented locally | Commit `17bdff7` adds a machine-readable map of current, reserved, and governance owners; a general CI gate proves symmetric security-workflow coverage, full-SHA action pinning, checkout credential isolation, and repository-wide read-only permissions. Content-aware secret scanning remains a separate R7 item |
-| Deterministic architecture and `rag` facade inventory | Implemented locally | Schema-v3 commit `62cb574` records the tracked-source graph, definition and signature hashes, paired contextual import provenance, production/test facade consumers, private reads, mutation seams, and an isolated runtime contract. The compact 1,005,471-byte baseline and canonical report reproduce byte-identically on Windows CPython 3.12/3.14 and WSL CPython 3.12; 53 focused tests, an independent exact-edge cross-check, and an independent adversarial audit pass. Broader R7 coverage, typing, lint, and static security work remain open |
-| Phase A0 architecture benchmark harness | A0a implemented locally; A0b pending | Commit `64843d1` runs nine contained fresh-process scenarios five times, binds deterministic calls/outputs/import classes/source and lock identity, exercises the real supervised CLI and worker boundaries, and includes adversarial validator, isolation, no-op, and lock controls. Focused review found no material A0a blocker. Separate clean CPython 3.12 x86-64 Windows/Linux baselines, matching hosted CI checks, and retained reports are still required before this can gate R8 |
+| Deterministic architecture and `rag` facade inventory | Implemented locally | Schema-v3 was introduced at `62cb574`; the current canonical checkpoint at `77a0f70` records the tracked-source graph, definition and signature hashes, paired contextual import provenance, production/test facade consumers, private reads, mutation seams, and an isolated runtime contract. Its compact 1,005,471-byte baseline and canonical report reproduce byte-identically on Windows CPython 3.12/3.14 and WSL CPython 3.12; 53 focused tests, an independent exact-edge cross-check, and an independent adversarial audit pass. Broader R7 coverage, typing, lint, and static security work remain open |
+| Phase A0 architecture benchmark harness | A0a implemented locally; A0b pending | Commit `64843d1` introduced nine contained fresh-process scenarios run five times; portability closure `77a0f70` redirects Linux's standard-library user base into the run-local temporary root without setting `HOME` or `CODEX_HOME`. The harness binds deterministic calls/outputs/import classes/source and lock identity, exercises the real supervised CLI and worker boundaries, and includes adversarial validator, isolation, no-op, lock, and user-base controls. All 51 tests pass on Windows and WSL, and focused review found no material A0a blocker. Separate clean CPython 3.12 x86-64 Windows/Linux baselines, matching hosted CI checks, and retained reports are still required before this can gate R8 |
 | Ethics corpus coherence and publication quality | Implemented (draft) | [PR #31](https://github.com/toddlar00/rag-pipeline/pull/31): canonical scaffold reconstruction, exact source identity, complete tables and nested footnotes, exact embedding budgets, regenerated exports, and an exactly reconciled 1,715-record Chroma index |
 | Machine-readable corpus quality attestation | Implemented (draft) | [PR #31](https://github.com/toddlar00/rag-pipeline/pull/31): schema-v1 report binds the exact Docling source, chunks bytes, parameters, source-lineage coverage, tables, normalization, classification, entities, token budgets, and stable/hash roots; resume, export, retrieval, and index publication fail closed on missing, stale, malformed, or mismatched evidence |
 | Synced-folder publication and read resilience | Implemented (draft) | [PR #31](https://github.com/toddlar00/rag-pipeline/pull/31): bounded Windows sharing-violation retries republish only a pinned staging file; marker and exact artifact reads retry only content-identical ctime churn while failing closed on content-generation changes; exact hashes bypass unsafe stat caching on Windows |
@@ -697,8 +697,8 @@ are a snapshot, not release claims:
 - `main` is `54cdb00`. The last published exact head is `e2196a1` on PR #43, 33
   commits and 80 changed files ahead of `main` with 28,881 insertions and 2,014
   deletions. That published head remains the last GitHub CI reference. The
-  audited local implementation checkpoint is `62cb574` (tree `ec49f2b`): 59
-  commits and 170 files ahead of `main`, with 94,272 insertions and 6,185
+  audited local implementation checkpoint is `77a0f70` (tree `fc268e5`): 61
+  commits and 173 files ahead of `main`, with 94,787 insertions and 6,185
   deletions. The large insertion count includes the canonical architecture
   inventory and should not be mistaken for equivalent executable-code growth.
   This aggregation includes the local R0/R0A/R0B, R4, R7, R8, R10, and R12
@@ -723,14 +723,16 @@ are a snapshot, not release claims:
   tests with 7 platform skips and emitted 637 dependency deprecation warnings
   primarily from
   FastAPI/Starlette's `asyncio.iscoroutinefunction` compatibility path. This is
-  SHA-bound local evidence, not evidence for `62cb574` or published CI. At the
-  later focused checkpoints, the Phase A0a suite passes 50 tests and the
+  SHA-bound local evidence, not evidence for `77a0f70` or published CI. At the
+  later focused checkpoints, the Phase A0a suite passes 51 tests on Windows
+  and WSL and the
   architecture/facade suite passes 53 tests; Ruff, exhaustive compilation of
   all 150 tracked Python sources, dependency policy, model-artifact policy, and
   diff checks pass. A new cumulative full-suite result is still required by R1.
-- Schema-v3 at `62cb574` inventories 150 tracked Python files: 53 production,
+- Schema-v3 was introduced at `62cb574`; the current canonical baseline at
+  `77a0f70` inventories 150 tracked Python files: 53 production,
   81 test, 14 tool, and two script files. The non-test architecture surface has
-  69 modules, 61,354 physical lines, 1,979 functions (1,301 top-level), 189
+  69 modules, 61,355 physical lines, 1,979 functions (1,301 top-level), 189
   classes, and 145 first-party edges. `rag.py` owns 16,353 lines, 425 functions
   (295 top-level), 17 classes, and 27 direct first-party dependencies. The
   largest already-measured risks remain
@@ -785,7 +787,7 @@ are a snapshot, not release claims:
 | [#33](https://github.com/toddlar00/rag-pipeline/pull/33)-[#38](https://github.com/toddlar00/rag-pipeline/pull/38) | Open focused draft dependency chain | Preserve focused diffs/audits; integrate through one current cumulative head |
 | [#39](https://github.com/toddlar00/rag-pipeline/pull/39) | Open draft cumulative PR to `main`, but only through #38 | Valuable migration rehearsal, not the current integration candidate |
 | [#40](https://github.com/toddlar00/rag-pipeline/pull/40)-[#43](https://github.com/toddlar00/rag-pipeline/pull/43) | Open drafts stacked after #39; #43 is the last published/CI-green head | Include in the new R1 cumulative PR after owner/privacy and R0A/R0B gates |
-| Local aggregation through `62cb574` | Twenty-six commits after published PR #43; no remote branch/PR; cumulative tree is 59 commits/170 files ahead of `main` | Finish only the already-started A0b gate slice, restore workflow-capable GitHub authentication, create a correctly named cumulative branch, record the exact commit/tree pair, and publish one current candidate |
+| Local aggregation through `77a0f70` | Twenty-eight commits after published PR #43; no remote branch/PR; cumulative tree is 61 commits/173 files ahead of `main` | Finish only the already-started A0b gate slice, restore workflow-capable GitHub authentication, create a correctly named cumulative branch, record the exact commit/tree pair, and publish one current candidate |
 
 No open project PR has a submitted GitHub review. “Mergeable” and self-audit
 comments are not approval, and green checks on different stacked heads do not
@@ -812,7 +814,7 @@ done separate; “code exists” does not imply “integrated” or “owner app
 | R7 quality gates | Exhaustive compile/Ruff, security-workflow ownership, and schema-v3 architecture/facade gates exist locally; branch coverage, typing, expanded lint, and static secret/security scans do not | The canonical inventory covers all tracked sources, paired import provenance, spans/arity, definitions, production/test consumers, private reads, mutation seams, and isolated runtime behavior; it reproduces on Windows and Linux and has an independent no-blocker audit. Point coverage remains non-gating and misses subprocesses | Not published | Baseline changes require a named reason/reviewer; maintainer still selects coverage/type/lint ratchets | Preserve the accepted inventory; next add branch/subprocess coverage, typed leaves, staged lint, content-aware secret scanning, and changed-safety-code ratchets |
 | R8 dependency direction | Evaluation inversion, durable supervision binding, service-host/search inversion, service job coordination, CLI/UI job-application inversion, HTTP implementation extraction, and a service-role outer root are implemented locally | Exact-function extraction, facade/type/pickle compatibility, import order/isolation, atomic bindings/root construction, cleanup/failure propagation, exact job/search/HTTP wiring, shell isolation, shared lock identity, live Uvicorn, and cross-process tests cover an acyclic first-party graph | Not published | No owner decision | Carry the accepted R7 facade inventory through A0b and final R1 convergence; then move pipeline implementation ownership behind the stable `rag.py` facade, migrating the search child, UI/CLI, and evaluator in separate slices without absorbing intentional child shells |
 | R9 orchestration decomposition | First policy leaves extracted; hot spots remain | Failure-injection suite provides characterization base | None | No owner decision | Wait for broader R7 and R10 Phase A1, then slice main/chunk/eval/OpenAPI |
-| R10 performance/capacity | Offline cache-aware model-sync planning plus the nine-scenario Phase A0a harness are implemented locally; runtime telemetry and queue metrics exist | A0a's containment, deterministic contracts, negative controls, real completion validators, and lock contention pass focused review; no authoritative per-OS A0b baseline/hosted check or later capacity budget exists | Not published | A0b needs exact-head review; authorized corpus/hardware/cost scope is still required for Phase B | Commit/review matching Windows and Linux A0b baselines and CI artifacts before R8c-6; then implement the separately gated A1a/A1b/A1c groups before corresponding R9 slices |
+| R10 performance/capacity | Offline cache-aware model-sync planning plus the nine-scenario Phase A0a harness are implemented locally; runtime telemetry and queue metrics exist | A0a's containment, deterministic contracts, negative controls, real completion validators, lock contention, and Linux user-base isolation pass 51 Windows/WSL tests and focused review; no authoritative per-OS A0b baseline/hosted check or later capacity budget exists | Not published | A0b needs exact-head review; authorized corpus/hardware/cost scope is still required for Phase B | Commit/review matching Windows and Linux A0b baselines and CI artifacts before R8c-6; then implement the separately gated A1a/A1b/A1c groups before corresponding R9 slices |
 | R11 corpus/profile breadth | Second profile and synthetic fixtures exist | No authorized real receipt for `roman-parts-book-v1` | None | Corpus authorization/qualification required | Add content-free profile diagnostics and real receipt |
 | R12 packaging/docs/UX | Task-oriented model-sync presets, offline plan output, and plan-based first-run guidance implemented locally; packaging/README split not done | Planner behavior is tested locally; documentation examples are not yet parser-executed in CI | Not published | Product language and remote-scope decisions remain | Add stable console entry points and short parser-checked release guides before R5 |
 
@@ -1226,7 +1228,7 @@ stack whose middle cumulative PR stops before the current head.
 - Publish a review manifest that maps focused PR/commit ranges and file domains
   to named reviewer roles. Require separate privacy/security, migration/release,
   evaluation, and cross-stack delta sign-offs, all bound to the final commit, so
-  the current roughly 100,457-changed-line cumulative diff does not receive only
+  the current roughly 100,972-changed-line cumulative diff does not receive only
   nominal approval. Freeze the candidate before review; any later code change
   invalidates the exact-head sign-offs and affected workflow conclusions.
 - Preserve `INTEGRATION_AUDIT.md` as the historical #1-#28 record and publish a
