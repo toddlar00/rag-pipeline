@@ -37,7 +37,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-REPORT_SCHEMA_VERSION = 2
+REPORT_SCHEMA_VERSION = 3
 BENCHMARK_NAME = "phase-a0"
 DEFAULT_REPETITIONS = 5
 MIN_REPETITIONS = 5
@@ -466,6 +466,21 @@ def runtime_identity() -> dict[str, object]:
     }
 
 
+def _normalized_platform_name(value: object) -> str:
+    raw = str(value or "").strip().casefold()
+    if raw.startswith("win"):
+        return "windows"
+    if raw.startswith("linux"):
+        return "linux"
+    if raw in {"darwin", "mac", "macos", "osx"}:
+        return "macos"
+    for family in ("freebsd", "openbsd", "netbsd"):
+        if raw.startswith(family):
+            return family
+    normalized = re.sub(r"[^a-z0-9]+", "-", raw).strip("-")
+    return normalized[:32] or "unknown"
+
+
 def execution_profile() -> dict[str, object]:
     implementation = platform.python_implementation()
     major_minor = f"{sys.version_info.major}.{sys.version_info.minor}"
@@ -474,6 +489,7 @@ def execution_profile() -> dict[str, object]:
         "implementation": implementation,
         "python_major_minor": major_minor,
         "pointer_bits": pointer_bits,
+        "platform": _normalized_platform_name(platform.system()),
         "canonical": (
             implementation == CANONICAL_IMPLEMENTATION
             and major_minor == CANONICAL_PYTHON_MAJOR_MINOR
@@ -1243,6 +1259,83 @@ def _resume_artifact_identity(rag, paths: Mapping[str, Path]) -> str:
     return _sha256_bytes(_canonical_bytes(identities))
 
 
+_VECTOR_LOCK_CONTROL_SOURCE = r'''import json
+from pathlib import Path
+import sys
+
+import rag
+
+try:
+    with rag._vector_store_lock(
+            Path(sys.argv[1]),
+            backend=sys.argv[2],
+            collection_name=sys.argv[3],
+            operation=sys.argv[4],
+            timeout=float(sys.argv[5])):
+        result = "acquired"
+except rag.VectorStoreBusyError:
+    result = "busy"
+
+print(json.dumps({"result": result}, sort_keys=True, separators=(",", ":")))
+'''
+
+
+def _run_vector_lock_control(
+        fixture_root: Path, db_dir: Path, *, collection_name: str,
+        label: str, expected_result: str) -> dict[str, object]:
+    """Attempt the production lease in an independently contained process."""
+    if expected_result not in {"busy", "acquired"}:
+        raise ValueError("expected_result must be 'busy' or 'acquired'")
+    attempt_root = fixture_root / f"vector-lock-{label}"
+    attempt_root.mkdir(mode=0o700)
+    script_path = attempt_root / "lock_control.py"
+    _write_private_generated_text(script_path, _VECTOR_LOCK_CONTROL_SOURCE)
+    guard_root = _install_sitecustomize_guard(attempt_root)
+    trace_path = attempt_root / "guard-trace.jsonl"
+    role = f"vector-lock-{label}"
+    environment = _guarded_child_environment(
+        attempt_root, guard_root, trace_path=trace_path, role=role)
+    timeout = 0.5
+    operation = "Phase A0 vector-lock contention control"
+    result = _run_contained_process(
+        script_path,
+        (
+            str(db_dir), "chroma", collection_name, operation,
+            str(timeout),
+        ),
+        cwd=attempt_root,
+        environment=environment,
+        timeout_seconds=10.0,
+        max_output_bytes=16_384,
+    )
+    if result.returncode != 0 or result.stderr:
+        raise PhaseA0BenchmarkError(
+            "resume vector-lock contention control failed")
+    payload = _strict_json_bytes(
+        result.stdout, description="vector-lock contention result")
+    events = _read_guard_trace(trace_path)
+    if (payload != {"result": expected_result}
+            or len(events) != 1
+            or events[0]["role"] != role
+            or events[0]["production_supervised"] is not False):
+        raise PhaseA0BenchmarkError(
+            "resume vector-lock mutual exclusion control failed")
+    identity = {
+        "db_dir": Path(db_dir).relative_to(fixture_root).as_posix(),
+        "backend": "chroma",
+        "collection_name": collection_name,
+        "operation": operation,
+        "timeout": timeout,
+    }
+    return {
+        "result": expected_result,
+        "arguments_sha256": _sha256_bytes(_canonical_bytes(identity)),
+        "exit_code": result.returncode,
+        "guarded_processes": len(events),
+        "cleanup_confirmed": result.cleanup_confirmed,
+    }
+
+
 def _probe_noop_resume() -> tuple[dict[str, object], dict[str, object]]:
     """Exercise completed-artifact resume without parsing, models, or vectors.
 
@@ -1355,6 +1448,101 @@ def _probe_noop_resume() -> tuple[dict[str, object], dict[str, object]]:
                 "parameters_sha256": identity_sha256(export_parameters),
             },
         }
+        mismatched_pdf = fixture_root / "mismatched-source.pdf"
+        mismatched_pdf.write_bytes(
+            b"%PDF-1.4\n% deliberately mismatched source\n%%EOF\n")
+        mismatched_conversion_parameters = {
+            **conversion_parameters,
+            "phase_a0_negative_control": "parameter-mismatch-v1",
+        }
+        mismatched_quality_parameters = {
+            **chunk_parameters,
+            "phase_a0_negative_control": "parameter-mismatch-v1",
+        }
+        missing_export = fixture_root / "missing-export.md"
+        validator_control_calls = {
+            "conversion": {
+                "negative_kind": "parameter_mismatch",
+                "negative_identity": {
+                    **expected_validator_arguments["conversion"],
+                    "parameters_sha256": identity_sha256(
+                        mismatched_conversion_parameters),
+                },
+                "valid": lambda: originals["_converted_outputs_complete"](
+                    pdf, paths["doc"], paths["converted_markdown"],
+                    parameters=conversion_parameters,
+                    preprocessed_output=paths["preprocessed"]),
+                "negative": lambda: originals[
+                    "_converted_outputs_complete"](
+                        pdf, paths["doc"], paths["converted_markdown"],
+                        parameters=mismatched_conversion_parameters,
+                        preprocessed_output=paths["preprocessed"]),
+            },
+            "chunks": {
+                "negative_kind": "source_mismatch",
+                "negative_identity": {
+                    **expected_validator_arguments["chunks"],
+                    "source_pdf": relative(mismatched_pdf),
+                },
+                "valid": lambda: originals["_chunks_complete"](
+                    paths["doc"], paths["chunks"],
+                    parameters=chunk_parameters, source_pdf_path=pdf),
+                "negative": lambda: originals["_chunks_complete"](
+                    paths["doc"], paths["chunks"],
+                    parameters=chunk_parameters,
+                    source_pdf_path=mismatched_pdf),
+            },
+            "quality": {
+                "negative_kind": "parameter_mismatch",
+                "negative_identity": {
+                    **expected_validator_arguments["quality"],
+                    "parameters_sha256": identity_sha256(
+                        mismatched_quality_parameters),
+                },
+                "valid": lambda: originals["_quality_report_complete"](
+                    paths["doc"], paths["chunks"],
+                    parameters=chunk_parameters),
+                "negative": lambda: originals[
+                    "_quality_report_complete"](
+                        paths["doc"], paths["chunks"],
+                        parameters=mismatched_quality_parameters),
+            },
+            "export": {
+                "negative_kind": "artifact_mismatch",
+                "negative_identity": {
+                    **expected_validator_arguments["export"],
+                    "export": relative(missing_export),
+                },
+                "valid": lambda: originals["_unified_export_complete"](
+                    paths["chunks"], paths["export"],
+                    parameters=export_parameters),
+                "negative": lambda: originals[
+                    "_unified_export_complete"](
+                        paths["chunks"], missing_export,
+                        parameters=export_parameters),
+            },
+        }
+        validator_controls = {}
+        for name, control in validator_control_calls.items():
+            valid_result = control["valid"]()
+            negative_result = control["negative"]()
+            if valid_result is not True or negative_result is not False:
+                raise PhaseA0BenchmarkError(
+                    f"resume {name} completion validator negative control "
+                    "failed")
+            validator_controls[name] = {
+                "valid": {
+                    "arguments_sha256": identity_sha256(
+                        expected_validator_arguments[name]),
+                    "result": valid_result,
+                },
+                "negative": {
+                    "kind": control["negative_kind"],
+                    "arguments_sha256": identity_sha256(
+                        control["negative_identity"]),
+                    "result": negative_result,
+                },
+            }
         validator_observations = {
             name: [] for name in expected_validator_arguments}
 
@@ -1439,7 +1627,8 @@ def _probe_noop_resume() -> tuple[dict[str, object], dict[str, object]]:
             "clean_exit": False,
             "active": False,
             "arguments_sha256": "",
-            "reacquired_after_exit": False,
+            "held_control": None,
+            "released_control": None,
         }
 
         def observe_lock(
@@ -1465,6 +1654,15 @@ def _probe_noop_resume() -> tuple[dict[str, object], dict[str, object]]:
                     lock_observation["entered"] += 1
                     lock_observation["active"] = True
                     try:
+                        lock_observation["held_control"] = (
+                            _run_vector_lock_control(
+                                fixture_root,
+                                Path(db_dir),
+                                collection_name=collection_name,
+                                label="held",
+                                expected_result="busy",
+                            )
+                        )
                         yield lease
                     except BaseException:
                         lock_observation["clean_exit"] = False
@@ -1565,6 +1763,8 @@ def _probe_noop_resume() -> tuple[dict[str, object], dict[str, object]]:
                 or lock_observation["exited"] != 1
                 or lock_observation["clean_exit"] is not True
                 or lock_observation["active"] is not False
+                or not isinstance(lock_observation["held_control"], dict)
+                or lock_observation["held_control"].get("result") != "busy"
                 or len(index_observations) != 1
                 or set(result) != {
                     "paths", "collection", "db_dir", "db_backend",
@@ -1576,11 +1776,13 @@ def _probe_noop_resume() -> tuple[dict[str, object], dict[str, object]]:
                 or result["index_outcome"] is not expected_outcome):
             raise PhaseA0BenchmarkError(
                 "resume pipeline observations were incomplete")
-        with originals["_vector_store_lock"](
-                paths["chroma"], backend="chroma",
-                collection_name=paths["collection"],
-                operation="pipeline chunk/index transition", timeout=1.0):
-            lock_observation["reacquired_after_exit"] = True
+        lock_observation["released_control"] = _run_vector_lock_control(
+            fixture_root,
+            paths["chroma"],
+            collection_name=paths["collection"],
+            label="released",
+            expected_result="acquired",
+        )
         outcome_fields = {
             name: getattr(expected_outcome, name)
             for name in (
@@ -1592,14 +1794,17 @@ def _probe_noop_resume() -> tuple[dict[str, object], dict[str, object]]:
         contract = {
             "record_count": 1,
             "completion_validators": {
-                name: records[0]
+                name: {
+                    **validator_controls[name],
+                    "pipeline": records[0],
+                }
                 for name, records in validator_observations.items()
             },
             "vector_lock": {
                 name: lock_observation[name]
                 for name in (
                     "calls", "entered", "exited", "clean_exit",
-                    "arguments_sha256", "reacquired_after_exit")
+                    "arguments_sha256", "held_control", "released_control")
             },
             "index_revalidation": {
                 "calls": len(index_observations),
@@ -1895,16 +2100,64 @@ def _validate_contract(name: str, value: object) -> None:
     elif name == "noop_resume":
         validators = value.get("completion_validators")
         vector_lock = value.get("vector_lock")
+        expected_negative_kinds = {
+            "conversion": "parameter_mismatch",
+            "chunks": "source_mismatch",
+            "quality": "parameter_mismatch",
+            "export": "artifact_mismatch",
+        }
+
+        def validator_item_valid(
+                validator_name: str, item: object) -> bool:
+            if (not isinstance(item, dict)
+                    or set(item) != {"valid", "negative", "pipeline"}):
+                return False
+            valid_control = item["valid"]
+            negative_control = item["negative"]
+            pipeline = item["pipeline"]
+            return (
+                isinstance(valid_control, dict)
+                and set(valid_control) == {"arguments_sha256", "result"}
+                and valid_control["result"] is True
+                and _SHA256_RE.fullmatch(str(
+                    valid_control["arguments_sha256"])) is not None
+                and isinstance(negative_control, dict)
+                and set(negative_control) == {
+                    "kind", "arguments_sha256", "result"}
+                and negative_control["kind"]
+                == expected_negative_kinds[validator_name]
+                and negative_control["result"] is False
+                and _SHA256_RE.fullmatch(str(
+                    negative_control["arguments_sha256"])) is not None
+                and negative_control["arguments_sha256"]
+                != valid_control["arguments_sha256"]
+                and isinstance(pipeline, dict)
+                and set(pipeline) == {"arguments_sha256", "result"}
+                and pipeline["result"] is True
+                and pipeline["arguments_sha256"]
+                == valid_control["arguments_sha256"]
+            )
+
+        def lock_control_valid(item: object, result: str) -> bool:
+            return (
+                isinstance(item, dict)
+                and set(item) == {
+                    "result", "arguments_sha256", "exit_code",
+                    "guarded_processes", "cleanup_confirmed"}
+                and item["result"] == result
+                and _SHA256_RE.fullmatch(str(
+                    item["arguments_sha256"])) is not None
+                and item["exit_code"] == 0
+                and item["guarded_processes"] == 1
+                and item["cleanup_confirmed"] is True
+            )
+
         validator_valid = (
             isinstance(validators, dict)
             and set(validators) == {"conversion", "chunks", "quality", "export"}
             and all(
-                isinstance(item, dict)
-                and set(item) == {"arguments_sha256", "result"}
-                and _SHA256_RE.fullmatch(
-                    str(item["arguments_sha256"])) is not None
-                and item["result"] is True
-                for item in validators.values()))
+                validator_item_valid(validator_name, item)
+                for validator_name, item in validators.items()))
         valid = (
             set(value) == {
                 "record_count", "completion_validators", "vector_lock",
@@ -1917,14 +2170,18 @@ def _validate_contract(name: str, value: object) -> None:
             and isinstance(vector_lock, dict)
             and set(vector_lock) == {
                 "calls", "entered", "exited", "clean_exit",
-                "arguments_sha256", "reacquired_after_exit"}
+                "arguments_sha256", "held_control", "released_control"}
             and vector_lock["calls"] == 1
             and vector_lock["entered"] == 1
             and vector_lock["exited"] == 1
             and vector_lock["clean_exit"] is True
-            and vector_lock["reacquired_after_exit"] is True
             and _SHA256_RE.fullmatch(str(
                 vector_lock["arguments_sha256"])) is not None
+            and lock_control_valid(vector_lock["held_control"], "busy")
+            and lock_control_valid(
+                vector_lock["released_control"], "acquired")
+            and vector_lock["held_control"]["arguments_sha256"]
+            == vector_lock["released_control"]["arguments_sha256"]
             and isinstance(value["index_revalidation"], dict)
             and set(value["index_revalidation"]) == {
                 "calls", "arguments_sha256", "under_active_lock", "outcome"}
@@ -2355,13 +2612,16 @@ def validate_report(report: object) -> dict[str, Any]:
     if (not isinstance(profile, dict)
             or set(profile) != {
                 "implementation", "python_major_minor", "pointer_bits",
-                "canonical"}
+                "platform", "canonical"}
             or not isinstance(profile["implementation"], str)
             or not profile["implementation"]
             or re.fullmatch(
                 r"[1-9][0-9]*\.[0-9]+",
                 str(profile["python_major_minor"])) is None
             or profile["pointer_bits"] not in {32, 64}
+            or not isinstance(profile["platform"], str)
+            or re.fullmatch(
+                r"[a-z][a-z0-9-]{0,31}", profile["platform"]) is None
             or not isinstance(profile["canonical"], bool)
             or profile["canonical"] != (
                 profile["implementation"] == CANONICAL_IMPLEMENTATION
@@ -2387,7 +2647,10 @@ def validate_report(report: object) -> dict[str, Any]:
             or _COMMIT_RE.fullmatch(str(source.get("commit"))) is None
             or not isinstance(source.get("worktree_clean"), bool)
             or _SHA256_RE.fullmatch(
-                str(source.get("tracked_diff_sha256"))) is None):
+                str(source.get("tracked_diff_sha256"))) is None
+            or (source["worktree_clean"] is True
+                and source["tracked_diff_sha256"]
+                != _sha256_bytes(b"\0"))):
         raise PhaseA0BenchmarkError("report source identity was invalid")
     runtime = report["runtime"]
     if (not isinstance(runtime, dict)
@@ -2411,6 +2674,8 @@ def validate_report(report: object) -> dict[str, Any]:
                 and len(system[name]) <= 160
                 and "\n" not in system[name] and "\r" not in system[name]
                 for name in ("os", "os_release", "machine", "processor"))
+            or _normalized_platform_name(system["os"])
+            != profile["platform"]
             or (system["logical_cpu_count"] is not None and (
                 isinstance(system["logical_cpu_count"], bool)
                 or not isinstance(system["logical_cpu_count"], int)
@@ -2477,20 +2742,21 @@ def compare_contracts(report: object, baseline: object) -> None:
     current = validate_report(report)
     expected = validate_report(baseline)
     authoritative_set = _scenario_set_identity(SCENARIOS)
-    canonical_profile = {
-        "implementation": CANONICAL_IMPLEMENTATION,
-        "python_major_minor": CANONICAL_PYTHON_MAJOR_MINOR,
-        "pointer_bits": CANONICAL_POINTER_BITS,
-        "canonical": True,
-    }
     if (current["scenario_set"] != authoritative_set
             or expected["scenario_set"] != authoritative_set):
         raise PhaseA0BenchmarkError(
             "Phase A0 comparison requires the authoritative scenario set")
-    if (current["profile"] != canonical_profile
-            or expected["profile"] != canonical_profile):
+    if (current["profile"]["canonical"] is not True
+            or expected["profile"]["canonical"] is not True):
         raise PhaseA0BenchmarkError(
             "Phase A0 comparison requires the canonical CPython 3.12 profile")
+    if current["profile"]["platform"] != expected["profile"]["platform"]:
+        raise PhaseA0BenchmarkError(
+            "Phase A0 comparison requires the same normalized platform")
+    if (current["source"]["worktree_clean"] is not True
+            or expected["source"]["worktree_clean"] is not True):
+        raise PhaseA0BenchmarkError(
+            "Phase A0 comparison requires clean current and baseline source")
     if current["inputs"] != expected["inputs"]:
         raise PhaseA0BenchmarkError("benchmark lock identities changed")
 
@@ -2576,10 +2842,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         selected = tuple(args.scenario) if args.scenario else SCENARIOS
         baseline = None
         if args.check is not None:
+            current_profile = execution_profile()
             if selected != SCENARIOS:
                 raise PhaseA0BenchmarkError(
                     "baseline comparison requires every Phase A0 scenario")
-            if execution_profile()["canonical"] is not True:
+            if current_profile["canonical"] is not True:
                 raise PhaseA0BenchmarkError(
                     "baseline comparison requires the canonical profile")
             if not repository_identity()["worktree_clean"]:
@@ -2592,6 +2859,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                     != _scenario_set_identity(SCENARIOS)):
                 raise PhaseA0BenchmarkError(
                     "baseline was not authoritative canonical evidence")
+            if baseline["profile"]["platform"] != current_profile["platform"]:
+                raise PhaseA0BenchmarkError(
+                    "baseline platform did not match the current platform")
+            if baseline["source"]["worktree_clean"] is not True:
+                raise PhaseA0BenchmarkError(
+                    "baseline source included staged, unstaged, or untracked "
+                    "changes")
         report = run_benchmark(
             scenarios=selected,
             repetitions=args.repetitions,

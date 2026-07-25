@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 from copy import deepcopy
 import json
 import os
@@ -54,13 +55,40 @@ def _diagnostics(
 
 
 def _noop_contract() -> dict:
+    negative_kinds = {
+        "conversion": "parameter_mismatch",
+        "chunks": "source_mismatch",
+        "quality": "parameter_mismatch",
+        "export": "artifact_mismatch",
+    }
     validators = {
-        name: {"arguments_sha256": character * 64, "result": True}
-        for name, character in zip(
+        name: {
+            "valid": {
+                "arguments_sha256": valid_character * 64,
+                "result": True,
+            },
+            "negative": {
+                "kind": negative_kinds[name],
+                "arguments_sha256": negative_character * 64,
+                "result": False,
+            },
+            "pipeline": {
+                "arguments_sha256": valid_character * 64,
+                "result": True,
+            },
+        }
+        for name, valid_character, negative_character in zip(
             ("conversion", "chunks", "quality", "export"),
             ("1", "2", "3", "4"),
+            ("a", "b", "c", "d"),
             strict=True,
         )
+    }
+    lock_control = {
+        "arguments_sha256": "6" * 64,
+        "exit_code": 0,
+        "guarded_processes": 1,
+        "cleanup_confirmed": True,
     }
     return {
         "record_count": 1,
@@ -71,11 +99,12 @@ def _noop_contract() -> dict:
             "exited": 1,
             "clean_exit": True,
             "arguments_sha256": "5" * 64,
-            "reacquired_after_exit": True,
+            "held_control": {**lock_control, "result": "busy"},
+            "released_control": {**lock_control, "result": "acquired"},
         },
         "index_revalidation": {
             "calls": 1,
-            "arguments_sha256": "6" * 64,
+            "arguments_sha256": "7" * 64,
             "under_active_lock": True,
             "outcome": {
                 "backend": "chroma",
@@ -103,7 +132,7 @@ def _noop_contract() -> dict:
             "quality": 0,
             "export": 0,
         },
-        "artifact_set_sha256": "7" * 64,
+        "artifact_set_sha256": "8" * 64,
         "physical_indexing_exercised": False,
         "partial_repair_exercised": False,
     }
@@ -247,7 +276,7 @@ def _report_diagnostics(output: dict | None = None) -> dict:
 def _valid_report(
         *, contract: dict | None = None, marker: str = "a",
         scenario_name: str = "cold_import_rag", output: dict | None = None,
-        authoritative: bool = False,
+        authoritative: bool = False, platform_name: str = "windows",
 ) -> dict:
     names = list(benchmark.SCENARIOS) if authoritative else [scenario_name]
     scenarios = []
@@ -273,13 +302,14 @@ def _valid_report(
             "implementation": "CPython",
             "python_major_minor": "3.12",
             "pointer_bits": 64,
+            "platform": platform_name,
             "canonical": True,
         },
         "scenario_set": benchmark._scenario_set_identity(names),
         "source": {
             "commit": marker * 40,
             "worktree_clean": True,
-            "tracked_diff_sha256": "b" * 64,
+            "tracked_diff_sha256": benchmark._sha256_bytes(b"\0"),
         },
         "runtime": {
             "implementation": "CPython",
@@ -287,7 +317,11 @@ def _valid_report(
             "pointer_bits": 64,
         },
         "system": {
-            "os": "TestOS",
+            "os": {
+                "windows": "Windows",
+                "linux": "Linux",
+                "macos": "Darwin",
+            }.get(platform_name, platform_name),
             "os_release": "1",
             "machine": "test",
             "processor": "test",
@@ -394,7 +428,14 @@ def test_summarize_runs_fails_on_unstable_evidence(mutation, message):
         benchmark.summarize_runs("cli_help", runs)
 
 
-def test_validate_report_checks_v2_profile_scenario_set_and_digest():
+def test_platform_normalization_is_stable():
+    assert benchmark._normalized_platform_name("Windows") == "windows"
+    assert benchmark._normalized_platform_name("Linux") == "linux"
+    assert benchmark._normalized_platform_name("Darwin") == "macos"
+    assert benchmark._normalized_platform_name("FreeBSD 14") == "freebsd"
+
+
+def test_validate_report_checks_v3_profile_scenario_set_and_digest():
     report = _valid_report()
     assert benchmark.validate_report(report) is report
 
@@ -411,6 +452,12 @@ def test_validate_report_checks_v2_profile_scenario_set_and_digest():
         benchmark.validate_report(tampered)
 
     tampered = deepcopy(report)
+    tampered["profile"]["platform"] = "Windows"
+    _rehash_report(tampered)
+    with pytest.raises(benchmark.PhaseA0BenchmarkError, match="profile"):
+        benchmark.validate_report(tampered)
+
+    tampered = deepcopy(report)
     tampered["scenario_set"]["sha256"] = "0" * 64
     _rehash_report(tampered)
     with pytest.raises(benchmark.PhaseA0BenchmarkError, match="scenario-set"):
@@ -418,6 +465,12 @@ def test_validate_report_checks_v2_profile_scenario_set_and_digest():
 
     tampered = deepcopy(report)
     tampered["source"]["commit"] = "not-a-commit"
+    _rehash_report(tampered)
+    with pytest.raises(benchmark.PhaseA0BenchmarkError, match="source"):
+        benchmark.validate_report(tampered)
+
+    tampered = deepcopy(report)
+    tampered["source"]["tracked_diff_sha256"] = "b" * 64
     _rehash_report(tampered)
     with pytest.raises(benchmark.PhaseA0BenchmarkError, match="source"):
         benchmark.validate_report(tampered)
@@ -495,6 +548,7 @@ def test_contract_comparison_rejects_subsets_and_noncanonical_profiles():
         "implementation": "CPython",
         "python_major_minor": "3.14",
         "pointer_bits": 64,
+        "platform": "windows",
         "canonical": False,
     }
     noncanonical["runtime"]["python_version"] = "3.14.1"
@@ -502,6 +556,27 @@ def test_contract_comparison_rejects_subsets_and_noncanonical_profiles():
     assert benchmark.validate_report(noncanonical) is noncanonical
     with pytest.raises(benchmark.PhaseA0BenchmarkError, match="CPython 3.12"):
         benchmark.compare_contracts(noncanonical, canonical)
+
+
+@pytest.mark.parametrize("dirty_operand", ["current", "baseline"])
+def test_contract_comparison_rejects_dirty_source_evidence(dirty_operand):
+    current = _valid_report(authoritative=True)
+    baseline = deepcopy(current)
+    dirty = current if dirty_operand == "current" else baseline
+    dirty["source"]["worktree_clean"] = False
+    _rehash_report(dirty)
+
+    assert benchmark.validate_report(dirty) is dirty
+    with pytest.raises(benchmark.PhaseA0BenchmarkError, match="clean"):
+        benchmark.compare_contracts(current, baseline)
+
+
+def test_contract_comparison_rejects_cross_platform_baseline():
+    current = _valid_report(authoritative=True, platform_name="windows")
+    baseline = _valid_report(authoritative=True, platform_name="linux")
+
+    with pytest.raises(benchmark.PhaseA0BenchmarkError, match="platform"):
+        benchmark.compare_contracts(current, baseline)
 
 
 def test_safe_child_environment_is_fixed_and_drops_ambient_state(
@@ -758,11 +833,15 @@ def test_real_noop_resume_observes_validators_lock_index_and_result():
         "noop_resume", timeout_seconds=30)["contract"]
     assert set(contract["completion_validators"]) == {
         "conversion", "chunks", "quality", "export"}
-    assert all(item["result"] is True
-               for item in contract["completion_validators"].values())
+    assert all(
+        item["valid"]["result"] is True
+        and item["negative"]["result"] is False
+        and item["pipeline"]["result"] is True
+        for item in contract["completion_validators"].values())
     assert contract["vector_lock"]["entered"] == 1
     assert contract["vector_lock"]["exited"] == 1
-    assert contract["vector_lock"]["reacquired_after_exit"] is True
+    assert contract["vector_lock"]["held_control"]["result"] == "busy"
+    assert contract["vector_lock"]["released_control"]["result"] == "acquired"
     assert contract["index_revalidation"]["under_active_lock"] is True
     assert contract["returned_result"] == {
         "paths_match": True,
@@ -773,6 +852,40 @@ def test_real_noop_resume_observes_validators_lock_index_and_result():
     }
     assert contract["skipped_physical_calls"] == {
         "convert": 0, "chunk": 0, "quality": 0, "export": 0}
+
+
+@pytest.mark.parametrize("validator_name", [
+    "_converted_outputs_complete",
+    "_chunks_complete",
+    "_quality_report_complete",
+    "_unified_export_complete",
+])
+def test_noop_resume_rejects_unconditional_completion_validator(
+        monkeypatch, tmp_path, validator_name):
+    import rag
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        rag, validator_name, lambda *_args, **_kwargs: True)
+    with pytest.raises(
+            benchmark.PhaseA0BenchmarkError,
+            match="completion validator negative control"):
+        benchmark._probe_noop_resume()
+
+
+def test_noop_resume_rejects_noop_vector_lock(monkeypatch, tmp_path):
+    import rag
+
+    @contextlib.contextmanager
+    def noop_lock(*_args, **_kwargs):
+        yield None
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(rag, "_vector_store_lock", noop_lock)
+    with pytest.raises(
+            (benchmark.PhaseA0BenchmarkError, RuntimeError),
+            match="mutual exclusion control"):
+        benchmark._probe_noop_resume()
 
 
 def test_noop_resume_rejects_replaced_pipeline(monkeypatch, tmp_path):
@@ -870,7 +983,8 @@ def test_check_preflight_requires_clean_worktree_before_running(
     monkeypatch.setattr(
         benchmark, "execution_profile", lambda: {
             "implementation": "CPython", "python_major_minor": "3.12",
-            "pointer_bits": 64, "canonical": True})
+            "pointer_bits": 64, "platform": "windows",
+            "canonical": True})
     monkeypatch.setattr(
         benchmark, "repository_identity", lambda: {
             "commit": "a" * 40, "worktree_clean": False,
@@ -878,6 +992,36 @@ def test_check_preflight_requires_clean_worktree_before_running(
     monkeypatch.setattr(
         benchmark, "run_benchmark",
         lambda **_kwargs: pytest.fail("dirty preflight must not run benchmark"))
+
+    assert benchmark.main(["--check", str(tmp_path / "baseline.json")]) == 1
+    assert capsys.readouterr().err == "Phase A0 benchmark failed.\n"
+
+
+@pytest.mark.parametrize("invalid_baseline", ["dirty", "cross_platform"])
+def test_check_preflight_rejects_non_authoritative_baseline_before_running(
+        monkeypatch, tmp_path, capsys, invalid_baseline):
+    baseline = _valid_report(
+        authoritative=True,
+        platform_name=("linux" if invalid_baseline == "cross_platform"
+                       else "windows"),
+    )
+    if invalid_baseline == "dirty":
+        baseline["source"]["worktree_clean"] = False
+        _rehash_report(baseline)
+    monkeypatch.setattr(
+        benchmark, "execution_profile", lambda: {
+            "implementation": "CPython", "python_major_minor": "3.12",
+            "pointer_bits": 64, "platform": "windows",
+            "canonical": True})
+    monkeypatch.setattr(
+        benchmark, "repository_identity", lambda: {
+            "commit": "a" * 40, "worktree_clean": True,
+            "tracked_diff_sha256": benchmark._sha256_bytes(b"\0")})
+    monkeypatch.setattr(benchmark, "_read_report", lambda _path: baseline)
+    monkeypatch.setattr(
+        benchmark, "run_benchmark",
+        lambda **_kwargs: pytest.fail(
+            "invalid baseline preflight must not run benchmark"))
 
     assert benchmark.main(["--check", str(tmp_path / "baseline.json")]) == 1
     assert capsys.readouterr().err == "Phase A0 benchmark failed.\n"
