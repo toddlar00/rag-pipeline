@@ -70,13 +70,15 @@ through `rag.py`. The facade is substantially smaller without forcing a broad
 consumer migration.
 
 The former `job_manager` to `rag` edge is resolved by the subsequent runtime
-binding decision, and the tracked first-party import graph is now acyclic.
-`service_runtime.py` still composes search and job operations through both
-modules, while `rag.py` retains lazy job CLI dispatch. That service/root
+binding decision, and the tracked first-party import graph is now acyclic. The
+later [service-host binding decision](service-host-binding.md) also removes the
+service host's `rag` dependency by moving physical retrieval composition to a
+dedicated child. `service_runtime.py` still composes job operations through
+`job_manager`, while `rag.py` retains lazy job CLI dispatch. That root
 composition is intentional compatibility debt, not evidence that supervision
-belongs in the facade. Later changes must characterize service calls, recovery,
-and platform cleanup before replacing the remaining seams with narrow
-protocols and one application root.
+belongs in the facade. Later changes must characterize job coordination and
+recovery before replacing the remaining seam with narrow protocols and one
+application root.
 
 ## Evidence and history
 

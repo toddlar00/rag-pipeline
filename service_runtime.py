@@ -9,10 +9,8 @@ from __future__ import annotations
 
 import json
 import hashlib
-import logging
 import os
 import stat
-import sys
 import tempfile
 import threading
 from dataclasses import dataclass
@@ -21,10 +19,10 @@ from typing import Any, Callable, Mapping, Sequence
 
 import job_manager
 import job_runtime
-import rag
 import release_security
 import retention
 import service_contracts
+import service_runtime_binding
 import storage_policy
 
 
@@ -44,6 +42,8 @@ _SEARCH_WORKER_ACTION = "_search_worker"
 _INTERNAL_SCHEMA_VERSION = 2
 _ACTIVE_SERVICE_GUARD = threading.Lock()
 _ACTIVE_SERVICE_KEYS: set[tuple[int, str]] = set()
+_default_service_runtime_binding = (
+    service_runtime_binding.default_service_runtime_binding)
 
 
 class ServiceRuntimeError(RuntimeError):
@@ -355,6 +355,7 @@ def _execute_search(
         config: service_contracts.CorpusConfig,
         request: service_contracts.SearchRequest,
         request_id: str, *,
+        search_index_fn: Callable[..., Any],
         security_policy: release_security.ReleaseSecurityPolicy | None = None,
         ) -> dict[str, Any]:
     hybrid = None
@@ -362,7 +363,7 @@ def _execute_search(
         hybrid = False
     elif request.mode == "hybrid":
         hybrid = True
-    response = rag.search_index(
+    response = search_index_fn(
         request.query,
         config.db_path,
         db_backend="qdrant",
@@ -395,14 +396,18 @@ def _write_worker_envelope(path: Path, payload: dict[str, Any]) -> None:
     storage_policy.atomic_write_private_json(path, payload)
 
 
-def search_worker_main(request_path: Path, result_path: Path) -> int:
+def search_worker_main(
+        request_path: Path, result_path: Path, *,
+        search_index_fn: Callable[..., Any]) -> int:
     """Run one trusted request file; emit no raw error or private log."""
     try:
         payload = _read_private_json(
             request_path, max_bytes=service_contracts.MAX_REQUEST_BYTES)
         config, request, request_id, policy = _parse_worker_request(payload)
         result = _execute_search(
-            config, request, request_id, security_policy=policy)
+            config, request, request_id,
+            search_index_fn=search_index_fn,
+            security_policy=policy)
         envelope = {
             "schema_version": _INTERNAL_SCHEMA_VERSION,
             "kind": "service_search_result",
@@ -463,9 +468,17 @@ def supervised_search(
         request_id: str, *,
         temporary_root: Path | None = None,
         security_policy: release_security.ReleaseSecurityPolicy | None = None,
+        runtime_binding: (
+            service_runtime_binding.ServiceRuntimeBinding | None) = None,
         ) -> dict[str, Any]:
     """Execute one search behind a hard, process-tree-cleaning deadline."""
     request_id = service_contracts.validate_request_id(request_id)
+    binding = (
+        _default_service_runtime_binding()
+        if runtime_binding is None else runtime_binding)
+    if not isinstance(
+            binding, service_runtime_binding.ServiceRuntimeBinding):
+        raise TypeError("runtime_binding must be a ServiceRuntimeBinding")
     parent = (
         storage_policy.ensure_private_directory(temporary_root)
         if temporary_root is not None else None)
@@ -483,15 +496,15 @@ def supervised_search(
                 security_policy=security_policy))
         try:
             with open(os.devnull, "wb") as output_sink:
-                exit_code = rag._run_cli_with_deadline(
-                    Path(__file__).resolve(),
+                exit_code = binding.supervisor(
+                    binding.worker_script_path,
                     [_SEARCH_WORKER_ACTION, str(request_path), str(result_path)],
                     operation="service search",
                     timeout=config.search_timeout_seconds,
                     stdout_target=output_sink,
                     stderr_target=output_sink,
                 )
-        except rag._SupervisorCleanupError as exc:
+        except binding.cleanup_error_type as exc:
             raise ServiceRuntimeError(
                 "service_unavailable", fatal=True) from exc
         if exit_code == 124:
@@ -531,6 +544,8 @@ class RagApplicationService:
             max_concurrent_searches: int = 2,
             security_policy: (
                 release_security.ReleaseSecurityPolicy | None) = None,
+            runtime_binding: (
+                service_runtime_binding.ServiceRuntimeBinding | None) = None,
             search_runner: Callable[[
                 service_contracts.CorpusConfig,
                 service_contracts.SearchRequest, str], dict[str, Any]
@@ -553,9 +568,16 @@ class RagApplicationService:
                 self.security_policy,
                 release_security.ReleaseSecurityPolicy):
             raise service_contracts.ServiceContractError()
+        self._runtime_binding = (
+            _default_service_runtime_binding()
+            if runtime_binding is None else runtime_binding)
+        if not isinstance(
+                self._runtime_binding,
+                service_runtime_binding.ServiceRuntimeBinding):
+            raise service_contracts.ServiceContractError()
         for config in checked.values():
-            if config.embedding_model.startswith(
-                    rag._API_EMBEDDING_MODEL_PREFIXES):
+            if self._runtime_binding.is_api_embedding_model(
+                    config.embedding_model):
                 release_security.require_cloud_egress(
                     self.security_policy,
                     feature=f"cloud embedding for corpus {config.corpus_id}")
@@ -627,7 +649,8 @@ class RagApplicationService:
                 supervised_search(
                     config, request, request_id,
                     temporary_root=self.search_temporary_root,
-                    security_policy=self.security_policy))
+                    security_policy=self.security_policy,
+                    runtime_binding=self._runtime_binding))
         else:
             self._search_runner = search_runner
         self._launcher = launcher
@@ -720,17 +743,12 @@ class RagApplicationService:
                 raise ServiceRuntimeError("service_unavailable")
             _ACTIVE_SERVICE_KEYS.add(self._service_key)
         lease = None
+        lease_entered = False
         try:
-            lease = rag._VectorStoreLease(
-                self.service_state_root / "instance",
-                backend="service",
-                collection_name="service-instance",
-                operation="local service startup",
-                timeout=0,
-                resource_description="local service instance",
-                timeout_option="service instance lease",
-            )
+            lease = self._runtime_binding.instance_lease_factory(
+                self.service_state_root / "instance")
             lease.__enter__()
+            lease_entered = True
             self._claim_job_root()
             _cleanup_stale_search_directories(self.search_temporary_root)
             self._reconcile_service_jobs(fail_queued=True)
@@ -738,7 +756,7 @@ class RagApplicationService:
             with _ACTIVE_SERVICE_GUARD:
                 _ACTIVE_SERVICE_KEYS.discard(self._service_key)
             try:
-                if lease is not None:
+                if lease_entered:
                     lease.__exit__(type(exc), exc, exc.__traceback__)
             except BaseException:
                 pass
@@ -1308,21 +1326,9 @@ class RagApplicationService:
         }
 
 
-def _silence_worker_output() -> None:
-    logging.disable(logging.CRITICAL)
-    try:
-        sink = open(os.devnull, "w", encoding="utf-8")
-    except OSError:
-        return
-    sys.stdout = sink
-    sys.stderr = sink
-
-
 def main(argv: Sequence[str] | None = None) -> int:
-    arguments = list(sys.argv[1:] if argv is None else argv)
-    if len(arguments) == 3 and arguments[0] == _SEARCH_WORKER_ACTION:
-        _silence_worker_output()
-        return search_worker_main(Path(arguments[1]), Path(arguments[2]))
+    """Fail closed; private worker dispatch lives in service_search_worker."""
+    del argv
     return 2
 
 

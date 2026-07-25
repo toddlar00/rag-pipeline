@@ -27,7 +27,10 @@ material. When documents disagree, use the authority order below.
   — containment policy and the stable `rag.py` facade.
 - [Runtime-supervision binding](architecture/decisions/runtime-supervision-binding.md)
   — the frozen production capability consumed by durable jobs, the removal of
-  the final import cycle, and the remaining service/composition-root work.
+  the final import cycle, and the later service-host boundary it enabled.
+- [Service-host binding and isolated search composition](architecture/decisions/service-host-binding.md)
+  — the frozen service-host capabilities, shared path lease and embedding
+  policy, hidden retrieval child, and remaining job/root composition work.
 - [Document-structure profiles](architecture/decisions/document-structure-profiles.md)
   — immutable reviewed profiles and fail-closed evidence.
 - [Context-aware retrieval](architecture/decisions/context-aware-retrieval.md)

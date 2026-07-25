@@ -154,6 +154,23 @@ def _raw_import_roots(path: Path) -> set[str]:
     return imports
 
 
+def _run_isolated(source: str) -> subprocess.CompletedProcess[str]:
+    program = (
+        "import sys; "
+        f"sys.path.insert(0, {str(PROJECT_ROOT)!r}); "
+        f"{source}"
+    )
+    return subprocess.run(
+        [sys.executable, "-I", "-c", program],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+
 def test_first_party_import_graph_is_acyclic():
     graph = _first_party_import_graph()
 
@@ -186,20 +203,102 @@ def test_job_manager_and_rag_import_cleanly_in_both_orders():
         "import rag; assert 'job_manager' not in sys.modules; "
         "import job_manager",
     ):
-        source = (
-            "import sys; "
-            f"sys.path.insert(0, {str(PROJECT_ROOT)!r}); "
-            f"{imports}"
-        )
-        result = subprocess.run(
-            [sys.executable, "-I", "-c", source],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=30,
-            check=False,
-        )
+        result = _run_isolated(imports)
+        assert result.returncode == 0, result.stderr
+
+
+def test_service_runtime_uses_inward_binding_without_loading_rag():
+    graph = _first_party_import_graph()
+
+    # ``job_manager`` is intentionally still a host dependency. Removing that
+    # remaining composition edge belongs to a later R8 milestone.
+    assert graph["service_runtime"] == {
+        "job_manager",
+        "job_runtime",
+        "release_security",
+        "retention",
+        "service_contracts",
+        "service_runtime_binding",
+        "storage_policy",
+    }
+    assert "rag" not in _transitive_dependencies(graph, "service_runtime")
+    assert graph["service_runtime_binding"] == {
+        "embedding_policy",
+        "resource_lease",
+        "runtime_supervision",
+    }
+    assert "rag" not in _transitive_dependencies(
+        graph, "service_runtime_binding")
+
+    result = _run_isolated(
+        "import service_runtime_binding as binding; "
+        "assert binding.ServiceRuntimeBinding.__dataclass_params__.frozen"
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_service_search_worker_is_the_only_rag_service_composition_shell():
+    graph = _first_party_import_graph()
+
+    composition_shells = {
+        module for module, dependencies in graph.items()
+        if {"rag", "service_runtime"} <= dependencies
+    }
+    assert composition_shells == {"service_search_worker"}
+    assert graph["service_search_worker"] == {"rag", "service_runtime"}
+    for host in ("rag", "service_runtime"):
+        assert "service_search_worker" not in graph[host]
+        assert "service_search_worker" not in _transitive_dependencies(
+            graph, host)
+
+
+def test_service_runtime_boundary_raw_imports_are_pinned():
+    modules = _application_modules()
+
+    assert _raw_import_roots(modules["service_runtime"]) == {
+        "dataclasses", "hashlib", "job_manager", "job_runtime", "json",
+        "os", "pathlib", "release_security", "retention",
+        "service_contracts", "service_runtime_binding", "stat",
+        "storage_policy", "tempfile", "threading", "typing",
+    }
+    assert _raw_import_roots(modules["service_runtime_binding"]) == {
+        "collections", "dataclasses", "embedding_policy", "pathlib",
+        "resource_lease", "runtime_supervision", "typing",
+    }
+    assert _raw_import_roots(modules["service_search_worker"]) == {
+        "collections", "logging", "os", "pathlib", "rag",
+        "service_runtime", "sys",
+    }
+    assert _raw_import_roots(modules["embedding_policy"]) == set()
+    assert _raw_import_roots(modules["resource_lease"]) == {
+        "collections", "dataclasses", "errno", "fcntl", "hashlib",
+        "logging", "math", "msvcrt", "os", "pathlib", "re",
+        "retention", "stat", "storage_policy", "threading", "time",
+        "typing",
+    }
+
+
+def test_service_runtime_isolated_import_avoids_rag_and_heavy_backends():
+    result = _run_isolated(
+        "import service_runtime; "
+        "forbidden = ('rag', 'qdrant', 'qdrant_client', 'chromadb', 'torch', "
+        "'transformers', 'docling'); "
+        "loaded = tuple(sys.modules); "
+        "assert not {root: [name for name in loaded if name == root or "
+        "name.startswith(root + '.')] for root in forbidden "
+        "if any(name == root or name.startswith(root + '.') "
+        "for name in loaded)}"
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_service_runtime_and_rag_import_cleanly_in_both_orders():
+    for imports in (
+        "import service_runtime; assert 'rag' not in sys.modules; import rag",
+        "import rag; assert 'service_runtime' not in sys.modules; "
+        "import service_runtime",
+    ):
+        result = _run_isolated(imports)
         assert result.returncode == 0, result.stderr
 
 

@@ -16,10 +16,8 @@ Usage:
 
 import argparse
 from contextlib import ExitStack, contextmanager
-import errno
 import gc
 from getpass import getpass
-import hashlib
 import json
 import logging
 import math
@@ -29,7 +27,6 @@ import re
 import requests
 import shutil
 import signal  # noqa: F401 - shared module retained for facade monkeypatching
-import stat
 import subprocess  # noqa: F401 - shared module retained for facade monkeypatching
 import sys
 import threading as _threading
@@ -43,6 +40,7 @@ import artifact_io as _artifact_io
 import chunking_core as _chunking_core
 import cli_policy as _cli_policy
 import document_profiles as _document_profiles
+import embedding_policy as _embedding_policy
 import endpoint_policy as _endpoint_policy
 import ingestion_core as _ingestion_core
 import index_state as _index_state
@@ -55,6 +53,7 @@ import process_supervision as _process_supervision
 import provider_transport as _provider_transport
 import quality_core as _quality_core
 import release_security as _release_security
+import resource_lease as _resource_lease
 import retention as _retention
 import retrieval_core as _retrieval_core
 import run_telemetry as _run_telemetry
@@ -146,13 +145,11 @@ EMBEDDING_MAX_TOKENS = {
 }
 _API_EMBEDDING_BATCH_TOKEN_BUDGET = 100_000
 _SUPPORTED_API_EMBEDDING_MODEL_PREFIXES = (
-    "voyage-", "text-embedding-", "embed-", "cohere-",
-)
-_UNSUPPORTED_API_EMBEDDING_MODEL_PREFIXES = ("embo-", "minimax-emb")
+    _embedding_policy.SUPPORTED_API_EMBEDDING_MODEL_PREFIXES)
+_UNSUPPORTED_API_EMBEDDING_MODEL_PREFIXES = (
+    _embedding_policy.UNSUPPORTED_API_EMBEDDING_MODEL_PREFIXES)
 _API_EMBEDDING_MODEL_PREFIXES = (
-    *_SUPPORTED_API_EMBEDDING_MODEL_PREFIXES,
-    *_UNSUPPORTED_API_EMBEDDING_MODEL_PREFIXES,
-)
+    _embedding_policy.API_EMBEDDING_MODEL_PREFIXES)
 _VOYAGE_EMBEDDINGS_URL = "https://api.voyageai.com/v1/embeddings"
 _COHERE_EMBEDDINGS_URL = "https://api.cohere.com/v1/embed"
 _OPENAI_EMBEDDINGS_URL = "https://api.openai.com/v1/embeddings"
@@ -1518,37 +1515,29 @@ def _observe_failed_index_operation(
             error=RuntimeError("redacted index metric observer failure"))
 
 
-@dataclass
-class _VectorStoreLockState:
-    """One reentrant in-process gate for a canonical database directory."""
-
-    thread_lock: Any = field(default_factory=_threading.RLock)
-    handle: Any = None
+_VectorStoreLockState = _resource_lease.PathLockState
 
 
-_vector_store_lock_states: dict[str, _VectorStoreLockState] = {}
-_vector_store_lock_states_guard = _threading.Lock()
-_vector_store_lock_local = _threading.local()
-
-
-def _reset_vector_store_locks_after_fork() -> None:
-    """Drop inherited handles and synchronization state in a forked child."""
+def _sync_vector_store_lock_facades() -> None:
+    """Refresh compatibility aliases after the shared fork reset."""
     global _vector_store_lock_states, _vector_store_lock_states_guard
     global _vector_store_lock_local
+    (
+        _vector_store_lock_states,
+        _vector_store_lock_states_guard,
+        _vector_store_lock_local,
+    ) = _resource_lease._shared_path_lock_registry()
+
+
+_sync_vector_store_lock_facades()
+
+
+def _reset_rag_caches_after_fork() -> None:
+    """Replace non-lease RAG caches and mirror the reset shared registry."""
     global _artifact_sha256_cache, _artifact_sha256_cache_lock
     global _bm25_cache, _bm25_cache_lock
     global _reranker_instances, _reranker_lock
-    for state in _vector_store_lock_states.values():
-        if state.handle is not None:
-            try:
-                # Close only: explicitly unlocking an inherited POSIX flock
-                # could release the parent's shared open-file-description lock.
-                state.handle.close()
-            except BaseException:
-                pass
-    _vector_store_lock_states = {}
-    _vector_store_lock_states_guard = _threading.Lock()
-    _vector_store_lock_local = _threading.local()
+    _sync_vector_store_lock_facades()
     if "_artifact_sha256_cache" in globals():
         _artifact_sha256_cache = {}
         _artifact_sha256_cache_lock = _threading.Lock()
@@ -1562,46 +1551,30 @@ def _reset_vector_store_locks_after_fork() -> None:
         _reranker_lock = _threading.Lock()
 
 
+def _reset_vector_store_locks_after_fork() -> None:
+    """Drop inherited shared leases and unsafe RAG caches after a fork."""
+    _resource_lease.reset_path_leases_after_fork()
+    _reset_rag_caches_after_fork()
+
+
 if hasattr(os, "register_at_fork"):
-    os.register_at_fork(after_in_child=_reset_vector_store_locks_after_fork)
+    # ``resource_lease`` registered its lease reset before this callback.
+    os.register_at_fork(after_in_child=_reset_rag_caches_after_fork)
 
 
 def _normalize_db_lock_timeout(timeout: float) -> float:
     """Validate a finite, bounded vector-store lease timeout."""
-    if isinstance(timeout, bool):
-        raise ValueError("db lock timeout must be a finite non-negative number")
-    try:
-        value = float(timeout)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(
-            "db lock timeout must be a finite non-negative number") from exc
-    if (not math.isfinite(value) or value < 0
-            or value > _threading.TIMEOUT_MAX):
-        raise ValueError(
-            "db lock timeout must be a finite non-negative number no greater "
-            f"than {_threading.TIMEOUT_MAX:g} seconds")
-    return value
+    return _resource_lease.normalize_lock_timeout(timeout)
 
 
 def _strip_windows_extended_path_prefix(value: str) -> str:
     """Normalize Win32 extended paths to their ordinary drive/UNC spelling."""
-    if os.name != "nt":
-        return value
-    if value.casefold().startswith("\\\\?\\unc\\"):
-        return "\\\\" + value[8:]
-    if re.match(r"^\\\\\?\\[A-Za-z]:[\\/]", value):
-        return value[4:]
-    return value
+    return _resource_lease.strip_windows_extended_path_prefix(value)
 
 
 def _resolved_vector_store_path(db_dir: Path) -> Path:
     """Resolve one database path while retaining its filesystem casing."""
-    path = Path(_strip_windows_extended_path_prefix(str(Path(db_dir))))
-    try:
-        resolved = path.resolve(strict=False)
-    except (OSError, RuntimeError):
-        resolved = Path(os.path.abspath(path))
-    return Path(_strip_windows_extended_path_prefix(str(resolved)))
+    return _resource_lease.resolved_path(db_dir)
 
 
 def _vector_store_lock_identity(db_dir: Path) -> tuple[Path, str]:
@@ -1617,270 +1590,76 @@ def _canonical_vector_store_key(db_dir: Path) -> str:
 
 def _vector_store_lock_directory(resolved: Path) -> Path:
     """Keep owned-run sentinels outside the deletable run directory."""
-    run_root = resolved.parent
-    output_root = run_root.parent
-    marker = run_root / _retention.RUN_MANIFEST_NAME
-    if marker.exists() or _storage_policy.path_is_link_like(marker):
-        _, manifest = _retention.load_pipeline_run_manifest(
-            output_root, run_root.name)
-        relative = resolved.relative_to(output_root).as_posix()
-        if any(record["path"] == relative
-               for record in manifest["vector_stores"]):
-            return output_root / ".rag-locks"
-    return run_root / ".rag-locks"
+    return _resource_lease.path_lock_directory(resolved)
 
 
 def _vector_store_lock_path(db_dir: Path) -> Path:
     """Return the persistent sidecar used only as an OS-locking inode."""
     resolved, key = _vector_store_lock_identity(db_dir)
-    safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", resolved.name)
-    safe_name = safe_name.strip("._")[:40] or "vector-store"
-    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:20]
-    return _vector_store_lock_directory(
-        resolved) / f"{safe_name}-{digest}.lock"
+    return _resource_lease._lock_path_from_identity(
+        resolved, key,
+        lock_directory_fn=lambda path: _vector_store_lock_directory(path))
 
 
 def _vector_store_lock_state(key: str) -> _VectorStoreLockState:
-    with _vector_store_lock_states_guard:
-        return _vector_store_lock_states.setdefault(
-            key, _VectorStoreLockState())
+    return _resource_lease.path_lock_state(key)
 
 
 def _try_vector_file_lock(handle) -> bool:
     """Attempt one non-blocking exclusive OS lock of the sentinel's byte 0."""
-    handle.seek(0)
-    if os.name == "nt":
-        import msvcrt
-        try:
-            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-        except OSError as exc:
-            if (exc.errno in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}
-                    or getattr(exc, "winerror", None) in {33, 36, 158}):
-                return False
-            raise
-        return True
-
-    import fcntl
-    try:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError as exc:
-        if exc.errno in {errno.EACCES, errno.EAGAIN}:
-            return False
-        raise
-    return True
+    return _resource_lease.try_path_file_lock(handle)
 
 
 def _unlock_vector_file(handle) -> None:
     """Release the platform OS lock held by *handle*."""
-    handle.seek(0)
-    if os.name == "nt":
-        import msvcrt
-        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-        return
-
-    import fcntl
-    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    _resource_lease.unlock_path_file(handle)
 
 
 def _finish_vector_file_lock(handle, *, primary_error: BaseException | None,
                              lock_path: Path) -> None:
     """Unlock and close a lease handle without changing error precedence."""
-    cleanup_errors: list[BaseException] = []
-    try:
-        _unlock_vector_file(handle)
-    except BaseException as exc:
-        cleanup_errors.append(exc)
-    try:
-        handle.close()
-    except BaseException as exc:
-        cleanup_errors.append(exc)
-
-    if not cleanup_errors:
-        return
-    selected_error = primary_error or cleanup_errors[0]
-    for cleanup_error in cleanup_errors:
-        if cleanup_error is selected_error:
-            continue
-        _log_cleanup_error(
-            "Vector-store lease cleanup also failed for %s",
-            lock_path,
-            error=cleanup_error,
-        )
-    if primary_error is None:
-        raise selected_error.with_traceback(selected_error.__traceback__)
+    _resource_lease.finish_path_file_lock(
+        handle,
+        primary_error=primary_error,
+        lock_path=lock_path,
+        unlock_file_fn=lambda lease_handle: _unlock_vector_file(lease_handle),
+        cleanup_error_fn=(
+            lambda message, *args, error: _log_cleanup_error(
+                message, *args, error=error)),
+    )
 
 
-class _VectorStoreLease:
-    """Bounded, reentrant, process-safe exclusive database-directory lease."""
+class _VectorStoreLease(_resource_lease.PathLease):
+    """Backward-compatible facade over the shared path-wide lease."""
 
     def __init__(self, db_dir: Path, *, backend: str, collection_name: str,
                  operation: str, timeout: float,
                  resource_description: str | None = None,
                  timeout_option: str = "--db-lock-timeout"):
-        self.db_dir = Path(db_dir)
-        self.backend = backend
-        self.collection_name = collection_name
-        self.operation = operation
-        self.resource_description = resource_description or (
-            f"vector store ({backend} collection '{collection_name}')")
-        self.timeout_option = timeout_option
-        self.timeout = _normalize_db_lock_timeout(timeout)
-        resolved, self.key = _vector_store_lock_identity(self.db_dir)
-        safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", resolved.name)
-        safe_name = safe_name.strip("._")[:40] or "vector-store"
-        digest = hashlib.sha256(self.key.encode("utf-8")).hexdigest()[:20]
-        self.lock_path = (
-            _vector_store_lock_directory(resolved)
-            / f"{safe_name}-{digest}.lock")
-        self.state = _vector_store_lock_state(self.key)
-        self._process_id = os.getpid()
-        self._owner_pid = None
-        self._entered = False
-        self._reentrant = False
-        self._handle = None
-
-    def _busy_error(self) -> VectorStoreBusyError:
-        return VectorStoreBusyError(
-            f"Timed out after {self.timeout:g}s waiting for exclusive "
-            f"access during {self.operation}: {self.db_dir} "
-            f"[{self.resource_description}]. Another local operation is "
-            f"using this resource; retry after it finishes or increase "
-            f"{self.timeout_option}."
+        super().__init__(
+            db_dir,
+            backend=backend,
+            collection_name=collection_name,
+            operation=operation,
+            timeout=timeout,
+            resource_description=resource_description,
+            timeout_option=timeout_option,
+            busy_error_type=VectorStoreBusyError,
+            normalize_timeout_fn=(
+                lambda value: _normalize_db_lock_timeout(value)),
+            lock_identity_fn=(
+                lambda path: _vector_store_lock_identity(path)),
+            lock_directory_fn=(
+                lambda path: _vector_store_lock_directory(path)),
+            lock_state_fn=lambda key: _vector_store_lock_state(key),
+            try_file_lock_fn=lambda handle: _try_vector_file_lock(handle),
+            unlock_file_fn=lambda handle: _unlock_vector_file(handle),
+            cleanup_error_fn=(
+                lambda message, *args, error: _log_cleanup_error(
+                    message, *args, error=error)),
+            monotonic_fn=lambda: time.monotonic(),
+            sleep_fn=lambda seconds: time.sleep(seconds),
         )
-
-    def __enter__(self):
-        if self._entered:
-            raise RuntimeError("Vector-store lease objects cannot be reused")
-        current_pid = os.getpid()
-        if current_pid != self._process_id:
-            # A lease object constructed (but not entered) before fork must use
-            # the child's freshly initialized synchronization registry.
-            self.state = _vector_store_lock_state(self.key)
-            self._process_id = current_pid
-        deadline = time.monotonic() + self.timeout
-        if not self.state.thread_lock.acquire(timeout=self.timeout):
-            raise self._busy_error()
-
-        thread_leases = getattr(
-            _vector_store_lock_local, "leases", None)
-        if thread_leases is None:
-            thread_leases = {}
-            _vector_store_lock_local.leases = thread_leases
-        if self.key in thread_leases:
-            thread_leases[self.key] += 1
-            self._entered = True
-            self._reentrant = True
-            self._owner_pid = current_pid
-            return self
-
-        handle = None
-        os_locked = False
-        try:
-            _storage_policy.ensure_private_directory(self.lock_path.parent)
-            _storage_policy.assert_no_link_components(self.lock_path)
-            flags = os.O_RDWR | os.O_APPEND | os.O_CREAT
-            flags |= getattr(os, "O_NOFOLLOW", 0)
-            descriptor = os.open(
-                self.lock_path, flags, _storage_policy.PRIVATE_FILE_MODE)
-            handle = os.fdopen(descriptor, "a+b")
-            lock_stat = os.fstat(handle.fileno())
-            if (not stat.S_ISREG(lock_stat.st_mode)
-                    or lock_stat.st_nlink != 1):
-                raise _storage_policy.StoragePolicyError(
-                    "vector-store lock must be one regular, unlinked file")
-            _storage_policy.enforce_private_path(
-                self.lock_path, directory=False)
-            handle.seek(0, os.SEEK_END)
-            if handle.tell() == 0:
-                handle.write(b"\0")
-                handle.flush()
-                os.fsync(handle.fileno())
-
-            first_attempt = True
-            while True:
-                remaining = deadline - time.monotonic()
-                # Opening, permission-checking, and initially syncing the
-                # private sidecar can consume a very small timeout on a slow
-                # filesystem.  The operating-system lock attempt is
-                # nonblocking, so always make exactly one attempt before
-                # treating the deadline as exhausted.  This preserves true
-                # zero-timeout try-lock semantics without turning unrelated,
-                # uncontended paths into false busy results.
-                if remaining <= 0 and not first_attempt:
-                    raise self._busy_error()
-                if _try_vector_file_lock(handle):
-                    os_locked = True
-                    break
-                first_attempt = False
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise self._busy_error()
-                time.sleep(min(0.05, remaining))
-
-            thread_leases[self.key] = 1
-            self._handle = handle
-            self.state.handle = handle
-            self._entered = True
-            self._owner_pid = current_pid
-            return self
-        except BaseException as exc:
-            thread_leases.pop(self.key, None)
-            if self.state.handle is handle:
-                self.state.handle = None
-            if handle is not None:
-                if os_locked:
-                    _finish_vector_file_lock(
-                        handle, primary_error=exc,
-                        lock_path=self.lock_path)
-                else:
-                    try:
-                        handle.close()
-                    except BaseException as close_error:
-                        _log_cleanup_error(
-                            "Vector-store lease handle cleanup failed for %s",
-                            self.lock_path,
-                            error=close_error,
-                        )
-            self.state.thread_lock.release()
-            raise
-
-    def __exit__(self, exc_type, exc, traceback):
-        if not self._entered:
-            return False
-        if self._owner_pid != os.getpid():
-            # ``after_in_child`` already closed the inherited descriptor and
-            # replaced the lock registry. Unwinding the parent's context in a
-            # forked child must not touch either parent's lock or stale TLS.
-            self._entered = False
-            self._handle = None
-            return False
-        thread_leases = _vector_store_lock_local.leases
-        cleanup_error = None
-        try:
-            depth = thread_leases.get(self.key)
-            if not isinstance(depth, int) or depth < 1:
-                raise RuntimeError("Vector-store lease ownership was lost")
-            if depth > 1:
-                thread_leases[self.key] = depth - 1
-            else:
-                thread_leases.pop(self.key)
-                if self._handle is None:
-                    raise RuntimeError("Vector-store lease handle was lost")
-                try:
-                    _finish_vector_file_lock(
-                        self._handle, primary_error=exc,
-                        lock_path=self.lock_path)
-                except BaseException as release_error:
-                    cleanup_error = release_error
-                finally:
-                    self.state.handle = None
-        finally:
-            self._entered = False
-            self.state.thread_lock.release()
-
-        if cleanup_error is not None:
-            raise cleanup_error.with_traceback(cleanup_error.__traceback__)
-        return False
 
 
 def _vector_store_lock(

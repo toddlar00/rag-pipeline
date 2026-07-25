@@ -80,9 +80,10 @@ Current policy/runtime modules include:
 - `chunking_core`, `document_profiles`, and `quality_core` — deterministic
   chunk policy, immutable attested document layouts, and corpus-quality
   evidence.
-- `artifact_io`, `index_state`, and `vector_lifecycle` — strict artifact I/O,
-  manifest decisions, guarded vector reconciliation, verification, and commit
-  ordering.
+- `artifact_io`, `index_state`, `vector_lifecycle`, and `resource_lease` —
+  strict artifact I/O, manifest decisions, guarded vector reconciliation,
+  verification/commit ordering, and canonical reentrant cross-process path
+  leases.
 - `cli_policy`, `ingestion_core`, `process_supervision`,
   `runtime_supervision`, and `operation_contracts` — CLI/resume policy,
   PDF-ingestion safety, generic process-tree containment/deadlines, the frozen
@@ -105,8 +106,9 @@ Current policy/runtime modules include:
 
 What deliberately remains inside `rag.py` includes top-level pipeline
 orchestration, compatibility wiring, mutable embedding/reranking/BM25 caches,
-and the physical Chroma/Qdrant adapters. Vector transaction policy and process
-supervision no longer live there, although their late-bound facade wrappers do.
+and the physical Chroma/Qdrant adapters. Vector transaction policy, canonical
+path-lease implementation, and process supervision no longer live there,
+although their late-bound facade wrappers do.
 
 ### Process supervision layering (not duplication)
 
@@ -119,13 +121,16 @@ that binding per operation and no longer imports `rag.py`; `rag.py` retains
 late-bound wrappers for direct compatibility callers and tests.
 `supervised_worker.py` remains the contained child's gate-wait bootstrap.
 
-The first-party import graph is acyclic, but R8 is not complete:
-`service_runtime.py` still imports both `rag` and `job_manager`, and lazy job
-CLI dispatch plus application composition remain in `rag.py`. Preserve the
-binding's atomic snapshot rule while service/search/index protocols and one
-composition root are introduced in later characterized slices. See the
-[process-supervision ADR](docs/architecture/decisions/process-supervision-extraction.md)
-and [runtime binding ADR](docs/architecture/decisions/runtime-supervision-binding.md).
+The first-party import graph is acyclic, but R8 is not complete.
+`service_runtime.py` now snapshots a frozen host binding and the isolated
+`service_search_worker.py` composes physical retrieval, so the host no longer
+imports `rag`. It still imports `job_manager`, while lazy job CLI dispatch and
+broader application composition remain in `rag.py`. Preserve both bindings'
+atomic snapshot rules while job coordination and one composition root are
+introduced in later characterized slices. See the
+[process-supervision ADR](docs/architecture/decisions/process-supervision-extraction.md),
+the [runtime binding ADR](docs/architecture/decisions/runtime-supervision-binding.md),
+and the [service-host binding ADR](docs/architecture/decisions/service-host-binding.md).
 
 ### Evaluation contract layering
 
@@ -157,7 +162,12 @@ against them.
 
 ### Service layer
 
-`service_contracts.py` (dependency-free v1 contract) → `service_runtime.py` (Qdrant search isolation, durable job facade) → `service_api.py` (authenticated loopback-only FastAPI adapter). `service-openapi-v1.json` is a committed static contract snapshot.
+`service_contracts.py` (dependency-free v1 contract) → `service_runtime.py`
+(Qdrant search isolation and durable job facade) → `service_api.py`
+(authenticated loopback-only FastAPI adapter). `service_runtime_binding.py`
+supplies the frozen host capability, while `service_search_worker.py` is the
+only child composition shell that imports both the runtime contract and
+`rag.py`. `service-openapi-v1.json` is a committed static contract snapshot.
 
 ## Conventions
 

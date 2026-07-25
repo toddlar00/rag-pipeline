@@ -43,10 +43,11 @@ Status terms:
 | Public UI and cloud-endpoint safety | Implemented locally | The R0A candidate removes the Gradio share path, binds `127.0.0.1` explicitly, centralizes versioned endpoint attestation before credential/cache/transport access, rejects redirects and ambiguous targets, isolates loopback proxies, prevents ambient `.netrc` credential replacement, and validates job persistence. It passes the full 1,678-test tree and an independent exploit-oriented audit |
 | Residual local/cloud trust boundary | Implemented locally | R0B adds versioned release-security policy v1 across CLI/Python/UI/service/evaluation/workers/jobs: trusted-single-user UI opt-in, local-only egress, release inline-secret rejection and cache-off default, opaque custom-gateway tenancy, cache-only model loading with explicit verified sync, pinned provider transports, bounded streamed JSON for every Requests-owned provider path, policy-controlled proxy/CA trust, disabled auxiliary telemetry, and strict provenance. The exact local tree passes 1,806 tests with 7 skips |
 | Offline model-sync planning and task presets | Implemented locally | A shared R10/R12 slice adds one lock-derived schema-v1 plan used by preflight and execution, presets for PDF ingestion/default retrieval/optional classification, explicit all-consumer selection, exact cache-aware byte and peak-space accounting, free-space refusal before transport/publication, full auxiliary/transform bundle identities, and explicit unsafe-pickle reporting. The exact local tree passes 1,839 tests with 7 platform skips; 72 focused tests and a separate adversarial audit cover the new boundary with no remaining material issue. It is local, not published, and does not complete either milestone |
-| Evaluation and runtime dependency boundaries | Implemented locally | R8a extracts strict snapshot/JSON/digest/corpus contracts into `evaluation_inputs.py`; R8b moves the exact 13-function query/schema/corpus/judgment/grounding closure into `evaluation_queries.py`; R8c-1 adds one frozen `runtime_supervision.py` capability so `job_manager.py` no longer imports `rag.py`. Release, review, evaluator, durable jobs, and the compatibility facade now follow an acyclic import graph while old private evaluation and supervision facades remain available. Dedicated tests characterize the input/query contracts, import order, runtime binding validation/snapshotting, default/override precedence, cleanup handling, and manager isolation. R7 and R8 remain open for broader static gates plus service protocols and one application composition root; the local work is unpublished |
+| Evaluation and runtime dependency boundaries | Implemented locally | R8a/R8b extract strict evaluation inputs and the query/judgment domain; R8c-1 removes the durable manager's facade dependency with one frozen supervision capability; R8c-2 removes the service host's facade dependency with a frozen host binding, shared embedding/lease policy, and a dedicated physical-search child. The tracked graph is acyclic and direct tests cover validation, atomic snapshots, import isolation, error/cleanup propagation, exact search wiring, and crash-released cross-process exclusion. R7 and R8 remain open for broader static gates, job coordination, and one application composition root; the local work is unpublished |
 | Ethics retrieval calibration | Owner review pending | [PR #43](https://github.com/toddlar00/rag-pipeline/pull/43): a current-schema clean-room rebuild preserved all 20 unique IDs behind 24 judgments in the exact 1,715-record corpus. A private owner packet now combines those judgments with 195 unique top-10 candidates across four modes, while a content-free receipt and strict four-mode release-policy contract make promotion explicit and review-bound. Actual owner decisions and final thresholds remain outstanding |
 | Process supervision extraction | Implemented (draft) | [PR #33](https://github.com/toddlar00/rag-pipeline/pull/33): deadline supervision, Windows/POSIX containment, startup gates, termination confirmation, and generic entrypoint policy moved to stdlib-only `process_supervision.py`; `rag.py` retains late-bound compatibility wrappers |
-| Runtime-supervision binding | Implemented locally | R8c-1 freezes the production entrypoint, supervisor, cleanup exception, and timeout policy in `runtime_supervision.py`; durable jobs snapshot that capability per operation instead of using `rag.py` as a service locator. The tracked first-party import graph is acyclic, and the exact local tree passes 1,932 tests with 7 platform skips plus all source/policy gates; service/search/index protocols and a single composition root remain open |
+| Runtime-supervision binding | Implemented locally | R8c-1 freezes the production entrypoint, supervisor, cleanup exception, and timeout policy in `runtime_supervision.py`; durable jobs snapshot that capability per operation instead of using `rag.py` as a service locator. R8c-2 reuses that policy in the service host without loading the facade; job coordination and a single composition root remain open |
+| Service-host binding and isolated search | Implemented locally | R8c-2 freezes the worker path, supervisor, cleanup type, singleton-lease factory, and remote-model predicate; `service_runtime.py` no longer imports `rag`, while `service_search_worker.py` is the sole explicit child composition shell. `resource_lease.py` preserves the exact shared `.rag-locks` identity and `embedding_policy.py` prevents host/provider classification drift. Exact search arguments, query-free argv, redacted envelopes, cleanup fatality, binding snapshots, startup rollback, import isolation, real Qdrant parity, and cross-process crash release are directly tested. The exact tree passes 1,998 tests with 7 platform skips plus Ruff, 135-source compilation, dependency/model-artifact policy, and diff gates; publication and final root convergence remain open |
 | Vector-index lifecycle extraction | Implemented (draft) | [PR #38](https://github.com/toddlar00/rag-pipeline/pull/38): a standard-library-only policy layer owns deterministic reconciliation, dirty-marker ownership, mutation epochs, exact-ID verification, callback-reentry exclusion, legacy-hash repair, and close/manifest/marker commit ordering |
 | Cumulative release migration rehearsal | Implemented (draft) | [PR #39](https://github.com/toddlar00/rag-pipeline/pull/39): actual Chroma and Qdrant probes recreate the integrated schema-5 manifest, rebuild one exact collection to schema 8, preserve and query a sibling collection, verify the no-op path, and require immediate lock release |
 | Evidence-grounded answer evaluation | Implemented (draft) | [PR #40](https://github.com/toddlar00/rag-pipeline/pull/40): corpus-pinned claim judgments, exact citation-entailment and unsupported-claim metrics, abstention and prompt-envelope fixtures, fail-closed named release gates, runtime source-identity hardening, and schema-v5 redacted reports |
@@ -679,13 +680,14 @@ are a snapshot, not release claims:
 - `main` is `54cdb00`. The last published exact head is `e2196a1` on PR #43, 33
   commits and 80 changed files ahead of `main` with 28,881 insertions and 2,014
   deletions. That published head remains the last GitHub CI reference. The
-  local branch adds ten committed slices after that head: repository truth,
+  local branch adds eleven commits after that head: repository truth,
   portable table-family evaluation, endpoint/exposure policy, release security,
   bounded provider transport, provider-SDK cleanup, offline model-sync
-  planning, and both evaluation dependency inversions. The staged R8c-1
-  runtime-supervision binding is the next local slice. None is yet a published
-  immutable GitHub head; R1 must record the exact cumulative SHA and diff rather
-  than infer them from earlier PR heads.
+  planning, both evaluation dependency inversions, and the R8c-1
+  runtime-supervision binding. The working tree adds the characterized R8c-2
+  service-host inversion as the next local slice. None is yet a published
+  immutable GitHub head; R1 must record the exact cumulative SHA and diff
+  rather than infer them from earlier PR heads.
 - PRs #31 and #33-#43 form one dependency stack. PR #39 is cumulative only
   through PR #38; PRs #40-#43 are later stacked work. PR #32 is a standalone
   process-supervision design document, and PR #30 is an independent Dependabot
@@ -698,16 +700,16 @@ are a snapshot, not release claims:
 - The pre-R0A statement-coverage probe reported 75% over application and tool
   code when tests were omitted. That number is directional: branch coverage is
   disabled and separately launched workers are not automatically combined. CI
-  does not currently measure coverage. The active R8c-1 tree passes 1,932 tests
-  with 7 platform skips and emits 429 dependency deprecation warnings,
+  does not currently measure coverage. The active R8c-2 tree passes 1,998
+  tests with 7 platform skips and emits 429 dependency deprecation warnings,
   primarily from FastAPI/Starlette's `asyncio.iscoroutinefunction`
-  compatibility path; this is local evidence, not published CI evidence.
+  compatibility path. This is local evidence, not published CI evidence.
 - CI is broad across Linux, Windows, Python 3.10-3.14, the full CPU environment,
   the loopback service, both local vector clients, dependency resolution, SBOM,
   vulnerability, license, model-artifact, and offline-evaluation checks. Its
   PR #43 `py_compile` list is stale, however: it omits several current modules.
   The current R0 branch replaces it with a tested, deterministic compile of all
-  Git-tracked Python sources; the current exact inventory contains 127 files.
+  Git-tracked Python sources; the R8c-2 inventory contains 135 files.
 - Four supply-chain exceptions expire on 2026-08-31: the Chroma vulnerability
   exception, normalized Torch and Torchvision audit skips, the PyMuPDF license
   exception, and FlagEmbedding's missing wheel-license metadata allowance.
@@ -721,7 +723,7 @@ are a snapshot, not release claims:
 - At the audited PR #43 head, `_run_civpro.py` and `_resume_civpro.py` remained
   in the root; `tmp/` and `.worktrees/` were not ignored; and `CLAUDE.md` plus
   `docs/` were untracked. The current R0 branch corrects those mechanical and
-  documentation-state defects. The current roughly 2,700-line, 141 KB
+  documentation-state defects. The current roughly 2,900-line, 152 KB
   README still requires the task-oriented decomposition planned in R12.
 
 ### Pull-request topology and disposition
@@ -737,7 +739,7 @@ are a snapshot, not release claims:
 | [#33](https://github.com/toddlar00/rag-pipeline/pull/33)-[#38](https://github.com/toddlar00/rag-pipeline/pull/38) | Open focused draft dependency chain | Preserve focused diffs/audits; integrate through one current cumulative head |
 | [#39](https://github.com/toddlar00/rag-pipeline/pull/39) | Open draft cumulative PR to `main`, but only through #38 | Valuable migration rehearsal, not the current integration candidate |
 | [#40](https://github.com/toddlar00/rag-pipeline/pull/40)-[#43](https://github.com/toddlar00/rag-pipeline/pull/43) | Open drafts stacked after #39; #43 is the last published/CI-green head | Include in the new R1 cumulative PR after owner/privacy and R0A/R0B gates |
-| Local sequence from `88fd301` through the staged R8c-1 binding | Validated local slices; no remote branch/PR | Restore workflow-capable GitHub authentication, freeze the exact SHA, then publish only as one current candidate |
+| Local sequence from `88fd301` through committed R8c-1 plus staged R8c-2 | Validated local slices; no remote branch/PR | Finish exact-tree gates and review, restore workflow-capable GitHub authentication, freeze the exact SHA, then publish only as one current candidate |
 
 No open project PR has a submitted GitHub review. “Mergeable” and self-audit
 comments are not approval, and green checks on different stacked heads do not
@@ -760,8 +762,8 @@ done separate; “code exists” does not imply “integrated” or “owner app
 | R4 table/context evaluation | Reusable exact semantics and CC0 CLI suite local | Portable baseline/gates pass | Not published | Private aliases/ablations require R3 owner labels | Run 0/1/2-context and table on/off four-mode study |
 | R5 release contract | Planned; migration rehearsal exists in #39 | No tag/release/manifest/rollback execution | None | Version, distribution, privacy, and release approval needed | Start only after R0-R4/R2 gates and R12 Phase A |
 | R6 vector-client debt | Windows Qdrant workaround exists in #39 stack | Reproducer and real-client evidence exist for pinned version | Draft stack | No policy decision unless workaround persists | Retest after R2; remove or isolate/version-gate |
-| R7 quality gates | Exhaustive compile/Ruff and a tracked-source AST import-DAG gate exist locally; coverage/types and the broader architecture inventory do not | The gate requires an acyclic first-party graph, pins both evaluation-domain dependencies and the runtime-supervision boundary, and enforces one-way release/review/evaluator direction; point coverage remains non-gating and misses subprocesses | Not published | Maintainer selects ratchet/tool baseline | Add branch coverage, typed leaves, function/facade inventory, and changed-safety-code ratchets |
-| R8 dependency direction | Evaluation inversion and runtime-supervision binding implemented locally | Exact-function extraction, compatibility, parser/digest/non-mutation, clean-subprocess review, import-order, atomic binding, manager isolation, and AST tests cover an acyclic first-party import graph | Not published | No owner decision | Characterize and invert the service/search/index seams, then converge composition at one application root |
+| R7 quality gates | Exhaustive compile/Ruff and a tracked-source AST import-DAG gate exist locally; coverage/types and the broader architecture inventory do not | The gate requires an acyclic first-party graph, pins both evaluation domains, runtime bindings, the sole service search composition shell, and one-way release/review/evaluator direction; point coverage remains non-gating and misses subprocesses | Not published | Maintainer selects ratchet/tool baseline | Add branch coverage, typed leaves, function/facade inventory, and changed-safety-code ratchets |
+| R8 dependency direction | Evaluation inversion, durable supervision binding, and service-host/search inversion implemented locally | Exact-function extraction, facade compatibility, import order/isolation, atomic bindings, cleanup/failure propagation, exact search wiring, shared lock identity, and cross-process tests cover an acyclic first-party graph | Not published | No owner decision | Invert service job coordination, then converge the service/API/UI/CLI composition roots without removing proven facades prematurely |
 | R9 orchestration decomposition | First policy leaves extracted; hot spots remain | Failure-injection suite provides characterization base | None | No owner decision | Wait for R7/R10A, then slice main/chunk/eval/OpenAPI |
 | R10 performance/capacity | Offline cache-aware model-sync byte/space planner implemented locally; runtime telemetry and queue metrics exist | Planner/preflight behavior is tested locally; no stable workload capacity budgets or hardware baselines | Not published | Authorized corpus/hardware/cost scope needed for Phase B | Establish small/medium CPU Phase A before R8/R9; retain the sync plan as its model-footprint input |
 | R11 corpus/profile breadth | Second profile and synthetic fixtures exist | No authorized real receipt for `roman-parts-book-v1` | None | Corpus authorization/qualification required | Add content-free profile diagnostics and real receipt |
@@ -780,7 +782,7 @@ generation open rather than treating a hand-maintained count as durable.
 | Retrieval and vector publication | PRs #36-#38 add bounded context, table rows, family collapse, and one guarded lifecycle for both stores | Production table/context benefit is not owner-calibrated; Windows local Qdrant still needs private-client detection plus forced garbage collection | R3, R4, R6 |
 | Evaluation and release | PRs #40/#43 plus local R4 bind judgments, grounding, review receipts, release modes, table policies, and portable baselines; local R8a/R8b provide strict input and query-domain boundaries with an acyclic evaluator/review/release graph | Owner approval and private four-mode ablations remain absent; the legacy general-query parser remains intentionally permissive and needs a separate policy decision before any strictification | R3, R4, R8 |
 | LLM execution | Integrated budgets, single-flight caching, adapter extraction, artifact locks, and transport accounting; local R0A/R0B adds endpoint validation, local-only consent, cache/tenant isolation, pinned provider transports, explicit environment trust, cache-only models, and release-safe secret/cache defaults | Exact-head review/CI is absent; R2 dependency upgrades can change SDK/HTTP behavior; application code cannot enforce OS DNS/firewall or validate a deliberately trusted interception proxy | R1, R2, R5 |
-| Jobs, service, and recovery | Integrated durable jobs/service plus PRs #41/#42 provide containment, terminal evidence, cancellation, recovery, queue metrics, and real fault drills; local R8c-1 gives durable jobs a frozen supervision binding without importing `rag` | `service_runtime` still imports both the facade and manager, and composition remains split across application modules; POSIX descendants can deliberately escape the process group with `setsid()`, so worker extensions remain trusted code rather than sandboxed plugins | R5, R8 |
+| Jobs, service, and recovery | Integrated durable jobs/service plus PRs #41/#42 provide containment, terminal evidence, cancellation, recovery, queue metrics, and real fault drills; local R8c-1 gives durable jobs a frozen supervision binding and R8c-2 gives the service host a frozen binding plus an isolated physical-search child, both without importing `rag` | `service_runtime` still imports `job_manager`, composition remains split across application modules, and POSIX descendants can deliberately escape the process group with `setsid()`, so worker extensions remain trusted code rather than sandboxed plugins | R5, R8 |
 | UI and exposure boundary | Local Search, Export, Info, and Jobs use bounded workers/private storage; local R0A removes public sharing and R0B refuses startup without explicit trusted-single-user acknowledgement | Shared-host or remote UI remains unsupported and needs principal authentication plus origin/session controls as a separate product | R1, R12 |
 | Supply chain | Universal hash locks, model byte locks, SBOM/ML-BOM, scheduled advisory/license checks, and real-client profiles are unusually strong | PR #30 is an unreviewable 13-package jump with stale locks; four policy exceptions expire 2026-08-31; Python 3.14 emits 429 dependency warnings | R2 |
 | Static quality and architecture | Extracted leaves, direct failure injection, exhaustive source compilation, a wide OS/Python matrix, and a local tracked-source acyclic-import/dependency gate reduce regression risk | No branch/subprocess coverage ratchet or type checker; the AST gate does not yet inventory function spans/arity or private-facade references; `rag.main` remains too large | R7-R9 |
@@ -817,7 +819,7 @@ and interface assumptions. They must not be executed or committed verbatim.
 | Ethics calibration | Review packet, receipt, and fail-closed four-mode release contract implemented by PR #43 | Corpus-owner relevance decisions and final thresholds remain R3 |
 | Leaf-module static typing | No mypy or Pyright configuration, dependency, or CI gate exists | Implement incrementally in R7 after branch convergence |
 | README split | Not implemented; the README has grown since the plan was written | Implement task-oriented documentation in R12 |
-| Dissolve runtime dependency seams | Evaluation release/review use `evaluation_inputs.py`, evaluator/review use `evaluation_queries.py`, and R8c-1 moves durable-job supervision defaults into a frozen `runtime_supervision.py` binding. The first-party import graph is acyclic; `service_runtime.py` still depends on both the facade and manager, and `rag.py` remains a split composition/CLI root | Retain the enforced acyclic baseline and continue service/root R8 one characterized boundary at a time |
+| Dissolve runtime dependency seams | Evaluation release/review use `evaluation_inputs.py`, evaluator/review use `evaluation_queries.py`, R8c-1 moves durable-job supervision into a frozen binding, and R8c-2 moves service supervision/model/lease defaults into another frozen binding with a dedicated search child. The first-party graph is acyclic; `service_runtime.py` still depends on `job_manager`, and `rag.py` remains a split composition/CLI root | Retain the enforced acyclic baseline; invert job coordination next, then converge application roots one characterized boundary at a time |
 
 The process-supervision plan links a specification that is absent from the
 current branch but present in standalone PR #32. PR #33 already implements that
@@ -1469,6 +1471,18 @@ one-way application over shared contracts rather than a reciprocal import.
   validation and immutability, call-time atomic replacement, timeout/default
   precedence, cleanup classification, detached launch, import order, and
   transitive manager isolation.
+- **Implemented locally (R8c-2):** bind the fixed private-search child,
+  concrete supervisor and cleanup type, exact service-instance lease factory,
+  and remote-embedding predicate in `service_runtime_binding.py`.
+  `service_runtime.py` snapshots that capability and no longer imports `rag`;
+  `service_search_worker.py` is the sole child composition shell that injects
+  `rag.search_index`. `embedding_policy.py` is the shared classification leaf,
+  while `resource_lease.py` owns the exact canonical `.rag-locks` policy and
+  shared reentrant/OS lease used by both the service and legacy facade.
+  Characterization covers all search modes and kwargs, policy identity,
+  query-free argv, strict redacted envelopes, actual cleanup failures,
+  binding replacement, startup rollback, exact sidecar continuity, real local
+  Qdrant parity, isolated imports, and cross-process exclusion/crash release.
 - Move application composition to one root module. Keep late-bound wrappers and
   re-exports until all tests and callers have migrated.
 - Enforce the target dependency graph in the R7 architecture test and delete
@@ -1485,14 +1499,16 @@ real-client regression passes unchanged.
 strict inputs, compatibility identity, depth/numeric/type failures, all
 four-module import orders, eager isolation, resolver semantics, legacy
 loader/query staging, and the acyclic evaluation graph; cross-surface
-regressions cover oversized numeric inputs. Runtime-binding and manager tests
-cover the R8c-1 capability and isolation boundary. Existing
-evaluator/review/grounding and process-supervision suites continue to exercise
-the compatibility facades. The tracked first-party import graph is acyclic.
-The exact local tree passes 1,932 tests with 7 platform skips; all 127 tracked
-Python sources compile, and Ruff plus dependency/model-artifact policy gates
-pass. R8 remains open and unpublished for service/search/index protocols and
-one application composition root.
+regressions cover oversized numeric inputs. Runtime-binding, manager,
+service-host, worker, embedding-policy, shared-lease, and architecture tests
+cover the R8c-1/R8c-2 capabilities and isolation boundaries. Existing
+evaluator/review/grounding, process-supervision, and vector-concurrency suites
+continue to exercise the compatibility facades. The tracked first-party import
+graph is acyclic. The exact R8c-2 tree passes 1,998 tests with 7 platform
+skips and 429 dependency warnings; all 135 tracked Python sources compile, and
+Ruff, dependency/model-artifact policy, and diff gates pass. R8 remains open
+and unpublished for service job coordination and one application composition
+root.
 
 ### R9 (P2, large in behavior-preserving slices): decompose orchestration hot spots
 
@@ -1673,7 +1689,7 @@ loopback or private-data boundaries.
 | 4 | R4 private-corpus ablations and expansion | Reusable semantics/CLI coverage are local; remaining evidence requires R3's frozen judgments |
 | 5 | R12 Phase A, R5 first versioned release, and R6 client-workaround decision | Requires R0B, R1-R4, R2 release locks, stable entry points, and minimum release docs |
 | 6 | R7 quality gates and R10 Phase A baselines | Establish both before architecture slices so correctness and performance are measurable |
-| 7 | Continue service/root R8 dependency direction and begin R9 orchestration decomposition | Evaluation inversion, the durable-job supervision binding, and the acyclic-DAG gate are local; the remaining runtime composition slices still require the rest of R7 and the Phase A baselines |
+| 7 | Continue service/root R8 dependency direction and begin R9 orchestration decomposition | Evaluation inversion, both durable-job and service-host bindings, the isolated search child, and the acyclic-DAG gate are local; job coordination and root convergence still require the rest of R7 and the Phase A baselines |
 | 8 | R10 Phase B capacity, R11 corpus breadth, and R12 Phase B experience | Build on stable release contracts and approved privacy policy |
 
 After owner review of this roadmap, create one GitHub issue per R0, R0A, R0B,

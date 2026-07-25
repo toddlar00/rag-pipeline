@@ -164,8 +164,10 @@ and strict-versus-legacy duplicate-key behavior.
 
 This completes the evaluation-side dependency inversion, not R7 or all of R8.
 The later R8c-1 runtime binding removes `job_manager.py`'s former `rag.py`
-import and therefore the last import cycle, but `service_runtime.py` still
-depends on the facade and application composition has not moved to one root.
-Coverage ratchets, typing, the broader architecture inventory, remaining
-runtime protocols, and service/root composition inversion remain planned. This
-local decision has not been pushed, reviewed, merged, tagged, or released.
+import and therefore the last import cycle. R8c-2 subsequently removes the
+service host's facade dependency through a frozen binding and isolated search
+child, but `service_runtime.py` still depends on `job_manager` and application
+composition has not moved to one root. Coverage ratchets, typing, the broader
+architecture inventory, job protocols, and service/root composition inversion
+remain planned. This local decision has not been pushed, reviewed, merged,
+tagged, or released.

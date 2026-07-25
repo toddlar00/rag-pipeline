@@ -75,13 +75,14 @@ the manager, but the manager points inward to the runtime binding instead of
 back to the facade. The manager can also be imported and characterized without
 loading the large pipeline facade.
 
-This is R8c-1, not completion of R8. `service_runtime.py` still imports both
-`rag` and `job_manager`; search/index/storage capabilities have not yet been
-expressed as narrow runtime protocols; and application composition is still
-split between `rag.py`, the service modules, and their CLIs. `rag.py` also
-retains lazy job dispatch for its compatibility CLI. Later slices must
-characterize those boundaries before introducing one composition root or
-removing facade aliases.
+This decision is R8c-1, not completion of R8. The later
+[service-host binding decision](service-host-binding.md) removes
+`service_runtime.py`'s `rag` dependency and gives physical search a dedicated
+child composition shell. The service still imports `job_manager`; application
+composition remains split between `rag.py`, the service modules, the UI, and
+their CLIs; and `rag.py` retains lazy job dispatch for compatibility. Later
+slices must characterize job coordination and root construction before
+introducing one application root or removing facade aliases.
 
 The sibling-file entrypoint is correct for the current flat repository. R12
 packaging work must deliberately replace or validate that assumption when
@@ -100,3 +101,5 @@ stable installed console entry points are introduced.
   [`tests/test_architecture.py`](../../../tests/test_architecture.py)
 - Prior extraction decision:
   [Process-supervision extraction](process-supervision-extraction.md)
+- Subsequent service decision:
+  [Service-host binding and isolated search composition](service-host-binding.md)

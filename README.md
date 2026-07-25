@@ -113,8 +113,10 @@ atomic publication, artifact hashing, and vector-store lease collaborators.
 layer. It computes deterministic add/replace/remove plans, owns dirty-marker
 acquisition and revalidation, invalidates stale verification evidence after
 every physical mutation, and permits manifest publication only after an exact
-post-mutation identity check. `rag.py` retains vector-store locking, client
-construction, embedding workers, and the physical Chroma/Qdrant adapters.
+post-mutation identity check. `resource_lease.py` owns the shared canonical
+path/OS lease and `.rag-locks` sidecar policy; `rag.py` retains late-bound lease
+facades, client construction, embedding workers, and the physical
+Chroma/Qdrant adapters.
 
 `llm_adapters.py` translates Ollama, Gemini, and OpenAI-compatible transport
 responses into the typed, provider-neutral contracts in `llm_runtime.py`.
@@ -153,10 +155,18 @@ late-bound collaborators for direct compatibility callers and monkeypatch
 seams. See the
 [runtime-supervision binding ADR](docs/architecture/decisions/runtime-supervision-binding.md).
 
-The tracked first-party import graph is now acyclic. This does not complete the
-runtime inversion milestone: `service_runtime.py` still composes through both
-the facade and job manager, lazy job CLI dispatch remains in `rag.py`, and the
-service/search/index capabilities have not converged on one application root.
+`service_runtime_binding.py` freezes the service worker path, supervisor,
+cleanup type, instance-lease factory, and remote-model predicate as one host
+capability. `service_runtime.py` snapshots it and no longer imports `rag.py`;
+the dedicated `service_search_worker.py` child is the only module that composes
+the service request contract with `rag.search_index`. `embedding_policy.py`
+keeps remote-model classification identical across the host and facade. See
+the [service-host binding ADR](docs/architecture/decisions/service-host-binding.md).
+
+The tracked first-party import graph remains acyclic. This R8 slice does not
+complete runtime inversion: `service_runtime.py` still composes through
+`job_manager`, lazy job CLI dispatch remains in `rag.py`, and the service, UI,
+and CLI have not converged on one application root.
 
 `ingestion_core.py` is the standard-library-only PDF safety layer for text-layer
 quality, page-coverage-aware background detection, complete pre-mutation
@@ -2651,6 +2661,7 @@ rebuild with `--full-reindex` if needed.
 rag.py                  # Stable command/API facade and pipeline orchestration
 process_supervision.py  # Stdlib-only process containment and deadlines
 runtime_supervision.py  # Frozen production supervisor/runtime capability
+resource_lease.py       # Shared canonical path and cross-process OS leases
 retrieval_core.py       # Stdlib-only retrieval models and pure algorithms
 table_retrieval_core.py # Stdlib-only table-row generation and family collapse
 artifact_io.py          # Stdlib-only strict reads and atomic publication
@@ -2663,6 +2674,7 @@ llm_adapters.py         # Typed LLM provider transport adapters
 llm_runtime.py          # Reproducible caching, fallback, budgets, and reports
 provider_transport.py   # Bounded streaming provider-response reader
 endpoint_policy.py      # Canonical cloud/loopback endpoint trust boundary
+embedding_policy.py     # Dependency-free remote embedding classification
 release_security.py     # Versioned egress/UI/cache/model release policy
 cli_policy.py           # Stdlib-only CLI interpretation and serialization policy
 ingestion_core.py       # Stdlib-only PDF inspection and stripping safety policy
@@ -2678,7 +2690,9 @@ job_runtime.py          # Durable private job schemas, bindings, transitions, le
 job_manager.py          # Detached supervision, cancellation, and restart recovery
 supervised_worker.py    # Gated same-PID bootstrap for pre-execution containment
 service_contracts.py    # Dependency-free bounded/redacted local API contracts
+service_runtime_binding.py # Frozen service-host capability composition
 service_runtime.py      # Qdrant search isolation and durable service job facade
+service_search_worker.py # Hidden physical-search child composition shell
 service_api.py          # Authenticated loopback-only FastAPI/CLI adapter
 service-openapi-v1.json # Committed static OpenAPI 3.1 contract snapshot
 service-config.example.json # Credential-free private registry template
