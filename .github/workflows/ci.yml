@@ -224,6 +224,115 @@ jobs:
           tests/test_service_live.py
           tests/test_job_runtime.py
 
+  phase-a0:
+    name: Phase A0 baseline / ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            platform: Linux
+            baseline: benchmarks/phase-a0-linux-cpython312.json
+            artifact: linux
+          - os: windows-latest
+            platform: Windows
+            baseline: benchmarks/phase-a0-windows-cpython312.json
+            artifact: windows
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements-full.lock
+            requirements-test.lock
+            requirements-lock-tools.lock
+      - name: Enforce the gate-only source delta
+        shell: bash
+        run: |
+          python - "${{ matrix.baseline }}" <<'PY'
+          import json
+          from pathlib import Path
+          import re
+          import subprocess
+          import sys
+
+          baseline_path = Path(sys.argv[1])
+          baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+          pair = [json.loads(Path(path).read_text(encoding="utf-8")) for path in (
+              "benchmarks/phase-a0-linux-cpython312.json",
+              "benchmarks/phase-a0-windows-cpython312.json",
+          )]
+          if (pair[0]["source"] != pair[1]["source"]
+                  or pair[0]["inputs"] != pair[1]["inputs"]
+                  or pair[0]["scenario_set"] != pair[1]["scenario_set"]
+                  or pair[0]["repetitions"] != pair[1]["repetitions"]
+                  or {item["profile"]["platform"] for item in pair}
+                  != {"linux", "windows"}):
+              raise SystemExit("paired baselines do not share one source contract")
+          source_commit = baseline["source"]["commit"]
+          if re.fullmatch(r"[0-9a-f]{40}", source_commit) is None:
+              raise SystemExit("baseline source commit is not canonical")
+          ancestor = subprocess.run(
+              ["git", "merge-base", "--is-ancestor", source_commit, "HEAD"],
+              check=False,
+          )
+          if ancestor.returncode != 0:
+              raise SystemExit("baseline source is not an ancestor of HEAD")
+          changed = set(subprocess.check_output(
+              ["git", "diff", "--name-only", source_commit, "HEAD"],
+              text=True,
+          ).splitlines())
+          allowed = {
+              ".gitattributes",
+              ".github/workflows/ci.yml",
+              "ROADMAP.md",
+              "benchmarks/README.md",
+              "benchmarks/phase-a0-linux-cpython312.json",
+              "benchmarks/phase-a0-windows-cpython312.json",
+              "docs/README.md",
+              "docs/architecture/decisions/phase-a0-benchmark-policy.md",
+          }
+          unexpected = sorted(changed - allowed)
+          if unexpected:
+              raise SystemExit(
+                  "non-evidence changes after baseline source: "
+                  + ", ".join(unexpected))
+          print(
+              f"Gate-only delta accepted from {source_commit}: "
+              f"{len(changed)} evidence paths")
+          PY
+      - name: Install the hash-locked bootstrapper
+        run: python -m pip install --require-hashes -r requirements-lock-tools.lock
+      - name: Synchronize the full locked CPU environment
+        run: >-
+          uv pip sync --system --strict --torch-backend cpu --require-hashes
+          requirements-full.lock requirements-test.lock
+          requirements-lock-tools.lock
+      - name: Verify installed dependency consistency
+        run: uv pip check --system
+      - name: Check the Phase A0 architecture baseline
+        run: >-
+          python tools/benchmark_phase_a0.py --require-clean
+          --check ${{ matrix.baseline }}
+          --output phase-a0-current-${{ matrix.artifact }}.json
+      - name: Retain the Phase A0 current report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: phase-a0-${{ matrix.artifact }}
+          path: phase-a0-current-${{ matrix.artifact }}.json
+          if-no-files-found: warn
+          retention-days: 30
+
   vector-store-smoke:
     name: Real vector stores / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}

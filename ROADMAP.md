@@ -19,6 +19,11 @@ or historical
 Claude-authored document under `docs/`. Point-in-time counts below are bound to
 their named commit; they are not silently carried forward. The remaining
 improvements are ordered and acceptance-testable.
+A fifth gate execution on 2026-07-25 froze clean pre-gate source `0fe69f3`,
+synchronized exact hash-locked full/test CPU environments on Windows and Linux,
+generated and independently reproduced both complete Phase A0b baseline
+candidates, and added a matching hosted matrix plus retained-report policy.
+Hosted exact-head results remain deliberately distinct from this local evidence.
 
 Status terms:
 
@@ -44,7 +49,7 @@ Status terms:
 | Repository truth and exhaustive source gate | Implemented locally | Local commit `88fd301` relocates and tests the two local launchers, ignores `tmp/` and `.worktrees/`, replaces the stale compile list with deterministic Git-index discovery, curates the Claude plans and developer guide, adds the process-supervision ADR, and records the unresolved private-source policy as an explicit owner decision. Its exact tree passes 1,507 tests with 7 skips |
 | CI security ownership and workflow invariants | Implemented locally | Commit `17bdff7` adds a machine-readable map of current, reserved, and governance owners; a general CI gate proves symmetric security-workflow coverage, full-SHA action pinning, checkout credential isolation, and repository-wide read-only permissions. Content-aware secret scanning remains a separate R7 item |
 | Deterministic architecture and `rag` facade inventory | Implemented locally | Schema-v3 was introduced at `62cb574`; the current canonical checkpoint at `77a0f70` records the tracked-source graph, definition and signature hashes, paired contextual import provenance, production/test facade consumers, private reads, mutation seams, and an isolated runtime contract. Its compact 1,005,471-byte baseline and canonical report reproduce byte-identically on Windows CPython 3.12/3.14 and WSL CPython 3.12; 53 focused tests, an independent exact-edge cross-check, and an independent adversarial audit pass. Broader R7 coverage, typing, lint, and static security work remain open |
-| Phase A0 architecture benchmark harness | A0a implemented locally; A0b pending | Commit `64843d1` introduced nine contained fresh-process scenarios run five times; portability closure `77a0f70` redirects Linux's standard-library user base into the run-local temporary root without setting `HOME` or `CODEX_HOME`. The harness binds deterministic calls/outputs/import classes/source and lock identity, exercises the real supervised CLI and worker boundaries, and includes adversarial validator, isolation, no-op, lock, and user-base controls. All 51 tests pass on Windows and WSL, and focused review found no material A0a blocker. Separate clean CPython 3.12 x86-64 Windows/Linux baselines, matching hosted CI checks, and retained reports are still required before this can gate R8 |
+| Phase A0 architecture benchmark | A0a implemented; A0b local candidate complete, hosted gate pending | Commit `64843d1` introduced nine contained fresh-process scenarios run five times; portability closure `77a0f70` redirects Linux's standard-library user base into the run-local temporary root without setting `HOME` or `CODEX_HOME`. All 51 A0a tests pass on Windows and WSL. From clean pre-gate source `0fe69f3`, separate CPython 3.12 x86-64 Windows and Linux baselines were generated and independently reproduced after exact hash-locked full/test CPU-profile synchronization. The gate-only candidate adds the two canonical reports, an evidence ledger, a matching hosted matrix, strict comparison, and 30-day current-report retention. A0b still requires both hosted jobs to pass at one frozen final commit/tree before it can gate R8 |
 | Ethics corpus coherence and publication quality | Implemented (draft) | [PR #31](https://github.com/toddlar00/rag-pipeline/pull/31): canonical scaffold reconstruction, exact source identity, complete tables and nested footnotes, exact embedding budgets, regenerated exports, and an exactly reconciled 1,715-record Chroma index |
 | Machine-readable corpus quality attestation | Implemented (draft) | [PR #31](https://github.com/toddlar00/rag-pipeline/pull/31): schema-v1 report binds the exact Docling source, chunks bytes, parameters, source-lineage coverage, tables, normalization, classification, entities, token budgets, and stable/hash roots; resume, export, retrieval, and index publication fail closed on missing, stale, malformed, or mismatched evidence |
 | Synced-folder publication and read resilience | Implemented (draft) | [PR #31](https://github.com/toddlar00/rag-pipeline/pull/31): bounded Windows sharing-violation retries republish only a pinned staging file; marker and exact artifact reads retry only content-identical ctime churn while failing closed on content-generation changes; exact hashes bypass unsafe stat caching on Windows |
@@ -697,8 +702,8 @@ are a snapshot, not release claims:
 - `main` is `54cdb00`. The last published exact head is `e2196a1` on PR #43, 33
   commits and 80 changed files ahead of `main` with 28,881 insertions and 2,014
   deletions. That published head remains the last GitHub CI reference. The
-  audited local implementation checkpoint is `77a0f70` (tree `fc268e5`): 61
-  commits and 173 files ahead of `main`, with 94,787 insertions and 6,185
+  clean pre-gate source checkpoint is `0fe69f3` (tree `f97aa2b`): 62 commits
+  and 173 files ahead of `main`, with 94,807 insertions and 6,185
   deletions. The large insertion count includes the canonical architecture
   inventory and should not be mistaken for equivalent executable-code growth.
   This aggregation includes the local R0/R0A/R0B, R4, R7, R8, R10, and R12
@@ -753,8 +758,9 @@ are a snapshot, not release claims:
   commits replace PR #43's stale compile list, gate the architecture inventory,
   and validate machine-readable security-workflow ownership plus pinned-action,
   checkout-credential, and permission invariants. Those additions do not yet
-  have hosted CI evidence. Phase A0b's per-OS baselines, comparisons, and
-  retained artifacts also remain absent at this snapshot.
+  have hosted CI evidence. Phase A0b's per-OS baseline candidates and local
+  same-platform comparisons now exist, together with 30-day retention wiring;
+  the hosted comparisons and their retained reports remain absent.
 - Five policy records across four supply-chain exception families expire on
   2026-08-31: the Chroma vulnerability exception; separate normalized Torch and
   Torchvision audit skips; the PyMuPDF license exception; and FlagEmbedding's
@@ -787,7 +793,7 @@ are a snapshot, not release claims:
 | [#33](https://github.com/toddlar00/rag-pipeline/pull/33)-[#38](https://github.com/toddlar00/rag-pipeline/pull/38) | Open focused draft dependency chain | Preserve focused diffs/audits; integrate through one current cumulative head |
 | [#39](https://github.com/toddlar00/rag-pipeline/pull/39) | Open draft cumulative PR to `main`, but only through #38 | Valuable migration rehearsal, not the current integration candidate |
 | [#40](https://github.com/toddlar00/rag-pipeline/pull/40)-[#43](https://github.com/toddlar00/rag-pipeline/pull/43) | Open drafts stacked after #39; #43 is the last published/CI-green head | Include in the new R1 cumulative PR after owner/privacy and R0A/R0B gates |
-| Local aggregation through `77a0f70` | Twenty-eight commits after published PR #43; no remote branch/PR; cumulative tree is 61 commits/173 files ahead of `main` | Finish only the already-started A0b gate slice, restore workflow-capable GitHub authentication, create a correctly named cumulative branch, record the exact commit/tree pair, and publish one current candidate |
+| Pre-gate source aggregation through `0fe69f3` | Twenty-nine commits after published PR #43; no remote branch/PR; source tree is 62 commits/173 files ahead of `main`. A following gate-only local candidate adds A0b baselines, CI, and evidence docs without Python or lock changes | Validate the gate-only diff and both same-platform comparisons, restore workflow-capable GitHub authentication, create a correctly named cumulative branch, record the exact final commit/tree pair, and publish one current candidate |
 
 No open project PR has a submitted GitHub review. “Mergeable” and self-audit
 comments are not approval, and green checks on different stacked heads do not
@@ -814,7 +820,7 @@ done separate; “code exists” does not imply “integrated” or “owner app
 | R7 quality gates | Exhaustive compile/Ruff, security-workflow ownership, and schema-v3 architecture/facade gates exist locally; branch coverage, typing, expanded lint, and static secret/security scans do not | The canonical inventory covers all tracked sources, paired import provenance, spans/arity, definitions, production/test consumers, private reads, mutation seams, and isolated runtime behavior; it reproduces on Windows and Linux and has an independent no-blocker audit. Point coverage remains non-gating and misses subprocesses | Not published | Baseline changes require a named reason/reviewer; maintainer still selects coverage/type/lint ratchets | Preserve the accepted inventory; next add branch/subprocess coverage, typed leaves, staged lint, content-aware secret scanning, and changed-safety-code ratchets |
 | R8 dependency direction | Evaluation inversion, durable supervision binding, service-host/search inversion, service job coordination, CLI/UI job-application inversion, HTTP implementation extraction, and a service-role outer root are implemented locally | Exact-function extraction, facade/type/pickle compatibility, import order/isolation, atomic bindings/root construction, cleanup/failure propagation, exact job/search/HTTP wiring, shell isolation, shared lock identity, live Uvicorn, and cross-process tests cover an acyclic first-party graph | Not published | No owner decision | Carry the accepted R7 facade inventory through A0b and final R1 convergence; then move pipeline implementation ownership behind the stable `rag.py` facade, migrating the search child, UI/CLI, and evaluator in separate slices without absorbing intentional child shells |
 | R9 orchestration decomposition | First policy leaves extracted; hot spots remain | Failure-injection suite provides characterization base | None | No owner decision | Wait for broader R7 and R10 Phase A1, then slice main/chunk/eval/OpenAPI |
-| R10 performance/capacity | Offline cache-aware model-sync planning plus the nine-scenario Phase A0a harness are implemented locally; runtime telemetry and queue metrics exist | A0a's containment, deterministic contracts, negative controls, real completion validators, lock contention, and Linux user-base isolation pass 51 Windows/WSL tests and focused review; no authoritative per-OS A0b baseline/hosted check or later capacity budget exists | Not published | A0b needs exact-head review; authorized corpus/hardware/cost scope is still required for Phase B | Commit/review matching Windows and Linux A0b baselines and CI artifacts before R8c-6; then implement the separately gated A1a/A1b/A1c groups before corresponding R9 slices |
+| R10 performance/capacity | Offline cache-aware model-sync planning, the nine-scenario Phase A0a harness, and a local A0b gate candidate are implemented; runtime telemetry and queue metrics exist | A0a's containment, deterministic contracts, negative controls, real completion validators, lock contention, and Linux user-base isolation pass 51 Windows/WSL tests and focused review. Separate clean-source Windows/Linux full-profile baselines each pass an independent 9×5 comparison; the hosted exact-head matrix has not run and no later capacity budget exists | Not published | A0b needs both retained hosted reports and exact-head review; authorized corpus/hardware/cost scope is still required for Phase B | Freeze and publish the gate-only candidate, require both hosted A0b jobs before R8c-6, then implement the separately gated A1a/A1b/A1c groups before corresponding R9 slices |
 | R11 corpus/profile breadth | Second profile and synthetic fixtures exist | No authorized real receipt for `roman-parts-book-v1` | None | Corpus authorization/qualification required | Add content-free profile diagnostics and real receipt |
 | R12 packaging/docs/UX | Task-oriented model-sync presets, offline plan output, and plan-based first-run guidance implemented locally; packaging/README split not done | Planner behavior is tested locally; documentation examples are not yet parser-executed in CI | Not published | Product language and remote-scope decisions remain | Add stable console entry points and short parser-checked release guides before R5 |
 
@@ -1200,12 +1206,16 @@ stack whose middle cumulative PR stops before the current head.
   intended Python source and dependency/model-lock change. Record its full
   commit SHA (`git rev-parse HEAD`) and tree SHA (`git rev-parse HEAD^{tree}`).
   Generate the per-OS A0b baselines from that checkpoint. The following
-  gate-only evidence commit may add only the reviewed baselines, CI wiring, and
-  evidence documentation; it may not change Python source or any lock. Then
-  record a separate **final R1 candidate** commit/tree pair and use only that
-  final pair for workflows, review, migration rehearsal, and merge. Any later
-  source or lock change invalidates both A0b baselines and requires a new
-  pre-gate checkpoint; any other change requires a new final candidate pair.
+  gate-only evidence commit may add only the reviewed baselines, their
+  path-scoped line-ending metadata, CI wiring, and evidence documentation; it
+  may not change Python source or any lock. Then record a separate **final R1
+  candidate** commit/tree pair and use only that final pair for workflows,
+  review, migration rehearsal, and merge. Any later source or lock change
+  invalidates both A0b baselines and requires a new pre-gate checkpoint; any
+  other change requires a new final candidate pair. Preserve the pre-gate
+  source commit in `main` history: a squash or history-rewriting rebase makes
+  the ancestor-bound source-delta proof fail and requires baseline regeneration
+  from the replacement history.
 - Create a new cumulative branch from the current validated local head to
   `main` without rewriting the focused review histories. Include every local
   slice after `e2196a1`, not merely the earlier R0/R4 subset. Do not merge the
@@ -1228,7 +1238,7 @@ stack whose middle cumulative PR stops before the current head.
 - Publish a review manifest that maps focused PR/commit ranges and file domains
   to named reviewer roles. Require separate privacy/security, migration/release,
   evaluation, and cross-stack delta sign-offs, all bound to the final commit, so
-  the current roughly 100,972-changed-line cumulative diff does not receive only
+  the current roughly 101,000-changed-line cumulative diff does not receive only
   nominal approval. Freeze the candidate before review; any later code change
   invalidates the exact-head sign-offs and affected workflow conclusions.
 - Preserve `INTEGRATION_AUDIT.md` as the historical #1-#28 record and publish a
@@ -1934,19 +1944,27 @@ than descriptive data with no release ceiling.
   wrong wiring, isolation mutations, and a real busy-then-acquired interprocess
   vector lock all fail as required. Local reports prove the harness works; they
   are not an authoritative baseline or CI gate.
-- **Phase A0b — canonical baseline and CI checkpoint, still before R8c-6:** from
-  the clean pre-gate source checkpoint, generate the complete authoritative A0
-  baseline under the locked CPU profile on CPython 3.12 x86-64 and reproduce it
-  independently on Tier-1 Windows and Linux. A gate-only evidence commit may
-  then add the redacted per-OS baselines, CI wiring, and evidence docs without
-  changing Python or dependency/model locks. Freeze the resulting final R1
-  commit/tree; make `--check` require the complete scenario set, canonical
-  runtime, clean tree, unchanged source/locks, and matching platform, and upload
-  each current report as a CI artifact. Any source/lock change regenerates both
-  baselines. Gate deterministic operation counts, output bytes, import classes,
-  and serialized identities; keep wall/RSS diagnostic until repeatability
-  supports a reviewed budget. Harness implementation alone does not satisfy
-  this checkpoint.
+- **Phase A0b — local candidate assembled; hosted checkpoint still before
+  R8c-6:** clean pre-gate source `0fe69f3` now has complete canonical baselines
+  generated and independently reproduced under the exact full/test CPU lock
+  profile on CPython 3.12 x86-64 for Tier-1 Windows and Linux. The following
+  gate-only candidate adds only the redacted per-OS baselines, path-scoped LF
+  preservation, CI wiring, and evidence docs; it does not change Python or
+  dependency/model locks. Its `--check` path requires the complete scenario
+  set, canonical runtime, clean
+  tree, unchanged source/locks, and matching platform, then retains each current
+  report for 30 days. Freeze the resulting final R1 commit/tree and require both
+  hosted matrix cells before authorizing R8c-6. Any source/lock change
+  regenerates both baselines. Deterministic operation counts, output bytes,
+  import classes, and serialized identities gate; wall/RSS remain diagnostic
+  until repeatability supports a reviewed budget. Local reproduction alone does
+  not satisfy the hosted checkpoint.
+- **A0 diagnostic follow-up — after the frozen R1 gate:** publish a validated,
+  redacted current report before contract comparison so a failed hosted cell
+  retains actionable drift evidence. The current harness writes its output only
+  after a successful comparison. Because changing that ordering touches Python
+  source, defer it to the next deliberate baseline cycle and regenerate both
+  platform baselines with the change.
 - **Phase A1a — command and artifact construction, before the corresponding R9
   slices:** add stable small/medium CPU baselines for parser/dispatch, chunk
   preparation/publication, quality build/validation, and OpenAPI generation.
@@ -1991,10 +2009,12 @@ than descriptive data with no release ceiling.
   credentials and spend ceilings are explicit. Exercise bounded overload and
   cancellation rather than only the success path.
 
-**Acceptance evidence.** A0a's harness and tests pass, and the separate A0b
-canonical baseline/CI checkpoint guards the R8 ownership move; no local smoke or
-partial scenario report can substitute for A0b. A1a, A1b, and A1c independently
-guard their corresponding semantic R9 slices. All benchmarks emit redacted,
+**Acceptance evidence.** A0a's harness and tests pass. Both local A0b baseline
+candidates reproduce under their matching exact full/test CPU profile, while
+the separate retained hosted baseline/CI checkpoint still guards the R8
+ownership move; no local smoke, partial scenario report, or local-only
+comparison can substitute for that final A0b evidence. A1a, A1b, and A1c
+independently guard their corresponding semantic R9 slices. All benchmarks emit redacted,
 schema-validated reports; baselines name commit, hardware, runtime, and
 model/lock identities;
 repeated local/CI runs show documented variability; deterministic output/count

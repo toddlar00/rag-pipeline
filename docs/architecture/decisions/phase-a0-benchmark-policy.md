@@ -1,7 +1,7 @@
 # Phase A0 Benchmark Policy
 
-- **Status:** A0a implemented locally; A0b canonical baselines and CI
-  checkpoint pending
+- **Status:** A0a implemented locally; A0b baselines and CI wiring implemented
+  locally, hosted frozen-head checkpoint pending
 - **Milestone:** R10 prerequisite for the R8 pipeline-ownership move
 - **Report schema:** `phase-a0` v3
 
@@ -22,10 +22,11 @@ Phase A0 is intentionally split:
   Linux baselines from a clean pre-gate source checkpoint, each generated on
   CPython 3.12 x86-64 with the locked CPU dependency profile, plus hosted CI
   comparison and retained current-report artifacts. A following gate-only
-  evidence commit may add those baselines, CI wiring, and evidence docs, but no
-  Python source or dependency/model lock. CI and review bind the resulting
-  final R1 candidate commit/tree; any intervening source or lock change
-  invalidates and regenerates both baselines.
+  evidence commit may add those baselines, CI wiring, evidence docs, and a
+  path-scoped LF rule that preserves canonical report bytes, but no Python
+  source or dependency/model lock. CI and review bind the resulting final R1
+  candidate commit/tree; any intervening source or lock change invalidates and
+  regenerates both baselines.
 
 [`tools/benchmark_phase_a0.py`](../../../tools/benchmark_phase_a0.py) runs five
 or more repetitions of nine fresh-process scenarios:
@@ -70,12 +71,26 @@ that `Path.home()` remains denied.
 
 ## A0b publication gate
 
-A0b remains pending. No local smoke report, subset, noncanonical interpreter,
-or baseline copied between operating systems is authoritative. The eventual CI
-checkpoint must require the complete nine-scenario set, five repetitions, a
-clean exact source/lock identity, the matching per-OS CPython 3.12/64 baseline,
-and artifact retention. Until both Tier-1 jobs pass at the frozen head, Phase
-A0 does not authorize the R8 ownership move.
+The local gate candidate uses clean pre-gate source `0fe69f3` and separate
+Windows and Linux CPython 3.12 x86-64 reports. Both were generated under the
+exact `requirements-full.lock`, `requirements-test.lock`, and retained
+`requirements-lock-tools.lock` union after strict hash-locked synchronization
+and dependency-consistency checks; each passes an independent complete 9×5
+same-platform comparison. The gate-only candidate adds those reports, their
+path-scoped LF normalization, matching CI matrix cells, and 30-day
+current-report retention without changing Python or dependency/model locks.
+
+A0b nevertheless remains pending. No local smoke report, subset, noncanonical
+interpreter, baseline copied between operating systems, or local-only
+comparison is authoritative. Both Tier-1 hosted jobs must pass against their
+matching baseline at one frozen final commit/tree and retain their reports.
+Until that exact-head evidence exists, Phase A0 does not authorize the R8
+ownership move.
+
+The source-delta check is intentionally ancestor-bound. The final candidate
+must reach `main` through a history-preserving merge that retains the pre-gate
+source commit. Squashing or rewriting that history invalidates the evidence and
+requires new baselines from the replacement source checkpoint.
 
 ## Boundaries
 
@@ -91,6 +106,12 @@ B workloads.
 - Harness: [`tools/benchmark_phase_a0.py`](../../../tools/benchmark_phase_a0.py)
 - Schema, containment, negative-control, and contract tests:
   [`tests/test_phase_a0_benchmark.py`](../../../tests/test_phase_a0_benchmark.py)
+- Baseline provenance and checking procedure:
+  [`benchmarks/README.md`](../../../benchmarks/README.md)
+- Windows and Linux canonical candidates:
+  [`phase-a0-windows-cpython312.json`](../../../benchmarks/phase-a0-windows-cpython312.json)
+  and
+  [`phase-a0-linux-cpython312.json`](../../../benchmarks/phase-a0-linux-cpython312.json)
 
 A0a was introduced at `64843d1`; the cross-platform user-base isolation closure
 is `77a0f70`. All 51 A0a tests pass under the locked Windows and WSL Linux test

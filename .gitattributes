@@ -6,3 +6,4 @@
 *.toml text eol=lf
 *.txt text eol=lf
 *.jsonl text eol=lf
+benchmarks/*.json text eol=lf
