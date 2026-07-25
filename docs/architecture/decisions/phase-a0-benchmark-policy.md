@@ -73,8 +73,8 @@ that `Path.home()` remains denied.
 ## A0b publication gate
 
 The replacement gate uses clean pre-gate source
-`6d9e814a9e5c1f071214f42d69ee4b0623e799a7` (tree
-`b33fa91b3aac80ae14084c54dbf6059176213723`) and separate Windows and Linux
+`9e81ef30f9f68206268a10a1954fd3bb7ab98557` (tree
+`bd77977c41a68b0b85dd41c3fc72aaa84d730a86`) and separate Windows and Linux
 CPython 3.12 x86-64 reports. Both were generated under the
 exact `requirements-full.lock`, `requirements-test.lock`, and retained
 `requirements-lock-tools.lock` union after strict hash-locked synchronization
@@ -82,7 +82,7 @@ and dependency-consistency checks: 189 marker-resolved distributions on
 Windows and 187 on Linux. They bind one clean source, the same eight LF and
 `HEAD`-identical dependency/model inputs, and the complete 9×5 scenario
 contract. Each passes an independent complete same-platform comparison. The
-repaired CI matrix, LF policy, and source gates are inherited by `6d9e814` and
+repaired CI matrix, LF policy, and source gates are inherited by `9e81ef3` and
 were exercised by generation and comparison. The Python 3.10-3.14
 normalization qualified at the earlier R1 checkpoint is also inherited; this
 regeneration itself used the canonical CPython 3.12.13 profile. The following
@@ -160,22 +160,22 @@ implementation identity for public `pathlib.Path`. The R1 pre-gate source
 `fdb08d2` closed those cases, including inherited cross-module type hints,
 without permitting operator-home or tilde access.
 
-Current clean pre-gate source `6d9e814` retains the qualified A0 controls and
-strict classification contract, then adds the strict shared TOC hierarchy
-output contract. Its complete locked Windows suite passes 2,425 tests with 7
-skips, and all dependency, model-artifact, CI-security, architecture, Ruff, and
-tracked-source compilation gates pass. The canonical architecture inventory
-records 2,020 functions and 380 compact runtime callables. The Windows
-replacement report is 49,245 bytes
+Current clean pre-gate source `9e81ef3` retains the qualified A0 controls and
+strict classification and shared TOC hierarchy contracts, then adds the strict
+upstream TOC layout contract. Its complete locked Windows suite passes 2,489
+tests with 7 skips, and all dependency, model-artifact, CI-security,
+architecture, Ruff, and tracked-source compilation gates pass. The canonical
+architecture inventory records 2,021 functions and 380 compact runtime
+callables. The Windows replacement report is 49,243 bytes
 under CPython
 3.12.13 (file SHA-256
-`4529674ebee037be5b627a725dbd824ebd88ce7a34d12b82267aeda52e18a6b3`;
+`bd9ca30d6a50b507ed69e0ff94e6b734a635833522d4de37654a9c16cf8474e4`;
 embedded report SHA-256
-`caeff095147e9e0a9275d27fad97d6281e769c556b6ed982078ab0584795862e`).
-The Linux report is 48,657 bytes under CPython 3.12.13 (file SHA-256
-`6cfa3c933b6d8fcf7e9955373e9174bee567cb98a50bb0b07bc23754f2881735`;
+`4a313fb42f66b7880a75ac173f753422287603f4a3272e08b96726d505b74351`).
+The Linux report is 48,654 bytes under CPython 3.12.13 (file SHA-256
+`34d3334aa8da7571cf30fde7b0b8fa6f1979e57032e5f28011e49893f1ef9ec4`;
 embedded report SHA-256
-`567679c11b3bfeb9db64e6d0552fe38ef6ff706809d2df70fd277e2edd24813c`).
+`7918d9259a5572e7b934df9c80b04b231a5766c27a5762ced66d675ac471e746`).
 Both pass independent complete same-platform 9×5 comparisons. These are local
 replacement baseline candidates. The gate-only commit that contains them
 freezes the final local candidate; publishing its exact commit/tree plus hosted
