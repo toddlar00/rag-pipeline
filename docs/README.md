@@ -59,6 +59,9 @@ material. When documents disagree, use the authority order below.
   — hostile generated-text validation, classification prompt framing,
   cache/single-flight enforcement, the owner-pending semantic-rejection
   fallback rule, and content-free receipts.
+- [TOC hierarchy output contract](architecture/decisions/toc-hierarchy-output-contract.md)
+  — proposed exact hierarchy-array validation, untrusted TOC prompt framing,
+  atomic multi-batch fallback, and opt-in chunk provenance.
 - [Architecture and facade inventory policy](architecture/decisions/architecture-facade-inventory-policy.md)
   — schema-v3 static graph, facade/mutation characterization, normalized
   runtime contract, and reviewed baseline refreshes.

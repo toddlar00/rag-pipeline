@@ -219,12 +219,67 @@ def test_chunk_completion_binds_source_options_model_lock_and_output(
         "max_bytes": 128,
         "allowed_values": list(rag._CONTENT_LABELS),
     }
+    assert initial["toc_scaffold_generation"] == {
+        "prompt_version": "2",
+        "input_policy_version": 1,
+        "max_output_tokens": 4096,
+        "timeout_seconds": 30,
+        "max_lines_per_batch": 80,
+        "max_line_characters": 512,
+        "max_line_json_bytes": 2048,
+        "max_batch_json_bytes": 262144,
+        "preserved_tail_characters": 128,
+        "max_layout_hints": 32,
+        "max_layout_hint_characters": 512,
+        "max_layout_hint_json_bytes": 2048,
+        "max_layout_json_bytes": 131072,
+        "output_contract": {
+            "policy_version": 1,
+            "contract_id": "toc-hierarchy-v1",
+            "fallback_id": "use-deterministic-toc-scaffold",
+            "max_bytes": 131072,
+            "max_depth": 2,
+            "max_integer_digits": 7,
+            "min_items": 1,
+            "max_items": 100,
+            "max_title_chars": 512,
+            "max_title_bytes": 512,
+            "max_page": 1000000,
+            "min_level": 1,
+            "max_level": 5,
+            "unicode_data_major": int(
+                rag._llm_output_contracts.TOC_HIERARCHY_UNICODE_DATA_VERSION
+                .split(".")[0]),
+            "unicode_data_minor": int(
+                rag._llm_output_contracts.TOC_HIERARCHY_UNICODE_DATA_VERSION
+                .split(".")[1]),
+            "unicode_data_patch": int(
+                rag._llm_output_contracts.TOC_HIERARCHY_UNICODE_DATA_VERSION
+                .split(".")[2]),
+        },
+    }
     disabled = parameters(llm_classify=False)
     assert disabled["classification_prompt_version"] == 1
     assert "classification_output_contract" not in disabled
+    scaffold_disabled = parameters(llm_scaffold=False)
+    assert "toc_scaffold_generation" not in scaffold_disabled
     _write_chunk_completion(document, chunks, initial)
 
     assert rag._chunks_complete(document, chunks, parameters=initial)
+    changed_toc_prompt = json.loads(json.dumps(initial))
+    changed_toc_prompt["toc_scaffold_generation"]["prompt_version"] = "3"
+    assert not rag._chunks_complete(
+        document, chunks, parameters=changed_toc_prompt)
+    changed_toc_input_policy = json.loads(json.dumps(initial))
+    changed_toc_input_policy["toc_scaffold_generation"][
+        "input_policy_version"] = 2
+    assert not rag._chunks_complete(
+        document, chunks, parameters=changed_toc_input_policy)
+    changed_toc_contract = json.loads(json.dumps(initial))
+    changed_toc_contract["toc_scaffold_generation"]["output_contract"][
+        "max_depth"] = 3
+    assert not rag._chunks_complete(
+        document, chunks, parameters=changed_toc_contract)
     changed_contract = json.loads(json.dumps(initial))
     changed_contract["classification_output_contract"]["max_bytes"] = 64
     assert not rag._chunks_complete(

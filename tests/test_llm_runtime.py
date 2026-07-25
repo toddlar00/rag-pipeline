@@ -60,6 +60,20 @@ def _contract_request(*, operation="test.output_contract",
     )
 
 
+def _toc_contract_request(*, failure_policy=None):
+    return LLMRequest(
+        prompt=(
+            "parse bounded TOC source\n"
+            + rag._TOC_HIERARCHY_CONTRACT_PROMPT_JSON),
+        operation="toc.scaffold",
+        prompt_version="2",
+        failure_policy=failure_policy,
+        output_contract_id=output_contracts.TOC_HIERARCHY_CONTRACT_ID,
+        output_fallback_id=output_contracts.TOC_SCAFFOLD_FALLBACK_ID,
+        output_validator=output_contracts.TOC_HIERARCHY_CONTRACT,
+    )
+
+
 def test_success_is_cached_and_warm_read_skips_provider(tmp_path):
     calls = 0
 
@@ -776,6 +790,90 @@ def test_output_contract_canonicalizes_and_caches_only_accepted_text(tmp_path):
     }]
 
 
+def test_toc_contract_canonicalizes_live_output_and_revalidates_cache(
+        tmp_path):
+    calls = 0
+
+    def invoke(_request):
+        nonlocal calls
+        calls += 1
+        return ' [ { "title":"Chapter One", "page":7, "level":1 } ] '
+
+    runtime = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="readwrite", cache_dir=tmp_path / "cache"))
+    request = _toc_contract_request()
+    provider = _provider(invoke)
+
+    live = runtime.execute(request, [provider])
+    cached = runtime.execute(request, [provider])
+
+    canonical = '[{"level":1,"page":7,"title":"Chapter One"}]'
+    assert live.text == cached.text == canonical
+    assert live.output_contract_status == "accepted"
+    assert cached.output_contract_status == "accepted"
+    assert cached.cache_status == "hit"
+    assert calls == 1
+    cache_text = next((tmp_path / "cache").rglob("*.json")).read_text(
+        encoding="utf-8")
+    assert canonical.replace('"', '\\"') in cache_text
+
+
+def test_toc_contract_rejection_is_content_free_in_best_effort_and_strict(
+        tmp_path):
+    response = (
+        'MODEL_RESPONSE_CANARY '
+        '[{"level":1,"title":"Chapter One","page":7}]')
+    provider = _provider(lambda _request: response)
+
+    best_effort = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="readwrite", cache_dir=tmp_path / "best-cache"))
+    result = best_effort.execute(_toc_contract_request(), [provider])
+
+    assert result.text == ""
+    assert result.error_category == "invalid_response"
+    assert result.output_contract_status == "rejected"
+    assert result.output_diagnostic_code == output_contracts.JSON_SYNTAX
+    assert result.output_fallback_id == (
+        output_contracts.TOC_SCAFFOLD_FALLBACK_ID)
+    assert not list((tmp_path / "best-cache").rglob("*.json"))
+    assert "MODEL_RESPONSE_CANARY" not in json.dumps(
+        best_effort.report_payload())
+
+    strict = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="off", cache_dir=tmp_path / "strict-cache",
+        failure_policy="strict"))
+    with pytest.raises(LLMExecutionError) as caught:
+        strict.execute(_toc_contract_request(), [provider])
+    assert caught.value.result.output_diagnostic_code == (
+        output_contracts.JSON_SYNTAX)
+    assert "MODEL_RESPONSE_CANARY" not in str(caught.value)
+
+
+def test_toc_semantic_rejection_does_not_delegate_provider_authority(
+        tmp_path):
+    secondary_calls = 0
+
+    def secondary(_request):
+        nonlocal secondary_calls
+        secondary_calls += 1
+        return '[{"level":1,"title":"Chapter One","page":1}]'
+
+    runtime = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="off", cache_dir=tmp_path / "cache"))
+    result = runtime.execute(
+        _toc_contract_request(),
+        [
+            _provider(lambda _request: "[]"),
+            _provider(secondary, name="secondary", model="model-b"),
+        ],
+    )
+
+    assert result.error_category == "invalid_response"
+    assert result.output_diagnostic_code == output_contracts.JSON_ITEM_LIMIT
+    assert result.fallback_path == ("primary",)
+    assert secondary_calls == 0
+
+
 def test_rejected_output_is_never_cached_and_best_effort_receipts_fallback(
         tmp_path):
     calls = 0
@@ -1387,25 +1485,42 @@ def test_toc_parser_uses_one_runtime_dispatch(monkeypatch):
 
     def fake_call(prompt, **kwargs):
         observed.append((prompt, kwargs))
-        return '[{"level": 1, "title": "Chapter One", "page": 1}]'
+        return ' [ {"page":1,"title":"Chapter One","level":1} ] '
 
     monkeypatch.setattr(rag, "_call_llm", fake_call)
     entries = rag._llm_parse_toc("Chapter One 1", cloud_key="key")
 
-    assert len(entries) == 1
+    assert entries == [{
+        "level": 1,
+        "title": "Chapter One",
+        "page": 1,
+        "marker": "",
+    }]
     assert len(observed) == 1
     assert observed[0][1]["operation"] == "toc.parse"
+    assert observed[0][1]["prompt_version"] == "2"
     assert observed[0][1]["timeout"] == 60
+    assert observed[0][1]["max_tokens"] == 4000
+    assert observed[0][1]["output_contract_id"] == "toc-hierarchy-v1"
+    assert observed[0][1]["output_fallback_id"] == (
+        "use-deterministic-toc-parser")
+    assert observed[0][1]["output_validator"] is (
+        rag._TOC_HIERARCHY_OUTPUT_CONTRACT)
 
 
-def test_scaffold_parser_does_not_swallow_budget_exhaustion(monkeypatch):
+@pytest.mark.parametrize("parser_name", [
+    "_llm_parse_scaffold",
+    "_llm_parse_toc",
+])
+def test_toc_parser_does_not_swallow_budget_exhaustion(
+        monkeypatch, parser_name):
     monkeypatch.setattr(
         rag, "_call_llm",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             LLMBudgetExceeded("limit")))
 
     with pytest.raises(LLMBudgetExceeded):
-        rag._llm_parse_scaffold("Chapter One 1")
+        getattr(rag, parser_name)("Chapter One 1")
 
 
 def test_cli_runtime_flags_configure_run_and_write_report(

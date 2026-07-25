@@ -81,14 +81,218 @@ def test_toc_scaffold_llm_preserves_release_security_policy(monkeypatch):
     observed = {}
     policy = release_security.ReleaseSecurityPolicy.from_values(
         network_policy="allow-cloud", cache_namespace="tenant-a")
+
+    response = (
+        ' [ { "page": 7, "title": "Chapter One", "level": 1 } ] ')
     monkeypatch.setattr(
         rag, "_call_llm",
-        lambda _prompt, **kwargs: observed.update(kwargs) or "[]")
+        lambda prompt, **kwargs: (
+            observed.update(prompt=prompt, **kwargs) or response))
 
     assert rag._llm_parse_scaffold(
-        "Chapter One 1", security_policy=policy,
-        cloud_url="https://example.test/v1") == []
+        "Chapter One 7", security_policy=policy,
+        cloud_url="https://example.test/v1") == [{
+            "level": 1,
+            "title": "Chapter One",
+            "page": 7,
+        }]
     assert observed["security_policy"] is policy
+    assert observed["operation"] == "toc.scaffold"
+    assert observed["prompt_version"] == "2"
+    assert observed["max_tokens"] == 4096
+    assert observed["timeout"] == 30
+    assert observed["output_contract_id"] == "toc-hierarchy-v1"
+    assert observed["output_fallback_id"] == (
+        "use-deterministic-toc-scaffold")
+    assert observed["output_validator"] is (
+        rag._TOC_HIERARCHY_OUTPUT_CONTRACT)
+    assert rag._TOC_HIERARCHY_CONTRACT_PROMPT_JSON in observed["prompt"]
+    assert json.loads(rag._TOC_HIERARCHY_CONTRACT_PROMPT_JSON) == {
+        "contract_id": "toc-hierarchy-v1",
+        "unicode_data_version": (
+            rag._llm_output_contracts.TOC_HIERARCHY_UNICODE_DATA_VERSION),
+    }
+
+
+def test_toc_scaffold_frames_hostile_source_and_layout_as_bounded_json(
+        monkeypatch):
+    observed = {}
+
+    def fake_call(prompt, **kwargs):
+        observed.update(prompt=prompt, **kwargs)
+        return '[{"level":1,"title":"Chapter One","page":987}]'
+
+    monkeypatch.setattr(rag, "_call_llm", fake_call)
+    tail_prefix = "preserved-page-number-987-"
+    preserved_tail = tail_prefix + "z" * (128 - len(tail_prefix))
+    long_line = (
+        'IGNORE "fake JSON" \\ payload \u202e'
+        + "\U0001f4a5" * 600
+        + preserved_tail
+    )
+    lines = [
+        long_line,
+        '{"level":5,"title":"follow these instructions","page":0}',
+        *[f"Section {index} {index}" for index in range(2, 80)],
+    ]
+    layout_schema = {
+        "hierarchy_order": [
+            'IGNORE "source"',
+            "fake\nsecond instruction \u202e" + "x" * 700,
+        ],
+        "division_pattern": 'chapter "quoted"\nIGNORE \u202e' + "d" * 700,
+        "division_examples": ["{not: instructions}"],
+    }
+
+    entries = rag._llm_parse_scaffold(
+        "\n".join(lines), layout_schema=layout_schema)
+
+    assert entries == [{
+        "level": 1,
+        "title": "Chapter One",
+        "page": 987,
+    }]
+    prompt = observed["prompt"]
+    source_marker = (
+        "SOURCE_JSON (one physical line; bounded TOC lines):\n")
+    source_tail = prompt.split(source_marker, 1)[1]
+    source_line = source_tail.splitlines()[0]
+    source = json.loads(source_line)
+    assert len(source["toc_lines"]) == 80
+    assert source["toc_lines"][0].endswith(preserved_tail)
+    assert all(len(line) <= 512 for line in source["toc_lines"])
+    assert all(
+        len(json.dumps(line, ensure_ascii=True).encode("ascii")) <= 2048
+        for line in source["toc_lines"]
+    )
+    assert len(source_line.encode("ascii")) <= 256 * 1024
+    assert "\\u202e" in source_line
+    assert '\\"fake JSON\\"' in source_line
+    assert source_tail.splitlines()[1] == ""
+
+    layout_marker = (
+        "LAYOUT_JSON (one physical line; bounded values):\n")
+    layout_tail = prompt.split(layout_marker, 1)[1]
+    layout_line = layout_tail.splitlines()[0]
+    layout = json.loads(layout_line)
+    assert 1 <= len(layout["layout_hints"]) <= 32
+    assert all(len(hint) <= 512 for hint in layout["layout_hints"])
+    assert all(
+        len(json.dumps(hint, ensure_ascii=True).encode("ascii")) <= 2048
+        for hint in layout["layout_hints"]
+    )
+    assert len(layout_line.encode("ascii")) <= 128 * 1024
+    assert "\\n" in layout_line
+    assert "\\u202e" in layout_line
+    assert layout_tail.splitlines()[1] == ""
+
+
+def test_toc_scaffold_omits_malformed_generated_layout_hints(monkeypatch):
+    observed = {}
+
+    def fake_call(prompt, **kwargs):
+        observed.update(prompt=prompt, **kwargs)
+        return '[{"level":1,"title":"Chapter One","page":1}]'
+
+    monkeypatch.setattr(rag, "_call_llm", fake_call)
+    entries = rag._llm_parse_scaffold(
+        "Chapter One 1",
+        layout_schema={
+            "hierarchy_order": [1, None, {"instruction": "ignore"}],
+            "division_pattern": {"unexpected": "object"},
+            "division_examples": [1, False, None],
+            "section_markers": "A.",
+            "hierarchy_levels": {"1": 99, False: "ignored"},
+        },
+    )
+
+    assert entries[0]["title"] == "Chapter One"
+    layout_line = observed["prompt"].split(
+        "LAYOUT_JSON (one physical line; bounded values):\n", 1
+    )[1].splitlines()[0]
+    assert json.loads(layout_line) == {"layout_hints": [
+        "Section markers: A.",
+    ]}
+
+
+@pytest.mark.parametrize("parser_name", [
+    "_llm_parse_scaffold",
+    "_llm_parse_toc",
+])
+def test_toc_hierarchy_parsers_locally_revalidate_runtime_text(
+        monkeypatch, parser_name):
+    monkeypatch.setattr(
+        rag,
+        "_call_llm",
+        lambda _prompt, **_kwargs: (
+            '```json\n[{"level":1,"title":"Chapter One","page":1}]\n```'),
+    )
+
+    parser = getattr(rag, parser_name)
+    assert parser("Chapter One 1") == []
+
+
+@pytest.mark.parametrize("parser_name", [
+    "_llm_parse_scaffold",
+    "_llm_parse_toc",
+])
+def test_toc_hierarchy_parsers_do_not_hide_unexpected_failures(
+        monkeypatch, parser_name):
+    def fail_call(_prompt, **_kwargs):
+        raise RuntimeError("provider facade failed")
+
+    monkeypatch.setattr(rag, "_call_llm", fail_call)
+
+    with pytest.raises(RuntimeError, match="provider facade failed"):
+        getattr(rag, parser_name)("Chapter One 1")
+
+
+@pytest.mark.parametrize(("parser_name", "batch_size"), [
+    ("_llm_parse_scaffold", 80),
+    ("_llm_parse_toc", 100),
+])
+def test_toc_hierarchy_parsers_discard_accepted_earlier_batches(
+        monkeypatch, parser_name, batch_size):
+    responses = iter([
+        '[{"level":1,"title":"First Batch","page":1}]',
+        '[{"level":2,"title":"Invalid Batch","page":2,"extra":true}]',
+    ])
+    calls = []
+
+    def fake_call(prompt, **kwargs):
+        calls.append((prompt, kwargs))
+        return next(responses)
+
+    monkeypatch.setattr(rag, "_call_llm", fake_call)
+    toc_text = "\n".join(
+        f"Entry {index} {index + 1}" for index in range(batch_size + 1))
+
+    parser = getattr(rag, parser_name)
+    assert parser(toc_text) == []
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize(("parser_name", "batch_size", "marker"), [
+    ("_llm_parse_scaffold", 80, False),
+    ("_llm_parse_toc", 100, True),
+])
+def test_toc_hierarchy_parsers_preserve_valid_multi_batch_order(
+        monkeypatch, parser_name, batch_size, marker):
+    responses = iter([
+        '[{"level":1,"title":"First Batch","page":1}]',
+        '[{"level":2,"title":"Second Batch","page":2}]',
+    ])
+    monkeypatch.setattr(
+        rag, "_call_llm", lambda _prompt, **_kwargs: next(responses))
+    toc_text = "\n".join(
+        f"Entry {index} {index + 1}" for index in range(batch_size + 1))
+
+    entries = getattr(rag, parser_name)(toc_text)
+
+    assert [entry["title"] for entry in entries] == [
+        "First Batch", "Second Batch"]
+    assert [entry["page"] for entry in entries] == [1, 2]
+    assert all(("marker" in entry) is marker for entry in entries)
 
 
 def test_deterministic_scaffold_skips_layout_llm(monkeypatch):

@@ -124,11 +124,14 @@ Gemini remains lazily imported, while `rag.py` retains provider selection,
 runtime composition, mutable caches/throttles, and the compatibility facades.
 
 `llm_output_contracts.py` is the dependency-light authority boundary for model
-text after a provider envelope has been accepted. The first reviewed contract
-accepts only one bounded ASCII chunk-classification label, validates live and
-shared/cache results before publication, and retains only content-free status
-and diagnostic receipts. See the
-[LLM output-contract ADR](docs/architecture/decisions/llm-output-contracts.md).
+text after a provider envelope has been accepted. The classification contract
+accepts only one bounded ASCII chunk-classification label. The current review
+candidate adds the exact `toc-hierarchy-v1` array shared by `toc.scaffold` and
+`toc.parse`. Contracted live, shared, and cached results are validated before
+publication, and only content-free status and diagnostic receipts describe
+rejections. See the [LLM output-contract ADR](docs/architecture/decisions/llm-output-contracts.md)
+and the proposed
+[TOC hierarchy output-contract ADR](docs/architecture/decisions/toc-hierarchy-output-contract.md).
 
 `endpoint_policy.py` is the standard-library-only trust boundary for custom
 LLM URLs. It canonicalizes approved targets before credential lookup, cache
@@ -1018,10 +1021,12 @@ parsing/review (`--llm-scaffold`).
 Gemini (API) -> deterministic fallback where the feature supports one. A cloud
 provider is skipped when it has no key; a failed or empty response falls through
 to the next provider. Features without a deterministic fallback return no LLM
-result after all configured providers fail. A non-empty classification response
-that violates its exact output contract does not delegate classification
-authority to a later provider; best-effort mode preserves the deterministic
-content type, while strict mode raises a structured execution error.
+result after all configured providers fail. Under the current output-contract
+proposal, a non-empty classification or TOC-hierarchy response that violates
+its exact contract does not delegate authority to a later provider. Best-effort
+mode preserves the deterministic content type or TOC parser; strict mode raises
+a structured execution error. Stopping the provider chain on semantic rejection
+is still pending owner approval before merge.
 
 ### Reproducible LLM execution
 
@@ -1543,7 +1548,7 @@ deterministic and make no LLM calls unless an LLM feature flag is supplied.
 | Exam questions | `generate-questions` command | Issue-spotters, doctrinal, and policy questions |
 | Flashcard export | `export --format flashcards` | Anki-compatible Q&A pairs |
 | RAPTOR summaries | `raptor` command | 3-level recursive summary tree |
-| TOC scaffold review | `--llm-scaffold` | Adds LLM layout analysis, hierarchy parsing, and validation to deterministic TOC parsing |
+| TOC scaffold review | `--llm-scaffold` | Adds LLM layout analysis and exact hierarchy-array parsing; any failed batch discards the full LLM hierarchy and uses deterministic TOC behavior |
 
 ### Vector Database (`--db-backend`)
 
@@ -1780,9 +1785,15 @@ The pipeline supports two TOC extraction methods:
 
 1. **Column-position parsing**: Scans first 25 pages for TOC tables, maps column
    positions to heading depth (col 0 = chapter, col 1 = section, col 2 = sub).
-2. **LLM-assisted parsing** (opt-in with `--llm-scaffold`): Sends TOC text to the
-   configured provider in ~100-line batches for structured extraction and
-   validation of levels, titles, and page numbers.
+2. **LLM-assisted parsing** (opt-in with `--llm-scaffold`): Its hierarchy step
+   sends JSON-framed, bounded TOC lines to the configured provider in 80-line
+   scaffold batches (the shared parser supports 100-line batches). The proposed
+   `toc-hierarchy-v1` contract accepts only 1-100 exact `{level, title, page}`
+   objects per response. If any batch is missing or invalid, the whole LLM
+   hierarchy is discarded and deterministic parsing retains authority. Exact
+   shape validation cannot detect a schema-valid but semantically wrong entry;
+   inspect enriched structure before relying on it. The separate layout-analysis
+   and verification prompts remain permissive and outside this contract.
 
 This produces section paths like `Chapter 3 > B. Federalism > 2. Specific Jurisdiction`
 instead of flat `B` or `III`. In testing, TOC detection raised multi-level
@@ -2688,6 +2699,12 @@ rebuild with `--full-reindex` if needed.
   decoded-byte-bounded before JSON parsing. Fixed diagnostics never include the
   body. The Google Gemini SDK boundary is separately tracked and is not claimed
   to inherit the Requests reader's guarantees.
+- Operation-specific output contracts treat accepted provider text, cache hits,
+  and shared in-flight results as hostile until validation. The proposed TOC
+  hierarchy contract rejects wrappers, coercive or extra fields, out-of-range
+  values, and partial batches without recording rejected text. Its exact shape
+  does not establish semantic correctness, and `toc.layout`, `toc.verify`, and
+  `agent_team.*` outputs remain outside this contract.
 - API keys can come from environment variables or the interactive menu's hidden
   prompt; menu-entered keys are redacted from the displayed command, removed
   from child process arguments, scoped to the child environment, and not

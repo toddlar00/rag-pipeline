@@ -7,16 +7,36 @@ only a stable diagnostic code; model output is never attached to an exception.
 
 from __future__ import annotations
 
+import json
+import math
 import re
 import unicodedata
 from dataclasses import dataclass
-from typing import Collection
+from typing import Any, Callable, Collection
 
 
 OUTPUT_CONTRACT_POLICY_VERSION = 1
 CLASSIFICATION_CONTRACT_ID = "chunk-classification-v2"
 CLASSIFICATION_FALLBACK_ID = "preserve-deterministic-content-type"
 CLASSIFICATION_MAX_BYTES = 128
+TOC_HIERARCHY_CONTRACT_ID = "toc-hierarchy-v1"
+TOC_SCAFFOLD_FALLBACK_ID = "use-deterministic-toc-scaffold"
+TOC_PARSE_FALLBACK_ID = "use-deterministic-toc-parser"
+TOC_HIERARCHY_MAX_BYTES = 128 * 1024
+TOC_HIERARCHY_MAX_DEPTH = 2
+TOC_HIERARCHY_MIN_ITEMS = 1
+TOC_HIERARCHY_MAX_ITEMS = 100
+TOC_HIERARCHY_MAX_TITLE_CHARS = 512
+TOC_HIERARCHY_MAX_TITLE_BYTES = 512
+TOC_HIERARCHY_MAX_INTEGER_DIGITS = 7
+TOC_HIERARCHY_MAX_PAGE = 1_000_000
+TOC_HIERARCHY_MIN_LEVEL = 1
+TOC_HIERARCHY_MAX_LEVEL = 5
+TOC_HIERARCHY_UNICODE_DATA_VERSION = unicodedata.unidata_version
+_TOC_HIERARCHY_UNICODE_VERSION_PARTS = tuple(
+    int(part) for part in TOC_HIERARCHY_UNICODE_DATA_VERSION.split("."))
+if len(_TOC_HIERARCHY_UNICODE_VERSION_PARTS) != 3:
+    raise RuntimeError("unsupported Unicode data version format")
 
 INVALID_TYPE = "llm-output-invalid-type"
 INVALID_ENCODING = "llm-output-invalid-encoding"
@@ -24,6 +44,14 @@ BYTE_LIMIT_EXCEEDED = "llm-output-byte-limit"
 EMPTY_OUTPUT = "llm-output-empty"
 CONTROL_CHARACTER = "llm-output-control-character"
 LABEL_MISMATCH = "llm-output-label-mismatch"
+JSON_SYNTAX = "llm-output-json-syntax"
+JSON_DUPLICATE_KEY = "llm-output-json-duplicate-key"
+JSON_NON_FINITE_NUMBER = "llm-output-json-non-finite-number"
+JSON_DEPTH_EXCEEDED = "llm-output-json-depth"
+JSON_SHAPE_MISMATCH = "llm-output-json-shape"
+JSON_ITEM_LIMIT = "llm-output-json-item-limit"
+JSON_STRING_LIMIT = "llm-output-json-string-limit"
+JSON_VALUE_OUT_OF_RANGE = "llm-output-json-value-range"
 INTERNAL_CONTRACT_ERROR = "llm-output-contract-internal-error"
 
 REJECTION_CODES = frozenset({
@@ -33,12 +61,28 @@ REJECTION_CODES = frozenset({
     EMPTY_OUTPUT,
     CONTROL_CHARACTER,
     LABEL_MISMATCH,
+    JSON_SYNTAX,
+    JSON_DUPLICATE_KEY,
+    JSON_NON_FINITE_NUMBER,
+    JSON_DEPTH_EXCEEDED,
+    JSON_SHAPE_MISMATCH,
+    JSON_ITEM_LIMIT,
+    JSON_STRING_LIMIT,
+    JSON_VALUE_OUT_OF_RANGE,
     INTERNAL_CONTRACT_ERROR,
 })
 
 _IDENTIFIER = re.compile(r"[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*")
 _ENUM_VALUE = re.compile(r"[a-z][a-z0-9_-]{0,63}")
 _OUTER_WHITESPACE = " \t\r\n"
+_JSON_PROVENANCE_RESERVED_FIELDS = frozenset({
+    "policy_version",
+    "contract_id",
+    "fallback_id",
+    "max_bytes",
+    "max_depth",
+    "max_integer_digits",
+})
 
 
 class OutputContractRejected(ValueError):
@@ -59,6 +103,133 @@ def _validate_identifier(value: object, *, label: str) -> str:
             or _IDENTIFIER.fullmatch(value) is None):
         raise ValueError(f"{label} must be a canonical safe identifier")
     return value
+
+
+def _bounded_response_text(response: object, *, max_bytes: int) -> str:
+    """Return non-empty UTF-8 text within a raw response byte ceiling."""
+    if not isinstance(response, str):
+        raise OutputContractRejected(INVALID_TYPE)
+    if len(response) > max_bytes:
+        raise OutputContractRejected(BYTE_LIMIT_EXCEEDED)
+    encoded = None
+    try:
+        encoded = response.encode("utf-8", errors="strict")
+    except UnicodeEncodeError:
+        pass
+    if encoded is None:
+        raise OutputContractRejected(INVALID_ENCODING)
+    if len(encoded) > max_bytes:
+        raise OutputContractRejected(BYTE_LIMIT_EXCEEDED)
+    normalized = response.strip(_OUTER_WHITESPACE)
+    if not normalized:
+        raise OutputContractRejected(EMPTY_OUTPUT)
+    return normalized
+
+
+def _require_json_depth(value: str, *, max_depth: int) -> None:
+    """Reject excessive structural depth before the JSON decoder recurses."""
+    depth = 0
+    in_string = False
+    escaped = False
+    for character in value:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+            elif ord(character) < 0x20:
+                raise OutputContractRejected(CONTROL_CHARACTER)
+            continue
+        if character == '"':
+            in_string = True
+        elif character in "[{":
+            depth += 1
+            if depth > max_depth:
+                raise OutputContractRejected(JSON_DEPTH_EXCEEDED)
+        elif character in "]}":
+            depth -= 1
+        elif (unicodedata.category(character).startswith("C")
+              and character not in "\t\r\n"):
+            raise OutputContractRejected(CONTROL_CHARACTER)
+
+
+def _strict_json_value(response: object, *, max_bytes: int,
+                       max_depth: int, max_integer_digits: int) -> Any:
+    """Decode exactly one bounded JSON value with strict object semantics."""
+    normalized = _bounded_response_text(response, max_bytes=max_bytes)
+    _require_json_depth(normalized, max_depth=max_depth)
+
+    def reject_constant(_value: str) -> None:
+        raise OutputContractRejected(JSON_NON_FINITE_NUMBER)
+
+    def bounded_integer(value: str) -> int:
+        digits = value[1:] if value.startswith("-") else value
+        if len(digits) > max_integer_digits:
+            raise OutputContractRejected(JSON_VALUE_OUT_OF_RANGE)
+        return int(value)
+
+    def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise OutputContractRejected(JSON_DUPLICATE_KEY)
+            result[key] = value
+        return result
+
+    decode_failed = False
+    try:
+        parsed = json.loads(
+            normalized,
+            object_pairs_hook=unique_object,
+            parse_constant=reject_constant,
+            parse_int=bounded_integer,
+        )
+    except OutputContractRejected:
+        raise
+    except (json.JSONDecodeError, RecursionError, ValueError):
+        decode_failed = True
+        parsed = None
+    if decode_failed:
+        raise OutputContractRejected(JSON_SYNTAX)
+    return parsed
+
+
+def _bounded_json_string(value: object, *, max_chars: int,
+                         allow_empty: bool,
+                         max_bytes: int | None = None) -> str:
+    if not isinstance(value, str):
+        raise OutputContractRejected(JSON_SHAPE_MISMATCH)
+    if any(unicodedata.category(character) == "Cs" for character in value):
+        raise OutputContractRejected(INVALID_ENCODING)
+    if any(
+            unicodedata.category(character).startswith("C")
+            or unicodedata.category(character) in {"Zl", "Zp"}
+            or (character.isspace() and character != " ")
+            for character in value):
+        raise OutputContractRejected(CONTROL_CHARACTER)
+    normalized = value.strip(" ")
+    if not normalized and not allow_empty:
+        raise OutputContractRejected(JSON_SHAPE_MISMATCH)
+    if len(normalized) > max_chars:
+        raise OutputContractRejected(JSON_STRING_LIMIT)
+    if (max_bytes is not None
+            and len(normalized.encode("utf-8")) > max_bytes):
+        raise OutputContractRejected(JSON_STRING_LIMIT)
+    return normalized
+
+
+def _require_finite_json_numbers(value: Any) -> None:
+    if isinstance(value, float) and not math.isfinite(value):
+        raise OutputContractRejected(JSON_NON_FINITE_NUMBER)
+    if isinstance(value, dict):
+        for key, child in value.items():
+            _bounded_json_string(key, max_chars=128, allow_empty=False)
+            _require_finite_json_numbers(child)
+    elif isinstance(value, list):
+        for child in value:
+            _require_finite_json_numbers(child)
 
 
 @dataclass(frozen=True)
@@ -99,20 +270,8 @@ class ExactEnumContract:
 
     def __call__(self, response: str) -> str:
         """Return the canonical enum or raise a response-free rejection."""
-        if not isinstance(response, str):
-            raise OutputContractRejected(INVALID_TYPE)
-        if len(response) > self.max_bytes:
-            raise OutputContractRejected(BYTE_LIMIT_EXCEEDED)
-        try:
-            encoded = response.encode("utf-8", errors="strict")
-        except UnicodeEncodeError:
-            raise OutputContractRejected(INVALID_ENCODING) from None
-        if len(encoded) > self.max_bytes:
-            raise OutputContractRejected(BYTE_LIMIT_EXCEEDED)
-
-        normalized = response.strip(_OUTER_WHITESPACE)
-        if not normalized:
-            raise OutputContractRejected(EMPTY_OUTPUT)
+        normalized = _bounded_response_text(
+            response, max_bytes=self.max_bytes)
         if any(unicodedata.category(character).startswith("C")
                for character in normalized):
             raise OutputContractRejected(CONTROL_CHARACTER)
@@ -138,6 +297,148 @@ class ExactEnumContract:
             "max_bytes": self.max_bytes,
             "allowed_values": list(self.allowed_values),
         }
+
+
+@dataclass(frozen=True)
+class ExactJSONContract:
+    """Canonicalize one strictly decoded JSON value through a fixed schema."""
+
+    contract_id: str
+    max_bytes: int
+    max_depth: int
+    schema_validator: Callable[[Any], Any]
+    max_integer_digits: int = 64
+    provenance_fields: tuple[tuple[str, int], ...] = ()
+
+    def __post_init__(self) -> None:
+        _validate_identifier(self.contract_id, label="output contract ID")
+        for label, value in (
+            ("max_bytes", self.max_bytes),
+            ("max_depth", self.max_depth),
+            ("max_integer_digits", self.max_integer_digits),
+        ):
+            if (isinstance(value, bool) or not isinstance(value, int)
+                    or value < 1):
+                raise ValueError(f"output {label} must be a positive integer")
+        if not callable(self.schema_validator):
+            raise TypeError("JSON schema validator must be callable")
+        if not isinstance(self.provenance_fields, tuple):
+            raise TypeError("JSON provenance fields must be a tuple")
+        names: set[str] = set()
+        for field in self.provenance_fields:
+            if not isinstance(field, tuple) or len(field) != 2:
+                raise TypeError("each JSON provenance field must be a pair")
+            name, value = field
+            _validate_identifier(name, label="JSON provenance field")
+            if name in _JSON_PROVENANCE_RESERVED_FIELDS:
+                raise ValueError(
+                    "JSON provenance fields cannot replace contract metadata")
+            if name in names:
+                raise ValueError("JSON provenance fields must be unique")
+            if (isinstance(value, bool) or not isinstance(value, int)
+                    or value < 0):
+                raise ValueError(
+                    "JSON provenance values must be non-negative integers")
+            names.add(name)
+
+    def parse(self, response: object) -> Any:
+        """Return the canonical typed value without retaining rejected text."""
+        parsed = _strict_json_value(
+            response, max_bytes=self.max_bytes, max_depth=self.max_depth,
+            max_integer_digits=self.max_integer_digits)
+        _require_finite_json_numbers(parsed)
+        diagnostic_code = None
+        validation_failed = False
+        try:
+            canonical = self.schema_validator(parsed)
+        except OutputContractRejected as exc:
+            diagnostic_code = exc.diagnostic_code
+        except Exception:
+            validation_failed = True
+        if diagnostic_code is not None:
+            raise OutputContractRejected(diagnostic_code)
+        if validation_failed:
+            raise OutputContractRejected(INTERNAL_CONTRACT_ERROR)
+        return canonical
+
+    def __call__(self, response: str) -> str:
+        canonical = self.parse(response)
+        serialization_failed = False
+        try:
+            canonical_text = json.dumps(
+                canonical,
+                ensure_ascii=False,
+                allow_nan=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+        except Exception:
+            serialization_failed = True
+            canonical_text = ""
+        if serialization_failed:
+            raise OutputContractRejected(INTERNAL_CONTRACT_ERROR)
+        _bounded_response_text(canonical_text, max_bytes=self.max_bytes)
+        return canonical_text
+
+    def provenance(self, *, fallback_id: str) -> dict[str, object]:
+        result: dict[str, object] = {
+            "policy_version": OUTPUT_CONTRACT_POLICY_VERSION,
+            "contract_id": self.contract_id,
+            "fallback_id": _validate_identifier(
+                fallback_id, label="output fallback ID"),
+            "max_bytes": self.max_bytes,
+            "max_depth": self.max_depth,
+            "max_integer_digits": self.max_integer_digits,
+        }
+        result.update(dict(self.provenance_fields))
+        return result
+
+
+def _validate_toc_hierarchy(value: Any) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        raise OutputContractRejected(JSON_SHAPE_MISMATCH)
+    if not TOC_HIERARCHY_MIN_ITEMS <= len(value) <= TOC_HIERARCHY_MAX_ITEMS:
+        raise OutputContractRejected(JSON_ITEM_LIMIT)
+
+    canonical: list[dict[str, object]] = []
+    for item in value:
+        if (not isinstance(item, dict)
+                or set(item) != {"level", "title", "page"}):
+            raise OutputContractRejected(JSON_SHAPE_MISMATCH)
+        level = item["level"]
+        page = item["page"]
+        if type(level) is not int or type(page) is not int:
+            raise OutputContractRejected(JSON_SHAPE_MISMATCH)
+        if not TOC_HIERARCHY_MIN_LEVEL <= level <= TOC_HIERARCHY_MAX_LEVEL:
+            raise OutputContractRejected(JSON_VALUE_OUT_OF_RANGE)
+        if not 0 <= page <= TOC_HIERARCHY_MAX_PAGE:
+            raise OutputContractRejected(JSON_VALUE_OUT_OF_RANGE)
+        title = _bounded_json_string(
+            item["title"], max_chars=TOC_HIERARCHY_MAX_TITLE_CHARS,
+            max_bytes=TOC_HIERARCHY_MAX_TITLE_BYTES, allow_empty=False)
+        canonical.append({"level": level, "title": title, "page": page})
+    return canonical
+
+
+TOC_HIERARCHY_CONTRACT = ExactJSONContract(
+    contract_id=TOC_HIERARCHY_CONTRACT_ID,
+    max_bytes=TOC_HIERARCHY_MAX_BYTES,
+    max_depth=TOC_HIERARCHY_MAX_DEPTH,
+    schema_validator=_validate_toc_hierarchy,
+    max_integer_digits=TOC_HIERARCHY_MAX_INTEGER_DIGITS,
+    provenance_fields=(
+        ("min_items", TOC_HIERARCHY_MIN_ITEMS),
+        ("max_items", TOC_HIERARCHY_MAX_ITEMS),
+        ("max_title_chars", TOC_HIERARCHY_MAX_TITLE_CHARS),
+        ("max_title_bytes", TOC_HIERARCHY_MAX_TITLE_BYTES),
+        ("max_page", TOC_HIERARCHY_MAX_PAGE),
+        ("min_level", TOC_HIERARCHY_MIN_LEVEL),
+        ("max_level", TOC_HIERARCHY_MAX_LEVEL),
+        ("unicode_data_major", _TOC_HIERARCHY_UNICODE_VERSION_PARTS[0]),
+        ("unicode_data_minor", _TOC_HIERARCHY_UNICODE_VERSION_PARTS[1]),
+        ("unicode_data_patch", _TOC_HIERARCHY_UNICODE_VERSION_PARTS[2]),
+    ),
+)
 
 
 def exact_classification_contract(
