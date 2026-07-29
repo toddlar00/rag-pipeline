@@ -8,8 +8,8 @@ fresh-process repetitions.
 ## Provenance
 
 Both current reports were generated from the clean pre-gate source checkpoint
-`c1bc042c862c42964e6084967f57987944e29f6a` (tree
-`4a37989c32d2a6743ccdef47bfe20460d165af32`). The executing environments were
+`e904fa6ea7419dac6797dc11af7cb1e507fb456c` (tree
+`4fe1f457d6a60668319234988fb181bb989ad2fb`). The executing environments were
 synchronized with repository-pinned uv 0.11.31 against the exact CPU
 application/test lock union plus its retained bootstrapper:
 
@@ -26,8 +26,8 @@ marker-resolved distributions before generation.
 
 | Platform | Runtime | Report | Bytes | File SHA-256 | Embedded report SHA-256 |
 |---|---:|---|---:|---|---|
-| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 49,077 | `931758678b0d6c9859b35f95ec0eea80f9ee60d09ac6f9e10ca7c79c57860c0f` | `a583d8578f182d07d7aa9439c7debc87e98b62d711db82530b6c9dd00888491a` |
-| Linux x86-64 | CPython 3.12.3 | `phase-a0-linux-cpython312.json` | 48,495 | `77f2147c4810143d06de66b7f4239aed55fe2a4951104ceaf9bddd9e10dc197e` | `c13233980a212da3a121d0af362098a2c865de5ff8e5e748c839fe272e5b91e2` |
+| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 50,259 | `2be765e4b78a5487896b865f7737fcdf897394289dfbeca6c94bad26445277d2` | `33159ac283d1df249108c4fc0c407decb9d69c9be5329524e88c1f6d13146933` |
+| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 49,657 | `00bec58cb0750831d0b97c437bfb821165bab10f7bbf15bc400ce6a1a6eb0108` | `1b0a69bf19d7996ad42ddde0b62e3df029cd9e36f771394f8bec20e7f0d0b766` |
 
 The reports attest the same source commit, clean-worktree state, tracked-diff
 digest, eight LF and `HEAD`-identical dependency/model-lock inputs, authoritative
@@ -64,10 +64,13 @@ Linux, and the inventory recorded 1,981 functions and 377 compact runtime
 callables. Gate-only commit `ed2995e` froze those candidates. R2 preparation
 then produced clean source `537f72b` and gate-only refresh `b813aa7`.
 
-The release-defect corrections in `c1bc042` changed Python source and therefore
-invalidated every earlier report under this policy. Its canonical inventory
-records 1,995 functions and 378 compact runtime callables. The current reports
-above bind that clean source, and each passes an independent complete
+Release-defect checkpoint `c1bc042` had itself invalidated the earlier report
+pair and recorded 1,995 functions and 378 compact runtime callables. The
+publication-readiness implementation in `e904fa6` supersedes that checkpoint
+and changes Python source again, so it invalidates every earlier report under
+this policy. Its canonical inventory records 2,563 functions and 607 compact
+runtime callables. The current reports above bind that clean source, and each
+passes an independent complete
 same-platform 9×5 comparison. The following reports-and-documentation-only
 commit freezes the new local candidate. No successful hosted replacement run
 is claimed. A0b remains pending until both exact-head hosted cells pass, retain
@@ -98,7 +101,7 @@ ancestor of the final head. Integrate a passing candidate with a
 history-preserving merge; a squash or history-rewriting rebase invalidates this
 evidence and requires regeneration from the replacement history.
 
-The replacement gate-only delta after `c1bc042` is limited to the two reviewed
+The replacement gate-only delta after `e904fa6` is limited to the two reviewed
 reports and their provenance/status documentation. The repaired workflow,
 line-ending policy, and Python gates are already part of the pre-gate source and
 were exercised while generating and comparing the baselines. Each successful

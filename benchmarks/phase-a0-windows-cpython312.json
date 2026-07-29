@@ -50,7 +50,7 @@
     "python_major_minor": "3.12"
   },
   "repetitions": 5,
-  "report_sha256": "a583d8578f182d07d7aa9439c7debc87e98b62d711db82530b6c9dd00888491a",
+  "report_sha256": "33159ac283d1df249108c4fc0c407decb9d69c9be5329524e88c1f6d13146933",
   "runtime": {
     "implementation": "CPython",
     "pointer_bits": 64,
@@ -85,12 +85,13 @@
       "contract_sha256": "752cf488e541aa6286665b0427df3e1d6da93b3855cdfeab55941917fe1b74b4",
       "diagnostics": {
         "first_party_loaded_count": {
-          "maximum": 31,
-          "median": 31,
-          "minimum": 31,
-          "p95": 31
+          "maximum": 36,
+          "median": 36,
+          "minimum": 36,
+          "p95": 36
         },
         "first_party_loaded_roots": [
+          "ai_project_export",
           "artifact_io",
           "attempt_reporting",
           "chunking_core",
@@ -98,6 +99,7 @@
           "document_profiles",
           "embedding_policy",
           "endpoint_policy",
+          "heading_lineage",
           "index_state",
           "ingestion_core",
           "job_application",
@@ -106,11 +108,13 @@
           "job_runtime",
           "llm_adapters",
           "llm_runtime",
+          "markdown_validation",
           "model_artifacts",
           "operation_contracts",
           "operational_metrics",
           "process_supervision",
           "provider_transport",
+          "publication_core",
           "quality_core",
           "rag",
           "release_security",
@@ -119,31 +123,32 @@
           "retrieval_core",
           "run_telemetry",
           "runtime_supervision",
+          "source_fidelity_core",
           "storage_policy",
           "table_retrieval_core",
           "vector_lifecycle"
         ],
-        "first_party_loaded_sha256": "4bd200c1da63bee2cea999c3848005aecfe16e9df7cb2666f4de84de07b3fc51",
+        "first_party_loaded_sha256": "aa237c5227ba2d5bee0ab994337e1fd98064013c4aba0ae9656b0f3eea3be135",
         "loaded_module_count": {
-          "maximum": 367,
-          "median": 367,
-          "minimum": 367,
-          "p95": 367
+          "maximum": 374,
+          "median": 374,
+          "minimum": 374,
+          "p95": 374
         },
         "output": null,
         "peak_rss_bytes": {
           "available": true,
-          "maximum": 67850240,
-          "median": 67194880,
-          "minimum": 66912256,
-          "p95": 67850240,
+          "maximum": 116842496,
+          "median": 115834880,
+          "minimum": 115380224,
+          "p95": 116842496,
           "scope": "process_only_excludes_descendants"
         },
         "stdlib_loaded_count": {
-          "maximum": 100,
-          "median": 100,
-          "minimum": 100,
-          "p95": 100
+          "maximum": 101,
+          "median": 101,
+          "minimum": 101,
+          "p95": 101
         },
         "stdlib_loaded_roots": [
           "abc",
@@ -180,6 +185,7 @@
           "hashlib",
           "heapq",
           "hmac",
+          "html",
           "http",
           "importlib",
           "inspect",
@@ -247,7 +253,7 @@
           "zipimport",
           "zlib"
         ],
-        "stdlib_loaded_sha256": "24f6eb9a0ca5f58a9a04d73db149e3f850a9bac6cf04b0953ed56039c0204bab",
+        "stdlib_loaded_sha256": "3fecf0e4156b09703053b68c02177836e2f6719d9692ff002db9874f1bae9b31",
         "third_party_loaded_count": {
           "maximum": 9,
           "median": 9,
@@ -267,10 +273,10 @@
         ],
         "third_party_loaded_sha256": "b1285ec0d2e4ea22465cb6bfe542c6236fcb703c5e4e20254547c3a92d5c433e",
         "wall_time_ms": {
-          "maximum": 630.638,
-          "median": 625.382,
-          "minimum": 594.783,
-          "p95": 630.638
+          "maximum": 1210.813,
+          "median": 1022.015,
+          "minimum": 1017.902,
+          "p95": 1210.813
         }
       },
       "name": "cold_import_rag",
@@ -292,12 +298,13 @@
       "contract_sha256": "ae2b048174403f75887461e02facfa686447339be35762d2a4c7c6dd9ef13528",
       "diagnostics": {
         "first_party_loaded_count": {
-          "maximum": 30,
-          "median": 30,
-          "minimum": 30,
-          "p95": 30
+          "maximum": 35,
+          "median": 35,
+          "minimum": 35,
+          "p95": 35
         },
         "first_party_loaded_roots": [
+          "ai_project_export",
           "artifact_io",
           "attempt_reporting",
           "chunking_core",
@@ -305,6 +312,7 @@
           "document_profiles",
           "embedding_policy",
           "endpoint_policy",
+          "heading_lineage",
           "index_state",
           "ingestion_core",
           "job_application",
@@ -313,11 +321,13 @@
           "job_runtime",
           "llm_adapters",
           "llm_runtime",
+          "markdown_validation",
           "model_artifacts",
           "operation_contracts",
           "operational_metrics",
           "process_supervision",
           "provider_transport",
+          "publication_core",
           "quality_core",
           "release_security",
           "resource_lease",
@@ -325,16 +335,17 @@
           "retrieval_core",
           "run_telemetry",
           "runtime_supervision",
+          "source_fidelity_core",
           "storage_policy",
           "table_retrieval_core",
           "vector_lifecycle"
         ],
-        "first_party_loaded_sha256": "c3d41768ab0d3f713f0f920667e9a67630e60ee3d9f595ad61a3bccd9c3326ac",
+        "first_party_loaded_sha256": "96bda5cefa77aebb939a7c6abcff0e11ba279139b2eeed46fc64a1be76b2dfde",
         "loaded_module_count": {
-          "maximum": 366,
-          "median": 366,
-          "minimum": 366,
-          "p95": 366
+          "maximum": 373,
+          "median": 373,
+          "minimum": 373,
+          "p95": 373
         },
         "output": {
           "stderr": {
@@ -350,17 +361,17 @@
         },
         "peak_rss_bytes": {
           "available": true,
-          "maximum": 70467584,
-          "median": 70053888,
-          "minimum": 69734400,
-          "p95": 70467584,
+          "maximum": 116523008,
+          "median": 115757056,
+          "minimum": 115589120,
+          "p95": 116523008,
           "scope": "process_only_excludes_descendants"
         },
         "stdlib_loaded_count": {
-          "maximum": 100,
-          "median": 100,
-          "minimum": 100,
-          "p95": 100
+          "maximum": 101,
+          "median": 101,
+          "minimum": 101,
+          "p95": 101
         },
         "stdlib_loaded_roots": [
           "abc",
@@ -397,6 +408,7 @@
           "hashlib",
           "heapq",
           "hmac",
+          "html",
           "http",
           "importlib",
           "inspect",
@@ -464,7 +476,7 @@
           "zipimport",
           "zlib"
         ],
-        "stdlib_loaded_sha256": "24f6eb9a0ca5f58a9a04d73db149e3f850a9bac6cf04b0953ed56039c0204bab",
+        "stdlib_loaded_sha256": "3fecf0e4156b09703053b68c02177836e2f6719d9692ff002db9874f1bae9b31",
         "third_party_loaded_count": {
           "maximum": 9,
           "median": 9,
@@ -484,10 +496,10 @@
         ],
         "third_party_loaded_sha256": "b1285ec0d2e4ea22465cb6bfe542c6236fcb703c5e4e20254547c3a92d5c433e",
         "wall_time_ms": {
-          "maximum": 627.856,
-          "median": 615.926,
-          "minimum": 598.564,
-          "p95": 627.856
+          "maximum": 1030.112,
+          "median": 1019.858,
+          "minimum": 1013.742,
+          "p95": 1030.112
         }
       },
       "name": "cli_help",
@@ -544,10 +556,10 @@
         },
         "peak_rss_bytes": {
           "available": true,
-          "maximum": 28061696,
-          "median": 26824704,
-          "minimum": 26525696,
-          "p95": 28061696,
+          "maximum": 27746304,
+          "median": 27725824,
+          "minimum": 26800128,
+          "p95": 27746304,
           "scope": "process_only_excludes_descendants"
         },
         "stdlib_loaded_count": {
@@ -644,10 +656,10 @@
         ],
         "third_party_loaded_sha256": "a757c8aea456ab56dddab71852924acc569e4b3f834cbdb5ef9695ddfcce0a5a",
         "wall_time_ms": {
-          "maximum": 1317.343,
-          "median": 1292.617,
-          "minimum": 1263.15,
-          "p95": 1317.343
+          "maximum": 2139.326,
+          "median": 2089.186,
+          "minimum": 2052.433,
+          "p95": 2139.326
         }
       },
       "name": "cli_info_empty",
@@ -701,10 +713,10 @@
         "output": null,
         "peak_rss_bytes": {
           "available": true,
-          "maximum": 50028544,
-          "median": 49725440,
-          "minimum": 49553408,
-          "p95": 50028544,
+          "maximum": 45993984,
+          "median": 45731840,
+          "minimum": 45670400,
+          "p95": 45993984,
           "scope": "process_only_excludes_descendants"
         },
         "stdlib_loaded_count": {
@@ -842,10 +854,10 @@
         ],
         "third_party_loaded_sha256": "12ea7e9a2d80aef71b45444a9c1525cbf17122e2dc917d113fef8d984b611d2c",
         "wall_time_ms": {
-          "maximum": 479.062,
-          "median": 459.479,
-          "minimum": 455.55,
-          "p95": 479.062
+          "maximum": 1053.779,
+          "median": 501.794,
+          "minimum": 493.643,
+          "p95": 1053.779
         }
       },
       "name": "service_composition",
@@ -861,12 +873,13 @@
       "contract_sha256": "31effc3121b3659fb5af28e2eef482e7a71698479252385322e88cee81666636",
       "diagnostics": {
         "first_party_loaded_count": {
-          "maximum": 36,
-          "median": 36,
-          "minimum": 36,
-          "p95": 36
+          "maximum": 41,
+          "median": 41,
+          "minimum": 41,
+          "p95": 41
         },
         "first_party_loaded_roots": [
+          "ai_project_export",
           "artifact_io",
           "attempt_reporting",
           "chunking_core",
@@ -874,6 +887,7 @@
           "document_profiles",
           "embedding_policy",
           "endpoint_policy",
+          "heading_lineage",
           "index_state",
           "ingestion_core",
           "job_application",
@@ -882,11 +896,13 @@
           "job_runtime",
           "llm_adapters",
           "llm_runtime",
+          "markdown_validation",
           "model_artifacts",
           "operation_contracts",
           "operational_metrics",
           "process_supervision",
           "provider_transport",
+          "publication_core",
           "quality_core",
           "rag",
           "release_security",
@@ -899,32 +915,33 @@
           "service_runtime",
           "service_runtime_binding",
           "service_search_worker",
+          "source_fidelity_core",
           "storage_policy",
           "table_retrieval_core",
           "ui",
           "vector_lifecycle"
         ],
-        "first_party_loaded_sha256": "c88412f1ce1fcab0accab02e014624ad8187a58b484a7d81a6d01aefe232cb29",
+        "first_party_loaded_sha256": "97d007ee40b9e1ca9e069ca893f3258dfe8dc685a946f715e3fe658ca4bd3755",
         "loaded_module_count": {
-          "maximum": 372,
-          "median": 372,
-          "minimum": 372,
-          "p95": 372
+          "maximum": 379,
+          "median": 379,
+          "minimum": 379,
+          "p95": 379
         },
         "output": null,
         "peak_rss_bytes": {
           "available": true,
-          "maximum": 67952640,
-          "median": 67661824,
-          "minimum": 67555328,
-          "p95": 67952640,
+          "maximum": 117104640,
+          "median": 116617216,
+          "minimum": 116260864,
+          "p95": 117104640,
           "scope": "process_only_excludes_descendants"
         },
         "stdlib_loaded_count": {
-          "maximum": 100,
-          "median": 100,
-          "minimum": 100,
-          "p95": 100
+          "maximum": 101,
+          "median": 101,
+          "minimum": 101,
+          "p95": 101
         },
         "stdlib_loaded_roots": [
           "abc",
@@ -961,6 +978,7 @@
           "hashlib",
           "heapq",
           "hmac",
+          "html",
           "http",
           "importlib",
           "inspect",
@@ -1028,7 +1046,7 @@
           "zipimport",
           "zlib"
         ],
-        "stdlib_loaded_sha256": "24f6eb9a0ca5f58a9a04d73db149e3f850a9bac6cf04b0953ed56039c0204bab",
+        "stdlib_loaded_sha256": "3fecf0e4156b09703053b68c02177836e2f6719d9692ff002db9874f1bae9b31",
         "third_party_loaded_count": {
           "maximum": 9,
           "median": 9,
@@ -1048,10 +1066,10 @@
         ],
         "third_party_loaded_sha256": "b1285ec0d2e4ea22465cb6bfe542c6236fcb703c5e4e20254547c3a92d5c433e",
         "wall_time_ms": {
-          "maximum": 631.288,
-          "median": 620.008,
-          "minimum": 618.699,
-          "p95": 631.288
+          "maximum": 1046.179,
+          "median": 1025.012,
+          "minimum": 1015.589,
+          "p95": 1046.179
         }
       },
       "name": "worker_imports",
@@ -1105,10 +1123,10 @@
         "output": null,
         "peak_rss_bytes": {
           "available": true,
-          "maximum": 28069888,
-          "median": 27430912,
-          "minimum": 26853376,
-          "p95": 28069888,
+          "maximum": 27807744,
+          "median": 26849280,
+          "minimum": 26574848,
+          "p95": 27807744,
           "scope": "process_only_excludes_descendants"
         },
         "stdlib_loaded_count": {
@@ -1209,10 +1227,10 @@
         ],
         "third_party_loaded_sha256": "a757c8aea456ab56dddab71852924acc569e4b3f834cbdb5ef9695ddfcce0a5a",
         "wall_time_ms": {
-          "maximum": 1354.889,
-          "median": 1335.343,
-          "minimum": 1321.709,
-          "p95": 1354.889
+          "maximum": 2135.237,
+          "median": 2124.227,
+          "minimum": 2119.184,
+          "p95": 2135.237
         }
       },
       "name": "worker_entrypoints",
@@ -1252,10 +1270,10 @@
         "output": null,
         "peak_rss_bytes": {
           "available": true,
-          "maximum": 27672576,
-          "median": 26841088,
-          "minimum": 26296320,
-          "p95": 27672576,
+          "maximum": 27766784,
+          "median": 27639808,
+          "minimum": 26656768,
+          "p95": 27766784,
           "scope": "process_only_excludes_descendants"
         },
         "stdlib_loaded_count": {
@@ -1352,10 +1370,10 @@
         ],
         "third_party_loaded_sha256": "a757c8aea456ab56dddab71852924acc569e4b3f834cbdb5ef9695ddfcce0a5a",
         "wall_time_ms": {
-          "maximum": 279.288,
-          "median": 264.469,
-          "minimum": 253.166,
-          "p95": 279.288
+          "maximum": 283.012,
+          "median": 270.317,
+          "minimum": 267.694,
+          "p95": 283.012
         }
       },
       "name": "isolation_guard",
@@ -1363,65 +1381,65 @@
     },
     {
       "contract": {
-        "artifact_set_sha256": "bf993c475f9f80936cede7d17c41175ec2e2efc8839d310af155651dee1b0ffc",
+        "artifact_set_sha256": "90a8f1f8dcbf025e29bba11e85253e30f29288ef1d3bb07155285f422ca5d827",
         "completion_validators": {
           "chunks": {
             "negative": {
-              "arguments_sha256": "a8e713f5814ed45a53ae242fc1ea6d0f79054abe0339c649d329ed4513d966bb",
+              "arguments_sha256": "473b06bb93f28fac7c4ccffcfdd09f8abf94cca4837aac744af634d27e5387ed",
               "kind": "source_mismatch",
               "result": false
             },
             "pipeline": {
-              "arguments_sha256": "249c856f7e7d93ecbbc2a69a96a845f1152f9dec4cddd59763e29c4ab6942110",
+              "arguments_sha256": "d96d267ed9e522e4f0d296ad17c116f515334d267bfb240ddfa766c8c81ae377",
               "result": true
             },
             "valid": {
-              "arguments_sha256": "249c856f7e7d93ecbbc2a69a96a845f1152f9dec4cddd59763e29c4ab6942110",
+              "arguments_sha256": "d96d267ed9e522e4f0d296ad17c116f515334d267bfb240ddfa766c8c81ae377",
               "result": true
             }
           },
           "conversion": {
             "negative": {
-              "arguments_sha256": "9d4c7f3cdb60a1e39ae0b3a0845ae442c441bf45330652ab4a77f231207c343c",
+              "arguments_sha256": "275961328bf6250515d5dc8392ed2791d6e09dab531070a64d59e542a5620654",
               "kind": "parameter_mismatch",
               "result": false
             },
             "pipeline": {
-              "arguments_sha256": "247f99f63a19516609a7de76bae7c6c151e105e071b6b2ee3b9b61f4d6e50fc6",
+              "arguments_sha256": "cbe932d1bec205c1eca0d3dbd9b2f97b306ff02fa88f7dcd0ee4e900744cd1b2",
               "result": true
             },
             "valid": {
-              "arguments_sha256": "247f99f63a19516609a7de76bae7c6c151e105e071b6b2ee3b9b61f4d6e50fc6",
+              "arguments_sha256": "cbe932d1bec205c1eca0d3dbd9b2f97b306ff02fa88f7dcd0ee4e900744cd1b2",
               "result": true
             }
           },
           "export": {
             "negative": {
-              "arguments_sha256": "f08d102291aebd407db0a1cbe36bc2b652f47768ee35012bc4462bc9b12fd5f7",
+              "arguments_sha256": "c704710b1a49f54c80e4ce7c0feb5e39b13f8bee102c83e42ec3ed602be5338b",
               "kind": "artifact_mismatch",
               "result": false
             },
             "pipeline": {
-              "arguments_sha256": "3d1010e76c621ba0eb28dbb69a86ed76914c057bb1814ceeb7a389c531b24ee3",
+              "arguments_sha256": "07079081d0289b28427cec9ba006c13b6054293591110cd541128acdc65e260b",
               "result": true
             },
             "valid": {
-              "arguments_sha256": "3d1010e76c621ba0eb28dbb69a86ed76914c057bb1814ceeb7a389c531b24ee3",
+              "arguments_sha256": "07079081d0289b28427cec9ba006c13b6054293591110cd541128acdc65e260b",
               "result": true
             }
           },
           "quality": {
             "negative": {
-              "arguments_sha256": "8fc0e471a52cd34631d0bac946680b47f4479fd00c0b98a1e1b8066f00112432",
+              "arguments_sha256": "acaf2d4ab451da5519037587aed5c4248c08525416374b099d5cc2818d1cb553",
               "kind": "parameter_mismatch",
               "result": false
             },
             "pipeline": {
-              "arguments_sha256": "6038b540541cf859de2fc97e45b879da8b95b314cc60e49f3eebc090a9552b1c",
+              "arguments_sha256": "ae61966666f0ab457cc730ae593b452329a42a67c8829a096940d616361a2404",
               "result": true
             },
             "valid": {
-              "arguments_sha256": "6038b540541cf859de2fc97e45b879da8b95b314cc60e49f3eebc090a9552b1c",
+              "arguments_sha256": "ae61966666f0ab457cc730ae593b452329a42a67c8829a096940d616361a2404",
               "result": true
             }
           }
@@ -1445,13 +1463,20 @@
         },
         "partial_repair_exercised": false,
         "physical_indexing_exercised": false,
+        "publication_commit": {
+          "after_index": true,
+          "arguments_sha256": "fc2387d5ea96e4a1482a29d9073903ac2f3cfd54c72c6d3c347433cd778c431a",
+          "calls": 1,
+          "gate_count": 5
+        },
         "record_count": 1,
         "returned_result": {
           "collection_match": true,
           "db_backend_match": true,
           "db_dir_match": true,
           "outcome_match": true,
-          "paths_match": true
+          "paths_match": true,
+          "publication_receipt_match": true
         },
         "skipped_physical_calls": {
           "chunk": 0,
@@ -1481,15 +1506,16 @@
           }
         }
       },
-      "contract_sha256": "8a6a1cddab8a274996f67958bd3bcee457b15daabd9b2e1fe878c1e270e1beff",
+      "contract_sha256": "bd3452ac7f49c028c6de5237cfc2d1cd001c55602760229fcee470d0352ad835",
       "diagnostics": {
         "first_party_loaded_count": {
-          "maximum": 31,
-          "median": 31,
-          "minimum": 31,
-          "p95": 31
+          "maximum": 36,
+          "median": 36,
+          "minimum": 36,
+          "p95": 36
         },
         "first_party_loaded_roots": [
+          "ai_project_export",
           "artifact_io",
           "attempt_reporting",
           "chunking_core",
@@ -1497,6 +1523,7 @@
           "document_profiles",
           "embedding_policy",
           "endpoint_policy",
+          "heading_lineage",
           "index_state",
           "ingestion_core",
           "job_application",
@@ -1505,11 +1532,13 @@
           "job_runtime",
           "llm_adapters",
           "llm_runtime",
+          "markdown_validation",
           "model_artifacts",
           "operation_contracts",
           "operational_metrics",
           "process_supervision",
           "provider_transport",
+          "publication_core",
           "quality_core",
           "rag",
           "release_security",
@@ -1518,31 +1547,32 @@
           "retrieval_core",
           "run_telemetry",
           "runtime_supervision",
+          "source_fidelity_core",
           "storage_policy",
           "table_retrieval_core",
           "vector_lifecycle"
         ],
-        "first_party_loaded_sha256": "4bd200c1da63bee2cea999c3848005aecfe16e9df7cb2666f4de84de07b3fc51",
+        "first_party_loaded_sha256": "aa237c5227ba2d5bee0ab994337e1fd98064013c4aba0ae9656b0f3eea3be135",
         "loaded_module_count": {
-          "maximum": 367,
-          "median": 367,
-          "minimum": 367,
-          "p95": 367
+          "maximum": 374,
+          "median": 374,
+          "minimum": 374,
+          "p95": 374
         },
         "output": null,
         "peak_rss_bytes": {
           "available": true,
-          "maximum": 67776512,
-          "median": 67207168,
-          "minimum": 66936832,
-          "p95": 67776512,
+          "maximum": 115978240,
+          "median": 115949568,
+          "minimum": 115585024,
+          "p95": 115978240,
           "scope": "process_only_excludes_descendants"
         },
         "stdlib_loaded_count": {
-          "maximum": 100,
-          "median": 100,
-          "minimum": 100,
-          "p95": 100
+          "maximum": 101,
+          "median": 101,
+          "minimum": 101,
+          "p95": 101
         },
         "stdlib_loaded_roots": [
           "abc",
@@ -1579,6 +1609,7 @@
           "hashlib",
           "heapq",
           "hmac",
+          "html",
           "http",
           "importlib",
           "inspect",
@@ -1646,7 +1677,7 @@
           "zipimport",
           "zlib"
         ],
-        "stdlib_loaded_sha256": "24f6eb9a0ca5f58a9a04d73db149e3f850a9bac6cf04b0953ed56039c0204bab",
+        "stdlib_loaded_sha256": "3fecf0e4156b09703053b68c02177836e2f6719d9692ff002db9874f1bae9b31",
         "third_party_loaded_count": {
           "maximum": 9,
           "median": 9,
@@ -1666,10 +1697,10 @@
         ],
         "third_party_loaded_sha256": "b1285ec0d2e4ea22465cb6bfe542c6236fcb703c5e4e20254547c3a92d5c433e",
         "wall_time_ms": {
-          "maximum": 2604.39,
-          "median": 2548.147,
-          "minimum": 2536.059,
-          "p95": 2604.39
+          "maximum": 3926.504,
+          "median": 3883.628,
+          "minimum": 3859.491,
+          "p95": 3926.504
         }
       },
       "name": "noop_resume",
@@ -1679,20 +1710,21 @@
       "contract": {
         "context_characters": 668,
         "context_segment_count": 2,
-        "markdown_bytes": 149,
+        "markdown_bytes": 180,
         "record_count": 3,
-        "result_sha256": "32f8cf511b3619a4cfe06655cfa678b4ee1f5fe00d92810ec7cd142e25af3ea3",
+        "result_sha256": "16623b13d968ffb973fa066bd4b22deeba7db1c506db71d74b71b55a6e84d4ae",
         "stable_id_count": 3
       },
-      "contract_sha256": "71a69c6be60f6b7e9a0524e0fcf1caab7f96130d93940eaba553dc7d723232d4",
+      "contract_sha256": "65f5b38813d19adb540d5b1d11eb9a68759981730cfa5359e6724fc9a9ca01a3",
       "diagnostics": {
         "first_party_loaded_count": {
-          "maximum": 31,
-          "median": 31,
-          "minimum": 31,
-          "p95": 31
+          "maximum": 36,
+          "median": 36,
+          "minimum": 36,
+          "p95": 36
         },
         "first_party_loaded_roots": [
+          "ai_project_export",
           "artifact_io",
           "attempt_reporting",
           "chunking_core",
@@ -1700,6 +1732,7 @@
           "document_profiles",
           "embedding_policy",
           "endpoint_policy",
+          "heading_lineage",
           "index_state",
           "ingestion_core",
           "job_application",
@@ -1708,11 +1741,13 @@
           "job_runtime",
           "llm_adapters",
           "llm_runtime",
+          "markdown_validation",
           "model_artifacts",
           "operation_contracts",
           "operational_metrics",
           "process_supervision",
           "provider_transport",
+          "publication_core",
           "quality_core",
           "rag",
           "release_security",
@@ -1721,31 +1756,32 @@
           "retrieval_core",
           "run_telemetry",
           "runtime_supervision",
+          "source_fidelity_core",
           "storage_policy",
           "table_retrieval_core",
           "vector_lifecycle"
         ],
-        "first_party_loaded_sha256": "4bd200c1da63bee2cea999c3848005aecfe16e9df7cb2666f4de84de07b3fc51",
+        "first_party_loaded_sha256": "aa237c5227ba2d5bee0ab994337e1fd98064013c4aba0ae9656b0f3eea3be135",
         "loaded_module_count": {
-          "maximum": 367,
-          "median": 367,
-          "minimum": 367,
-          "p95": 367
+          "maximum": 374,
+          "median": 374,
+          "minimum": 374,
+          "p95": 374
         },
         "output": null,
         "peak_rss_bytes": {
           "available": true,
-          "maximum": 67989504,
-          "median": 67432448,
-          "minimum": 66871296,
-          "p95": 67989504,
+          "maximum": 116404224,
+          "median": 115625984,
+          "minimum": 115216384,
+          "p95": 116404224,
           "scope": "process_only_excludes_descendants"
         },
         "stdlib_loaded_count": {
-          "maximum": 100,
-          "median": 100,
-          "minimum": 100,
-          "p95": 100
+          "maximum": 101,
+          "median": 101,
+          "minimum": 101,
+          "p95": 101
         },
         "stdlib_loaded_roots": [
           "abc",
@@ -1782,6 +1818,7 @@
           "hashlib",
           "heapq",
           "hmac",
+          "html",
           "http",
           "importlib",
           "inspect",
@@ -1849,7 +1886,7 @@
           "zipimport",
           "zlib"
         ],
-        "stdlib_loaded_sha256": "24f6eb9a0ca5f58a9a04d73db149e3f850a9bac6cf04b0953ed56039c0204bab",
+        "stdlib_loaded_sha256": "3fecf0e4156b09703053b68c02177836e2f6719d9692ff002db9874f1bae9b31",
         "third_party_loaded_count": {
           "maximum": 9,
           "median": 9,
@@ -1869,10 +1906,10 @@
         ],
         "third_party_loaded_sha256": "b1285ec0d2e4ea22465cb6bfe542c6236fcb703c5e4e20254547c3a92d5c433e",
         "wall_time_ms": {
-          "maximum": 615.947,
-          "median": 609.21,
-          "minimum": 604.361,
-          "p95": 615.947
+          "maximum": 1045.583,
+          "median": 1020.045,
+          "minimum": 997.886,
+          "p95": 1045.583
         }
       },
       "name": "offline_export_retrieval",
@@ -1881,7 +1918,7 @@
   ],
   "schema_version": 3,
   "source": {
-    "commit": "c1bc042c862c42964e6084967f57987944e29f6a",
+    "commit": "e904fa6ea7419dac6797dc11af7cb1e507fb456c",
     "tracked_diff_sha256": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d",
     "worktree_clean": true
   },
@@ -1891,6 +1928,6 @@
     "os": "Windows",
     "os_release": "11",
     "processor": "Intel64 Family 6 Model 198 Stepping 2, GenuineIntel",
-    "total_memory_bytes": 68013473792
+    "total_memory_bytes": 68013531136
   }
 }

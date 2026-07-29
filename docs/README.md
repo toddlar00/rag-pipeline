@@ -103,15 +103,17 @@ drive-relative path `C:escape.py`; it did not pass A0b. Replacement source
 `7594f8b` repaired those gates, and `fdb08d2` normalized the supported Python
 3.10-3.14 runtime-contract differences without weakening the probe's home/tilde
 denial. Gate-only `ed2995e` froze those candidates; R2 source `537f72b` and
-gate-only refresh `b813aa7` followed. The source-changing defect corrections in
-`c1bc042` invalidated both earlier report pairs, so fresh CPython 3.12 x86-64
-Windows/Linux candidates now bind `c1bc042`, the same eight LF/`HEAD`-identical
-inputs, and the complete 9×5 contract. Both matching local comparisons
-independently pass. The following reports-and-documentation-only commit freezes
-the current local candidate; A0b still requires publishing its exact
-commit/tree, passing hosted comparisons on both operating systems, retaining
-successful evidence artifacts, and exact-head review. None of those hosted or
-review gates is implied by A0a, the failed first attempt, or a local-only result.
+gate-only refresh `b813aa7` followed. Source-changing defect corrections in
+`c1bc042` invalidated both earlier report pairs, and the later publication-
+readiness implementation superseded that refresh in turn. Fresh CPython 3.12
+x86-64 Windows/Linux candidates now bind clean source `e904fa6`, the same eight
+LF/`HEAD`-identical inputs, and the complete 9×5 contract. Both matching local
+comparisons independently pass. The following reports-and-documentation-only
+commit freezes the current local candidate; A0b still requires publishing its
+exact commit/tree, passing hosted comparisons on both operating systems,
+retaining successful evidence artifacts, and exact-head review. None of those
+hosted or review gates is implied by A0a, the failed first attempt, or a
+local-only result.
 
 Ignored `output/` paths are not durable evidence in a fresh clone. A roadmap or
 PR claim that depends on private output must be backed by a tracked content-free

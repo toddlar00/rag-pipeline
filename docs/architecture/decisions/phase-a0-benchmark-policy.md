@@ -74,8 +74,8 @@ that `Path.home()` remains denied.
 ## A0b publication gate
 
 The replacement gate uses clean pre-gate source
-`c1bc042c862c42964e6084967f57987944e29f6a` (tree
-`4a37989c32d2a6743ccdef47bfe20460d165af32`) and separate Windows and Linux
+`e904fa6ea7419dac6797dc11af7cb1e507fb456c` (tree
+`4fe1f457d6a60668319234988fb181bb989ad2fb`) and separate Windows and Linux
 CPython 3.12 x86-64 reports. Both were generated under the
 exact `requirements-full.lock`, `requirements-test.lock`, and retained
 `requirements-lock-tools.lock` union after strict hash-locked synchronization
@@ -84,7 +84,7 @@ Windows and 187 on Linux. They bind one clean source, the same eight LF and
 `HEAD`-identical dependency/model inputs, and the complete 9×5 scenario
 contract. Each passes an independent complete same-platform comparison. The
 repaired CI matrix, LF policy, source gates, and Python 3.10-3.14 compatibility
-normalization precede `c1bc042` and were exercised by generation and
+normalization precede `e904fa6` and were exercised by generation and
 comparison. The following gate-only delta is limited to the two reports and
 their provenance/status documentation.
 
@@ -167,18 +167,19 @@ and its runtime contract reproduced across Windows and Linux CPython
 preparation later produced clean source `537f72b` and gate-only refresh
 `b813aa7`.
 
-Release-defect source `c1bc042` then changed Python and invalidated those
-reports. Its current inventory records 1,995 functions and 378 compact runtime
+Release-defect source `c1bc042` changed Python and invalidated those reports;
+publication-readiness source `e904fa6` later superseded that paired refresh in
+turn. The current inventory records 2,563 functions and 607 compact runtime
 callables. After strict synchronization and dependency checks for 189 Windows
-and 187 Linux distributions, the Windows replacement report is 49,077 bytes
+and 187 Linux distributions, the Windows replacement report is 50,259 bytes
 under CPython 3.12.13 (file SHA-256
-`931758678b0d6c9859b35f95ec0eea80f9ee60d09ac6f9e10ca7c79c57860c0f`;
+`2be765e4b78a5487896b865f7737fcdf897394289dfbeca6c94bad26445277d2`;
 embedded report SHA-256
-`a583d8578f182d07d7aa9439c7debc87e98b62d711db82530b6c9dd00888491a`).
-The Linux report is 48,495 bytes under CPython 3.12.3 (file SHA-256
-`77f2147c4810143d06de66b7f4239aed55fe2a4951104ceaf9bddd9e10dc197e`;
+`33159ac283d1df249108c4fc0c407decb9d69c9be5329524e88c1f6d13146933`).
+The Linux report is 49,657 bytes under CPython 3.12.13 (file SHA-256
+`00bec58cb0750831d0b97c437bfb821165bab10f7bbf15bc400ce6a1a6eb0108`;
 embedded report SHA-256
-`c13233980a212da3a121d0af362098a2c865de5ff8e5e748c839fe272e5b91e2`).
+`1b0a69bf19d7996ad42ddde0b62e3df029cd9e36f771394f8bec20e7f0d0b766`).
 Each current candidate passes an independent complete same-platform 9×5
 comparison. The following reports-and-documentation-only commit freezes the
 new local candidate; publishing its exact commit/tree plus hosted execution,

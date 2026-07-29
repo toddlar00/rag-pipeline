@@ -32,13 +32,14 @@ Windows and Linux across Python 3.10-3.14, and independently passes both local
 9×5 comparisons. The replacement hosted exact-head checkpoint remains
 deliberately distinct and pending.
 A later R2 preparation checkpoint `537f72b` and gate-only refresh `b813aa7`
-superseded that report pair. The 2026-07-25 release-defect corrections then
-changed Python source and invalidated the R2 reports in turn. Current clean
-pre-gate source `c1bc042` (tree `4a37989`) records 1,995 functions and 378
-compact runtime callables; fresh locked Windows/Linux candidates bind that
-source and each independently passes its complete same-platform 9×5
-comparison. The following reports-and-documentation-only commit freezes the
-new local candidate. Hosted exact-head evidence and review remain pending.
+superseded that report pair. The 2026-07-25 release-defect corrections and the
+2026-07-29 publication-readiness implementation then changed Python source and
+invalidated the earlier reports in turn. Current clean pre-gate source
+`e904fa6` (tree `4fe1f45`) records 2,563 functions and 607 compact runtime
+callables; fresh locked Windows/Linux candidates bind that source and each
+independently passes its complete same-platform 9×5 comparison. The following
+reports-and-documentation-only commit freezes the new local candidate. Hosted
+exact-head evidence and review remain pending.
 On 2026-07-29, the publication-readiness branch added exact source-token and
 reading-order fidelity, occurrence-bound heading lineage, strict Markdown
 validation, one atomic five-gate READY receipt, and receipt-bound NotebookLM,
@@ -47,8 +48,8 @@ with 7 platform/optional skips, every local static gate, all three portable
 retrieval baselines, the real pinned Zettlr profile, and a five-test real
 Chroma/Qdrant smoke. A content-free local rehearsal passed all five gates and
 produced a validated multi-document NotebookLM package; no private output is
-tracked. Fresh two-platform Phase A0 evidence, hosted exact-head validation,
-and independent review remain pending.
+tracked. Paired local Phase A0 evidence now passes on Windows and Linux; hosted
+exact-head validation and independent review remain pending.
 
 Status terms:
 
@@ -71,11 +72,11 @@ Status terms:
 | Milestone | Status | Durable result |
 |---|---|---|
 | Foundation | Baseline | End-to-end PDF ingestion, enriched chunking, shared LLM runtime, grounded answers, hybrid retrieval/reranking, evaluation harness, Chroma/Qdrant indexing, CLI, UI, docs, and tests |
-| Repository truth and exhaustive source gate | Implemented in draft #44; owner decision pending | Commit `88fd301` relocates and tests the two local launchers, ignores `tmp/` and `.worktrees/`, replaces the stale compile list with deterministic Git-index discovery, curates the Claude plans and developer guide, adds the process-supervision ADR, and records the unresolved private-source policy as an explicit owner decision. The implementation is published at `ba9c66d`; the current replacement source-gate checkpoint is local `c1bc042`, pending the next #44 head |
+| Repository truth and exhaustive source gate | Implemented in draft #44; owner decision pending | Commit `88fd301` relocates and tests the two local launchers, ignores `tmp/` and `.worktrees/`, replaces the stale compile list with deterministic Git-index discovery, curates the Claude plans and developer guide, adds the process-supervision ADR, and records the unresolved private-source policy as an explicit owner decision. The implementation is published at `ba9c66d`; the current replacement source-gate checkpoint is local `e904fa6`, pending publication |
 | CI security ownership and workflow invariants | Implemented in draft #44 | Commit `17bdff7` adds a machine-readable map of current, reserved, and governance owners; a general CI gate proves symmetric security-workflow coverage, full-SHA action pinning, checkout credential isolation, and repository-wide read-only permissions. The implementation is present in draft #44; content-aware secret scanning remains a separate R7 item |
-| Deterministic architecture and `rag` facade inventory | Implemented in draft #44; replacement refresh local | Schema-v3 was introduced at `62cb574`; the published `ba9c66d` inventory records the tracked-source graph, definition and signature hashes, paired contextual import provenance, production/test facade consumers, private reads, mutation seams, and an isolated runtime contract. Historical source `fdb08d2` records 1,981 functions and reproduced across Windows/Linux CPython 3.10-3.14; current clean source `c1bc042` records 1,995 functions and 378 compact runtime callables. Broader R7 coverage, typing, lint, and static security work remain open |
-| Phase A0 architecture benchmark | A0a implemented; A0b replacement local candidate complete, hosted replacement gate pending | Commit `64843d1` introduced nine contained fresh-process scenarios run five times; portability closure `77a0f70` redirects Linux's standard-library user base into the run-local temporary root without setting `HOME` or `CODEX_HOME`. The first hosted frozen head `ba9c66d` exposed checkout-EOL lock and inventory drift plus POSIX acceptance of the adversarial drive-relative path `C:escape.py`; it did not pass A0b. Repairs `7594f8b` and `fdb08d2` close the hosted and CPython 3.10-3.14 normalization defects. After interim R2 refresh `b813aa7`, source-changing defect corrections required the current clean checkpoint `c1bc042`. Separate CPython 3.12 x86-64 Windows/Linux baselines bind that source, share eight LF/`HEAD`-identical inputs and the full 9×5 contract, and each passes an independent matching local comparison. The following reports/docs-only commit is the new local candidate. Successful hosted evidence remains strict and retained for 30 days. A0b still requires both hosted jobs to pass at that exact published commit/tree before it can gate R8 |
-| Five-gate logical publication and AI project exports | Implemented locally; Phase A0 and hosted review pending | Schema-v7 chunk receipts and schema-v12 quality evidence bind source-oracle registries, exact lexical ownership and physical order, occurrence-bound heading lineage, strict Pandoc/Zettlr-valid Markdown, and schema-v9 physical vector parity into one atomic READY receipt. Receipt-bound NotebookLM, ChatGPT, and Claude packages preserve page locators and endnotes while removing hidden comments and package-local links. The implementation passes 3,081 tests with 7 skips, every local static gate, all three offline retrieval suites, real Zettlr validation, real Chroma/Qdrant smoke, and a content-free local rehearsal. Fresh Phase A0 evidence, exact-head CI, and independent review remain required before draft completion |
+| Deterministic architecture and `rag` facade inventory | Implemented in draft #44; replacement refresh local | Schema-v3 was introduced at `62cb574`; the published `ba9c66d` inventory records the tracked-source graph, definition and signature hashes, paired contextual import provenance, production/test facade consumers, private reads, mutation seams, and an isolated runtime contract. Historical source `fdb08d2` records 1,981 functions and reproduced across Windows/Linux CPython 3.10-3.14; current clean source `e904fa6` records 2,563 functions and 607 compact runtime callables. Broader R7 coverage, typing, lint, and static security work remain open |
+| Phase A0 architecture benchmark | A0a implemented; A0b replacement local candidate complete, hosted replacement gate pending | Commit `64843d1` introduced nine contained fresh-process scenarios run five times; portability closure `77a0f70` redirects Linux's standard-library user base into the run-local temporary root without setting `HOME` or `CODEX_HOME`. The first hosted frozen head `ba9c66d` exposed checkout-EOL lock and inventory drift plus POSIX acceptance of the adversarial drive-relative path `C:escape.py`; it did not pass A0b. Repairs `7594f8b` and `fdb08d2` close the hosted and CPython 3.10-3.14 normalization defects. After interim R2 refresh `b813aa7`, source-changing work required current clean checkpoint `e904fa6`. Separate CPython 3.12.13 x86-64 Windows/Linux baselines bind that source, share eight LF/`HEAD`-identical inputs and the full 9×5 contract, and each passes an independent matching local comparison. The following reports/docs-only commit is the new local candidate. Successful hosted evidence remains strict and retained for 30 days. A0b still requires both hosted jobs to pass at that exact published commit/tree before it can gate R8 |
+| Five-gate logical publication and AI project exports | Implemented locally; local Phase A0 complete, hosted review pending | Schema-v7 chunk receipts and schema-v12 quality evidence bind source-oracle registries, exact lexical ownership and physical order, occurrence-bound heading lineage, strict Pandoc/Zettlr-valid Markdown, and schema-v9 physical vector parity into one atomic READY receipt. Receipt-bound NotebookLM, ChatGPT, and Claude packages preserve page locators and endnotes while removing hidden comments and package-local links. The implementation passes 3,081 tests with 7 skips, every local static gate, all three offline retrieval suites, real Zettlr validation, real Chroma/Qdrant smoke, a content-free local rehearsal, and paired local Phase A0 comparisons. Exact-head CI and independent review remain required before draft completion |
 | Ethics corpus coherence and publication quality | Implemented (draft) | [PR #31](https://github.com/toddlar00/rag-pipeline/pull/31): canonical scaffold reconstruction, exact source identity, complete tables and nested footnotes, exact embedding budgets, regenerated exports, and an exactly reconciled 1,715-record Chroma index |
 | Machine-readable corpus quality attestation | Implemented (draft) | [PR #31](https://github.com/toddlar00/rag-pipeline/pull/31): schema-v1 report binds the exact Docling source, chunks bytes, parameters, source-lineage coverage, tables, normalization, classification, entities, token budgets, and stable/hash roots; resume, export, retrieval, and index publication fail closed on missing, stale, malformed, or mismatched evidence |
 | Synced-folder publication and read resilience | Implemented (draft) | [PR #31](https://github.com/toddlar00/rag-pipeline/pull/31): bounded Windows sharing-violation retries republish only a pinned staging file; marker and exact artifact reads retry only content-identical ctime churn while failing closed on content-generation changes; exact hashes bypass unsafe stat caching on Windows |
@@ -1734,7 +1735,7 @@ a disruptive whole-repository rewrite.
   security-critical `job_runtime` only after its imported policy/storage layer
   is clean. Expand by dependency layer, not by blanket ignores.
 - **Implemented in draft #44; normalization established at `fdb08d2`, current
-  inventory refreshed at `c1bc042`:** the
+  2,563-function/607-callable inventory refreshed at `e904fa6`:** the
   schema-v3 tracked-source architecture/facade
   inventory subsumes the earlier AST import-DAG gate. It requires the
   first-party graph to remain acyclic, pins both shared evaluation domains and
@@ -1745,7 +1746,7 @@ a disruptive whole-repository rewrite.
   module/type/pickle identity, and reload/restoration behavior. The isolated
   runtime probe is supervised and output-bounded. The `fdb08d2` snapshot
   reproduced byte-identically across Windows and Linux CPython 3.10-3.14; the
-  current `c1bc042` snapshot passes its deterministic local gate but has not
+  current `e904fa6` snapshot passes its deterministic local gate but has not
   repeated that ten-cell matrix. An independent AST graph must exactly match
   every static edge.
 - Preserve the architecture/facade baseline as canonical, reviewable JSON with
@@ -2079,13 +2080,18 @@ than descriptive data with no release ceiling.
   (tree `4a37989c32d2a6743ccdef47bfe20460d165af32`) then changed Python and required
   another paired refresh. Its exact locked Windows suite passes 2,287 tests
   with 7 skips, and its inventory records 1,995 functions and 378 compact
-  runtime callables. Replacement Windows CPython 3.12.13 and Linux CPython
-  3.12.3 reports share eight exact inputs and the full
-  nine-scenario/five-repetition contract, and both matching local comparisons
-  independently pass. The gate-only delta after `c1bc042` is limited to those
-  two reports and provenance/status documentation; the workflow, LF policy,
-  and executable gates are already in the source checkpoint and were exercised
-  during generation. The following reports/docs-only commit freezes the final
+  runtime callables. Publication-readiness source
+  `e904fa6ea7419dac6797dc11af7cb1e507fb456c` (tree
+  `4fe1f457d6a60668319234988fb181bb989ad2fb`) changed Python again and superseded
+  that refresh. Its exact locked Windows suite passes 3,081 tests with 7 skips,
+  and its inventory records 2,563 functions and 607 compact runtime callables.
+  Replacement Windows and Linux CPython 3.12.13 reports share eight exact
+  inputs and the full nine-scenario/five-repetition contract, and both matching
+  local comparisons independently pass. The gate-only delta after `e904fa6` is
+  limited to those two reports and provenance/status documentation; the
+  workflow, LF policy, and executable gates are already in the source
+  checkpoint and were exercised during generation. The following
+  reports/docs-only commit freezes the final
   local R1 candidate; publish it and
   require both replacement hosted cells before authorizing
   R8c-6. Any source/lock change regenerates both baselines. Deterministic
@@ -2325,7 +2331,7 @@ does not declare R7 or A0 complete.
 | Sequence | Workstream | Dependency or gate |
 |---|---|---|
 | 1 | Immediate scope freeze, issue/milestone creation, R0 private-source decision/audit, and R3 corpus-owner review | Human decisions and tracking proceed while the already-started R7/A0 gate work finishes; no new feature slice starts |
-| 2 | R1 exact-head convergence including R0A/R0B plus the reviewable R7/A0 gate-only slice | Requires R0's integration policy and both safety fixes; excludes dependency PR #30; publish only the reports/provenance child after `c1bc042`, record its exact commit/tree pair on #44, then require the replacement hosted gates |
+| 2 | R1 exact-head convergence including R0A/R0B plus the reviewable R7/A0 gate-only slice | Requires R0's integration policy and both safety fixes; excludes dependency PR #30; publish only the reports/provenance child after `e904fa6`, record its exact commit/tree pair, then require the replacement hosted gates |
 | 3 | R2a decisions/evidence now; R2b dependency compatibility after R1 freeze | Keep R2a from changing R1 dependencies, split R2b by compatibility domain, replay R0A/R0B transports, escalate unresolved exceptions on 2026-08-15, and finish before 2026-08-31 |
 | 4 | R0C cloud/model-code qualification or explicit deferral | Required before the release advertises cloud-assisted ingestion or trusted remote model code as supported; policy/schema/model isolation work can proceed beside owner-led R3/R4 evidence |
 | 5 | R4 private-corpus ablations and expansion | Reusable semantics/CLI coverage are local; remaining evidence requires R3's frozen judgments |
