@@ -1,5 +1,7 @@
+import os
 from pathlib import Path
 
+import pytest
 import rag
 
 
@@ -21,6 +23,7 @@ def test_new_run_uses_book_scoped_paths(monkeypatch, tmp_path):
         "converted_markdown": book_dir / "Civil Procedure_docling.md",
         "chunks": book_dir / "Civil Procedure_chunks.jsonl",
         "quality_report": book_dir / "Civil Procedure_chunks.quality.json",
+        "publication_receipt": book_dir / ".rag-publication.json",
         "export": book_dir / "Civil Procedure.md",
         "chapters_dir": book_dir / "Chapters",
         "chroma": book_dir / "Civil Procedure_chroma",
@@ -59,6 +62,18 @@ def test_resume_uses_highest_existing_run_despite_gap(monkeypatch, tmp_path):
     paths = rag._derive_output_paths_existing(Path("Torts.pdf"))
 
     assert paths["doc"] == output_dir / "Torts_7" / "Torts_7.json"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows path case semantics")
+def test_resume_preserves_existing_run_name_case_on_windows(
+        monkeypatch, tmp_path):
+    output_dir = _use_output_dir(monkeypatch, tmp_path)
+    (output_dir / "sample handbook").mkdir()
+
+    paths = rag._derive_output_paths_existing(Path("Sample handbook.pdf"))
+
+    assert paths["doc"] == (
+        output_dir / "sample handbook" / "sample handbook.json")
 
 
 def test_legacy_flat_json_reserves_run_name(monkeypatch, tmp_path):

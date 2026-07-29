@@ -21,7 +21,11 @@ import table_retrieval_core
 
 
 DEFAULT_RRF_K = 10
-RETRIEVAL_LINKAGE_SCHEMA_VERSION = 1
+STABLE_ID_SCHEMA_VERSION = 2
+STABLE_ID_SOURCE_FIELD = "stable_id_source"
+LEGACY_CHUNK_ID_SCHEME = "retrieval_core._chunk_id"
+SOURCE_BOUND_CHUNK_ID_SCHEME = "retrieval_core._chunk_id:v2"
+RETRIEVAL_LINKAGE_SCHEMA_VERSION = 2
 MAX_CONTEXT_WINDOW = 2
 MAX_CONTEXT_CHARACTERS = 32_000
 MAX_CONTEXT_SEGMENT_CHARACTERS = 8_000
@@ -277,16 +281,19 @@ def _chunk_hash(rec: dict) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
 
 
-def _chunk_id(rec: dict) -> str:
-    """Return a durable source identity independent of derived enrichment."""
+def _chunk_identity(
+        rec: dict, source_identity: dict, *,
+        include_display_page_range: bool = True) -> dict:
+    """Build the shared identity payload for legacy and source-bound IDs."""
     metadata = rec.get("metadata", {})
     identity = {
         "text": rec["text"],
-        "source_file": metadata.get("source_file", ""),
         "page_start": metadata.get("page_start"),
         "page_end": metadata.get("page_end"),
-        "page_range": metadata.get("page_range", ""),
     }
+    if include_display_page_range:
+        identity["page_range"] = metadata.get("page_range", "")
+    identity.update(source_identity)
     source_items = metadata.get("source_items")
     if isinstance(source_items, list):
         source_refs = sorted({
@@ -321,6 +328,11 @@ def _chunk_id(rec: dict) -> str:
                 "table_parent_stable_id"),
             "table_child_index": metadata.get("table_child_index"),
         })
+    return identity
+
+
+def _chunk_id_from_identity(identity: dict) -> str:
+    """Hash one canonical stable-ID identity payload."""
     content = json.dumps(
         identity,
         ensure_ascii=False,
@@ -329,6 +341,90 @@ def _chunk_id(rec: dict) -> str:
     )
     digest = hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
     return f"chunk_{digest}"
+
+
+def _legacy_chunk_id(rec: dict) -> str:
+    """Return the exact pre-v2 ID used by existing unbound artifacts."""
+    metadata = rec.get("metadata", {})
+    identity = _chunk_identity(rec, {
+        "source_file": metadata.get("source_file", ""),
+    })
+    return _chunk_id_from_identity(identity)
+
+
+def _validated_stable_id_source(rec: dict) -> dict:
+    """Return a strict original-source binding for stable-ID schema v2."""
+    metadata = rec.get("metadata", {})
+    source = metadata.get(STABLE_ID_SOURCE_FIELD)
+    expected_fields = {"name", "size", "sha256"}
+    if not isinstance(source, dict) or set(source) != expected_fields:
+        raise ValueError(
+            f"{STABLE_ID_SOURCE_FIELD} must contain exactly "
+            "name, size, and sha256"
+        )
+    name = source.get("name")
+    size = source.get("size")
+    digest = source.get("sha256")
+    if (not isinstance(name, str) or not name or name in {".", ".."}
+            or "/" in name or "\\" in name):
+        raise ValueError(f"{STABLE_ID_SOURCE_FIELD}.name is invalid")
+    if (not isinstance(size, int) or isinstance(size, bool) or size <= 0):
+        raise ValueError(
+            f"{STABLE_ID_SOURCE_FIELD}.size must be a positive integer")
+    if (not isinstance(digest, str)
+            or re.fullmatch(r"[0-9a-f]{64}", digest) is None):
+        raise ValueError(
+            f"{STABLE_ID_SOURCE_FIELD}.sha256 must be lowercase SHA-256")
+    return {
+        "name": name,
+        "size": size,
+        "sha256": digest,
+    }
+
+
+def _source_bound_chunk_id(rec: dict) -> str:
+    """Return a v2 ID bound to the captured original source generation."""
+    source = _validated_stable_id_source(rec)
+    identity = _chunk_identity(
+        rec,
+        {
+            "stable_id_schema_version": STABLE_ID_SCHEMA_VERSION,
+            "source": source,
+        },
+        # Human-facing page labels may be repaired without changing the
+        # physical source location or the durable chunk identity.
+        include_display_page_range=False,
+    )
+    return _chunk_id_from_identity(identity)
+
+
+def _chunk_id(rec: dict) -> str:
+    """Return a durable chunk ID, using v2 when source-bound metadata exists.
+
+    Existing artifacts without ``stable_id_source`` retain the exact legacy
+    algorithm.  New artifacts opt into schema v2 by carrying a strict binding
+    to the captured original source file.  Consequently, an output/run display
+    name in ``source_file`` cannot perturb a v2 ID.
+    """
+    metadata = rec.get("metadata", {})
+    if STABLE_ID_SOURCE_FIELD in metadata:
+        return _source_bound_chunk_id(rec)
+    return _legacy_chunk_id(rec)
+
+
+def _chunk_id_scheme(records: list[dict] | tuple[dict, ...]) -> str:
+    """Return the exact homogeneous ID scheme used by one corpus."""
+    source_bound = [
+        STABLE_ID_SOURCE_FIELD in (record.get("metadata") or {})
+        for record in records
+    ]
+    if any(source_bound) and not all(source_bound):
+        raise ValueError("corpus mixes legacy and source-bound chunk IDs")
+    if source_bound and all(source_bound):
+        for record in records:
+            _validated_stable_id_source(record)
+        return SOURCE_BOUND_CHUNK_ID_SCHEME
+    return LEGACY_CHUNK_ID_SCHEME
 
 
 _RETRIEVAL_LINKAGE_FIELDS = (
@@ -350,6 +446,12 @@ _CONTEXT_METADATA_FIELDS = (
     "page_start",
     "page_end",
     "page_range",
+    "pdf_page_start",
+    "pdf_page_end",
+    "pdf_page_range",
+    "printed_page_start",
+    "printed_page_end",
+    "printed_page_range",
     "headings",
     "cross_references",
 )
@@ -420,20 +522,37 @@ def _context_metadata_projection(metadata: dict[str, Any]) -> dict[str, Any]:
 def _context_parent_id(metadata: dict[str, Any]) -> str:
     """Return the deterministic source/chapter context-group identity.
 
-    Unknown chapters are intentionally not assigned a context parent. This
-    prevents front matter or malformed records from acquiring neighbors merely
-    because they happen to be adjacent in the published JSONL order.
+    Source-bound records use the captured original file identity, so changing
+    an output/run display name cannot churn context links. Substantive
+    chapterless records share a deliberate ``front_matter`` context group;
+    structural records and table children remain isolated.
     """
     if table_retrieval_core.is_table_child(metadata):
         return ""
-    source_file = metadata.get("source_file")
+    if metadata.get("content_type") == "structural":
+        return ""
+    if metadata.get("content_source") in {"footnote", "figure"}:
+        return ""
+    source_binding = metadata.get(STABLE_ID_SOURCE_FIELD)
+    if source_binding is not None:
+        source_identity: object = _validated_stable_id_source({
+            "metadata": {STABLE_ID_SOURCE_FIELD: source_binding},
+        })
+    else:
+        source_file = metadata.get("source_file")
+        if not isinstance(source_file, str) or not source_file.strip():
+            return ""
+        source_identity = {"legacy_source_file": source_file}
     chapter_num = metadata.get("chapter_num")
-    if (not isinstance(source_file, str) or not source_file.strip()
-            or isinstance(chapter_num, bool)
-            or not isinstance(chapter_num, int)):
+    chapter_group: object
+    if isinstance(chapter_num, int) and not isinstance(chapter_num, bool):
+        chapter_group = chapter_num
+    elif chapter_num is None:
+        chapter_group = "front_matter"
+    else:
         return ""
     payload = json.dumps(
-        {"source_file": source_file, "chapter_num": chapter_num},
+        {"source": source_identity, "chapter_group": chapter_group},
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),

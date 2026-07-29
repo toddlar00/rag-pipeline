@@ -61,6 +61,7 @@ class ResumeCommandDefaults:
     security_profile: str = "release"
     network_policy: str = "local-only"
     model_download_policy: str = "cache-only"
+    markdown_validation: str = "auto"
 
 
 class LLMCallOptions(TypedDict, total=False):
@@ -185,6 +186,8 @@ def _build_resume_cmd(
         ("network_policy", defaults.network_policy, "--network-policy"),
         ("model_download_policy", defaults.model_download_policy,
          "--model-download-policy"),
+        ("markdown_validation", defaults.markdown_validation,
+         "--markdown-validation"),
     )
     for attr, default, flag in value_flags:
         value = getattr(args, attr, default)

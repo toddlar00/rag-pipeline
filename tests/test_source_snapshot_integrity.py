@@ -1038,7 +1038,7 @@ def _write_chunk_v3(document: Path, chunks: Path, parameters: dict) -> dict:
         rag._document_profiles.get_profile(rag.DEFAULT_STRUCTURE_PROFILE))
     parameters.setdefault("structure_profile", receipt)
     document_raw = document.read_bytes()
-    inputs = {
+    upstream_inputs = {
         "docling_json": {
             "name": document.name,
             "size": len(document_raw),
@@ -1047,13 +1047,27 @@ def _write_chunk_v3(document: Path, chunks: Path, parameters: dict) -> dict:
         "conversion_manifest": None,
         "table_recovery": None,
     }
+    oracle_path = rag._source_oracle_registry_path(chunks)
+    rag._atomic_write_json(
+        oracle_path,
+        rag._source_fidelity_core.build_source_oracle_registry(
+            oracles={}, input_bindings=upstream_inputs),
+    )
+    inputs = {
+        **upstream_inputs,
+        "source_fidelity_oracles": rag._source_oracle_registry_binding(
+            oracle_path),
+    }
     rag._write_artifact_completion(
         rag._artifact_completion_path(chunks, stage="chunking"),
         stage="chunking",
         source_sha256=inputs["docling_json"]["sha256"],
         source_record_count=None,
         parameters=parameters,
-        outputs={"chunks_jsonl": chunks},
+        outputs={
+            "chunks_jsonl": chunks,
+            "source_fidelity_oracles": oracle_path,
+        },
         schema_version=rag.CHUNK_COMPLETION_SCHEMA_VERSION,
         extra_fields={
             "inputs": inputs,
@@ -1091,34 +1105,65 @@ def test_chunk_v3_rejects_tampered_inputs_and_unbound_recovery(tmp_path):
 def _quality_fixture(tmp_path):
     document = tmp_path / "book.json"
     chunks = tmp_path / "book_chunks.jsonl"
+    source_text = "Source-backed professional responsibility discussion."
     mapping = {
         "pages": {"1": {}},
         "texts": [{
             "self_ref": "#/texts/0",
             "label": "text",
             "content_layer": "body",
-            "text": "Source-backed professional responsibility discussion.",
-            "prov": [{"page_no": 1}],
+            "text": source_text,
+            "prov": [{
+                "page_no": 1,
+                "charspan": [0, len(source_text)],
+                "bbox": {
+                    "l": 10, "t": 10, "r": 200, "b": 20,
+                    "coord_origin": "TOPLEFT",
+                },
+            }],
         }],
     }
     rag._atomic_write_json(document, mapping)
+    descriptor, _ = rag._source_fidelity_core.source_descriptor(
+        mapping["texts"][0])
+    source_tokens = rag._source_fidelity_core.lexical_tokens(source_text)
     record = {
-        "text": "Source-backed professional responsibility discussion.",
+        "text": source_text,
         "metadata": {
             "chunk_index": 0,
             "source_file": "book",
-            "source_lineage_schema_version": 1,
+            "source_lineage_schema_version": (
+                rag._quality_core.SOURCE_LINEAGE_SCHEMA_VERSION),
             "source_items": [{
                 "ref": "#/texts/0", "label": "text",
-                "parent_refs": [], "spans": [{"page": 1}],
+                "parent_refs": [], "spans": descriptor["spans"],
+                "scope": {"provenance_indexes": [0]},
+                "source_text_sha256": descriptor["source_text_sha256"],
+                "source_lexical_sha256": descriptor[
+                    "source_lexical_sha256"],
+                "source_lexical_count": descriptor[
+                    "source_lexical_count"],
+                "transform": "plain",
+                "oracle_text_sha256": (
+                    rag._source_fidelity_core.text_sha256(source_text)),
+                "oracle_lexical_sha256": (
+                    rag._source_fidelity_core.lexical_sha256(source_tokens)),
+                "oracle_lexical_count": len(source_tokens),
+                "recovery_sha256": None,
             }],
             "page_start": 1, "page_end": 1,
             "chapter_num": 1, "content_type": "author_narrative",
             "content_source": "body", "token_count": 5,
             "embedding_token_count": 5, "case_names": [],
             "primary_case": None,
+            rag._heading_lineage.HEADING_SCHEMA_FIELD: (
+                rag._heading_lineage.HEADING_LINEAGE_SCHEMA_VERSION),
+            rag._heading_lineage.HEADING_PATH_FIELD: [],
+            rag._heading_lineage.DIRECT_HEADING_FIELD: [],
+            rag._heading_lineage.HEADING_COMPONENTS_FIELD: [],
         },
     }
+    rag._source_fidelity_core.attach_record_attestations([record])
     rag._retrieval_core._attach_retrieval_linkage([record])
     rag._atomic_write_jsonl(chunks, [record])
     parameters = {"embedding_model": "model-a"}
@@ -1269,13 +1314,27 @@ def test_index_quality_requires_exact_chunk_completion_inputs(tmp_path):
             "discovery": "explicit",
         },
     }
+    oracle_path = rag._source_oracle_registry_path(chunks)
+    rag._atomic_write_json(
+        oracle_path,
+        rag._source_fidelity_core.build_source_oracle_registry(
+            oracles={}, input_bindings=bound_inputs),
+    )
+    bound_inputs = {
+        **bound_inputs,
+        "source_fidelity_oracles": rag._source_oracle_registry_binding(
+            oracle_path),
+    }
     rag._write_artifact_completion(
         rag._artifact_completion_path(chunks, stage="chunking"),
         stage="chunking",
         source_sha256=document_sha256,
         source_record_count=None,
         parameters=parameters,
-        outputs={"chunks_jsonl": chunks},
+        outputs={
+            "chunks_jsonl": chunks,
+            "source_fidelity_oracles": oracle_path,
+        },
         schema_version=rag.CHUNK_COMPLETION_SCHEMA_VERSION,
         extra_fields={
             "inputs": bound_inputs,
@@ -1484,3 +1543,19 @@ def test_chunking_rejects_input_output_alias_before_writing(
 
     assert document.read_text(encoding="utf-8") == '{"texts":[]}'
     assert source_pdf.read_bytes() == b"original PDF"
+
+
+def test_chunking_rejects_source_oracle_sidecar_alias_before_writing(
+        monkeypatch, tmp_path):
+    chunks = tmp_path / "book_chunks.jsonl"
+    document = rag._source_oracle_registry_path(chunks)
+    document.write_text('{"texts":[]}', encoding="utf-8")
+    monkeypatch.setattr(
+        rag, "_chunk_document_locked",
+        lambda *_args, **_kwargs: pytest.fail("aliased output reached writer"),
+    )
+
+    with pytest.raises(ValueError, match="distinct files"):
+        rag.chunk_document(document, chunks)
+
+    assert document.read_text(encoding="utf-8") == '{"texts":[]}'

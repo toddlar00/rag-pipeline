@@ -80,6 +80,10 @@ Current policy/runtime modules include:
 - `chunking_core`, `document_profiles`, and `quality_core` — deterministic
   chunk policy, immutable attested document layouts, and corpus-quality
   evidence.
+- `source_fidelity_core`, `heading_lineage`, `markdown_validation`,
+  `publication_core`, and `ai_project_export` — exact source-token ownership
+  and physical order, occurrence-bound semantic hierarchy, validated Markdown,
+  atomic five-gate READY receipts, and receipt-bound AI project derivatives.
 - `artifact_io`, `index_state`, `vector_lifecycle`, and `resource_lease` —
   strict artifact I/O, manifest decisions, guarded vector reconciliation,
   verification/commit ordering, and canonical reentrant cross-process path

@@ -265,6 +265,25 @@ def test_pipeline_manifest_create_resume_state_and_conflict(tmp_path):
         retention.mark_pipeline_run_state(manifest, "active")
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows path case semantics")
+def test_pipeline_manifest_resume_allows_job_scope_case_only_change(tmp_path):
+    output_root, run_root, sibling, manifest, vector_stores = (
+        _create_owned_run(tmp_path))
+    retention.mark_pipeline_run_state(manifest, "complete")
+
+    resumed = retention.ensure_pipeline_run_manifest(
+        output_root,
+        run_root,
+        job_scope="Book-Job",
+        owned_siblings=[sibling],
+        vector_stores=vector_stores,
+    )
+
+    payload = json.loads(resumed.read_text(encoding="utf-8"))
+    assert payload["job_scope"] == "book-job"
+    assert payload["state"] == "active"
+
+
 def test_new_manifest_refuses_to_claim_a_preexisting_sibling(tmp_path):
     output_root = tmp_path / "output"
     output_root.mkdir()

@@ -13,20 +13,26 @@ import math
 import re
 from collections import Counter, defaultdict
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Iterable, NamedTuple, Sequence
 
+import chunking_core
+import heading_lineage
 import retrieval_core
+import source_fidelity_core
 import table_retrieval_core
 
-QUALITY_REPORT_SCHEMA_VERSION = 4
-LEGACY_QUALITY_REPORT_SCHEMA_VERSION = 3
-SOURCE_LINEAGE_SCHEMA_VERSION = 1
+QUALITY_REPORT_SCHEMA_VERSION = 12
+SOURCE_LINEAGE_SCHEMA_VERSION = 5
+SOURCE_ANALYSIS_SCHEMA_VERSION = 4
+PAGE_ORDER_REASON_FIELD = "page_order_reason"
+FOOTNOTE_AFTER_CONTINUATION_REASON = (
+    "footnote_after_cross_page_continuation")
 MAX_QUALITY_REPORT_BYTES = 16 * 1024 * 1024
 _QUALITY_REPORT_FIELDS = {
     "schema_version", "kind", "status", "source", "parameters_sha256",
     "inputs", "embedding", "source_lineage", "tables", "corpus",
     "normalization", "classification", "entities", "retrieval",
-    "table_retrieval", "hashes", "checks",
+    "table_retrieval", "source_analysis", "hashes", "checks",
 }
 _EMBEDDING_FIELDS = {
     "model", "limit", "raw_token_min", "raw_token_max", "raw_token_p50",
@@ -38,7 +44,7 @@ _SOURCE_LINEAGE_FIELDS = {
     "schema_version", "inventory_issues", "eligible_items",
     "represented_items", "coverage_ppm", "missing_refs", "unknown_refs",
     "chunks_without_lineage", "invalid_entries", "metadata_mismatches",
-    "schema_issues", "excluded_items_by_reason",
+    "schema_issues", "excluded_items_by_reason", "fidelity",
 }
 _TABLE_FIELDS = {
     "eligible_source_tables", "represented_source_tables", "missing_refs",
@@ -59,20 +65,61 @@ _TABLE_RETRIEVAL_FIELDS = {
     "schema_version", "parent_tables", "expanded_parents", "child_chunks",
     "issues",
 }
+_SOURCE_ANALYSIS_FIELDS = {
+    "schema_version", "available", "substantive_page_footers", "pictures",
+    "section_headings",
+}
+_PAGE_FOOTER_ANALYSIS_FIELDS = {
+    "total", "page_label_like", "repeating_or_short",
+    "substantive_detected", "substantive_represented",
+    "substantive_risk", "substantive_risk_refs",
+}
+_PICTURE_ANALYSIS_FIELDS = {
+    "total", "with_linked_text", "covered_by_linked_text",
+    "covered_by_figure_text", "missing_linked_text", "large_unlinked",
+    "other_unlinked", "substantive_risk", "substantive_risk_refs",
+}
+_SECTION_HEADING_ANALYSIS_FIELDS = {
+    "schema_version", "policy", "source_items", "attachable_items",
+    "attached_items", "directly_owned_items", "exceptions", "artifacts",
+    "item_coverage_ppm", "missing_refs", "unattached_refs",
+    "missing_direct_refs", "duplicate_direct_refs",
+    "invalid_binding_records", "scope_conflict_records",
+    "display_binding_records", "ancestor_resumption_count",
+    "evidence_sha256",
+}
 
 _SOURCE_LABELS = {
     "text", "list_item", "footnote", "caption", "code", "table",
+    "document_index", "picture",
 }
 _KNOWN_CONTENT_TYPES = {
     "case_opinion", "notes_and_questions", "author_narrative",
     "statutory_excerpt", "table", "footnote", "chapter_introduction",
+    "problem_hypothetical", "figure",
 }
 _SOURCE_COLLECTIONS = (
     "texts", "tables", "pictures", "key_value_items", "form_items",
 )
 _CANONICAL_TEXT_RE = re.compile(r"[^a-z0-9]+")
+_PAGE_LABEL_RE = re.compile(
+    r"(?:page\s+)?(?:[0-9]{1,6}|[ivxlcdm]{1,16})", re.IGNORECASE)
+_FOOTNOTE_PREFIX_RE = re.compile(
+    r"(?:[*\u2020\u2021]+\s*)?(?:[0-9]{1,4}|[a-z])[.)]\s+\S",
+    re.IGNORECASE)
+_CITATION_LEAD_RE = re.compile(
+    r"(?:id\.|ibid\.|see\b|accord\b|cf\.\s|supra\b|infra\b)",
+    re.IGNORECASE)
+_LEGAL_CITATION_RE = re.compile(
+    r"\b[0-9]{1,4}\s+[A-Z][A-Za-z. '&-]{0,28}\s+[0-9]{1,6}\b")
+_LARGE_PICTURE_AREA_RATIO = 0.15
+_PRINTED_PAGE_NUMBER_RE = re.compile(r"[1-9][0-9]{0,5}")
+_RUNNING_PAGE_MARGIN_RATIO = 0.12
+_RUNNING_PAGE_LANE_TOLERANCE_RATIO = 0.025
+_RUNNING_PAGE_DELTA_MIN_SUPPORT = 3
 _EMPHASIS_BOILERPLATE_RE = re.compile(
     r"^\**\s*all\s+emphasis\s+added\.?\s*\**$", re.IGNORECASE)
+_SINGLE_LETTER_SECTION_MARKER_RE = re.compile(r"^[A-Z]$")
 _RULE_LANGUAGE_HEADING_RE = re.compile(
     r"^\s*rule\s+language\s*\**\s*$", re.IGNORECASE)
 _AUTHORS_EXPLANATION_HEADING_RE = re.compile(
@@ -88,9 +135,12 @@ _HARD_CHECK_NAMES = (
     "eligible_source_items_represented",
     "source_refs_resolve",
     "source_lineage_matches_source",
+    "source_geometry_complete",
+    "source_token_fidelity",
     "source_tables_represented",
     "page_metadata_valid",
     "page_regressions",
+    "same_page_reading_order",
     "structural_ranges_excluded",
     "contiguous_chunk_indexes",
     "retrieval_linkage_invariants",
@@ -103,8 +153,13 @@ _HARD_CHECK_NAMES = (
     "classification_invariants",
     "entity_invariants",
     "table_invariants",
+    "section_heading_attachment",
 )
-_WARNING_CHECK_NAMES = ("canonical_text_duplicates",)
+_WARNING_CHECK_NAMES = (
+    "canonical_text_duplicates",
+    "substantive_excluded_page_footers",
+    "uncovered_substantive_pictures",
+)
 _QUALITY_CHECK_NAMES = frozenset(
     _HARD_CHECK_NAMES + _WARNING_CHECK_NAMES)
 _ZERO_COUNT_CHECK_NAMES = frozenset({
@@ -115,9 +170,12 @@ _ZERO_COUNT_CHECK_NAMES = frozenset({
     "eligible_source_items_represented",
     "source_refs_resolve",
     "source_lineage_matches_source",
+    "source_geometry_complete",
+    "source_token_fidelity",
     "source_tables_represented",
     "page_metadata_valid",
     "page_regressions",
+    "same_page_reading_order",
     "structural_ranges_excluded",
     "contiguous_chunk_indexes",
     "retrieval_linkage_invariants",
@@ -127,6 +185,7 @@ _ZERO_COUNT_CHECK_NAMES = frozenset({
     "classification_invariants",
     "entity_invariants",
     "table_invariants",
+    "section_heading_attachment",
 })
 
 
@@ -186,6 +245,38 @@ def _valid_issue_mapping(
     return not require_empty or not any(value.values())
 
 
+def _normalization_issues(records: Sequence[dict]) -> dict[str, list[int]]:
+    """Derive the exact normalization findings for a record snapshot."""
+    issues: defaultdict[str, list[int]] = defaultdict(list)
+    for index, record in enumerate(records):
+        metadata = record.get("metadata") or {}
+        text = str(record.get("text") or "")
+        if "\ufffd" in text:
+            issues["replacement_character"].append(index)
+        if re.search(
+                r"(?:(?<=[A-Za-z0-9])-\s+(?=[a-z])|"
+                r"(?<=[A-Za-z0-9])\s+-(?=[A-Za-z0-9]))",
+                text):
+            issues["split_hyphen"].append(index)
+        if (metadata.get("content_source") not in {"figure", "table"}
+                and re.search(
+                    r"(?<![A-Za-z0-9_])(?:[A-Za-z]\s+){3,}"
+                    r"[A-Za-z](?![A-Za-z0-9_])",
+                    text)):
+            issues["ocr_gibberish"].append(index)
+        if chunking_core.has_malformed_url_spacing(text):
+            issues["split_url"].append(index)
+        if "This and other authors' explanations draw" in text:
+            issues["editorial_boilerplate"].append(index)
+        if re.search(
+                r"\b(?:clientlawyer|lawyerclient|plaintiffdefendant|"
+                r"threejudge|Aconcluding)\b", text, re.I):
+            issues["known_fused_term"].append(index)
+    return {
+        key: indexes for key, indexes in sorted(issues.items())
+    }
+
+
 def _valid_sha256(value: object) -> bool:
     return (isinstance(value, str)
             and re.fullmatch(r"[0-9a-f]{64}", value) is not None)
@@ -212,8 +303,20 @@ def _valid_file_binding(value: object, *, capture_policy: bool = False) -> bool:
 def _valid_input_bindings(value: object) -> bool:
     if (not isinstance(value, dict)
             or set(value) != {
-                "docling_json", "conversion_manifest", "table_recovery"}
+                "docling_json", "conversion_manifest", "table_recovery",
+                "source_fidelity_oracles"}
             or not _valid_file_binding(value.get("docling_json"))):
+        return False
+    oracle_registry = value.get("source_fidelity_oracles")
+    if (not isinstance(oracle_registry, dict)
+            or set(oracle_registry) != {
+                "name", "size", "sha256", "schema_version"}
+            or not _valid_file_binding({
+                key: oracle_registry.get(key)
+                for key in ("name", "size", "sha256")
+            })
+            or oracle_registry.get("schema_version")
+            != source_fidelity_core.SOURCE_ORACLE_REGISTRY_SCHEMA_VERSION):
         return False
     conversion = value.get("conversion_manifest")
     if conversion is not None and (
@@ -236,6 +339,14 @@ def _valid_input_bindings(value: object) -> bool:
         and recovery.get("conversion_manifest") == conversion
         and recovery.get("discovery") in {"explicit", "adjacent", "ancestor"}
     )
+
+
+def _source_oracle_upstream_inputs(value: dict) -> dict:
+    """Return the exact inputs captured before the oracle sidecar existed."""
+    return {
+        key: value[key]
+        for key in ("docling_json", "conversion_manifest", "table_recovery")
+    }
 
 
 def _headings(metadata: dict) -> tuple[str, ...]:
@@ -264,12 +375,34 @@ def _allowed_semantic_lane_regression(
     )
 
 
+def _allowed_cross_page_footnote_regression(
+        previous_metadata: dict, metadata: dict, *,
+        previous_page: int, page: int) -> bool:
+    """Recognize a footnote delayed to preserve a cross-page sentence."""
+    return (
+        previous_page == page + 1
+        and previous_metadata.get("content_source") == "body"
+        and metadata.get("content_source") == "footnote"
+        and metadata.get("content_type") == "footnote"
+        and isinstance(metadata.get("section_path"), str)
+        and metadata.get(PAGE_ORDER_REASON_FIELD)
+        == FOOTNOTE_AFTER_CONTINUATION_REASON
+    )
+
+
 def _valid_page_regression_evidence(entry: object, *, allowed: bool) -> bool:
-    if not isinstance(entry, dict) or set(entry) != {
+    base_fields = {
             "chunk_index", "previous_chunk_index", "previous_page_start",
             "page_start", "section_path", "previous_content_type",
             "content_type", "previous_headings", "headings", "reason",
-    }:
+    }
+    footnote_fields = base_fields | {
+        "previous_content_source", "content_source", PAGE_ORDER_REASON_FIELD,
+    }
+    entry_fields = frozenset(entry) if isinstance(entry, dict) else frozenset()
+    if (not isinstance(entry, dict)
+            or entry_fields not in {frozenset(base_fields),
+                                    frozenset(footnote_fields)}):
         return False
     index = entry["chunk_index"]
     previous_index = entry["previous_chunk_index"]
@@ -290,19 +423,35 @@ def _valid_page_regression_evidence(entry: object, *, allowed: bool) -> bool:
         return False
     if not allowed:
         return entry["reason"] == "unexpected_page_decrease"
-    if entry["reason"] != "rule_language_to_authors_explanation":
+    if entry["reason"] == "rule_language_to_authors_explanation":
+        if entry_fields != frozenset(base_fields):
+            return False
+        previous_metadata = {
+            "section_path": entry["section_path"],
+            "content_type": entry["previous_content_type"],
+            "headings": entry["previous_headings"],
+        }
+        metadata = {
+            "section_path": entry["section_path"],
+            "content_type": entry["content_type"],
+            "headings": entry["headings"],
+        }
+        return _allowed_semantic_lane_regression(previous_metadata, metadata)
+    if entry["reason"] != FOOTNOTE_AFTER_CONTINUATION_REASON \
+            or entry_fields != frozenset(footnote_fields):
         return False
     previous_metadata = {
-        "section_path": entry["section_path"],
-        "content_type": entry["previous_content_type"],
-        "headings": entry["previous_headings"],
+        "content_source": entry["previous_content_source"],
     }
     metadata = {
         "section_path": entry["section_path"],
+        "content_source": entry["content_source"],
         "content_type": entry["content_type"],
-        "headings": entry["headings"],
+        PAGE_ORDER_REASON_FIELD: entry[PAGE_ORDER_REASON_FIELD],
     }
-    return _allowed_semantic_lane_regression(previous_metadata, metadata)
+    return _allowed_cross_page_footnote_regression(
+        previous_metadata, metadata,
+        previous_page=previous_page, page=page)
 
 
 def _label(value: object) -> str:
@@ -323,33 +472,7 @@ def _item_pages(item: dict) -> tuple[int, ...]:
 
 def _source_spans(item: dict) -> list[dict]:
     """Serialize source provenance exactly as ``rag`` serializes lineage."""
-    spans = []
-    for provenance in item.get("prov") or []:
-        if not isinstance(provenance, dict):
-            continue
-        page = provenance.get("page_no")
-        if not isinstance(page, int) or isinstance(page, bool) or page < 1:
-            continue
-        span: dict[str, object] = {"page": page}
-        bbox = provenance.get("bbox")
-        if isinstance(bbox, dict):
-            coordinates = []
-            for name in ("l", "t", "r", "b"):
-                value = bbox.get(name)
-                if (not isinstance(value, (int, float))
-                        or isinstance(value, bool)
-                        or not math.isfinite(value)):
-                    coordinates = []
-                    break
-                coordinates.append(round(float(value), 3))
-            if len(coordinates) == 4:
-                span["bbox"] = coordinates
-                origin = str(bbox.get("coord_origin") or "")
-                if origin:
-                    span["origin"] = origin.upper()
-        spans.append(span)
-    spans.sort(key=lambda value: (
-        value["page"], value.get("bbox", []), value.get("origin", "")))
+    spans, _ = source_fidelity_core.provenance_spans(item)
     return spans
 
 
@@ -365,22 +488,238 @@ def _inside_ranges(page: int,
     return any(start <= page <= end for start, end in structural_ranges)
 
 
+def _running_division_furniture_refs(document: dict) -> set[str]:
+    """Return mislabeled list/text banners aligned with real page headers."""
+    texts = document.get("texts") if isinstance(document, dict) else None
+    values = texts if isinstance(texts, list) else []
+
+    def position(item: dict) -> tuple[int, float] | None:
+        provenance = item.get("prov")
+        if not isinstance(provenance, list) or not provenance:
+            return None
+        first = provenance[0]
+        bbox = first.get("bbox") if isinstance(first, dict) else None
+        page = first.get("page_no") if isinstance(first, dict) else None
+        if (not isinstance(page, int) or isinstance(page, bool)
+                or not isinstance(bbox, dict)):
+            return None
+        try:
+            top = float(bbox.get("t"))
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(top):
+            return None
+        origin = str(bbox.get("coord_origin") or "").upper()
+        return page, -top if origin == "BOTTOMLEFT" else top
+
+    header_verticals: defaultdict[int, list[float]] = defaultdict(list)
+    for item in values:
+        if (not isinstance(item, dict)
+                or _label(item.get("label")) != "page_header"):
+            continue
+        item_position = position(item)
+        if item_position is not None:
+            header_verticals[item_position[0]].append(item_position[1])
+
+    refs = set()
+    for item in values:
+        if not isinstance(item, dict):
+            continue
+        if _label(item.get("label")) not in {"text", "list_item"}:
+            continue
+        ref = item.get("self_ref")
+        item_position = position(item)
+        if (not isinstance(ref, str) or not ref or item_position is None
+                or not chunking_core.is_probable_running_division_banner(
+                    _source_text(item))):
+            continue
+        if any(
+                abs(item_position[1] - vertical) <= 12.0
+                for vertical in header_verticals.get(item_position[0], [])):
+            refs.add(ref)
+    return refs
+
+
+class _PrintedPageNumberEvidence(NamedTuple):
+    """One numeric source item with page-edge geometry."""
+
+    ref: str
+    page: int
+    printed_page: int
+    edge: str
+    edge_distance_ratio: float
+
+    @property
+    def delta(self) -> int:
+        return self.page - self.printed_page
+
+
+def _serialized_page_height(document: dict, page_number: int) -> float | None:
+    pages = document.get("pages")
+    page = None
+    if isinstance(pages, dict):
+        page = pages.get(str(page_number))
+        if page is None:
+            page = pages.get(page_number)
+    elif isinstance(pages, list) and 0 <= page_number - 1 < len(pages):
+        page = pages[page_number - 1]
+    size = page.get("size") if isinstance(page, dict) else None
+    height = size.get("height") if isinstance(size, dict) else None
+    try:
+        value = float(height)
+    except (TypeError, ValueError):
+        return None
+    return value if math.isfinite(value) and value > 0 else None
+
+
+def _printed_page_number_evidence(
+        document: dict, item: dict,
+) -> _PrintedPageNumberEvidence | None:
+    """Return exact numeric text plus normalized physical-margin evidence."""
+    text = _source_text(item).strip()
+    if _PRINTED_PAGE_NUMBER_RE.fullmatch(text) is None:
+        return None
+    ref = item.get("self_ref")
+    provenance = item.get("prov")
+    if (not isinstance(ref, str) or not ref
+            or not isinstance(provenance, list) or len(provenance) != 1):
+        return None
+    span = provenance[0]
+    if not isinstance(span, dict):
+        return None
+    page = span.get("page_no")
+    bbox = span.get("bbox")
+    if (not isinstance(page, int) or isinstance(page, bool) or page < 1
+            or not isinstance(bbox, dict)):
+        return None
+    height = _serialized_page_height(document, page)
+    origin = str(bbox.get("coord_origin") or "").upper()
+    if height is None or origin not in {"BOTTOMLEFT", "TOPLEFT"}:
+        return None
+    try:
+        low, high = sorted((float(bbox.get("b")), float(bbox.get("t"))))
+    except (TypeError, ValueError):
+        return None
+    if (not math.isfinite(low) or not math.isfinite(high)
+            or low < -2.0 or high > height + 2.0 or low > high):
+        return None
+    if origin == "BOTTOMLEFT":
+        distances = {"bottom": low, "top": height - high}
+    else:
+        distances = {"top": low, "bottom": height - high}
+    edge, distance = min(distances.items(), key=lambda entry: entry[1])
+    ratio = max(0.0, distance) / height
+    if ratio > _RUNNING_PAGE_MARGIN_RATIO:
+        return None
+    return _PrintedPageNumberEvidence(
+        ref=ref,
+        page=page,
+        printed_page=int(text),
+        edge=edge,
+        edge_distance_ratio=ratio,
+    )
+
+
+def running_page_number_furniture_refs(document: dict) -> set[str]:
+    """Infer numeric ``text`` items that are mislabeled page furniture.
+
+    The inference is deliberately document-level and fail-closed.  Correctly
+    labeled numeric ``page_header`` and ``page_footer`` objects establish a
+    unique, strict-majority PDF-page/printed-page delta.  A candidate must be
+    an exact decimal ``text`` item, match that delta, and occupy the same
+    physical top- or bottom-margin lane as the supporting furniture.  Each
+    source page gets one vote so duplicated OCR objects cannot create a false
+    dominant offset.
+    """
+    texts = document.get("texts") if isinstance(document, dict) else None
+    values = texts if isinstance(texts, list) else []
+    labeled_evidence: list[_PrintedPageNumberEvidence] = []
+    for item in values:
+        if not isinstance(item, dict):
+            continue
+        label = _label(item.get("label"))
+        if label not in {"page_header", "page_footer"}:
+            continue
+        evidence = _printed_page_number_evidence(document, item)
+        expected_edge = "top" if label == "page_header" else "bottom"
+        if evidence is not None and evidence.edge == expected_edge:
+            labeled_evidence.append(evidence)
+
+    deltas_by_page: defaultdict[int, set[int]] = defaultdict(set)
+    for evidence in labeled_evidence:
+        deltas_by_page[evidence.page].add(evidence.delta)
+    delta_counts = Counter(
+        next(iter(deltas))
+        for deltas in deltas_by_page.values()
+        if len(deltas) == 1
+    )
+    if not delta_counts:
+        return set()
+    dominant_delta, support = delta_counts.most_common(1)[0]
+    total_support = sum(delta_counts.values())
+    if (support < _RUNNING_PAGE_DELTA_MIN_SUPPORT
+            or support * 2 <= total_support
+            or sum(count == support for count in delta_counts.values()) != 1):
+        return set()
+
+    lane_ratios: defaultdict[str, list[float]] = defaultdict(list)
+    for evidence in labeled_evidence:
+        if evidence.delta == dominant_delta:
+            lane_ratios[evidence.edge].append(evidence.edge_distance_ratio)
+    lane_centers = {
+        edge: sorted(ratios)[len(ratios) // 2]
+        for edge, ratios in lane_ratios.items()
+        if ratios
+    }
+
+    refs: set[str] = set()
+    for item in values:
+        if (not isinstance(item, dict)
+                or _label(item.get("label")) != "text"):
+            continue
+        evidence = _printed_page_number_evidence(document, item)
+        if evidence is None or evidence.delta != dominant_delta:
+            continue
+        lane_center = lane_centers.get(evidence.edge)
+        if (lane_center is not None
+                and abs(evidence.edge_distance_ratio - lane_center)
+                <= _RUNNING_PAGE_LANE_TOLERANCE_RATIO):
+            refs.add(evidence.ref)
+    return refs
+
+
 def _source_exclusion_reason(
-        item: dict, *, structural_ranges: Sequence[tuple[int, int]]) -> str | None:
+        item: dict, *, structural_ranges: Sequence[tuple[int, int]],
+        page_footer_frequencies: Counter[str] | None = None,
+        substantive_picture: bool = False) -> str | None:
     label = _label(item.get("label"))
-    if label not in _SOURCE_LABELS:
+    text = str(item.get("text") or item.get("orig") or "").strip()
+    canonical = _canonical_text(text)
+    substantive_page_footer = (
+        label == "page_footer"
+        and _looks_substantive_page_footer(
+            text,
+            canonical_frequency=(page_footer_frequencies or {}).get(
+                canonical, 0),
+        )
+    )
+    if label not in _SOURCE_LABELS and not substantive_page_footer:
         return f"label:{label or 'unknown'}"
     content_layer = str(item.get("content_layer") or "").lower()
-    if "furniture" in content_layer:
+    if "furniture" in content_layer and not substantive_page_footer:
         return "furniture"
     pages = _item_pages(item)
     if not pages:
         return "no_provenance"
     if all(_inside_ranges(page, structural_ranges) for page in pages):
         return "structural_range"
-    text = str(item.get("text") or item.get("orig") or "").strip()
-    if label != "table" and not text:
+    if label == "picture" and not substantive_picture:
+        return "decorative_picture"
+    if label not in {"table", "document_index", "picture"} and not text:
         return "empty"
+    if (label == "text"
+            and _SINGLE_LETTER_SECTION_MARKER_RE.fullmatch(text)):
+        return "section_marker"
     if _EMPHASIS_BOILERPLATE_RE.fullmatch(text):
         return "editorial_boilerplate"
     if "This and other authors' explanations draw" in text:
@@ -410,6 +749,27 @@ def source_inventory(
     integrity_issues: defaultdict[str, list[object]] = defaultdict(list)
     if not isinstance(document, dict):
         return {}, {}, {}, {"invalid_document": ["root"]}
+    source_texts = document.get("texts")
+    source_item_map = _source_items_by_ref(document)
+    substantive_picture_refs = {
+        ref for ref, item in source_item_map.items()
+        if (_label(item.get("label")) == "picture"
+            and (_picture_text_refs(item, source_item_map)
+                 or _large_picture(item, document)))
+    }
+    sparse_ocr_heading_artifact_refs = (
+        heading_lineage.sparse_ocr_heading_artifact_refs(document))
+    running_furniture_refs = (
+        _running_division_furniture_refs(document)
+        | running_page_number_furniture_refs(document)
+    )
+    page_footer_frequencies = Counter(
+        _canonical_text(_source_text(item))
+        for item in (source_texts if isinstance(source_texts, list) else [])
+        if (isinstance(item, dict)
+            and _label(item.get("label")) == "page_footer"
+            and _canonical_text(_source_text(item)))
+    )
     for collection in _SOURCE_COLLECTIONS:
         values = document.get(collection, [])
         if values is None:
@@ -436,42 +796,36 @@ def source_inventory(
                     "duplicate": location,
                 })
                 continue
-            provenance = item.get("prov")
-            if not isinstance(provenance, list) or not provenance:
-                integrity_issues["invalid_provenance"].append(
-                    f"{location}.prov")
-            else:
-                for prov_index, prov in enumerate(provenance):
-                    prov_location = f"{location}.prov[{prov_index}]"
-                    if not isinstance(prov, dict):
-                        integrity_issues["invalid_provenance"].append(
-                            prov_location)
-                        continue
-                    page = prov.get("page_no")
-                    bbox = prov.get("bbox")
-                    valid_bbox = bbox is None or (
-                        isinstance(bbox, dict)
-                        and all(
-                            isinstance(bbox.get(name), (int, float))
-                            and not isinstance(bbox.get(name), bool)
-                            and math.isfinite(float(bbox[name]))
-                            for name in ("l", "t", "r", "b"))
-                    )
-                    if (not isinstance(page, int) or isinstance(page, bool)
-                            or page < 1 or not valid_bbox):
-                        integrity_issues["invalid_provenance"].append(
-                            prov_location)
+            fidelity_descriptor, provenance_issues = (
+                source_fidelity_core.source_descriptor(item))
+            if provenance_issues:
+                integrity_issues["invalid_provenance"].extend(
+                    f"{location}.{issue}" for issue in provenance_issues)
             descriptor = {
                 "label": _label(item.get("label")),
                 "pages": list(_item_pages(item)),
-                "spans": _source_spans(item),
+                "spans": fidelity_descriptor["spans"],
                 "parent_refs": [],
+                "source_text_sha256": fidelity_descriptor[
+                    "source_text_sha256"],
+                "source_lexical_sha256": fidelity_descriptor[
+                    "source_lexical_sha256"],
+                "source_lexical_count": fidelity_descriptor[
+                    "source_lexical_count"],
             }
             all_items[ref] = descriptor
             raw_items[ref] = item
             item_locations[ref] = location
-            reason = _source_exclusion_reason(
-                item, structural_ranges=ranges)
+            reason = (
+                heading_lineage.SPARSE_OCR_HEADING_ARTIFACT_REASON
+                if ref in sparse_ocr_heading_artifact_refs
+                else "running_page_furniture"
+                if ref in running_furniture_refs
+                else _source_exclusion_reason(
+                    item, structural_ranges=ranges,
+                    page_footer_frequencies=page_footer_frequencies,
+                    substantive_picture=ref in substantive_picture_refs)
+            )
             if reason is None:
                 eligible[ref] = descriptor
             else:
@@ -524,7 +878,12 @@ def _source_table_dimensions(document: dict) -> dict[str, tuple[int, int]]:
 
     Docling's matrix row count includes the first row that its Markdown export
     publishes as the header.  The strict retrieval parser counts only rows
-    after that header, hence the single-row subtraction here.
+    after that header, hence the ordinary single-row subtraction.  A table
+    with exactly one source row whose cells are explicitly not headers is
+    normalized to a blank Markdown header plus one data row, so its attested
+    data-row count remains one.  A leading source cell spanning every column
+    is published as table preamble rather than as a duplicated Markdown row,
+    so that source-attested title row is also excluded from the data count.
     """
     dimensions = {}
     tables = document.get("tables") if isinstance(document, dict) else None
@@ -541,12 +900,561 @@ def _source_table_dimensions(document: dict) -> dict[str, tuple[int, int]]:
                 or not _is_nonnegative_int(rows) or rows < 1
                 or not _is_nonnegative_int(columns) or columns < 1):
             continue
-        dimensions[ref] = (rows - 1, columns)
+        cells = data.get("table_cells")
+        column_header_flags = [
+            cell.get("column_header") if isinstance(cell, dict) else None
+            for cell in (cells if isinstance(cells, list) else [])
+        ]
+        headerless_single_row = (
+            table_retrieval_core.source_table_has_single_headerless_row(
+                rows, column_header_flags)
+        )
+        first_row = [
+            cell for cell in (cells if isinstance(cells, list) else [])
+            if (isinstance(cell, dict)
+                and cell.get("start_row_offset_idx") == 0)
+        ]
+        promoted_full_width_title = (
+            rows >= 3 and len(first_row) == 1
+            and first_row[0].get("start_col_offset_idx") == 0
+            and first_row[0].get("end_col_offset_idx") == columns
+            and first_row[0].get("end_row_offset_idx") == 1
+            and bool(str(first_row[0].get("text") or "").strip())
+        )
+        dimensions[ref] = (
+            (rows if headerless_single_row else rows - 1)
+            - int(promoted_full_width_title),
+            columns,
+        )
     return dimensions
 
 
 def _canonical_text(text: str) -> str:
     return _CANONICAL_TEXT_RE.sub("", text.casefold())
+
+
+def _source_text(item: dict) -> str:
+    return str(item.get("text") or item.get("orig") or "").strip()
+
+
+def _source_bbox_height(item: dict) -> float | None:
+    """Return one finite provenance height for geometry-gated QC rules."""
+    provenance = item.get("prov")
+    if not isinstance(provenance, list) or len(provenance) != 1:
+        return None
+    bbox = provenance[0].get("bbox") if isinstance(
+        provenance[0], dict) else None
+    if not isinstance(bbox, dict):
+        return None
+    try:
+        top = float(bbox.get("t"))
+        bottom = float(bbox.get("b"))
+    except (TypeError, ValueError):
+        return None
+    height = abs(top - bottom)
+    return height if math.isfinite(height) else None
+
+
+def _valid_source_ref(value: object) -> str:
+    if not isinstance(value, dict):
+        return ""
+    ref = value.get("cref")
+    return ref if isinstance(ref, str) and ref else ""
+
+
+def _source_items_by_ref(document: dict) -> dict[str, dict]:
+    items = {}
+    if not isinstance(document, dict):
+        return items
+    for collection in _SOURCE_COLLECTIONS:
+        values = document.get(collection)
+        if not isinstance(values, list):
+            continue
+        for item in values:
+            if not isinstance(item, dict):
+                continue
+            ref = item.get("self_ref")
+            if isinstance(ref, str) and ref and ref not in items:
+                items[ref] = item
+    return items
+
+
+def _outside_structural_ranges(
+        item: dict, ranges: Sequence[tuple[int, int]]) -> bool:
+    pages = _item_pages(item)
+    return bool(pages) and not all(
+        _inside_ranges(page, ranges) for page in pages)
+
+
+def _looks_substantive_page_footer(
+        text: str, *, canonical_frequency: int) -> bool:
+    compact = " ".join(text.split())
+    if not compact or _PAGE_LABEL_RE.fullmatch(compact):
+        return False
+    if (re.search(r"https?://|\bwww\s*\.|\bdoi\b", compact, re.I)
+            or _FOOTNOTE_PREFIX_RE.match(compact)
+            or _CITATION_LEAD_RE.match(compact)
+            or _LEGAL_CITATION_RE.search(compact)):
+        return True
+    # Repeated non-citation text is normally running furniture.  Unique prose
+    # of meaningful length is retained as a risk signal without making a
+    # document-profile-specific claim that it is definitely a footnote.
+    return canonical_frequency < 3 and len(compact.split()) >= 6
+
+
+def _page_footer_analysis(
+        document: dict, *, represented_refs: set[str],
+        ranges: Sequence[tuple[int, int]]) -> dict:
+    texts = document.get("texts") if isinstance(document, dict) else None
+    footers = [
+        item for item in (texts if isinstance(texts, list) else [])
+        if (isinstance(item, dict)
+            and _label(item.get("label")) == "page_footer"
+            and _outside_structural_ranges(item, ranges))
+    ]
+    frequencies = Counter(
+        _canonical_text(_source_text(item)) for item in footers
+        if _canonical_text(_source_text(item)))
+    page_labels = 0
+    substantive_refs = []
+    for item in footers:
+        text = " ".join(_source_text(item).split())
+        if _PAGE_LABEL_RE.fullmatch(text):
+            page_labels += 1
+            continue
+        canonical = _canonical_text(text)
+        if _looks_substantive_page_footer(
+                text, canonical_frequency=frequencies.get(canonical, 0)):
+            ref = item.get("self_ref")
+            if isinstance(ref, str) and ref:
+                substantive_refs.append(ref)
+    substantive_refs = sorted(set(substantive_refs))
+    represented_substantive = sorted(
+        set(substantive_refs) & represented_refs)
+    risk_refs = sorted(set(substantive_refs) - represented_refs)
+    return {
+        "total": len(footers),
+        "page_label_like": page_labels,
+        "repeating_or_short": len(footers) - page_labels
+        - len(substantive_refs),
+        "substantive_detected": len(substantive_refs),
+        "substantive_represented": len(represented_substantive),
+        "substantive_risk": len(risk_refs),
+        "substantive_risk_refs": risk_refs,
+    }
+
+
+def _page_area(document: dict, page: int) -> float | None:
+    pages = document.get("pages") if isinstance(document, dict) else None
+    if not isinstance(pages, dict):
+        return None
+    value = pages.get(str(page), pages.get(page))
+    size = value.get("size") if isinstance(value, dict) else None
+    width = size.get("width") if isinstance(size, dict) else None
+    height = size.get("height") if isinstance(size, dict) else None
+    if (not isinstance(width, (int, float)) or isinstance(width, bool)
+            or not math.isfinite(float(width)) or width <= 0
+            or not isinstance(height, (int, float)) or isinstance(height, bool)
+            or not math.isfinite(float(height)) or height <= 0):
+        return None
+    return float(width) * float(height)
+
+
+def _large_picture(item: dict, document: dict) -> bool:
+    for provenance in item.get("prov") or []:
+        if not isinstance(provenance, dict):
+            continue
+        page = provenance.get("page_no")
+        bbox = provenance.get("bbox")
+        if (not isinstance(page, int) or isinstance(page, bool) or page < 1
+                or not isinstance(bbox, dict)):
+            continue
+        coordinates = [bbox.get(name) for name in ("l", "t", "r", "b")]
+        if any(not isinstance(value, (int, float))
+               or isinstance(value, bool) or not math.isfinite(float(value))
+               for value in coordinates):
+            continue
+        width = abs(float(coordinates[2]) - float(coordinates[0]))
+        height = abs(float(coordinates[1]) - float(coordinates[3]))
+        page_area = _page_area(document, page)
+        if (page_area is not None
+                and width * height / page_area >= _LARGE_PICTURE_AREA_RATIO):
+            return True
+    return False
+
+
+def _picture_text_refs(item: dict, item_by_ref: dict[str, dict]) -> set[str]:
+    refs = set()
+    # Picture footnotes in casebooks are commonly copyright/source credits;
+    # representing that credit does not represent the figure's information.
+    for relationship in ("captions", "children"):
+        values = item.get(relationship)
+        if not isinstance(values, list):
+            continue
+        for value in values:
+            ref = _valid_source_ref(value)
+            related = item_by_ref.get(ref)
+            if (related is not None
+                    and _label(related.get("label")) in {
+                        "text", "list_item", "footnote", "caption", "code",
+                        "section_header",
+                    }):
+                refs.add(ref)
+    return refs
+
+
+def _picture_analysis(
+        document: dict, *, represented_refs: set[str],
+        ranges: Sequence[tuple[int, int]],
+) -> dict:
+    pictures = document.get("pictures") if isinstance(document, dict) else None
+    values = [
+        item for item in (pictures if isinstance(pictures, list) else [])
+        if (isinstance(item, dict)
+            and isinstance(item.get("self_ref"), str)
+            and bool(item["self_ref"])
+            and _outside_structural_ranges(item, ranges))
+    ]
+    item_by_ref = _source_items_by_ref(document)
+    covered = 0
+    covered_by_figure_text = 0
+    missing_linked = 0
+    large_unlinked = 0
+    other_unlinked = 0
+    risk_refs = []
+    for item in values:
+        linked_refs = _picture_text_refs(item, item_by_ref)
+        if linked_refs:
+            if linked_refs & represented_refs:
+                covered += 1
+            else:
+                missing_linked += 1
+                risk_refs.append(item["self_ref"])
+        elif item["self_ref"] in represented_refs:
+            covered_by_figure_text += 1
+        elif _large_picture(item, document):
+            large_unlinked += 1
+            risk_refs.append(item["self_ref"])
+        else:
+            other_unlinked += 1
+    risk_refs = sorted(set(risk_refs))
+    with_linked = covered + missing_linked
+    return {
+        "total": len(values),
+        "with_linked_text": with_linked,
+        "covered_by_linked_text": covered,
+        "covered_by_figure_text": covered_by_figure_text,
+        "missing_linked_text": missing_linked,
+        "large_unlinked": large_unlinked,
+        "other_unlinked": other_unlinked,
+        "substantive_risk": len(risk_refs),
+        "substantive_risk_refs": risk_refs,
+    }
+
+
+def _section_heading_analysis(
+        document: dict, *, records: Sequence[dict],
+        ranges: Sequence[tuple[int, int]],
+) -> dict:
+    """Recompute occurrence-bound heading ownership from exact source refs."""
+    texts = document.get("texts") if isinstance(document, dict) else None
+    excluded_refs = {
+        item["self_ref"]
+        for item in (texts if isinstance(texts, list) else [])
+        if (isinstance(item, dict)
+            and isinstance(item.get("self_ref"), str)
+            and bool(item["self_ref"])
+            and _label(item.get("label")) == "section_header"
+            and chunking_core.is_probable_misclassified_section_header(
+                _source_text(item), bbox_height=_source_bbox_height(item)))
+    }
+    excluded_refs.update(
+        heading_lineage.sparse_ocr_heading_artifact_refs(document))
+    audit = heading_lineage.audit_heading_bindings(
+        document, records, structural_ranges=ranges,
+        excluded_heading_refs=excluded_refs)
+    exception_refs = {
+        reason: sorted(refs)
+        for reason, refs in sorted(audit["exception_refs"].items())
+    }
+    artifact_refs = {
+        reason: sorted(refs)
+        for reason, refs in sorted(audit["artifact_refs"].items())
+    }
+    attachable_items = len(audit["attachable_refs"])
+    attached_items = attachable_items - len(audit["unattached_refs"])
+    directly_owned_items = (
+        attachable_items - len(audit["missing_direct_refs"]))
+    binding_evidence = []
+    for record in records:
+        metadata = record.get("metadata") if isinstance(record, dict) else None
+        binding_evidence.append({
+            heading_lineage.HEADING_SCHEMA_FIELD: (
+                metadata.get(heading_lineage.HEADING_SCHEMA_FIELD)
+                if isinstance(metadata, dict) else None),
+            heading_lineage.HEADING_PATH_FIELD: (
+                metadata.get(heading_lineage.HEADING_PATH_FIELD)
+                if isinstance(metadata, dict) else None),
+            heading_lineage.DIRECT_HEADING_FIELD: (
+                metadata.get(heading_lineage.DIRECT_HEADING_FIELD)
+                if isinstance(metadata, dict) else None),
+            heading_lineage.HEADING_COMPONENTS_FIELD: (
+                metadata.get(heading_lineage.HEADING_COMPONENTS_FIELD)
+                if isinstance(metadata, dict) else None),
+        })
+    ancestor_resumptions = {
+        index: sorted(
+            proofs,
+            key=lambda proof: json.dumps(
+                proof, ensure_ascii=False, sort_keys=True,
+                separators=(",", ":")),
+        )
+        for index, proofs in sorted(audit["ancestor_resumptions"].items())
+    }
+    evidence_payload = {
+        "schema_version": heading_lineage.HEADING_LINEAGE_SCHEMA_VERSION,
+        "policy": heading_lineage.HEADING_LINEAGE_POLICY,
+        "source_refs": audit["source_refs"],
+        "attachable_refs": audit["attachable_refs"],
+        "exceptions": exception_refs,
+        "artifacts": artifact_refs,
+        "record_bindings": binding_evidence,
+        "ancestor_resumptions": ancestor_resumptions,
+    }
+    evidence_sha256 = hashlib.sha256(json.dumps(
+        evidence_payload, ensure_ascii=False, sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")).hexdigest()
+    return {
+        "schema_version": heading_lineage.HEADING_LINEAGE_SCHEMA_VERSION,
+        "policy": heading_lineage.HEADING_LINEAGE_POLICY,
+        "source_items": len(audit["source_refs"]),
+        "attachable_items": attachable_items,
+        "attached_items": attached_items,
+        "directly_owned_items": directly_owned_items,
+        "exceptions": exception_refs,
+        "artifacts": artifact_refs,
+        "item_coverage_ppm": (
+            attached_items * 1_000_000 // attachable_items
+            if attachable_items else 1_000_000),
+        "missing_refs": sorted(audit["missing_refs"]),
+        "unattached_refs": sorted(audit["unattached_refs"]),
+        "missing_direct_refs": sorted(audit["missing_direct_refs"]),
+        "duplicate_direct_refs": sorted(audit["duplicate_direct_refs"]),
+        "invalid_binding_records": sorted(audit["invalid_binding_records"]),
+        "scope_conflict_records": sorted(audit["scope_conflict_records"]),
+        "display_binding_records": sorted(audit["display_binding_records"]),
+        "ancestor_resumption_count": sum(
+            len(proofs) for proofs in ancestor_resumptions.values()),
+        "evidence_sha256": evidence_sha256,
+    }
+
+
+def _source_analysis(
+        document: dict, *, records: Sequence[dict],
+        represented_refs: set[str], ranges: Sequence[tuple[int, int]],
+) -> dict:
+    return {
+        "schema_version": SOURCE_ANALYSIS_SCHEMA_VERSION,
+        "available": True,
+        "substantive_page_footers": _page_footer_analysis(
+            document, represented_refs=represented_refs, ranges=ranges),
+        "pictures": _picture_analysis(
+            document, represented_refs=represented_refs, ranges=ranges),
+        "section_headings": _section_heading_analysis(
+            document, records=records, ranges=ranges),
+    }
+
+
+def _unavailable_source_analysis() -> dict:
+    return {
+        "schema_version": SOURCE_ANALYSIS_SCHEMA_VERSION,
+        "available": False,
+        "substantive_page_footers": {
+            "total": 0,
+            "page_label_like": 0,
+            "repeating_or_short": 0,
+            "substantive_detected": 0,
+            "substantive_represented": 0,
+            "substantive_risk": 0,
+            "substantive_risk_refs": [],
+        },
+        "pictures": {
+            "total": 0,
+            "with_linked_text": 0,
+            "covered_by_linked_text": 0,
+            "covered_by_figure_text": 0,
+            "missing_linked_text": 0,
+            "large_unlinked": 0,
+            "other_unlinked": 0,
+            "substantive_risk": 0,
+            "substantive_risk_refs": [],
+        },
+        "section_headings": {
+            "schema_version": heading_lineage.HEADING_LINEAGE_SCHEMA_VERSION,
+            "policy": heading_lineage.HEADING_LINEAGE_POLICY,
+            "source_items": 0,
+            "attachable_items": 0,
+            "attached_items": 0,
+            "directly_owned_items": 0,
+            "exceptions": {
+                heading_lineage.EMBEDDED_OUTLINE_REASON: [],
+                heading_lineage.RUNNING_FURNITURE_REASON: [],
+            },
+            "artifacts": {
+                heading_lineage.SPARSE_OCR_HEADING_ARTIFACT_REASON: [],
+            },
+            "item_coverage_ppm": 1_000_000,
+            "missing_refs": [],
+            "unattached_refs": [],
+            "missing_direct_refs": [],
+            "duplicate_direct_refs": [],
+            "invalid_binding_records": [],
+            "scope_conflict_records": [],
+            "display_binding_records": [],
+            "ancestor_resumption_count": 0,
+            "evidence_sha256": hashlib.sha256(b"").hexdigest(),
+        },
+    }
+
+
+def _valid_source_ref_list(value: object) -> bool:
+    return (
+        isinstance(value, list)
+        and all(isinstance(ref, str) and ref for ref in value)
+        and value == sorted(set(value))
+    )
+
+
+def _valid_record_index_list(value: object, record_count: int) -> bool:
+    return (
+        isinstance(value, list)
+        and all(_is_nonnegative_int(index) and index < record_count
+                for index in value)
+        and value == sorted(set(value))
+    )
+
+
+def _valid_source_analysis(
+        value: object, *, record_count: int,
+        allow_unavailable: bool = False) -> bool:
+    if (not isinstance(value, dict)
+            or set(value) != _SOURCE_ANALYSIS_FIELDS
+            or value.get("schema_version") != SOURCE_ANALYSIS_SCHEMA_VERSION
+            or not isinstance(value.get("available"), bool)):
+        return False
+    if not value["available"]:
+        return allow_unavailable and value == _unavailable_source_analysis()
+
+    footers = value.get("substantive_page_footers")
+    pictures = value.get("pictures")
+    headings = value.get("section_headings")
+    if (not isinstance(footers, dict)
+            or set(footers) != _PAGE_FOOTER_ANALYSIS_FIELDS
+            or not all(_is_nonnegative_int(footers.get(field))
+                       for field in _PAGE_FOOTER_ANALYSIS_FIELDS
+                       if field != "substantive_risk_refs")
+            or not _valid_source_ref_list(
+                footers.get("substantive_risk_refs"))
+            or footers["substantive_risk"]
+            != len(footers["substantive_risk_refs"])
+            or footers["substantive_detected"] != (
+                footers["substantive_represented"]
+                + footers["substantive_risk"])
+            or footers["total"] != (
+                footers["page_label_like"]
+                + footers["repeating_or_short"]
+                + footers["substantive_detected"])):
+        return False
+    if (not isinstance(pictures, dict)
+            or set(pictures) != _PICTURE_ANALYSIS_FIELDS
+            or not all(_is_nonnegative_int(pictures.get(field))
+                       for field in _PICTURE_ANALYSIS_FIELDS
+                       if field != "substantive_risk_refs")
+            or not _valid_source_ref_list(
+                pictures.get("substantive_risk_refs"))
+            or pictures["with_linked_text"] != (
+                pictures["covered_by_linked_text"]
+                + pictures["missing_linked_text"])
+            or pictures["total"] != (
+                pictures["with_linked_text"]
+                + pictures["covered_by_figure_text"]
+                + pictures["large_unlinked"]
+                + pictures["other_unlinked"])
+            or pictures["substantive_risk"] != (
+                pictures["missing_linked_text"]
+                + pictures["large_unlinked"])
+            or pictures["substantive_risk"]
+            != len(pictures["substantive_risk_refs"])):
+        return False
+    if (not isinstance(headings, dict)
+            or set(headings) != _SECTION_HEADING_ANALYSIS_FIELDS
+            or headings.get("schema_version")
+            != heading_lineage.HEADING_LINEAGE_SCHEMA_VERSION
+            or headings.get("policy") != heading_lineage.HEADING_LINEAGE_POLICY
+            or not all(_is_nonnegative_int(headings.get(field))
+                       for field in (
+                           "source_items", "attachable_items",
+                           "attached_items", "directly_owned_items",
+                           "item_coverage_ppm",
+                           "ancestor_resumption_count"))
+            or not _valid_sha256(headings.get("evidence_sha256"))
+            or not all(_valid_source_ref_list(headings.get(field))
+                       for field in (
+                           "missing_refs", "unattached_refs",
+                           "missing_direct_refs", "duplicate_direct_refs"))
+            or not all(_valid_record_index_list(
+                headings.get(field), record_count) for field in (
+                    "invalid_binding_records", "scope_conflict_records",
+                    "display_binding_records"))
+            or not isinstance(headings.get("exceptions"), dict)
+            or set(headings["exceptions"]) != {
+                heading_lineage.RUNNING_FURNITURE_REASON,
+                heading_lineage.EMBEDDED_OUTLINE_REASON,
+            }
+            or not all(_valid_source_ref_list(refs)
+                       for refs in headings["exceptions"].values())
+            or not isinstance(headings.get("artifacts"), dict)
+            or set(headings["artifacts"]) != {
+                heading_lineage.SPARSE_OCR_HEADING_ARTIFACT_REASON,
+            }
+            or not all(_valid_source_ref_list(refs)
+                       for refs in headings["artifacts"].values())
+            or len({
+                ref
+                for values in (
+                    *headings["exceptions"].values(),
+                    *headings["artifacts"].values(),
+                )
+                for ref in values
+            }) != sum(
+                len(refs) for refs in (
+                    *headings["exceptions"].values(),
+                    *headings["artifacts"].values(),
+                ))
+            or headings["source_items"] != (
+                headings["attachable_items"]
+                + sum(len(refs) for refs in headings["exceptions"].values())
+                + sum(len(refs) for refs in headings["artifacts"].values()))
+            or headings["attached_items"] > headings["source_items"]
+            or headings["attached_items"] > headings["attachable_items"]
+            or headings["directly_owned_items"]
+            > headings["attachable_items"]
+            or headings["attachable_items"] != (
+                headings["attached_items"]
+                + len(headings["unattached_refs"]))
+            or headings["directly_owned_items"] != (
+                headings["attachable_items"]
+                - len(headings["missing_direct_refs"]))
+            or not set(headings["missing_refs"]).issubset(
+                set(headings["unattached_refs"])
+                & set(headings["missing_direct_refs"]))
+            or headings["item_coverage_ppm"] != (
+                headings["attached_items"] * 1_000_000
+                // headings["attachable_items"]
+                if headings["attachable_items"] else 1_000_000)):
+        return False
+    return True
 
 
 def _source_refs(record: dict) -> tuple[set[str], int, list[dict]]:
@@ -558,41 +1466,59 @@ def _source_refs(record: dict) -> tuple[set[str], int, list[dict]]:
     invalid = 0
     valid_entries = []
     for item in values:
-        if not isinstance(item, dict):
+        if (not isinstance(item, dict)
+                or set(item) != source_fidelity_core.LINEAGE_ITEM_FIELDS):
             invalid += 1
             continue
         ref = item.get("ref")
         spans = item.get("spans")
         parent_refs = item.get("parent_refs", [])
         label = item.get("label")
+        transform = item.get("transform")
+        recovery_sha256 = item.get("recovery_sha256")
         if (not isinstance(ref, str) or not ref
                 or not isinstance(label, str) or not label
                 or not isinstance(spans, list)
+                or source_fidelity_core.lineage_scope_indexes(item) is None
                 or not isinstance(parent_refs, list)
                 or any(not isinstance(parent, str) or not parent
-                       for parent in parent_refs)):
+                       for parent in parent_refs)
+                or not _valid_sha256(item.get("source_text_sha256"))
+                or not _valid_sha256(item.get("source_lexical_sha256"))
+                or not _is_nonnegative_int(item.get("source_lexical_count"))
+                or transform not in source_fidelity_core.ALLOWED_TRANSFORMS
+                or not _valid_sha256(item.get("oracle_text_sha256"))
+                or not _valid_sha256(item.get("oracle_lexical_sha256"))
+                or not _is_nonnegative_int(item.get("oracle_lexical_count"))
+                or (recovery_sha256 is not None
+                    and not _valid_sha256(recovery_sha256))):
             invalid += 1
             continue
         entry_valid = True
         for span in spans:
-            if not isinstance(span, dict):
+            if (not isinstance(span, dict)
+                    or set(span) != source_fidelity_core.LINEAGE_SPAN_FIELDS):
                 invalid += 1
                 entry_valid = False
                 continue
             page = span.get("page")
             bbox = span.get("bbox")
+            provenance_index = span.get("provenance_index")
+            charspan = span.get("charspan")
             if (not isinstance(page, int) or isinstance(page, bool) or page < 1
-                    or (bbox is not None and (
-                        not isinstance(bbox, list) or len(bbox) != 4
-                        or any(not isinstance(value, (int, float))
-                               or isinstance(value, bool)
-                               or not math.isfinite(value)
-                               for value in bbox)))):
+                    or not _is_nonnegative_int(provenance_index)
+                    or not isinstance(bbox, list) or len(bbox) != 4
+                    or any(not isinstance(value, (int, float))
+                           or isinstance(value, bool)
+                           or not math.isfinite(value) for value in bbox)
+                    or not isinstance(charspan, list) or len(charspan) != 2
+                    or any(not _is_nonnegative_int(value)
+                           for value in charspan)
+                    or charspan[1] < charspan[0]):
                 invalid += 1
                 entry_valid = False
             origin = span.get("origin")
-            if origin is not None and (
-                    not isinstance(origin, str) or not origin):
+            if origin not in {"BOTTOMLEFT", "TOPLEFT"}:
                 invalid += 1
                 entry_valid = False
         if ref in refs:
@@ -622,7 +1548,7 @@ def build_quality_report(
         source_sha256: str, chunks_name: str, chunks_sha256: str,
         chunks_size: int, parameters_sha256: str,
         embedding_model: str, embedding_limit: int | None,
-        input_bindings: dict,
+        input_bindings: dict, source_oracle_registry: dict,
 ) -> dict:
     """Build a deterministic, release-gating report for one chunks artifact."""
     if len(stable_ids) != len(records) or len(chunk_hashes) != len(records):
@@ -630,6 +1556,11 @@ def build_quality_report(
             "stable_ids and chunk_hashes must align one-to-one with records")
     if not _valid_input_bindings(input_bindings):
         raise ValueError("quality input bindings are invalid")
+    trusted_source_oracles = (
+        source_fidelity_core.validate_source_oracle_registry(
+            source_oracle_registry,
+            expected_input_bindings=_source_oracle_upstream_inputs(
+                input_bindings)))
 
     ranges = tuple(sorted(set(structural_ranges)))
     (all_items, eligible_items, exclusion_counts,
@@ -647,7 +1578,7 @@ def build_quality_report(
     page_regressions = []
     allowed_page_regressions = []
     unexpected_page_regressions = []
-    normalization_issues: defaultdict[str, list[int]] = defaultdict(list)
+    normalization_issues = _normalization_issues(records)
     classification_issues: defaultdict[str, list[int]] = defaultdict(list)
     entity_issues: defaultdict[str, list[int]] = defaultdict(list)
     table_issues: defaultdict[str, list[int]] = defaultdict(list)
@@ -679,7 +1610,9 @@ def build_quality_report(
             if expected_item is None:
                 continue
             mismatched_fields = [
-                field for field in ("label", "spans", "parent_refs")
+                field for field in (
+                    "label", "spans", "parent_refs", "source_text_sha256",
+                    "source_lexical_sha256", "source_lexical_count")
                 if entry.get(field) != expected_item[field]
             ]
             if mismatched_fields:
@@ -689,6 +1622,26 @@ def build_quality_report(
                     "fields": mismatched_fields,
                 })
 
+        scoped_spans_by_entry = [
+            [
+                span for span in entry["spans"]
+                if span["provenance_index"] in set(
+                    source_fidelity_core.lineage_scope_indexes(entry) or ())
+            ]
+            for entry in lineage_entries
+        ]
+        lineage_pages = {
+            span["page"]
+            for spans in scoped_spans_by_entry
+            for span in spans
+        }
+        lineage_structural_leak = any(
+            spans
+            and all(_inside_ranges(span["page"], ranges)
+                    for span in spans)
+            for spans in scoped_spans_by_entry
+        )
+
         page_start = metadata.get("page_start")
         page_end = metadata.get("page_end")
         valid_pages = (
@@ -696,10 +1649,18 @@ def build_quality_report(
             and isinstance(page_end, int) and not isinstance(page_end, bool)
             and 1 <= page_start <= page_end
         )
-        if not valid_pages:
+        lineage_bounds_match = (
+            not lineage_pages
+            or (valid_pages
+                and page_start == min(lineage_pages)
+                and page_end == max(lineage_pages))
+        )
+        if not valid_pages or not lineage_bounds_match:
             page_metadata_issues.append(index)
-        elif any(start <= page_start and page_end <= end
-                 for start, end in ranges):
+        if (lineage_structural_leak
+                or (valid_pages and any(
+                    start <= page_start and page_end <= end
+                    for start, end in ranges))):
             structural_leaks.append(index)
         if valid_pages and not table_retrieval_core.is_table_child(metadata):
             if previous_page is not None and page_start < previous_page:
@@ -725,6 +1686,20 @@ def build_quality_report(
                     evidence["reason"] = (
                         "rule_language_to_authors_explanation")
                     allowed_page_regressions.append(evidence)
+                elif (previous_page_index == index - 1
+                      and previous_page_metadata is not None
+                      and _allowed_cross_page_footnote_regression(
+                          previous_page_metadata, metadata,
+                          previous_page=previous_page, page=page_start)):
+                    evidence.update({
+                        "previous_content_source": previous_page_metadata.get(
+                            "content_source"),
+                        "content_source": metadata.get("content_source"),
+                        PAGE_ORDER_REASON_FIELD: metadata.get(
+                            PAGE_ORDER_REASON_FIELD),
+                        "reason": FOOTNOTE_AFTER_CONTINUATION_REASON,
+                    })
+                    allowed_page_regressions.append(evidence)
                 else:
                     evidence["reason"] = "unexpected_page_decrease"
                     unexpected_page_regressions.append(evidence)
@@ -745,33 +1720,23 @@ def build_quality_report(
         if (isinstance(embedded, int) and not isinstance(embedded, bool)
                 and embedded >= 0):
             embedding_counts.append(embedded)
-        canonical = _canonical_text(str(record.get("text") or ""))
+        text = str(record.get("text") or "")
+        canonical = _canonical_text(text)
         if canonical:
             canonical_groups[canonical].append(index)
-        text = str(record.get("text") or "")
-        if "\ufffd" in text:
-            normalization_issues["replacement_character"].append(index)
-        if re.search(r"(?<=[A-Za-z0-9])-\s+(?=[A-Za-z0-9])", text):
-            normalization_issues["split_hyphen"].append(index)
-        if re.search(r"https?://\s|\bwww\s+\.|\bperma\.cc/\s", text, re.I):
-            normalization_issues["split_url"].append(index)
-        if "This and other authors' explanations draw" in text:
-            normalization_issues["editorial_boilerplate"].append(index)
-        if re.search(
-                r"\b(?:clientlawyer|lawyerclient|plaintiffdefendant|"
-                r"threejudge|Aconcluding)\b", text, re.I):
-            normalization_issues["known_fused_term"].append(index)
-
         content_type = str(metadata.get("content_type") or "")
         content_source = str(metadata.get("content_source") or "")
         if not content_type:
             classification_issues["missing_content_type"].append(index)
-        if content_source not in {"body", "footnote", "table", "mixed"}:
+        if content_source not in {
+                "body", "footnote", "table", "mixed", "figure"}:
             classification_issues["unknown_content_source"].append(index)
         if content_source == "table" and content_type != "table":
             classification_issues["table_source_mismatch"].append(index)
         if content_source == "footnote" and content_type != "footnote":
             classification_issues["footnote_source_mismatch"].append(index)
+        if content_source == "figure" and content_type != "figure":
+            classification_issues["figure_source_mismatch"].append(index)
 
         case_names = metadata.get("case_names")
         if not isinstance(case_names, list):
@@ -848,6 +1813,29 @@ def build_quality_report(
         source_table_dimensions=_source_table_dimensions(document))
     table_retrieval_issue_count = sum(
         len(indexes) for indexes in table_retrieval["issues"].values())
+    source_analysis = _source_analysis(
+        document, records=records, represented_refs=represented_refs,
+        ranges=ranges)
+    footer_risk_count = source_analysis[
+        "substantive_page_footers"]["substantive_risk"]
+    picture_risk_count = source_analysis["pictures"]["substantive_risk"]
+    heading_analysis = source_analysis["section_headings"]
+    heading_issue_count = sum(len(heading_analysis[field]) for field in (
+        "missing_refs", "unattached_refs", "missing_direct_refs",
+        "duplicate_direct_refs", "invalid_binding_records",
+        "scope_conflict_records", "display_binding_records",
+    ))
+    fidelity = source_fidelity_core.audit_source_fidelity(
+        records=records, document=document, eligible_refs=eligible_refs,
+        recovery_binding=input_bindings.get("table_recovery"),
+        source_oracles=trusted_source_oracles)
+    source_geometry_issue_count = len(fidelity["geometry_issues"])
+    source_token_issue_count = (
+        len(fidelity["source_hash_mismatches"])
+        + len(fidelity["lineage_issues"])
+        + len(fidelity["output_coverage_issues"])
+        + len(fidelity["source_coverage_issues"])
+    )
 
     checks = [
         _check("nonempty_corpus", failed=not records,
@@ -876,6 +1864,12 @@ def build_quality_report(
         _check("source_lineage_matches_source",
                failed=bool(lineage_metadata_mismatches),
                observed=len(lineage_metadata_mismatches), required=0),
+        _check("source_geometry_complete",
+               failed=bool(source_geometry_issue_count),
+               observed=source_geometry_issue_count, required=0),
+        _check("source_token_fidelity",
+               failed=bool(source_token_issue_count),
+               observed=source_token_issue_count, required=0),
         _check("source_tables_represented",
                failed=bool(missing_table_refs),
                observed=len(missing_table_refs), required=0),
@@ -884,6 +1878,9 @@ def build_quality_report(
                observed=len(page_metadata_issues), required=0),
         _check("page_regressions", failed=bool(unexpected_page_regressions),
                observed=len(unexpected_page_regressions), required=0),
+        _check("same_page_reading_order",
+               failed=bool(fidelity["geometry_violations"]),
+               observed=len(fidelity["geometry_violations"]), required=0),
         _check("structural_ranges_excluded",
                failed=bool(structural_leaks),
                observed=len(structural_leaks), required=0),
@@ -918,6 +1915,15 @@ def build_quality_report(
                observed=table_issue_count, required=0),
         _check("canonical_text_duplicates", failed=bool(duplicate_groups),
                observed=len(duplicate_groups), required=0, warning=True),
+        _check("substantive_excluded_page_footers",
+               failed=bool(footer_risk_count), observed=footer_risk_count,
+               required=0, warning=True),
+        _check("uncovered_substantive_pictures",
+               failed=bool(picture_risk_count), observed=picture_risk_count,
+               required=0, warning=True),
+        _check("section_heading_attachment",
+               failed=bool(heading_issue_count),
+               observed=heading_issue_count, required=0),
     ]
     status = "fail" if any(check["status"] == "fail" for check in checks) \
         else "pass"
@@ -973,6 +1979,7 @@ def build_quality_report(
             "metadata_mismatches": lineage_metadata_mismatches,
             "schema_issues": lineage_schema_issues,
             "excluded_items_by_reason": exclusion_counts,
+            "fidelity": fidelity,
         },
         "tables": {
             "eligible_source_tables": len(eligible_table_refs),
@@ -997,9 +2004,7 @@ def build_quality_report(
             "chunk_index_issues": chunk_index_issues,
             "canonical_duplicate_groups": duplicate_groups,
         },
-        "normalization": {
-            key: values for key, values in sorted(normalization_issues.items())
-        },
+        "normalization": normalization_issues,
         "classification": {
             "issues": {
                 key: values
@@ -1021,6 +2026,7 @@ def build_quality_report(
         },
         "retrieval": retrieval,
         "table_retrieval": table_retrieval,
+        "source_analysis": source_analysis,
         "hashes": {
             "stable_id_root_sha256": _sha256_lines(stable_ids),
             "chunk_hash_root_sha256": _sha256_lines(
@@ -1041,9 +2047,13 @@ def validate_quality_report(
         embedding_model: str | None = None,
         embedding_limit: int | None = None,
         input_bindings: dict | None = None,
+        source_oracle_registry: dict | None = None,
         recovered_table_count: int | None = None,
         recovered_table_refs: Sequence[str] | None = None,
         records: Sequence[dict] | None = None,
+        document: dict | None = None,
+        structural_ranges: Iterable[tuple[int, int]] = (),
+        _allow_unavailable_source_analysis: bool = False,
 ) -> dict:
     """Validate report schema, pass state, and exact chunks binding."""
     if not isinstance(payload, dict):
@@ -1113,6 +2123,16 @@ def validate_quality_report(
             "corpus quality report source and input bindings disagree")
     if input_bindings is not None and manifested_inputs != input_bindings:
         raise ValueError("corpus quality report does not match input bindings")
+    try:
+        trusted_source_oracles = (
+            source_fidelity_core.validate_source_oracle_registry(
+                source_oracle_registry,
+                expected_input_bindings=_source_oracle_upstream_inputs(
+                    manifested_inputs)))
+    except ValueError as exc:
+        raise ValueError(
+            "corpus quality report source oracle registry is invalid") \
+            from exc
     if not _valid_sha256(payload.get("parameters_sha256")):
         raise ValueError("corpus quality report parameters are invalid")
     tables = payload.get("tables")
@@ -1253,6 +2273,32 @@ def validate_quality_report(
             "corpus quality report check set does not match schema")
     if len(checks_by_name) != len(checks):
         raise ValueError("corpus quality report contains duplicate checks")
+    source_analysis = payload.get("source_analysis")
+    if not _valid_source_analysis(
+            source_analysis, record_count=record_count,
+            allow_unavailable=_allow_unavailable_source_analysis):
+        raise ValueError("corpus quality report source analysis is invalid")
+    if source_analysis["available"]:
+        expected_warning_counts = {
+            "substantive_excluded_page_footers": source_analysis[
+                "substantive_page_footers"]["substantive_risk"],
+            "uncovered_substantive_pictures": source_analysis[
+                "pictures"]["substantive_risk"],
+        }
+        if any(checks_by_name[name].get("observed") != count
+               for name, count in expected_warning_counts.items()):
+            raise ValueError(
+                "corpus quality report source warning checks disagree")
+        heading_analysis = source_analysis["section_headings"]
+        heading_issue_count = sum(len(heading_analysis[field]) for field in (
+            "missing_refs", "unattached_refs", "missing_direct_refs",
+            "duplicate_direct_refs", "invalid_binding_records",
+            "scope_conflict_records", "display_binding_records",
+        ))
+        if checks_by_name["section_heading_attachment"].get(
+                "observed") != heading_issue_count:
+            raise ValueError(
+                "corpus quality report heading check disagrees")
     lineage = payload.get("source_lineage")
     lineage_version = (
         lineage.get("schema_version") if isinstance(lineage, dict) else None)
@@ -1269,6 +2315,11 @@ def validate_quality_report(
             or lineage.get("invalid_entries") != 0
             or lineage.get("metadata_mismatches") != []
             or lineage.get("schema_issues") != []
+            or not source_fidelity_core.validate_summary(
+                lineage.get("fidelity"))
+            or lineage["fidelity"].get("source_oracle_root_sha256")
+            != source_fidelity_core.source_oracle_root_sha256(
+                trusted_source_oracles)
             or not _is_nonnegative_int(lineage.get("eligible_items"))
             or not _is_nonnegative_int(lineage.get("represented_items"))
             or lineage.get("represented_items")
@@ -1400,6 +2451,29 @@ def validate_quality_report(
         if len(records) != record_count:
             raise ValueError(
                 "corpus quality report record summary input is misaligned")
+        if payload["normalization"] != _normalization_issues(records):
+            raise ValueError(
+                "corpus quality report normalization does not match records")
+        for record in records:
+            metadata = record.get("metadata")
+            if (not isinstance(metadata, dict)
+                    or metadata.get("retrieval_role") == "table_child"):
+                continue
+            if metadata.get("source_fidelity") \
+                    != source_fidelity_core.record_attestation(record):
+                raise ValueError(
+                    "corpus quality report output attestation is stale")
+        expected_output_tokens = source_fidelity_core.output_lexical_count(
+            records)
+        fidelity_summary = lineage["fidelity"]
+        if (fidelity_summary.get("output_tokens") != expected_output_tokens
+                or fidelity_summary.get("covered_output_tokens")
+                != expected_output_tokens
+                or fidelity_summary.get("output_attestation_root_sha256")
+                != source_fidelity_core.output_attestation_root_sha256(
+                    records)):
+            raise ValueError(
+                "corpus quality report output fidelity does not match records")
         expected_retrieval = retrieval_core._retrieval_linkage_summary(
             records, stable_ids=list(stable_ids))
         if retrieval != expected_retrieval:
@@ -1472,6 +2546,31 @@ def validate_quality_report(
                 or payload["entities"]["unique"] != len(set(actual_names))):
             raise ValueError(
                 "corpus quality report entity summaries do not match records")
+    if document is not None:
+        if records is None:
+            raise ValueError(
+                "source-backed quality validation requires exact records")
+        represented_refs = set()
+        for record in records:
+            refs, _, _ = _source_refs(record)
+            represented_refs.update(refs)
+        ranges = tuple(sorted(set(structural_ranges)))
+        expected_source_analysis = _source_analysis(
+            document, records=records, represented_refs=represented_refs,
+            ranges=ranges)
+        if source_analysis != expected_source_analysis:
+            raise ValueError(
+                "corpus quality report source analysis does not match source")
+        (_, expected_eligible, _, _) = source_inventory(
+            document, structural_ranges=ranges)
+        expected_fidelity = source_fidelity_core.audit_source_fidelity(
+            records=records, document=document,
+            eligible_refs=set(expected_eligible),
+            recovery_binding=manifested_inputs.get("table_recovery"),
+            source_oracles=trusted_source_oracles)
+        if payload["source_lineage"].get("fidelity") != expected_fidelity:
+            raise ValueError(
+                "corpus quality report fidelity does not match source")
     return payload
 
 
@@ -1484,9 +2583,13 @@ def read_quality_report(
         embedding_model: str | None = None,
         embedding_limit: int | None = None,
         input_bindings: dict | None = None,
+        source_oracle_registry: dict | None = None,
         recovered_table_count: int | None = None,
         recovered_table_refs: Sequence[str] | None = None,
         records: Sequence[dict] | None = None,
+        document: dict | None = None,
+        structural_ranges: Iterable[tuple[int, int]] = (),
+        compatible_schema_versions: Sequence[int] = (),
 ) -> dict:
     try:
         with Path(path).open("rb") as handle:
@@ -1501,9 +2604,12 @@ def read_quality_report(
         parameters_sha256=parameters_sha256,
         embedding_model=embedding_model, embedding_limit=embedding_limit,
         input_bindings=input_bindings,
+        source_oracle_registry=source_oracle_registry,
         recovered_table_count=recovered_table_count,
         recovered_table_refs=recovered_table_refs,
-        records=records)
+        records=records, document=document,
+        structural_ranges=structural_ranges,
+        compatible_schema_versions=compatible_schema_versions)
 
 
 def parse_quality_report_bytes(
@@ -1515,9 +2621,12 @@ def parse_quality_report_bytes(
         embedding_model: str | None = None,
         embedding_limit: int | None = None,
         input_bindings: dict | None = None,
+        source_oracle_registry: dict | None = None,
         recovered_table_count: int | None = None,
         recovered_table_refs: Sequence[str] | None = None,
         records: Sequence[dict] | None = None,
+        document: dict | None = None,
+        structural_ranges: Iterable[tuple[int, int]] = (),
         compatible_schema_versions: Sequence[int] = (),
 ) -> dict:
     """Strictly parse and validate one exact report byte snapshot."""
@@ -1542,38 +2651,11 @@ def parse_quality_report_bytes(
             object_pairs_hook=reject_duplicate_keys)
     except (UnicodeError, json.JSONDecodeError) as exc:
         raise ValueError("cannot parse corpus quality report") from exc
-    validation_payload = payload
-    if (isinstance(payload, dict)
-            and payload.get("schema_version")
-            == LEGACY_QUALITY_REPORT_SCHEMA_VERSION
-            and LEGACY_QUALITY_REPORT_SCHEMA_VERSION
-            in compatible_schema_versions):
-        if records is None:
-            raise ValueError(
-                "legacy corpus quality validation requires exact records")
-        table_retrieval = table_retrieval_core._table_retrieval_summary(
-            records, stable_ids=list(stable_ids))
-        if (table_retrieval["expanded_parents"]
-                or table_retrieval["child_chunks"]
-                or table_retrieval["issues"]):
-            raise ValueError(
-                "legacy corpus quality reports cannot attest table children")
-        validation_payload = {
-            **payload,
-            "schema_version": QUALITY_REPORT_SCHEMA_VERSION,
-            "table_retrieval": table_retrieval,
-            "checks": [
-                *list(payload.get("checks") or []),
-                {
-                    "name": "table_retrieval_invariants",
-                    "status": "pass",
-                    "observed": 0,
-                    "required": 0,
-                },
-            ],
-        }
-    validated = validate_quality_report(
-        validation_payload, chunks_name=chunks_name,
+    # Historical reports cannot attest lineage-v2 token or geometry proofs.
+    # ``compatible_schema_versions`` remains an API placeholder for callers
+    # performing migrations, but never inflates stale evidence into a pass.
+    return validate_quality_report(
+        payload, chunks_name=chunks_name,
         chunks_sha256=chunks_sha256,
         chunks_size=chunks_size, record_count=record_count,
         stable_ids=stable_ids, chunk_hashes=chunk_hashes,
@@ -1581,7 +2663,7 @@ def parse_quality_report_bytes(
         parameters_sha256=parameters_sha256,
         embedding_model=embedding_model, embedding_limit=embedding_limit,
         input_bindings=input_bindings,
+        source_oracle_registry=source_oracle_registry,
         recovered_table_count=recovered_table_count,
-        recovered_table_refs=recovered_table_refs, records=records)
-    # Preserve the exact persisted schema for manifest compatibility checks.
-    return payload if validation_payload is not payload else validated
+        recovered_table_refs=recovered_table_refs, records=records,
+        document=document, structural_ranges=structural_ranges)

@@ -16,6 +16,7 @@ from pathlib import Path
 
 from retrieval_core import (
     _chunk_id,
+    _chunk_id_scheme,
     _legal_search_tokens,
     _lexical_document_text,
 )
@@ -48,6 +49,7 @@ class OfflineIndexSnapshot:
     source_record_count: int
     table_child_count: int
     stable_ids: tuple[str, ...]
+    id_scheme: str
 
     def as_report_dict(self) -> dict:
         return {
@@ -55,7 +57,7 @@ class OfflineIndexSnapshot:
             "source_record_count": self.source_record_count,
             "record_count": self.source_record_count,
             "table_child_count": self.table_child_count,
-            "id_scheme": "retrieval_core._chunk_id",
+            "id_scheme": self.id_scheme,
             "retriever_implementation": (
                 f"offline_retrieval.OfflineBM25Index/v{OFFLINE_RETRIEVER_VERSION}"),
             "scoring": "BM25 Okapi with non-negative Robertson IDF",
@@ -79,6 +81,7 @@ class OfflineBM25Index:
             source_record_count=len(records),
             table_child_count=table_retrieval_core.table_child_count(records),
             stable_ids=self.stable_ids,
+            id_scheme=_chunk_id_scheme(records),
         )
         self._tokens = tuple(
             _content_tokens(_lexical_document_text(

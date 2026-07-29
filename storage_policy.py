@@ -663,7 +663,7 @@ def _atomic_write_private_posix(
 
         os.fchmod(descriptor, PRIVATE_FILE_MODE)
         mode = "w" if text else "wb"
-        options = {"encoding": "utf-8"} if text else {}
+        options = {"encoding": "utf-8", "newline": ""} if text else {}
         with os.fdopen(descriptor, mode, **options) as handle:
             descriptor = -1
             writer(handle)
@@ -719,7 +719,7 @@ def _atomic_write_private_by_path(
     parent_identity = _parent_identity(path.parent)
     temporary: Path | None = None
     mode = "w" if text else "wb"
-    options = {"encoding": "utf-8"} if text else {}
+    options = {"encoding": "utf-8", "newline": ""} if text else {}
     try:
         with tempfile.NamedTemporaryFile(
                 mode=mode, dir=path.parent, prefix=f".{path.name}.",

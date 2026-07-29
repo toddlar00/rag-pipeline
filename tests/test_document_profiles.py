@@ -35,7 +35,7 @@ def test_profile_provenance_is_strict_stable_and_content_addressed():
     assert first == {
         "schema_version": 1,
         "name": "us-law-casebook-v1",
-        "revision": 1,
+        "revision": 6,
         "sha256": document_profiles.profile_sha256(profile),
     }
     assert document_profiles.profile_from_provenance(first) is profile
@@ -78,6 +78,26 @@ def test_context_qualified_match_preserves_roman_display_designator():
         "Part IV: Institutions and Practice")
     assert document_profiles.match_division(
         "Chapter 4 — Institutions", profile, "running_header") is None
+
+
+def test_legal_profile_matches_split_running_header_after_aggregation():
+    profile = document_profiles.get_profile("us-law-casebook-v1")
+
+    match = document_profiles.match_division(
+        "198 SAMPLE SYSTEM OPERATIONS CH. 4", profile, "running_header")
+    opener = document_profiles.match_division(
+        "CHAPTER 4", profile, "section_boundary")
+
+    assert match == document_profiles.DivisionMatch(
+        ordinal=4,
+        raw_number="4",
+        kind="Chapter",
+        title="SAMPLE SYSTEM OPERATIONS",
+        matched_text="198 SAMPLE SYSTEM OPERATIONS CH. 4",
+    )
+    assert opener is not None
+    assert opener.ordinal == 4
+    assert opener.title == ""
 
 
 def test_spaced_word_division_preserves_the_complete_ordinal():

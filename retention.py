@@ -335,6 +335,9 @@ def ensure_pipeline_run_manifest(
                 normalized_stores,
                 key=lambda item: (item["backend"], item["path"])),
         }
+        if os.path.normcase(payload["job_scope"]) == os.path.normcase(
+                job_scope):
+            expected["job_scope"] = payload["job_scope"]
         actual = {
             "job_scope": payload["job_scope"],
             "owned_siblings": sorted(payload["owned_siblings"]),

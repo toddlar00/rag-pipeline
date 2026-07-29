@@ -119,12 +119,19 @@ def _noop_contract() -> dict:
                 "committed": True,
             },
         },
+        "publication_commit": {
+            "calls": 1,
+            "arguments_sha256": "9" * 64,
+            "after_index": True,
+            "gate_count": 5,
+        },
         "returned_result": {
             "paths_match": True,
             "collection_match": True,
             "db_dir_match": True,
             "db_backend_match": True,
             "outcome_match": True,
+            "publication_receipt_match": True,
         },
         "skipped_physical_calls": {
             "convert": 0,
@@ -861,9 +868,9 @@ def test_offline_probe_is_deterministic_generated_evidence_only():
         "stable_id_count": 3,
         "context_segment_count": 2,
         "context_characters": 668,
-        "markdown_bytes": 149,
+        "markdown_bytes": 180,
         "result_sha256": (
-            "32f8cf511b3619a4cfe06655cfa678b4ee1f5fe00d92810ec7cd142e25af3ea3"),
+            "16623b13d968ffb973fa066bd4b22deeba7db1c506db71d74b71b55a6e84d4ae"),
     }
     assert first_diagnostics == second_diagnostics
     assert str(benchmark.PROJECT_ROOT) not in json.dumps(first_contract)
@@ -916,12 +923,15 @@ def test_real_noop_resume_observes_validators_lock_index_and_result():
     assert contract["vector_lock"]["held_control"]["result"] == "busy"
     assert contract["vector_lock"]["released_control"]["result"] == "acquired"
     assert contract["index_revalidation"]["under_active_lock"] is True
+    assert contract["publication_commit"]["after_index"] is True
+    assert contract["publication_commit"]["gate_count"] == 5
     assert contract["returned_result"] == {
         "paths_match": True,
         "collection_match": True,
         "db_dir_match": True,
         "db_backend_match": True,
         "outcome_match": True,
+        "publication_receipt_match": True,
     }
     assert contract["skipped_physical_calls"] == {
         "convert": 0, "chunk": 0, "quality": 0, "export": 0}

@@ -190,6 +190,7 @@ def _load_index_manifest(
 def _index_manifest_mismatch(
         manifest: dict, *, backend: str, collection_name: str,
         embedding_model: str, embedding_dimension: int,
+        embedding_input_policy_version: int,
         model_artifact_lock_sha256: str,
         manifest_schema_version: int,
         quality_report_schema_version: int) -> str | None:
@@ -200,6 +201,7 @@ def _index_manifest_mismatch(
         "collection": collection_name,
         "embedding_model": embedding_model,
         "embedding_dimension": embedding_dimension,
+        "embedding_input_policy_version": embedding_input_policy_version,
         "model_artifact_lock_sha256": model_artifact_lock_sha256,
     }
     for key, value in expected.items():
@@ -306,6 +308,7 @@ def _resolve_incremental_index_state(
 def _save_index_manifest(
         db_dir: Path, *, backend: str, collection_name: str,
         embedding_model: str, embedding_dimension: int,
+        embedding_input_policy_version: int,
         model_artifact_lock_sha256: str,
         chunk_hashes: dict[str, str], manifest_schema_version: int,
         quality_report_policy_schema_version: int,
@@ -319,6 +322,10 @@ def _save_index_manifest(
     """Atomically persist versioned incremental state for one collection."""
     path = manifest_path_fn(
         db_dir, backend=backend, collection_name=collection_name)
+    if (isinstance(embedding_input_policy_version, bool)
+            or not isinstance(embedding_input_policy_version, int)
+            or embedding_input_policy_version < 1):
+        raise ValueError("Invalid embedding-input policy version")
     quality_binding = {
         "quality_report_schema_version": quality_report_schema_version,
         "quality_report_sha256": quality_report_sha256,
@@ -344,6 +351,7 @@ def _save_index_manifest(
         "collection": collection_name,
         "embedding_model": embedding_model,
         "embedding_dimension": embedding_dimension,
+        "embedding_input_policy_version": embedding_input_policy_version,
         "model_artifact_lock_sha256": model_artifact_lock_sha256,
         "chunk_hashes": chunk_hashes,
         "source_sha256": source_sha256,
@@ -358,6 +366,7 @@ def _save_index_manifest(
 def _query_manifest_dimension_impl(
         db_dir: Path, *, backend: str, collection_name: str,
         embedding_model: str, model_artifact_lock_sha256: str,
+        embedding_input_policy_version: int,
         manifest_schema_version: int,
         quality_report_schema_version: int,
         marker_path_fn: PathFn,
@@ -409,6 +418,9 @@ def _query_manifest_dimension_impl(
         "embedding_model": embedding_model,
         "model_artifact_lock_sha256": model_artifact_lock_sha256,
     }
+    if manifest_version == manifest_schema_version:
+        expected["embedding_input_policy_version"] = (
+            embedding_input_policy_version)
     for key, value in expected.items():
         if manifest.get(key) != value:
             raise ValueError(

@@ -97,6 +97,97 @@ def test_strict_parser_preserves_caption_escaped_pipes_and_blank_cells():
     assert tables._split_markdown_row(r"| A\\| B |") == (r"A\\", "B")
 
 
+@pytest.mark.parametrize(
+    ("markdown", "expected"),
+    [
+        (
+            """Comparison caption
+| Rule | Value\\|alternative | Note |
+| :--- | ---: | :---: |
+| A | one\\|two | |
+| B | three | four |
+""",
+            (2, 3),
+        ),
+        (
+            """| Rule language* | Authors' explanation** |
+|---|---|
+| First rule<br><br>Second rule | First explanation<br><br>Second explanation |
+""",
+            (1, 2),
+        ),
+        (
+            """Synthetic recovered caption
+| Reconstructed sample layout |
+|---|
+| Scenario Alpha: Scheduled review<br>Example device A<br>Scenario Beta: Delayed signal |
+""",
+            (1, 1),
+        ),
+    ],
+    ids=("normal", "recovered-columns", "recovered-layout"),
+)
+def test_markdown_table_dimensions_are_data_rows_by_columns(
+        markdown, expected):
+    assert tables.markdown_table_dimensions(markdown) == expected
+
+
+def test_markdown_table_dimensions_fail_closed_for_non_table_text():
+    assert tables.markdown_table_dimensions(
+        "| A | B |\n| one | two |") is None
+
+
+def test_headerless_single_source_row_becomes_markdown_data_row():
+    exported = (
+        "Civil process\n\n"
+        "| Interview | Research | Investigation |\n"
+        "|---|---|---|"
+    )
+
+    normalized = tables.normalize_source_table_markdown(
+        exported, row_count=1,
+        column_header_flags=(False, False, False))
+
+    assert normalized == (
+        "Civil process\n\n"
+        "|  |  |  |\n"
+        "|---|---|---|\n"
+        "| Interview | Research | Investigation |"
+    )
+    assert tables.markdown_table_dimensions(normalized) == (1, 3)
+
+
+@pytest.mark.parametrize(
+    ("row_count", "header_flags"),
+    [
+        (True, (False, False)),
+        (1, (False, None)),
+        (1, (False, True)),
+        (1, ()),
+        (2, (False, False)),
+    ],
+)
+def test_single_row_normalization_requires_unambiguous_source_semantics(
+        row_count, header_flags):
+    exported = "| One | Two |\n|---|---|"
+
+    assert tables.normalize_source_table_markdown(
+        exported, row_count=row_count,
+        column_header_flags=header_flags) == exported
+
+
+def test_single_row_normalization_leaves_existing_or_malformed_data_unchanged():
+    existing = "| One | Two |\n|---|---|\n| Three | Four |"
+    malformed = "| One | Two |\n|---|"
+
+    assert tables.normalize_source_table_markdown(
+        existing, row_count=1,
+        column_header_flags=(False, False)) == existing
+    assert tables.normalize_source_table_markdown(
+        malformed, row_count=1,
+        column_header_flags=(False, False)) == malformed
+
+
 def test_strict_parser_rejects_missing_separator_ragged_and_trailing_prose():
     invalid_tables = [
         "| A | B |\n| one | two |\n| three | four |",
@@ -250,7 +341,7 @@ def test_identical_row_packed_fragments_survive_with_unique_identities():
         f"| Same | {repeated_value} |"
     )
     parts = rag._split_markdown_table_by_rows(
-        markdown, lambda value: len(value.split()), max_tokens=50)
+        markdown, lambda value: len(value.split()), max_tokens=60)
     assert len(parts) == 2
     assert parts[0] == parts[1]
 

@@ -238,6 +238,8 @@ def test_save_manifest_uses_current_rag_path_writer_and_schema(
     assert result == manifest_path
     assert observed["path"] == manifest_path
     assert observed["payload"]["schema_version"] == 81
+    assert observed["payload"]["embedding_input_policy_version"] == (
+        rag.EMBEDDING_INPUT_POLICY_VERSION)
     assert observed["payload"]["chunk_hashes"] == {"stable": "hash"}
 
 
@@ -251,6 +253,8 @@ def test_query_manifest_impl_uses_current_rag_collaborators(
         "collection": "cases",
         "embedding_model": "model",
         "embedding_dimension": 5,
+        "embedding_input_policy_version": (
+            rag.EMBEDDING_INPUT_POLICY_VERSION),
         "model_artifact_lock_sha256": rag._model_artifact_lock_sha256(),
         "quality_report_schema_version": None,
         "quality_report_sha256": None,
@@ -307,12 +311,50 @@ def test_manifest_persists_and_validates_quality_report_binding(tmp_path):
     assert manifest["quality_report_schema_version"] == (
         rag._quality_core.QUALITY_REPORT_SCHEMA_VERSION)
     assert manifest["quality_report_sha256"] == report_sha256
+    assert manifest["embedding_input_policy_version"] == (
+        rag.EMBEDDING_INPUT_POLICY_VERSION)
     assert rag._index_manifest_mismatch(
         manifest, backend="chroma", collection_name="cases",
         embedding_model="model", embedding_dimension=5) is None
     assert rag._query_manifest_dimension_impl(
         tmp_path, backend="chroma", collection_name="cases",
         embedding_model="model") == 5
+
+
+@pytest.mark.parametrize(("manifest_age", "policy_state", "mismatch_key"), [
+    ("old", "current", "schema_version"),
+    ("current", "missing", "embedding_input_policy_version"),
+    ("current", "different", "embedding_input_policy_version"),
+])
+def test_manifest_reuse_rejects_old_or_stale_embedding_input_policy(
+        tmp_path, manifest_age, policy_state, mismatch_key):
+    manifest_path = rag._save_index_manifest(
+        tmp_path, backend="chroma", collection_name="cases",
+        embedding_model="model", embedding_dimension=5,
+        chunk_hashes={"stable": "hash"}, source_sha256="b" * 64,
+        source_record_count=1)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest_age == "old":
+        manifest["schema_version"] = rag.INDEX_MANIFEST_SCHEMA_VERSION - 1
+    if policy_state == "missing":
+        manifest.pop("embedding_input_policy_version")
+    elif policy_state == "different":
+        manifest["embedding_input_policy_version"] = (
+            rag.EMBEDDING_INPUT_POLICY_VERSION + 1)
+    rag._atomic_write_json(manifest_path, manifest)
+
+    hashes, rebuild, reason = rag._resolve_incremental_index_state(
+        tmp_path, backend="chroma", collection_name="cases",
+        embedding_model="model", embedding_dimension=5,
+        collection_exists=True, full_reindex=False)
+
+    assert hashes == {}
+    assert rebuild is True
+    assert mismatch_key in reason
+    with pytest.raises(ValueError, match=mismatch_key):
+        rag._query_manifest_dimension_impl(
+            tmp_path, backend="chroma", collection_name="cases",
+            embedding_model="model", allow_legacy=False)
 
 
 def test_schema_v6_queries_remain_compatible_only_without_context(tmp_path):
@@ -367,7 +409,7 @@ def test_schema_v7_context_indexes_remain_query_compatible(tmp_path):
     (None, "a" * 64),
     (1, None),
     (True, "a" * 64),
-    (5, "a" * 64),
+    (10, "a" * 64),
     (1, "short"),
     (1, "A" * 64),
 ])
@@ -405,6 +447,8 @@ def test_table_children_require_a_current_quality_binding(tmp_path):
         "collection": "cases",
         "embedding_model": "model",
         "embedding_dimension": 5,
+        "embedding_input_policy_version": (
+            rag.EMBEDDING_INPUT_POLICY_VERSION),
         "model_artifact_lock_sha256": rag._model_artifact_lock_sha256(),
         "chunk_hashes": {"child": "hash"},
         "source_sha256": "b" * 64,

@@ -1977,7 +1977,8 @@ def _main_with_args(args, parser: argparse.ArgumentParser) -> int:
                 actual_count=offline_index.snapshot.source_record_count)
             table_family_attestation = _validate_judged_ids(
                 queries, list(offline_index.records), _chunk_id,
-                corpus_sha256=offline_index.snapshot.source_sha256)
+                corpus_sha256=offline_index.snapshot.source_sha256,
+                id_scheme=offline_index.snapshot.id_scheme)
             _validate_grounding_evidence_ids(
                 queries, list(offline_index.records), _chunk_id)
             index_snapshot = offline_index.snapshot.as_report_dict()

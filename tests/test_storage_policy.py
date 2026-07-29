@@ -65,6 +65,15 @@ def test_atomic_text_json_and_jsonl_writers_publish_private_files(tmp_path):
         _assert_private_permissions(path, directory=False)
 
 
+def test_atomic_private_text_preserves_canonical_lf_bytes(tmp_path):
+    private = storage_policy.ensure_private_directory(tmp_path / "private")
+    target = private / "canonical.txt"
+
+    storage_policy.atomic_write_private_text(target, "first\nsecond\n")
+
+    assert target.read_bytes() == b"first\nsecond\n"
+
+
 def test_jsonl_lines_splits_only_on_written_terminators():
     assert storage_policy.jsonl_lines("a\nb\n") == ["a", "b", ""]
     assert storage_policy.jsonl_lines("a\r\nb\r\n") == ["a", "b", ""]

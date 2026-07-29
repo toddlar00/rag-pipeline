@@ -375,4 +375,4 @@ def test_local_vector_store_releases_lock_after_v5_release_migration(
         f"child stdout:\n{completed.stdout}\n"
         f"child stderr:\n{completed.stderr}"
     )
-    assert f"MIGRATION_REHEARSED:{backend}:5->8" in completed.stdout
+    assert f"MIGRATION_REHEARSED:{backend}:5->9" in completed.stdout

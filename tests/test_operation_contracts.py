@@ -81,6 +81,22 @@ def test_removal_only_update_is_coherent():
     assert outcome.removed_records == 1
 
 
+def test_metadata_only_update_is_coherent_without_content_upserts():
+    operations = IndexOperationMetrics(
+        collection_delete_calls=0, collection_create_calls=0,
+        record_delete_calls=0, upsert_calls=0, queue_put_count=0,
+        queue_saturation_events=0, queue_wait_ms=0,
+        metadata_update_calls=1)
+    outcome = IndexOutcome(
+        backend="chroma", disposition="updated", total_records=2,
+        changed_records=0, unchanged_records=2, removed_records=0,
+        upserted_records=0, batch_count=0, physical_count=2,
+        committed=True, operations=operations)
+
+    assert outcome.operations.metadata_update_calls == 1
+    assert outcome.operations.physical_mutation_calls == 1
+
+
 def test_index_operation_metrics_extend_telemetry_without_content():
     operations = IndexOperationMetrics(
         collection_delete_calls=0,

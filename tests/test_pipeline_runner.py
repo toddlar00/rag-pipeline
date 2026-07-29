@@ -65,6 +65,15 @@ def _paths(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(rag, "_unified_export_complete", lambda *a, **k: True)
     monkeypatch.setattr(rag, "_split_export_complete", lambda *a, **k: True)
     monkeypatch.setattr(rag, "_raptor_output_complete", lambda *a, **k: True)
+    monkeypatch.setattr(
+        rag, "_publish_pipeline_publication",
+        lambda *a, **k: {
+            "gates": [
+                {"name": name, "status": "pass"}
+                for name in rag._publication_core.PUBLICATION_GATE_NAMES
+            ],
+        },
+    )
     return rag._output_paths_for_name("Book")
 
 

@@ -72,6 +72,60 @@ Enriched Chunks + Bound Quality Report
  +---> [citations] -----> Citation graph (cases, statutes, cross-refs)
 ```
 
+### Five-gate logical publication commit
+
+A full pipeline run is **READY** only after one final, atomically written
+`.rag-publication.json` receipt binds five passing gates to the exact run
+artifacts: source completeness, physical order, semantic hierarchy, Markdown
+validity, and vector-store parity. Individual conversion, chunk, index, and
+export artifacts written before that receipt are staging artifacts; their
+presence alone does not make a run ready for use.
+
+For migration and recovery, a missing, malformed, or stale
+`.rag-publication.json` means **not READY**, including for runs created before
+this receipt existed. `--resume` first validates the existing stage receipts
+and repairs any incomplete stage, then regenerates the final publication
+receipt without repeating stages whose exact outputs remain valid.
+
+Publication rechecks the current gate-policy schemas, completion relationships,
+artifact hashes, split-chapter inventory, and index/model bindings. Under the
+vector-store lease it also performs a fresh backend scan for the exact stable
+IDs and stored `chunk_index` positions; the `info` command uses the same live
+check before displaying `[READY]`. This is deliberately stronger (and a little
+slower) than treating an index sidecar as proof of current physical parity.
+
+The source-fidelity gate binds every eligible source item to its exact Docling
+reference, text hashes, provenance index, page, bounding box, coordinate
+origin, and character span. It requires one exact, nonoverlapping partition of
+the published lexical tokens: every eligible source token must be represented,
+every published token must be source-owned, and declared list markers are
+mandatory source tokens rather than optional Markdown decoration. Numeric page
+furniture is removed only through its exact source-bound classification, and
+footnotes retain their source page and order before endnote serialization.
+
+Same-page reading order is checked from each item's first and last published
+token positions. Typed `container_alias` ownership permits a table or picture
+to carry only its source-proved alternate OCR segmentation. A PDF-bound native
+recovery group may share one indivisible output interval only when the registry
+cryptographically binds the shared oracle and the exact source-ordered member
+references; all edges from that group to surrounding source items remain
+strict.
+
+Opaque table, figure, and native-text repairs are authorized by a separate
+`*_chunks.source-oracles.json` registry created from the captured source before
+chunk records are formed. The chunk completion, quality report, publication
+receipt, and READY inventory all bind that exact registry; a missing, replayed,
+overlapping, or changed oracle fails closed.
+
+The semantic-hierarchy gate independently recomputes occurrence-bound heading
+lineage. Every attachable source heading is owned exactly once by its first
+applicable chunk and retained by exact source-reference identity throughout
+its scope. Repeated display text is never treated as identity; running page
+furniture and embedded outline rows are closed, source-proven exception types.
+Sparse OCR fragments that only resemble headings are retained in a separate,
+typed `sparse_ocr_heading_artifact` bucket and are hash-bound by the quality and
+publication evidence instead of being silently discarded or promoted.
+
 `rag.py` remains the stable command and Python compatibility facade.
 `retrieval_core.py` is its standard-library-only retrieval domain: structured
 search/grounding results, stable chunk identity, legal lexical analysis,
@@ -294,6 +348,7 @@ output/
 |   |-- Civil_procedure.json             # DoclingDocument
 |   |-- Civil_procedure_docling.md        # Raw Docling conversion markdown
 |   |-- Civil_procedure_chunks.jsonl      # Enriched chunks
+|   |-- Civil_procedure_chunks.source-oracles.json # Opaque source-oracle registry
 |   |-- Civil_procedure_chunks.quality.json # Exact quality attestation
 |   |-- Civil_procedure.md                # Final, filtered unified export
 |   |-- Civil_procedure_chroma/           # Chroma index (default backend)
@@ -1317,7 +1372,7 @@ python rag.py export \
   --chunks output/Civil_procedure/Civil_procedure_chunks.jsonl \
   -o output/Civil_procedure/Civil_procedure.md --format markdown
 
-# Split into one file per chapter (ideal for Claude Projects / NotebookLM)
+# Publish the canonical chapter Markdown used by target-specific derivatives
 python rag.py export \
   --chunks output/Civil_procedure/Civil_procedure_chunks.jsonl \
   -o output/Civil_procedure/Civil_procedure.md \
@@ -1351,25 +1406,73 @@ python rag.py export \
   --chapters 3 --include-types case_opinion --split-chapters
 ```
 
-### Using with Claude Projects / NotebookLM
+### Markdown validation
 
-Upload the exported markdown for clean, structured content. Split chapters give
-best retrieval:
+Markdown publication always runs deterministic structural checks before any
+output file is replaced. The default `--markdown-validation auto` mode also
+runs the pinned Pandoc 3.10.1 semantic parser and the exact Zettlr 4.7 remark
+profile when those local tools are available. Semantic mismatches stop the
+export; Zettlr style diagnostics are warnings in `auto` mode.
+
+Use `strict` to require both pinned validators and make style diagnostics
+blocking. Use `internal` only for a hermetic export that deliberately skips
+both external validators.
 
 ```bash
-python rag.py export \
-  --chunks output/Civil_procedure/Civil_procedure_chunks.jsonl \
-  -o output/Civil_procedure/Civil_procedure.md --split-chapters
+python rag.py export --chunks output/chunks.jsonl -o output/book.md \
+  --markdown-validation strict
 ```
 
-Output:
+The Zettlr-compatible validator never installs packages at runtime. Prepare its
+locked local dependencies once after cloning or updating the repository:
+
+```bash
+cd tools/zettlr-markdown-validator
+npm ci --ignore-scripts --no-audit --no-fund
 ```
-output/Civil_procedure/Chapters/
-  ch02_Subject_Matter_Jurisdiction.md
-  ch03_Personal_Jurisdiction.md
-  ch13_Special_Multiparty_Litigation.md
-  front_matter.md
+
+### AI project upload packages
+
+Create a target-specific upload directory from an existing **READY** full run.
+The run must have been published with canonical chapter Markdown, so use
+`full --split-chapters` (or resume that run with the same option) first. A
+standalone split export is not a substitute for the five-gate publication
+receipt.
+
+```bash
+# Markdown documents, grouped to NotebookLM's default source-count budget
+python rag.py export \
+  --chunks output/Civil_procedure/Civil_procedure_chunks.jsonl \
+  --target notebooklm --markdown-validation strict
+
+# Markdown documents, with an explicit project-file budget
+python rag.py export \
+  --chunks output/Civil_procedure/Civil_procedure_chunks.jsonl \
+  --target chatgpt --max-files 20 --markdown-validation strict
+
+# Normalized text documents for a Claude Project
+python rag.py export \
+  --chunks output/Civil_procedure/Civil_procedure_chunks.jsonl \
+  --target claude --markdown-validation strict
 ```
+
+Each command creates exactly one sibling directory: `NotebookLM/`, `ChatGPT/`,
+or `Claude/`. NotebookLM and ChatGPT packages contain `.md`; Claude packages
+contain `.txt` with the same visible headings and endnotes. Upload only the
+files inside that directory. The strict ownership/provenance receipt is a
+hidden sibling of the directory and is deliberately kept out of the upload
+inventory. Target derivatives are validated again after comment
+materialization, link removal, footnote relabeling, and chapter grouping;
+`--markdown-validation strict` requires the pinned Pandoc and Zettlr profiles
+to pass before any upload file is published.
+
+When a file budget is lower than the canonical chapter count, chapters are
+grouped in source order and balanced by size. Footnotes are relabeled within
+each grouped file, generated comments become visible labels, cross-chapter and
+figure links that would break outside `Chapters/` become visible text, and
+physical locators such as `[PDF page 42]` remain in the content. The target
+package is an optional derivative: creating or deleting it does not change the
+run's five-gate READY state.
 
 ## AI Model Integration
 
@@ -1605,8 +1708,8 @@ before work begins, publish the JSONL via atomic replacement, and retain the
 vector lease until the matching index commits. A crash therefore exposes
 neither partial JSONL nor an apparently clean old index paired with a new
 corpus. Before any vector-client mutation, indexing validates the adjacent
-quality report against one exact chunks snapshot; schema-v8 manifests bind the
-validated schema-v4 report SHA-256 and attest the row-child count used to select
+quality report against one exact chunks snapshot; schema-v9 manifests bind the
+validated schema-v12 report SHA-256 and attest the row-child count used to select
 a safe candidate depth. Chroma hybrid search and opt-in neighbor
 assembly compare both the chunks and quality-report SHA-256 values with the
 manifest, parse and hash one exact file-handle snapshot, and refuse
@@ -1676,7 +1779,7 @@ an existing manifest.
 
 The real-vector-client release rehearsal recreates the exact schema-5 manifest
 field set emitted by the last integrated release, upgrades only the selected
-collection to schema 8, and verifies exact IDs and hashes, sibling collection
+collection to schema 9, and verifies exact IDs and hashes, sibling collection
 and manifest preservation, a subsequent no-op, successful queries against both
 collections, clean recovery-marker state, and immediate database-directory
 removal on Windows and Linux for both Chroma and Qdrant.
@@ -1814,9 +1917,9 @@ validating their artifacts as follows:
 | Stage | Checks for |
 |-------|-----------|
 | Convert | Schema-v2 immutable original/effective PDF binding, config/model lock, and exact JSON/Markdown/derived-PDF output hashes |
-| Chunk | Schema-v3 exact Docling/conversion/recovery inputs, immutable structure-profile receipt, output hash, and strict JSONL schema |
-| Quality | Schema-v4 chunk-input provenance plus exact Docling/chunks/parameters/retrieval-linkage/table-family binding and every required PASS check |
-| Index | Clean schema-v8 manifest plus schema-v4 report binding, physical IDs/count, row-child count, and chunk hashes |
+| Chunk | Schema-v7 exact Docling/conversion/recovery inputs, immutable structure-profile receipt, output hash, and strict JSONL schema |
+| Quality | Schema-v12 chunk-input provenance plus exact Docling/chunks/parameters/retrieval-linkage/table-family binding and every required PASS check |
+| Index | Clean schema-v9 manifest plus schema-v12 report binding, physical IDs/count, row-child count, and chunk hashes |
 | Export | Source/config completion and output hash |
 | Chapter export | Exact manifested chapter-file set and hashes |
 | RAPTOR | Source/config-bound tree schema and statistics |
@@ -1834,17 +1937,14 @@ python rag.py batch *.pdf --resume
 
 On failure, the pipeline prints a ready-to-paste resume command.
 
-Conversion schema-v1 and chunk schema-v1/v2 completion files remain readable as
-migration inputs but are never accepted as verified resume evidence. Schema-v1
-or schema-v2 quality reports and pre-v6 index bindings are not accepted. A
-schema-v3 quality report remains read-compatible only after deterministic
-in-memory validation proves that its corpus contains no row children. A corpus
-carrying quality evidence, source lineage, or any table-family metadata requires
-a current schema-v4 report for indexing. Query-only compatibility accepts a
-schema-v6/schema-v2 index with neighbor context off and a schema-v7/schema-v3
-index with context on or off. Current indexing writes schema-v8/schema-v4
-evidence. Migrate the whole artifact chain in order, using the same processing
-flags, embedding model, and explicit structure profile as the original run:
+Legacy completion and quality files can be retained as migration inputs, but
+they are not verified resume evidence unless every current validator accepts
+their exact artifact generation. A corpus carrying quality evidence, source
+lineage, opaque source oracles, or table-family metadata requires the current
+schema-v12 quality report for indexing. Current indexing writes a schema-v9
+manifest bound to that schema-v12 report. Migrate the whole artifact chain in
+order, using the same processing flags, embedding model, and explicit structure
+profile as the original run:
 
 ```bash
 # Rebuild conversion, chunks, and quality evidence when needed, then reconcile
@@ -1858,9 +1958,9 @@ python rag.py full --pdf Book.pdf --resume --full-reindex \
 ```
 
 Do not query or export the old collection until this command finishes. Resume
-keeps valid schema-v2 conversion evidence, rebuilds invalid or pre-v3 chunk
-evidence under schema v3 and chunking policy v23, regenerates the schema-v4
-quality report from the exact chunk-completion inputs, and then reconciles or
+keeps valid schema-v2 conversion evidence, rebuilds stale chunk evidence under
+schema v7 and chunking policy v79, regenerates the schema-v12 quality report
+from the exact chunk-completion inputs, and then reconciles or
 rebuilds an index whose
 prior quality binding is incompatible. The chunk receipt records the selected
 profile name, revision, schema, and canonical policy SHA-256 plus a
