@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "current_implementation_owners": {
+    "release_security": [
+      "release_security.py",
+      "endpoint_policy.py"
+    ],
+    "provider_runtime": [
+      "embedding_policy.py",
+      "provider_transport.py",
+      "llm_adapters.py",
+      "llm_runtime.py"
+    ],
+    "model_supply_chain": [
+      "model_artifacts.py",
+      "tools/check_model_artifacts.py",
+      "tools/refresh_model_artifacts.py",
+      "tools/sync_model_artifacts.py"
+    ],
+    "vector_runtime": [
+      "index_state.py",
+      "resource_lease.py",
+      "retrieval_core.py",
+      "vector_lifecycle.py",
+      "rag.py"
+    ]
+  },
+  "reserved_implementation_owners": {
+    "pipeline_runtime": [
+      "pipeline_runtime.py"
+    ]
+  },
+  "governance_paths": [
+    "ci-security-ownership.json",
+    "tools/check_ci_security.py",
+    ".github/workflows/security.yml"
+  ]
+}

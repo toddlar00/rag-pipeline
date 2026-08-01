@@ -9,21 +9,21 @@ from __future__ import annotations
 
 import json
 import hashlib
-import logging
 import os
 import stat
-import sys
 import tempfile
 import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-import job_manager
+import job_coordination
+import job_coordination_contracts
 import job_runtime
-import rag
+import release_security
 import retention
 import service_contracts
+import service_runtime_binding
 import storage_policy
 
 
@@ -40,9 +40,14 @@ _OWNER_MARKER_SCHEMA_VERSION = 1
 _OWNER_MARKER_KIND = "rag_service_job_root_owner"
 _MAX_OWNER_MARKER_BYTES = 4096
 _SEARCH_WORKER_ACTION = "_search_worker"
-_INTERNAL_SCHEMA_VERSION = 1
+_INTERNAL_SCHEMA_VERSION = 2
 _ACTIVE_SERVICE_GUARD = threading.Lock()
 _ACTIVE_SERVICE_KEYS: set[tuple[int, str]] = set()
+_default_service_runtime_binding = (
+    service_runtime_binding.default_service_runtime_binding)
+_default_service_job_coordination_binding = (
+    job_coordination.default_service_job_coordination_binding)
+_LAUNCHER_UNSET = object()
 
 
 class ServiceRuntimeError(RuntimeError):
@@ -277,11 +282,17 @@ def load_corpus_registry(path: Path) -> dict[str, service_contracts.CorpusConfig
 def _search_request_payload(
         config: service_contracts.CorpusConfig,
         request: service_contracts.SearchRequest,
-        request_id: str) -> dict[str, Any]:
+        request_id: str, *,
+        security_policy: release_security.ReleaseSecurityPolicy | None = None,
+        ) -> dict[str, Any]:
+    policy = security_policy or release_security.ReleaseSecurityPolicy()
+    if not isinstance(policy, release_security.ReleaseSecurityPolicy):
+        raise TypeError("invalid release-security policy")
     return {
         "schema_version": _INTERNAL_SCHEMA_VERSION,
         "kind": "service_search_request",
         "request_id": request_id,
+        "release_security": policy.provenance(),
         "corpus": {
             "corpus_id": config.corpus_id,
             "backend": config.backend,
@@ -303,17 +314,22 @@ def _search_request_payload(
 def _parse_worker_request(
         payload: object,
         ) -> tuple[service_contracts.CorpusConfig,
-                   service_contracts.SearchRequest, str]:
+                   service_contracts.SearchRequest, str,
+                   release_security.ReleaseSecurityPolicy]:
     payload = _exact_fields(
         payload,
         allowed=frozenset({
-            "schema_version", "kind", "request_id", "corpus", "search"}),
+            "schema_version", "kind", "request_id", "release_security",
+            "corpus", "search"}),
         required=frozenset({
-            "schema_version", "kind", "request_id", "corpus", "search"}))
+            "schema_version", "kind", "request_id", "release_security",
+            "corpus", "search"}))
     if (payload["schema_version"] != _INTERNAL_SCHEMA_VERSION
             or payload["kind"] != "service_search_request"):
         raise service_contracts.ServiceContractError()
     request_id = service_contracts.validate_request_id(payload["request_id"])
+    policy = release_security.ReleaseSecurityPolicy.from_provenance(
+        payload["release_security"])
     corpus = _exact_fields(
         payload["corpus"],
         allowed=frozenset({
@@ -336,19 +352,22 @@ def _parse_worker_request(
         db_lock_timeout_seconds=corpus["db_lock_timeout_seconds"],
     )
     request = service_contracts.parse_search_request(payload["search"])
-    return config, request, request_id
+    return config, request, request_id, policy
 
 
 def _execute_search(
         config: service_contracts.CorpusConfig,
         request: service_contracts.SearchRequest,
-        request_id: str) -> dict[str, Any]:
+        request_id: str, *,
+        search_index_fn: Callable[..., Any],
+        security_policy: release_security.ReleaseSecurityPolicy | None = None,
+        ) -> dict[str, Any]:
     hybrid = None
     if request.mode == "vector":
         hybrid = False
     elif request.mode == "hybrid":
         hybrid = True
-    response = rag.search_index(
+    response = search_index_fn(
         request.query,
         config.db_path,
         db_backend="qdrant",
@@ -361,6 +380,7 @@ def _execute_search(
         hybrid=hybrid,
         chunks_path=config.chunks_path,
         lock_timeout=config.db_lock_timeout_seconds,
+        security_policy=security_policy,
     )
     return service_contracts.public_search_response(
         response, corpus_id=config.corpus_id, request_id=request_id)
@@ -380,13 +400,18 @@ def _write_worker_envelope(path: Path, payload: dict[str, Any]) -> None:
     storage_policy.atomic_write_private_json(path, payload)
 
 
-def search_worker_main(request_path: Path, result_path: Path) -> int:
+def search_worker_main(
+        request_path: Path, result_path: Path, *,
+        search_index_fn: Callable[..., Any]) -> int:
     """Run one trusted request file; emit no raw error or private log."""
     try:
         payload = _read_private_json(
             request_path, max_bytes=service_contracts.MAX_REQUEST_BYTES)
-        config, request, request_id = _parse_worker_request(payload)
-        result = _execute_search(config, request, request_id)
+        config, request, request_id, policy = _parse_worker_request(payload)
+        result = _execute_search(
+            config, request, request_id,
+            search_index_fn=search_index_fn,
+            security_policy=policy)
         envelope = {
             "schema_version": _INTERNAL_SCHEMA_VERSION,
             "kind": "service_search_result",
@@ -445,9 +470,19 @@ def supervised_search(
         config: service_contracts.CorpusConfig,
         request: service_contracts.SearchRequest,
         request_id: str, *,
-        temporary_root: Path | None = None) -> dict[str, Any]:
+        temporary_root: Path | None = None,
+        security_policy: release_security.ReleaseSecurityPolicy | None = None,
+        runtime_binding: (
+            service_runtime_binding.ServiceRuntimeBinding | None) = None,
+        ) -> dict[str, Any]:
     """Execute one search behind a hard, process-tree-cleaning deadline."""
     request_id = service_contracts.validate_request_id(request_id)
+    binding = (
+        _default_service_runtime_binding()
+        if runtime_binding is None else runtime_binding)
+    if not isinstance(
+            binding, service_runtime_binding.ServiceRuntimeBinding):
+        raise TypeError("runtime_binding must be a ServiceRuntimeBinding")
     parent = (
         storage_policy.ensure_private_directory(temporary_root)
         if temporary_root is not None else None)
@@ -460,18 +495,20 @@ def supervised_search(
         request_path = temporary_path / "request.json"
         result_path = temporary_path / "result.json"
         storage_policy.atomic_write_private_json(
-            request_path, _search_request_payload(config, request, request_id))
+            request_path, _search_request_payload(
+                config, request, request_id,
+                security_policy=security_policy))
         try:
             with open(os.devnull, "wb") as output_sink:
-                exit_code = rag._run_cli_with_deadline(
-                    Path(__file__).resolve(),
+                exit_code = binding.supervisor(
+                    binding.worker_script_path,
                     [_SEARCH_WORKER_ACTION, str(request_path), str(result_path)],
                     operation="service search",
                     timeout=config.search_timeout_seconds,
                     stdout_target=output_sink,
                     stderr_target=output_sink,
                 )
-        except rag._SupervisorCleanupError as exc:
+        except binding.cleanup_error_type as exc:
             raise ServiceRuntimeError(
                 "service_unavailable", fatal=True) from exc
         if exit_code == 124:
@@ -509,12 +546,18 @@ class RagApplicationService:
             service_state_root: Path | None = None,
             ready_timeout_seconds: float = 10.0,
             max_concurrent_searches: int = 2,
+            security_policy: (
+                release_security.ReleaseSecurityPolicy | None) = None,
+            runtime_binding: (
+                service_runtime_binding.ServiceRuntimeBinding | None) = None,
+            job_coordination_binding: (
+                job_coordination_contracts.ServiceJobCoordinationBinding
+                | None) = None,
             search_runner: Callable[[
                 service_contracts.CorpusConfig,
                 service_contracts.SearchRequest, str], dict[str, Any]
             ] = supervised_search,
-            launcher: Callable[..., job_manager.LaunchResult] =
-            job_manager.launch_detached,
+            launcher: Callable[..., object] | object = _LAUNCHER_UNSET,
     ):
         if (not isinstance(corpora, Mapping) or not corpora
                 or len(corpora) > MAX_CORPORA):
@@ -525,6 +568,33 @@ class RagApplicationService:
                     or key != config.corpus_id or key in checked):
                 raise service_contracts.ServiceContractError()
             checked[key] = config
+        self.security_policy = (
+            security_policy or release_security.ReleaseSecurityPolicy())
+        if not isinstance(
+                self.security_policy,
+                release_security.ReleaseSecurityPolicy):
+            raise service_contracts.ServiceContractError()
+        self._runtime_binding = (
+            _default_service_runtime_binding()
+            if runtime_binding is None else runtime_binding)
+        if not isinstance(
+                self._runtime_binding,
+                service_runtime_binding.ServiceRuntimeBinding):
+            raise service_contracts.ServiceContractError()
+        self._job_coordination = (
+            _default_service_job_coordination_binding()
+            if job_coordination_binding is None
+            else job_coordination_binding)
+        if not isinstance(
+                self._job_coordination,
+                job_coordination_contracts.ServiceJobCoordinationBinding):
+            raise service_contracts.ServiceContractError()
+        for config in checked.values():
+            if self._runtime_binding.is_api_embedding_model(
+                    config.embedding_model):
+                release_security.require_cloud_egress(
+                    self.security_policy,
+                    feature=f"cloud embedding for corpus {config.corpus_id}")
         if (isinstance(max_concurrent_searches, bool)
                 or not isinstance(max_concurrent_searches, int)
                 or not 1 <= max_concurrent_searches <= 16):
@@ -592,10 +662,14 @@ class RagApplicationService:
             self._search_runner = lambda config, request, request_id: (
                 supervised_search(
                     config, request, request_id,
-                    temporary_root=self.search_temporary_root))
+                    temporary_root=self.search_temporary_root,
+                    security_policy=self.security_policy,
+                    runtime_binding=self._runtime_binding))
         else:
             self._search_runner = search_runner
-        self._launcher = launcher
+        self._launcher = (
+            self._job_coordination.launch_detached
+            if launcher is _LAUNCHER_UNSET else launcher)
         self._search_slots = threading.BoundedSemaphore(
             max_concurrent_searches)
         self._state_lock = threading.Lock()
@@ -685,17 +759,12 @@ class RagApplicationService:
                 raise ServiceRuntimeError("service_unavailable")
             _ACTIVE_SERVICE_KEYS.add(self._service_key)
         lease = None
+        lease_entered = False
         try:
-            lease = rag._VectorStoreLease(
-                self.service_state_root / "instance",
-                backend="service",
-                collection_name="service-instance",
-                operation="local service startup",
-                timeout=0,
-                resource_description="local service instance",
-                timeout_option="service instance lease",
-            )
+            lease = self._runtime_binding.instance_lease_factory(
+                self.service_state_root / "instance")
             lease.__enter__()
+            lease_entered = True
             self._claim_job_root()
             _cleanup_stale_search_directories(self.search_temporary_root)
             self._reconcile_service_jobs(fail_queued=True)
@@ -703,7 +772,7 @@ class RagApplicationService:
             with _ACTIVE_SERVICE_GUARD:
                 _ACTIVE_SERVICE_KEYS.discard(self._service_key)
             try:
-                if lease is not None:
+                if lease_entered:
                     lease.__exit__(type(exc), exc, exc.__traceback__)
             except BaseException:
                 pass
@@ -822,7 +891,7 @@ class RagApplicationService:
                             snapshot.job_id, lease=lease)
                         if not self._execution_is_service_reindex(execution):
                             continue
-                        results.append(job_manager.reconcile_job(
+                        results.append(self._job_coordination.reconcile_job(
                             self.store, snapshot.job_id,
                             fail_queued=(
                                 fail_queued
@@ -836,7 +905,7 @@ class RagApplicationService:
                     continue
             return results
         except (job_runtime.JobCorruptError,
-                job_manager.JobManagerCorruptError) as exc:
+                self._job_coordination.corrupt_error_type) as exc:
             self.mark_unhealthy()
             raise ServiceRuntimeError(
                 "service_unavailable", fatal=True) from exc
@@ -852,9 +921,10 @@ class RagApplicationService:
                 summaries = self._reconcile_service_jobs(fail_queued=True)
             return [service_contracts.public_job(item) for item in summaries]
         except (job_runtime.JobCorruptError,
-                job_manager.JobManagerCorruptError) as exc:
+                self._job_coordination.corrupt_error_type) as exc:
             self.mark_unhealthy()
-            raise ServiceRuntimeError("service_unavailable") from exc
+            raise ServiceRuntimeError(
+                "service_unavailable", fatal=True) from exc
         except job_runtime.JobRuntimeError as exc:
             raise ServiceRuntimeError("service_unavailable") from exc
 
@@ -981,16 +1051,19 @@ class RagApplicationService:
         self._require_job_root_owned()
         self._require_service_execution(job_id)
         try:
-            current = job_manager.reconcile_job(self.store, job_id)
+            current = self._job_coordination.reconcile_job(
+                self.store, job_id)
         except job_runtime.JobNotFoundError as exc:
             raise ServiceRuntimeError("not_found") from exc
         except job_runtime.JobBusyError as exc:
             raise ServiceRuntimeError("service_unavailable") from exc
         except (job_runtime.JobCorruptError,
-                job_manager.JobManagerCorruptError) as exc:
+                self._job_coordination.corrupt_error_type) as exc:
             self.mark_unhealthy()
             raise ServiceRuntimeError(
                 "service_unavailable", fatal=True) from exc
+        except job_runtime.JobRuntimeError as exc:
+            raise ServiceRuntimeError("service_unavailable") from exc
         if (current.attempt_number != attempt_number
                 or current.revision != revision):
             raise ServiceRuntimeError("precondition_failed")
@@ -1047,17 +1120,17 @@ class RagApplicationService:
                     expected_revision=execution.revision,
                     lease_timeout=0,
                 )
-        except BaseException as exc:
+        except Exception as exc:
             self.mark_unhealthy()
             raise ServiceRuntimeError(
-                "service_unavailable", job_id=job_id) from exc
+                "service_unavailable", job_id=job_id, fatal=True) from exc
 
     def _launch_job(self, job_id: str) -> None:
         try:
             self._launcher(
                 self.store, job_id,
                 ready_timeout=self.ready_timeout_seconds)
-        except BaseException as exc:
+        except Exception as exc:
             try:
                 self._mark_launch_failed(job_id)
             except ServiceRuntimeError:
@@ -1075,7 +1148,20 @@ class RagApplicationService:
             "--embedding-model", config.embedding_model,
             "--db-backend", "qdrant",
             "--db-lock-timeout", f"{config.db_lock_timeout_seconds:g}",
+            "--release-security-policy-version",
+            str(self.security_policy.schema_version),
+            "--security-profile", self.security_policy.profile,
+            "--network-policy", self.security_policy.network_policy,
+            "--model-download-policy",
+            self.security_policy.model_download_policy,
         ]
+        if self.security_policy.cache_namespace_id is not None:
+            arguments.extend([
+                "--release-cache-namespace-id",
+                self.security_policy.cache_namespace_id,
+            ])
+        if self.security_policy.trust_environment_network:
+            arguments.append("--trust-environment-network")
         if request.full_reindex:
             arguments.append("--full-reindex")
         return tuple(arguments)
@@ -1121,10 +1207,10 @@ class RagApplicationService:
                     summary = self.store.get_job(job_id)
                     if (summary.status == "queued"
                             and job_id not in self._launching_job_ids):
-                        summary = job_manager.reconcile_job(
+                        summary = self._job_coordination.reconcile_job(
                             self.store, job_id, fail_queued=True)
                 except (job_runtime.JobCorruptError,
-                        job_manager.JobManagerCorruptError) as exc:
+                        self._job_coordination.corrupt_error_type) as exc:
                     self.mark_unhealthy()
                     raise ServiceRuntimeError(
                         "service_unavailable", fatal=True) from exc
@@ -1134,6 +1220,9 @@ class RagApplicationService:
                     raise ServiceRuntimeError("service_unavailable") from exc
                 except job_runtime.JobStateError as exc:
                     raise ServiceRuntimeError("conflict") from exc
+                except job_runtime.JobRuntimeError as exc:
+                    raise ServiceRuntimeError(
+                        "service_unavailable") from exc
                 replay = True
             except job_runtime.JobBusyError as exc:
                 raise ServiceRuntimeError("service_unavailable") from exc
@@ -1196,7 +1285,8 @@ class RagApplicationService:
             self._require_job_root_owned()
             self._require_service_execution(job_id)
             try:
-                summary = job_manager.reconcile_job(self.store, job_id)
+                summary = self._job_coordination.reconcile_job(
+                    self.store, job_id)
                 plan = retention.plan_background_job_deletion(
                     self.store.root, job_id)
             except job_runtime.JobNotFoundError as exc:
@@ -1208,10 +1298,12 @@ class RagApplicationService:
             except retention.RetentionError as exc:
                 self._raise_retention_failure(exc, state_code="conflict")
             except (job_runtime.JobCorruptError,
-                    job_manager.JobManagerCorruptError) as exc:
+                    self._job_coordination.corrupt_error_type) as exc:
                 self.mark_unhealthy()
                 raise ServiceRuntimeError(
                     "service_unavailable", fatal=True) from exc
+            except job_runtime.JobRuntimeError as exc:
+                raise ServiceRuntimeError("service_unavailable") from exc
         return {
             "schema_version": service_contracts.SERVICE_SCHEMA_VERSION,
             "job": service_contracts.public_job(summary),
@@ -1260,21 +1352,9 @@ class RagApplicationService:
         }
 
 
-def _silence_worker_output() -> None:
-    logging.disable(logging.CRITICAL)
-    try:
-        sink = open(os.devnull, "w", encoding="utf-8")
-    except OSError:
-        return
-    sys.stdout = sink
-    sys.stderr = sink
-
-
 def main(argv: Sequence[str] | None = None) -> int:
-    arguments = list(sys.argv[1:] if argv is None else argv)
-    if len(arguments) == 3 and arguments[0] == _SEARCH_WORKER_ACTION:
-        _silence_worker_output()
-        return search_worker_main(Path(arguments[1]), Path(arguments[2]))
+    """Fail closed; private worker dispatch lives in service_search_worker."""
+    del argv
     return 2
 
 

@@ -80,6 +80,29 @@ def test_grounded_answer_keeps_valid_citations_and_source_metadata(monkeypatch):
     assert '"page_range": "pp.101-102"' in observed["prompt"]
 
 
+def test_table_child_keeps_independent_citation_and_parent_trace(monkeypatch):
+    hit = _hit(
+        "| Arrangement | Safeguard |\n| --- | --- |\n"
+        "| Contingent fee | Written agreement |",
+        stable_id="table-row-2",
+        content_type="table",
+        retrieval_role="table_child",
+        table_parent_stable_id="table-parent",
+        table_child_index=2,
+        table_child_count=4,
+    )
+    response = _response(hit)
+
+    answer = _generate(
+        monkeypatch, "A written agreement is required [S1].", response)
+
+    mapping = answer.source_mapping()["S1"]
+    assert answer.citations == ["S1"]
+    assert mapping["source_id"] == "table-row-2"
+    assert mapping["metadata"]["table_parent_stable_id"] == "table-parent"
+    assert "equivalent_sources" not in mapping["metadata"]
+
+
 def test_grounded_answer_withholds_hallucinated_source_ids(monkeypatch):
     answer = _generate(
         monkeypatch,
@@ -140,6 +163,47 @@ def test_quote_cannot_span_the_boundary_between_two_sources(monkeypatch):
         _response(
             _hit("The source has alpha ending"),
             _hit("beta beginning in another source", score=0.8),
+        ),
+    )
+
+    assert answer.abstained is True
+    assert any("Unsupported direct quotation" in warning
+               for warning in answer.warnings)
+
+
+def test_quote_must_appear_in_a_source_cited_by_its_own_paragraph(monkeypatch):
+    answer = _generate(
+        monkeypatch,
+        'The first source says "minimum contacts are required" [S1].\n'
+        "A separate proposition is supported [S2].",
+        _response(
+            _hit("The first source discusses only venue."),
+            _hit(
+                "Minimum contacts are required. A separate proposition is "
+                "supported.",
+                score=0.8,
+            ),
+        ),
+    )
+
+    assert answer.abstained is True
+    assert any("Unsupported direct quotation" in warning
+               for warning in answer.warnings)
+
+
+@pytest.mark.parametrize("malformed_reference", [
+    "plain S1 text",
+    "[see S1 later]",
+])
+def test_malformed_source_text_cannot_import_quote_evidence_into_paragraph(
+        monkeypatch, malformed_reference):
+    answer = _generate(
+        monkeypatch,
+        'The second source says "minimum contacts are required" '
+        f"{malformed_reference} [S2].",
+        _response(
+            _hit("Minimum contacts are required."),
+            _hit("The second source discusses only venue.", score=0.8),
         ),
     )
 
@@ -226,6 +290,124 @@ def test_chroma_metadata_persists_the_stable_source_id():
     ids, _, _, metadatas = rag._prepare_chroma_batch([record])
 
     assert metadatas[0]["stable_id"] == ids[0]
+
+
+def test_neighbor_context_receives_its_own_exact_citation():
+    hit = _hit("Ranked primary evidence.")
+    hit.source_id = "chunk_primary"
+    hit.context_segments = [rag.ContextSegment(
+        text="Supplementary evidence text from the next chunk.",
+        metadata={"page_range": "8"},
+        source_id="chunk_neighbor",
+        relation="next",
+        distance=1,
+    )]
+
+    sources = rag._grounded_sources(_response(hit))
+
+    assert [(source.citation_id, source.source_id) for source in sources] == [
+        ("S1", "chunk_primary"),
+        ("S2", "chunk_neighbor"),
+    ]
+    answer = rag._validate_grounded_answer(
+        'The source states "Supplementary evidence text" [S2].', sources)
+    assert answer.abstained is False
+    assert answer.citations == ["S2"]
+    mapping = answer.source_mapping()["S2"]
+    assert mapping["source_id"] == "chunk_neighbor"
+    assert mapping["score"] is None
+    assert mapping["score_kind"] == "supplementary_context"
+
+
+def test_identical_ranked_primaries_render_once_with_alias_provenance():
+    first = _hit("Identical ranked evidence.", page_range="1")
+    first.source_id = "chunk_primary_one"
+    second = _hit("Identical ranked evidence.", page_range="2")
+    second.source_id = "chunk_primary_two"
+    second.context_segments = [rag.ContextSegment(
+        text="Neighbor attached to the duplicate primary.",
+        metadata={"page_range": "3"},
+        source_id="chunk_neighbor",
+        relation="next",
+        distance=1,
+    )]
+
+    sources = rag._grounded_sources(_response(first, second))
+
+    assert [source.source_id for source in sources] == [
+        "chunk_primary_one", "chunk_neighbor",
+    ]
+    assert sources[0].metadata["equivalent_sources"] == [{
+        "source_id": "chunk_primary_two",
+        "metadata": {
+            "source_file": "Civil Procedure.pdf",
+            "page_range": "2",
+            "content_type": "case_opinion",
+            "section_path": "Chapter 3 > Personal Jurisdiction",
+            "primary_case": "International Shoe Co. v. Washington",
+        },
+    }]
+    assert sources[1].metadata["primary_source_id"] == "chunk_primary_one"
+
+
+def test_raw_metadata_cannot_declare_equivalent_source_identity():
+    hit = _hit(
+        "Primary evidence.",
+        equivalent_sources=[{
+            "source_id": "forged-source", "metadata": {"page_range": "9"},
+        }],
+    )
+    hit.source_id = "actual-source"
+
+    sources = rag._grounded_sources(_response(hit))
+
+    assert sources[0].source_id == "actual-source"
+    assert "equivalent_sources" not in sources[0].metadata
+
+
+def test_grounded_sources_cap_supplements_relative_to_actual_primaries():
+    hits = []
+    for primary_index in range(3):
+        hit = _hit(f"Primary {primary_index}.")
+        hit.source_id = f"chunk_primary_{primary_index}"
+        hit.context_segments = [
+            rag.ContextSegment(
+                text=f"Supplement {primary_index}-{context_index}.",
+                metadata={"page_range": str(context_index + 1)},
+                source_id=f"chunk_context_{primary_index}_{context_index}",
+                relation="next",
+                distance=context_index + 1,
+            )
+            for context_index in range(4)
+        ]
+        hits.append(hit)
+
+    sources = rag._grounded_sources(_response(*hits))
+
+    assert sum(source.score is not None for source in sources) == 3
+    assert sum(source.score is None for source in sources) == 10
+    assert len(sources) == 13
+
+
+def test_neighbor_context_is_capped_before_answer_prompting():
+    hit = _hit("Ranked primary evidence.")
+    hit.source_id = "chunk_primary"
+    neighbor_text = "continuation evidence " * 1000
+    hit.context_segments = [rag.ContextSegment(
+        text=neighbor_text,
+        metadata={"page_range": "8"},
+        source_id="chunk_neighbor",
+        relation="next",
+        distance=1,
+    )]
+
+    sources = rag._grounded_sources(_response(hit))
+    prompt = rag._grounded_answer_prompt("What continues?", sources)
+
+    assert len(sources[1].excerpt) <= rag._ANSWER_SOURCE_CHAR_LIMIT
+    assert sources[1].excerpt.endswith("\u2026")
+    assert neighbor_text not in prompt
+    assert sources[1].excerpt in prompt
 
 
 def test_json_output_keeps_answer_string_and_adds_grounding(capsys):

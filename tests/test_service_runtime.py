@@ -1,19 +1,30 @@
 import json
 import os
+import queue
 import stat
+import subprocess
+import sys
+import textwrap
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
+import job_coordination
 import job_manager
 import job_runtime
 import retention
+import release_security
 import retrieval_core
 import service_contracts
 import service_runtime
+import service_runtime_binding
 import storage_policy
+
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _config(tmp_path: Path) -> service_contracts.CorpusConfig:
@@ -49,6 +60,58 @@ def _empty_search_response(config, request, request_id):
     }
 
 
+def _runtime_binding(**changes):
+    return replace(
+        service_runtime_binding.default_service_runtime_binding(),
+        **changes,
+    )
+
+
+def _coordination_binding(**changes):
+    return replace(
+        job_coordination.default_service_job_coordination_binding(),
+        **changes,
+    )
+
+
+_SERVICE_HOLDER_SCRIPT = textwrap.dedent(
+    """
+    from pathlib import Path
+    import sys
+
+    import service_contracts
+    import service_runtime
+
+    assert "job_manager" not in sys.modules
+    assert "rag" not in sys.modules
+
+    root = Path(sys.argv[1]).resolve()
+    config = service_contracts.CorpusConfig(
+        corpus_id="property",
+        db_path=(root / "qdrant").resolve(),
+        chunks_path=(root / "chunks.jsonl").resolve(),
+        collection_name="property_collection",
+        embedding_model="test-model",
+    )
+    service = service_runtime.RagApplicationService(
+        {config.corpus_id: config},
+        job_root=root / "jobs",
+        working_directory=root,
+        output_root=root / "output",
+        service_state_root=root / "service-state",
+    )
+    assert "job_manager" not in sys.modules
+    assert "rag" not in sys.modules
+    service.start()
+    assert "job_manager" not in sys.modules
+    assert "rag" not in sys.modules
+    print("ACQUIRED", flush=True)
+    sys.stdin.readline()
+    service.close()
+    """
+)
+
+
 def _launch_starting(store, job_id, *, ready_timeout):
     del ready_timeout
     execution = store.load_execution(job_id)
@@ -68,7 +131,7 @@ def _launch_starting(store, job_id, *, ready_timeout):
 
 
 def _service(tmp_path, *, search_runner=None, launcher=_launch_starting,
-             state_name="service-state", max_searches=2):
+             job_binding=None, state_name="service-state", max_searches=2):
     config = _config(tmp_path)
     options = {}
     if search_runner is not None:
@@ -80,6 +143,7 @@ def _service(tmp_path, *, search_runner=None, launcher=_launch_starting,
         output_root=tmp_path / "output",
         service_state_root=tmp_path / state_name,
         max_concurrent_searches=max_searches,
+        job_coordination_binding=job_binding,
         launcher=launcher,
         **options,
     )
@@ -138,6 +202,81 @@ def test_registry_loader_is_strict_private_and_resolves_relative_paths(
         registry["property"].public_dict())
 
 
+@pytest.mark.parametrize(
+    "embedding_model",
+    [
+        "voyage-law-2",
+        "text-embedding-3-small",
+        "embed-english-v3.0",
+        "cohere-embed-v4.0",
+        "embo-01",
+        "minimax-embedding-01",
+    ],
+)
+def test_service_rejects_every_cloud_embedding_family_before_filesystem_setup(
+        tmp_path, embedding_model):
+    config = _config(tmp_path)
+    cloud = service_contracts.CorpusConfig(
+        corpus_id=config.corpus_id,
+        db_path=config.db_path,
+        chunks_path=config.chunks_path,
+        collection_name=config.collection_name,
+        embedding_model=embedding_model,
+    )
+    service_output = tmp_path / "not-created" / "output"
+
+    with pytest.raises(
+            release_security.ReleaseSecurityError,
+            match="network-policy allow-cloud"):
+        service_runtime.RagApplicationService(
+            {cloud.corpus_id: cloud},
+            job_root=tmp_path / "not-created" / "jobs",
+            working_directory=tmp_path,
+            output_root=service_output,
+        )
+    assert not service_output.parent.exists()
+
+
+def test_service_worker_receipt_round_trips_opaque_policy(tmp_path):
+    config = _config(tmp_path)
+    request = service_contracts.SearchRequest("private query")
+    policy = release_security.ReleaseSecurityPolicy.from_values(
+        profile="development", network_policy="allow-cloud",
+        cache_namespace="tenant-label",
+        model_download_policy="allow-reviewed-sync",
+    )
+
+    parsed = service_runtime._parse_worker_request(
+        service_runtime._search_request_payload(
+            config, request, "req-1", security_policy=policy))
+
+    assert parsed[3] == policy
+    assert "tenant-label" not in json.dumps(
+        service_runtime._search_request_payload(
+            config, request, "req-1", security_policy=policy))
+
+
+def test_service_reindex_job_pins_versioned_opaque_policy(tmp_path):
+    config = _config(tmp_path)
+    policy = release_security.ReleaseSecurityPolicy.from_values(
+        cache_namespace="tenant-label")
+    service = service_runtime.RagApplicationService(
+        {config.corpus_id: config},
+        job_root=tmp_path / "jobs",
+        working_directory=tmp_path,
+        output_root=tmp_path / "output",
+        security_policy=policy,
+    )
+
+    argv = service._reindex_argv(
+        config, service_contracts.ReindexRequest())
+
+    assert "tenant-label" not in argv
+    assert "--release-security-policy-version" in argv
+    namespace_index = argv.index("--release-cache-namespace-id")
+    assert argv[namespace_index + 1] == policy.cache_namespace_id
+
+
 def test_committed_service_config_example_matches_registry_contract(tmp_path):
     source = Path(__file__).resolve().parents[1] / "service-config.example.json"
     config_path = tmp_path / "service.json"
@@ -147,7 +286,8 @@ def test_committed_service_config_example_matches_registry_contract(tmp_path):
 
     assert tuple(registry) == ("civil_procedure",)
     assert registry["civil_procedure"].collection_name == "civil_procedure"
-    assert registry["civil_procedure"].embedding_model == "embo-01"
+    assert registry["civil_procedure"].embedding_model == (
+        "text-embedding-3-small")
 
 
 @pytest.mark.parametrize("mutator", [
@@ -202,6 +342,8 @@ def test_registry_loader_rejects_lexical_symlink_before_resolution(tmp_path):
 
 def test_service_start_reconciles_once_and_holds_single_instance(
         monkeypatch, tmp_path):
+    import rag
+
     calls = []
     real_reconcile = service_runtime.RagApplicationService._reconcile_service_jobs
 
@@ -225,6 +367,12 @@ def test_service_start_reconciles_once_and_holds_single_instance(
         assert calls == [first.store.root]
         assert first.healthy
         assert first.readiness()
+        assert first._instance_lease.lock_path.parent == (
+            first.service_state_root / ".rag-locks")
+        assert first._instance_lease.lock_path == (
+            rag._vector_store_lock_path(
+                first.service_state_root / "instance"))
+        assert not os.path.lexists(first.service_state_root / "instance")
         with pytest.raises(service_runtime.ServiceRuntimeError) as raised:
             second.start()
         assert raised.value.code == "service_unavailable"
@@ -233,6 +381,420 @@ def test_service_start_reconciles_once_and_holds_single_instance(
 
     second.start()
     second.close()
+
+
+def test_service_instance_lease_is_cross_process_and_crash_released(tmp_path):
+    config = _config(tmp_path)
+    holder = subprocess.Popen(
+        [sys.executable, "-c", _SERVICE_HOLDER_SCRIPT, str(tmp_path)],
+        cwd=_PROJECT_ROOT,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert holder.stdout is not None
+        ready_queue = queue.Queue()
+        threading.Thread(
+            target=lambda: ready_queue.put(holder.stdout.readline()),
+            daemon=True,
+        ).start()
+        try:
+            ready = ready_queue.get(timeout=15)
+        except queue.Empty:
+            holder.kill()
+            holder.wait(timeout=5)
+            pytest.fail(
+                "service holder did not acquire: " + holder.stderr.read())
+        assert ready.strip() == "ACQUIRED", (
+            holder.stderr.read() if holder.poll() is not None else ready)
+
+        contender = service_runtime.RagApplicationService(
+            {config.corpus_id: config},
+            job_root=tmp_path / "jobs",
+            working_directory=tmp_path,
+            output_root=tmp_path / "output",
+            service_state_root=tmp_path / "service-state",
+            launcher=_launch_starting,
+        )
+        with pytest.raises(service_runtime.ServiceRuntimeError) as raised:
+            contender.start()
+        assert raised.value.code == "service_unavailable"
+        assert raised.value.fatal is True
+
+        other_root = tmp_path / "other"
+        other_root.mkdir()
+        other_config = _config(other_root)
+        independent = service_runtime.RagApplicationService(
+            {other_config.corpus_id: other_config},
+            job_root=other_root / "jobs",
+            working_directory=other_root,
+            output_root=other_root / "output",
+            service_state_root=other_root / "service-state",
+            launcher=_launch_starting,
+        )
+        independent.start()
+        independent.close()
+
+        holder.kill()
+        holder.wait(timeout=5)
+
+        successor = service_runtime.RagApplicationService(
+            {config.corpus_id: config},
+            job_root=tmp_path / "jobs",
+            working_directory=tmp_path,
+            output_root=tmp_path / "output",
+            service_state_root=tmp_path / "service-state",
+            launcher=_launch_starting,
+        )
+        successor.start()
+        successor.close()
+    finally:
+        if holder.poll() is None:
+            holder.kill()
+            holder.wait(timeout=5)
+        if holder.stdin is not None:
+            holder.stdin.close()
+        if holder.stdout is not None:
+            holder.stdout.close()
+        if holder.stderr is not None:
+            holder.stderr.close()
+
+
+def test_service_snapshots_one_complete_runtime_binding_at_construction(
+        monkeypatch, tmp_path):
+    events = []
+
+    class FirstCleanupError(RuntimeError):
+        pass
+
+    class SecondCleanupError(RuntimeError):
+        pass
+
+    class Lease:
+        def __init__(self, label, path):
+            self.label = label
+            self.path = path
+
+        def __enter__(self):
+            events.append(("enter", self.label, self.path))
+            return self
+
+        def __exit__(self, *_args):
+            events.append(("exit", self.label, self.path))
+
+    def first_supervisor(script_path, _argv, **_kwargs):
+        events.append(("supervisor", script_path))
+        raise FirstCleanupError("first cleanup policy")
+
+    def first_predicate(model_name):
+        events.append(("predicate", model_name))
+        return False
+
+    def unexpected(*_args, **_kwargs):
+        pytest.fail("a later default binding generation was mixed in")
+
+    first_worker = tmp_path / "first-worker.py"
+    first_binding = _runtime_binding(
+        worker_script_path=first_worker,
+        supervisor=first_supervisor,
+        cleanup_error_type=FirstCleanupError,
+        instance_lease_factory=lambda path: Lease("first", path),
+        is_api_embedding_model=first_predicate,
+    )
+    second_binding = _runtime_binding(
+        worker_script_path=tmp_path / "second-worker.py",
+        supervisor=unexpected,
+        cleanup_error_type=SecondCleanupError,
+        instance_lease_factory=unexpected,
+        is_api_embedding_model=unexpected,
+    )
+    monkeypatch.setattr(
+        service_runtime,
+        "_default_service_runtime_binding",
+        lambda: first_binding,
+    )
+    config = _config(tmp_path)
+    service = service_runtime.RagApplicationService(
+        {config.corpus_id: config},
+        job_root=tmp_path / "jobs",
+        working_directory=tmp_path,
+        output_root=tmp_path / "output",
+        service_state_root=tmp_path / "service-state",
+        launcher=_launch_starting,
+    )
+    monkeypatch.setattr(
+        service_runtime,
+        "_default_service_runtime_binding",
+        lambda: second_binding,
+    )
+
+    service.start()
+    with pytest.raises(service_runtime.ServiceRuntimeError) as raised:
+        service.search(
+            config.corpus_id,
+            service_contracts.SearchRequest("private query"),
+            "req-binding-snapshot",
+        )
+    assert raised.value.code == "service_unavailable"
+    assert raised.value.fatal is True
+    service.close()
+
+    instance_path = service.service_state_root / "instance"
+    assert events == [
+        ("predicate", config.embedding_model),
+        ("enter", "first", instance_path),
+        ("supervisor", first_worker),
+        ("exit", "first", instance_path),
+    ]
+
+
+def test_service_snapshots_job_coordination_and_explicit_launcher_wins(
+        monkeypatch, tmp_path):
+    events = []
+
+    class FirstCorrupt(job_manager.JobManagerCorruptError):
+        pass
+
+    class SecondCorrupt(job_manager.JobManagerCorruptError):
+        pass
+
+    def first_reconcile(store, job_id, **kwargs):
+        events.append(("reconcile", store, job_id, kwargs))
+        raise FirstCorrupt("first generation")
+
+    def unexpected(*_args, **_kwargs):
+        pytest.fail("a replaced coordination generation was mixed in")
+
+    first_binding = _coordination_binding(
+        launch_detached=unexpected,
+        reconcile_job=first_reconcile,
+        corrupt_error_type=FirstCorrupt,
+    )
+    second_binding = _coordination_binding(
+        launch_detached=unexpected,
+        reconcile_job=unexpected,
+        corrupt_error_type=SecondCorrupt,
+    )
+    monkeypatch.setattr(
+        service_runtime,
+        "_default_service_job_coordination_binding",
+        lambda: first_binding,
+    )
+
+    config = _config(tmp_path)
+
+    def explicit_launch(store, job_id, *, ready_timeout):
+        events.append(("launch", store, job_id, ready_timeout))
+        return _launch_starting(
+            store, job_id, ready_timeout=ready_timeout)
+
+    service = service_runtime.RagApplicationService(
+        {config.corpus_id: config},
+        job_root=tmp_path / "jobs",
+        working_directory=tmp_path,
+        output_root=tmp_path / "output",
+        service_state_root=tmp_path / "service-state",
+        launcher=explicit_launch,
+    )
+    monkeypatch.setattr(
+        service_runtime,
+        "_default_service_job_coordination_binding",
+        lambda: second_binding,
+    )
+
+    service.start()
+    try:
+        created = service.reindex(
+            "property", service_contracts.ReindexRequest(),
+            idempotency_key="coordination-snapshot-1234")
+        current = service.store.get_job(created.job["job_id"])
+        with pytest.raises(service_runtime.ServiceRuntimeError) as raised:
+            service.cancel_job(
+                current.job_id,
+                attempt_number=current.attempt_number,
+                revision=current.revision,
+            )
+        assert raised.value.fatal is True
+        assert not service.healthy
+    finally:
+        service.close()
+
+    assert service._job_coordination is first_binding
+    assert events[0] == (
+        "launch", service.store, created.job["job_id"],
+        service.ready_timeout_seconds)
+    assert events[1] == (
+        "reconcile", service.store, created.job["job_id"], {})
+
+
+def test_service_omitted_launcher_delegates_to_bound_generation_exactly(
+        tmp_path):
+    calls = []
+
+    def bound_launch(store, job_id, *, ready_timeout):
+        calls.append((store, job_id, ready_timeout))
+        return _launch_starting(
+            store, job_id, ready_timeout=ready_timeout)
+
+    config = _config(tmp_path)
+    service = service_runtime.RagApplicationService(
+        {config.corpus_id: config},
+        job_root=tmp_path / "jobs",
+        working_directory=tmp_path,
+        output_root=tmp_path / "output",
+        service_state_root=tmp_path / "service-state",
+        job_coordination_binding=_coordination_binding(
+            launch_detached=bound_launch),
+    )
+    service.start()
+    try:
+        created = service.reindex(
+            "property", service_contracts.ReindexRequest(),
+            idempotency_key="bound-default-launch-1234")
+    finally:
+        service.close()
+
+    assert calls == [(
+        service.store,
+        created.job["job_id"],
+        service.ready_timeout_seconds,
+    )]
+
+
+def test_service_reconciliation_passes_exact_active_lease_and_queue_policy(
+        tmp_path):
+    calls = []
+
+    def reconcile(store, job_id, **kwargs):
+        calls.append((store, job_id, kwargs.copy()))
+        lease = kwargs["lease"]
+        assert lease.active
+        store.load_execution(job_id, lease=lease)
+        return store.get_job(job_id)
+
+    service = _service(
+        tmp_path,
+        job_binding=_coordination_binding(reconcile_job=reconcile),
+    )
+    try:
+        submitted = _submit_service_job(service)
+        service._launching_job_ids.add(submitted.job_id)
+        service._reconcile_service_jobs(fail_queued=True)
+        service._launching_job_ids.clear()
+        service._reconcile_service_jobs(fail_queued=True)
+    finally:
+        service.close()
+
+    assert len(calls) == 2
+    assert calls[0][0:2] == (service.store, submitted.job_id)
+    assert calls[0][2]["fail_queued"] is False
+    assert calls[1][2]["fail_queued"] is True
+    assert calls[0][2]["lease"] is not calls[1][2]["lease"]
+    assert not calls[0][2]["lease"].active
+    assert not calls[1][2]["lease"].active
+
+
+def test_service_reconciliation_skips_terminal_and_foreign_jobs(tmp_path):
+    calls = []
+
+    def reconcile(store, job_id, **kwargs):
+        calls.append((store, job_id, kwargs.copy()))
+        return store.get_job(job_id)
+
+    service = _service(
+        tmp_path,
+        job_binding=_coordination_binding(reconcile_job=reconcile),
+    )
+    try:
+        active = _submit_service_job(service)
+        terminal = _submit_service_job(service)
+        terminal = _advance_failed(service.store, terminal.job_id)
+        foreign = service.store.submit_job(
+            "export", ["--chunks", "private.jsonl"])
+
+        results = service._reconcile_service_jobs(fail_queued=False)
+    finally:
+        service.close()
+
+    assert [call[1] for call in calls] == [active.job_id]
+    assert calls[0][2]["fail_queued"] is False
+    assert not calls[0][2]["lease"].active
+    assert {result.job_id for result in results} == {
+        active.job_id, terminal.job_id}
+    assert foreign.job_id not in {result.job_id for result in results}
+
+
+def test_service_releases_instance_lease_after_startup_failure(
+        monkeypatch, tmp_path):
+    events = []
+
+    class Lease:
+        def __enter__(self):
+            events.append("enter")
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            events.append(("exit", exc_type, exc, traceback))
+
+    config = _config(tmp_path)
+    service = service_runtime.RagApplicationService(
+        {config.corpus_id: config},
+        job_root=tmp_path / "jobs",
+        working_directory=tmp_path,
+        output_root=tmp_path / "output",
+        service_state_root=tmp_path / "service-state",
+        launcher=_launch_starting,
+        runtime_binding=_runtime_binding(
+            instance_lease_factory=lambda _path: Lease()),
+    )
+    failure = RuntimeError("injected startup failure")
+    monkeypatch.setattr(
+        service,
+        "_reconcile_service_jobs",
+        lambda **_kwargs: (_ for _ in ()).throw(failure),
+    )
+
+    with pytest.raises(service_runtime.ServiceRuntimeError) as raised:
+        service.start()
+
+    assert raised.value.fatal is True
+    assert events[0] == "enter"
+    assert events[1][0:3] == ("exit", RuntimeError, failure)
+    assert service._service_key not in service_runtime._ACTIVE_SERVICE_KEYS
+
+
+def test_service_does_not_exit_an_instance_lease_that_failed_to_enter(
+        tmp_path):
+    events = []
+
+    class EnterFailureLease:
+        def __enter__(self):
+            events.append("enter")
+            raise RuntimeError("lease acquisition failed")
+
+        def __exit__(self, *_args):
+            events.append("exit")
+
+    config = _config(tmp_path)
+    service = service_runtime.RagApplicationService(
+        {config.corpus_id: config},
+        job_root=tmp_path / "jobs",
+        working_directory=tmp_path,
+        output_root=tmp_path / "output",
+        service_state_root=tmp_path / "service-state",
+        launcher=_launch_starting,
+        runtime_binding=_runtime_binding(
+            instance_lease_factory=lambda _path: EnterFailureLease()),
+    )
+
+    with pytest.raises(service_runtime.ServiceRuntimeError) as raised:
+        service.start()
+
+    assert raised.value.fatal is True
+    assert events == ["enter"]
+    assert service._service_key not in service_runtime._ACTIVE_SERVICE_KEYS
 
 
 def test_default_service_job_root_is_dedicated_and_ready_timeout_is_bounded(
@@ -402,14 +964,14 @@ def test_retryable_job_listing_contention_does_not_poison_health(
         service.close()
 
 
-def test_expected_job_contention_does_not_poison_health(
-        monkeypatch, tmp_path):
-    service = _service(tmp_path)
+def test_expected_job_contention_does_not_poison_health(tmp_path):
+    service = _service(
+        tmp_path,
+        job_binding=_coordination_binding(
+            reconcile_job=lambda *_args, **_kwargs: (
+                _ for _ in ()).throw(job_runtime.JobBusyError("busy"))),
+    )
     submitted = _submit_service_job(service)
-    monkeypatch.setattr(
-        service_runtime.job_manager, "reconcile_job",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            job_runtime.JobBusyError("busy")))
     try:
         with pytest.raises(service_runtime.ServiceRuntimeError) as raised:
             service.cancel_job(
@@ -419,6 +981,45 @@ def test_expected_job_contention_does_not_poison_health(
         assert raised.value.code == "service_unavailable"
         assert raised.value.fatal is False
         assert service.healthy
+    finally:
+        service.close()
+
+
+@pytest.mark.parametrize(
+    ("failure_type", "code", "fatal", "healthy"),
+    [
+        (job_runtime.JobNotFoundError, "not_found", False, True),
+        (job_runtime.JobBusyError, "service_unavailable", False, True),
+        (job_runtime.JobStateError, "service_unavailable", False, True),
+        (job_runtime.JobValidationError,
+         "service_unavailable", False, True),
+        (job_runtime.JobCorruptError,
+         "service_unavailable", True, False),
+        (job_manager.JobManagerCorruptError,
+         "service_unavailable", True, False),
+    ],
+)
+def test_expected_job_maps_every_coordination_error_stably(
+        tmp_path, failure_type, code, fatal, healthy):
+    def fail(*_args, **_kwargs):
+        raise failure_type("private coordination detail")
+
+    service = _service(
+        tmp_path,
+        job_binding=_coordination_binding(reconcile_job=fail),
+    )
+    submitted = _submit_service_job(service)
+    try:
+        with pytest.raises(service_runtime.ServiceRuntimeError) as raised:
+            service.cancel_job(
+                submitted.job_id,
+                attempt_number=submitted.attempt_number,
+                revision=submitted.revision,
+            )
+        assert raised.value.code == code
+        assert raised.value.fatal is fatal
+        assert service.healthy is healthy
+        assert "private coordination detail" not in str(raised.value)
     finally:
         service.close()
 
@@ -469,8 +1070,6 @@ def test_supervised_search_keeps_query_out_of_arguments_and_cleans_temp(
         reranker_applied=False,
         warnings=["Hybrid search failed at C:/private; used vector search."],
     )
-    monkeypatch.setattr(service_runtime.rag, "search_index", lambda *a, **k: response)
-
     def run(script_path, argv, *, operation, timeout, **kwargs):
         observed.update({
             "script": script_path,
@@ -486,17 +1085,19 @@ def test_supervised_search_keeps_query_out_of_arguments_and_cleans_temp(
             assert stat.S_IMODE(request_path.stat().st_mode) == 0o600
             assert stat.S_IMODE(request_path.parent.stat().st_mode) == 0o700
         return service_runtime.search_worker_main(
-            request_path, Path(argv[2]))
+            request_path, Path(argv[2]),
+            search_index_fn=lambda *a, **k: response)
 
-    monkeypatch.setattr(service_runtime.rag, "_run_cli_with_deadline", run)
-
-    result = service_runtime.supervised_search(config, request, "req-1")
+    binding = _runtime_binding(supervisor=run)
+    result = service_runtime.supervised_search(
+        config, request, "req-1", runtime_binding=binding)
 
     assert result["hits"][0]["source_id"] == "chunk_abc"
     assert result["warnings"] == ["hybrid_failed"]
     assert "source_file" not in json.dumps(result)
     assert request.query not in " ".join(map(str, observed["argv"]))
     assert observed["argv"][0] == service_runtime._SEARCH_WORKER_ACTION
+    assert observed["script"] == binding.worker_script_path
     assert observed["operation"] == "service search"
     assert observed["timeout"] == config.search_timeout_seconds
     assert observed["stdout_target"] is observed["stderr_target"]
@@ -504,8 +1105,63 @@ def test_supervised_search_keeps_query_out_of_arguments_and_cleans_temp(
     assert not observed["temporary"].exists()
 
 
+@pytest.mark.parametrize(
+    ("mode", "hybrid"),
+    [("auto", None), ("vector", False), ("hybrid", True)],
+)
+def test_search_backend_receives_the_exact_bound_qdrant_contract(
+        tmp_path, mode, hybrid):
+    config = _config(tmp_path)
+    request = service_contracts.SearchRequest(
+        "minimum contacts",
+        mode=mode,
+        limit=7,
+        filters=service_contracts.SearchFilters(
+            content_type="case_opinion", chapter_num=3),
+    )
+    policy = release_security.ReleaseSecurityPolicy.from_values(
+        profile="development", network_policy="allow-cloud")
+    observed = {}
+
+    def search_index(*args, **kwargs):
+        observed.update(args=args, kwargs=kwargs)
+        return retrieval_core.SearchResponse(
+            hits=[],
+            backend="qdrant",
+            requested_mode=mode,
+            effective_mode="vector",
+            reranker_applied=False,
+            warnings=[],
+        )
+
+    result = service_runtime._execute_search(
+        config,
+        request,
+        "req-search-binding",
+        search_index_fn=search_index,
+        security_policy=policy,
+    )
+
+    assert observed["args"] == (request.query, config.db_path)
+    assert observed["kwargs"] == {
+        "db_backend": "qdrant",
+        "n_results": 7,
+        "content_type": "case_opinion",
+        "chapter_num": 3,
+        "collection_name": config.collection_name,
+        "embedding_model": config.embedding_model,
+        "use_reranker": False,
+        "hybrid": hybrid,
+        "chunks_path": config.chunks_path,
+        "lock_timeout": config.db_lock_timeout_seconds,
+        "security_policy": policy,
+    }
+    assert observed["kwargs"]["security_policy"] is policy
+    assert result["requested_mode"] == mode
+
+
 def test_search_worker_returns_only_stable_error_without_exception_text(
-        monkeypatch, tmp_path):
+        tmp_path):
     config = _config(tmp_path)
     request_path = tmp_path / "request.json"
     result_path = tmp_path / "result.json"
@@ -513,12 +1169,11 @@ def test_search_worker_returns_only_stable_error_without_exception_text(
         request_path,
         service_runtime._search_request_payload(
             config, service_contracts.SearchRequest("secret query"), "req-1"))
-    monkeypatch.setattr(
-        service_runtime.rag, "search_index",
-        lambda *a, **k: (_ for _ in ()).throw(
-            RuntimeError("C:/private/book.pdf API_KEY=secret")))
+    def fail_search(*_args, **_kwargs):
+        raise RuntimeError("C:/private/book.pdf API_KEY=secret")
 
-    assert service_runtime.search_worker_main(request_path, result_path) == 1
+    assert service_runtime.search_worker_main(
+        request_path, result_path, search_index_fn=fail_search) == 1
     payload = json.loads(result_path.read_text(encoding="utf-8"))
     encoded = json.dumps(payload)
     assert payload["error_code"] == "service_unavailable"
@@ -527,15 +1182,42 @@ def test_search_worker_returns_only_stable_error_without_exception_text(
     assert "RuntimeError" not in encoded
 
 
+def test_worker_replaces_oversized_envelope_with_bounded_stable_error(
+        tmp_path):
+    result_path = tmp_path / "result.json"
+
+    service_runtime._write_worker_envelope(
+        result_path,
+        {"private": "x" * service_runtime.MAX_SEARCH_RESULT_BYTES},
+    )
+
+    assert result_path.stat().st_size < service_runtime.MAX_SEARCH_RESULT_BYTES
+    assert json.loads(result_path.read_text(encoding="utf-8")) == {
+        "schema_version": service_runtime._INTERNAL_SCHEMA_VERSION,
+        "kind": "service_search_result",
+        "ok": False,
+        "error_code": "service_unavailable",
+    }
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [None, [], ["_search_worker", "request.json", "result.json"]],
+)
+def test_service_runtime_script_fails_closed_after_worker_relocation(
+        arguments):
+    assert service_runtime.main(arguments) == 2
+
+
 def test_supervised_search_maps_deadline_and_malformed_envelopes(
-        monkeypatch, tmp_path):
+        tmp_path):
     config = _config(tmp_path)
     request = service_contracts.SearchRequest("query")
-    monkeypatch.setattr(
-        service_runtime.rag, "_run_cli_with_deadline",
-        lambda *a, **k: 124)
     with pytest.raises(service_runtime.ServiceRuntimeError) as raised:
-        service_runtime.supervised_search(config, request, "req-1")
+        service_runtime.supervised_search(
+            config, request, "req-1",
+            runtime_binding=_runtime_binding(
+                supervisor=lambda *a, **k: 124))
     assert raised.value.code == "deadline_exceeded"
 
     def malformed(_script, argv, **_kwargs):
@@ -543,11 +1225,63 @@ def test_supervised_search_maps_deadline_and_malformed_envelopes(
             Path(argv[2]), {"private": "C:/secret"})
         return 0
 
-    monkeypatch.setattr(
-        service_runtime.rag, "_run_cli_with_deadline", malformed)
     with pytest.raises((service_runtime.ServiceRuntimeError,
                         service_contracts.ServiceContractError)):
-        service_runtime.supervised_search(config, request, "req-1")
+        service_runtime.supervised_search(
+            config, request, "req-1",
+            runtime_binding=_runtime_binding(supervisor=malformed))
+
+
+def test_supervised_search_maps_actual_cleanup_failure_to_fatal_and_cleans(
+        tmp_path):
+    config = _config(tmp_path)
+    request = service_contracts.SearchRequest("private query")
+    binding = _runtime_binding()
+    temporary_root = tmp_path / "search-tmp"
+
+    def fail_cleanup(*_args, **_kwargs):
+        raise binding.cleanup_error_type("verified cleanup failed")
+
+    with pytest.raises(service_runtime.ServiceRuntimeError) as raised:
+        service_runtime.supervised_search(
+            config,
+            request,
+            "req-cleanup",
+            temporary_root=temporary_root,
+            runtime_binding=replace(binding, supervisor=fail_cleanup),
+        )
+
+    assert raised.value.code == "service_unavailable"
+    assert raised.value.fatal is True
+    assert list(temporary_root.iterdir()) == []
+
+
+def test_supervised_search_rejects_valid_envelope_from_nonzero_worker(
+        tmp_path):
+    config = _config(tmp_path)
+    request = service_contracts.SearchRequest("query")
+
+    def nonzero(_script, argv, **_kwargs):
+        storage_policy.atomic_write_private_json(
+            Path(argv[2]), {
+                "schema_version": service_runtime._INTERNAL_SCHEMA_VERSION,
+                "kind": "service_search_result",
+                "ok": True,
+                "result": _empty_search_response(
+                    config, request, "req-nonzero"),
+            })
+        return 1
+
+    with pytest.raises(service_runtime.ServiceRuntimeError) as raised:
+        service_runtime.supervised_search(
+            config,
+            request,
+            "req-nonzero",
+            runtime_binding=_runtime_binding(supervisor=nonzero),
+        )
+
+    assert raised.value.code == "service_unavailable"
+    assert raised.value.fatal is False
 
 
 def test_supervised_search_surfaces_and_marks_cleanup_failure(
@@ -560,7 +1294,7 @@ def test_supervised_search_surfaces_and_marks_cleanup_failure(
         result = _empty_search_response(config, request, "req-1")
         storage_policy.atomic_write_private_json(
             Path(argv[2]), {
-                "schema_version": 1,
+                "schema_version": service_runtime._INTERNAL_SCHEMA_VERSION,
                 "kind": "service_search_result",
                 "ok": True,
                 "result": result,
@@ -573,14 +1307,14 @@ def test_supervised_search_surfaces_and_marks_cleanup_failure(
         observed.update(path=path, identity=identity)
         raise OSError("injected cleanup failure")
 
-    monkeypatch.setattr(service_runtime.rag, "_run_cli_with_deadline", run)
     monkeypatch.setattr(
         service_runtime, "_remove_search_directory", fail_remove)
 
     with pytest.raises(service_runtime.ServiceRuntimeError) as raised:
         service_runtime.supervised_search(
             config, request, "req-1",
-            temporary_root=tmp_path / "search-tmp")
+            temporary_root=tmp_path / "search-tmp",
+            runtime_binding=_runtime_binding(supervisor=run))
 
     assert raised.value.code == "service_unavailable"
     assert raised.value.fatal is True
@@ -647,9 +1381,120 @@ def test_reindex_is_structured_idempotent_and_detects_key_reuse(tmp_path):
         service.close()
 
 
-def test_reindex_replay_maps_manager_corruption_to_fatal_unavailability(
+def test_queued_reindex_replay_uses_explicit_fail_queued_coordination(
+        tmp_path):
+    calls = []
+
+    def reconcile(store, job_id, **kwargs):
+        calls.append((store, job_id, kwargs.copy()))
+        return store.get_job(job_id)
+
+    service = _service(
+        tmp_path,
+        job_binding=_coordination_binding(reconcile_job=reconcile),
+    )
+    try:
+        config = service.corpora["property"]
+        request = service_contracts.ReindexRequest()
+        job_id = service_contracts.job_id_for_idempotency(
+            "property", "exact-replay-1234")
+        service.store.submit_job(
+            "index", service._reindex_argv(config, request),
+            timeout_seconds=config.reindex_timeout_seconds,
+            job_id=job_id,
+            working_directory=service.working_directory,
+            output_root=service.output_root,
+        )
+
+        result = service.reindex(
+            "property", request,
+            idempotency_key="exact-replay-1234")
+    finally:
+        service.close()
+
+    assert result.idempotent_replay is True
+    assert calls == [
+        (service.store, job_id, {"fail_queued": True}),
+    ]
+
+
+def test_launch_failure_terminalizes_job_and_returns_stable_error(tmp_path):
+    def fail_launch(*_args, **_kwargs):
+        raise RuntimeError("private launch detail")
+
+    service = _service(tmp_path, launcher=fail_launch)
+    try:
+        with pytest.raises(service_runtime.ServiceRuntimeError) as raised:
+            service.reindex(
+                "property", service_contracts.ReindexRequest(),
+                idempotency_key="launch-failure-1234")
+
+        assert raised.value.code == "service_unavailable"
+        assert raised.value.fatal is False
+        assert raised.value.job_id is not None
+        assert service.store.get_job(raised.value.job_id).status == "failed"
+        assert service.healthy
+        assert "private launch detail" not in str(raised.value)
+    finally:
+        service.close()
+
+
+def test_launch_failure_terminalization_failure_is_fatal_and_unhealthy(
         monkeypatch, tmp_path):
-    service = _service(tmp_path)
+    def fail_launch(*_args, **_kwargs):
+        raise RuntimeError("private launch detail")
+
+    service = _service(tmp_path, launcher=fail_launch)
+    monkeypatch.setattr(
+        service.store,
+        "transition_job",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            job_runtime.JobBusyError("private terminalization detail")),
+    )
+    try:
+        with pytest.raises(service_runtime.ServiceRuntimeError) as raised:
+            service.reindex(
+                "property", service_contracts.ReindexRequest(),
+                idempotency_key="terminalization-failure-1234")
+
+        assert raised.value.code == "service_unavailable"
+        assert raised.value.fatal is True
+        assert raised.value.job_id is not None
+        assert not service.healthy
+        assert service.store.get_job(raised.value.job_id).status == "queued"
+    finally:
+        service.close()
+
+
+def test_process_control_exception_is_not_swallowed_as_launch_failure(
+        tmp_path):
+    def interrupt(*_args, **_kwargs):
+        raise KeyboardInterrupt()
+
+    service = _service(tmp_path, launcher=interrupt)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            service.reindex(
+                "property", service_contracts.ReindexRequest(),
+                idempotency_key="interrupt-launch-1234")
+        jobs = service.store.list_jobs()
+        assert len(jobs) == 1
+        assert jobs[0].status == "queued"
+        assert service.healthy
+        assert service._launching_job_ids == set()
+    finally:
+        service.close()
+
+
+def test_reindex_replay_maps_manager_corruption_to_fatal_unavailability(
+        tmp_path):
+    service = _service(
+        tmp_path,
+        job_binding=_coordination_binding(
+            reconcile_job=lambda *_args, **_kwargs: (
+                _ for _ in ()).throw(
+                    job_manager.JobManagerCorruptError("corrupt"))),
+    )
     config = service.corpora["property"]
     request = service_contracts.ReindexRequest()
     job_id = service_contracts.job_id_for_idempotency(
@@ -661,10 +1506,6 @@ def test_reindex_replay_maps_manager_corruption_to_fatal_unavailability(
         working_directory=service.working_directory,
         output_root=service.output_root,
     )
-    monkeypatch.setattr(
-        service_runtime.job_manager, "reconcile_job",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            service_runtime.job_manager.JobManagerCorruptError("corrupt")))
     try:
         with pytest.raises(service_runtime.ServiceRuntimeError) as raised:
             service.reindex(
@@ -678,8 +1519,13 @@ def test_reindex_replay_maps_manager_corruption_to_fatal_unavailability(
 
 
 def test_reindex_replay_contention_is_retryable_without_poisoning_health(
-        monkeypatch, tmp_path):
-    service = _service(tmp_path)
+        tmp_path):
+    service = _service(
+        tmp_path,
+        job_binding=_coordination_binding(
+            reconcile_job=lambda *_args, **_kwargs: (
+                _ for _ in ()).throw(job_runtime.JobBusyError("busy"))),
+    )
     config = service.corpora["property"]
     request = service_contracts.ReindexRequest()
     job_id = service_contracts.job_id_for_idempotency(
@@ -691,10 +1537,6 @@ def test_reindex_replay_contention_is_retryable_without_poisoning_health(
         working_directory=service.working_directory,
         output_root=service.output_root,
     )
-    monkeypatch.setattr(
-        service_runtime.job_manager, "reconcile_job",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            job_runtime.JobBusyError("busy")))
     try:
         with pytest.raises(service_runtime.ServiceRuntimeError) as raised:
             service.reindex(
@@ -703,6 +1545,50 @@ def test_reindex_replay_contention_is_retryable_without_poisoning_health(
         assert raised.value.code == "service_unavailable"
         assert raised.value.fatal is False
         assert service.healthy
+    finally:
+        service.close()
+
+
+@pytest.mark.parametrize(
+    ("failure_type", "code", "fatal", "healthy"),
+    [
+        (job_runtime.JobNotFoundError, "not_found", False, True),
+        (job_runtime.JobStateError, "conflict", False, True),
+        (job_runtime.JobValidationError,
+         "service_unavailable", False, True),
+        (job_runtime.JobCorruptError,
+         "service_unavailable", True, False),
+    ],
+)
+def test_reindex_replay_maps_remaining_coordination_errors(
+        tmp_path, failure_type, code, fatal, healthy):
+    def fail(*_args, **_kwargs):
+        raise failure_type("private replay detail")
+
+    service = _service(
+        tmp_path,
+        job_binding=_coordination_binding(reconcile_job=fail),
+    )
+    config = service.corpora["property"]
+    request = service_contracts.ReindexRequest()
+    job_id = service_contracts.job_id_for_idempotency(
+        "property", "mapped-replay-1234")
+    service.store.submit_job(
+        "index", service._reindex_argv(config, request),
+        timeout_seconds=config.reindex_timeout_seconds,
+        job_id=job_id,
+        working_directory=service.working_directory,
+        output_root=service.output_root,
+    )
+    try:
+        with pytest.raises(service_runtime.ServiceRuntimeError) as raised:
+            service.reindex(
+                "property", request,
+                idempotency_key="mapped-replay-1234")
+        assert raised.value.code == code
+        assert raised.value.fatal is fatal
+        assert service.healthy is healthy
+        assert "private replay detail" not in str(raised.value)
     finally:
         service.close()
 
@@ -787,19 +1673,18 @@ def test_concurrent_idempotent_reindex_launches_exactly_once(tmp_path):
         service.close()
 
 
-def test_job_listing_is_redacted_cursor_paginated_and_read_only(
-        monkeypatch, tmp_path):
-    service = _service(tmp_path)
+def test_job_listing_is_redacted_cursor_paginated_and_read_only(tmp_path):
+    service = _service(
+        tmp_path,
+        job_binding=_coordination_binding(
+            reconcile_job=lambda *_args, **_kwargs: pytest.fail(
+                "GET listing must not reconcile")),
+    )
     try:
         ids = []
         for _index in range(3):
             summary = _submit_service_job(service)
             ids.append(summary.job_id)
-        monkeypatch.setattr(
-            service_runtime.job_manager, "reconcile_job",
-            lambda *_args, **_kwargs: pytest.fail(
-                "GET listing must not reconcile"))
-
         first = service.list_jobs(limit=2)
         assert len(first["items"]) == 2
         assert first["next_cursor"]
@@ -950,6 +1835,42 @@ def test_active_job_deletion_plan_is_conflict_without_poisoning_health(
         service.close()
 
 
+@pytest.mark.parametrize(
+    ("failure_type", "code", "fatal", "healthy"),
+    [
+        (job_runtime.JobNotFoundError, "not_found", False, True),
+        (job_runtime.JobStateError, "conflict", False, True),
+        (job_runtime.JobBusyError, "service_unavailable", False, True),
+        (job_runtime.JobValidationError,
+         "service_unavailable", False, True),
+        (job_runtime.JobCorruptError,
+         "service_unavailable", True, False),
+        (job_manager.JobManagerCorruptError,
+         "service_unavailable", True, False),
+    ],
+)
+def test_deletion_plan_maps_every_coordination_error_stably(
+        tmp_path, failure_type, code, fatal, healthy):
+    def fail(*_args, **_kwargs):
+        raise failure_type("private deletion detail")
+
+    service = _service(
+        tmp_path,
+        job_binding=_coordination_binding(reconcile_job=fail),
+    )
+    submitted = _submit_service_job(service)
+    _advance_failed(service.store, submitted.job_id)
+    try:
+        with pytest.raises(service_runtime.ServiceRuntimeError) as raised:
+            service.deletion_plan(submitted.job_id)
+        assert raised.value.code == code
+        assert raised.value.fatal is fatal
+        assert service.healthy is healthy
+        assert "private deletion detail" not in str(raised.value)
+    finally:
+        service.close()
+
+
 @pytest.mark.parametrize(("cause", "code", "fatal", "healthy"), [
     (job_runtime.JobBusyError("busy"),
      "service_unavailable", False, True),
@@ -1068,6 +1989,8 @@ def test_injected_search_runner_cannot_bypass_public_response_allowlist(
 def test_service_search_uses_real_local_qdrant_contract(
         monkeypatch, tmp_path):
     pytest.importorskip("qdrant_client")
+    import rag
+
     chunks_path = tmp_path / "real-chunks.jsonl"
     chunks_path.write_text(json.dumps({
         "text": "Minimum contacts support personal jurisdiction.",
@@ -1079,13 +2002,13 @@ def test_service_search_uses_real_local_qdrant_contract(
     }) + "\n", encoding="utf-8")
     db_path = tmp_path / "real-qdrant"
     monkeypatch.setattr(
-        service_runtime.rag, "_embed_texts",
+        rag, "_embed_texts",
         lambda texts, *_args, **_kwargs: [
             [1.0, 0.5, 0.25, 0.125] for _text in texts])
     monkeypatch.setattr(
-        service_runtime.rag, "_validate_embedding_token_counts",
+        rag, "_validate_embedding_token_counts",
         lambda *_args, **_kwargs: None)
-    service_runtime.rag.index_chunks_qdrant(
+    rag.index_chunks_qdrant(
         chunks_path,
         db_path,
         collection_name="service_parity",
@@ -1105,6 +2028,7 @@ def test_service_search_uses_real_local_qdrant_contract(
             "minimum contacts", mode="vector",
             filters=service_contracts.SearchFilters(chapter_num=2)),
         "req-real-qdrant",
+        search_index_fn=rag.search_index,
     )
 
     assert result["backend"] == "qdrant"

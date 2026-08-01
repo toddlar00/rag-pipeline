@@ -54,6 +54,8 @@ qdrant_db/
 # Editors and operating systems
 .idea/
 .vscode/
+.worktrees/
+tmp/
 .DS_Store
 Thumbs.db
 Desktop.ini

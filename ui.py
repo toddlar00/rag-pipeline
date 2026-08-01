@@ -11,6 +11,7 @@ Usage:
 
 import argparse
 import json
+import os
 import sys
 import tempfile
 import time
@@ -18,11 +19,19 @@ import zipfile
 from pathlib import Path
 from uuid import uuid4
 
+# Gradio and Hugging Face libraries can otherwise make unrelated analytics or
+# version-check requests.  The UI is a private local surface, so disable those
+# auxiliary transports before importing either the pipeline or Gradio.
+os.environ["GRADIO_ANALYTICS_ENABLED"] = "False"
+os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
+os.environ["DO_NOT_TRACK"] = "1"
+
 # Import pipeline functions
 sys.path.insert(0, str(Path(__file__).parent))
 import rag
-import job_manager
+import job_application
 import job_runtime
+import release_security
 import storage_policy
 
 
@@ -45,10 +54,13 @@ _config = {
     "job_root": job_runtime.DEFAULT_JOB_ROOT,
     "job_ready_timeout": 5.0,
     "share": False,
+    "release_security_policy": release_security.ReleaseSecurityPolicy(),
 }
 
 _VECTOR_WORKER_FLAG = "--vector-worker"
 _UI_EXPORT_MARKER = ".rag-owned.json"
+_default_job_application_binding = (
+    job_application.default_job_application_binding)
 
 
 def _write_export_marker(
@@ -80,6 +92,9 @@ def _execute_vector_request(request: dict) -> dict:
     action = request.get("action")
     config = request["config"]
     if action == "search":
+        policy = release_security.ReleaseSecurityPolicy.from_provenance(
+            config["release_security"])
+        release_security.require_trusted_ui(policy)
         options = request["options"]
         response = rag.search_index(
             request["query"], Path(config["db_path"]),
@@ -92,14 +107,46 @@ def _execute_vector_request(request: dict) -> dict:
             use_reranker=options["use_reranker"],
             hybrid=options["hybrid"],
             chunks_path=Path(config["chunks_path"]),
+            context_window=options.get("context_window", 0),
             lock_timeout=config["db_lock_timeout"],
+            security_policy=policy,
         )
+        hits = []
+        for hit in response.hits:
+            public_hit = {
+                "text": hit.text,
+                "metadata": hit.metadata,
+                "score": hit.score,
+            }
+            if getattr(response, "context_window", 0):
+                public_hit["source_id"] = hit.source_id
+                public_hit["equivalent_sources"] = [
+                    {
+                        "source_id": alias.source_id,
+                        "metadata": alias.metadata,
+                    }
+                    for alias in hit.source_aliases
+                ]
+                public_hit["context"] = [
+                    {
+                        "text": segment.text,
+                        "metadata": segment.metadata,
+                        "source_id": segment.source_id,
+                        "relation": segment.relation,
+                        "distance": segment.distance,
+                        "equivalent_sources": [
+                            {
+                                "source_id": alias.source_id,
+                                "metadata": alias.metadata,
+                            }
+                            for alias in segment.source_aliases
+                        ],
+                    }
+                    for segment in hit.context_segments
+                ]
+            hits.append(public_hit)
         return {
-            "hits": [
-                {"text": hit.text, "metadata": hit.metadata,
-                 "score": hit.score}
-                for hit in response.hits
-            ],
+            "hits": hits,
             "effective_mode": response.effective_mode,
             "reranker_applied": response.reranker_applied,
             "warnings": response.warnings,
@@ -162,6 +209,9 @@ def _supervised_vector_request(action: str, payload: dict, *,
 
 
 def _vector_config_payload() -> dict:
+    policy = _config["release_security_policy"]
+    if not isinstance(policy, release_security.ReleaseSecurityPolicy):
+        raise TypeError("UI release-security policy is invalid")
     return {
         "db_path": str(_config["db_path"]),
         "chunks_path": str(_config["chunks_path"]),
@@ -169,6 +219,7 @@ def _vector_config_payload() -> dict:
         "collection": _config["collection"],
         "embedding_model": _config["embedding_model"],
         "db_lock_timeout": _config["db_lock_timeout"],
+        "release_security": policy.provenance(),
     }
 
 
@@ -208,8 +259,14 @@ def _load_chunk_metadata() -> dict:
 # ---------------------------------------------------------------------------
 
 def do_search(query, content_type, chapter, n_results, hybrid, use_reranker,
-              db_backend=None):
+              context_window=0, db_backend=None):
     """Run search and return formatted results."""
+    if (isinstance(context_window, str)
+            and context_window in {"chroma", "qdrant"}
+            and db_backend is None):
+        # Compatibility with the historical optional positional backend.
+        db_backend = context_window
+        context_window = 0
     if not query.strip():
         return "Enter a search query."
 
@@ -253,6 +310,7 @@ def do_search(query, content_type, chapter, n_results, hybrid, use_reranker,
                     "chapter_num": ch,
                     "use_reranker": use_reranker,
                     "hybrid": hybrid,
+                    "context_window": int(context_window),
                 },
             },
             timeout=_config["search_timeout"],
@@ -288,6 +346,28 @@ def do_search(query, content_type, chapter, n_results, hybrid, use_reranker,
             if ctx:
                 lines.append(f"*Context: {ctx}*")
             lines.append(f"\n{doc[:500]}{'...' if len(doc) > 500 else ''}\n")
+            primary_aliases = hit.get("equivalent_sources", [])
+            if primary_aliases:
+                lines.append(
+                    "**Equivalent source occurrences:** "
+                    + ", ".join(
+                        f"`{alias['source_id']}`"
+                        for alias in primary_aliases))
+            for segment in hit.get("context", []):
+                role = segment["relation"].capitalize()
+                lines.append(
+                    f"**{role} context {segment['distance']}** "
+                    f"(`{segment['source_id']}`)")
+                context_text = segment["text"]
+                lines.append(
+                    f"\n{context_text[:500]}"
+                    f"{'...' if len(context_text) > 500 else ''}\n")
+                aliases = segment.get("equivalent_sources", [])
+                if aliases:
+                    lines.append(
+                        "**Equivalent source occurrences:** "
+                        + ", ".join(
+                            f"`{alias['source_id']}`" for alias in aliases))
             lines.append("---")
 
         return "\n".join(lines)
@@ -467,8 +547,10 @@ def _jobs_disabled() -> str | None:
     return None
 
 
-def _job_store() -> job_runtime.JobStore:
-    return job_runtime.JobStore(Path(_config["job_root"]))
+def _job_store(
+        binding: job_application.JobApplicationBinding,
+) -> job_runtime.JobStore:
+    return binding.job_store_factory(Path(_config["job_root"]))
 
 
 def _format_job_summaries(
@@ -485,16 +567,28 @@ def _format_job_summaries(
     return "\n".join(lines)
 
 
+def _jobs_refresh_with_binding(
+        binding: job_application.JobApplicationBinding,
+) -> str:
+    try:
+        store = _job_store(binding)
+        summaries = binding.reconcile_all_jobs(store)
+        return _format_job_summaries(summaries)
+    except Exception as exc:
+        return f"Job status unavailable ({type(exc).__name__})."
+
+
 def do_jobs_refresh():
     disabled = _jobs_disabled()
     if disabled is not None:
         return disabled
     try:
-        store = _job_store()
-        summaries = job_manager.reconcile_all_jobs(store)
-        return _format_job_summaries(summaries)
+        binding = _default_job_application_binding()
+        if not isinstance(binding, job_application.JobApplicationBinding):
+            raise TypeError("invalid job application binding")
     except Exception as exc:
         return f"Job status unavailable ({type(exc).__name__})."
+    return _jobs_refresh_with_binding(binding)
 
 
 def do_job_reindex(full_reindex):
@@ -515,20 +609,37 @@ def do_job_reindex(full_reindex):
         "--embedding-model", str(_config["embedding_model"]),
         "--db-lock-timeout", str(_config["db_lock_timeout"]),
     ]
+    policy = _config["release_security_policy"]
+    if not isinstance(policy, release_security.ReleaseSecurityPolicy):
+        return "UI release-security policy is invalid."
+    arguments.extend([
+        "--release-security-policy-version", str(policy.schema_version),
+        "--security-profile", policy.profile,
+        "--network-policy", policy.network_policy,
+        "--model-download-policy", policy.model_download_policy,
+    ])
+    if policy.cache_namespace_id is not None:
+        arguments.extend([
+            "--release-cache-namespace-id", policy.cache_namespace_id])
+    if policy.trust_environment_network:
+        arguments.append("--trust-environment-network")
     if full_reindex:
         arguments.append("--full-reindex")
     try:
-        store = _job_store()
+        binding = _default_job_application_binding()
+        if not isinstance(binding, job_application.JobApplicationBinding):
+            raise TypeError("invalid job application binding")
+        store = _job_store(binding)
         submitted = store.submit_job(
             "index", arguments,
             timeout_seconds=rag.DEFAULT_OPERATION_TIMEOUTS["index"],
             working_directory=Path.cwd(), output_root=rag.OUTPUT_DIR)
-        launched = job_manager.launch_detached(
+        launched = binding.launch_detached(
             store, submitted.job_id,
             ready_timeout=_config["job_ready_timeout"])
         return (
             f"Submitted `{submitted.job_id}` ({launched.status}).\n\n"
-            f"{do_jobs_refresh()}")
+            f"{_jobs_refresh_with_binding(binding)}")
     except Exception as exc:
         return f"Could not submit reindex job ({type(exc).__name__})."
 
@@ -538,9 +649,12 @@ def do_job_cancel(job_id):
     if disabled is not None:
         return disabled
     try:
-        store = _job_store()
+        binding = _default_job_application_binding()
+        if not isinstance(binding, job_application.JobApplicationBinding):
+            raise TypeError("invalid job application binding")
+        store = _job_store(binding)
         store.request_cancel(str(job_id).strip())
-        return do_jobs_refresh()
+        return _jobs_refresh_with_binding(binding)
     except Exception as exc:
         return f"Could not request cancellation ({type(exc).__name__})."
 
@@ -550,14 +664,17 @@ def do_job_resume(job_id):
     if disabled is not None:
         return disabled
     try:
-        store = _job_store()
+        binding = _default_job_application_binding()
+        if not isinstance(binding, job_application.JobApplicationBinding):
+            raise TypeError("invalid job application binding")
+        store = _job_store(binding)
         job_id = str(job_id).strip()
-        current = job_manager.reconcile_job(store, job_id)
+        current = binding.reconcile_job(store, job_id)
         store.prepare_resume(job_id, expected_revision=current.revision)
-        job_manager.launch_detached(
+        binding.launch_detached(
             store, job_id,
             ready_timeout=_config["job_ready_timeout"])
-        return do_jobs_refresh()
+        return _jobs_refresh_with_binding(binding)
     except Exception as exc:
         return f"Could not resume job ({type(exc).__name__})."
 
@@ -567,6 +684,8 @@ def do_job_resume(job_id):
 # ---------------------------------------------------------------------------
 
 def build_app():
+    policy = _config["release_security_policy"]
+    release_security.require_trusted_ui(policy)
     try:
         import gradio as gr
     except ImportError as exc:
@@ -578,8 +697,13 @@ def build_app():
     type_choices = ["All"] + meta["types"]
     ch_choices = ["All"] + [str(c) for c in meta["chapters"]]
 
-    with gr.Blocks(title="RAG Pipeline", theme=gr.themes.Soft()) as app:
+    with gr.Blocks(
+            title="RAG Pipeline", theme=gr.themes.Soft(),
+            analytics_enabled=False) as app:
         gr.Markdown("# RAG Pipeline")
+        gr.Markdown(
+            "> **Private local UI:** unauthenticated and supported only in "
+            "the trusted single-user OS session acknowledged at startup.")
 
         with gr.Tab("Search"):
             with gr.Row():
@@ -593,6 +717,9 @@ def build_app():
                 ch_dd = gr.Dropdown(choices=ch_choices, value="All",
                                     label="Chapter")
                 n_slider = gr.Slider(1, 20, value=5, step=1, label="Results")
+                context_slider = gr.Slider(
+                    0, rag.MAX_CONTEXT_WINDOW, value=0, step=1,
+                    label="Neighbor context")
 
             with gr.Row():
                 hybrid_cb = gr.Radio(
@@ -608,13 +735,13 @@ def build_app():
             search_btn.click(
                 do_search,
                 inputs=[query_box, type_dd, ch_dd, n_slider, hybrid_cb,
-                        rerank_cb],
+                        rerank_cb, context_slider],
                 outputs=results_md,
             )
             query_box.submit(
                 do_search,
                 inputs=[query_box, type_dd, ch_dd, n_slider, hybrid_cb,
-                        rerank_cb],
+                        rerank_cb, context_slider],
                 outputs=results_md,
             )
 
@@ -681,8 +808,30 @@ def build_app():
 # ---------------------------------------------------------------------------
 
 def main(argv: list[str] | None = None):
-    parser = argparse.ArgumentParser(description="RAG Pipeline Web UI")
+    parser = argparse.ArgumentParser(
+        description="RAG Pipeline Web UI", allow_abbrev=False)
     parser.add_argument("--port", type=int, default=7860)
+    parser.add_argument(
+        "--trust-local-user", action="store_true",
+        help=("Acknowledge that this unauthenticated loopback UI is only "
+              "for one trusted local OS user"))
+    parser.add_argument(
+        "--security-profile", choices=["release", "development"],
+        default="release")
+    parser.add_argument(
+        "--release-security-policy-version", type=int,
+        default=release_security.RELEASE_SECURITY_POLICY_VERSION,
+        help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--network-policy", choices=["local-only", "allow-cloud"],
+        default="local-only")
+    parser.add_argument(
+        "--model-download-policy",
+        choices=["cache-only", "allow-reviewed-sync"],
+        default="cache-only")
+    parser.add_argument("--llm-cache-namespace", default="")
+    parser.add_argument(
+        "--trust-environment-network", action="store_true")
     parser.add_argument("--chunks", type=Path, required=True,
                         help="Book-scoped chunks JSONL from a pipeline run")
     parser.add_argument("--db", type=Path, required=True,
@@ -709,10 +858,21 @@ def main(argv: list[str] | None = None):
     parser.add_argument(
         "--job-ready-timeout", type=float, default=5.0,
         help="Seconds to wait for a detached job-manager handshake")
-    parser.add_argument("--share", action="store_true",
-                        help="Create a public Gradio share link")
     args = parser.parse_args(argv)
     try:
+        policy = release_security.ReleaseSecurityPolicy.from_values(
+            profile=args.security_profile,
+            network_policy=args.network_policy,
+            model_download_policy=args.model_download_policy,
+            cache_namespace=args.llm_cache_namespace,
+            trust_environment_network=args.trust_environment_network,
+            trusted_single_user_ui=args.trust_local_user,
+            schema_version=args.release_security_policy_version,
+        )
+        release_security.require_trusted_ui(policy)
+        if args.embedding_model.startswith(rag._API_EMBEDDING_MODEL_PREFIXES):
+            release_security.require_cloud_egress(
+                policy, feature="cloud embedding")
         args.db_lock_timeout = rag._normalize_db_lock_timeout(
             args.db_lock_timeout)
         args.search_timeout = rag._normalize_operation_timeout(
@@ -721,7 +881,7 @@ def main(argv: list[str] | None = None):
             args.info_timeout)
         args.job_ready_timeout = rag._normalize_operation_timeout(
             args.job_ready_timeout)
-    except ValueError as exc:
+    except (TypeError, ValueError) as exc:
         parser.error(str(exc))
 
     _config["chunks_path"] = args.chunks
@@ -734,10 +894,16 @@ def main(argv: list[str] | None = None):
     _config["info_timeout"] = args.info_timeout
     _config["job_root"] = args.job_root
     _config["job_ready_timeout"] = args.job_ready_timeout
-    _config["share"] = args.share
+    _config["share"] = False
+    _config["release_security_policy"] = policy
 
     app = build_app()
-    app.launch(server_port=args.port, share=args.share)
+    app.launch(
+        server_name="127.0.0.1",
+        server_port=args.port,
+        share=False,
+        enable_monitoring=False,
+    )
 
 
 if __name__ == "__main__":

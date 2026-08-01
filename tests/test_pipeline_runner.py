@@ -8,6 +8,7 @@ import pytest
 
 import job_runtime
 import rag
+import release_security
 from operation_contracts import IndexOutcome
 from run_telemetry import RunTelemetry
 
@@ -25,6 +26,7 @@ def _args(**overrides):
         "collection": None,
         "db_backend": "chroma",
         "embedding_model": "test-embedding",
+        "structure_profile": rag.DEFAULT_STRUCTURE_PROFILE,
         "full_reindex": False,
         "batch_size": None,
         "backend": "auto",
@@ -58,6 +60,8 @@ def _paths(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(rag, "OUTPUT_DIR", tmp_path / "output")
     monkeypatch.setattr(rag, "_converted_outputs_complete", lambda *a, **k: True)
     monkeypatch.setattr(rag, "_chunks_complete", lambda *a, **k: True)
+    monkeypatch.setattr(
+        rag, "_quality_report_complete", lambda *a, **k: True)
     monkeypatch.setattr(rag, "_unified_export_complete", lambda *a, **k: True)
     monkeypatch.setattr(rag, "_split_export_complete", lambda *a, **k: True)
     monkeypatch.setattr(rag, "_raptor_output_complete", lambda *a, **k: True)
@@ -85,13 +89,17 @@ def test_shared_runner_passes_distinct_per_run_conversion_artifacts(
         lambda *args, **kwargs: calls.append(("export", args, kwargs)))
 
     result = rag._run_pipeline_stages(
-        Path("Book.pdf"), paths, _args(), resume=False, watermark=None)
+        Path("Book.pdf"), paths,
+        _args(structure_profile="roman-parts-book-v1"),
+        resume=False, watermark=None)
 
     convert = next(call for call in calls if call[0] == "convert")
     assert convert[2]["preprocessed_output"] == paths["preprocessed"]
     assert convert[2]["markdown_output"] == paths["converted_markdown"]
     assert paths["converted_markdown"] != paths["export"]
     assert [call[0] for call in calls] == ["convert", "chunk", "index", "export"]
+    chunk = next(call for call in calls if call[0] == "chunk")
+    assert chunk[2]["structure_profile"].name == "roman-parts-book-v1"
     active_token = next(
         call for call in calls if call[0] == "index")[2][
             "_active_update_token"]
@@ -218,6 +226,37 @@ def test_resume_rechunks_when_completion_is_missing(monkeypatch, tmp_path):
 
     assert state["calls"] == 1
     assert "fresh" in paths["chunks"].read_text(encoding="utf-8")
+
+
+def test_resume_repairs_missing_quality_report_without_rechunking(
+        monkeypatch, tmp_path):
+    paths = _paths(monkeypatch, tmp_path)
+    checks = iter([False, True])
+    publications = []
+    monkeypatch.setattr(rag, "_chunk_record_count", lambda _path: 4)
+    monkeypatch.setattr(
+        rag, "_quality_report_complete",
+        lambda *args, **kwargs: next(checks))
+    monkeypatch.setattr(
+        rag, "_publish_corpus_quality_report",
+        lambda *args, **kwargs: (
+            publications.append((args, kwargs)) or {"status": "pass"}))
+    monkeypatch.setattr(
+        rag, "chunk_document",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("quality repair must not rechunk")))
+    monkeypatch.setattr(
+        rag, "_index_chunks_for_backend",
+        lambda *args, **kwargs: _index_outcome())
+
+    result = rag._run_pipeline_stages(
+        Path("Book.pdf"), paths, _args(), resume=True, watermark=None)
+
+    assert result["paths"] == paths
+    assert len(publications) == 1
+    assert publications[0][0] == (paths["doc"], paths["chunks"])
+    assert publications[0][1]["structure_profile"].name == (
+        rag.DEFAULT_STRUCTURE_PROFILE)
 
 
 def test_pipeline_chunk_failure_leaves_dirty_marker(monkeypatch, tmp_path):
@@ -511,7 +550,7 @@ def test_runner_reports_the_failing_stage_including_system_exit(
     assert isinstance(error.value.cause, SystemExit)
 
 
-def test_convert_derives_a_preprocessed_path_from_its_output(
+def test_convert_derives_preprocessed_bytes_in_private_scratch(
         monkeypatch, tmp_path):
     pdf = tmp_path / "source.pdf"
     pdf.write_bytes(b"pdf")
@@ -532,7 +571,9 @@ def test_convert_derives_a_preprocessed_path_from_its_output(
         pass
 
     def fake_preprocess(input_path, output_path, **kwargs):
+        observed["input"] = input_path
         observed["output"] = output_path
+        observed["force"] = kwargs["force"]
         raise StopAfterPreprocess
 
     monkeypatch.setattr(rag, "preprocess_pdf", fake_preprocess)
@@ -540,13 +581,18 @@ def test_convert_derives_a_preprocessed_path_from_its_output(
     with pytest.raises(StopAfterPreprocess):
         rag.convert_pdf(pdf, doc_output)
 
-    assert observed["output"] == doc_output.with_name("book_preprocessed.pdf")
+    assert observed["input"] != pdf
+    assert observed["output"].name.startswith(".rag-preprocess-")
+    assert observed["output"].suffix == ".pdf"
+    assert observed["output"].parent != doc_output.parent
+    assert observed["force"] is True
 
 
 def test_resume_command_preserves_pipeline_options():
     args = _args(
         split_chapters=True,
         llm_scaffold=True,
+        table_children=True,
         contextualize=True,
         thinking=True,
         cloud_url="https://api.deepseek.com",
@@ -559,13 +605,16 @@ def test_resume_command_preserves_pipeline_options():
         db_lock_timeout=7,
         operation_timeout=99,
         max_llm_transport_attempts=23,
+        structure_profile="roman-parts-book-v1",
     )
 
     command = rag._build_resume_cmd(Path("My Book.pdf"), args)
 
     assert '--pdf "My Book.pdf" --resume' in command
+    assert "--structure-profile roman-parts-book-v1" in command
     assert "--split-chapters" in command
     assert "--llm-scaffold" in command
+    assert "--table-children" in command
     assert "--contextualize" in command
     assert "--thinking" in command
     assert "--cloud-url https://api.deepseek.com" in command
@@ -628,6 +677,33 @@ def test_shared_runner_forwards_thinking_and_provider_to_all_llm_stages(
         assert kwargs["llm_workers"] == 4
 
 
+def test_shared_runner_uses_nondefault_policy_for_raptor_completion(
+        monkeypatch, tmp_path):
+    paths = _paths(monkeypatch, tmp_path)
+    observed_parameters = []
+    policy = release_security.ReleaseSecurityPolicy.from_values(
+        network_policy="allow-cloud", cache_namespace="tenant-a",
+        trust_environment_network=True)
+    monkeypatch.setattr(rag, "convert_pdf", lambda *args, **kwargs: None)
+    monkeypatch.setattr(rag, "chunk_document", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        rag, "_index_chunks_for_backend",
+        lambda *args, **kwargs: _index_outcome())
+    monkeypatch.setattr(rag, "export_markdown", lambda *args, **kwargs: None)
+    monkeypatch.setattr(rag, "build_raptor_tree", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        rag, "_raptor_output_complete",
+        lambda *_args, **kwargs: (
+            observed_parameters.append(kwargs["parameters"]) or True))
+    args = _args(raptor=True, _release_security_policy=policy)
+
+    rag._run_pipeline_stages(
+        Path("Book.pdf"), paths, args, resume=False, watermark=None)
+
+    assert len(observed_parameters) == 1
+    assert observed_parameters[0]["release_security"] == policy.provenance()
+
+
 def test_resume_validators_reject_partial_json_artifacts(tmp_path):
     doc = tmp_path / "book.json"
     chunks = tmp_path / "chunks.jsonl"
@@ -680,3 +756,47 @@ def test_pipeline_runner_emits_scoped_stage_and_index_outcomes(
     events = (tmp_path / "events.jsonl").read_text(encoding="utf-8")
     assert '"changed_records":1' in events
     assert "PRIVATE_BOOK" not in events
+
+
+def test_pipeline_runner_preserves_redacted_index_attempts_on_failure(
+        monkeypatch, tmp_path):
+    paths = _paths(monkeypatch, tmp_path)
+    monkeypatch.setattr(rag, "convert_pdf", lambda *args, **kwargs: None)
+    monkeypatch.setattr(rag, "chunk_document", lambda *args, **kwargs: None)
+
+    def fail_index(*args, **kwargs):
+        kwargs["_operation_observer"]({
+            "committed": False,
+            "attempted_record_delete_calls": 1,
+            "attempted_upsert_calls": 1,
+            "attempted_physical_mutation_calls": 2,
+            "attempted_queue_put_count": 1,
+            "queue_saturation_events": 3,
+            "queue_wait_ms": 125.0,
+        })
+        raise RuntimeError("C:/private/source.pdf API_KEY=secret")
+
+    monkeypatch.setattr(rag, "_index_chunks_for_backend", fail_index)
+    telemetry = RunTelemetry(
+        "full", run_id="failed-index-run",
+        events_path=tmp_path / "events.jsonl",
+        report_path=tmp_path / "report.json")
+    telemetry.start()
+
+    with pytest.raises(rag._PipelineStageError) as raised:
+        rag._run_pipeline_stages(
+            Path("PRIVATE_BOOK.pdf"), paths, _args(), resume=False,
+            watermark=None, telemetry=telemetry)
+    report = telemetry.finish("failed", exc=raised.value)
+
+    index_metrics = report["stages"]["index"]["metrics"]
+    assert index_metrics["attempted_physical_mutation_calls"]["total"] == 2
+    assert index_metrics["attempted_queue_put_count"]["total"] == 1
+    assert index_metrics["queue_saturation_events"]["total"] == 3
+    assert index_metrics["queue_wait_ms"]["total"] == 125.0
+    assert index_metrics["committed"]["false_count"] == 1
+    persisted = (
+        (tmp_path / "events.jsonl").read_text(encoding="utf-8")
+        + (tmp_path / "report.json").read_text(encoding="utf-8"))
+    assert "C:/private" not in persisted
+    assert "API_KEY" not in persisted

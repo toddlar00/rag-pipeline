@@ -49,6 +49,10 @@ AGGREGATE_FILES = {
         "requirements-optional.txt",
     ),
 }
+# These providers use the repository-owned Requests transport. Reintroducing an
+# SDK expands endpoint, retry, credential, and transitive-package behavior and
+# therefore requires an explicit policy/code review rather than lock drift.
+OWNED_TRANSPORT_PROVIDER_SDKS = frozenset({"cohere", "openai", "voyageai"})
 _REQUIREMENT_RE = re.compile(
     r"^(?P<name>[A-Za-z0-9][A-Za-z0-9_.-]*"
     r"(?:\[[A-Za-z0-9_,.-]+\])?)\s*(?P<spec>.*)$"
@@ -158,6 +162,11 @@ def validate(root: Path = PROJECT_ROOT) -> list[str]:
                     f"{filename}:{line_number}: {name} needs an upper bound"
                 )
             normalized = re.sub(r"[-_.]+", "-", name.split("[", 1)[0]).lower()
+            if normalized in OWNED_TRANSPORT_PROVIDER_SDKS:
+                errors.append(
+                    f"{filename}:{line_number}: {name} is forbidden while the "
+                    "provider uses the owned Requests transport"
+                )
             runtime_names_by_file.setdefault(filename, set()).add(normalized)
             if filename != "requirements-smoke.txt":
                 previous = runtime_names.setdefault(normalized, filename)
@@ -251,6 +260,12 @@ def validate(root: Path = PROJECT_ROOT) -> list[str]:
                     r"[-_.]+", "-", name.split("[", 1)[0]
                 ).lower()
             )
+            if (filename == "requirements-full.lock"
+                    and normalized in OWNED_TRANSPORT_PROVIDER_SDKS):
+                errors.append(
+                    f"{filename}:{line_number}: {name} unexpectedly expands "
+                    "the owned provider transport dependency surface"
+                )
             if len(specifiers) == 1 and specifiers[0][0] == "==":
                 locked_versions_by_file.setdefault(filename, {}).setdefault(
                     normalized, set()

@@ -1,9 +1,25 @@
 import subprocess
 import sys
 
+import endpoint_policy
 import llm_adapters
+import pytest
 import rag
+import release_security
 from llm_runtime import LLMRuntime, ProviderCallError, ProviderResponse
+
+
+@pytest.fixture(autouse=True)
+def _explicit_cloud_policy_for_provider_contracts(monkeypatch):
+    monkeypatch.setattr(
+        rag,
+        "_DEFAULT_RELEASE_SECURITY_POLICY",
+        release_security.ReleaseSecurityPolicy(
+            profile="development",
+            network_policy="allow-cloud",
+            trust_environment_network=True,
+        ),
+    )
 
 
 def test_llm_adapters_import_is_provider_sdk_lazy_and_rag_independent():
@@ -37,16 +53,24 @@ def test_rag_reexports_standalone_adapter_helpers():
     assert rag._AdaptiveThrottle is llm_adapters._AdaptiveThrottle
     assert rag._retry_after_seconds is llm_adapters._retry_after_seconds
     assert rag._llm_endpoint_id is llm_adapters._llm_endpoint_id
+    assert rag._validate_cloud_endpoint is (
+        endpoint_policy.validate_cloud_endpoint)
 
 
-def test_endpoint_predicates_use_current_rag_hostname_helper(monkeypatch):
+def test_endpoint_predicates_use_current_rag_validator(monkeypatch):
     observed = []
 
-    def fake_hostname(url):
+    def fake_validator(url):
         observed.append(url)
-        return "api.deepseek.com" if "deep" in url else "api.minimax.io"
+        provider = "deepseek" if "deep" in url else "minimax"
+        return endpoint_policy.ValidatedEndpoint(
+            base_url=f"https://{provider}.test",
+            endpoint_id=f"v1:https://{provider}.test",
+            provider=provider,
+            is_loopback=False,
+        )
 
-    monkeypatch.setattr(rag, "_provider_hostname", fake_hostname)
+    monkeypatch.setattr(rag, "_validate_cloud_endpoint", fake_validator)
 
     assert rag._is_deepseek_cloud("deep")
     assert rag._is_minimax_cloud("mini")
@@ -82,9 +106,6 @@ def test_ollama_result_facade_injects_current_rag_hooks(monkeypatch):
         observed.update(kwargs)
         return sentinel
 
-    def fake_post(*args, **kwargs):
-        raise AssertionError((args, kwargs))
-
     def fake_count(source, name):
         return None
 
@@ -94,16 +115,28 @@ def test_ollama_result_facade_injects_current_rag_hooks(monkeypatch):
 
     monkeypatch.setattr(
         llm_adapters, "_call_ollama_result", fake_core)
-    monkeypatch.setattr(rag.requests, "post", fake_post)
+    cloud_posts = []
+    monkeypatch.setattr(
+        rag, "_post_cloud_with_policy",
+        lambda policy, *args, **kwargs: cloud_posts.append(
+            (policy, args, kwargs)))
     monkeypatch.setattr(rag, "_provider_token_count", fake_count)
     monkeypatch.setattr(rag, "_provider_call_error", fake_error)
 
     result = rag._call_ollama_result(
-        "prompt", url="http://local", model="model",
+        "prompt", url="http://127.0.0.1:11434", model="model",
         thinking=True, max_tokens=10, timeout=4)
 
     assert result is sentinel
-    assert observed["post_fn"] is fake_post
+    observed["post_fn"]("https://ollama.example/api", timeout=1)
+    assert cloud_posts == [(
+        rag._DEFAULT_RELEASE_SECURITY_POLICY,
+        ("https://ollama.example/api",),
+        {"timeout": 1},
+    )]
+    assert observed["loopback_post_fn"] is (
+        rag._post_loopback_without_environment)
+    assert observed["validate_endpoint_fn"] is rag._validate_cloud_endpoint
     assert observed["provider_token_count_fn"] is fake_count
     assert observed["provider_call_error_fn"] is fake_error
 
@@ -117,8 +150,11 @@ def test_gemini_result_facade_injects_cache_and_response_hooks(monkeypatch):
         observed.update(kwargs)
         return sentinel
 
-    def fake_loader(api_key):
-        raise AssertionError(api_key)
+    loader_calls = []
+
+    def fake_loader(api_key, **kwargs):
+        loader_calls.append((api_key, kwargs))
+        return object(), object()
 
     def fake_value(source, name):
         return None
@@ -146,7 +182,10 @@ def test_gemini_result_facade_injects_cache_and_response_hooks(monkeypatch):
         max_tokens=10, timeout=4)
 
     assert result is sentinel
-    assert observed["client_loader_fn"] is fake_loader
+    observed["client_loader_fn"]("forwarded-key")
+    assert loader_calls == [(
+        "forwarded-key", {"security_policy": rag._DEFAULT_RELEASE_SECURITY_POLICY},
+    )]
     assert observed["provider_value_fn"] is fake_value
     assert observed["provider_token_count_fn"] is fake_count
     assert observed["provider_call_error_fn"] is fake_error
@@ -162,11 +201,16 @@ def test_openai_result_facade_injects_current_transport_hooks(monkeypatch):
         observed.update(kwargs)
         return sentinel
 
+    cloud_posts = []
+
+    def cloud_post(policy, *args, **kwargs):
+        cloud_posts.append((policy, args, kwargs))
+
     hooks = {
-        "post_fn": lambda *args, **kwargs: None,
+        "loopback_post_fn": lambda *args, **kwargs: None,
         "get_throttle_fn": lambda workers: None,
         "sleep_fn": lambda seconds: None,
-        "is_deepseek_fn": lambda url, model="": False,
+        "validate_endpoint_fn": endpoint_policy.validate_cloud_endpoint,
         "provider_token_count_fn": lambda source, name: None,
         "provider_value_fn": lambda source, name: None,
         "provider_call_error_fn": lambda error, **kwargs: error,
@@ -175,10 +219,14 @@ def test_openai_result_facade_injects_current_transport_hooks(monkeypatch):
 
     monkeypatch.setattr(
         llm_adapters, "_call_openai_compatible_result", fake_core)
-    monkeypatch.setattr(rag.requests, "post", hooks["post_fn"])
+    monkeypatch.setattr(rag, "_post_cloud_with_policy", cloud_post)
+    monkeypatch.setattr(
+        rag, "_post_loopback_without_environment",
+        hooks["loopback_post_fn"])
     monkeypatch.setattr(rag, "_get_throttle", hooks["get_throttle_fn"])
     monkeypatch.setattr(rag.time, "sleep", hooks["sleep_fn"])
-    monkeypatch.setattr(rag, "_is_deepseek_cloud", hooks["is_deepseek_fn"])
+    monkeypatch.setattr(
+        rag, "_validate_cloud_endpoint", hooks["validate_endpoint_fn"])
     monkeypatch.setattr(
         rag, "_provider_token_count", hooks["provider_token_count_fn"])
     monkeypatch.setattr(rag, "_provider_value", hooks["provider_value_fn"])
@@ -193,6 +241,12 @@ def test_openai_result_facade_injects_current_transport_hooks(monkeypatch):
     assert result is sentinel
     for name, hook in hooks.items():
         assert observed[name] is hook
+    observed["post_fn"]("https://provider.test/v1", marker=True)
+    assert cloud_posts == [(
+        rag._DEFAULT_RELEASE_SECURITY_POLICY,
+        ("https://provider.test/v1",),
+        {"marker": True},
+    )]
 
 
 def test_throttle_factory_keeps_mutable_state_and_sleep_hook_in_rag(

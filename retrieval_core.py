@@ -17,8 +17,44 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+import table_retrieval_core
+
 
 DEFAULT_RRF_K = 10
+RETRIEVAL_LINKAGE_SCHEMA_VERSION = 1
+MAX_CONTEXT_WINDOW = 2
+MAX_CONTEXT_CHARACTERS = 32_000
+MAX_CONTEXT_SEGMENT_CHARACTERS = 8_000
+DEFAULT_CONTEXT_MAX_CHARACTERS = 8_000
+DEFAULT_CONTEXT_SEGMENT_CHARACTERS = 1_600
+_CONTEXT_METADATA_CHAR_LIMIT = 1_200
+_ANSWER_SOURCE_METADATA_CHAR_LIMIT = 1_600
+_METADATA_STRING_CHAR_LIMIT = 384
+_METADATA_SEQUENCE_ITEM_LIMIT = 12
+
+
+@dataclass(frozen=True)
+class ContextSourceAlias:
+    """Additional provenance for evidence rendered exactly once."""
+
+    source_id: str
+    metadata: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ContextSegment:
+    """One supplementary chunk attached to a ranked search hit.
+
+    A segment keeps its own stable ``source_id`` so generated answers can cite
+    it independently from the ranked hit that caused it to be assembled.
+    """
+
+    text: str
+    metadata: dict[str, Any]
+    source_id: str
+    relation: str
+    distance: int
+    source_aliases: tuple[ContextSourceAlias, ...] = ()
 
 
 @dataclass
@@ -29,6 +65,8 @@ class SearchHit:
     metadata: dict[str, Any]
     score: float
     source_id: str = ""
+    context_segments: list[ContextSegment] = field(default_factory=list)
+    source_aliases: list[ContextSourceAlias] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -44,7 +82,7 @@ class GroundedSource:
     source_id: str
     text: str
     metadata: dict[str, Any]
-    score: float
+    score: float | None
     excerpt: str = ""
 
 
@@ -61,16 +99,22 @@ class GroundedAnswer:
     def source_mapping(self, *, cited_only: bool = False) -> dict[str, dict]:
         """Return a JSON-ready mapping from ``S#`` labels to source details."""
         cited = set(self.citations)
-        return {
-            source.citation_id: {
+        result = {}
+        for source in self.sources:
+            if cited_only and source.citation_id not in cited:
+                continue
+            entry = {
                 "source_id": source.source_id,
-                "score": round(source.score, 4),
+                "score": (
+                    round(source.score, 4)
+                    if source.score is not None else None),
                 "metadata": source.metadata,
                 "excerpt": (source.excerpt or source.text)[:500],
             }
-            for source in self.sources
-            if not cited_only or source.citation_id in cited
-        }
+            if source.score is None:
+                entry["score_kind"] = "supplementary_context"
+            result[source.citation_id] = entry
+        return result
 
 
 @dataclass
@@ -90,6 +134,8 @@ class SearchResponse:
     warnings: list[str] = field(default_factory=list)
     candidate_depth: int = 0
     reranker_model: str | None = None
+    context_window: int = 0
+    context_characters: int = 0
 
 
 def _metadata_text(value: object) -> str:
@@ -241,6 +287,40 @@ def _chunk_id(rec: dict) -> str:
         "page_end": metadata.get("page_end"),
         "page_range": metadata.get("page_range", ""),
     }
+    source_items = metadata.get("source_items")
+    if isinstance(source_items, list):
+        source_refs = sorted({
+            item.get("ref")
+            for item in source_items
+            if (isinstance(item, dict)
+                and isinstance(item.get("ref"), str)
+                and item.get("ref"))
+        })
+        if source_refs:
+            # Exact source refs distinguish legitimate repeated text on the
+            # same page.  Legacy records without lineage retain their former
+            # stable-ID contract.
+            identity["source_refs"] = source_refs
+    fragment_occurrence = metadata.get(
+        table_retrieval_core.TABLE_FRAGMENT_OCCURRENCE_FIELD)
+    if (isinstance(fragment_occurrence, int)
+            and not isinstance(fragment_occurrence, bool)
+            and fragment_occurrence > 0):
+        # Occurrence zero retains the pre-feature parent ID.  Later otherwise
+        # identical row-packed fragments need this ordinal to remain distinct.
+        identity[table_retrieval_core.TABLE_FRAGMENT_OCCURRENCE_FIELD] = (
+            fragment_occurrence)
+    if metadata.get("retrieval_role") == table_retrieval_core.TABLE_CHILD_ROLE:
+        # A source table may contain two identical rows on the same page and
+        # therefore under the same source ref.  The explicit parent/ordinal
+        # fields distinguish those legitimate retrieval units without changing
+        # the durable identity contract for any pre-existing primary record.
+        identity.update({
+            "retrieval_role": table_retrieval_core.TABLE_CHILD_ROLE,
+            "table_parent_stable_id": metadata.get(
+                "table_parent_stable_id"),
+            "table_child_index": metadata.get("table_child_index"),
+        })
     content = json.dumps(
         identity,
         ensure_ascii=False,
@@ -249,6 +329,477 @@ def _chunk_id(rec: dict) -> str:
     )
     digest = hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
     return f"chunk_{digest}"
+
+
+_RETRIEVAL_LINKAGE_FIELDS = (
+    "retrieval_linkage_schema_version",
+    "stable_id",
+    "context_parent_id",
+    "previous_stable_id",
+    "next_stable_id",
+)
+_CONTEXT_METADATA_FIELDS = (
+    "source_file",
+    "content_type",
+    "content_source",
+    "chapter_num",
+    "chapter_title",
+    "section_path",
+    "primary_case",
+    "case_names",
+    "page_start",
+    "page_end",
+    "page_range",
+    "headings",
+    "cross_references",
+)
+
+
+def _json_character_count(value: Any) -> int:
+    """Return deterministic serialized character use for one public value."""
+    return len(json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+        default=str))
+
+
+def _truncate_metadata_string(value: str, limit: int) -> str:
+    if len(value) <= limit:
+        return value
+    if limit <= 1:
+        return "\u2026"[:limit]
+    return value[:limit - 1] + "\u2026"
+
+
+def _bounded_metadata_value(value: Any, *, depth: int = 0) -> Any:
+    """Normalize one metadata value without permitting prompt-size bypasses."""
+    if isinstance(value, str):
+        return _truncate_metadata_string(value, _METADATA_STRING_CHAR_LIMIT)
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if depth >= 2:
+        return _truncate_metadata_string(
+            str(value), _METADATA_STRING_CHAR_LIMIT)
+    if isinstance(value, dict):
+        bounded = {}
+        for key in sorted(value, key=str)[:_METADATA_SEQUENCE_ITEM_LIMIT]:
+            bounded[_truncate_metadata_string(str(key), 96)] = (
+                _bounded_metadata_value(value[key], depth=depth + 1))
+        return bounded
+    if isinstance(value, (list, tuple, set)):
+        values = sorted(value, key=str) if isinstance(value, set) else value
+        return [
+            _bounded_metadata_value(item, depth=depth + 1)
+            for item in list(values)[:_METADATA_SEQUENCE_ITEM_LIMIT]
+        ]
+    return _truncate_metadata_string(str(value), _METADATA_STRING_CHAR_LIMIT)
+
+
+def _bounded_metadata_projection(
+        metadata: dict[str, Any], fields: tuple[str, ...], *,
+        max_characters: int,
+) -> dict[str, Any]:
+    """Keep whole bounded fields within one deterministic JSON-size cap."""
+    result = {}
+    for key in fields:
+        if key not in metadata or metadata[key] in (None, "", -1, [], {}):
+            continue
+        value = _bounded_metadata_value(metadata[key])
+        candidate = {**result, key: value}
+        if _json_character_count(candidate) <= max_characters:
+            result = candidate
+    return result
+
+
+def _context_metadata_projection(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Keep bounded, locating metadata for supplementary evidence."""
+    return _bounded_metadata_projection(
+        metadata, _CONTEXT_METADATA_FIELDS,
+        max_characters=_CONTEXT_METADATA_CHAR_LIMIT)
+
+
+def _context_parent_id(metadata: dict[str, Any]) -> str:
+    """Return the deterministic source/chapter context-group identity.
+
+    Unknown chapters are intentionally not assigned a context parent. This
+    prevents front matter or malformed records from acquiring neighbors merely
+    because they happen to be adjacent in the published JSONL order.
+    """
+    if table_retrieval_core.is_table_child(metadata):
+        return ""
+    source_file = metadata.get("source_file")
+    chapter_num = metadata.get("chapter_num")
+    if (not isinstance(source_file, str) or not source_file.strip()
+            or isinstance(chapter_num, bool)
+            or not isinstance(chapter_num, int)):
+        return ""
+    payload = json.dumps(
+        {"source_file": source_file, "chapter_num": chapter_num},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+    return f"context_{digest}"
+
+
+def _attach_retrieval_linkage(
+        records: list[dict], *, stable_ids: list[str] | None = None,
+) -> list[str]:
+    """Attach exact stable adjacency after the corpus reaches final order."""
+    ids = list(stable_ids) if stable_ids is not None else [
+        _chunk_id(record) for record in records
+    ]
+    if (len(ids) != len(records)
+            or any(not isinstance(value, str) or not value for value in ids)):
+        raise ValueError("stable IDs must align one-to-one with records")
+    parents = [
+        _context_parent_id(record.get("metadata") or {})
+        for record in records
+    ]
+    for index, (record, stable_id, parent_id) in enumerate(
+            zip(records, ids, parents)):
+        metadata = record.get("metadata")
+        if not isinstance(metadata, dict):
+            raise ValueError("retrieval linkage requires object metadata")
+        previous_id = ""
+        next_id = ""
+        if index and parent_id and parents[index - 1] == parent_id:
+            previous_id = ids[index - 1]
+        if (index + 1 < len(records) and parent_id
+                and parents[index + 1] == parent_id):
+            next_id = ids[index + 1]
+        metadata.update({
+            "retrieval_linkage_schema_version": (
+                RETRIEVAL_LINKAGE_SCHEMA_VERSION),
+            "stable_id": stable_id,
+            "context_parent_id": parent_id,
+            "previous_stable_id": previous_id,
+            "next_stable_id": next_id,
+        })
+    return ids
+
+
+def _retrieval_linkage_issues(
+        records: list[dict] | tuple[dict, ...], *,
+        stable_ids: list[str] | tuple[str, ...] | None = None,
+) -> dict[str, list[int]]:
+    """Return every record whose stored linkage differs from exact order."""
+    ids = list(stable_ids) if stable_ids is not None else [
+        _chunk_id(record) for record in records
+    ]
+    if len(ids) != len(records):
+        raise ValueError("stable IDs must align one-to-one with records")
+    parents = [
+        _context_parent_id(record.get("metadata") or {})
+        for record in records
+    ]
+    issues: dict[str, list[int]] = {
+        "schema_version": [],
+        "stable_id": [],
+        "context_parent_id": [],
+        "previous_stable_id": [],
+        "next_stable_id": [],
+    }
+    for index, record in enumerate(records):
+        metadata = record.get("metadata")
+        if not isinstance(metadata, dict):
+            for indexes in issues.values():
+                indexes.append(index)
+            continue
+        expected_previous = (
+            ids[index - 1]
+            if index and parents[index] and parents[index - 1] == parents[index]
+            else ""
+        )
+        expected_next = (
+            ids[index + 1]
+            if (index + 1 < len(records) and parents[index]
+                and parents[index + 1] == parents[index])
+            else ""
+        )
+        expected = {
+            "retrieval_linkage_schema_version": (
+                RETRIEVAL_LINKAGE_SCHEMA_VERSION),
+            "stable_id": ids[index],
+            "context_parent_id": parents[index],
+            "previous_stable_id": expected_previous,
+            "next_stable_id": expected_next,
+        }
+        for link_field, issue_name in zip(
+                _RETRIEVAL_LINKAGE_FIELDS, issues, strict=True):
+            value = metadata.get(link_field)
+            if (link_field == "retrieval_linkage_schema_version"
+                    and isinstance(value, bool)):
+                issues[issue_name].append(index)
+            elif value != expected[link_field]:
+                issues[issue_name].append(index)
+    return {
+        name: indexes for name, indexes in issues.items() if indexes
+    }
+
+
+def _retrieval_linkage_summary(
+        records: list[dict] | tuple[dict, ...], *,
+        stable_ids: list[str] | tuple[str, ...] | None = None,
+) -> dict[str, Any]:
+    """Build deterministic quality evidence for adjacency metadata."""
+    parents = [
+        _context_parent_id(record.get("metadata") or {})
+        for record in records
+    ]
+    linked_chunks = sum(
+        bool((record.get("metadata") or {}).get("previous_stable_id")
+             or (record.get("metadata") or {}).get("next_stable_id"))
+        for record in records
+    )
+    return {
+        "schema_version": RETRIEVAL_LINKAGE_SCHEMA_VERSION,
+        "context_parents": len({value for value in parents if value}),
+        "linked_chunks": linked_chunks,
+        "isolated_chunks": len(records) - linked_chunks,
+        "issues": _retrieval_linkage_issues(
+            records, stable_ids=stable_ids),
+    }
+
+
+def _context_excerpt(text: str, relation: str, limit: int) -> str:
+    """Keep the continuation-facing edge of one neighboring chunk."""
+    if len(text) <= limit:
+        return text
+    if limit == 1:
+        return "\u2026"
+    if relation == "previous":
+        return "\u2026" + text[-(limit - 1):]
+    return text[:limit - 1] + "\u2026"
+
+
+def _context_segment_character_cost(segment: ContextSegment) -> int:
+    """Measure the serialized supplementary evidence charged to its budget."""
+    return _json_character_count({
+        "source_id": segment.source_id,
+        "relation": segment.relation,
+        "distance": segment.distance,
+        "text": segment.text,
+        "metadata": segment.metadata,
+    })
+
+
+def _context_alias_character_cost(alias: ContextSourceAlias) -> int:
+    return _json_character_count({
+        "source_id": alias.source_id,
+        "metadata": alias.metadata,
+    })
+
+
+_CONTEXT_HIT_IDENTITY_FIELDS = (
+    "source_file",
+    "chapter_num",
+    "content_type",
+    "page_start",
+    "page_end",
+    "page_range",
+    "section_path",
+)
+
+
+def _context_hit_matches_record(hit: SearchHit, record: dict,
+                                source_id: str) -> bool:
+    """Verify one vector payload against its exact manifested source row."""
+    if hit.text != record.get("text"):
+        return False
+    record_metadata = record.get("metadata")
+    if not isinstance(record_metadata, dict):
+        return False
+    if hit.metadata.get("stable_id") != source_id:
+        return False
+    for field_name in _CONTEXT_HIT_IDENTITY_FIELDS:
+        actual = hit.metadata.get(field_name)
+        expected = record_metadata.get(field_name)
+        if expected is None and actual in (None, "", -1):
+            continue
+        if actual != expected:
+            return False
+    return True
+
+
+def _assemble_retrieval_context(
+        response: SearchResponse, records: list[dict], *,
+        context_window: int,
+        content_type: str | None = None,
+        chapter_num: int | None = None,
+        max_characters: int = DEFAULT_CONTEXT_MAX_CHARACTERS,
+        segment_characters: int = DEFAULT_CONTEXT_SEGMENT_CHARACTERS,
+        source_id_fn: Callable[[SearchHit], str] | None = None,
+) -> SearchResponse:
+    """Attach filter-safe neighboring evidence without changing ranked hits."""
+    if (isinstance(context_window, bool) or not isinstance(context_window, int)
+            or not 0 <= context_window <= MAX_CONTEXT_WINDOW):
+        raise ValueError(
+            f"context_window must be an integer from 0 to {MAX_CONTEXT_WINDOW}")
+    if (isinstance(max_characters, bool) or not isinstance(max_characters, int)
+            or not 1 <= max_characters <= MAX_CONTEXT_CHARACTERS):
+        raise ValueError(
+            "context max characters must be an integer from 1 to "
+            f"{MAX_CONTEXT_CHARACTERS}")
+    if (isinstance(segment_characters, bool)
+            or not isinstance(segment_characters, int)
+            or not 1 <= segment_characters
+            <= MAX_CONTEXT_SEGMENT_CHARACTERS):
+        raise ValueError(
+            "context segment characters must be an integer from 1 to "
+            f"{MAX_CONTEXT_SEGMENT_CHARACTERS}")
+    response.context_window = context_window
+    response.context_characters = 0
+    for hit in response.hits:
+        hit.context_segments = []
+        hit.source_aliases = []
+    if context_window == 0 or not response.hits:
+        return response
+
+    if source_id_fn is None:
+        source_id_fn = _search_hit_source_id
+
+    issues = _retrieval_linkage_issues(records)
+    if issues:
+        raise ValueError("chunks artifact has invalid retrieval linkage")
+    records_by_id = {
+        str((record.get("metadata") or {}).get("stable_id")): record
+        for record in records
+    }
+    primary_ids = []
+    for hit in response.hits:
+        source_id = source_id_fn(hit)
+        hit.source_id = source_id
+        if source_id not in records_by_id:
+            raise ValueError(
+                "retrieved hit is not present in the exact chunks snapshot")
+        if not _context_hit_matches_record(
+                hit, records_by_id[source_id], source_id):
+            raise ValueError(
+                "retrieved hit payload does not match the exact chunks "
+                "snapshot")
+        primary_ids.append(source_id)
+    reserved_ids = set(primary_ids)
+    selected_ids: set[str] = set()
+    selected: list[list[ContextSegment]] = [
+        [] for _ in response.hits
+    ]
+    primary_text_owner: dict[str, int] = {}
+    for hit_index, source_id in enumerate(primary_ids):
+        primary_text_owner.setdefault(
+            str(records_by_id[source_id].get("text") or ""), hit_index)
+    selected_text_owner: dict[str, tuple[int, int]] = {}
+    consumed = 0
+
+    def linked_id(anchor_id: str, relation: str, distance: int) -> str:
+        current_id = anchor_id
+        field = (
+            "previous_stable_id" if relation == "previous"
+            else "next_stable_id")
+        for _ in range(distance):
+            current = records_by_id.get(current_id)
+            if current is None:
+                return ""
+            value = (current.get("metadata") or {}).get(field)
+            if not isinstance(value, str) or not value:
+                return ""
+            current_id = value
+        return current_id
+
+    # Breadth-first, rank-stable allocation prevents the first hit from
+    # consuming the entire supplementary evidence budget.
+    for distance in range(1, context_window + 1):
+        for hit_index, anchor_id in enumerate(primary_ids):
+            anchor_metadata = records_by_id[anchor_id]["metadata"]
+            for relation in ("previous", "next"):
+                candidate_id = linked_id(anchor_id, relation, distance)
+                if (not candidate_id or candidate_id in reserved_ids
+                        or candidate_id in selected_ids):
+                    continue
+                candidate = records_by_id.get(candidate_id)
+                if candidate is None:
+                    raise ValueError(
+                        "retrieval linkage references an unknown stable ID")
+                metadata = candidate.get("metadata") or {}
+                if (metadata.get("context_parent_id")
+                        != anchor_metadata.get("context_parent_id")
+                        or not metadata.get("context_parent_id")
+                        or metadata.get("source_file")
+                        != anchor_metadata.get("source_file")
+                        or metadata.get("chapter_num")
+                        != anchor_metadata.get("chapter_num")):
+                    raise ValueError(
+                        "retrieval linkage crosses a source or chapter boundary")
+                if (content_type is not None
+                        and metadata.get("content_type") != content_type):
+                    continue
+                if (chapter_num is not None
+                        and metadata.get("chapter_num") != chapter_num):
+                    continue
+                candidate_text = str(candidate.get("text") or "")
+                if not candidate_text:
+                    continue
+                projected_metadata = _context_metadata_projection(metadata)
+                alias = ContextSourceAlias(
+                    source_id=candidate_id,
+                    metadata=projected_metadata,
+                )
+                alias_cost = _context_alias_character_cost(alias)
+                primary_owner = primary_text_owner.get(candidate_text)
+                if primary_owner is not None:
+                    if consumed + alias_cost > max_characters:
+                        continue
+                    response.hits[primary_owner].source_aliases.append(alias)
+                    selected_ids.add(candidate_id)
+                    consumed += alias_cost
+                    continue
+                context_owner = selected_text_owner.get(candidate_text)
+                if context_owner is not None:
+                    if consumed + alias_cost > max_characters:
+                        continue
+                    owner_hit, owner_segment = context_owner
+                    existing = selected[owner_hit][owner_segment]
+                    selected[owner_hit][owner_segment] = ContextSegment(
+                        text=existing.text,
+                        metadata=existing.metadata,
+                        source_id=existing.source_id,
+                        relation=existing.relation,
+                        distance=existing.distance,
+                        source_aliases=existing.source_aliases + (alias,),
+                    )
+                    selected_ids.add(candidate_id)
+                    consumed += alias_cost
+                    continue
+                excerpt = _context_excerpt(
+                    candidate_text, relation,
+                    segment_characters)
+                segment = ContextSegment(
+                    text=excerpt,
+                    metadata=projected_metadata,
+                    source_id=candidate_id,
+                    relation=relation,
+                    distance=distance,
+                )
+                segment_cost = _context_segment_character_cost(segment)
+                if not excerpt or consumed + segment_cost > max_characters:
+                    continue
+                selected[hit_index].append(segment)
+                selected_text_owner[candidate_text] = (
+                    hit_index, len(selected[hit_index]) - 1)
+                selected_ids.add(candidate_id)
+                consumed += segment_cost
+
+    for hit, segments in zip(response.hits, selected):
+        hit.context_segments = sorted(
+            segments,
+            key=lambda item: (
+                0 if item.relation == "previous" else 1,
+                -item.distance if item.relation == "previous"
+                else item.distance,
+            ),
+        )
+    response.context_characters = consumed
+    return response
 
 
 def _reciprocal_rank_fusion(
@@ -315,6 +866,7 @@ def _build_chroma_where(content_type: str | None = None,
 
 
 _ANSWER_SOURCE_LIMIT = 5
+_ANSWER_CONTEXT_SOURCE_LIMIT = 10
 _ANSWER_SOURCE_CHAR_LIMIT = 2400
 _INSUFFICIENT_EVIDENCE_TEXT = (
     "Insufficient evidence in the retrieved sources to answer this question."
@@ -325,6 +877,24 @@ _DIRECT_QUOTE_RE = re.compile(
     r'"([^"\r\n]{8,})"|\u201c([^\u201d\r\n]{8,})\u201d'
 )
 _THINK_TAG_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+
+
+def _valid_source_citation_ids(text: str) -> list[str]:
+    """Return only source IDs from syntactically accepted bracket groups."""
+    citation_ids = []
+    for match in _BRACKETED_TEXT_RE.finditer(text):
+        content = match.group(1)
+        raw_ids = _SOURCE_CITATION_RE.findall(content)
+        if not raw_ids:
+            continue
+        remainder = _SOURCE_CITATION_RE.sub("", content)
+        if remainder.strip(" \t,;:&/-"):
+            continue
+        for raw_id in raw_ids:
+            citation_id = raw_id.upper()
+            if citation_id not in citation_ids:
+                citation_ids.append(citation_id)
+    return citation_ids
 
 
 def _search_hit_source_id(
@@ -341,11 +911,50 @@ def _search_hit_source_id(
 
 
 def _useful_source_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
-    """Keep non-empty retrieval metadata for prompts and source mappings."""
-    return {
+    """Keep bounded retrieval metadata for prompts and source mappings."""
+    priority = (
+        "source_file", "chapter_num", "chapter_title", "page_start",
+        "page_end", "page_range", "content_type", "section_path",
+        "primary_case", "context_role", "context_distance",
+        "primary_source_id", "retrieval_role", "table_parent_stable_id",
+        "table_child_index", "table_child_count",
+    )
+    remaining = tuple(sorted(
+        key for key in metadata
+        if key not in _RETRIEVAL_LINKAGE_FIELDS
+        and key not in priority
+        and key != "equivalent_sources"
+    ))
+    result = _bounded_metadata_projection(
+        metadata, priority + remaining,
+        max_characters=_ANSWER_SOURCE_METADATA_CHAR_LIMIT)
+    aliases = metadata.get("equivalent_sources")
+    if isinstance(aliases, list):
+        normalized_aliases = []
+        for alias in aliases:
+            if not isinstance(alias, dict):
+                continue
+            source_id = alias.get("source_id")
+            if not isinstance(source_id, str) or not source_id:
+                continue
+            alias_metadata = alias.get("metadata")
+            normalized_aliases.append({
+                "source_id": _truncate_metadata_string(source_id, 128),
+                "metadata": _context_metadata_projection(
+                    alias_metadata if isinstance(alias_metadata, dict) else {}),
+            })
+        if normalized_aliases:
+            result["equivalent_sources"] = normalized_aliases
+    return result
+
+
+def _prompt_source_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Exclude provenance aliases and re-cap model-visible metadata."""
+    without_aliases = {
         key: value for key, value in metadata.items()
-        if value not in (None, "", -1, [], {})
+        if key != "equivalent_sources"
     }
+    return _useful_source_metadata(without_aliases)
 
 
 def _query_centered_excerpt(text: str, query: str, *,
@@ -383,23 +992,131 @@ def _grounded_sources(
     """Build a ranked, de-duplicated source registry for answer generation."""
     sources = []
     seen_source_ids = set()
+    sources_by_text: dict[str, GroundedSource] = {}
+
+    def with_aliases(
+            metadata: dict[str, Any],
+            aliases: list[ContextSourceAlias]
+            | tuple[ContextSourceAlias, ...],
+    ) -> dict[str, Any]:
+        # Alias provenance is trusted only after the backend adapter has
+        # materialized typed aliases. Raw metadata is source-controlled input
+        # and must not be able to forge another stable evidence identity.
+        result = {
+            key: value for key, value in metadata.items()
+            if key != "equivalent_sources"
+        }
+        if aliases:
+            result["equivalent_sources"] = [
+                {
+                    "source_id": alias.source_id,
+                    "metadata": alias.metadata,
+                }
+                for alias in aliases
+            ]
+        return result
+
+    def add_source(
+            *, source_id: str, text: str, metadata: dict[str, Any],
+            score: float | None, excerpt: str,
+    ) -> GroundedSource | None:
+        if source_id in seen_source_ids:
+            return None
+        seen_source_ids.add(source_id)
+        source = GroundedSource(
+            citation_id=f"S{len(sources) + 1}",
+            source_id=source_id,
+            text=text,
+            metadata=_useful_source_metadata(metadata),
+            score=score,
+            excerpt=excerpt,
+        )
+        sources.append(source)
+        sources_by_text.setdefault(text, source)
+        return source
+
+    def add_alias(source: GroundedSource, alias: ContextSourceAlias) -> None:
+        if (alias.source_id == source.source_id
+                or alias.source_id in seen_source_ids):
+            return
+        existing = source.metadata.setdefault("equivalent_sources", [])
+        if any(item.get("source_id") == alias.source_id for item in existing):
+            return
+        seen_source_ids.add(alias.source_id)
+        existing.append({
+            "source_id": alias.source_id,
+            "metadata": _context_metadata_projection(alias.metadata),
+        })
+
+    # Ranked primaries always retain the first citation slots. Supplementary
+    # neighbors are added afterward under their own stable source identities.
+    registered_hits: list[tuple[SearchHit, str]] = []
     for hit in response.hits:
         source_id = source_id_fn(hit)
         hit.source_id = source_id
-        if source_id in seen_source_ids:
-            continue
-        seen_source_ids.add(source_id)
-        sources.append(GroundedSource(
-            citation_id=f"S{len(sources) + 1}",
-            source_id=source_id,
-            text=hit.text,
-            metadata=_useful_source_metadata(hit.metadata),
-            score=hit.score,
-            excerpt=_query_centered_excerpt(hit.text, query),
-        ))
+        owner = sources_by_text.get(hit.text)
+        if owner is not None:
+            add_alias(owner, ContextSourceAlias(
+                source_id=source_id,
+                metadata=_context_metadata_projection(hit.metadata),
+            ))
+            for alias in hit.source_aliases:
+                add_alias(owner, alias)
+            registered_hits.append((hit, owner.source_id))
+        else:
+            source = add_source(
+                source_id=source_id,
+                text=hit.text,
+                metadata=with_aliases(hit.metadata, hit.source_aliases),
+                score=hit.score,
+                excerpt=_query_centered_excerpt(hit.text, query),
+            )
+            if source is not None:
+                registered_hits.append((hit, source.source_id))
         if len(sources) >= _ANSWER_SOURCE_LIMIT:
             break
+    context_sources = 0
+    for hit, primary_source_id in registered_hits:
+        for segment in hit.context_segments:
+            metadata = {
+                **with_aliases(
+                    segment.metadata, segment.source_aliases),
+                "context_role": segment.relation,
+                "context_distance": segment.distance,
+                "primary_source_id": primary_source_id,
+            }
+            owner = sources_by_text.get(segment.text)
+            if owner is not None:
+                add_alias(owner, ContextSourceAlias(
+                    source_id=segment.source_id,
+                    metadata=_context_metadata_projection(segment.metadata),
+                ))
+                for alias in segment.source_aliases:
+                    add_alias(owner, alias)
+                continue
+            source = add_source(
+                source_id=segment.source_id,
+                text=segment.text,
+                metadata=metadata,
+                score=None,
+                excerpt=_context_excerpt(
+                    segment.text, segment.relation,
+                    _ANSWER_SOURCE_CHAR_LIMIT),
+            )
+            if source is not None:
+                context_sources += 1
+            if context_sources >= _ANSWER_CONTEXT_SOURCE_LIMIT:
+                return sources
     return sources
+
+
+def _one_line_json_payload(payload: dict[str, Any]) -> str:
+    """Serialize a prompt payload without literal Unicode line separators."""
+    return json.dumps(payload, ensure_ascii=False, default=str).translate({
+        ord("\u0085"): r"\u0085",
+        ord("\u2028"): r"\u2028",
+        ord("\u2029"): r"\u2029",
+    })
 
 
 def _grounded_answer_prompt(query: str,
@@ -410,12 +1127,12 @@ def _grounded_answer_prompt(query: str,
         payload = {
             "citation_id": source.citation_id,
             "source_id": source.source_id,
-            "metadata": source.metadata,
+            "metadata": _prompt_source_metadata(source.metadata),
             "text": source.excerpt or source.text[:_ANSWER_SOURCE_CHAR_LIMIT],
         }
         source_blocks.append(
             "BEGIN_UNTRUSTED_SOURCE\n"
-            + json.dumps(payload, ensure_ascii=False, default=str)
+            + _one_line_json_payload(payload)
             + "\nEND_UNTRUSTED_SOURCE"
         )
 
@@ -522,18 +1239,28 @@ def _validate_grounded_answer(raw_answer: str,
             citations=[], sources=sources, warnings=warnings, abstained=True,
         )
 
-    normalized_evidence = [
-        re.sub(r"\s+", " ", source.excerpt or source.text).casefold()
+    evidence_by_citation = {
+        source.citation_id: re.sub(
+            r"\s+", " ", source.excerpt or source.text).casefold()
         for source in sources if source.citation_id in citations
-    ]
+    }
     unsupported_quotes = []
-    for match in _DIRECT_QUOTE_RE.finditer(cleaned):
-        quoted_text = next(group for group in match.groups() if group is not None)
-        normalized_quote = re.sub(r"\s+", " ", quoted_text).strip().casefold()
-        if (normalized_quote
-                and not any(normalized_quote in evidence
-                            for evidence in normalized_evidence)):
-            unsupported_quotes.append(quoted_text.strip())
+    for paragraph in re.split(r"\n+", cleaned):
+        paragraph_citations = set(_valid_source_citation_ids(paragraph))
+        paragraph_evidence = [
+            evidence_by_citation[citation_id]
+            for citation_id in paragraph_citations
+            if citation_id in evidence_by_citation
+        ]
+        for match in _DIRECT_QUOTE_RE.finditer(paragraph):
+            quoted_text = next(
+                group for group in match.groups() if group is not None)
+            normalized_quote = re.sub(
+                r"\s+", " ", quoted_text).strip().casefold()
+            if (normalized_quote
+                    and not any(normalized_quote in evidence
+                                for evidence in paragraph_evidence)):
+                unsupported_quotes.append(quoted_text.strip())
     if unsupported_quotes:
         preview = unsupported_quotes[0]
         if len(preview) > 80:

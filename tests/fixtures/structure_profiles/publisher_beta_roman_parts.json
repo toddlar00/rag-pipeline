@@ -1,0 +1,64 @@
+{
+  "pages": {
+    "1": {},
+    "2": {},
+    "3": {},
+    "4": {},
+    "5": {},
+    "6": {},
+    "7": {},
+    "8": {},
+    "9": {},
+    "10": {},
+    "11": {},
+    "12": {},
+    "13": {},
+    "14": {},
+    "15": {},
+    "16": {},
+    "17": {},
+    "18": {},
+    "19": {},
+    "20": {},
+    "21": {},
+    "22": {},
+    "23": {},
+    "24": {},
+    "25": {},
+    "26": {},
+    "27": {},
+    "28": {},
+    "29": {},
+    "30": {},
+    "31": {},
+    "32": {},
+    "33": {},
+    "34": {},
+    "35": {},
+    "36": {},
+    "37": {},
+    "38": {},
+    "39": {},
+    "40": {}
+  },
+  "texts": [
+    {"label": "section_header", "text": "Contents", "prov": [{"page_no": 3}]},
+    {"label": "page_header", "text": "Part IV — Institutions and Practice", "prov": [{"page_no": 10}]},
+    {"label": "page_header", "text": "Part IV — Institutions and Practice", "prov": [{"page_no": 11}]},
+    {"label": "section_header", "text": "Bibliography", "prov": [{"page_no": 35}]},
+    {"label": "section_header", "text": "Index", "prov": [{"page_no": 39}]}
+  ],
+  "tables": [
+    {
+      "prov": [{"page_no": 3}],
+      "data": {
+        "table_cells": [
+          {"text": "Part IV — Institutions and Practice", "start_row_offset_idx": 0, "end_row_offset_idx": 1, "start_col_offset_idx": 0, "end_col_offset_idx": 1},
+          {"text": "10", "start_row_offset_idx": 0, "end_row_offset_idx": 1, "start_col_offset_idx": 1, "end_col_offset_idx": 2},
+          {"text": "I. Institutions", "start_row_offset_idx": 1, "end_row_offset_idx": 2, "start_col_offset_idx": 0, "end_col_offset_idx": 1},
+          {"text": "11", "start_row_offset_idx": 1, "end_row_offset_idx": 2, "start_col_offset_idx": 1, "end_col_offset_idx": 2}
+        ]
+      }
+    }
+  ]
+}

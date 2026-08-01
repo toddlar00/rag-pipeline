@@ -7,13 +7,15 @@ or local LLM assistance.
 
 Handles scanned PDFs, structure-aware chunking, TOC-based hierarchy detection,
 hybrid search (BM25 + vector + cross-encoder reranking), LLM classification,
-contextual retrieval, RAPTOR multi-level summaries, citation graph extraction,
-and source-grounded answer generation with explicit abstention.
+contextual retrieval, optional row-level table retrieval, RAPTOR multi-level
+summaries, citation graph extraction, and source-grounded answer generation
+with explicit abstention.
 
 See [`ROADMAP.md`](ROADMAP.md) for implemented hardening milestones, merge
-status, and the ordered improvement backlog. The final cross-stack findings and
-their disposition are recorded in
-[`INTEGRATION_AUDIT.md`](INTEGRATION_AUDIT.md).
+status, and the ordered improvement backlog. The historical #1-#28 integration
+findings and their disposition are recorded in
+[`INTEGRATION_AUDIT.md`](INTEGRATION_AUDIT.md). The maintained documentation
+map is [`docs/README.md`](docs/README.md).
 
 ## Architecture
 
@@ -41,12 +43,17 @@ PDF
  |                  - Contextual retrieval prefixes (LLM)
  |                  - Quality scoring (LLM, 1-5 scale)
  |                  - Footnote separation
+ |                  - Exact Docling source-item lineage
  |                  - Structural filtering (TOC, index, front matter)
- |                  - Trigram Jaccard deduplication
+ |                  - Source-aware trigram Jaccard deduplication
  |                  - Chapter detection & propagation
+ |                  - Optional header-propagated table-row retrieval children
  |
  v
-Enriched Chunks (JSONL, including raw + embedding token counts)
+Enriched Chunks + Bound Quality Report
+ |                  - Exact source/chunks/parameter hashes
+ |                  - Lineage, table-family, structure, normalization, entity,
+ |                    classification, duplicate, and token-budget checks
  |
  +---> [index] ---------> ChromaDB or Qdrant (manifest-validated incremental index)
  |
@@ -82,22 +89,110 @@ owns deterministic normalization, structural filtering, near-duplicate
 detection, rule-based content classification, and basic chunk metadata helpers;
 Docling, LLM enrichment, and chunk publication remain orchestrated by `rag.py`.
 
+`quality_core.py` is the standard-library-only corpus-attestation layer. It
+builds and strictly validates a deterministic adjacent `*_chunks.quality.json`
+report over the exact Docling and chunks snapshots. New source-lineaged corpora
+must pass its source coverage, structure, normalization, token, table,
+classification, entity, stable-ID, and chunk-hash checks before downstream
+publication or use.
+
+`table_retrieval_core.py` is the standard-library-only table retrieval policy.
+It strictly parses preserved Markdown tables, derives optional one-row children
+that repeat their caption and header, groups continued fragments by exact
+Docling table lineage, attests every parent/child family and its dimensions,
+keeps retrieval-only children out of publication consumers, and removes a
+retrieved parent only when a more specific child from that same family is also
+present.
+
 `index_state.py` is the standard-library-only index policy layer. It owns
 collection-scoped manifest and dirty-marker rules, incremental rebuild
 decisions, and query compatibility checks; `rag.py` injects schema, logging,
 atomic publication, artifact hashing, and vector-store lease collaborators.
+
+`vector_lifecycle.py` is the standard-library-only vector mutation policy
+layer. It computes deterministic add/replace/remove plans, owns dirty-marker
+acquisition and revalidation, invalidates stale verification evidence after
+every physical mutation, and permits manifest publication only after an exact
+post-mutation identity check. `resource_lease.py` owns the shared canonical
+path/OS lease and `.rag-locks` sidecar policy; `rag.py` retains late-bound lease
+facades, client construction, embedding workers, and the physical
+Chroma/Qdrant adapters.
 
 `llm_adapters.py` translates Ollama, Gemini, and OpenAI-compatible transport
 responses into the typed, provider-neutral contracts in `llm_runtime.py`.
 Gemini remains lazily imported, while `rag.py` retains provider selection,
 runtime composition, mutable caches/throttles, and the compatibility facades.
 
+`endpoint_policy.py` is the standard-library-only trust boundary for custom
+LLM URLs. It canonicalizes approved targets before credential lookup, cache
+lookup, job persistence, artifact binding, or transport; classifies official
+providers only from their exact reviewed HTTPS origin and base path; and emits
+opaque identities for custom and rejected targets. See the
+[endpoint and UI boundary ADR](docs/architecture/decisions/local-endpoint-boundaries.md).
+
+`release_security.py` owns the versioned release trust record shared by every
+CLI, UI, service, evaluation, worker, durable-job, cache, provider, and model
+loader boundary. Release defaults are local-only, model-cache-only, and
+LLM-cache-off; cloud egress, trusted proxy/CA configuration, custom gateway
+tenancy, and the unauthenticated single-user UI each require explicit consent.
+See the [release-security ADR](docs/architecture/decisions/release-security-policy.md).
+
 `cli_policy.py` is the standard-library-only command policy layer for timeout
 validation and scanning, resume-command serialization, provider and credential
 option mapping, menu LLM detection, and secret redaction/environment routing.
 `rag.py` injects live defaults and endpoint predicates while retaining argparse
-definitions and dispatch, process supervision, environment mutation/restoration,
-runtime mutation, pipeline execution, and output/artifact behavior.
+definitions and dispatch, runtime mutation, pipeline execution, and
+output/artifact behavior.
+
+`process_supervision.py` is the standard-library-only deadline and containment
+runtime. It owns Windows Job Objects, POSIX process groups, same-PID startup
+gates, bounded termination confirmation, cancellation/deadline control, and the
+generic supervised entrypoint flow. `runtime_supervision.py` binds that core to
+the production script path, deadlines, environment names, cleanup exception,
+and prompt-free telemetry as one frozen capability. The durable engine in
+`job_coordination.py` consumes that binding without importing `rag.py`.
+`job_manager.py` is now the stable executable/import facade; its public
+results, errors, launch, recovery, and CLI surfaces remain compatible. See the
+[runtime-supervision binding ADR](docs/architecture/decisions/runtime-supervision-binding.md).
+
+`service_runtime_binding.py` freezes the service worker path, supervisor,
+cleanup type, instance-lease factory, and remote-model predicate as one host
+capability. `service_runtime.py` snapshots it and no longer imports `rag.py`;
+the dedicated `service_search_worker.py` child is the only module that composes
+the service request contract with `rag.search_index`. `embedding_policy.py`
+keeps remote-model classification identical across the host and facade. See
+the [service-host binding ADR](docs/architecture/decisions/service-host-binding.md).
+
+`job_coordination_contracts.py` keeps the manager result/error identities and
+one frozen launch/reconcile/integrity capability together. The service snapshots
+that binding once, honors an explicit launcher override, and no longer imports
+or transitively loads the `job_manager` shell. Detached children still execute
+the stable `job_manager.py` path. See the
+[service job-coordination ADR](docs/architecture/decisions/service-job-coordination-binding.md).
+
+`job_application.py` now freezes the job-store factory, launch, single/all-job
+reconciliation, and manager-error classification used by outer applications.
+The `rag.py jobs` command snapshots it once per command and each UI action uses
+one generation through any nested refresh. No production Python module imports
+`job_manager.py`; detached execution still invokes that stable public and
+executable facade. See the
+[job-application binding ADR](docs/architecture/decisions/job-application-binding.md).
+
+`service_http.py` owns the authenticated FastAPI implementation behind a
+structural runtime port and one frozen error/paging-policy binding. It imports
+only `service_contracts.py` from the first-party graph.
+`application_composition.py` executes only standard-library imports when cold
+imported, then lazily captures the concrete runtime, host, job-coordination,
+and HTTP capabilities and constructs the production service from one
+generation. `service_api.py` remains the stable token/CLI/import facade,
+including its direct embedded-app surface. See the
+[service application-composition ADR](docs/architecture/decisions/service-application-composition.md).
+
+The tracked first-party import graph remains acyclic. R8 is still open because
+`rag.py` still owns both pipeline implementation and its executable facade,
+and the UI/CLI roles still compose through it. R8c-5 supplies a real outer root
+for the service role only; the narrow pipeline implementation must be
+separated before that root can compose the remaining application roles.
 
 `ingestion_core.py` is the standard-library-only PDF safety layer for text-layer
 quality, page-coverage-aware background detection, complete pre-mutation
@@ -120,12 +215,28 @@ and interrupted-worker recovery contract used by the CLI and LLM runtime.
 publication layer. `retention.py` validates pipeline/UI/cache ownership and
 implements dry-run-first quarantine and deletion plans.
 
+`evaluation_inputs.py` is the dependency-light input-contract leaf shared by
+owner review and release policy. It provides bounded duplicate-safe JSON-object
+parsing, exact link-aware snapshots, digest validation, and one normalized
+corpus binding. `evaluation_release.py` imports this leaf directly;
+`evaluation_review.py` retains object-identical compatibility aliases.
+`evaluation_queries.py` separately owns the query schema, corpus-pin,
+judged-ID/table-family, and grounding-evidence contracts shared by the evaluator
+and owner review. `eval.py` preserves object-identical private aliases and its
+legacy `load_queries` facade, raw-byte digest cache, scoring, and CLI
+composition. Both applications now depend one-way on the shared domain; the
+evaluation/review/release graph is acyclic. See the
+[evaluation input-contract ADR](docs/architecture/decisions/evaluation-input-contract.md).
+
 ## Quick Start
 
 The portable command-line and CPU dependency profiles are tested on CPython
 3.10 through 3.14. Clean core and core-plus-optional environments are installed
 and tested on Python 3.12, with resolution checks at both ends of that range.
 The RTX 50-series/CUDA 12.8 setup below intentionally requires Python 3.12-3.14.
+It is a manually qualified development path, not yet a hash-locked release
+profile; the first versioned release must either qualify and pin it or declare
+CPU-only reproducibility.
 
 ```bash
 # 1. Install PyTorch with CUDA (must come first for GPU support)
@@ -134,12 +245,42 @@ pip install "torch>=2.7,<3" --index-url https://download.pytorch.org/whl/cu128
 # 2. Install the core dependencies
 pip install -r requirements.txt
 
-# 3. Full pipeline -- one command
+# 3. Inspect the exact offline plan for PDF ingestion plus default retrieval
+python tools/sync_model_artifacts.py \
+  --task pdf-ingestion \
+  --task default-retrieval \
+  --plan
+
+# 4. If the byte and free-space preflight is acceptable, synchronize that selection
+python tools/sync_model_artifacts.py \
+  --task pdf-ingestion \
+  --task default-retrieval
+
+# 5. Full pipeline -- one command
 python rag.py full --pdf Civil_procedure.pdf --force
 
-# 4. Interactive menu (no arguments)
+# Experimental profile qualification; not yet production-supported
+python rag.py full --pdf Scholarly_book.pdf \
+  --structure-profile roman-parts-book-v1
+
+# 6. Interactive menu (no arguments)
 python rag.py
 ```
+
+Use the plan's exact integer-byte totals instead of a documentation estimate:
+they are derived from the current reviewed lock and the verified contents of
+the selected cache. The plan reports required downloads, already-present
+runtime bytes, peak additional staging/destination space, its safety margin,
+and whether the filesystem currently has enough free space. It performs no
+network access or download. Add `--task classification` to both commands only
+when the zero-shot classifier is needed. Use `--all` explicitly to select every
+independently syncable safe bundle, and add `--json` to `--plan` for the
+schema-v1 machine-readable result.
+
+Synchronization sends only reviewed public model IDs and file requests, never
+corpus text. It uses the official Hugging Face endpoint unless a reviewed
+`HF_ENDPOINT`, proxy, or custom CA is explicitly accepted with
+`--trust-environment-network`.
 
 For a first run of `Civil_procedure.pdf`, the main artifacts are scoped to one
 book directory. A temporary preprocessed PDF, when needed, is run-named beside
@@ -153,6 +294,7 @@ output/
 |   |-- Civil_procedure.json             # DoclingDocument
 |   |-- Civil_procedure_docling.md        # Raw Docling conversion markdown
 |   |-- Civil_procedure_chunks.jsonl      # Enriched chunks
+|   |-- Civil_procedure_chunks.quality.json # Exact quality attestation
 |   |-- Civil_procedure.md                # Final, filtered unified export
 |   |-- Civil_procedure_chroma/           # Chroma index (default backend)
 |   `-- Chapters/                         # Only with --split-chapters
@@ -279,7 +421,21 @@ OS-backed manager lease under `output/.rag-jobs/JOB_ID/`. The spec pins the
 canonical submission working directory and private output-root filesystem
 identities, and every detached attempt runs from that directory. Attempts store
 private runtime metadata, a bounded final 8 MiB worker-log tail, and correlated
-event/report files. POSIX uses verified
+event/report files. Each attempt also has an atomic, manager-owned
+`attempt.report.json` schema-v1 outcome snapshot. It binds the job, attempt,
+run, and operation; records submitted/manager/worker/cancel/recovery/cleanup/
+finish times; derives dispatch, startup, worker, cancellation, recovery, and
+total durations; and records the redacted finalizer, terminal reason, cleanup,
+worker-telemetry, and process-recovery outcomes. Reconciliation explicitly
+marks unavailable runtime metadata, report repair, and reconstructed timing;
+an intact terminal report is immutable and repeated reconciliation leaves it
+byte-identical.
+
+The attempt report never contains arguments, paths, attempt tokens, process
+IDs or birth identities, logs, exception text, prompts, or model responses. It
+is strict, size-bounded, atomically replaced, and current-user-only. This makes
+it suitable as durable operational evidence, not as a substitute for the
+private worker log or the stage-level `run.report.json`. POSIX uses verified
 `0700`/`0600` modes; Windows uses a protected DACL for only the current SID.
 Logs can contain source paths and model output even though status and telemetry
 are redacted, so treat the entire job root as sensitive. Job records persist
@@ -325,11 +481,13 @@ status/logs and provider usage before choosing `jobs resume`.
 ### Authenticated local service (draft v1)
 
 `service_api.py` exposes a stable, authenticated application boundary for one
-local OS user. It is deliberately smaller than the CLI: clients can inspect
-configured corpora, retrieve bounded Qdrant search hits, and manage durable
-reindex jobs. It does not expose conversion, arbitrary commands, filesystem
-paths, job arguments or logs, provider identities, raw exceptions, reranking,
-or LLM answer generation.
+local OS user. It is the token/CLI/import facade; `service_http.py` implements
+the authenticated adapter, and `application_composition.py` lazily constructs
+the concrete runtime and adapter as one frozen service generation. The service
+is deliberately smaller than the CLI: clients can inspect configured corpora,
+retrieve bounded Qdrant search hits, and manage durable reindex jobs. It does
+not expose conversion, arbitrary commands, filesystem paths, job arguments or
+logs, provider identities, raw exceptions, reranking, or LLM answer generation.
 
 Create an isolated environment and install the exact narrow service runtime.
 Contributors can add the separately locked test tools after verifying the
@@ -365,13 +523,14 @@ python -c "from pathlib import Path; import storage_policy; storage_policy.enfor
 The registry is credential-free, strictly shaped, Qdrant-only, and rejects
 links. Its database directory and chunks JSONL must already exist, while the
 collection name and embedding model must exactly match the indexed collection.
-The example uses MiniMax `embo-01`, which requires `MINIMAX_API_KEY` and works
-with the narrow service profile's HTTP dependencies. Change it to the model
-that built the index. Local sentence-transformer models require the full locked
-runtime; Voyage, OpenAI, and Cohere embeddings require their optional SDKs, so
-add the full locked runtime while retaining `requirements-service.lock` when
-using those backends. The service profile does not silently install those
-heavier providers.
+The example uses OpenAI `text-embedding-3-small`, which requires
+`OPENAI_API_KEY` and works with the narrow service profile's HTTP dependencies.
+Change it to the model that built the index. Voyage, OpenAI, and Cohere
+embeddings use the same pinned Requests transport and do not require their
+provider SDKs. MiniMax embedding IDs fail closed because there is no current
+reviewed MiniMax embedding API contract. Local
+sentence-transformer models still require the full locked runtime; the service
+profile does not silently install that heavier local-model stack.
 
 Loopback describes who can call this HTTP service; it does not prevent provider
 network egress. A cloud embedding model sends raw search query text during
@@ -390,8 +549,15 @@ python service_api.py serve \
   --working-directory . \
   --output-root output \
   --job-root output/.rag-service-jobs \
-  --service-state-root output/.rag-service
+  --service-state-root output/.rag-service \
+  --network-policy allow-cloud
 ```
+
+The explicit cloud policy is required because the example registry uses an
+OpenAI embedding. If reviewed proxy or custom-CA environment variables are
+active, the release profile also refuses startup until the operator either
+removes them or adds `--trust-environment-network` after reviewing that route.
+Use the default `local-only` policy with a compatible local embedding model.
 
 The examples below assume the two token values have been loaded into
 `READER_TOKEN` and `ADMIN_TOKEN` without printing them. Health endpoints are
@@ -405,7 +571,7 @@ curl -i http://127.0.0.1:8765/health/ready
 curl -sS -H "Authorization: Bearer $READER_TOKEN" \
   http://127.0.0.1:8765/v1/corpora
 
-# Bounded retrieval only: no reranker or generated answer
+# Bounded primary retrieval only: no reranker, neighbor context, or answer
 curl -sS -X POST \
   -H "Authorization: Bearer $READER_TOKEN" \
   -H "Content-Type: application/json" \
@@ -501,13 +667,22 @@ it does not change an LLM request ID or cache key.
 
 The schema-v1 JSONL stream records a sequence number, timestamp, operation,
 stage, status, numeric/boolean metrics, and a safe diagnostic when applicable.
-The schema-v1 JSON report summarizes run status (`succeeded`, `partial`,
-`failed`, or `cancelled`), elapsed time, event count, and per-stage counts and
-durations. Pipeline stages cover conversion, chunk/index lease acquisition,
-chunking, indexing, exports, and RAPTOR. Index metrics come from the committed
+The schema-v2 JSON report summarizes run status (`succeeded`, `partial`,
+`failed`, or `cancelled`), elapsed time, event count, per-stage counts and
+durations, and typed numeric/boolean metric aggregates. The job supervisor can
+still read an already-committed schema-v1 terminal report. New writers always
+publish schema v2, reject metric type drift and non-finite aggregate totals
+before appending an event, and persist strict JSON.
+
+Pipeline stages cover conversion, chunk/index lease acquisition, chunking,
+indexing, exports, and RAPTOR. Successful index metrics come from the committed
 `IndexOutcome`: disposition plus total, changed, unchanged, removed, upserted,
-batch, and physically verified record counts. LLM observations aggregate calls,
-attempts, retries, latency, and exact/estimated tokens.
+batch, physically verified record counts, exact physical mutation calls, and
+bounded-queue pressure. A failed index stage instead records separately named
+content-free attempted delete/create/upsert/queue counts with
+`committed=false`; it does not mislabel partial physical work as a committed
+outcome. LLM observations aggregate calls, attempts, retries, latency, and
+exact/estimated tokens.
 
 Each invocation replaces the supplied run-event/report files with its current
 run. Run and LLM event/report outputs must resolve to pairwise distinct files;
@@ -516,8 +691,11 @@ that completes its best-effort loop but has failed, missing, or
 unprocessed inputs reports `partial` while preserving the command's existing
 summary behavior. After a deadline or interruption, the supervisor first
 confirms worker cleanup, then recovers the current event stream, terminates any
-unmatched stages, and writes the final failure/cancellation record. A terminal
-success already committed by the worker wins over a late cancellation.
+unmatched stages, and writes the final failure/cancellation record. Recovery
+counts and stage-closure time are also bound into the terminal event, so a
+missing report can be reconstructed and repeated finalization preserves the
+same evidence. A terminal success already committed by the worker wins over a
+late cancellation.
 
 Run telemetry intentionally omits source and output paths, prompts, responses,
 credentials, endpoints, and exception messages. Its message fingerprint is a
@@ -527,6 +705,34 @@ details. Telemetry uses the same private storage policy as pipeline artifacts
 and LLM outputs: POSIX directories/files are verified at `0700`/`0600`, while
 Windows paths receive a protected DACL granting full control only to the current
 user SID.
+
+### Operational recovery drills
+
+Run both disposable recovery drills into a new or empty evidence directory:
+
+```bash
+python tools/run_operational_drills.py \
+  --output-dir output/operational-drill-2026-07-24
+```
+
+The hard-kill drill starts a real child telemetry writer inside a supervised
+process tree, waits until one stage is durably active, kills the tree, confirms
+complete cleanup, and only then recovers the event stream into a terminal
+report. Parent death also closes the containment primitive and kills the tree;
+unconfirmed cleanup is an explicit failed result. Its child receives only
+allowlisted interpreter/OS environment plumbing, not ambient provider
+credentials. The synced-publication
+drill writes one private staging payload while an injected replacement seam
+raises two Windows sharing violations; publication must retry the same pinned
+bytes, verify the target, and leave no staging file.
+
+`operational-drill.report.json` is a strict, size-bounded schema-v1 report with
+only a random run ID, timestamps, durations, counts, booleans, and safe terminal
+status. It contains no paths, process identities, exception strings,
+credentials, corpus text, prompts, or model output. The drill directory must be
+empty so evidence from separate runs cannot be interleaved or silently
+overwritten. Exit status is `0` only when both drills pass, `1` when a completed
+report contains a failed drill, and `2` when the run cannot start or publish.
 
 ### Private storage and retention
 
@@ -564,10 +770,17 @@ python rag.py storage --prune-ui-exports --older-than-days 7
 # Inspect recoverable leftovers from an interrupted deletion, then purge them
 python rag.py storage --purge-quarantine --older-than-days 7
 python rag.py storage --purge-quarantine --older-than-days 7 --apply
+
+# Inspect, then prune old marker-owned PDF snapshot trees left by a hard kill
+python rag.py storage --prune-snapshot-scratch --older-than-days 1
+python rag.py storage --prune-snapshot-scratch --older-than-days 1 --apply
 ```
 
-Use `--output-root`, `--llm-cache-dir`, `--max-cache-bytes`, and `--json` for
-custom locations, size policy, and automation. A plan deletes only data whose
+Use `--output-root`, `--llm-cache-dir`, `--snapshot-scratch-root`,
+`--max-cache-bytes`, and `--json` for custom locations, size policy, and
+automation. `--snapshot-scratch-root` is the base directory containing the
+owned `rag-pipeline-scratch-v1` directory; `RAG_SNAPSHOT_SCRATCH` selects the
+same base for conversion and table-recovery snapshots. A plan deletes only data whose
 marker/schema/token or cache key validates; unowned directories, special files,
 links, junctions, and hard-linked content fail closed. Applied run deletion
 replans after acquiring the run and all existing vector-store leases, moves the
@@ -585,14 +798,17 @@ and device-appropriate cryptographic erasure when those copies are in scope.
 ### Interactive Menu
 
 Running `python rag.py` with no arguments launches a guided menu that walks
-through file selection, options, and command construction. All commands are
-accessible through the menu, with file path validation and sensible defaults.
+through common pipeline commands, file selection, options, and command
+construction. Administrative commands such as `storage` and `jobs` remain CLI
+only.
 For LLM-backed operations, the menu also offers DeepSeek V4 Pro/Flash, MiniMax,
 Ollama, Gemini, and custom providers. API keys entered there use a hidden prompt
 and are redacted from the generated command shown on screen. They are removed
 from worker process arguments and supplied only through that worker's child-only
 environment; press Enter at the key prompt to use the corresponding ambient
-environment variable instead.
+environment variable instead. Cloud selections require an explicit egress
+confirmation, and custom/public gateways also collect the required nonsecret
+trust/tenant namespace.
 
 ## Searching
 
@@ -615,6 +831,12 @@ python rag.py query "Rule 12(b)(6) motion to dismiss" --hybrid \
 
 # Search + source-grounded LLM answer with validated citation IDs
 python rag.py query "minimum contacts test" --answer \
+  --db output/Civil_procedure/Civil_procedure_chroma \
+  --chunks output/Civil_procedure/Civil_procedure_chunks.jsonl \
+  --collection civil_procedure
+
+# Opt-in neighboring evidence; each neighbor keeps its own citation identity
+python rag.py query "minimum contacts test" --answer --context-window 1 \
   --db output/Civil_procedure/Civil_procedure_chroma \
   --chunks output/Civil_procedure/Civil_procedure_chunks.jsonl \
   --collection civil_procedure
@@ -655,16 +877,22 @@ python rag.py query "Rule 12(b)(6)" --db-backend qdrant --hybrid \
 ```
 Query --> [1] Embedding (nomic MoE) --> Vector similarity (ChromaDB/Qdrant)
                                               |
-      --> [2] Legal analyzer + BM25 ---> weighted RRF (auto/--hybrid)
+      --> [2] Legal analyzer + BM25 ---> [3] weighted RRF (auto/--hybrid)
                                               |
                                               v
-                                  [3] Adaptive reranker (BGE)
+                              [4] Table-family collapse
+                                              |
+                                              v
+                                  [5] Adaptive reranker (BGE)
                                               |
                                               v
                                         Top-K results
                                               |
                                               v
-                                     [4] LLM answer (if --answer)
+                              [6] Neighbor assembly (opt-in)
+                                              |
+                                              v
+                                     [7] LLM answer (if --answer)
 ```
 
 1. **Vector search** retrieves semantically similar chunks.
@@ -673,16 +901,41 @@ Query --> [1] Embedding (nomic MoE) --> Vector similarity (ChromaDB/Qdrant)
    plus bounded case, section, heading, and context metadata.
 3. **RRF fusion** combines the rankings. Chroma defaults to the judged-set
    calibration `dense=0.5`, `lexical=1.0`, `k=10`; Qdrant uses native RRF.
-4. **Adaptive reranking** reranks vector fallback automatically but preserves
+4. **Table-family collapse** suppresses a whole-table parent only when one of
+   its row children is already among the candidates. Distinct sibling rows are
+   retained so answers may draw on more than one row.
+5. **Adaptive reranking** reranks vector fallback automatically but preserves
    calibrated hybrid order. `--rerank` forces BGE reranking and `--no-rerank`
    disables it.
-5. **Answer generation** (optional) gives each retrieved source a stable ID and
+6. **Neighbor assembly** (optional) resolves canonical preceding/following
+   chunks from the exact quality-attested JSONL generation. It preserves the
+   ranked hits, hard filters, source/chapter boundary, and one stable ID per
+   supplementary source.
+7. **Answer generation** (optional) gives each retrieved source a stable ID and
    requires the configured LLM to cite those sources as `[S1]`, `[S2]`, and so on.
 
 Use `--vector-only` to suppress lexical retrieval. Advanced reproducibility
 controls are `--overfetch`, `--rrf-k`, `--dense-weight`, `--sparse-weight`, and
 `--reranker-model`. Search responses distinguish the requested mode (`auto`,
 `hybrid`, or `vector`) from the effective mode after any safe fallback.
+
+`--context-window 1` or `2` attaches supplementary neighbors after ranking;
+the default `0` performs no context-specific snapshot load and preserves the
+historical response shape. Context-enabled queries require the chunks and
+quality-report SHA-256 values to match the active index manifest for either
+backend. Assembly follows final published order, never crosses a source or
+explicit chapter, reapplies content/chapter filters, reserves ranked primaries,
+and emits identical text only once while retaining equivalent-source aliases.
+Previous chunks contribute their tail and following chunks their head. Bound
+the total serialized supplementary evidence and each neighbor's text with the
+character-based `--context-max-characters` and
+`--context-segment-characters` controls. Locating metadata is independently
+bounded and charged to the total. Answer generation separately caps each
+rendered primary or neighbor excerpt at 2,400 characters and admits at most five
+primaries plus ten supplementary sources. The defaults are 8,000 total and
+1,600 per-neighbor text; hard maxima are 32,000 and 8,000. Ranked retrieval
+metrics remain based only on primary hits;
+supplementary context is not promoted into the ranking.
 
 ### Answer Generation (`--answer`)
 
@@ -694,6 +947,13 @@ uncited answer paragraphs, or direct quotations absent from the exact supplied
 source excerpt cause the pipeline to withhold the entire answer. Long chunks use
 a query-centered excerpt so matching evidence near the end is not discarded.
 Empty responses and explicit insufficient-evidence responses also abstain.
+When neighbor assembly is enabled, every rendered supplementary segment
+receives its own `[S#]` label and stable ID; byte-identical occurrences are
+represented as equivalent-source aliases. The pipeline never concatenates
+neighbor text under the primary chunk's citation, so quote validation and
+source tracing remain exact. Supplementary source mappings report `score: null`
+and `score_kind: supplementary_context`; they never inherit the primary hit's
+relevance score.
 
 The terminal output prints the answer and cited source locations before the
 ordinary ranked results. Combine `--answer` with `--json` for a structured
@@ -730,7 +990,12 @@ python rag.py query "What is the minimum contacts test?" --answer \
 
 ## Optional LLM Intelligence Layer
 
-MiniMax M2.7-highspeed remains the default cloud model. DeepSeek is also
+MiniMax M3 is the default cloud model. Its reviewed adapter maps `--thinking`
+to adaptive thinking and the default to disabled thinking, separates reasoning
+from final answer text, uses `max_completion_tokens`, and sends temperature
+zero. Legacy MiniMax M2.x models cannot honor disabled thinking; the adapter
+rejects that combination and applies a 512-token completion floor when
+reasoning is explicitly enabled. DeepSeek is also
 supported directly through its official `https://api.deepseek.com` endpoint,
 with `deepseek-v4-pro` and `deepseek-v4-flash` as the built-in model choices.
 See the official [DeepSeek API documentation](https://api-docs.deepseek.com/)
@@ -755,14 +1020,47 @@ in-flight requests, and can reuse successful results across runs. Existing
 Python integrations remain compatible: `_call_llm(...)` still returns
 `str | None`, while `_call_llm_result(...)` exposes structured provenance.
 
-CLI calls use a persistent, machine-local response cache by default. Direct
-Python calls default to `off`, preserving the original library behavior. A
-cache key covers the exact prompt digest, operation and prompt versions,
-generation settings, timeout, fallback policy, and ordered provider/model/
-endpoint identities. Prompts, API keys, and raw endpoint URLs are not stored in
-the cache key or record. Only non-empty successful responses are cached, and
-entries use integrity hashes plus atomic replacement so truncated or tampered
-records become misses and are repaired by the next successful call.
+Endpoint configuration is fail-closed. Official DeepSeek and MiniMax targets
+must use their exact reviewed HTTPS host, port, and base path. Other public or
+custom targets require HTTPS. Plain HTTP is accepted only for a canonical
+literal loopback address such as `127.0.0.1` or `[::1]`; names such as
+`localhost`, noncanonical IP spellings, IPv4-mapped IPv6, user information,
+queries, fragments, redirects, and ambiguous path encodings are rejected.
+Loopback requests ignore ambient proxy settings, and all built-in provider API
+Requests transports refuse redirects so one admitted API transport is one HTTP
+request. Reviewed model synchronization separately permits repository-to-CDN
+redirects while enforcing exact byte hashes and a credential-free request.
+Credentialed Requests calls use an explicit Bearer-auth object so ambient
+`.netrc` credentials cannot replace the provider key selected by policy.
+
+All seven Requests-based provider response paths use bounded streaming rather
+than `response.json()`. Successful responses must use `application/json` or an
+`application/*+json` media type with UTF-8 data. The reader rejects ambiguous
+or dishonest framing, duplicate fields, non-standard numbers, excessive JSON
+nesting, invalid/truncated text, and decoded bodies above 16 MiB for generation,
+8 MiB for reranking, or 32 MiB for embeddings. The decoded ceiling also bounds
+compressed and chunked responses; response and session ownership remains live
+through streaming and is released on every terminal path. Gemini currently uses
+the separately pinned Google SDK response contract and remains a distinct R2
+transport-ceiling review item.
+
+Release CLI calls default the response cache to `off`; development-profile CLI
+calls retain the persistent machine-local `readwrite` default. Direct Python
+calls inherit the process `LLMRuntimeConfig` (initially `off`) unless they pass
+an explicit `cache_mode`; changing only the security profile does not rewrite
+an already configured runtime. A cache key covers the exact prompt digest,
+operation and prompt
+versions, generation settings, timeout, fallback policy, ordered
+provider/model/endpoint identities, and opaque trust/tenant namespace.
+Prompts, API keys, raw endpoints, and raw namespace labels are not stored in the
+key or record: reviewed official targets use a versioned canonical identity,
+while custom/rejected targets and namespaces use opaque SHA-256 identities.
+Enabled endpoints are validated before cache lookup. Only non-empty successful
+responses are cached, and entries use unkeyed integrity hashes plus atomic
+replacement so truncated, malformed, hash-inconsistent, or ambiguous legacy
+records fail closed and are repaired only by a later explicitly cache-enabled
+successful call. This detects damage; it is not cryptographic protection from
+a trusted local writer.
 
 The cache itself contains successful response text in plaintext. Treat its
 directory as sensitive when textbook excerpts, client facts, or other private
@@ -775,6 +1073,11 @@ default location is the platform user-cache directory
 
 | Option | Purpose |
 |--------|---------|
+| `--security-profile release|development` | Select fail-closed release defaults or explicit development conveniences |
+| `--network-policy local-only|allow-cloud` | Consent before private text can reach a cloud provider |
+| `--model-download-policy cache-only|allow-reviewed-sync` | Keep runtime offline by default or explicitly permit reviewed model sync |
+| `--llm-cache-namespace LABEL` | Nonsecret custom-gateway trust/tenant label; only its digest persists |
+| `--trust-environment-network` | Accept reviewed proxy/custom-CA routing and an explicit `HF_ENDPOINT` for model sync |
 | `--llm-cache-mode readwrite|readonly|refresh|off` | Read/write policy; `refresh` bypasses a hit and replaces it after live success |
 | `--llm-cache-dir PATH` | Override the machine-local response-cache directory |
 | `--llm-events PATH` | Append one prompt-free JSONL event per logical request |
@@ -796,7 +1099,7 @@ python rag.py generate-questions \
 # Retry the preferred cloud provider even if a fallback result is cached
 python rag.py brief \
   --chunks output/Civil_procedure/Civil_procedure_chunks.jsonl \
-  --llm-cache-mode refresh
+  --llm-cache-mode refresh --network-policy allow-cloud
 
 # Require the selected first provider and fail on unavailable output
 python rag.py query "What is the Erie doctrine?" --answer \
@@ -809,6 +1112,12 @@ python rag.py query "What is the Erie doctrine?" --answer \
 Caching is chain-level: if Ollama or Gemini succeeds after the preferred cloud
 provider fails, that successful fallback remains the warm result. Use
 `--llm-cache-mode refresh` to retry the preferred provider and replace it.
+Release CLI mode defaults the plaintext LLM cache to `off`; select a cache mode
+explicitly only after accepting its local retention. Development CLI mode
+retains the historical `readwrite` default. Direct Python calls use their
+explicit or process runtime configuration. Custom release gateways require a
+nonsecret `--llm-cache-namespace` even with caching off so cache, single-flight,
+report, and resume identities cannot cross credential tenants.
 Single-flight coalescing and budgets are process-local; separate processes do
 not share admissions. Event logs and reports include stable request IDs,
 operation labels, provider/model names, latency, fallback paths, cache status,
@@ -842,7 +1151,7 @@ and stops fallback, with the contract violation exposed in the run report.
 Gemini receives the configured timeout and has SDK retries disabled, so its
 transport count remains explicit.
 
-### DeepSeek V4 configuration
+### Cloud-provider configuration
 
 The shorter LLM option names and the existing cloud option names are aliases:
 
@@ -850,41 +1159,49 @@ The shorter LLM option names and the existing cloud option names are aliases:
 |--------|-------------------|---------|
 | `--llm-url URL` | `--cloud-url URL` | OpenAI-compatible API base URL |
 | `--llm-model MODEL` | `--cloud-model MODEL` | Cloud model name |
-| `--api-key KEY` | `--cloud-key KEY` | One-off, hand-entered cloud API key |
-| `--thinking` | — | Enable supported model reasoning |
-| `--no-thinking` | — | Explicitly disable supported model reasoning (the default) |
+| `--api-key KEY` | `--cloud-key KEY` | Development-only inline key (prefer environment/hidden prompt) |
+| `--thinking` | — | DeepSeek thinking, MiniMax M3 adaptive thinking, Gemini high thinking, or Ollama `think=true` |
+| `--no-thinking` | — | DeepSeek/MiniMax M3 disabled, Gemini minimal, or Ollama `think=false` (the default) |
 
 Selecting a `deepseek-*` model while the URL is still at its MiniMax default
 automatically selects the official DeepSeek endpoint. Conversely, selecting the
 official DeepSeek endpoint without changing the default model selects
-`deepseek-v4-pro`. `--thinking` / `--no-thinking` controls DeepSeek's thinking
-mode and is also forwarded to Ollama's `think` option.
+`deepseek-v4-pro`. The thinking flags are provider-specific: DeepSeek and
+MiniMax M3 support enabled/disabled modes, Gemini maps them to high/minimal,
+and Ollama receives its native boolean. MiniMax M2.x always reasons, so a
+`--no-thinking` M2.x request fails closed rather than misreporting provenance.
 
 Cloud API keys are resolved without reusing a provider-specific secret for an
-unrelated host:
+unrelated host. Endpoint validation always happens first:
 
-1. `--api-key` / `--cloud-key`, when supplied, always wins.
+1. In the development profile only, `--api-key` / `--cloud-key`, when
+   supplied, wins only for a valid endpoint. Release mode rejects inline keys.
 2. DeepSeek uses `DEEPSEEK_API_KEY`, then falls back to `CLOUD_API_KEY`.
 3. MiniMax uses `MINIMAX_API_KEY`, then falls back to `CLOUD_API_KEY`.
-4. Any other custom cloud endpoint uses only `CLOUD_API_KEY`.
+4. A custom HTTPS endpoint uses only `CLOUD_API_KEY`.
+5. A loopback endpoint never reads an ambient provider key; supply an explicit
+   key only when that local server requires one.
 
 ```bash
 # DeepSeek V4 Pro with thinking (set DEEPSEEK_API_KEY first)
 python rag.py generate-questions \
   --chunks output/Civil_procedure/Civil_procedure_chunks.jsonl \
-  --llm-model deepseek-v4-pro --thinking
+  --llm-model deepseek-v4-pro --thinking \
+  --network-policy allow-cloud
 
 # DeepSeek V4 Flash with thinking explicitly disabled
 python rag.py brief \
   --chunks output/Civil_procedure/Civil_procedure_chunks.jsonl \
   --llm-url https://api.deepseek.com \
-  --llm-model deepseek-v4-flash --no-thinking
+  --llm-model deepseek-v4-flash --no-thinking \
+  --network-policy allow-cloud
 
 # Use the default MiniMax cloud model (requires MINIMAX_API_KEY)
 python rag.py chunk \
   --doc output/Civil_procedure/Civil_procedure.json \
   --out output/Civil_procedure/Civil_procedure_chunks.jsonl \
-  --llm-classify --contextualize
+  --llm-classify --contextualize \
+  --network-policy allow-cloud
 
 # Configure the local Ollama fallback (unset cloud keys to use it first)
 python rag.py chunk \
@@ -892,18 +1209,19 @@ python rag.py chunk \
   --out output/Civil_procedure/Civil_procedure_chunks.jsonl \
   --llm-classify --ollama-url http://127.0.0.1:11434 --ollama-model qwen3:30b
 
-# Configure the Gemini fallback
+# Configure the Gemini fallback (set GEMINI_API_KEY first)
 python rag.py chunk \
   --doc output/Civil_procedure/Civil_procedure.json \
   --out output/Civil_procedure/Civil_procedure_chunks.jsonl \
-  --llm-classify --gemini-key YOUR_KEY
+  --llm-classify --network-policy allow-cloud
 
-# Custom OpenAI-compatible endpoint
+# Custom OpenAI-compatible endpoint (set CLOUD_API_KEY first)
 python rag.py chunk \
   --doc output/Civil_procedure/Civil_procedure.json \
   --out output/Civil_procedure/Civil_procedure_chunks.jsonl \
   --llm-classify --cloud-url https://api.example.com/v1 \
-  --cloud-model model-name --cloud-key KEY
+  --cloud-model model-name --network-policy allow-cloud \
+  --llm-cache-namespace reviewed-tenant
 ```
 
 ### Adaptive Rate Limiting
@@ -915,10 +1233,12 @@ successes. No manual intervention needed.
 
 ```bash
 # Start with 10 parallel workers (default)
-python rag.py full --pdf book.pdf --llm-classify --llm-workers 10
+python rag.py full --pdf book.pdf --llm-classify --llm-workers 10 \
+  --network-policy allow-cloud
 
 # Conservative start for strict rate limits
-python rag.py full --pdf book.pdf --llm-classify --llm-workers 4
+python rag.py full --pdf book.pdf --llm-classify --llm-workers 4 \
+  --network-policy allow-cloud
 ```
 
 ## Case Briefs
@@ -1057,20 +1377,24 @@ output/Civil_procedure/Chapters/
 
 Embeddings are computed at `index` time and stored. Chunking automatically caps
 `--max-tokens` to a known model input limit; when `--contextualize` is enabled,
-it also reserves room for the contextual prefix. Every new chunk records both
-its raw `token_count` and its final `embedding_token_count` (context included).
+it also reserves room for the contextual prefix. The default 500-token chunk
+budget fits Nomic v2's 512-token input after reserving its four-token
+`search_document: ` prefix and two special tokens. Every new chunk records both
+its raw `token_count` and its final `embedding_token_count` (context, retrieval
+task prefix, and special tokens included).
 Indexing recomputes final counts with the provider/model tokenizer where
 available (using a conservative fallback), rejects oversized chunks, and sizes
 API batches by aggregate tokens rather than record count. Legacy JSONL without
 count fields is rechecked during indexing.
 
-| Model | Type | Cost | Max Tokens | Best for |
-|-------|------|------|-----------|----------|
-| `nomic-ai/nomic-embed-text-v2-moe` | Local GPU | Free | 8192 | **Default.** Best open-source. |
-| `voyage-law-2` | Voyage API | ~$0.12/M tokens | 16000 | Legal-specific. Trained on case law. |
-| `voyage-3-large` | Voyage API | ~$0.18/M tokens | 16000 | Best general Voyage model. |
-| `text-embedding-3-large` | OpenAI API | $0.13/M tokens | 8191 | Best commercial general-purpose. |
-| `embed-v4.0` | Cohere API | $0.10/M tokens | - | Multilingual. |
+| Model | Type | Pricing | Max Tokens | Best for |
+|-------|------|---------|------------|----------|
+| `nomic-ai/nomic-embed-text-v2-moe` | Local GPU | Free | 512 | **Default.** Best open-source; raw chunks are capped at 506 tokens. |
+| `voyage-law-2` | Voyage API | Provider-priced | 16000 | Legal-specific retrieval. |
+| `voyage-4-large` | Voyage API | Provider-priced | 32000 | Current high-quality general/multilingual option. |
+| `voyage-3-large` | Voyage API | Provider-priced | 32000 | Supported previous-generation general model. |
+| `text-embedding-3-large` | OpenAI API | Provider-priced | 8191 | Commercial general-purpose embedding. |
+| `embed-v4.0` | Cohere API | Provider-priced | Provider-defined | Multilingual. |
 | `dunzhang/stella_en_400M_v5` | Local GPU | Free | 8192 | High quality (requires xformers). |
 | `nlpaueb/legal-bert-base-uncased` | Local GPU | Free | 512 | Inventory only: legacy pickle weights are blocked. |
 
@@ -1083,17 +1407,83 @@ from its separately pinned code repository and its `auto_map` is deterministical
 rewritten to local references before offline loading. BGE, BART, and Docling use
 only selected safe weights. LegalBERT remains in the provenance inventory, but
 its only PyTorch weight is pickle-based and therefore fails closed. An unknown
-custom model also fails closed unless the operator explicitly sets
-`RAG_ALLOW_UNPINNED_MODELS=1`; that escape hatch logs that provenance and byte
+custom model also fails closed unless all three development-only gates are
+present: `--security-profile development`,
+`--model-download-policy allow-reviewed-sync`, and
+`RAG_ALLOW_UNPINNED_MODELS=1`. That escape hatch logs that provenance and byte
 verification are disabled.
 
-The first use synchronizes the selected files into
+Runtime loading is cache-only by default. Before opening a private document,
+explicitly synchronize the reviewed models the run will need into
 `~/.cache/rag-pipeline/model-artifacts` (override with
-`RAG_MODEL_ARTIFACT_CACHE`). Subsequent loads rehash that isolated tree and run
-offline. Delete a corrupt cache entry and rerun to synchronize it again; never
-edit a published cache tree in place. Each process keeps one validated registry
-snapshot so loader records and provenance cannot cross lock generations;
-restart long-running processes after intentionally replacing the policy/lock.
+`RAG_MODEL_ARTIFACT_CACHE`):
+
+```bash
+# Offline: resolve the lock, verify any existing bundles, and preflight space
+python tools/sync_model_artifacts.py \
+  --task pdf-ingestion \
+  --task default-retrieval \
+  --plan
+
+# Networked: synchronize the same first-full-run task selection
+python tools/sync_model_artifacts.py \
+  --task pdf-ingestion \
+  --task default-retrieval
+
+# Optional zero-shot classification; add this task to both commands above
+python tools/sync_model_artifacts.py --task classification --plan
+python tools/sync_model_artifacts.py --task classification
+
+# Machine-readable offline plan for automation
+python tools/sync_model_artifacts.py \
+  --task pdf-ingestion \
+  --task default-retrieval \
+  --plan --json
+
+# Intentionally inspect, then synchronize, every independently safe consumer
+python tools/sync_model_artifacts.py --all --plan
+python tools/sync_model_artifacts.py --all
+```
+
+`pdf-ingestion` selects the reviewed Docling layout/table bundles and Nomic
+chunk tokenizer. `default-retrieval` adds Nomic embedding/token counting and
+the BGE reranker; combine those two presets for the first full run.
+`classification` adds BART only when zero-shot classification is enabled.
+Repeated `--task` and `--model` selections are canonicalized and deduplicated,
+so `--model` remains available for a narrower expert-selected plan without
+making an unqualified synchronization command mean “everything.”
+
+The offline plan obtains every byte count from `model-artifacts.lock.json` and
+reports each independently published runtime bundle as `missing` or
+`verified-present`. Its totals distinguish the selected uncached download,
+the download still required after local verification, already-present runtime
+bytes, additional runtime bytes, peak simultaneous staging/destination space,
+and a free-space margin. `--plan --json` emits the same decision as schema-v1
+JSON with the model-lock and plan SHA-256 identities. A plan exits nonzero when
+space is insufficient; execution revalidates the lock, cache state, and free
+space before transport and again before each missing bundle is published.
+
+LegalBERT remains in the reviewed provenance inventory, but the planner marks
+its pickle-only embedding consumer `unsafe-pickle` and never downloads that
+weight; any independently safe tokenizer consumers remain separate bundles.
+`--all` means all independently syncable safe bundles, not an override of this
+block. Plan totals cover only synchronizer-created reviewed Hub runtime
+bundles. They intentionally exclude derived Docling composite caches and
+RapidOCR assets supplied and verified from the installed package, so those
+separate local footprints are not part of the reported sync requirement.
+
+The tool fetches exact revisions and allowlisted files, then verifies raw and
+transformed bytes before atomic publication. A runtime cache miss fails before
+Hub import or transport; `--model-download-policy allow-reviewed-sync` is an
+explicit convenience, not the release default. Delete a corrupt cache entry
+and rerun the sync tool; never edit a published cache tree in place. Runtime
+bundle identity schema v2 binds the full primary, transformation, and auxiliary
+inventory. An older Nomic directory named with the former partial identity is
+therefore a cache miss and should be resynchronized with the relevant task;
+this migration involves no source or private-corpus data. Each process keeps
+one validated registry snapshot so loader records and provenance cannot cross
+lock generations; restart long-running processes after intentionally replacing
+the policy/lock.
 
 ### Cross-Encoder Reranker
 
@@ -1105,8 +1495,8 @@ containing case, section, heading, chapter, context, and raw text. Returned text
 remains the original chunk. Local models are lazy-loaded and cached by exact
 model name, so switching rerankers cannot silently reuse the wrong model.
 
-Additional reranker backends: Cohere (`cohere-rerank-*`, requires API key) and
-Jina (`jina-reranker-*`, requires API key).
+Additional reranker backends: Cohere (`cohere-rerank-*`, requires
+`COHERE_API_KEY`) and Jina (`jina-reranker-*`, requires `JINA_API_KEY`).
 
 Use `--no-rerank` to disable it, `--reranker-model` to select a model, and
 `--overfetch` to control candidate depth.
@@ -1114,9 +1504,9 @@ Use `--no-rerank` to disable it, `--reranker-model` to select a model, and
 ### LLM Features
 
 LLM-enabled features try the configured OpenAI-compatible cloud endpoint first
-(MiniMax M2.7-highspeed by default, or DeepSeek/custom when selected), then
+(MiniMax M3 by default, or DeepSeek/custom when selected), then
 local Ollama at `http://127.0.0.1:11434`, then Gemini when configured. See
-[DeepSeek V4 configuration](#deepseek-v4-configuration) for model, key, and
+[cloud-provider configuration](#cloud-provider-configuration) for model, key, and
 thinking options. Ordinary chunking and TOC scaffold construction are
 deterministic and make no LLM calls unless an LLM feature flag is supplied.
 
@@ -1124,6 +1514,7 @@ deterministic and make no LLM calls unless an LLM feature flag is supplied.
 |---------|---------------|--------------|
 | Content classification | `--llm-classify` | Replaces regex type detection with LLM inference per chunk |
 | Contextual retrieval | `--contextualize` | Generates 1-2 sentence context prefix per chunk (Anthropic pattern) |
+| Neighbor assembly | `query --context-window N` | Adds manifest-bound adjacent evidence after ranking while preserving independent citations |
 | Heading reconstruction | `--reconstruct-headings` | Infers full section paths for bare headings ("B", "III") |
 | Quality scoring | `--quality-score` | Rates each chunk 1-5 for RAG usefulness |
 | Answer generation | `--answer` (on query) | Produces source-cited answers and abstains when citations are unsupported |
@@ -1154,7 +1545,8 @@ The `index` command hashes each chunk's text and indexable metadata and stores
 the hashes in an atomic, versioned manifest scoped to the database backend and
 collection. The manifest also records its schema version, embedding model,
 embedding dimension, validated model-artifact-lock SHA-256, exact source JSONL
-SHA-256, and source record count. A compatible rerun embeds only changed/new
+SHA-256, source record count, exact table-row-child count, and the exact
+schema-versioned quality-report SHA-256 pair. A compatible rerun embeds only changed/new
 chunks, removes chunks no longer present, and skips unchanged chunks. Qdrant incremental runs scan payload-only
 stable IDs before mutation and again after writes, refusing to advance the
 manifest if points are missing, unexpected, duplicated, untracked, or returned
@@ -1212,9 +1604,13 @@ suffix. When they regenerate chunks, they create the collection recovery marker
 before work begins, publish the JSONL via atomic replacement, and retain the
 vector lease until the matching index commits. A crash therefore exposes
 neither partial JSONL nor an apparently clean old index paired with a new
-corpus. Chroma hybrid search independently compares the chunks SHA-256 with the
-manifest, parses and hashes one exact file-handle snapshot, and refuses
-cross-generation lexical/vector fusion until reindexing. A legacy Chroma index
+corpus. Before any vector-client mutation, indexing validates the adjacent
+quality report against one exact chunks snapshot; schema-v8 manifests bind the
+validated schema-v4 report SHA-256 and attest the row-child count used to select
+a safe candidate depth. Chroma hybrid search and opt-in neighbor
+assembly compare both the chunks and quality-report SHA-256 values with the
+manifest, parse and hash one exact file-handle snapshot, and refuse
+cross-generation retrieval until reindexing. A legacy Chroma index
 without a manifested source SHA-256 falls back to vector retrieval with a
 warning instead of fusing unproven lexical data. Reranking begins only after the
 retrieval lease and vector client are released, so model or API latency does not
@@ -1231,6 +1627,19 @@ stage fail-closed: `full --resume` regenerates it instead of accepting a
 truncated, stale, or partial artifact set. Legacy pipeline artifacts without
 completion metadata regenerate once when resumed.
 
+On Windows, transient synced-folder sharing/access failures (`winerror` 5, 32,
+or 33) receive a small bounded retry only around replacement of the already
+written, fsynced staging file. Every retry revalidates the parent identity,
+destination leaf, staging identity and exact bytes, link count, and private
+permissions after backoff. Owned-marker reads and exact artifact snapshot reads
+separately retry only content-identical ctime churn. Artifact retries pin the
+opened device, inode, size, mtime, and SHA-256 across attempts; any content
+generation change still fails closed. Marker reads additionally pin link count,
+schema, and ownership. Windows recomputes exact artifact hashes for every
+verification because its `st_ctime` is a creation time rather than a safe
+change counter; the bounded stat-keyed hash cache is used only on platforms
+where ctime changes with file metadata or content.
+
 The sequential background-upsert paths for both backends share teardown that
 requests a worker stop, waits for completion, and attempts both executor and
 progress closure; progress advances only after a write succeeds, and a
@@ -1246,7 +1655,13 @@ the recovery marker and old manifest instead of reporting success while a
 Windows database lock remains held. Operation errors take precedence over
 secondary close errors. Chroma 1.5.2 is the minimum supported release because
 it provides the public, reference-counted `close()` needed to release shared
-local database handles without invalidating another live client.
+local database handles without invalidating another live client. On Windows,
+closing a filesystem-local Qdrant client is followed by one explicit garbage
+collection to finalize unreachable SQLite cursors retained by the local client;
+remote Qdrant clients and non-Windows platforms do not pay that cost. This
+correctness trade-off can add a variable pause to a Windows local-mode request;
+real-client CI keeps it observable, and it should be removed when the pinned
+client release explicitly finalizes every persistence cursor.
 
 If the model, model-artifact lock, vector dimension, or manifest schema
 changes—or an older shared `chunk_hashes.json` sidecar is encountered—the
@@ -1258,6 +1673,13 @@ Chunk JSONL is parsed and schema-checked strictly before a collection can be
 changed. `full --resume` always revalidates the manifest and hashes, and queries
 refuse a model, model-lock generation, or vector dimension that conflicts with
 an existing manifest.
+
+The real-vector-client release rehearsal recreates the exact schema-5 manifest
+field set emitted by the last integrated release, upgrades only the selected
+collection to schema 8, and verifies exact IDs and hashes, sibling collection
+and manifest preservation, a subsequent no-op, successful queries against both
+collections, clean recovery-marker state, and immediate database-directory
+removal on Windows and Linux for both Chroma and Qdrant.
 
 ```bash
 python rag.py index \
@@ -1279,10 +1701,61 @@ model to `index` automatically triggers the safe collection rebuild described
 above; `--full-reindex` remains available when an unconditional rebuild is
 desired.
 
+## Source-Preserving Chunking
+
+Chunk preparation keeps Docling source items authoritative when flattened
+chunk text would lose structure. Mixed prose/table chunks are separated;
+tables are emitted once as Markdown with captions and nested footnotes; and
+text merged across a front- or back-matter boundary is split by source page so
+substantive content cannot be discarded with structural material. When a
+Docling table cell omits text that is visibly present inside the source PDF's
+table bounding box, the pipeline restores that table from the PDF while
+ignoring information-equivalent token fusion such as `New York`/`NewYork`.
+Large tables are row-packed under the embedding limit with their header row
+repeated in each preserved parent chunk. Add `--table-children` to `chunk`,
+`full`, or `batch` to derive one retrieval-only child for each data row in an
+eligible source table with at least four rows across all of its preserved
+fragments:
+
+```bash
+python rag.py full --pdf Civil_procedure.pdf --table-children
+```
+
+Every fragment of an eligible source table receives children, including a
+fragment that is itself shorter than four rows. Each child repeats that
+fragment's table caption, header, separator, and exactly one source row. The
+parent text and durable ID stay unchanged; even identical source rows receive
+distinct stable IDs and citations through their parent ID plus ordinal.
+When row packing produces two byte-identical fragments, deterministic fragment
+occurrence metadata preserves both through deduplication; occurrence zero keeps
+the original parent ID and only later occurrences extend their identity.
+Children inherit exact source/page/section provenance but have no ordinary
+previous/next context links. Search overfetches when the manifest records
+children, suppresses a parent only when a child from the same table was also
+retrieved, and retains distinct sibling rows. Markdown/plaintext/flashcard
+exports, question and brief generation, citation graphs, and RAPTOR trees use
+only canonical records, so enabling the flag cannot duplicate published or
+study material. Malformed tables fail closed and receive no children; bounded
+per-table and per-corpus caps prevent record explosion. Quality attestation
+also requires fragments from one source table to share an exact Markdown
+schema and compares their aggregate row/column dimensions with the bound
+Docling source matrix when native dimensions are available. PDF-recovered
+tables are exempt from a defective native matrix; their replacement remains
+bound to the hash-verified recovery PDF and conversion manifest.
+
 ## TOC-Based Hierarchy Detection
 
 The pipeline extracts authoritative document structure from the Table of Contents
-rather than relying solely on heading detection. It supports two methods:
+rather than relying solely on heading detection. Structure policy is selected
+explicitly with `--structure-profile`; the production-qualified default is
+`us-law-casebook-v1`. The registered `roman-parts-book-v1` policy models books
+whose primary divisions are Roman-numbered Parts, but currently has synthetic
+fixture coverage only and is not yet production-qualified on an authorized real
+corpus. A profile controls front/back-matter labels, division patterns, TOC
+hierarchy, canonical titles, cross-references, classification, quality checks,
+and export paths as one immutable policy.
+
+The pipeline supports two TOC extraction methods:
 
 1. **Column-position parsing**: Scans first 25 pages for TOC tables, maps column
    positions to heading depth (col 0 = chapter, col 1 = section, col 2 = sub).
@@ -1293,6 +1766,24 @@ rather than relying solely on heading detection. It supports two methods:
 This produces section paths like `Chapter 3 > B. Federalism > 2. Specific Jurisdiction`
 instead of flat `B` or `III`. In testing, TOC detection raised multi-level
 section paths from 0% to 84%.
+
+```bash
+# Arabic-numbered U.S. casebooks (the default)
+python rag.py chunk --doc output/Casebook/Casebook.json \
+  --out output/Casebook/Casebook_chunks.jsonl \
+  --structure-profile us-law-casebook-v1
+
+# Experimental qualification only; inspect results before production use
+python rag.py full --pdf Scholarly_book.pdf \
+  --structure-profile roman-parts-book-v1
+```
+
+Profile selection is intentionally not guessed from document text. An unknown
+profile is rejected by the CLI, and a selected profile that recognizes no
+primary divisions fails before chunk publication. `batch` applies its one
+explicit profile to every PDF, so group documents by layout family rather than
+mixing publisher structures in one command. Profiles are reviewed code, not
+arbitrary runtime JSON, and concurrent runs do not share mutable profile state.
 
 ## Scaffold-to-Markdown CLI
 
@@ -1322,9 +1813,10 @@ validating their artifacts as follows:
 
 | Stage | Checks for |
 |-------|-----------|
-| Convert | Source/config/model-lock completion plus both output hashes |
-| Chunk | Source/config/model-lock completion, output hash, and strict JSONL schema |
-| Index | Clean compatible manifest plus physical IDs/count and chunk hashes |
+| Convert | Schema-v2 immutable original/effective PDF binding, config/model lock, and exact JSON/Markdown/derived-PDF output hashes |
+| Chunk | Schema-v3 exact Docling/conversion/recovery inputs, immutable structure-profile receipt, output hash, and strict JSONL schema |
+| Quality | Schema-v4 chunk-input provenance plus exact Docling/chunks/parameters/retrieval-linkage/table-family binding and every required PASS check |
+| Index | Clean schema-v8 manifest plus schema-v4 report binding, physical IDs/count, row-child count, and chunk hashes |
 | Export | Source/config completion and output hash |
 | Chapter export | Exact manifested chapter-file set and hashes |
 | RAPTOR | Source/config-bound tree schema and statistics |
@@ -1341,6 +1833,65 @@ python rag.py batch *.pdf --resume
 ```
 
 On failure, the pipeline prints a ready-to-paste resume command.
+
+Conversion schema-v1 and chunk schema-v1/v2 completion files remain readable as
+migration inputs but are never accepted as verified resume evidence. Schema-v1
+or schema-v2 quality reports and pre-v6 index bindings are not accepted. A
+schema-v3 quality report remains read-compatible only after deterministic
+in-memory validation proves that its corpus contains no row children. A corpus
+carrying quality evidence, source lineage, or any table-family metadata requires
+a current schema-v4 report for indexing. Query-only compatibility accepts a
+schema-v6/schema-v2 index with neighbor context off and a schema-v7/schema-v3
+index with context on or off. Current indexing writes schema-v8/schema-v4
+evidence. Migrate the whole artifact chain in order, using the same processing
+flags, embedding model, and explicit structure profile as the original run:
+
+```bash
+# Rebuild conversion, chunks, and quality evidence when needed, then reconcile
+# the collection and commit its new quality-report binding.
+python rag.py full --pdf Book.pdf --resume \
+  --structure-profile us-law-casebook-v1
+
+# Optional conservative variant: replace the named vector collection outright.
+python rag.py full --pdf Book.pdf --resume --full-reindex \
+  --structure-profile us-law-casebook-v1
+```
+
+Do not query or export the old collection until this command finishes. Resume
+keeps valid schema-v2 conversion evidence, rebuilds invalid or pre-v3 chunk
+evidence under schema v3 and chunking policy v23, regenerates the schema-v4
+quality report from the exact chunk-completion inputs, and then reconciles or
+rebuilds an index whose
+prior quality binding is incompatible. The chunk receipt records the selected
+profile name, revision, schema, and canonical policy SHA-256 plus a
+credential-free composite binding between that receipt and the complete
+parameter digest. A changed, detached, or tampered policy forces re-chunking
+instead of silently reusing different structure semantics. Deleting or
+hand-editing only one manifest cannot migrate the chain and fails closed. Keep
+the profile and any LLM/classification/context flags from the original command;
+changing them intentionally creates a new parameter-bound generation.
+
+Conversion streams one opened PDF generation into a private,
+access-restricted scratch pathname, gives only that pathname to preprocessing
+and Docling, and verifies both the staged copy and live source before committing
+its manifest. Chunking captures one exact Docling JSON generation and, when PDF
+table recovery is used, records the hash-verified PDF and conversion-manifest
+identities in both the chunk and quality manifests. Standalone recovery should
+name the source explicitly:
+
+```bash
+python rag.py chunk --doc output/Book/Book.json \
+  --out output/Book/Book_chunks.jsonl --source-pdf Book.pdf \
+  --structure-profile us-law-casebook-v1
+```
+
+`full` and `batch` pass their exact source PDF automatically. Snapshot copies
+require free scratch space equal to the PDF size plus a 64 MiB margin. Normal
+exit removes them immediately; startup and the storage command conservatively
+remove only old, marker-owned trees whose exact process generation is no longer
+alive. Cleanup pins the owned root and run directory, refuses device-boundary
+crossings, nested/link-like entries, and multiply linked files, and preserves
+the ownership marker whenever removal cannot be completed safely.
 
 ## Question Extraction
 
@@ -1410,7 +1961,22 @@ Each enriched chunk carries:
 | `headings` | list[str] | Full heading hierarchy from Docling layout model |
 | `quality_score` | int/null | LLM-rated usefulness 1-5 (with `--quality-score`) |
 | `token_count` | int | Token count of the raw chunk before any contextual prefix |
-| `embedding_token_count` | int | Token count of the exact contextualized text sent for embedding |
+| `embedding_token_count` | int | Token count of the exact contextualized, task-prefixed model input, including special tokens |
+| `source_lineage_schema_version` | int | Version of the exact source-item lineage contract |
+| `source_items` | list[object] | Deterministic Docling refs with labels, parent refs, pages, and optional bounding boxes |
+| `retrieval_linkage_schema_version` | int | Version of the stable context-link contract |
+| `stable_id` | str | Intrinsic `chunk_<digest>` identity; independent of output position and derived linkage |
+| `context_parent_id` | str | Deterministic source/chapter context group; empty when no explicit chapter is safe to link |
+| `previous_stable_id` | str | Immediate prior chunk in final published order within the same context parent, or empty |
+| `next_stable_id` | str | Immediate following chunk in final published order within the same context parent, or empty |
+| `table_retrieval_schema_version` | int | Version of the optional table parent/row-child contract |
+| `retrieval_role` | str | `table_parent` or retrieval-only `table_child` when row expansion is enabled |
+| `table_parent_stable_id` | str | Stable ID of the preserved whole-table parent |
+| `table_fragment_occurrence` | int | Zero-based disambiguator present only when row packing yields otherwise identical source-table fragments |
+| `table_child_index` | int | Zero-based source-row ordinal; present only on a row child |
+| `table_child_count` | int | Exact number of row children attested for this table family |
+| `table_source_row_count` | int | Exact row count across all preserved fragments sharing one source-table lineage |
+| `table_source_fragment_count` | int | Exact number of preserved fragments sharing one source-table lineage |
 | `chunk_index` | int | Positional index in output |
 
 ### Content Types
@@ -1444,13 +2010,37 @@ query must contain at least one positive judgment.
 `stable_id` and `source_file` returned by existing indexes are accepted as
 compatibility aliases when matching results.
 
+When row-level table retrieval is enabled, a reviewed schema-v1 `table_family`
+may list the exact child rows that also satisfy one canonical parent judgment:
+
+```json
+{"chunk_id":"chunk_parent","relevance":3,"table_family":{"schema_version":1,"accepted_child_chunk_ids":["chunk_answer_row"]}}
+```
+
+The parent or any listed child earns one positive parent grade exactly once; a
+zero-relevance judgment cannot declare family aliases. An unlisted
+sibling, unrelated table, repeated family hit, or result that merely claims the
+same parent in backend metadata earns no credit. Child IDs must be sorted and
+unique, belong to the parent's fully attested family in the pinned chunks
+artifact, and be included in corpus-owner review. A family-bearing suite must
+pin every query to the same exact corpus SHA-256, record count, and stable-ID
+scheme. Direct Python callers must derive a sealed `TableFamilyAttestation`
+from the exact corpus with `evaluation_contract.attest_table_families`; the
+evaluator rejects caller-authored membership mappings. Full reports name the
+canonical judgment ID, the actual matched ID, and `match_kind` (`exact` or
+`accepted_table_child`). Summary reports retain the match kind but hash both
+identities. Retrieval aliases do not broaden claim-level grounding evidence:
+`grounding_case.entailed_by` must still name the exact model-visible source.
+[The table-family evaluation ADR](docs/architecture/decisions/table-family-evaluation.md)
+records the rejected blanket-alias alternatives and version migration.
+
 Judged sets may also declare subject/book labels, repeatable slice tags, and
 query-specific metadata filters. An abstention case intentionally has no
 positive judgment and succeeds only when the retriever returns no evidence:
 
 ```json
-{"query_id":"property-filter","query":"elements of adverse possession","subject":"Property","book":"Property Mini Corpus","tags":["filter"],"filters":{"content_type":"doctrine","chapter_num":2},"judgments":[{"chunk_id":"chunk_c0efee95e1e2bb5b","relevance":3}],"corpus":{"sha256":"177e9a2d4b9015c1bac083a2489d2f622281f623d649d9292ef67eda41a6154f","record_count":10}}
-{"query_id":"property-abstain","query":"unsupported lithium royalty percentage","subject":"Property","book":"Property Mini Corpus","tags":["abstention","adversarial"],"expected_abstain":true,"corpus":{"sha256":"177e9a2d4b9015c1bac083a2489d2f622281f623d649d9292ef67eda41a6154f","record_count":10}}
+{"query_id":"property-filter","query":"elements of adverse possession","subject":"Property","book":"Property Mini Corpus","tags":["filter"],"filters":{"content_type":"doctrine","chapter_num":2},"judgments":[{"chunk_id":"chunk_c0efee95e1e2bb5b","relevance":3}],"corpus":{"sha256":"606ea787c06e32b8b0a8b0e31a96900c5e2996839e8ed384cda291e0693776a8","record_count":11}}
+{"query_id":"property-abstain","query":"unsupported lithium royalty percentage","subject":"Property","book":"Property Mini Corpus","tags":["abstention","adversarial"],"expected_abstain":true,"corpus":{"sha256":"606ea787c06e32b8b0a8b0e31a96900c5e2996839e8ed384cda291e0693776a8","record_count":11}}
 ```
 
 Allowed filters are `content_type` and `chapter_num`. Reports aggregate tagged,
@@ -1462,10 +2052,48 @@ subject, book, and difficulty slices under metric names such as
 Optional `grounding_case` fixtures pass an authored candidate answer through the
 deterministic citation/quotation policy without calling an LLM. Their
 `grounding_accuracy` measures policy-fixture behavior only—not model answer
-quality. The checked-in cases cover an unknown source citation, an uncited
-answer, and an unsupported direct quotation. Every slice metric is accompanied
-by its own `/num_queries` denominator plus a slice-level `total_queries`, so a
-mixed relevance/abstention tag cannot imply that every metric used every case.
+quality. Legacy fixtures cover an unknown source citation. Schema-v2 fixtures
+add ordered, human-reviewed claim labels: each non-empty answer line is one
+explicit `answer_unit`, and `entailed_by` names the exhaustive set of stable
+chunk IDs allowed to support it plus an anchor that must occur in the
+model-visible excerpt. An empty `entailed_by` labels an unsupported claim.
+These labels are corpus-pinned and must declare `review_status` as either
+`approved` or `draft_requires_corpus_owner`. Any CLI run containing a schema-v2
+case requires every query to declare the exact corpus SHA-256 and record count,
+including exploratory runs against a live index.
+
+```json
+{"schema_version":2,"case_type":"supported_claim","answer":"A later purchaser must take without notice and record first [S1].","expected_abstained":false,"claim_judgments":[{"claim_id":"race-notice-elements","answer_unit":"A later purchaser must take without notice and record first [S1].","entailed_by":[{"source_id":"chunk_0b7678dcd47185e0","excerpt_contains":"taking without notice of the earlier interest and recording before the earlier claimant"}]}]}
+```
+
+The evaluator resolves query-local `S#` citations back to stable IDs and emits
+micro-averaged `claim_citation_entailment_accuracy`,
+`unsupported_claim_rate`, and `answer_abstention_accuracy`. It reports exact
+claim/case denominators globally and per slice, rather than averaging cases
+that contain different numbers of claims. `grounding_accuracy` remains the
+backward-compatible case composite, so a perfect value now requires the
+structural citation checks, every supported claim, no exposed unsupported
+claim, the expected answer-abstention behavior, and any prompt-envelope check
+to pass.
+
+The checked-in CC0 suites include accepted supported answers as well as
+withheld uncited, unknown-citation, and unsupported-quotation answers; an
+always-abstaining implementation therefore cannot pass. Each subject also has
+a source containing delimiter, role, question, sentinel, and fake-citation
+strings. `prompt_injection_fixture_accuracy` reconstructs the answer prompt,
+parses every exact one-line JSON source envelope, confirms the declared marker
+never escaped its untrusted payload, and also requires the authored answer to
+meet its expected abstention and claim labels. This is a serialization and
+policy fixture, not evidence that a live model resists prompt injection or a
+general semantic-entailment detector. Runtime quotation validation additionally
+requires a quote to occur in evidence cited by that quote's own paragraph.
+Source JSON escapes newline, next-line, and Unicode paragraph/line-separator
+characters so adversarial source text cannot create a second envelope line.
+
+Every ordinary slice metric is accompanied by its `/num_queries` denominator
+plus a slice-level `total_queries`. Claim metrics additionally include
+`/num_claims`, while answer and prompt metrics include `/num_cases`, so a mixed
+slice cannot imply that every metric used every case.
 
 ```bash
 # Single config with custom cutoffs and a detailed JSON report
@@ -1477,6 +2105,16 @@ python eval.py \
   --k 1 5 10 \
   --depth 100 \
   --json-report output/eval/current.json
+
+# Preserve primary ranking metrics while serializing adjacent evidence
+python eval.py \
+  --queries my_judged_queries.jsonl \
+  --chunks output/Civil_procedure/Civil_procedure_chunks.jsonl \
+  --db output/Civil_procedure/Civil_procedure_chroma \
+  --collection civil_procedure \
+  --context-window 1 \
+  --context-max-characters 8000 \
+  --context-segment-characters 1600
 
 # Compare 4 configs side-by-side
 python eval.py --compare \
@@ -1494,16 +2132,38 @@ python eval.py \
   --baseline-report evaluation/baselines/property-bm25.json \
   --fail-under ndcg@3=0.95 \
   --fail-under abstention_accuracy=1 \
+  --fail-under claim_citation_entailment_accuracy=1 \
+  --fail-under answer_abstention_accuracy=1 \
+  --fail-under prompt_injection_fixture_accuracy=1 \
   --fail-over false_answer_rate=0 \
+  --fail-over unsupported_claim_rate=0 \
   --max-regression ndcg@3=0
+
+# Focused table-family contract: selected rows earn one logical parent qrel,
+# while sibling and unrelated-family hard negatives remain misses at rank 1
+python eval.py \
+  --retriever bm25 \
+  --queries evaluation/suites/table_family/queries.jsonl \
+  --chunks evaluation/suites/table_family/chunks.jsonl \
+  --k 1 3 5 --depth 10 \
+  --json-report evaluation-reports/table-family.json \
+  --baseline-report evaluation/baselines/table-family-bm25.json
 ```
 
 `--retriever index` remains the default and exercises the real Chroma/Qdrant,
 embedding, hybrid, and reranker path. `--retriever bm25` is deliberately a
 lower-fidelity lexical adapter for deterministic, no-download regression tests;
 its scores must not be presented as dense-retrieval quality. The checked-in
-CC0 Property and Constitutional Law mini corpora are controlled calibration
-fixtures, not substitutes for expert review of a full private textbook.
+CC0 Property, Constitutional Law, and synthetic table-family mini corpora are
+controlled calibration fixtures, not substitutes for expert review of a full
+private textbook. The table-family suite deliberately contains two generated
+four-row families and hard negatives; it exercises exact corpus attestation,
+parent suppression, selected-child credit, exact-once scoring, filters, and
+full-detail match provenance through the public CLI.
+The index adapter also accepts the three context flags shown above, records
+them in the report, and serializes supplementary segments without changing the
+primary result list used for ranking metrics. Offline BM25 rejects nonzero
+neighbor context because it has no manifested adjacency contract.
 For explicit no-evidence behavior, the adapter removes a pinned stop-word set
 and requires two distinct content-term matches for queries containing more than
 two content terms; its implementation version and stop-word digest are recorded
@@ -1513,11 +2173,24 @@ All query schemas report Success@k, MRR, and optional top-result type accuracy.
 Queries with explicit judgments additionally report Recall@k, nDCG@k, and MAP;
 those judged metrics are averaged only across judged queries. Detailed JSON
 reports contain a schema version, retrieval configuration, aggregate metrics,
-and per-query ranked-result identities and relevance matches. Schema v4 also
-records per-query plus p50/p95/max retrieval latency, sampled process RSS,
-Python `tracemalloc` peak, and bounded index/storage byte counts. RSS is sampled
+and per-query ranked-result identities and relevance matches. Schema v6 binds
+grounding-scorer version 2, judgment-scorer version 2, the table-family
+judgment and retrieval/collapse policies, and the configured context budgets.
+It retains schema v5's claim-level metrics and schema v4's per-query retrieval
+latency plus p50/p95/max summaries,
+sampled process RSS, Python `tracemalloc` peak, and bounded index/storage byte
+counts. RSS is sampled
 rather than a continuous peak, and `tracemalloc` excludes native allocations;
 the report records both measurement methods.
+
+Safety rates are serialized without three-decimal rounding so a single unsafe
+answer in a large suite cannot become `0.0` (or a falsely perfect `1.0`) before
+`--fail-under` or `--fail-over` is applied. Ranking metrics retain their compact
+three-decimal report format. For schema-v2 suites, a
+`--fail-under grounding_accuracy=1` release gate automatically expands to the
+applicable named claim-entailment, unsupported-claim, answer-abstention, and
+prompt-injection gates. Missing component metrics therefore fail closed even if
+an older CI command names only the backward-compatible composite.
 
 Summary detail is the default: query text, source previews, raw stable/source
 IDs, local manifest paths, and storage paths are omitted or hashed so CI
@@ -1568,6 +2241,137 @@ These figures informed the Chroma defaults (`dense=0.5`, `lexical=1.0`,
 set before treating them as universal. The old machine-readable run is local
 under ignored `output/` storage and is intentionally not a committed baseline.
 
+`eval_queries_ethics_draft.jsonl` is a 14-query, 24-judgment calibration draft
+pinned to the exact 1,715-record `Ethics_3` snapshot. Its slices distinguish
+Rule 1.5(c)'s page-542 disclosure rule from the page-543 numerical calculation,
+grade an irrelevant section-outline distractor, and cover rule tables, author
+explanations, cases, cross-page chunks, metadata filters, abstention, and direct
+queries for which outlines are relevant. Every row is marked
+`draft_requires_corpus_owner`; do not use it as a release gate or committed
+baseline until a corpus owner reviews the queries, stable IDs, and grades. The
+evaluator enforces that distinction: `--fail-under`, `--fail-over`, and
+baseline-regression checks reject any explicitly draft query.
+
+`evaluation_review.py` makes the owner boundary explicit instead of relying on
+an unaudited JSON edit. First, re-pin a still-draft set after a regenerated
+corpus proves that every judged stable ID survives. Then produce a protected
+full-detail comparison and combine its top candidates with the exact judged
+passages in an owner-only packet:
+
+```bash
+python evaluation_review.py rebind \
+  --queries eval_queries_ethics_draft.jsonl \
+  --chunks output/Ethics_3/Ethics_3_chunks.jsonl \
+  --declared-chunks-path output/Ethics_3/Ethics_3_chunks.jsonl \
+  --out evaluation-reports/ethics-draft-current.jsonl
+
+python eval.py \
+  --queries evaluation-reports/ethics-draft-current.jsonl \
+  --chunks output/Ethics_3/Ethics_3_chunks.jsonl \
+  --db output/Ethics_3/Ethics_3_chroma \
+  --collection ethics_3 --compare --k 1 3 5 10 --depth 20 \
+  --report-detail full \
+  --json-report evaluation-reports/ethics-draft-current.full.json
+
+python evaluation_review.py prepare \
+  --queries evaluation-reports/ethics-draft-current.jsonl \
+  --chunks output/Ethics_3/Ethics_3_chunks.jsonl \
+  --diagnostic-report evaluation-reports/ethics-draft-current.full.json \
+  --candidate-depth 10 \
+  --out evaluation-reports/ethics-owner-review.packet.json
+```
+
+The packet contains private query and evidence text and is published with the
+same owner-only, link-aware storage policy as pipeline artifacts. Edit only each
+`query_decision` and `judgment_reviews[].decision`, using `approve` or `reject`.
+Approving a query also attests that its displayed unjudged retrieval candidates
+were checked for missing evidence; an abstention approval attests that the
+negative proposition was independently checked against the pinned corpus. A
+rejection requires revising the draft and preparing a new packet.
+Preparation computes the exact indented UTF-8 payload size before publication
+and fails without creating the output when the packet would exceed its parser
+ceiling.
+
+Review and release-policy objects use the strict shared parser: duplicate
+fields, invalid UTF-8, structures deeper than 64 levels, non-finite literals,
+and out-of-range numeric magnitudes such as `1e999` fail closed. The general
+`eval.load_queries` JSONL path deliberately remains the legacy parser for
+compatibility: R8b moved its query validation contracts, not its parsing,
+error, raw-byte digest, or mutation semantics. Any future strictification is a
+separate input-policy migration rather than dependency-direction work.
+
+Once every decision is `approve`, the corpus owner—not an automated agent—can
+promote the set and issue a content-free receipt:
+
+```bash
+python evaluation_review.py finalize \
+  --packet evaluation-reports/ethics-owner-review.packet.json \
+  --queries evaluation-reports/ethics-draft-current.jsonl \
+  --chunks output/Ethics_3/Ethics_3_chunks.jsonl \
+  --diagnostic-report evaluation-reports/ethics-draft-current.full.json \
+  --candidate-depth 10 \
+  --approved-queries-out evaluation-reports/ethics-v1.jsonl \
+  --receipt-out evaluation-reports/ethics-v1.review.json \
+  --reviewer-id "CORPUS OWNER LABEL" \
+  --reviewed-at 2026-07-24T18:30:00Z \
+  --attestation "I reviewed every query and judgment against the pinned corpus"
+```
+
+The approved set is bound to the receipt by its exact bytes and a review batch
+digest. The receipt stores only hashes, counts, coverage tags, and the review
+time; it does not contain query text, corpus text, stable IDs, paths, or the
+reviewer label. This is a provenance attestation, not an identity signature, so
+a durable human PR review is still required. Receipt-bound queries cannot use
+release thresholds without `--review-receipt`.
+
+After review, create one approved schema-v2 release policy. The policy binds the
+query set, corpus, review receipt, model-artifact lock, retrieval parameters,
+scorer/report versions, table generation and family-collapse semantics, and
+explicit Success@3, Recall@10, nDCG@10, MAP, abstention, filter, and false-answer
+thresholds for all four modes. It deliberately owns those CLI settings, so
+ambiguous manual overrides are rejected. Run each mode separately to retain a
+schema-v6 single-run gate report:
+
+```bash
+python eval.py \
+  --release-policy evaluation/policies/ethics-v1.json \
+  --policy-mode vector \
+  --review-receipt evaluation/reviews/ethics-v1.review.json \
+  --queries evaluation/suites/ethics/queries.jsonl \
+  --chunks output/Ethics_3/Ethics_3_chunks.jsonl \
+  --db output/Ethics_3/Ethics_3_chroma --collection ethics_3 \
+  --json-report evaluation-reports/ethics-v1-vector.json
+```
+
+Repeat with `vector_reranked`, `hybrid`, and `hybrid_reranked`. Do not create an
+approved policy or choose final floors from draft judgments; derive them only
+after the final owner-reviewed labels are fixed.
+
+```bash
+python eval.py \
+  --queries eval_queries_ethics_draft.jsonl \
+  --chunks output/Ethics_3/Ethics_3_chunks.jsonl \
+  --db output/Ethics_3/Ethics_3_chroma \
+  --collection ethics_3 \
+  --compare --k 1 3 5 10 --depth 20 \
+  --json-report evaluation-reports/ethics-draft-compare.json
+```
+
+The archived pre-family schema-v5 clean-room diagnostic, against corpus SHA-256
+`a56f145f09a6c97efac1ad622e478a735b9f23fb1d48d4807ae89edd4fd7a790`,
+produced the following non-gating results. The
+page-542 rule-specific query ranked its table first; the calculation query
+retrieved all six graded page-542/page-543 chunks in the hybrid top six. Plain
+hybrid's remaining misses were broad outline intents, which is evidence against
+a blanket outline penalty.
+
+| Draft configuration | Success@3 | nDCG@10 | MAP |
+|---|---:|---:|---:|
+| Vector only | 0.923 | 0.872 | 0.836 |
+| Vector + BGE reranker | 1.000 | 0.986 | 0.977 |
+| Hybrid | 0.923 | 0.874 | 0.862 |
+| Hybrid + BGE reranker | 1.000 | 0.986 | 0.977 |
+
 Use repeatable thresholds to make a single-configuration evaluation fail with
 exit code 2 when quality is below a required floor:
 
@@ -1608,9 +2412,9 @@ query digest, portable index snapshot fields, retrieval settings, and model
 lock where applicable; absolute local manifest paths are intentionally excluded
 from compatibility checks.
 
-CI runs both checked-in offline suites, enforces absolute and zero-tolerance
-baseline gates, and retains the redacted schema-v4 JSON reports for 30 days as
-the `offline-retrieval-evaluation` artifact. The repository's
+CI runs all three checked-in offline suites, enforces absolute and
+zero-tolerance baseline gates, and retains the redacted schema-v6 JSON reports
+for 30 days as the `offline-retrieval-evaluation` artifact. The repository's
 `eval_queries.jsonl` remains a ten-query keyword starter set, while
 `eval_queries_judged.jsonl` is the 24-query private Civil Procedure calibration.
 Create and expert-review a separate stable-ID set before calibrating any full
@@ -1626,26 +2430,33 @@ pip install -r requirements-optional.txt
 python ui.py \
   --chunks output/Civil_procedure/Civil_procedure_chunks.jsonl \
   --db output/Civil_procedure/Civil_procedure_chroma \
-  --collection civil_procedure             # http://localhost:7860
+  --collection civil_procedure \
+  --trust-local-user                        # http://127.0.0.1:7860
 
 # Qdrant run
 python ui.py --db-backend qdrant \
   --chunks output/Civil_procedure/Civil_procedure_chunks.jsonl \
   --db output/Civil_procedure/Civil_procedure_qdrant \
-  --collection civil_procedure
+  --collection civil_procedure \
+  --trust-local-user
 ```
 
-Add `--share` to either complete command to create a public Gradio link. This
-can expose private queries, retrieved passages, metadata, and exports to anyone
-who obtains the link; do not use it for a sensitive corpus. The Jobs tab is not
-registered in shared mode, and its callbacks refuse to touch private job state.
-Search retrieval and Info's exact vector count execute in killable workers. Use
-`--search-timeout SECONDS`, `--info-timeout SECONDS`, and
+The UI always binds the literal loopback address `127.0.0.1` and explicitly
+disables Gradio sharing. Because loopback does not authenticate another local
+OS user, the UI refuses to build or launch without the explicit
+`--trust-local-user` acknowledgement and is supported only in a trusted
+single-user OS session. There is no supported public-share flag. Remote access
+requires a separately reviewed deployment boundary with authentication, TLS,
+authorization, origin protections, rate isolation, audit policy, and corpus
+distribution approval. Search retrieval and Info's exact vector count execute
+in killable workers. Use `--search-timeout SECONDS`, `--info-timeout SECONDS`, and
 `--db-lock-timeout SECONDS` to tune their hard deadlines and local lease wait
 independently.
 
 **Search tab**: query box, content type/chapter filters, three-state retrieval
-and reranker controls (Auto/forced/disabled), formatted results with metadata.
+and reranker controls (Auto/forced/disabled), a Neighbor context slider from
+zero to two, and formatted primary/neighbor results with source aliases. The UI
+uses the default total and per-segment character budgets.
 
 **Export tab**: single-file or split-chapter export with content type filters;
 returns one file download or a ZIP archive for split chapters.
@@ -1771,7 +2582,8 @@ python rag.py convert --pdf book.pdf --batch-size 2
 
 The adaptive throttle handles this automatically. To start more conservatively:
 ```bash
-python rag.py full --pdf book.pdf --llm-classify --llm-workers 4
+python rag.py full --pdf book.pdf --llm-classify --llm-workers 4 \
+  --network-policy allow-cloud
 ```
 
 ### Missing API key
@@ -1781,6 +2593,7 @@ API-based models validate keys at startup. Set the appropriate env var:
 set VOYAGE_API_KEY=voy-...
 set OPENAI_API_KEY=sk-...
 set COHERE_API_KEY=...
+set JINA_API_KEY=...
 set GEMINI_API_KEY=...
 set MINIMAX_API_KEY=...
 set DEEPSEEK_API_KEY=...
@@ -1829,19 +2642,44 @@ rebuild with `--full-reindex` if needed.
   enabled only for the reviewed Nomic and Stella local bundles; the BGE reranker
   explicitly uses `trust_remote_code=False`. Reviewed remote Python is copied
   through a fresh process-private Transformers module cache so stale global
-  cache entries cannot shadow the verified source tree.
-- Unknown model IDs fail closed unless `RAG_ALLOW_UNPINNED_MODELS=1` is set.
+  cache entries cannot shadow the verified source tree. Runtime is cache-only by
+  default; use `tools/sync_model_artifacts.py` before private-data processing.
+- Unknown model IDs fail closed. The legacy escape requires the development
+  profile, `--model-download-policy allow-reviewed-sync`, and
+  `RAG_ALLOW_UNPINNED_MODELS=1` together.
   LegalBERT's pickle weight is inventoried but blocked; prefer safetensors.
 - Model-card and package license fields are publisher-declared evidence, not a
   legal attestation. In particular, review LegalBERT's share-alike terms and
   RapidOCR model-data rights before distribution.
+- Release mode defaults to `--network-policy local-only`. API embeddings,
+  rerankers, Gemini, and public/custom LLM endpoints require explicit
+  `allow-cloud` before credential lookup, import, cache access, or transport.
+  Official embedding/reranking origins are pinned; redirects and implicit SDK
+  retries are disabled. Custom release gateways also require a nonsecret cache
+  namespace whose opaque digest binds cache, single-flight, report, and resume
+  identity.
+- Cloud transports ignore ambient proxy, custom-CA, and SDK endpoint settings
+  by default. Release mode reads values only to identify non-empty override
+  variable names, never persisting, echoing, or reporting those values, and
+  requires `--trust-environment-network` after review.
+  This does not replace OS DNS, firewall, or egress controls.
+- Requests-based provider responses are MIME-, framing-, deadline-, depth-, and
+  decoded-byte-bounded before JSON parsing. Fixed diagnostics never include the
+  body. The Google Gemini SDK boundary is separately tracked and is not claimed
+  to inherit the Requests reader's guarantees.
 - API keys can come from environment variables or the interactive menu's hidden
   prompt; menu-entered keys are redacted from the displayed command, removed
   from child process arguments, scoped to the child environment, and not
   written to a configuration file.
 - Direct CLI key flags (`--api-key`, `--cloud-key`, and `--gemini-key`) are
-  supported, but their values can be visible in process listings and shell
-  history. Prefer environment variables or the interactive menu.
+  rejected by the release profile because their values can be visible in
+  process listings and shell history. They remain a discouraged explicit
+  development-profile escape hatch.
+- The release LLM cache default is `off`; explicit cache modes use a private
+  plaintext store, not encryption. Chroma, Gradio, and Hugging Face auxiliary
+  telemetry is disabled. See the
+  [release-security ADR](docs/architecture/decisions/release-security-policy.md)
+  for the complete data-flow and migration contract.
 - Input paths remain user-selected and are not a general-purpose sandbox.
   Managed sensitive outputs use the private, link-aware storage policy above.
 
@@ -1849,36 +2687,64 @@ rebuild with `--full-reindex` if needed.
 
 ```
 rag.py                  # Stable command/API facade and pipeline orchestration
+process_supervision.py  # Stdlib-only process containment and deadlines
+runtime_supervision.py  # Frozen production supervisor/runtime capability
+resource_lease.py       # Shared canonical path and cross-process OS leases
 retrieval_core.py       # Stdlib-only retrieval models and pure algorithms
+table_retrieval_core.py # Stdlib-only table-row generation and family collapse
 artifact_io.py          # Stdlib-only strict reads and atomic publication
 chunking_core.py        # Stdlib-only text preparation and classification
+document_profiles.py    # Immutable reviewed document-layout policy registry
+quality_core.py         # Stdlib-only corpus quality reports and bindings
 index_state.py          # Stdlib-only index manifests and compatibility policy
+vector_lifecycle.py     # Stdlib-only guarded vector mutation and commit policy
 llm_adapters.py         # Typed LLM provider transport adapters
+llm_runtime.py          # Reproducible caching, fallback, budgets, and reports
+provider_transport.py   # Bounded streaming provider-response reader
+endpoint_policy.py      # Canonical cloud/loopback endpoint trust boundary
+embedding_policy.py     # Dependency-free remote embedding classification
+release_security.py     # Versioned egress/UI/cache/model release policy
 cli_policy.py           # Stdlib-only CLI interpretation and serialization policy
 ingestion_core.py       # Stdlib-only PDF inspection and stripping safety policy
 model_artifacts.py      # Stdlib-only model lock, byte verification, and ML-BOM
 operation_contracts.py  # Committed vector-index outcome contract
+operational_metrics.py  # Content-free mutation and queue-pressure counters
+operational_drills.py   # Hard-kill/synced-publication evidence drills
 run_telemetry.py        # Correlated stage events, reports, and recovery
+attempt_reporting.py    # Redacted manager-owned job-attempt outcome reports
 storage_policy.py       # Owner-only DACL/mode and atomic publication policy
 retention.py            # Ownership manifests and dry-run-first lifecycle plans
 job_runtime.py          # Durable private job schemas, bindings, transitions, leases
-job_manager.py          # Detached supervision, cancellation, and restart recovery
+job_coordination_contracts.py # Stable results, errors, and frozen service binding
+job_coordination.py     # Detached launch, supervision, cancellation, and recovery
+job_application.py      # Frozen CLI/UI store, launch, reconcile, and error capability
+job_manager.py          # Compatible durable-job import and executable facade
 supervised_worker.py    # Gated same-PID bootstrap for pre-execution containment
 service_contracts.py    # Dependency-free bounded/redacted local API contracts
-service_runtime.py      # Qdrant search isolation and durable service job facade
-service_api.py          # Authenticated loopback-only FastAPI/CLI adapter
+service_runtime_binding.py # Frozen service-host capability composition
+service_runtime.py      # Search isolation and binding-driven durable job facade
+service_search_worker.py # Hidden physical-search child composition shell
+service_http.py         # Structural authenticated loopback HTTP implementation
+application_composition.py # Lazy frozen outer root for the service role
+service_api.py          # Stable service token/import/executable facade
 service-openapi-v1.json # Committed static OpenAPI 3.1 contract snapshot
 service-config.example.json # Credential-free private registry template
 model-artifact-policy.json # Reviewed models, consumers, files, code, and licenses
 model-artifacts.lock.json # Immutable revisions and per-file raw SHA-256 inventory
 preprocess_pdf.py       # Standalone PDF preprocessing CLI facade
 eval.py                 # Relevance/safety evaluation, gates, and reports
+evaluation_inputs.py    # Strict shared snapshot/JSON/corpus input contracts
+evaluation_queries.py   # Shared query/schema/corpus/judgment domain contracts
+evaluation_contract.py  # Shared report/scorer/table-policy version contract
+evaluation_review.py    # Private owner-review packets and portable receipts
+evaluation_release.py   # Strict four-mode retrieval release-policy contract
 evaluation_metrics.py   # Latency, memory, storage, usage, and cost measurements
 offline_retrieval.py    # Deterministic no-model BM25 evaluation adapter
-evaluation/suites/      # Pinned CC0 Property and Constitutional Law fixtures
+evaluation/suites/      # Pinned CC0 legal and synthetic table-family fixtures
 evaluation/baselines/   # Portable offline regression baselines
 eval_queries.jsonl      # Starter evaluation queries (10 CivPro)
 eval_queries_judged.jsonl # Pinned 24-query private CivPro calibration
+eval_queries_ethics_draft.jsonl # Pinned Ethics judgments awaiting owner review
 ui.py                   # Gradio web UI (Search, Export, Info, local Jobs tabs)
 scaffold_to_markdown.py # Apply an existing TOC scaffold to PDF text
 requirements.txt        # Direct core dependencies
@@ -1893,7 +2759,9 @@ requirements-lock-tools.txt # Exact lockfile-generator pin
 requirements-*.lock     # Universal exact CPU locks with SHA-256 hashes
 dependency-license-policy.json # Denied licenses and reviewed exceptions
 dependency-vulnerability-policy.json # Expiring advisory exceptions and audit skips
-tools/                  # Dependency/model lock refresh and policy checks
+scripts/                # Repository-local convenience launchers
+docs/                   # Maintained ADRs, governance proposals, and archived plans
+tools/                  # Source/policy checks, lock refresh, and operational drills
 .github/workflows/      # CI, dependency compatibility, and security automation
 output/                 # Per-run book directories (auto-created)
 ```
@@ -1921,14 +2789,14 @@ numpy>=1.26,<3                  # RAPTOR clustering
 
 ```
 qdrant-client>=1.17,<2       # Qdrant vector DB backend
-voyageai>=0.2,<1             # Voyage AI embeddings
-openai>=1.0,<3               # OpenAI embeddings
-cohere>=5.0,<6               # Cohere embeddings and reranking
 google-genai>=1.68,<2        # Gemini fallback + timeout/retry controls
 gradio>=6.0,<7               # Web UI
 ```
 
 These are the project's direct declarations; transitive packages are omitted.
+Voyage, OpenAI, Cohere, Jina, DeepSeek, MiniMax, and custom OpenAI-compatible
+operations use the owned Requests transport already present in the core profile;
+their provider SDK packages are neither imported nor installed.
 Lower bounds preserve the established feature floor; upper bounds cap the
 admitted compatibility range. Dependabot proposes bounded updates weekly.
 
@@ -1951,6 +2819,7 @@ a CUDA environment.
 
 ```bash
 pip install --require-hashes -r requirements-test.lock
+python tools/check_python_sources.py
 python tools/check_dependency_policy.py
 python tools/check_model_artifacts.py
 python -m ruff check .
@@ -2030,6 +2899,7 @@ pip install "torch>=2.7,<3" --index-url https://download.pytorch.org/whl/cu128
 ```bash
 # Maximum intelligence: all LLM features enabled
 python rag.py full --pdf CivPro_Casebook.pdf \
+  --structure-profile us-law-casebook-v1 \
   --llm-classify \
   --contextualize \
   --reconstruct-headings \
@@ -2038,6 +2908,7 @@ python rag.py full --pdf CivPro_Casebook.pdf \
   --raptor \
   --db-backend qdrant \
   --embedding-model voyage-law-2 \
+  --network-policy allow-cloud \
   --llm-workers 10
 
 # Then query with answer generation
@@ -2046,15 +2917,18 @@ python rag.py query "minimum contacts test" --answer --hybrid \
   --db output/CivPro_Casebook/CivPro_Casebook_qdrant \
   --chunks output/CivPro_Casebook/CivPro_Casebook_chunks.jsonl \
   --collection civpro_casebook \
-  --embedding-model voyage-law-2
+  --embedding-model voyage-law-2 \
+  --network-policy allow-cloud
 
 # Generate study materials
 python rag.py brief \
   --chunks output/CivPro_Casebook/CivPro_Casebook_chunks.jsonl \
-  -o output/CivPro_Casebook/CivPro_Casebook_briefs.jsonl
+  -o output/CivPro_Casebook/CivPro_Casebook_briefs.jsonl \
+  --network-policy allow-cloud
 python rag.py generate-questions \
   --chunks output/CivPro_Casebook/CivPro_Casebook_chunks.jsonl \
-  -o output/CivPro_Casebook/CivPro_Casebook_exam_questions.jsonl
+  -o output/CivPro_Casebook/CivPro_Casebook_exam_questions.jsonl \
+  --network-policy allow-cloud
 python rag.py export --format flashcards \
   --chunks output/CivPro_Casebook/CivPro_Casebook_chunks.jsonl \
   -o output/CivPro_Casebook/CivPro_Casebook_flashcards.tsv

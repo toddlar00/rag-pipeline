@@ -19,6 +19,8 @@ from urllib.parse import urlparse
 
 import requests
 
+import endpoint_policy
+import provider_transport
 from llm_runtime import LLMBudgetExceeded, ProviderCallError, ProviderResponse
 
 
@@ -30,7 +32,9 @@ class HttpResponseProtocol(Protocol):
 
     def raise_for_status(self) -> None: ...
 
-    def json(self) -> object: ...
+    def iter_content(self, *, chunk_size: int): ...
+
+    def close(self) -> None: ...
 
 
 class HttpPostFn(Protocol):
@@ -55,7 +59,7 @@ ProviderValueFn = Callable[[object, str], object]
 ProviderTokenCountFn = Callable[[object, str], int | None]
 ProviderCallErrorFn = Callable[..., ProviderCallError]
 ErrorCategoryFn = Callable[[BaseException], str]
-EndpointPredicateFn = Callable[..., bool]
+EndpointValidatorFn = Callable[..., endpoint_policy.ValidatedEndpoint | None]
 ThrottleFactoryFn = Callable[[int], ThrottleProtocol]
 RetryAfterFn = Callable[[object], float]
 SleepFn = Callable[[float], None]
@@ -65,6 +69,22 @@ EnvironmentGetFn = Callable[[str, str], str]
 
 
 _log = logging.getLogger(__name__)
+
+
+class _BearerAuth(requests.auth.AuthBase):
+    """Explicit Requests auth that prevents ambient netrc replacement."""
+
+    __slots__ = ("_token",)
+
+    def __init__(self, token: str):
+        self._token = token
+
+    def __call__(self, request):
+        request.headers["Authorization"] = f"Bearer {self._token}"
+        return request
+
+    def __repr__(self) -> str:
+        return "<_BearerAuth token=<redacted>>"
 
 
 def _provider_hostname(url: str) -> str:
@@ -77,18 +97,26 @@ def _provider_hostname(url: str) -> str:
 
 def _is_deepseek_cloud(
         url: str, model: str = "", *,
-        provider_hostname_fn: Callable[[str], str] = (
-            _provider_hostname)) -> bool:
+        validate_endpoint_fn: EndpointValidatorFn = (
+            endpoint_policy.validate_cloud_endpoint)) -> bool:
     """Return whether an API URL is the official DeepSeek endpoint."""
     del model  # Kept for compatibility with callers that also have a model.
-    return provider_hostname_fn(url) == "api.deepseek.com"
+    try:
+        endpoint = validate_endpoint_fn(url)
+    except (TypeError, ValueError):
+        return False
+    return endpoint is not None and endpoint.provider == "deepseek"
 
 
 def _is_minimax_cloud(
-        url: str, *, provider_hostname_fn: Callable[[str], str] = (
-            _provider_hostname)) -> bool:
+        url: str, *, validate_endpoint_fn: EndpointValidatorFn = (
+            endpoint_policy.validate_cloud_endpoint)) -> bool:
     """Return whether an API URL is the official MiniMax endpoint."""
-    return provider_hostname_fn(url) == "api.minimax.io"
+    try:
+        endpoint = validate_endpoint_fn(url)
+    except (TypeError, ValueError):
+        return False
+    return endpoint is not None and endpoint.provider == "minimax"
 
 
 def _provider_value(source: object, name: str) -> object:
@@ -114,6 +142,14 @@ def _provider_error_category(exc: BaseException) -> str:
     """Map provider/transport exceptions to a fixed, secret-safe category."""
     if isinstance(exc, ProviderCallError):
         return exc.category
+    if isinstance(exc, (
+            provider_transport.ProviderResponseDeadlineExceeded,
+            provider_transport.ProviderResponseReadTimeout)):
+        return "timeout"
+    if isinstance(exc, provider_transport.ProviderResponseReadError):
+        return "connection_error"
+    if isinstance(exc, provider_transport.ProviderResponseRejected):
+        return "invalid_response"
     if isinstance(exc, requests.exceptions.Timeout):
         return "timeout"
     if isinstance(exc, requests.exceptions.ConnectionError):
@@ -167,13 +203,32 @@ def _provider_call_error(
         error_category_fn(exc), transport_attempts=transport_attempts)
 
 
+def _close_response_error(response: object) -> BaseException | None:
+    """Close without losing the caller's throttle/accounting path."""
+    try:
+        provider_transport.close_http_response(response)
+    except Exception as exc:
+        return exc
+    return None
+
+
 def _call_ollama_result(
         prompt: str, *, url: str, model: str,
         thinking: bool, max_tokens: int, timeout: int,
         post_fn: HttpPostFn,
+        loopback_post_fn: HttpPostFn,
+        validate_endpoint_fn: EndpointValidatorFn,
         provider_token_count_fn: ProviderTokenCountFn,
         provider_call_error_fn: ProviderCallErrorFn) -> ProviderResponse:
     """Return Ollama text with its native prompt/output token counts."""
+    try:
+        endpoint = validate_endpoint_fn(url)
+    except (TypeError, ValueError):
+        raise ProviderCallError(
+            "configuration_error", transport_attempts=0) from None
+    if endpoint is None:
+        raise ProviderCallError(
+            "configuration_error", transport_attempts=0)
     payload = {
         "model": model,
         "prompt": prompt,
@@ -181,14 +236,34 @@ def _call_ollama_result(
         "think": thinking,
         "options": {"num_predict": max_tokens},
     }
+    selected_post_fn = (
+        loopback_post_fn if endpoint.is_loopback else post_fn)
     try:
-        resp = post_fn(
-            f"{url.rstrip('/')}/api/generate",
+        resp = selected_post_fn(
+            f"{endpoint.base_url}/api/generate",
             json=payload,
             timeout=timeout,
+            allow_redirects=False,
+            stream=True,
         )
-        resp.raise_for_status()
-        body = resp.json()
+        if 300 <= resp.status_code < 400:
+            cleanup_error = _close_response_error(resp)
+            if cleanup_error is not None:
+                raise cleanup_error
+            raise ProviderCallError(
+                "configuration_error", transport_attempts=1)
+        try:
+            resp.raise_for_status()
+        except Exception:
+            cleanup_error = _close_response_error(resp)
+            if cleanup_error is not None:
+                raise cleanup_error from None
+            raise
+        body = provider_transport.read_bounded_json_response(
+            resp,
+            max_bytes=provider_transport.LLM_RESPONSE_MAX_BYTES,
+            deadline_seconds=timeout,
+        )
         if not isinstance(body, dict) or not isinstance(
                 body.get("response"), str):
             raise ProviderCallError("invalid_response")
@@ -231,6 +306,7 @@ def _gemini_content_filtered(
 def _call_gemini_result(
         prompt: str, *, api_key: str, model: str,
         max_tokens: int, timeout: int,
+        thinking_level: str | None,
         client_loader_fn: GeminiClientLoaderFn,
         provider_value_fn: ProviderValueFn,
         provider_token_count_fn: ProviderTokenCountFn,
@@ -252,18 +328,25 @@ def _call_gemini_result(
         raise ProviderCallError(
             "configuration_error", transport_attempts=0) from None
 
+    config_kwargs = {
+        "max_output_tokens": max_tokens,
+        "http_options": types.HttpOptions(
+            timeout=timeout * 1000,
+            retry_options=types.HttpRetryOptions(attempts=1),
+        ),
+    }
+    if thinking_level is not None:
+        if thinking_level not in {"minimal", "low", "medium", "high"}:
+            raise ProviderCallError(
+                "configuration_error", transport_attempts=0)
+        config_kwargs["thinking_config"] = types.ThinkingConfig(
+            thinking_level=thinking_level)
+
     try:
         response = client.models.generate_content(
             model=model,
             contents=prompt,
-            config=types.GenerateContentConfig(
-                max_output_tokens=max_tokens,
-                temperature=0.0,
-                http_options=types.HttpOptions(
-                    timeout=timeout * 1000,
-                    retry_options=types.HttpRetryOptions(attempts=1),
-                ),
-            ),
+            config=types.GenerateContentConfig(**config_kwargs),
         )
     except LLMBudgetExceeded:
         raise
@@ -416,45 +499,77 @@ def _call_openai_compatible_result(
         prompt: str, *, base_url: str, model: str, api_key: str,
         thinking: bool, max_tokens: int, max_workers: int, timeout: int,
         post_fn: HttpPostFn,
+        loopback_post_fn: HttpPostFn,
         get_throttle_fn: ThrottleFactoryFn,
         sleep_fn: SleepFn,
-        is_deepseek_fn: EndpointPredicateFn,
+        validate_endpoint_fn: EndpointValidatorFn,
         provider_token_count_fn: ProviderTokenCountFn,
         provider_value_fn: ProviderValueFn,
         provider_call_error_fn: ProviderCallErrorFn,
         retry_after_fn: RetryAfterFn,
         admit_retry_fn: Callable[[], None] | None = None) -> ProviderResponse:
     """Return OpenAI-compatible text, usage, and retry provenance."""
+    try:
+        endpoint = validate_endpoint_fn(base_url)
+    except (TypeError, ValueError):
+        raise ProviderCallError(
+            "configuration_error", transport_attempts=0) from None
+    if endpoint is None:
+        raise ProviderCallError(
+            "configuration_error", transport_attempts=0)
     if not api_key:
         raise ProviderCallError(
             "missing_credentials", transport_attempts=0)
 
     throttle = get_throttle_fn(max(1, max_workers))
-    is_deepseek = is_deepseek_fn(base_url, model)
+    is_deepseek = endpoint.provider == "deepseek"
     payload = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": max_tokens,
     }
+    token_limit_field = (
+        "max_completion_tokens"
+        if endpoint.provider == "minimax" else "max_tokens")
+    payload[token_limit_field] = max_tokens
+    if endpoint.provider == "minimax":
+        # Native M2.x responses otherwise mix private reasoning tags into the
+        # answer text.  The reviewed API can return that reasoning separately;
+        # callers intentionally consume only the final ``content`` field.
+        payload["reasoning_split"] = True
     if is_deepseek:
         payload["thinking"] = {
             "type": "enabled" if thinking else "disabled"
         }
     if not (is_deepseek and thinking):
         payload["temperature"] = 0.0
+    if endpoint.provider == "minimax":
+        is_minimax_m3 = model.casefold().startswith("minimax-m3")
+        if not is_minimax_m3 and not thinking:
+            # M2.x cannot disable reasoning, so accepting ``thinking=False``
+            # would make request identity/provenance disagree with execution.
+            raise ProviderCallError(
+                "configuration_error", transport_attempts=0)
+        payload["thinking"] = {
+            "type": "adaptive" if thinking else "disabled"
+        }
 
     transient_errors: list[str] = []
+    selected_post_fn = (
+        loopback_post_fn if endpoint.is_loopback else post_fn)
 
     for attempt in range(2):
         throttle.acquire()
         try:
             if attempt > 0 and admit_retry_fn is not None:
                 admit_retry_fn()
-            resp = post_fn(
-                f"{base_url.rstrip('/')}/chat/completions",
+            resp = selected_post_fn(
+                f"{endpoint.base_url}/chat/completions",
                 headers={"Authorization": f"Bearer {api_key}"},
+                auth=_BearerAuth(api_key),
                 json=payload,
                 timeout=timeout,
+                allow_redirects=False,
+                stream=True,
             )
         except LLMBudgetExceeded:
             throttle.release_error()
@@ -464,12 +579,26 @@ def _call_openai_compatible_result(
             raise provider_call_error_fn(
                 exc, transport_attempts=attempt + 1) from None
 
+        if 300 <= resp.status_code < 400:
+            cleanup_error = _close_response_error(resp)
+            throttle.release_error()
+            if cleanup_error is not None:
+                raise provider_call_error_fn(
+                    cleanup_error,
+                    transport_attempts=attempt + 1) from None
+            raise ProviderCallError(
+                "configuration_error", transport_attempts=attempt + 1)
         if resp.status_code == 429:
+            retry_after_value = resp.headers.get("Retry-After", "2")
+            cleanup_error = _close_response_error(resp)
             throttle.release_429()
+            if cleanup_error is not None:
+                raise provider_call_error_fn(
+                    cleanup_error,
+                    transport_attempts=attempt + 1) from None
+            retry_after = retry_after_fn(retry_after_value)
             if attempt == 0:
                 transient_errors.append("rate_limited")
-                retry_after = retry_after_fn(
-                    resp.headers.get("Retry-After", "2"))
                 sleep_fn(retry_after)
                 continue
             raise ProviderCallError(
@@ -477,7 +606,19 @@ def _call_openai_compatible_result(
 
         try:
             resp.raise_for_status()
-            body = resp.json()
+        except Exception as exc:
+            cleanup_error = _close_response_error(resp)
+            error = cleanup_error if cleanup_error is not None else exc
+            throttle.release_error()
+            raise provider_call_error_fn(
+                error, transport_attempts=attempt + 1) from None
+
+        try:
+            body = provider_transport.read_bounded_json_response(
+                resp,
+                max_bytes=provider_transport.LLM_RESPONSE_MAX_BYTES,
+                deadline_seconds=timeout,
+            )
             if not isinstance(body, dict):
                 raise ProviderCallError("invalid_response")
             choices = body.get("choices")
@@ -549,12 +690,4 @@ def _call_openai_compatible_result(
 
 def _llm_endpoint_id(url: str) -> str:
     """Return a credential-free endpoint identity for cache separation."""
-    parsed = urlparse(url)
-    if not parsed.hostname:
-        return url.rstrip("/")
-    try:
-        port = f":{parsed.port}" if parsed.port is not None else ""
-    except ValueError:
-        port = ""
-    path = parsed.path.rstrip("/")
-    return f"{parsed.scheme.casefold()}://{parsed.hostname.casefold()}{port}{path}"
+    return endpoint_policy.cloud_endpoint_identity(url)

@@ -28,6 +28,8 @@ from pathlib import Path
 from typing import Callable, Iterator, Mapping, Sequence
 from uuid import uuid4
 
+import cli_policy
+import endpoint_policy
 import storage_policy
 
 
@@ -63,6 +65,19 @@ SECRET_OPTIONS = frozenset({
     "--api-key",
     "--cloud-key",
     "--gemini-key",
+})
+SECRET_OPTION_TERMS = frozenset({
+    "credential",
+    "credentials",
+    "key",
+    "password",
+    "secret",
+    "token",
+})
+ENDPOINT_OPTIONS = frozenset({
+    "--cloud-url",
+    "--llm-url",
+    "--ollama-url",
 })
 RESERVED_JOB_OPTIONS = frozenset({
     "--operation-timeout",
@@ -131,6 +146,7 @@ _MAX_STATE_BYTES = 32 * 1024
 _MAX_CANCEL_BYTES = 16 * 1024
 _MAX_COUNTER = (1 << 63) - 1
 _MAX_FILESYSTEM_IDENTITY = (1 << 128) - 1
+_MAX_TIMESTAMP = 253_402_300_799.0
 _STORE_LOCK_NAME = ".store.lock"
 _RETENTION_QUARANTINE_NAME = ".rag-quarantine"
 _JOB_LOCK_NAME = ".lock"
@@ -307,11 +323,82 @@ def _validate_command(command: str) -> str:
     return command
 
 
+def _normalize_endpoint_argv(argv: Sequence[str]) -> tuple[str, ...]:
+    """Validate endpoint values before a private job spec can persist them."""
+    normalized: list[str] = []
+    index = 0
+    terminated = False
+    while index < len(argv):
+        token = argv[index]
+        if not isinstance(token, str):
+            normalized.append(token)
+            index += 1
+            continue
+        if token == "--":
+            normalized.append(token)
+            terminated = True
+            index += 1
+            continue
+
+        option, separator, inline_value = token.partition("=")
+        folded = option.casefold()
+        if folded in ENDPOINT_OPTIONS and option != folded:
+            raise JobValidationError(
+                "background endpoint options are case sensitive")
+        if cli_policy._option_spelling_conflicts(option, ENDPOINT_OPTIONS):
+            raise JobValidationError(
+                "background endpoint options must not be abbreviated")
+        if folded not in ENDPOINT_OPTIONS:
+            normalized.append(token)
+            index += 1
+            continue
+        if terminated:
+            raise JobValidationError(
+                "background endpoint options are not allowed after --")
+
+        if separator:
+            value = inline_value
+            consumed = 1
+        else:
+            if index + 1 >= len(argv) or not isinstance(argv[index + 1], str):
+                raise JobValidationError(
+                    "background endpoint option requires a URL value")
+            value = argv[index + 1]
+            consumed = 2
+        try:
+            endpoint = endpoint_policy.validate_cloud_endpoint(
+                value, allow_disabled=True)
+        except (TypeError, ValueError):
+            raise JobValidationError(
+                "background endpoint URL is not permitted") from None
+        safe_value = endpoint.base_url if endpoint is not None else ""
+        normalized.append(
+            f"{folded}={safe_value}" if separator else folded)
+        if not separator:
+            normalized.append(safe_value)
+        index += consumed
+    return tuple(normalized)
+
+
 def _validate_argv(argv: Sequence[str]) -> tuple[str, ...]:
     if isinstance(argv, (str, bytes)) or not isinstance(argv, Sequence):
         raise JobValidationError("argv must be a sequence of strings")
     if len(argv) > _MAX_ARGUMENT_COUNT:
         raise JobValidationError("background command has too many arguments")
+    for token in argv:
+        if isinstance(token, str) and "://" in token:
+            option, separator, inline_value = token.partition("=")
+            if separator and option.casefold() not in ENDPOINT_OPTIONS:
+                raise JobValidationError(
+                    "background endpoint/URL argument is not permitted")
+            candidate = inline_value if separator else token
+            try:
+                endpoint_policy.validate_cloud_endpoint(
+                    candidate, allow_disabled=True)
+            except (TypeError, ValueError):
+                raise JobValidationError(
+                    "background endpoint/URL argument is not permitted") from None
+    argv = _normalize_endpoint_argv(argv)
     normalized = []
     total_bytes = 0
     for token in argv:
@@ -325,12 +412,19 @@ def _validate_argv(argv: Sequence[str]) -> tuple[str, ...]:
             raise JobValidationError(
                 "background command arguments must be valid UTF-8 text") from exc
         option = token.split("=", 1)[0].lower()
-        # argparse accepts unambiguous long-option abbreviations by default.
-        # Reject prefixes too, otherwise ``--cloud-k VALUE`` could bypass the
-        # durable-spec credential rule and later resolve to ``--cloud-key``.
-        secret_option = option in SECRET_OPTIONS or (
-            len(option) > 2
-            and any(secret.startswith(option) for secret in SECRET_OPTIONS)
+        # Keep the durable boundary independent of current parser settings.
+        # Prefixes and shape variants must not bypass the credential rule.
+        normalized_option = option.casefold().replace("_", "-")
+        option_terms = (
+            frozenset(
+                part for part in normalized_option[2:].split("-") if part)
+            if normalized_option.startswith("--") else frozenset()
+        )
+        secret_option = (
+            option in SECRET_OPTIONS
+            or cli_policy._option_spelling_conflicts(
+                token.split("=", 1)[0], SECRET_OPTIONS)
+            or bool(option_terms & SECRET_OPTION_TERMS)
         )
         if secret_option:
             raise JobValidationError(
@@ -366,7 +460,8 @@ def _validate_timeout(value: float | None) -> float | None:
 
 def _validate_timestamp(value, name: str) -> float:
     if (isinstance(value, bool) or not isinstance(value, (int, float))
-            or not math.isfinite(float(value)) or float(value) < 0):
+            or not math.isfinite(float(value)) or float(value) < 0
+            or float(value) > _MAX_TIMESTAMP):
         raise JobCorruptError(f"job {name} is invalid")
     return float(value)
 
@@ -447,7 +542,8 @@ def _validate_digest(value: str) -> str:
 def _now(clock: Callable[[], float]) -> float:
     value = clock()
     if (isinstance(value, bool) or not isinstance(value, (int, float))
-            or not math.isfinite(float(value)) or float(value) < 0):
+            or not math.isfinite(float(value)) or float(value) < 0
+            or float(value) > _MAX_TIMESTAMP):
         raise JobRuntimeError("job clock returned an invalid timestamp")
     return float(value)
 
@@ -1114,6 +1210,17 @@ class JobStore:
             self._validate_supplied_lease(acquired, job_id)
             yield
 
+    @contextmanager
+    def _state_lease(self, lease: JobLease | None) -> Iterator[None]:
+        """Serialize state changes with attempt-bound cancel publication."""
+        if lease is not None:
+            self._validate_supplied_store_lease(lease)
+            yield
+            return
+        with self.store_lease() as acquired:
+            self._validate_supplied_store_lease(acquired)
+            yield
+
     def _load_record(self, job_id: str) -> tuple[_StoredSpec, _StoredState]:
         directory = self._job_dir(job_id)
         spec = _parse_spec(_read_private_json(
@@ -1511,24 +1618,38 @@ class JobStore:
                 _cancel_payload(marker))
             return self._summary(spec, state)
 
-    def is_cancel_requested(self, job_id: str, attempt_token: str) -> bool:
-        """Return whether a valid marker targets the active exact attempt."""
+    def _cancel_requested_at(self, job_id: str, attempt_token: str, *,
+                             include_terminal: bool) -> float | None:
         job_id = _validate_job_id(job_id)
         attempt_token = _validate_attempt_token(attempt_token)
         _, state = self._load_record(job_id)
-        if (state.attempt_token != attempt_token
-                or state.status in TERMINAL_JOB_STATUSES):
-            return False
+        if (not hmac.compare_digest(state.attempt_token, attempt_token)
+                or (not include_terminal
+                    and state.status in TERMINAL_JOB_STATUSES)):
+            return None
         marker = self._read_cancel_marker(
             job_id, state.attempt_number, missing_ok=True)
-        return (marker is not None
-                and self._marker_matches_state(marker, state))
+        if marker is None or not self._marker_matches_state(marker, state):
+            return None
+        return marker.requested_at
+
+    def cancel_requested_at(self, job_id: str,
+                            attempt_token: str) -> float | None:
+        """Return the exact attempt's durable request time, even if terminal."""
+        return self._cancel_requested_at(
+            job_id, attempt_token, include_terminal=True)
+
+    def is_cancel_requested(self, job_id: str, attempt_token: str) -> bool:
+        """Return whether a valid marker targets the active exact attempt."""
+        return self._cancel_requested_at(
+            job_id, attempt_token, include_terminal=False) is not None
 
     def transition_job(self, job_id: str, target_status: str, *,
                        attempt_token: str,
                        expected_revision: int | None = None,
                        lease_timeout: float = 5.0,
-                       lease: JobLease | None = None) -> JobSummary:
+                       lease: JobLease | None = None,
+                       store_lease: JobLease | None = None) -> JobSummary:
         """Apply one legal, attempt-bound atomic state transition."""
         job_id = _validate_job_id(job_id)
         attempt_token = _validate_attempt_token(attempt_token)
@@ -1542,38 +1663,41 @@ class JobStore:
                 raise JobValidationError("expected_revision is invalid")
         with self._mutation_lease(
                 job_id, timeout=lease_timeout, lease=lease):
-            spec, state = self._load_record(job_id)
-            if not hmac.compare_digest(state.attempt_token, attempt_token):
-                raise JobStateError("state transition targets a stale attempt")
-            if state.status == target_status:
-                return self._summary(spec, state)
-            if (expected_revision is not None
-                    and state.revision != expected_revision):
-                raise JobStateError("state transition revision is stale")
-            if target_status not in LEGAL_JOB_TRANSITIONS[state.status]:
-                raise JobStateError(
-                    f"illegal job transition: {state.status} -> {target_status}")
-            if target_status == "cancel_requested":
-                marker = self._read_cancel_marker(
-                    job_id, state.attempt_number, missing_ok=True)
-                if (marker is None
-                        or not self._marker_matches_state(marker, state)):
+            with self._state_lease(store_lease):
+                spec, state = self._load_record(job_id)
+                if not hmac.compare_digest(state.attempt_token, attempt_token):
                     raise JobStateError(
-                        "cancel_requested requires a matching cancel marker")
-            if state.revision >= _MAX_COUNTER:
-                raise JobStateError("job state revision is exhausted")
-            updated = _StoredState(
-                job_id=job_id,
-                status=target_status,
-                attempt_number=state.attempt_number,
-                attempt_token=state.attempt_token,
-                revision=state.revision + 1,
-                spec_sha256=state.spec_sha256,
-                created_at=state.created_at,
-                updated_at=max(state.updated_at, _now(self._clock)),
-            )
-            storage_policy.atomic_write_private_json(
-                self.root / job_id / _STATE_NAME, _state_payload(updated))
+                        "state transition targets a stale attempt")
+                if state.status == target_status:
+                    return self._summary(spec, state)
+                if (expected_revision is not None
+                        and state.revision != expected_revision):
+                    raise JobStateError("state transition revision is stale")
+                if target_status not in LEGAL_JOB_TRANSITIONS[state.status]:
+                    raise JobStateError(
+                        f"illegal job transition: {state.status} -> "
+                        f"{target_status}")
+                if target_status == "cancel_requested":
+                    marker = self._read_cancel_marker(
+                        job_id, state.attempt_number, missing_ok=True)
+                    if (marker is None
+                            or not self._marker_matches_state(marker, state)):
+                        raise JobStateError(
+                            "cancel_requested requires a matching cancel marker")
+                if state.revision >= _MAX_COUNTER:
+                    raise JobStateError("job state revision is exhausted")
+                updated = _StoredState(
+                    job_id=job_id,
+                    status=target_status,
+                    attempt_number=state.attempt_number,
+                    attempt_token=state.attempt_token,
+                    revision=state.revision + 1,
+                    spec_sha256=state.spec_sha256,
+                    created_at=state.created_at,
+                    updated_at=max(state.updated_at, _now(self._clock)),
+                )
+                storage_policy.atomic_write_private_json(
+                    self.root / job_id / _STATE_NAME, _state_payload(updated))
         return self._summary(spec, updated)
 
     def prepare_resume(self, job_id: str, *,
@@ -1588,28 +1712,29 @@ class JobStore:
                     or expected_revision > _MAX_COUNTER):
                 raise JobValidationError("expected_revision is invalid")
         with self.lease(job_id, timeout=lease_timeout):
-            spec, state = self._load_record(job_id)
-            if (expected_revision is not None
-                    and state.revision != expected_revision):
-                raise JobStateError("resume revision is stale")
-            if state.status not in RESUMABLE_JOB_STATUSES:
-                raise JobStateError(
-                    f"job status {state.status!r} is not resumable")
-            if (state.attempt_number >= _MAX_COUNTER
-                    or state.revision >= _MAX_COUNTER):
-                raise JobStateError("job attempt counters are exhausted")
-            updated = _StoredState(
-                job_id=job_id,
-                status="queued",
-                attempt_number=state.attempt_number + 1,
-                attempt_token=secrets.token_hex(16),
-                revision=state.revision + 1,
-                spec_sha256=state.spec_sha256,
-                created_at=state.created_at,
-                updated_at=max(state.updated_at, _now(self._clock)),
-            )
-            storage_policy.atomic_write_private_json(
-                self.root / job_id / _STATE_NAME, _state_payload(updated))
+            with self.store_lease():
+                spec, state = self._load_record(job_id)
+                if (expected_revision is not None
+                        and state.revision != expected_revision):
+                    raise JobStateError("resume revision is stale")
+                if state.status not in RESUMABLE_JOB_STATUSES:
+                    raise JobStateError(
+                        f"job status {state.status!r} is not resumable")
+                if (state.attempt_number >= _MAX_COUNTER
+                        or state.revision >= _MAX_COUNTER):
+                    raise JobStateError("job attempt counters are exhausted")
+                updated = _StoredState(
+                    job_id=job_id,
+                    status="queued",
+                    attempt_number=state.attempt_number + 1,
+                    attempt_token=secrets.token_hex(16),
+                    revision=state.revision + 1,
+                    spec_sha256=state.spec_sha256,
+                    created_at=state.created_at,
+                    updated_at=max(state.updated_at, _now(self._clock)),
+                )
+                storage_policy.atomic_write_private_json(
+                    self.root / job_id / _STATE_NAME, _state_payload(updated))
         return self._summary(spec, updated)
 
     def prepare_delete(self, job_id: str, *,
@@ -1622,8 +1747,8 @@ class JobStore:
             expected_revision, "expected_revision", minimum=0)
         expected_attempt_number = _validate_expected_counter(
             expected_attempt_number, "expected_attempt_number", minimum=1)
-        with self.store_lease():
-            with self.lease(job_id, timeout=lease_timeout) as lease:
+        with self.lease(job_id, timeout=lease_timeout) as lease:
+            with self.store_lease() as store_lease:
                 execution = self.load_execution(job_id, lease=lease)
                 if (expected_revision is not None
                         and execution.revision != expected_revision):
@@ -1639,7 +1764,8 @@ class JobStore:
                 return self.transition_job(
                     job_id, "deleting",
                     attempt_token=execution.attempt_token,
-                    expected_revision=execution.revision, lease=lease)
+                    expected_revision=execution.revision, lease=lease,
+                    store_lease=store_lease)
 
     def retention_record(self, job_id: str, *,
                          lease_timeout: float = 0.0) -> tuple[Path, str, float]:

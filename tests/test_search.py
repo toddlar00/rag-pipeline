@@ -9,6 +9,7 @@ import pytest
 
 import eval as retrieval_eval
 import rag
+import release_security
 
 
 @pytest.fixture
@@ -45,7 +46,10 @@ def search_fakes(monkeypatch, tmp_path):
             source_record_count=1,
         )
 
-    def fake_embed(texts, model_name, *, input_type="document"):
+    def fake_embed(
+            texts, model_name, *, input_type="document",
+            security_policy=None):
+        del security_policy
         state["embedding_calls"].append((list(texts), model_name, input_type))
         return [[0.25, 0.75] for _ in texts]
 
@@ -254,6 +258,81 @@ def test_search_matrix_is_structured_and_overfetches(
         assert search_fakes.state["rerank_calls"][0]["top_k"] == 3
     else:
         assert search_fakes.state["rerank_calls"] == []
+
+
+@pytest.mark.parametrize("backend", ["chroma", "qdrant"])
+@pytest.mark.parametrize("use_reranker", [False, True])
+def test_table_children_force_overfetch_and_suppress_only_retrieved_parent(
+        search_fakes, monkeypatch, backend, use_reranker):
+    rag._save_index_manifest(
+        search_fakes.db_dir, backend=backend,
+        collection_name=rag.DEFAULT_COLLECTION,
+        embedding_model="fake-embedding", embedding_dimension=2,
+        chunk_hashes={}, source_record_count=4,
+        table_child_count=2,
+        quality_report_schema_version=(
+            rag._quality_core.QUALITY_REPORT_SCHEMA_VERSION),
+        quality_report_sha256="a" * 64,
+    )
+    parent = {
+        "retrieval_role": "table_parent",
+        "table_parent_stable_id": "table-parent",
+        "stable_id": "table-parent",
+    }
+    child_one = {
+        "retrieval_role": "table_child",
+        "table_parent_stable_id": "table-parent",
+        "table_child_index": 0,
+        "stable_id": "table-row-0",
+    }
+    child_two = {
+        "retrieval_role": "table_child",
+        "table_parent_stable_id": "table-parent",
+        "table_child_index": 1,
+        "stable_id": "table-row-1",
+    }
+    observed = []
+
+    def candidates(_query, _db, *, n_results, **_kwargs):
+        observed.append(n_results)
+        return (
+            ["whole table", "first row", "other", "second row"],
+            [parent, child_one, {"stable_id": "other"}, child_two],
+            [0.99, 0.95, 0.9, 0.85],
+            "vector",
+        )
+
+    monkeypatch.setattr(
+        rag,
+        "_search_chroma_candidates" if backend == "chroma"
+        else "_search_qdrant_candidates",
+        candidates,
+    )
+
+    response = rag.search_index(
+        "fee safeguards", search_fakes.db_dir, db_backend=backend,
+        n_results=3, embedding_model="fake-embedding", hybrid=False,
+        use_reranker=use_reranker, overfetch=4,
+        chunks_path=search_fakes.chunks_path,
+    )
+
+    assert observed == [12]
+    assert response.candidate_depth == 12
+    assert {hit.text for hit in response.hits} == {
+        "first row", "other", "second row"}
+    assert {hit.source_id for hit in response.hits} == {
+        "table-row-0", "other", "table-row-1"}
+    assert "whole table" not in [hit.text for hit in response.hits]
+    if use_reranker:
+        assert search_fakes.state["rerank_calls"][0][
+            "candidate_count"] == 3
+    else:
+        assert search_fakes.state["rerank_calls"] == []
+    assert response.hits[0].metadata["table_parent_stable_id"] == (
+        "table-parent")
+    grounded = rag._grounded_sources(response, "fee safeguards")
+    assert grounded[0].source_id == response.hits[0].source_id
+    assert grounded[0].metadata["table_parent_stable_id"] == "table-parent"
 
 
 @pytest.mark.parametrize("backend", ["chroma", "qdrant"])
@@ -494,6 +573,111 @@ def test_search_releases_vector_lease_before_reranking(
     assert response.reranker_applied is True
 
 
+@pytest.mark.parametrize("backend", ["chroma", "qdrant"])
+def test_context_search_uses_exact_manifested_chunks_without_changing_rank(
+        search_fakes, monkeypatch, backend):
+    prefix = "dense" if backend == "chroma" else "qdrant"
+    records = [
+        {
+            "text": f"{prefix}-{index}",
+            "metadata": {
+                "chunk_index": index,
+                "source_file": "book.json",
+                "chapter_num": 2,
+                "content_type": "case_opinion",
+                "page_start": index + 1,
+                "page_end": index + 1,
+                "page_range": str(index + 1),
+            },
+        }
+        for index in range(3)
+    ]
+    rag._retrieval_core._attach_retrieval_linkage(records)
+    source_sha256 = hashlib.sha256(
+        search_fakes.chunks_path.read_bytes()).hexdigest()
+    monkeypatch.setattr(
+        rag, "_load_index_snapshot_with_quality",
+        lambda _path: (records, source_sha256, (1, 2, 3, 4, 5), (3, "f" * 64)),
+    )
+    monkeypatch.setattr(
+        rag, "_require_hybrid_chunks_snapshot",
+        lambda *_args, **_kwargs: source_sha256,
+    )
+    def source_id_for_hit(hit):
+        metadata = records[hit.metadata["chunk_index"]]["metadata"]
+        hit.metadata.update({
+            key: metadata.get(key)
+            for key in rag._retrieval_core._CONTEXT_HIT_IDENTITY_FIELDS
+        })
+        hit.metadata["stable_id"] = metadata["stable_id"]
+        return metadata["stable_id"]
+
+    monkeypatch.setattr(rag, "_search_hit_source_id", source_id_for_hit)
+
+    response = rag.search_index(
+        "minimum contacts", search_fakes.db_dir,
+        db_backend=backend, n_results=1,
+        embedding_model="fake-embedding", hybrid=False,
+        use_reranker=False, chunks_path=search_fakes.chunks_path,
+        context_window=1,
+    )
+
+    assert [hit.text for hit in response.hits] == [f"{prefix}-0"]
+    assert response.context_window == 1
+    assert [
+        segment.source_id for segment in response.hits[0].context_segments
+    ] == [records[1]["metadata"]["stable_id"]]
+
+
+@pytest.mark.parametrize("manifest_digest", [None, "f" * 64])
+def test_context_search_rejects_missing_or_mismatched_generation(
+        search_fakes, monkeypatch, manifest_digest):
+    monkeypatch.setattr(
+        rag, "_load_index_snapshot_with_quality",
+        lambda _path: ([], "a" * 64, (1, 2, 3, 4, 5), (3, "e" * 64)),
+    )
+    monkeypatch.setattr(
+        rag, "_require_hybrid_chunks_snapshot",
+        lambda *_args, **_kwargs: manifest_digest,
+    )
+
+    with pytest.raises(ValueError, match="does not match the indexed corpus"):
+        rag.search_index(
+            "minimum contacts", search_fakes.db_dir,
+            db_backend="chroma", n_results=1,
+            embedding_model="fake-embedding", hybrid=False,
+            use_reranker=False, chunks_path=search_fakes.chunks_path,
+            context_window=1,
+        )
+    assert search_fakes.state["embedding_calls"] == []
+
+
+def test_context_search_rejects_path_replacement_after_snapshot_load(
+        search_fakes, monkeypatch):
+    original_sha256 = hashlib.sha256(
+        search_fakes.chunks_path.read_bytes()).hexdigest()
+
+    def load_then_replace(_path):
+        search_fakes.chunks_path.write_text(
+            json.dumps({"text": "replacement chunk", "metadata": {}}) + "\n",
+            encoding="utf-8",
+        )
+        return [], original_sha256, (1, 2, 3, 4, 5), (3, None)
+
+    monkeypatch.setattr(
+        rag, "_load_index_snapshot_with_quality", load_then_replace)
+
+    with pytest.raises(ValueError, match="does not match the indexed corpus"):
+        rag.search_index(
+            "minimum contacts", search_fakes.db_dir,
+            db_backend="chroma", n_results=1,
+            embedding_model="fake-embedding", hybrid=False,
+            use_reranker=False, chunks_path=search_fakes.chunks_path,
+            context_window=1,
+        )
+    assert search_fakes.state["embedding_calls"] == []
+
+
 @pytest.mark.parametrize("wrapper, backend", [
     (rag.query_index, "chroma"),
     (rag.query_index_qdrant, "qdrant"),
@@ -564,6 +748,40 @@ def test_eval_delegates_hybrid_and_reranker_to_public_search(
     assert observed["kwargs"]["use_reranker"] is True
 
 
+def test_eval_preserves_context_for_grounding_without_changing_rank(
+        monkeypatch, tmp_path):
+    observed = {}
+    hit = rag.SearchHit(
+        "ranked text", {"stable_id": "chunk_primary"}, 0.8,
+        source_id="chunk_primary")
+    hit.context_segments = [rag.ContextSegment(
+        text="neighbor text",
+        metadata={"page_range": "2"},
+        source_id="chunk_neighbor",
+        relation="next",
+        distance=1,
+    )]
+    response = rag.SearchResponse(
+        hits=[hit], backend="chroma", requested_mode="vector",
+        effective_mode="vector", reranker_applied=False,
+        context_window=1)
+
+    def fake_search(*args, **kwargs):
+        observed.update(kwargs)
+        return response
+
+    monkeypatch.setattr(rag, "search_index", fake_search)
+    results = retrieval_eval.run_search(
+        "query", tmp_path, chunks_path=tmp_path / "chunks.jsonl",
+        context_window=1)
+
+    assert len(results) == 1
+    assert results[0]["text"] == "ranked text"
+    assert [item["source_id"] for item in results[0]["context"]] == [
+        "chunk_neighbor"]
+    assert observed["context_window"] == 1
+
+
 def test_evaluate_uses_success_name_fetches_max_k_and_counts_empty_type_miss(
         monkeypatch, tmp_path):
     observed = []
@@ -620,6 +838,49 @@ def test_chroma_batch_embeds_context_but_stores_raw_text():
     assert metadatas[0]["context"] == "Chapter 2: Personal Jurisdiction"
     assert metadatas[0]["case_names"] == "International Shoe"
     assert metadatas[0]["chapter_num"] == -1
+
+
+def test_chunk_id_distinguishes_same_page_source_occurrences():
+    def record(ref):
+        return {
+            "text": "The same rule appears twice on this page.",
+            "metadata": {
+                "source_file": "book",
+                "page_start": 10,
+                "page_end": 10,
+                "page_range": "pp.10-10",
+                "source_items": [{"ref": ref}],
+            },
+        }
+
+    first = record("#/texts/1")
+    second = record("#/texts/2")
+
+    assert rag._chunk_id(first) != rag._chunk_id(second)
+    del first["metadata"]["source_items"]
+    del second["metadata"]["source_items"]
+    assert rag._chunk_id(first) == rag._chunk_id(second)
+
+
+def test_chroma_batch_embeds_heading_for_short_source_answer():
+    record = {
+        "text": "No.",
+        "metadata": {
+            "context": "",
+            "case_names": [],
+            "cross_references": [],
+            "headings": ["Did they bill for secretarial time?"],
+            "primary_case": None,
+            "chapter_title": "Chapter 9",
+            "chapter_num": 9,
+        },
+    }
+
+    _, embedding_inputs, documents, _ = rag._prepare_chroma_batch([record])
+
+    assert embedding_inputs == [
+        "Did they bill for secretarial time?\n\nNo."]
+    assert documents == ["No."]
 
 
 def test_chroma_result_normalizer_strips_legacy_context_prefix():
@@ -903,7 +1164,9 @@ def test_metadata_aware_reranker_scores_enriched_text_but_returns_raw(
             captured["normalize"] = normalize
             return [0.1, 0.9]
 
-    monkeypatch.setattr(rag, "_get_reranker", lambda model: FakeReranker())
+    monkeypatch.setattr(
+        rag, "_get_reranker",
+        lambda model, **_kwargs: FakeReranker())
     documents = ["raw first", "raw second"]
     metadatas = [
         {"primary_case": "Case One", "section_path": "Jurisdiction"},
@@ -922,9 +1185,93 @@ def test_metadata_aware_reranker_scores_enriched_text_but_returns_raw(
     assert scores == [0.9, 0.1]
 
 
+def test_jina_reranker_has_a_deadline_and_refuses_redirects(monkeypatch):
+    observed = {}
+
+    class Response:
+        status_code = 200
+        payload = {"results": [{"index": 0, "relevance_score": 0.9}]}
+        body = json.dumps(payload).encode("utf-8")
+        headers = {
+            "Content-Type": "application/json",
+            "Content-Length": str(len(body)),
+        }
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            pytest.fail("provider path must not eagerly call response.json()")
+
+        def iter_content(self, *, chunk_size):
+            yield from (
+                self.body[offset:offset + chunk_size]
+                for offset in range(0, len(self.body), chunk_size)
+            )
+
+        def close(self):
+            return None
+
+    def post(url, **kwargs):
+        observed.update(url=url, **kwargs)
+        return Response()
+
+    monkeypatch.setenv("JINA_API_KEY", "secret")
+    monkeypatch.setattr(
+        rag, "_post_cloud_with_policy",
+        lambda _policy, url, **kwargs: post(url, **kwargs))
+
+    documents, metadatas, scores = rag._rerank(
+        "query", ["document"], [{"stable_id": "one"}], [0.2], 1,
+        reranker_model="jina-reranker-v2-base-multilingual",
+        security_policy=release_security.ReleaseSecurityPolicy(
+            profile="development", network_policy="allow-cloud"),
+    )
+
+    assert documents == ["document"]
+    assert metadatas == [{"stable_id": "one"}]
+    assert scores == [0.9]
+    assert observed["url"] == "https://api.jina.ai/v1/rerank"
+    assert observed["timeout"] == 60
+    assert observed["allow_redirects"] is False
+    assert observed["stream"] is True
+    assert isinstance(observed["auth"], rag._llm_adapters._BearerAuth)
+
+
+def test_jina_reranker_rejects_redirect_response_body(monkeypatch):
+    class Response:
+        status_code = 308
+        headers = {}
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"results": [{"index": 0, "relevance_score": 0.9}]}
+
+        def close(self):
+            return None
+
+    monkeypatch.setenv("JINA_API_KEY", "secret")
+    monkeypatch.setattr(
+        rag, "_post_cloud_with_policy",
+        lambda *_args, **_kwargs: Response())
+
+    with pytest.raises(RuntimeError, match="returned a redirect"):
+        rag._rerank(
+            "query", ["document"], [{}], [0.2], 1,
+            reranker_model="jina-reranker-v2-base-multilingual",
+            security_policy=release_security.ReleaseSecurityPolicy(
+                profile="development", network_policy="allow-cloud"),
+        )
+
+
 def test_reranker_cache_is_keyed_by_model(monkeypatch):
     loaded = []
     monkeypatch.setenv("RAG_ALLOW_UNPINNED_MODELS", "1")
+    policy = release_security.ReleaseSecurityPolicy(
+        profile="development",
+        model_download_policy="allow-reviewed-sync")
 
     class FakeFlagReranker:
         def __init__(self, model_name, **kwargs):
@@ -936,10 +1283,11 @@ def test_reranker_cache_is_keyed_by_model(monkeypatch):
     monkeypatch.setitem(sys.modules, "FlagEmbedding", module)
     monkeypatch.setattr(rag, "_reranker_instances", {})
 
-    model_a = rag._get_reranker("model-a")
-    model_b = rag._get_reranker("model-b")
+    model_a = rag._get_reranker("model-a", security_policy=policy)
+    model_b = rag._get_reranker("model-b", security_policy=policy)
 
-    assert rag._get_reranker("model-a") is model_a
+    assert rag._get_reranker(
+        "model-a", security_policy=policy) is model_a
     assert model_b is not model_a
     assert [item[0] for item in loaded] == ["model-a", "model-b"]
 

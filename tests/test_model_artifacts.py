@@ -3,6 +3,7 @@ import hashlib
 import io
 import json
 import os
+from dataclasses import replace
 import subprocess
 import sys
 from types import ModuleType, SimpleNamespace
@@ -13,6 +14,7 @@ import pytest
 
 import model_artifacts
 import rag
+import release_security
 from tools import check_model_artifacts
 
 
@@ -539,6 +541,8 @@ def test_verified_model_directory_builds_offline_remote_code_bundle(
         main.model_id, "embedding",
         cache_root=tmp_path / "cache",
         snapshot_download_fn=snapshot_download,
+        allow_download=True,
+        authorize_download_fn=lambda: None,
     )
 
     assert (result / "config.json").read_bytes() == derived
@@ -550,11 +554,17 @@ def test_verified_model_directory_builds_offline_remote_code_bundle(
             "repo_id": "owner/model",
             "revision": "1" * 40,
             "allow_patterns": ["config.json", "model.safetensors"],
+            "endpoint": model_artifacts.HUGGINGFACE_HUB_OFFICIAL_ENDPOINT,
+            "token": False,
+            "etag_timeout": 10,
         },
         {
             "repo_id": "code/repo",
             "revision": "2" * 40,
             "allow_patterns": ["config.py", "model.py"],
+            "endpoint": model_artifacts.HUGGINGFACE_HUB_OFFICIAL_ENDPOINT,
+            "token": False,
+            "etag_timeout": 10,
         },
     ]
 
@@ -565,6 +575,303 @@ def test_verified_model_directory_builds_offline_remote_code_bundle(
             "an already verified bundle must be offline"),
     )
     assert again == result
+
+
+def test_runtime_bundle_spec_is_the_shared_source_and_destination_contract(
+        monkeypatch, tmp_path):
+    main, code, _roots, derived = _synthetic_artifacts(tmp_path)
+    artifacts = {main.model_id: main, code.model_id: code}
+    monkeypatch.setattr(
+        model_artifacts, "model_artifact",
+        lambda model_id, **_kwargs: artifacts.get(model_id))
+
+    spec = model_artifacts.runtime_bundle_spec(
+        main.model_id, "embedding", cache_root=tmp_path / "cache")
+
+    assert spec.model_id == main.model_id
+    assert spec.auxiliary_model_id == code.model_id
+    assert spec.auxiliary_consumer == "embedding_remote_code"
+    assert spec.primary_download_bytes == sum(file.size for file in main.files)
+    assert spec.primary_runtime_bytes == len(derived) + main.files[1].size
+    assert spec.auxiliary_download_bytes == sum(file.size for file in code.files)
+    assert spec.auxiliary_runtime_bytes == spec.auxiliary_download_bytes
+    assert spec.transformed_bytes_removed == (
+        main.files[0].size - len(derived))
+    assert spec.runtime_bytes == sum(file.size for file in spec.expected_files)
+    assert len(spec.identity_sha256) == 64
+    assert model_artifacts.verify_cached_runtime_bundle(spec) is False
+    assert not (tmp_path / "cache").exists()
+
+
+def test_runtime_identity_v2_binds_auxiliary_code_inventory(
+        monkeypatch, tmp_path):
+    main, code, _roots, _derived = _synthetic_artifacts(tmp_path)
+    artifacts = {main.model_id: main, code.model_id: code}
+    monkeypatch.setattr(
+        model_artifacts, "model_artifact",
+        lambda model_id, **_kwargs: artifacts.get(model_id))
+    first = model_artifacts.runtime_bundle_spec(
+        main.model_id, "embedding", cache_root=tmp_path / "cache")
+
+    changed_file = replace(code.files[0], content_sha256="f" * 64)
+    artifacts[code.model_id] = replace(
+        code, files=(changed_file, *code.files[1:]))
+    second = model_artifacts.runtime_bundle_spec(
+        main.model_id, "embedding", cache_root=tmp_path / "cache")
+
+    assert first.primary_files == second.primary_files
+    assert first.transforms == second.transforms
+    assert first.identity_sha256 != second.identity_sha256
+    assert first.target != second.target
+
+
+def test_runtime_bundle_spec_rejects_unsafe_or_ambiguous_auxiliary_files(
+        monkeypatch, tmp_path):
+    main, code, _roots, _derived = _synthetic_artifacts(tmp_path)
+    artifacts = {main.model_id: main, code.model_id: code}
+    monkeypatch.setattr(
+        model_artifacts, "model_artifact",
+        lambda model_id, **_kwargs: artifacts.get(model_id))
+
+    unsafe = _model_file("helper.BIN", b"pickle")
+    artifacts[code.model_id] = replace(
+        code,
+        runtime_files=(("embedding_remote_code", (unsafe.path,)),),
+        files=(unsafe,),
+    )
+    with pytest.raises(model_artifacts.ModelArtifactError, match="dependency"):
+        model_artifacts.runtime_bundle_spec(main.model_id, "embedding")
+
+    colliding = _model_file("config.json", b"collision")
+    artifacts[code.model_id] = replace(
+        code,
+        runtime_files=(("embedding_remote_code", (colliding.path,)),),
+        files=(colliding,),
+    )
+    with pytest.raises(model_artifacts.ModelArtifactError, match="collides"):
+        model_artifacts.runtime_bundle_spec(main.model_id, "embedding")
+
+    descendant = _model_file("config.json/helper.py", b"collision")
+    artifacts[code.model_id] = replace(
+        code,
+        runtime_files=(("embedding_remote_code", (descendant.path,)),),
+        files=(descendant,),
+    )
+    with pytest.raises(model_artifacts.ModelArtifactError, match="file/directory"):
+        model_artifacts.runtime_bundle_spec(main.model_id, "embedding")
+
+    with pytest.raises(
+            model_artifacts.ModelArtifactError,
+            match="case-folded directory collision"):
+        model_artifacts._validate_runtime_bundle_topology((
+            model_artifacts.RuntimeBundleFile("Code/one.py", 1, "1" * 64),
+            model_artifacts.RuntimeBundleFile("code/two.py", 1, "2" * 64),
+        ))
+
+
+def test_runtime_bundle_spec_rejects_dependency_only_consumer(
+        monkeypatch, tmp_path):
+    _main, code, _roots, _derived = _synthetic_artifacts(tmp_path)
+    monkeypatch.setattr(
+        model_artifacts, "model_artifact",
+        lambda model_id, **_kwargs: code if model_id == code.model_id else None)
+
+    with pytest.raises(model_artifacts.ModelArtifactError, match="dependency-only"):
+        model_artifacts.runtime_bundle_spec(
+            code.model_id, "embedding_remote_code")
+
+
+def test_verified_model_directory_is_cache_only_until_explicit_sync(
+        monkeypatch, tmp_path):
+    main, code, roots, _derived = _synthetic_artifacts(tmp_path)
+    artifacts = {main.model_id: main, code.model_id: code}
+    monkeypatch.setattr(
+        model_artifacts, "model_artifact",
+        lambda model_id, **_kwargs: artifacts.get(model_id))
+    observed = []
+
+    with pytest.raises(
+            model_artifacts.ModelArtifactError, match="not synchronized"):
+        model_artifacts.verified_model_directory(
+            main.model_id, "embedding", cache_root=tmp_path / "cache",
+            snapshot_download_fn=lambda **_kwargs: pytest.fail(
+                "cache-only runtime must not construct a download"))
+
+    with pytest.raises(
+            model_artifacts.ModelArtifactError,
+            match="explicit download authorizer"):
+        model_artifacts.verified_model_directory(
+            main.model_id, "embedding", cache_root=tmp_path / "cache",
+            allow_download=True,
+            snapshot_download_fn=lambda **kwargs: str(
+                roots[kwargs["repo_id"]]))
+
+    result = model_artifacts.verified_model_directory(
+        main.model_id, "embedding", cache_root=tmp_path / "cache",
+        allow_download=True,
+        authorize_download_fn=lambda: observed.append("authorized"),
+        snapshot_download_fn=lambda **kwargs: str(roots[kwargs["repo_id"]]),
+    )
+
+    assert result.is_dir()
+    assert observed == ["authorized"]
+
+
+def test_hub_download_owns_endpoint_auth_deadline_redirect_and_size_policy(
+        monkeypatch, tmp_path):
+    import requests
+
+    sessions = []
+    payload = b"reviewed model bytes"
+
+    class Response:
+        headers = {"Content-Length": str(len(payload))}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def raise_for_status(self):
+            return None
+
+        def iter_content(self, *, chunk_size):
+            assert chunk_size == 1024 * 1024
+            return iter((payload,))
+
+    class Session:
+        def __init__(self):
+            self.trust_env = None
+            self.auth = None
+            self.max_redirects = None
+            self.headers = {}
+            self.gets = []
+            self.closed = False
+            sessions.append(self)
+
+        def get(self, url, **kwargs):
+            self.gets.append((url, kwargs))
+            return Response()
+
+        def close(self):
+            self.closed = True
+
+    monkeypatch.setattr(requests, "Session", Session)
+    monkeypatch.setenv("HF_ENDPOINT", "https://sink.invalid")
+    destination = tmp_path / "download"
+
+    result = model_artifacts._snapshot_model_repository(
+        repo_id="owner/model", revision="1" * 40,
+        allow_patterns=["weights/model.safetensors"],
+        endpoint=model_artifacts.HUGGINGFACE_HUB_OFFICIAL_ENDPOINT,
+        trust_environment_network=False,
+        destination=destination,
+        expected_sizes={"weights/model.safetensors": len(payload)})
+
+    assert result == str(destination)
+    assert (destination / "weights/model.safetensors").read_bytes() == payload
+    session = sessions[0]
+    assert session.trust_env is False
+    assert session.max_redirects == 5
+    assert session.headers == {
+        "Accept-Encoding": "identity",
+        "User-Agent": "rag-pipeline-model-sync/1",
+    }
+    assert session.gets == [(
+        "https://huggingface.co/owner/model/resolve/" + "1" * 40
+        + "/weights/model.safetensors",
+        {
+            "stream": True,
+            "allow_redirects": True,
+            "timeout": (10, 60),
+        },
+    )]
+    request = SimpleNamespace(headers={"Authorization": "ambient"})
+    assert session.auth(request) is request
+    assert "Authorization" not in request.headers
+    request.headers["Authorization"] = "redirect-netrc"
+    session.rebuild_auth(request, SimpleNamespace())
+    assert "Authorization" not in request.headers
+    assert session.closed is True
+
+    trusted_destination = tmp_path / "trusted"
+    model_artifacts._snapshot_model_repository(
+        repo_id="owner/model", revision="1" * 40,
+        allow_patterns=["config.json"],
+        endpoint="https://reviewed-mirror.example",
+        trust_environment_network=True,
+        destination=trusted_destination,
+        expected_sizes={"config.json": len(payload)})
+    assert sessions[-1].trust_env is True
+    assert sessions[-1].gets[0][0].startswith(
+        "https://reviewed-mirror.example/owner/model/resolve/")
+
+
+def test_model_download_redirect_never_rebuilds_netrc_auth(monkeypatch):
+    import requests
+
+    discovered = []
+    monkeypatch.setattr(
+        requests.sessions, "get_netrc_auth",
+        lambda url: discovered.append(url) or ("ambient", "secret"))
+    session = model_artifacts._model_download_session(
+        requests, trust_environment_network=True)
+    request = requests.Request(
+        "GET", "https://cdn.example/model",
+        headers={"Authorization": "Basic ambient"}).prepare()
+    try:
+        session.rebuild_auth(request, SimpleNamespace())
+    finally:
+        session.close()
+
+    assert "Authorization" not in request.headers
+    assert discovered == []
+
+
+def test_model_download_rejects_https_to_http_redirect_before_following():
+    import requests
+
+    session = model_artifacts._model_download_session(
+        requests, trust_environment_network=False)
+    response = requests.Response()
+    response.status_code = 302
+    response.url = "https://huggingface.co/owner/model/resolve/rev/file"
+    response.headers["Location"] = "http://cdn.example/file"
+    try:
+        with pytest.raises(
+                model_artifacts.ModelArtifactError,
+                match="redirect must remain credential-free HTTPS"):
+            session.get_redirect_target(response)
+    finally:
+        session.close()
+
+
+def test_model_download_stage_is_removed_when_publication_stage_fails(
+        monkeypatch, tmp_path):
+    main, code, roots, _derived = _synthetic_artifacts(tmp_path)
+    artifacts = {main.model_id: main, code.model_id: code}
+    monkeypatch.setattr(
+        model_artifacts, "model_artifact",
+        lambda model_id, **_kwargs: artifacts.get(model_id))
+    real_mkdtemp = model_artifacts.tempfile.mkdtemp
+
+    def fail_publication_stage(*args, **kwargs):
+        if ".download." in kwargs.get("prefix", ""):
+            return real_mkdtemp(*args, **kwargs)
+        raise OSError("injected publication-stage failure")
+
+    monkeypatch.setattr(model_artifacts.tempfile, "mkdtemp", fail_publication_stage)
+    cache_root = tmp_path / "cache"
+
+    with pytest.raises(OSError, match="publication-stage failure"):
+        model_artifacts.verified_model_directory(
+            main.model_id, "embedding", cache_root=cache_root,
+            allow_download=True, authorize_download_fn=lambda: None,
+            snapshot_download_fn=lambda **kwargs: str(
+                roots[kwargs["repo_id"]]))
+
+    assert not list(cache_root.glob(".*.download.*"))
 
 
 def test_verified_model_directory_rejects_tampering_and_pickle(
@@ -578,7 +885,8 @@ def test_verified_model_directory_rejects_tampering_and_pickle(
         return str(roots[kwargs["repo_id"]])
     result = model_artifacts.verified_model_directory(
         main.model_id, "embedding", cache_root=tmp_path / "cache",
-        snapshot_download_fn=download)
+        snapshot_download_fn=download, allow_download=True,
+        authorize_download_fn=lambda: None)
     (result / "unexpected.txt").write_text("tamper", encoding="utf-8")
 
     with pytest.raises(model_artifacts.ModelArtifactError, match="unexpected"):
@@ -595,6 +903,26 @@ def test_verified_model_directory_rejects_tampering_and_pickle(
         model_artifacts.verified_model_directory(
             legal.model_id, "embedding", cache_root=tmp_path / "legal",
             snapshot_download_fn=lambda **_kwargs: pytest.fail("must block first"))
+
+
+def test_cached_runtime_bundle_rejects_unexpected_empty_directory(
+        monkeypatch, tmp_path):
+    main, code, roots, _derived = _synthetic_artifacts(tmp_path)
+    artifacts = {main.model_id: main, code.model_id: code}
+    monkeypatch.setattr(
+        model_artifacts, "model_artifact",
+        lambda model_id, **_kwargs: artifacts.get(model_id))
+    result = model_artifacts.verified_model_directory(
+        main.model_id, "embedding", cache_root=tmp_path / "cache",
+        allow_download=True, authorize_download_fn=lambda: None,
+        snapshot_download_fn=lambda **kwargs: str(roots[kwargs["repo_id"]]))
+    (result / "unexpected-empty").mkdir()
+
+    spec = model_artifacts.runtime_bundle_spec(
+        main.model_id, "embedding", cache_root=tmp_path / "cache")
+    with pytest.raises(
+            model_artifacts.ModelArtifactError, match="unexpected directory"):
+        model_artifacts.verify_cached_runtime_bundle(spec)
 
 
 def test_verified_installed_package_model_checks_version_and_bytes(
@@ -700,7 +1028,7 @@ def test_model_loader_source_is_verified_or_explicitly_opted_out(
         lambda model_id: artifact if model_id == "owner/model" else None)
     monkeypatch.setattr(
         rag._model_artifacts, "verified_model_directory",
-        lambda *_args: tmp_path)
+        lambda *_args, **_kwargs: tmp_path)
     monkeypatch.setattr(
         rag._model_artifacts, "configure_transformers_dynamic_module_cache",
         lambda: cache_calls.append(True))
@@ -716,12 +1044,18 @@ def test_model_loader_source_is_verified_or_explicitly_opted_out(
     with pytest.raises(model_artifacts.ModelArtifactError, match="reviewed"):
         rag._model_loader_source("custom/model", "embedding")
     monkeypatch.setenv("RAG_ALLOW_UNPINNED_MODELS", "1")
-    assert rag._model_loader_source("custom/model", "embedding") == (
+    development_policy = release_security.ReleaseSecurityPolicy(
+        profile="development",
+        model_download_policy="allow-reviewed-sync")
+    assert rag._model_loader_source(
+        "custom/model", "embedding",
+        security_policy=development_policy) == (
         "custom/model", False)
 
 
 def test_tokenizer_loader_receives_only_verified_local_path(monkeypatch):
     captured = {}
+    encoded = []
     monkeypatch.setattr(
         rag, "_model_loader_source", lambda *_args: ("verified/tokenizer", True))
 
@@ -729,7 +1063,11 @@ def test_tokenizer_loader_receives_only_verified_local_path(monkeypatch):
         @classmethod
         def from_pretrained(cls, model_name, **kwargs):
             captured.update(model_name=model_name, kwargs=kwargs)
-            return SimpleNamespace(encode=lambda *_args, **_kwargs: [1, 2])
+            return cls()
+
+        def encode(self, text, **kwargs):
+            encoded.append((text, kwargs))
+            return [1, 2]
 
     module = ModuleType("transformers")
     module.AutoTokenizer = FakeTokenizer
@@ -743,6 +1081,39 @@ def test_tokenizer_loader_receives_only_verified_local_path(monkeypatch):
         "model_name": "verified/tokenizer",
         "kwargs": {"trust_remote_code": False, "local_files_only": True},
     }
+    assert encoded == [(
+        "search_document: text",
+        {"add_special_tokens": True, "truncation": False},
+    )]
+
+
+def test_generic_embedding_token_counter_does_not_add_nomic_prefix(
+        monkeypatch):
+    encoded = []
+    monkeypatch.setattr(
+        rag, "_model_loader_source", lambda *_args: ("verified/tokenizer", True))
+
+    class FakeTokenizer:
+        @classmethod
+        def from_pretrained(cls, *_args, **_kwargs):
+            return cls()
+
+        def encode(self, text, **kwargs):
+            encoded.append((text, kwargs))
+            return [1, 2, 3]
+
+    module = ModuleType("transformers")
+    module.AutoTokenizer = FakeTokenizer
+    monkeypatch.setitem(sys.modules, "transformers", module)
+
+    counts, exact = rag._count_embedding_text_tokens(
+        ["ordinary document"], "owner/generic-embedding-model")
+
+    assert (counts, exact) == ([3], True)
+    assert encoded == [(
+        "ordinary document",
+        {"add_special_tokens": True, "truncation": False},
+    )]
 
 
 def test_sentence_transformer_loader_uses_offline_verified_bundle(
@@ -777,10 +1148,97 @@ def test_sentence_transformer_loader_uses_offline_verified_bundle(
     }
 
 
+@pytest.mark.parametrize("model_name", ["embo-01", "minimax-embedding-01"])
+def test_minimax_embedding_models_fail_closed_without_transport(
+        monkeypatch, model_name):
+    monkeypatch.setattr(
+        rag, "_post_cloud_with_policy",
+        lambda *_args, **_kwargs: pytest.fail(
+            "unsupported MiniMax embedding reached transport"))
+
+    with pytest.raises(ValueError, match="no current reviewed MiniMax"):
+        rag._get_embedding_fn(
+            model_name,
+            security_policy=release_security.ReleaseSecurityPolicy(
+                profile="development", network_policy="allow-cloud"))
+
+
+def test_sentence_transformer_rejects_overstated_configured_limit(
+        monkeypatch):
+    monkeypatch.setitem(sys.modules, "chromadb", None)
+    monkeypatch.setattr(
+        rag, "_model_loader_source",
+        lambda *_args, **_kwargs: ("verified/embedding", True))
+    monkeypatch.setattr(
+        rag._model_artifacts, "model_artifact",
+        lambda *_args: SimpleNamespace(trust_remote_code=True))
+
+    class FakeSentenceTransformer:
+        max_seq_length = 256
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+    sentence_transformers = ModuleType("sentence_transformers")
+    sentence_transformers.SentenceTransformer = FakeSentenceTransformer
+    monkeypatch.setitem(
+        sys.modules, "sentence_transformers", sentence_transformers)
+
+    embedding = rag._get_embedding_fn(
+        rag.DEFAULT_EMBEDDING_MODEL_GENERAL)
+
+    with pytest.raises(RuntimeError, match="truncates at 256"):
+        embedding._load()
+
+
+def test_nomic_inference_uses_same_task_prefix_as_token_validation(
+        monkeypatch):
+    encoded = []
+    monkeypatch.setitem(sys.modules, "chromadb", None)
+    monkeypatch.setattr(
+        rag, "_model_loader_source",
+        lambda *_args, **_kwargs: ("verified/embedding", True))
+    monkeypatch.setattr(
+        rag._model_artifacts, "model_artifact",
+        lambda *_args: SimpleNamespace(trust_remote_code=True))
+
+    class Vector:
+        def tolist(self):
+            return [1.0, 2.0]
+
+    class FakeSentenceTransformer:
+        max_seq_length = 512
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def encode(self, texts, **kwargs):
+            encoded.append((texts, kwargs))
+            return [Vector() for _ in texts]
+
+    sentence_transformers = ModuleType("sentence_transformers")
+    sentence_transformers.SentenceTransformer = FakeSentenceTransformer
+    monkeypatch.setitem(
+        sys.modules, "sentence_transformers", sentence_transformers)
+
+    document_embedding = rag._get_embedding_fn(
+        rag.DEFAULT_EMBEDDING_MODEL_GENERAL, input_type="document")
+    query_embedding = rag._get_embedding_fn(
+        rag.DEFAULT_EMBEDDING_MODEL_GENERAL, input_type="query")
+
+    assert document_embedding(["body"]) == [[1.0, 2.0]]
+    assert query_embedding(["question"]) == [[1.0, 2.0]]
+    assert encoded == [
+        (["search_document: body"], {"convert_to_numpy": True}),
+        (["search_query: question"], {"convert_to_numpy": True}),
+    ]
+
+
 def test_zero_shot_and_reranker_use_verified_local_paths(monkeypatch):
     monkeypatch.setattr(
         rag, "_model_loader_source",
-        lambda _model, consumer: (f"verified/{consumer}", True))
+        lambda _model, consumer, **_kwargs: (
+            f"verified/{consumer}", True))
     pipeline_call = {}
 
     def fake_pipeline(*args, **kwargs):

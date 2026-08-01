@@ -1,22 +1,52 @@
 import inspect
+import json
 
 import pytest
 
 import rag
+import release_security
+
+
+@pytest.fixture(autouse=True)
+def _explicit_cloud_policy_for_provider_contracts(monkeypatch):
+    monkeypatch.setattr(
+        rag,
+        "_DEFAULT_RELEASE_SECURITY_POLICY",
+        release_security.ReleaseSecurityPolicy(
+            profile="development",
+            network_policy="allow-cloud",
+            trust_environment_network=True,
+        ),
+    )
+    monkeypatch.setattr(
+        rag, "_post_cloud_with_policy",
+        lambda _policy, url, **kwargs: rag.requests.post(url, **kwargs),
+    )
 
 
 class _FakeResponse:
     status_code = 200
-    headers = {}
 
     def __init__(self, payload):
         self._payload = payload
+        self._body = json.dumps(payload).encode("utf-8")
+        self.headers = {
+            "Content-Type": "application/json",
+            "Content-Length": str(len(self._body)),
+        }
 
     def raise_for_status(self):
         return None
 
     def json(self):
-        return self._payload
+        pytest.fail("provider path must not eagerly call response.json()")
+
+    def iter_content(self, *, chunk_size):
+        for offset in range(0, len(self._body), chunk_size):
+            yield self._body[offset:offset + chunk_size]
+
+    def close(self):
+        return None
 
 
 def test_disabled_agent_team_never_calls_an_llm(monkeypatch):
@@ -29,6 +59,36 @@ def test_disabled_agent_team_never_calls_an_llm(monkeypatch):
     assert team.director_plan("Run deterministic validation") == ""
     assert team.manager_decompose("") == ""
     assert team.qc_criteria("") == ""
+
+
+def test_agent_team_preserves_release_security_policy(monkeypatch):
+    observed = {}
+    policy = release_security.ReleaseSecurityPolicy.from_values(
+        network_policy="allow-cloud", cache_namespace="tenant-a")
+    monkeypatch.setattr(
+        rag, "_call_llm",
+        lambda _prompt, **kwargs: observed.update(kwargs) or "plan")
+
+    team = rag._AgentTeam(
+        "Cloud review", security_policy=policy,
+        cloud_url="https://example.test/v1")
+
+    assert team.director_plan("Review") == "plan"
+    assert observed["security_policy"] is policy
+
+
+def test_toc_scaffold_llm_preserves_release_security_policy(monkeypatch):
+    observed = {}
+    policy = release_security.ReleaseSecurityPolicy.from_values(
+        network_policy="allow-cloud", cache_namespace="tenant-a")
+    monkeypatch.setattr(
+        rag, "_call_llm",
+        lambda _prompt, **kwargs: observed.update(kwargs) or "[]")
+
+    assert rag._llm_parse_scaffold(
+        "Chapter One 1", security_policy=policy,
+        cloud_url="https://example.test/v1") == []
+    assert observed["security_policy"] is policy
 
 
 def test_deterministic_scaffold_skips_layout_llm(monkeypatch):
@@ -191,6 +251,57 @@ def test_custom_openai_provider_does_not_receive_deepseek_fields(monkeypatch):
     assert observed["json"]["temperature"] == 0.0
 
 
+@pytest.mark.parametrize(
+    ("thinking", "expected_thinking"),
+    [(False, {"type": "disabled"}), (True, {"type": "adaptive"})],
+)
+def test_minimax_m3_payload_binds_sampling_thinking_and_output_contract(
+        monkeypatch, thinking, expected_thinking):
+    observed = {}
+
+    def fake_post(url, **kwargs):
+        observed.update(url=url, **kwargs)
+        return _FakeResponse({
+            "choices": [{"message": {"content": "answer"}}],
+        })
+
+    monkeypatch.setattr(rag.requests, "post", fake_post)
+    monkeypatch.setattr(rag, "_api_throttle", None)
+
+    assert rag._call_openai_compatible(
+        "prompt",
+        base_url=rag.DEFAULT_CLOUD_URL,
+        model=rag.DEFAULT_CLOUD_MODEL,
+        api_key="key",
+        thinking=thinking,
+    ) == "answer"
+    assert observed["json"]["temperature"] == 0.0
+    assert observed["json"]["max_completion_tokens"] == 256
+    assert "max_tokens" not in observed["json"]
+    assert observed["json"]["thinking"] == expected_thinking
+    assert observed["json"]["reasoning_split"] is True
+
+
+def test_minimax_m2_rejects_unhonorable_no_thinking_request(monkeypatch):
+    monkeypatch.setattr(
+        rag.requests, "post",
+        lambda *_args, **_kwargs: pytest.fail(
+            "invalid MiniMax M2 request reached transport"))
+
+    with pytest.raises(rag.ProviderCallError) as caught:
+        rag._call_openai_compatible(
+            "prompt",
+            base_url=rag.DEFAULT_CLOUD_URL,
+            model="MiniMax-M2.7",
+            api_key="key",
+            thinking=False,
+            _structured=True,
+        )
+
+    assert caught.value.category == "configuration_error"
+    assert caught.value.transport_attempts == 0
+
+
 def test_ollama_thinking_payload_returns_only_final_response(monkeypatch):
     observed = {}
 
@@ -202,16 +313,17 @@ def test_ollama_thinking_payload_returns_only_final_response(monkeypatch):
             "response": "final response",
         })
 
-    monkeypatch.setattr(rag.requests, "post", fake_post)
+    monkeypatch.setattr(rag, "_post_loopback_without_environment", fake_post)
 
     result = rag._call_ollama(
-        "prompt", url="http://localhost:11434", model="qwen3:30b",
+        "prompt", url="http://127.0.0.1:11434", model="qwen3:30b",
         thinking=True, max_tokens=99,
     )
 
     assert result == "final response"
-    assert observed["url"] == "http://localhost:11434/api/generate"
+    assert observed["url"] == "http://127.0.0.1:11434/api/generate"
     assert observed["json"]["think"] is True
+    assert observed["allow_redirects"] is False
     assert observed["json"]["options"]["num_predict"] == 99
 
 
@@ -230,6 +342,7 @@ def test_llm_classify_accepts_and_forwards_worker_count(monkeypatch):
     assert result == "case_opinion"
     assert observed["llm_workers"] == 7
     assert observed["thinking"] is True
+    assert observed["max_tokens"] == 256
 
 
 def test_generate_context_accepts_and_forwards_worker_count(monkeypatch):

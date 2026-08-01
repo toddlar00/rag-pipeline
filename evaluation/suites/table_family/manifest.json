@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "name": "table-family-mini",
+  "subject": "Synthetic Table Retrieval",
+  "book": "CC0 Table Family Mini Corpus",
+  "license": "CC0-1.0",
+  "source_note": "All passages, table data, and questions were written specifically for this evaluation suite; the schedules are fictional and no source text is copied.",
+  "chunks": {
+    "path": "chunks.jsonl",
+    "sha256": "c4e1e2300c7ea7dbc91df7d70401dc221f8f06443fa43414406ff7f836ad8c42",
+    "record_count": 10,
+    "id_scheme": "retrieval_core._chunk_id"
+  },
+  "queries": {
+    "path": "queries.jsonl",
+    "sha256": "bd266d0e38c411d4cf3874e31af912843bfe2f46714ba145b2babff9ba841eeb",
+    "record_count": 6
+  }
+}

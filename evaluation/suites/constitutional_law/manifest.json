@@ -7,13 +7,13 @@
   "source_note": "All passages and questions were written specifically for this evaluation suite. Case summaries are original paraphrases of facts and rules from public-domain United States judicial opinions; no source text is copied.",
   "chunks": {
     "path": "chunks.jsonl",
-    "sha256": "7706debb54b29e3e253cbe8cfcef8dff031bcb3b0046cb901981eab0d1bdf1ca",
-    "record_count": 10,
+    "sha256": "41e51415ad9fd2b4040a64e76b2dfd904909c6a1adfab05d21ec1eb1ee138cd0",
+    "record_count": 11,
     "id_scheme": "retrieval_core._chunk_id"
   },
   "queries": {
     "path": "queries.jsonl",
-    "sha256": "396d2e23f16f2742f63bfaad1a1811e34389d4651c5e95331bbf0ba641c8e1de",
-    "record_count": 7
+    "sha256": "c846bdb2acf994ebab74304e0c88456624b45bce46c5cd2b293f3c171e914953",
+    "record_count": 8
   }
 }

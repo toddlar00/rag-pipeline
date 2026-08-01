@@ -15,10 +15,9 @@ Usage:
 """
 
 import argparse
-from contextlib import ExitStack
-import errno
+from contextlib import ExitStack, contextmanager
+import gc
 from getpass import getpass
-import hashlib
 import json
 import logging
 import math
@@ -26,9 +25,9 @@ import os
 import queue
 import re
 import requests
-import signal
-import stat
-import subprocess
+import shutil
+import signal  # noqa: F401 - shared module retained for facade monkeypatching
+import subprocess  # noqa: F401 - shared module retained for facade monkeypatching
 import sys
 import threading as _threading
 import time
@@ -40,16 +39,29 @@ from uuid import UUID, uuid4
 import artifact_io as _artifact_io
 import chunking_core as _chunking_core
 import cli_policy as _cli_policy
+import document_profiles as _document_profiles
+import embedding_policy as _embedding_policy
+import endpoint_policy as _endpoint_policy
 import ingestion_core as _ingestion_core
 import index_state as _index_state
+import job_application as _job_application
 import job_runtime as _job_runtime
 import llm_adapters as _llm_adapters
 import model_artifacts as _model_artifacts
 import operation_contracts as _operation_contracts
+import operational_metrics as _operational_metrics
+import process_supervision as _process_supervision
+import provider_transport as _provider_transport
+import quality_core as _quality_core
+import release_security as _release_security
+import resource_lease as _resource_lease
 import retention as _retention
 import retrieval_core as _retrieval_core
 import run_telemetry as _run_telemetry
+import runtime_supervision as _runtime_supervision
 import storage_policy as _storage_policy
+import table_retrieval_core as _table_retrieval_core
+import vector_lifecycle as _vector_lifecycle
 
 from llm_runtime import (
     LLMBudgetExceeded,
@@ -62,6 +74,13 @@ from llm_runtime import (
     ProviderResponse,
     ProviderSpec,
 )
+
+# Runtime ML/database libraries are never allowed to emit auxiliary analytics
+# or version-check traffic from this private-data process. Provider calls are
+# governed separately by the explicit release-security policy.
+os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
+os.environ["ANONYMIZED_TELEMETRY"] = "False"
+os.environ["DO_NOT_TRACK"] = "1"
 
 # ---------------------------------------------------------------------------
 # Logging — configured in main() based on -v / --quiet flags
@@ -76,39 +95,68 @@ log = logging.getLogger(__name__)
 DEFAULT_EMBEDDING_MODEL_LEGAL = "voyage-law-2"
 DEFAULT_EMBEDDING_MODEL_GENERAL = "nomic-ai/nomic-embed-text-v2-moe"
 DEFAULT_EMBEDDING_MODEL = DEFAULT_EMBEDDING_MODEL_GENERAL  # free, local GPU, no API key needed
-DEFAULT_MAX_TOKENS = 4096
+# The default embedding model accepts 512 tokens including its retrieval-task
+# prefix and special tokens.  Five hundred leaves a small safety margin while
+# preserving ordinary sentence-boundary repair.
+DEFAULT_MAX_TOKENS = 500
 DEFAULT_COLLECTION = "civpro"
 DEFAULT_DB_LOCK_TIMEOUT = 30.0
-DEFAULT_OPERATION_TIMEOUTS = {
-    "index": 7200.0,
-    "query": 300.0,
-    "info": 120.0,
-    "full": 14400.0,
-    "batch": 43200.0,
-    "evaluation": 14400.0,
-    "storage": 600.0,
-}
+DEFAULT_OPERATION_TIMEOUTS = dict(
+    _runtime_supervision.DEFAULT_OPERATION_TIMEOUTS)
 ARTIFACT_COMPLETION_SCHEMA_VERSION = 1
-_SUPERVISED_CHILD_ENV = "RAG_PIPELINE_SUPERVISED_CHILD"
-_RUN_ID_ENV = "RAG_PIPELINE_RUN_ID"
-_SUPERVISED_TERMINATE_GRACE = 5.0
-_SUPERVISED_POLL_INTERVAL = 0.2
-_SUPERVISED_START_GATE_TIMEOUT = 60.0
+CONVERSION_COMPLETION_SCHEMA_VERSION = 2
+CHUNK_COMPLETION_SCHEMA_VERSION = 3
+_CONVERSION_CAPTURE_POLICY = "stream-copy-v1"
+_MAX_CONVERSION_MANIFEST_BYTES = 1024 * 1024
+_MAX_CHUNK_COMPLETION_BYTES = 1024 * 1024
+_SNAPSHOT_SCRATCH_ENV = "RAG_SNAPSHOT_SCRATCH"
+_SUPERVISED_CHILD_ENV = _runtime_supervision.SUPERVISED_CHILD_ENV
+_RUN_ID_ENV = _runtime_supervision.RUN_ID_ENV
+_SUPERVISED_TERMINATE_GRACE = (
+    _runtime_supervision.SUPERVISED_TERMINATE_GRACE)
+_SUPERVISED_POLL_INTERVAL = _runtime_supervision.SUPERVISED_POLL_INTERVAL
+_SUPERVISED_START_GATE_TIMEOUT = (
+    _runtime_supervision.SUPERVISED_START_GATE_TIMEOUT)
+
+
+def _structure_profile_parameters_binding(
+        parameters_sha256: str, receipt: object,
+) -> str:
+    """Bind a public profile receipt to a parameter digest without secrets."""
+    if (not isinstance(parameters_sha256, str)
+            or re.fullmatch(r"[0-9a-f]{64}", parameters_sha256) is None):
+        raise ValueError("invalid chunk parameter digest")
+    profile = _document_profiles.profile_from_provenance(receipt)
+    return _artifact_io._artifact_parameters_sha256({
+        "parameters_sha256": parameters_sha256,
+        "structure_profile": _document_profiles.profile_provenance(profile),
+    })
 
 # Embedding model max token limits (for validation)
 EMBEDDING_MAX_TOKENS = {
     "voyage-law-2": 16000,
-    "voyage-3-large": 16000,
+    "voyage-3-large": 32000,
+    "voyage-4-large": 32000,
+    "voyage-4": 32000,
+    "voyage-4-lite": 32000,
     "dunzhang/stella_en_400M_v5": 8192,
-    "nomic-ai/nomic-embed-text-v2-moe": 8192,
+    "nomic-ai/nomic-embed-text-v2-moe": 512,
     "text-embedding-3-large": 8191,
     "nlpaueb/legal-bert-base-uncased": 512,
 }
 _API_EMBEDDING_BATCH_TOKEN_BUDGET = 100_000
+_SUPPORTED_API_EMBEDDING_MODEL_PREFIXES = (
+    _embedding_policy.SUPPORTED_API_EMBEDDING_MODEL_PREFIXES)
+_UNSUPPORTED_API_EMBEDDING_MODEL_PREFIXES = (
+    _embedding_policy.UNSUPPORTED_API_EMBEDDING_MODEL_PREFIXES)
 _API_EMBEDDING_MODEL_PREFIXES = (
-    "voyage-", "text-embedding-", "embed-", "cohere-", "embo-",
-    "minimax-emb",
-)
+    _embedding_policy.API_EMBEDDING_MODEL_PREFIXES)
+_VOYAGE_EMBEDDINGS_URL = "https://api.voyageai.com/v1/embeddings"
+_COHERE_EMBEDDINGS_URL = "https://api.cohere.com/v1/embed"
+_OPENAI_EMBEDDINGS_URL = "https://api.openai.com/v1/embeddings"
+_COHERE_RERANK_URL = "https://api.cohere.com/v2/rerank"
+_JINA_RERANK_URL = "https://api.jina.ai/v1/rerank"
+_GEMINI_API_BASE_URL = "https://generativelanguage.googleapis.com"
 _ALLOW_UNPINNED_MODELS_ENV = "RAG_ALLOW_UNPINNED_MODELS"
 # Backward-compatible defaults for standalone commands. ``full`` and
 # ``batch`` derive collision-free, book-scoped paths for every run.
@@ -117,6 +165,7 @@ DEFAULT_CHUNKS_PATH = Path("output/chunks.jsonl")
 DEFAULT_CHROMA_DIR = Path("output/chroma_db")
 DEFAULT_QDRANT_DIR = Path("output/qdrant_db")
 DEFAULT_DB_BACKEND = "chroma"  # "chroma" or "qdrant"
+DEFAULT_STRUCTURE_PROFILE = _document_profiles.DEFAULT_STRUCTURE_PROFILE
 DEFAULT_EXPORT_PATH = Path("output/textbook.md")
 OUTPUT_DIR = Path(os.environ.get(
     _job_runtime.OUTPUT_ROOT_ENV, "output"))
@@ -127,14 +176,31 @@ def _model_artifact_lock_sha256() -> str:
     return _model_artifacts.model_artifact_lock_sha256()
 
 
+def _model_download_transport(
+        policy: _release_security.ReleaseSecurityPolicy) -> dict[str, object]:
+    """Bind Hub endpoint and ambient transport trust to one policy."""
+    endpoint = _model_artifacts.HUGGINGFACE_HUB_OFFICIAL_ENDPOINT
+    if policy.trust_environment_network:
+        endpoint = os.environ.get("HF_ENDPOINT", endpoint) or endpoint
+    return {
+        "download_endpoint": endpoint,
+        "trust_environment_network": policy.trust_environment_network,
+    }
+
+
 def _model_loader_source(
         model_id: str, consumer: str, *,
-        execute_remote_code: bool = False) -> tuple[str, bool]:
+        execute_remote_code: bool = False,
+        security_policy: (
+            _release_security.ReleaseSecurityPolicy | None) = None,
+        ) -> tuple[str, bool]:
     """Resolve a reviewed model to a verified local tree.
 
-    Unknown models fail closed unless the operator explicitly opts into the
-    legacy unpinned behavior with ``RAG_ALLOW_UNPINNED_MODELS=1``.
+    Unknown models fail closed unless the operator selects the development
+    profile, reviewed-sync policy, and ``RAG_ALLOW_UNPINNED_MODELS=1``
+    together.
     """
+    policy = _effective_security_policy(security_policy)
     artifact = _model_artifacts.model_artifact(model_id)
     if artifact is not None:
         if execute_remote_code:
@@ -142,9 +208,23 @@ def _model_loader_source(
                 raise _model_artifacts.ModelArtifactError(
                     f"remote code is not approved for {model_id}")
             _model_artifacts.configure_transformers_dynamic_module_cache()
+        allow_download = policy.model_download_policy == "allow-reviewed-sync"
         return str(_model_artifacts.verified_model_directory(
-            model_id, consumer)), True
-    if os.environ.get(_ALLOW_UNPINNED_MODELS_ENV) == "1":
+            model_id, consumer, allow_download=allow_download,
+            authorize_download_fn=(
+                lambda: _release_security.require_model_download(
+                    policy,
+                    feature=f"model synchronization for {model_id}")
+            ) if allow_download else None,
+            **(_model_download_transport(policy) if allow_download else {}),
+        )), True
+    if (
+        policy.profile == "development"
+        and policy.model_download_policy == "allow-reviewed-sync"
+        and os.environ.get(_ALLOW_UNPINNED_MODELS_ENV) == "1"
+    ):
+        _release_security.require_model_download(
+            policy, feature=f"unpinned model loading for {model_id}")
         if execute_remote_code:
             _model_artifacts.configure_transformers_dynamic_module_cache()
         log.warning(
@@ -155,8 +235,9 @@ def _model_loader_source(
         )
         return model_id, False
     raise _model_artifacts.ModelArtifactError(
-        f"model is not in the reviewed artifact lock: {model_id}; set "
-        f"{_ALLOW_UNPINNED_MODELS_ENV}=1 only after reviewing the model")
+        f"model is not in the reviewed artifact lock: {model_id}; unpinned "
+        "loading requires the development profile, explicit reviewed-sync "
+        f"policy, and {_ALLOW_UNPINNED_MODELS_ENV}=1")
 
 
 class PipelinePaths(TypedDict):
@@ -165,6 +246,7 @@ class PipelinePaths(TypedDict):
     doc: Path
     converted_markdown: Path
     chunks: Path
+    quality_report: Path
     export: Path
     chapters_dir: Path
     chroma: Path
@@ -178,6 +260,8 @@ class VectorStoreBusyError(TimeoutError):
 
 
 SearchHit = _retrieval_core.SearchHit
+ContextSourceAlias = _retrieval_core.ContextSourceAlias
+ContextSegment = _retrieval_core.ContextSegment
 GroundedSource = _retrieval_core.GroundedSource
 GroundedAnswer = _retrieval_core.GroundedAnswer
 SearchResponse = _retrieval_core.SearchResponse
@@ -190,9 +274,9 @@ DEDUP_THRESHOLD = _chunking_core.DEDUP_THRESHOLD
 # LLM classification / contextual retrieval defaults
 DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
 DEFAULT_OLLAMA_MODEL = "qwen3:30b"
-DEFAULT_GEMINI_MODEL = "gemini-2.0-flash"
+DEFAULT_GEMINI_MODEL = "gemini-3.6-flash"
 DEFAULT_CLOUD_URL = "https://api.minimax.io/v1"
-DEFAULT_CLOUD_MODEL = "MiniMax-M2.7-highspeed"
+DEFAULT_CLOUD_MODEL = "MiniMax-M3"
 DEFAULT_DEEPSEEK_URL = "https://api.deepseek.com"
 DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-pro"
 DEFAULT_LLM_WORKERS = 10
@@ -202,6 +286,14 @@ RERANK_OVERFETCH = 4  # retrieve N*4 from ChromaDB, rerank to N
 DEFAULT_RRF_K = _retrieval_core.DEFAULT_RRF_K
 DEFAULT_DENSE_RRF_WEIGHT = 0.5
 DEFAULT_SPARSE_RRF_WEIGHT = 1.0
+MAX_CONTEXT_WINDOW = _retrieval_core.MAX_CONTEXT_WINDOW
+MAX_CONTEXT_CHARACTERS = _retrieval_core.MAX_CONTEXT_CHARACTERS
+MAX_CONTEXT_SEGMENT_CHARACTERS = (
+    _retrieval_core.MAX_CONTEXT_SEGMENT_CHARACTERS)
+DEFAULT_CONTEXT_MAX_CHARACTERS = (
+    _retrieval_core.DEFAULT_CONTEXT_MAX_CHARACTERS)
+DEFAULT_CONTEXT_SEGMENT_CHARACTERS = (
+    _retrieval_core.DEFAULT_CONTEXT_SEGMENT_CHARACTERS)
 
 # Direct Python callers retain the historical uncached behavior. ``main``
 # enables the persistent cache for CLI LLM workflows unless explicitly
@@ -217,7 +309,9 @@ _CONTEXT_TOKEN_RESERVE = 192
 
 # Incremental vector-index metadata. Bump this whenever the indexed payload or
 # vector layout changes in a way that requires rebuilding existing collections.
-INDEX_MANIFEST_SCHEMA_VERSION = 5
+INDEX_MANIFEST_SCHEMA_VERSION = 8
+_LEGACY_QUERY_SCHEMA_BINDINGS = ((6, 2), (7, 3))
+_CONTEXT_QUERY_SCHEMA_BINDINGS = ((7, 3),)
 
 # Content type labels for LLM classification prompt
 _CONTENT_LABELS = [
@@ -227,18 +321,19 @@ _CONTENT_LABELS = [
 
 
 _provider_hostname = _llm_adapters._provider_hostname
+_validate_cloud_endpoint = _endpoint_policy.validate_cloud_endpoint
 
 
 def _is_deepseek_cloud(url: str, model: str = "") -> bool:
     """Return whether an API URL is the official DeepSeek endpoint."""
     return _llm_adapters._is_deepseek_cloud(
-        url, model, provider_hostname_fn=_provider_hostname)
+        url, model, validate_endpoint_fn=_validate_cloud_endpoint)
 
 
 def _is_minimax_cloud(url: str) -> bool:
     """Return whether an API URL is the official MiniMax endpoint."""
     return _llm_adapters._is_minimax_cloud(
-        url, provider_hostname_fn=_provider_hostname)
+        url, validate_endpoint_fn=_validate_cloud_endpoint)
 
 
 def _effective_chunk_token_limit(embedding_model: str,
@@ -255,16 +350,56 @@ def _effective_chunk_token_limit(embedding_model: str,
     special_token_reserve = (
         0 if embedding_model.startswith(_API_EMBEDDING_MODEL_PREFIXES) else 2
     )
+    # Nomic's SentenceTransformer input includes a four-token
+    # ``search_document: `` task prefix in addition to BOS/EOS.  Chunker token
+    # counts exclude both, so reserve all six tokens before publication.
+    task_prefix_reserve = (
+        4
+        if embedding_model == "nomic-ai/nomic-embed-text-v2-moe"
+        else 0
+    )
     return min(
         requested_tokens,
-        max(1, model_limit - reserve_tokens - special_token_reserve),
+        max(
+            1,
+            model_limit - reserve_tokens - special_token_reserve
+            - task_prefix_reserve,
+        ),
     )
 
 
 def _embedding_text(record: dict) -> str:
-    context = record.get("metadata", {}).get("context", "")
+    metadata = record.get("metadata", {})
+    context = metadata.get("context", "")
     text = record.get("text", "")
-    return f"{context}\n\n{text}" if context else text
+    if context:
+        return f"{context}\n\n{text}"
+    if len(text.split()) < MIN_CHUNK_WORDS:
+        headings = metadata.get("headings") or []
+        if headings:
+            return f"{headings[-1]}\n\n{text}"
+    return text
+
+
+def _embedding_task_prefix(embedding_model: str,
+                           input_type: str) -> str:
+    """Return the exact retrieval-task prefix applied at model inference."""
+    if embedding_model.startswith("nomic-ai/nomic-embed-text"):
+        return (
+            "search_query: " if input_type == "query"
+            else "search_document: "
+        )
+    return ""
+
+
+def _prepare_embedding_inputs(texts, embedding_model: str,
+                              input_type: str) -> list[str]:
+    """Apply the same task prefix for token validation and model inference."""
+    prefix = _embedding_task_prefix(embedding_model, input_type)
+    return [
+        text if not prefix or text.startswith(prefix) else prefix + text
+        for text in texts
+    ]
 
 
 def _conservative_token_estimate(text: str) -> int:
@@ -277,24 +412,13 @@ def _conservative_token_estimate(text: str) -> int:
 def _count_embedding_text_tokens(texts: list[str],
                                  embedding_model: str) -> tuple[list[int], bool]:
     """Count model input tokens, returning ``(counts, exact_tokenizer)``."""
+    texts = _prepare_embedding_inputs(
+        texts, embedding_model, "document")
     try:
-        if embedding_model.startswith("voyage-"):
-            import voyageai
-
-            client = voyageai.Client(api_key=os.environ.get("VOYAGE_API_KEY"))
-            return (
-                [len(tokens) for tokens in client.tokenize(
-                    texts, model=embedding_model)],
-                True,
-            )
-        if embedding_model.startswith("text-embedding-"):
-            import tiktoken
-
-            try:
-                encoding = tiktoken.encoding_for_model(embedding_model)
-            except KeyError:
-                encoding = tiktoken.get_encoding("cl100k_base")
-            return [len(encoding.encode(text)) for text in texts], True
+        # API tokenizers can perform hidden model/blob downloads on a cache
+        # miss.  Runtime execution never invokes them: the conservative local
+        # estimator preserves the no-network contract and merely reduces the
+        # effective provider batch size.
         if not embedding_model.startswith(_API_EMBEDDING_MODEL_PREFIXES):
             from transformers import AutoTokenizer
 
@@ -472,13 +596,16 @@ def strip_watermark(text: str, wm: Optional[re.Pattern] = None) -> str:
 
 def _validate_api_key(model_name: str) -> None:
     """Check that required API key is set for API-based models. Call early."""
+    if model_name.startswith(_UNSUPPORTED_API_EMBEDDING_MODEL_PREFIXES):
+        log.error(
+            f"MiniMax embedding model '{model_name}' is unsupported: "
+            "there is no current reviewed MiniMax embedding API contract")
+        sys.exit(1)
     checks = [
         ("voyage-", "VOYAGE_API_KEY", "https://dash.voyageai.com/"),
         ("cohere-", "COHERE_API_KEY", "https://dashboard.cohere.com/"),
         ("embed-", "COHERE_API_KEY", "https://dashboard.cohere.com/"),
         ("text-embedding-", "OPENAI_API_KEY", "https://platform.openai.com/"),
-        ("embo-", "MINIMAX_API_KEY", "https://platform.minimax.io/"),
-        ("minimax-emb", "MINIMAX_API_KEY", "https://platform.minimax.io/"),
     ]
     for prefix, env_var, url in checks:
         if model_name.startswith(prefix):
@@ -489,7 +616,66 @@ def _validate_api_key(model_name: str) -> None:
             return
 
 
-def _get_embedding_fn(model_name: str, *, input_type: str = "document"):
+def _validated_embedding_vectors(
+        value: object, *, expected_count: int, provider: str,
+) -> list[list[float]]:
+    """Validate one provider response without retaining arbitrary payloads."""
+    if not isinstance(value, list) or len(value) != expected_count:
+        raise RuntimeError(f"{provider} returned an invalid embedding count")
+    vectors: list[list[float]] = []
+    dimension: int | None = None
+    for raw_vector in value:
+        if not isinstance(raw_vector, list) or not raw_vector:
+            raise RuntimeError(f"{provider} returned an invalid embedding")
+        vector = []
+        for raw_number in raw_vector:
+            if isinstance(raw_number, bool) or not isinstance(
+                    raw_number, (int, float)):
+                raise RuntimeError(
+                    f"{provider} returned a nonnumeric embedding")
+            number = float(raw_number)
+            if not math.isfinite(number):
+                raise RuntimeError(
+                    f"{provider} returned a non-finite embedding")
+            vector.append(number)
+        if dimension is None:
+            dimension = len(vector)
+        elif len(vector) != dimension:
+            raise RuntimeError(
+                f"{provider} returned inconsistent embedding dimensions")
+        vectors.append(vector)
+    return vectors
+
+
+def _data_embedding_vectors(
+        payload: object, *, expected_count: int, provider: str,
+) -> list[list[float]]:
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"{provider} returned an invalid response")
+    data = payload.get("data")
+    if not isinstance(data, list):
+        raise RuntimeError(f"{provider} returned an invalid response")
+    rows: list[tuple[int, object]] = []
+    for position, item in enumerate(data):
+        if not isinstance(item, dict):
+            raise RuntimeError(f"{provider} returned an invalid response")
+        index = item.get("index", position)
+        if isinstance(index, bool) or not isinstance(index, int):
+            raise RuntimeError(f"{provider} returned an invalid response index")
+        rows.append((index, item.get("embedding")))
+    if sorted(index for index, _ in rows) != list(range(expected_count)):
+        raise RuntimeError(f"{provider} returned invalid embedding indexes")
+    rows.sort(key=lambda item: item[0])
+    return _validated_embedding_vectors(
+        [embedding for _, embedding in rows],
+        expected_count=expected_count, provider=provider)
+
+
+def _get_embedding_fn(
+        model_name: str, *, input_type: str = "document",
+        security_policy: (
+            _release_security.ReleaseSecurityPolicy | None
+        ) = None):
     """Return a vector-client-compatible embedding function for *model_name*.
 
     Automatically routes to the right backend:
@@ -504,6 +690,21 @@ def _get_embedding_fn(model_name: str, *, input_type: str = "document"):
     """
     if input_type not in {"document", "query"}:
         raise ValueError("input_type must be 'document' or 'query'")
+    policy = _effective_security_policy(security_policy)
+    is_api_embedding = model_name.startswith(_API_EMBEDDING_MODEL_PREFIXES)
+
+    def _authorize_api_embedding() -> None:
+        if not is_api_embedding:
+            return
+        _release_security.require_cloud_egress(
+            policy, feature="cloud embedding")
+
+    _authorize_api_embedding()
+
+    if model_name.startswith(_UNSUPPORTED_API_EMBEDDING_MODEL_PREFIXES):
+        raise ValueError(
+            "MiniMax embedding models are unsupported because there is no "
+            "current reviewed MiniMax embedding API contract")
 
     # These adapters are plain callables.  Chroma validates the ``__call__``
     # signature structurally, so inheriting its optional typing protocol only
@@ -517,34 +718,42 @@ def _get_embedding_fn(model_name: str, *, input_type: str = "document"):
             def __init__(self, name: str, role: str):
                 self._name = name
                 self._role = role
-                self._client = None
 
-            def _load(self):
-                if self._client is None:
-                    import voyageai
-                    api_key = os.environ.get("VOYAGE_API_KEY", "")
-                    if not api_key:
-                        raise ValueError(
-                            "VOYAGE_API_KEY env var required for Voyage AI embeddings. "
-                            "Get one at https://dash.voyageai.com/")
-                    self._client = voyageai.Client(api_key=api_key)
-                return self._client
+            def _embed(self, texts: list[str]) -> Embeddings:
+                _authorize_api_embedding()
+                api_key = os.environ.get("VOYAGE_API_KEY", "")
+                if not api_key:
+                    raise ValueError(
+                        "VOYAGE_API_KEY env var required for Voyage AI embeddings. "
+                        "Get one at https://dash.voyageai.com/")
+                response = _post_cloud_with_policy(
+                    policy, _VOYAGE_EMBEDDINGS_URL,
+                    headers={"Accept": "application/json"},
+                    auth=_llm_adapters._BearerAuth(api_key),
+                    json={"input": texts, "model": self._name,
+                          "input_type": self._role},
+                    timeout=60, allow_redirects=False, stream=True,
+                )
+                payload = _read_provider_json_response(
+                    response,
+                    feature="Voyage embedding",
+                    max_bytes=(
+                        _provider_transport.EMBEDDING_RESPONSE_MAX_BYTES),
+                    deadline_seconds=60,
+                )
+                return _data_embedding_vectors(
+                    payload, expected_count=len(texts),
+                    provider="Voyage")
 
             def __call__(self, input: Documents) -> Embeddings:
-                client = self._load()
                 # Voyage API batch limit: 1000 items or 120K tokens.
                 # Use 128-item batches for safety with long legal texts.
                 BATCH = 128
                 if len(input) <= BATCH:
-                    result = client.embed(input, model=self._name,
-                                          input_type=self._role)
-                    return result.embeddings
+                    return self._embed(list(input))
                 all_embs: Embeddings = []
                 for i in range(0, len(input), BATCH):
-                    batch = input[i:i + BATCH]
-                    result = client.embed(batch, model=self._name,
-                                          input_type=self._role)
-                    all_embs.extend(result.embeddings)
+                    all_embs.extend(self._embed(list(input[i:i + BATCH])))
                 return all_embs
 
         return _VoyageEmbedFn(model_name, input_type)
@@ -555,36 +764,46 @@ def _get_embedding_fn(model_name: str, *, input_type: str = "document"):
             def __init__(self, name: str, role: str):
                 self._name = name.removeprefix("cohere-")
                 self._role = role
-                self._client = None
 
-            def _load(self):
-                if self._client is None:
-                    import cohere
-                    api_key = os.environ.get("COHERE_API_KEY", "")
-                    if not api_key:
-                        raise ValueError(
-                            "COHERE_API_KEY env var required for Cohere embeddings.")
-                    self._client = cohere.Client(api_key)
-                return self._client
+            def _embed(self, texts: list[str]) -> Embeddings:
+                _authorize_api_embedding()
+                api_key = os.environ.get("COHERE_API_KEY", "")
+                if not api_key:
+                    raise ValueError(
+                        "COHERE_API_KEY env var required for Cohere embeddings.")
+                response = _post_cloud_with_policy(
+                    policy, _COHERE_EMBEDDINGS_URL,
+                    headers={"Accept": "application/json"},
+                    auth=_llm_adapters._BearerAuth(api_key),
+                    json={
+                        "texts": texts,
+                        "model": self._name,
+                        "input_type": (
+                            "search_query" if self._role == "query"
+                            else "search_document"),
+                    },
+                    timeout=60, allow_redirects=False, stream=True,
+                )
+                payload = _read_provider_json_response(
+                    response,
+                    feature="Cohere embedding",
+                    max_bytes=(
+                        _provider_transport.EMBEDDING_RESPONSE_MAX_BYTES),
+                    deadline_seconds=60,
+                )
+                if not isinstance(payload, dict):
+                    raise RuntimeError("Cohere returned an invalid response")
+                return _validated_embedding_vectors(
+                    payload.get("embeddings"), expected_count=len(texts),
+                    provider="Cohere")
 
             def __call__(self, input: Documents) -> Embeddings:
-                client = self._load()
                 BATCH = 96
                 if len(input) <= BATCH:
-                    resp = client.embed(
-                        texts=list(input), model=self._name,
-                        input_type=("search_query" if self._role == "query"
-                                    else "search_document"),
-                    )
-                    return [list(e) for e in resp.embeddings]
+                    return self._embed(list(input))
                 all_embs: Embeddings = []
                 for i in range(0, len(input), BATCH):
-                    resp = client.embed(
-                        texts=list(input[i:i + BATCH]), model=self._name,
-                        input_type=("search_query" if self._role == "query"
-                                    else "search_document"),
-                    )
-                    all_embs.extend([list(e) for e in resp.embeddings])
+                    all_embs.extend(self._embed(list(input[i:i + BATCH])))
                 return all_embs
 
         return _CohereEmbedFn(model_name, input_type)
@@ -594,52 +813,43 @@ def _get_embedding_fn(model_name: str, *, input_type: str = "document"):
         class _OpenAIEmbedFn:
             def __init__(self, name: str):
                 self._name = name
-                self._client = None
 
-            def _load(self):
-                if self._client is None:
-                    from openai import OpenAI
-                    self._client = OpenAI()  # reads OPENAI_API_KEY
-                return self._client
+            def _embed(self, texts: list[str]) -> Embeddings:
+                _authorize_api_embedding()
+                api_key = os.environ.get("OPENAI_API_KEY", "")
+                if not api_key:
+                    raise ValueError(
+                        "OPENAI_API_KEY env var required for OpenAI embeddings.")
+                response = _post_cloud_with_policy(
+                    policy, _OPENAI_EMBEDDINGS_URL,
+                    headers={"Accept": "application/json"},
+                    auth=_llm_adapters._BearerAuth(api_key),
+                    json={"model": self._name, "input": texts},
+                    timeout=60, allow_redirects=False, stream=True,
+                )
+                payload = _read_provider_json_response(
+                    response,
+                    feature="OpenAI embedding",
+                    max_bytes=(
+                        _provider_transport.EMBEDDING_RESPONSE_MAX_BYTES),
+                    deadline_seconds=60,
+                )
+                return _data_embedding_vectors(
+                    payload, expected_count=len(texts),
+                    provider="OpenAI")
 
             def __call__(self, input: Documents) -> Embeddings:
-                client = self._load()
-                BATCH = 2048  # OpenAI allows large batches
+                # Keep a legitimate 3,072-dimension response comfortably below
+                # the decoded 32 MiB provider-response ceiling.
+                BATCH = 256
                 if len(input) <= BATCH:
-                    resp = client.embeddings.create(model=self._name,
-                                                    input=list(input))
-                    return [d.embedding for d in resp.data]
+                    return self._embed(list(input))
                 all_embs: Embeddings = []
                 for i in range(0, len(input), BATCH):
-                    resp = client.embeddings.create(model=self._name,
-                                                    input=list(input[i:i + BATCH]))
-                    all_embs.extend([d.embedding for d in resp.data])
+                    all_embs.extend(self._embed(list(input[i:i + BATCH])))
                 return all_embs
 
         return _OpenAIEmbedFn(model_name)
-
-    # --- MiniMax (embo-01) ---
-    if model_name.startswith("embo-") or model_name.startswith("minimax-emb"):
-        class _MiniMaxEmbedFn:
-            def __init__(self, name: str):
-                self._name = name
-
-            def __call__(self, input: Documents) -> Embeddings:
-                api_key = os.environ.get("MINIMAX_API_KEY", "")
-                if not api_key:
-                    raise ValueError(
-                        "MINIMAX_API_KEY env var required for MiniMax embeddings.")
-                resp = requests.post(
-                    f"{DEFAULT_CLOUD_URL.rstrip('/')}/embeddings",
-                    headers={"Authorization": f"Bearer {api_key}"},
-                    json={"model": self._name, "input": list(input)},
-                    timeout=60,
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                return [d["embedding"] for d in data["data"]]
-
-        return _MiniMaxEmbedFn(model_name)
 
     # --- Local sentence-transformers (nomic, legal-bert, etc.) ---
     # WARNING: trust_remote_code=True allows model repos to execute arbitrary
@@ -660,6 +870,7 @@ def _get_embedding_fn(model_name: str, *, input_type: str = "document"):
                     execute_remote_code=(
                         artifact.trust_remote_code
                         if artifact is not None else True),
+                    security_policy=policy,
                 )
                 from sentence_transformers import SentenceTransformer
                 loader_kwargs = {
@@ -675,19 +886,26 @@ def _get_embedding_fn(model_name: str, *, input_type: str = "document"):
                 self._model = SentenceTransformer(
                     model_source, **loader_kwargs,
                 )
+                declared_limit = EMBEDDING_MAX_TOKENS.get(self._name)
+                runtime_limit = getattr(self._model, "max_seq_length", None)
+                if (
+                    declared_limit is not None
+                    and isinstance(runtime_limit, int)
+                    and runtime_limit > 0
+                    and declared_limit > runtime_limit
+                ):
+                    raise RuntimeError(
+                        f"Configured input limit for {self._name} is "
+                        f"{declared_limit} tokens, but the verified embedding "
+                        f"artifact truncates at {runtime_limit}."
+                    )
             return self._model
 
         def __call__(self, input: Documents) -> Embeddings:
             model = self._load()
-            texts = list(input)
-            # Nomic retrieval models require task prefixes.  Keep this scoped
-            # to the known model family; generic sentence-transformer models
-            # do not share a universal query/document prompt convention.
-            if self._name.startswith("nomic-ai/nomic-embed-text"):
-                prefix = ("search_query: " if self._role == "query"
-                          else "search_document: ")
-                texts = [text if text.startswith(prefix) else prefix + text
-                         for text in texts]
+            # Keep token validation and inference on one exact input contract.
+            texts = _prepare_embedding_inputs(
+                list(input), self._name, self._role)
             embeddings = model.encode(texts, convert_to_numpy=True)
             return [e.tolist() for e in embeddings]
 
@@ -697,10 +915,12 @@ def _get_embedding_fn(model_name: str, *, input_type: str = "document"):
 def _output_paths_for_name(name: str) -> PipelinePaths:
     """Build the artifact paths for one named pipeline run."""
     book_dir = OUTPUT_DIR / name
+    chunks = book_dir / f"{name}_chunks.jsonl"
     return {
         "doc":          book_dir / f"{name}.json",
         "converted_markdown": book_dir / f"{name}_docling.md",
-        "chunks":       book_dir / f"{name}_chunks.jsonl",
+        "chunks":       chunks,
+        "quality_report": _quality_core.quality_report_path(chunks),
         "export":       book_dir / f"{name}.md",
         "chapters_dir": book_dir / "Chapters",
         "chroma":       book_dir / f"{name}_chroma",
@@ -820,6 +1040,22 @@ def _json_file_is_valid(path: Path) -> bool:
         return False
 
 
+def _chroma_settings_kwargs(chromadb_module) -> dict[str, object]:
+    """Construct an explicit no-telemetry Chroma settings object."""
+    settings_factory = getattr(chromadb_module, "Settings", None)
+    if settings_factory is None:
+        # Lightweight unit fakes intentionally expose only PersistentClient.
+        # An installed Chroma package must expose Settings or fail closed.
+        if getattr(chromadb_module, "__file__", None) is None:
+            return {}
+        raise RuntimeError(
+            "installed Chroma does not expose telemetry controls")
+    settings = settings_factory(anonymized_telemetry=False)
+    if getattr(settings, "anonymized_telemetry", None) is not False:
+        raise RuntimeError("Chroma telemetry could not be disabled")
+    return {"settings": settings}
+
+
 def _chunk_record_count(path: Path) -> int | None:
     """Strictly validate a chunk JSONL file and return its record count.
 
@@ -878,7 +1114,8 @@ def _index_collection_count_impl(db_dir: Path, collection_name: str,
     client = None
     operation_error = None
     try:
-        client = chromadb.PersistentClient(path=str(db_dir))
+        client = chromadb.PersistentClient(
+            path=str(db_dir), **_chroma_settings_kwargs(chromadb))
         try:
             collection = client.get_collection(collection_name)
         except Exception as exc:
@@ -949,6 +1186,7 @@ def _resume_command_defaults() -> _cli_policy.ResumeCommandDefaults:
         executable=sys.executable,
         script_name="rag.py",
         embedding_model=DEFAULT_EMBEDDING_MODEL,
+        structure_profile=DEFAULT_STRUCTURE_PROFILE,
         db_backend=DEFAULT_DB_BACKEND,
         conversion_backend="pypdfium2",
         max_tokens=DEFAULT_MAX_TOKENS,
@@ -956,7 +1194,7 @@ def _resume_command_defaults() -> _cli_policy.ResumeCommandDefaults:
         dedup_threshold=DEDUP_THRESHOLD,
         db_lock_timeout=DEFAULT_DB_LOCK_TIMEOUT,
         full_operation_timeout=DEFAULT_OPERATION_TIMEOUTS["full"],
-        llm_cache_mode="readwrite",
+        llm_cache_mode="off",
         llm_fallback="ordered",
         llm_failure_policy="best-effort",
         provider=_provider_cli_defaults(),
@@ -1009,12 +1247,179 @@ def _parse_index_records_strict(raw: bytes, path: Path) -> list[dict]:
         raw, path, chunk_id_fn=_chunk_id)
 
 
+def _quality_report_required(chunks_path: Path, records: list[dict]) -> bool:
+    """Return whether this corpus participates in the quality contract."""
+    return (
+        _quality_core.quality_report_path(chunks_path).is_file()
+        or _table_retrieval_core.has_table_retrieval_metadata(records)
+        or any(
+            "source_lineage_schema_version" in record.get("metadata", {})
+            for record in records
+        )
+    )
+
+
+def _load_index_chunk_completion_inputs(
+        chunks_path: Path, *, chunks_sha256: str, chunks_size: int,
+        records: list[dict]) -> tuple[dict, str]:
+    """Validate the adjacent chunk-v3 completion used by index readers.
+
+    Indexing does not need the live Docling/PDF inputs, but it must not accept
+    a quality report whose provenance was detached from the chunk completion
+    that committed this exact JSONL generation.
+    """
+    chunks_path = Path(chunks_path)
+    manifest_path = _artifact_completion_path(
+        chunks_path, stage="chunking")
+    try:
+        raw, _, _ = _read_index_artifact_snapshot(
+            manifest_path, max_bytes=_MAX_CHUNK_COMPLETION_BYTES)
+    except FileNotFoundError as exc:
+        raise ValueError(
+            "Quality-bound chunks require an adjacent chunk-v3 completion: "
+            f"{manifest_path}"
+        ) from exc
+    payload = _strict_json_object(raw, description="chunk completion")
+    if payload.get("schema_version") != CHUNK_COMPLETION_SCHEMA_VERSION:
+        raise ValueError(
+            "Quality-bound chunks require a supported chunk-v3 completion")
+    if set(payload) != {
+            "schema_version", "stage", "source_sha256",
+            "source_record_count", "parameters_sha256", "outputs",
+            "inputs", "structure_profile",
+            "structure_profile_parameters_sha256"}:
+        raise ValueError("chunk completion has an invalid field set")
+
+    inputs = payload.get("inputs")
+    if (payload.get("stage") != "chunking"
+            or payload.get("source_record_count") is not None
+            or not isinstance(payload.get("parameters_sha256"), str)
+            or re.fullmatch(
+                r"[0-9a-f]{64}", payload["parameters_sha256"]) is None
+            or not _quality_core._valid_input_bindings(inputs)):
+        raise ValueError("chunk completion header or inputs are invalid")
+    if payload.get("source_sha256") != inputs["docling_json"]["sha256"]:
+        raise ValueError("chunk completion header or inputs are invalid")
+    receipt = payload.get("structure_profile")
+    if payload.get("structure_profile_parameters_sha256") != (
+            _structure_profile_parameters_binding(
+                payload["parameters_sha256"], receipt)):
+        raise ValueError(
+            "chunk completion structure profile is detached from parameters")
+
+    outputs = payload.get("outputs")
+    output = (
+        outputs[0]
+        if isinstance(outputs, list) and len(outputs) == 1
+        else None
+    )
+    if (not isinstance(output, dict)
+            or set(output) != {"role", "name", "size", "sha256"}
+            or output.get("role") != "chunks_jsonl"
+            or not _valid_manifest_file_record({
+                key: output.get(key) for key in ("name", "size", "sha256")
+            })
+            or output.get("name") != chunks_path.name
+            or output.get("size") != chunks_size
+            or output.get("sha256") != chunks_sha256):
+        raise ValueError(
+            "chunk completion does not bind this chunks generation")
+
+    if (any(
+            isinstance(metadata := record.get("metadata"), dict)
+            and metadata.get("table_recovered_from_pdf")
+            for record in records)
+            and inputs.get("table_recovery") is None):
+        raise ValueError(
+            "recovered tables lack a bound source-PDF input")
+    return inputs, payload["parameters_sha256"]
+
+
+def _validated_quality_report_binding(
+        chunks_path: Path, records: list[dict], chunks_sha256: str,
+        chunks_size: int, *, source_name: str | None = None,
+        source_sha256: str | None = None,
+        parameters_sha256: str | None = None,
+        embedding_model: str | None = None,
+        embedding_limit: int | None = None,
+        input_bindings: dict | None = None,
+        allow_legacy_quality: bool = True,
+) -> tuple[int | None, str | None, dict | None]:
+    """Validate one exact adjacent report snapshot and return its binding."""
+    chunks_path = Path(chunks_path)
+    if not _quality_report_required(chunks_path, records):
+        return None, None, None
+    report_path = _quality_core.quality_report_path(chunks_path)
+    report_raw, report_sha256, _ = _read_index_artifact_snapshot(
+        report_path, max_bytes=_quality_core.MAX_QUALITY_REPORT_BYTES)
+    stable_ids = [_retrieval_core._chunk_id(record) for record in records]
+    chunk_hashes = [_retrieval_core._chunk_hash(record) for record in records]
+    recovered_table_refs = _recovered_table_refs_from_records(records)
+    payload = _quality_core.parse_quality_report_bytes(
+        report_raw,
+        chunks_name=chunks_path.name,
+        chunks_sha256=chunks_sha256,
+        chunks_size=chunks_size,
+        record_count=len(records),
+        stable_ids=stable_ids,
+        chunk_hashes=chunk_hashes,
+        source_name=source_name,
+        source_sha256=source_sha256,
+        parameters_sha256=parameters_sha256,
+        embedding_model=embedding_model,
+        embedding_limit=embedding_limit,
+        input_bindings=input_bindings,
+        recovered_table_count=len(recovered_table_refs),
+        recovered_table_refs=sorted(recovered_table_refs),
+        records=records,
+        compatible_schema_versions=(
+            (_quality_core.LEGACY_QUALITY_REPORT_SCHEMA_VERSION,)
+            if allow_legacy_quality else ()),
+    )
+    if input_bindings is None:
+        completion_inputs, completion_parameters_sha256 = (
+            _load_index_chunk_completion_inputs(
+            chunks_path,
+            chunks_sha256=chunks_sha256,
+            chunks_size=chunks_size,
+            records=records,
+        ))
+        if (payload.get("inputs") != completion_inputs
+                or payload.get("parameters_sha256")
+                != completion_parameters_sha256):
+            raise ValueError(
+                "corpus quality report does not match input bindings or "
+                "parameters")
+    return payload["schema_version"], report_sha256, payload
+
+
+def _load_index_snapshot_with_quality(
+        path: Path, *, allow_legacy_quality: bool = True,
+) -> tuple[
+        list[dict], str, tuple[int, int, int, int, int],
+        tuple[int | None, str | None],
+]:
+    """Load one exact chunks snapshot plus its validated quality binding."""
+    path = Path(path)
+    with _chunk_output_lease(path):
+        raw, source_sha256, fingerprint = _read_index_artifact_snapshot(path)
+        records = _parse_index_records_strict(raw, path)
+        schema_version, report_sha256, _ = _validated_quality_report_binding(
+            path, records, source_sha256, len(raw),
+            allow_legacy_quality=allow_legacy_quality)
+        return (
+            records, source_sha256, fingerprint,
+            (schema_version, report_sha256),
+        )
+
+
 def _load_index_snapshot_strict(
         path: Path,
 ) -> tuple[list[dict], str, tuple[int, int, int, int, int]]:
     """Load records, SHA-256, and identity from one exact byte snapshot."""
-    raw, source_sha256, fingerprint = _read_index_artifact_snapshot(path)
-    return _parse_index_records_strict(raw, Path(path)), source_sha256, fingerprint
+    records, source_sha256, fingerprint, _ = (
+        _load_index_snapshot_with_quality(path))
+    return records, source_sha256, fingerprint
 
 
 def _load_index_records_strict(path: Path) -> list[dict]:
@@ -1028,19 +1433,57 @@ def _load_index_records_strict(path: Path) -> list[dict]:
     return records
 
 
-def _put_unless_worker_failed(work_queue: queue.Queue, item,
-                              worker_future) -> None:
+@dataclass
+class _IndexOperationalTracker:
+    collection_delete_calls: int = 0
+    collection_create_calls: int = 0
+    record_delete_calls: int = 0
+    upsert_calls: int = 0
+    committed: bool = False
+    queue: _operational_metrics.QueueBackpressureMetrics = field(
+        default_factory=_operational_metrics.QueueBackpressureMetrics)
+
+    def contract(self) -> _operation_contracts.IndexOperationMetrics:
+        queue_metrics = self.queue.snapshot()
+        return _operation_contracts.IndexOperationMetrics(
+            collection_delete_calls=self.collection_delete_calls,
+            collection_create_calls=self.collection_create_calls,
+            record_delete_calls=self.record_delete_calls,
+            upsert_calls=self.upsert_calls,
+            queue_put_count=int(queue_metrics["queue_put_count"]),
+            queue_saturation_events=int(
+                queue_metrics["queue_saturation_events"]),
+            queue_wait_ms=float(queue_metrics["queue_wait_ms"]),
+        )
+
+    def attempted_telemetry_metrics(self) -> dict[str, int | float | bool]:
+        """Return exact content-free attempts after an uncommitted failure."""
+        operations = self.contract()
+        return {
+            "committed": self.committed,
+            "attempted_collection_delete_calls": (
+                operations.collection_delete_calls),
+            "attempted_collection_create_calls": (
+                operations.collection_create_calls),
+            "attempted_record_delete_calls": operations.record_delete_calls,
+            "attempted_upsert_calls": operations.upsert_calls,
+            "attempted_physical_mutation_calls": (
+                operations.physical_mutation_calls),
+            "attempted_queue_put_count": operations.queue_put_count,
+            "queue_saturation_events": operations.queue_saturation_events,
+            "queue_wait_ms": operations.queue_wait_ms,
+        }
+
+
+def _put_unless_worker_failed(
+        work_queue: queue.Queue, item, worker_future, *,
+        metrics: _operational_metrics.QueueBackpressureMetrics | None = None,
+        poll_interval: float = 0.1,
+        monotonic_clock=time.monotonic) -> None:
     """Put with backpressure while surfacing a failed consumer promptly."""
-    while True:
-        if worker_future.done():
-            worker_future.result()
-            raise RuntimeError(
-                "Queue worker exited before accepting all work")
-        try:
-            work_queue.put(item, timeout=0.1)
-            return
-        except queue.Full:
-            continue
+    _operational_metrics.put_unless_worker_failed(
+        work_queue, item, worker_future, metrics=metrics,
+        poll_interval=poll_interval, monotonic_clock=monotonic_clock)
 
 
 def _log_cleanup_error(message: str, *args,
@@ -1059,37 +1502,43 @@ def _log_cleanup_error(message: str, *args,
         pass
 
 
-@dataclass
-class _VectorStoreLockState:
-    """One reentrant in-process gate for a canonical database directory."""
+def _observe_failed_index_operation(
+        observer: Callable[[dict[str, int | float | bool]], None] | None,
+        tracker: _IndexOperationalTracker) -> None:
+    """Publish failure counters without changing primary-error precedence."""
+    if observer is None:
+        return
+    try:
+        observer(tracker.attempted_telemetry_metrics())
+    except BaseException:
+        _log_cleanup_error(
+            "Index failure-metric observation also failed",
+            error=RuntimeError("redacted index metric observer failure"))
 
-    thread_lock: Any = field(default_factory=_threading.RLock)
-    handle: Any = None
+
+_VectorStoreLockState = _resource_lease.PathLockState
 
 
-_vector_store_lock_states: dict[str, _VectorStoreLockState] = {}
-_vector_store_lock_states_guard = _threading.Lock()
-_vector_store_lock_local = _threading.local()
-
-
-def _reset_vector_store_locks_after_fork() -> None:
-    """Drop inherited handles and synchronization state in a forked child."""
+def _sync_vector_store_lock_facades() -> None:
+    """Refresh compatibility aliases after the shared fork reset."""
     global _vector_store_lock_states, _vector_store_lock_states_guard
     global _vector_store_lock_local
+    (
+        _vector_store_lock_states,
+        _vector_store_lock_states_guard,
+        _vector_store_lock_local,
+    ) = _resource_lease._shared_path_lock_registry()
+
+
+_sync_vector_store_lock_facades()
+
+
+def _reset_rag_caches_after_fork() -> None:
+    """Replace non-lease RAG caches and mirror the reset shared registry."""
     global _artifact_sha256_cache, _artifact_sha256_cache_lock
     global _bm25_cache, _bm25_cache_lock
     global _reranker_instances, _reranker_lock
-    for state in _vector_store_lock_states.values():
-        if state.handle is not None:
-            try:
-                # Close only: explicitly unlocking an inherited POSIX flock
-                # could release the parent's shared open-file-description lock.
-                state.handle.close()
-            except BaseException:
-                pass
-    _vector_store_lock_states = {}
-    _vector_store_lock_states_guard = _threading.Lock()
-    _vector_store_lock_local = _threading.local()
+    _sync_vector_store_lock_facades()
     if "_artifact_sha256_cache" in globals():
         _artifact_sha256_cache = {}
         _artifact_sha256_cache_lock = _threading.Lock()
@@ -1103,46 +1552,30 @@ def _reset_vector_store_locks_after_fork() -> None:
         _reranker_lock = _threading.Lock()
 
 
+def _reset_vector_store_locks_after_fork() -> None:
+    """Drop inherited shared leases and unsafe RAG caches after a fork."""
+    _resource_lease.reset_path_leases_after_fork()
+    _reset_rag_caches_after_fork()
+
+
 if hasattr(os, "register_at_fork"):
-    os.register_at_fork(after_in_child=_reset_vector_store_locks_after_fork)
+    # ``resource_lease`` registered its lease reset before this callback.
+    os.register_at_fork(after_in_child=_reset_rag_caches_after_fork)
 
 
 def _normalize_db_lock_timeout(timeout: float) -> float:
     """Validate a finite, bounded vector-store lease timeout."""
-    if isinstance(timeout, bool):
-        raise ValueError("db lock timeout must be a finite non-negative number")
-    try:
-        value = float(timeout)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(
-            "db lock timeout must be a finite non-negative number") from exc
-    if (not math.isfinite(value) or value < 0
-            or value > _threading.TIMEOUT_MAX):
-        raise ValueError(
-            "db lock timeout must be a finite non-negative number no greater "
-            f"than {_threading.TIMEOUT_MAX:g} seconds")
-    return value
+    return _resource_lease.normalize_lock_timeout(timeout)
 
 
 def _strip_windows_extended_path_prefix(value: str) -> str:
     """Normalize Win32 extended paths to their ordinary drive/UNC spelling."""
-    if os.name != "nt":
-        return value
-    if value.casefold().startswith("\\\\?\\unc\\"):
-        return "\\\\" + value[8:]
-    if re.match(r"^\\\\\?\\[A-Za-z]:[\\/]", value):
-        return value[4:]
-    return value
+    return _resource_lease.strip_windows_extended_path_prefix(value)
 
 
 def _resolved_vector_store_path(db_dir: Path) -> Path:
     """Resolve one database path while retaining its filesystem casing."""
-    path = Path(_strip_windows_extended_path_prefix(str(Path(db_dir))))
-    try:
-        resolved = path.resolve(strict=False)
-    except (OSError, RuntimeError):
-        resolved = Path(os.path.abspath(path))
-    return Path(_strip_windows_extended_path_prefix(str(resolved)))
+    return _resource_lease.resolved_path(db_dir)
 
 
 def _vector_store_lock_identity(db_dir: Path) -> tuple[Path, str]:
@@ -1158,270 +1591,76 @@ def _canonical_vector_store_key(db_dir: Path) -> str:
 
 def _vector_store_lock_directory(resolved: Path) -> Path:
     """Keep owned-run sentinels outside the deletable run directory."""
-    run_root = resolved.parent
-    output_root = run_root.parent
-    marker = run_root / _retention.RUN_MANIFEST_NAME
-    if marker.exists() or _storage_policy.path_is_link_like(marker):
-        _, manifest = _retention.load_pipeline_run_manifest(
-            output_root, run_root.name)
-        relative = resolved.relative_to(output_root).as_posix()
-        if any(record["path"] == relative
-               for record in manifest["vector_stores"]):
-            return output_root / ".rag-locks"
-    return run_root / ".rag-locks"
+    return _resource_lease.path_lock_directory(resolved)
 
 
 def _vector_store_lock_path(db_dir: Path) -> Path:
     """Return the persistent sidecar used only as an OS-locking inode."""
     resolved, key = _vector_store_lock_identity(db_dir)
-    safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", resolved.name)
-    safe_name = safe_name.strip("._")[:40] or "vector-store"
-    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:20]
-    return _vector_store_lock_directory(
-        resolved) / f"{safe_name}-{digest}.lock"
+    return _resource_lease._lock_path_from_identity(
+        resolved, key,
+        lock_directory_fn=lambda path: _vector_store_lock_directory(path))
 
 
 def _vector_store_lock_state(key: str) -> _VectorStoreLockState:
-    with _vector_store_lock_states_guard:
-        return _vector_store_lock_states.setdefault(
-            key, _VectorStoreLockState())
+    return _resource_lease.path_lock_state(key)
 
 
 def _try_vector_file_lock(handle) -> bool:
     """Attempt one non-blocking exclusive OS lock of the sentinel's byte 0."""
-    handle.seek(0)
-    if os.name == "nt":
-        import msvcrt
-        try:
-            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-        except OSError as exc:
-            if (exc.errno in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}
-                    or getattr(exc, "winerror", None) in {33, 36, 158}):
-                return False
-            raise
-        return True
-
-    import fcntl
-    try:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError as exc:
-        if exc.errno in {errno.EACCES, errno.EAGAIN}:
-            return False
-        raise
-    return True
+    return _resource_lease.try_path_file_lock(handle)
 
 
 def _unlock_vector_file(handle) -> None:
     """Release the platform OS lock held by *handle*."""
-    handle.seek(0)
-    if os.name == "nt":
-        import msvcrt
-        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-        return
-
-    import fcntl
-    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    _resource_lease.unlock_path_file(handle)
 
 
 def _finish_vector_file_lock(handle, *, primary_error: BaseException | None,
                              lock_path: Path) -> None:
     """Unlock and close a lease handle without changing error precedence."""
-    cleanup_errors: list[BaseException] = []
-    try:
-        _unlock_vector_file(handle)
-    except BaseException as exc:
-        cleanup_errors.append(exc)
-    try:
-        handle.close()
-    except BaseException as exc:
-        cleanup_errors.append(exc)
-
-    if not cleanup_errors:
-        return
-    selected_error = primary_error or cleanup_errors[0]
-    for cleanup_error in cleanup_errors:
-        if cleanup_error is selected_error:
-            continue
-        _log_cleanup_error(
-            "Vector-store lease cleanup also failed for %s",
-            lock_path,
-            error=cleanup_error,
-        )
-    if primary_error is None:
-        raise selected_error.with_traceback(selected_error.__traceback__)
+    _resource_lease.finish_path_file_lock(
+        handle,
+        primary_error=primary_error,
+        lock_path=lock_path,
+        unlock_file_fn=lambda lease_handle: _unlock_vector_file(lease_handle),
+        cleanup_error_fn=(
+            lambda message, *args, error: _log_cleanup_error(
+                message, *args, error=error)),
+    )
 
 
-class _VectorStoreLease:
-    """Bounded, reentrant, process-safe exclusive database-directory lease."""
+class _VectorStoreLease(_resource_lease.PathLease):
+    """Backward-compatible facade over the shared path-wide lease."""
 
     def __init__(self, db_dir: Path, *, backend: str, collection_name: str,
                  operation: str, timeout: float,
                  resource_description: str | None = None,
                  timeout_option: str = "--db-lock-timeout"):
-        self.db_dir = Path(db_dir)
-        self.backend = backend
-        self.collection_name = collection_name
-        self.operation = operation
-        self.resource_description = resource_description or (
-            f"vector store ({backend} collection '{collection_name}')")
-        self.timeout_option = timeout_option
-        self.timeout = _normalize_db_lock_timeout(timeout)
-        resolved, self.key = _vector_store_lock_identity(self.db_dir)
-        safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", resolved.name)
-        safe_name = safe_name.strip("._")[:40] or "vector-store"
-        digest = hashlib.sha256(self.key.encode("utf-8")).hexdigest()[:20]
-        self.lock_path = (
-            _vector_store_lock_directory(resolved)
-            / f"{safe_name}-{digest}.lock")
-        self.state = _vector_store_lock_state(self.key)
-        self._process_id = os.getpid()
-        self._owner_pid = None
-        self._entered = False
-        self._reentrant = False
-        self._handle = None
-
-    def _busy_error(self) -> VectorStoreBusyError:
-        return VectorStoreBusyError(
-            f"Timed out after {self.timeout:g}s waiting for exclusive "
-            f"access during {self.operation}: {self.db_dir} "
-            f"[{self.resource_description}]. Another local operation is "
-            f"using this resource; retry after it finishes or increase "
-            f"{self.timeout_option}."
+        super().__init__(
+            db_dir,
+            backend=backend,
+            collection_name=collection_name,
+            operation=operation,
+            timeout=timeout,
+            resource_description=resource_description,
+            timeout_option=timeout_option,
+            busy_error_type=VectorStoreBusyError,
+            normalize_timeout_fn=(
+                lambda value: _normalize_db_lock_timeout(value)),
+            lock_identity_fn=(
+                lambda path: _vector_store_lock_identity(path)),
+            lock_directory_fn=(
+                lambda path: _vector_store_lock_directory(path)),
+            lock_state_fn=lambda key: _vector_store_lock_state(key),
+            try_file_lock_fn=lambda handle: _try_vector_file_lock(handle),
+            unlock_file_fn=lambda handle: _unlock_vector_file(handle),
+            cleanup_error_fn=(
+                lambda message, *args, error: _log_cleanup_error(
+                    message, *args, error=error)),
+            monotonic_fn=lambda: time.monotonic(),
+            sleep_fn=lambda seconds: time.sleep(seconds),
         )
-
-    def __enter__(self):
-        if self._entered:
-            raise RuntimeError("Vector-store lease objects cannot be reused")
-        current_pid = os.getpid()
-        if current_pid != self._process_id:
-            # A lease object constructed (but not entered) before fork must use
-            # the child's freshly initialized synchronization registry.
-            self.state = _vector_store_lock_state(self.key)
-            self._process_id = current_pid
-        deadline = time.monotonic() + self.timeout
-        if not self.state.thread_lock.acquire(timeout=self.timeout):
-            raise self._busy_error()
-
-        thread_leases = getattr(
-            _vector_store_lock_local, "leases", None)
-        if thread_leases is None:
-            thread_leases = {}
-            _vector_store_lock_local.leases = thread_leases
-        if self.key in thread_leases:
-            thread_leases[self.key] += 1
-            self._entered = True
-            self._reentrant = True
-            self._owner_pid = current_pid
-            return self
-
-        handle = None
-        os_locked = False
-        try:
-            _storage_policy.ensure_private_directory(self.lock_path.parent)
-            _storage_policy.assert_no_link_components(self.lock_path)
-            flags = os.O_RDWR | os.O_APPEND | os.O_CREAT
-            flags |= getattr(os, "O_NOFOLLOW", 0)
-            descriptor = os.open(
-                self.lock_path, flags, _storage_policy.PRIVATE_FILE_MODE)
-            handle = os.fdopen(descriptor, "a+b")
-            lock_stat = os.fstat(handle.fileno())
-            if (not stat.S_ISREG(lock_stat.st_mode)
-                    or lock_stat.st_nlink != 1):
-                raise _storage_policy.StoragePolicyError(
-                    "vector-store lock must be one regular, unlinked file")
-            _storage_policy.enforce_private_path(
-                self.lock_path, directory=False)
-            handle.seek(0, os.SEEK_END)
-            if handle.tell() == 0:
-                handle.write(b"\0")
-                handle.flush()
-                os.fsync(handle.fileno())
-
-            first_attempt = True
-            while True:
-                remaining = deadline - time.monotonic()
-                # Opening, permission-checking, and initially syncing the
-                # private sidecar can consume a very small timeout on a slow
-                # filesystem.  The operating-system lock attempt is
-                # nonblocking, so always make exactly one attempt before
-                # treating the deadline as exhausted.  This preserves true
-                # zero-timeout try-lock semantics without turning unrelated,
-                # uncontended paths into false busy results.
-                if remaining <= 0 and not first_attempt:
-                    raise self._busy_error()
-                if _try_vector_file_lock(handle):
-                    os_locked = True
-                    break
-                first_attempt = False
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise self._busy_error()
-                time.sleep(min(0.05, remaining))
-
-            thread_leases[self.key] = 1
-            self._handle = handle
-            self.state.handle = handle
-            self._entered = True
-            self._owner_pid = current_pid
-            return self
-        except BaseException as exc:
-            thread_leases.pop(self.key, None)
-            if self.state.handle is handle:
-                self.state.handle = None
-            if handle is not None:
-                if os_locked:
-                    _finish_vector_file_lock(
-                        handle, primary_error=exc,
-                        lock_path=self.lock_path)
-                else:
-                    try:
-                        handle.close()
-                    except BaseException as close_error:
-                        _log_cleanup_error(
-                            "Vector-store lease handle cleanup failed for %s",
-                            self.lock_path,
-                            error=close_error,
-                        )
-            self.state.thread_lock.release()
-            raise
-
-    def __exit__(self, exc_type, exc, traceback):
-        if not self._entered:
-            return False
-        if self._owner_pid != os.getpid():
-            # ``after_in_child`` already closed the inherited descriptor and
-            # replaced the lock registry. Unwinding the parent's context in a
-            # forked child must not touch either parent's lock or stale TLS.
-            self._entered = False
-            self._handle = None
-            return False
-        thread_leases = _vector_store_lock_local.leases
-        cleanup_error = None
-        try:
-            depth = thread_leases.get(self.key)
-            if not isinstance(depth, int) or depth < 1:
-                raise RuntimeError("Vector-store lease ownership was lost")
-            if depth > 1:
-                thread_leases[self.key] = depth - 1
-            else:
-                thread_leases.pop(self.key)
-                if self._handle is None:
-                    raise RuntimeError("Vector-store lease handle was lost")
-                try:
-                    _finish_vector_file_lock(
-                        self._handle, primary_error=exc,
-                        lock_path=self.lock_path)
-                except BaseException as release_error:
-                    cleanup_error = release_error
-                finally:
-                    self.state.handle = None
-        finally:
-            self._entered = False
-            self.state.thread_lock.release()
-
-        if cleanup_error is not None:
-            raise cleanup_error.with_traceback(cleanup_error.__traceback__)
-        return False
 
 
 def _vector_store_lock(
@@ -1450,6 +1689,56 @@ def _pipeline_job_lock(
         resource_description=f"pipeline outputs for '{Path(pdf_path).stem}'",
         timeout_option="--db-lock-timeout",
     )
+
+
+@contextmanager
+def _conversion_output_lease(
+        *targets: Path, timeout: float = DEFAULT_DB_LOCK_TIMEOUT):
+    """Serialize writers for every conversion output pathname."""
+    canonical_targets = sorted({
+        str(Path(target).resolve(strict=False)) for target in targets
+    }, key=os.path.normcase)
+    with ExitStack() as leases:
+        for value in canonical_targets:
+            target = Path(value)
+            leases.enter_context(_VectorStoreLease(
+                target,
+                backend="conversion",
+                collection_name=target.name,
+                operation="conversion artifact publication",
+                timeout=timeout,
+                resource_description=f"conversion output '{target}'",
+                timeout_option="conversion lock timeout",
+            ))
+        yield
+
+
+@contextmanager
+def _chunk_output_lease(
+        chunks_output: Path, *, timeout: float = DEFAULT_DB_LOCK_TIMEOUT):
+    """Serialize chunks, completion, and quality-report publication."""
+    chunks_output = Path(chunks_output)
+    targets = {
+        chunks_output,
+        _artifact_completion_path(chunks_output, stage="chunking"),
+        _quality_core.quality_report_path(chunks_output),
+    }
+    canonical_targets = sorted({
+        str(target.resolve(strict=False)) for target in targets
+    }, key=os.path.normcase)
+    with ExitStack() as leases:
+        for value in canonical_targets:
+            target = Path(value)
+            leases.enter_context(_VectorStoreLease(
+                target,
+                backend="chunking",
+                collection_name=chunks_output.name,
+                operation="chunk artifact publication",
+                timeout=timeout,
+                resource_description=f"chunk output '{target}'",
+                timeout_option="chunk output lock timeout",
+            ))
+        yield
 
 
 def _finish_executor_progress(executor, progress, *, operation_name: str,
@@ -1507,6 +1796,18 @@ def _finish_vector_client(client, *, client_name: str,
             raise RuntimeError(
                 f"{client_name} client does not expose required close()")
         close()
+        if sys.platform == "win32" and client_name == "Qdrant":
+            inner_client = getattr(client, "_client", None)
+            is_local_client = type(inner_client).__module__.startswith(
+                "qdrant_client.local.")
+        else:
+            is_local_client = False
+        if is_local_client:
+            # qdrant-client local persistence creates short-lived sqlite
+            # cursors that can retain a Windows file handle after close().
+            # One explicit full collection finalizes those unreachable cursors
+            # so a caller can immediately move or remove a multi-collection DB.
+            gc.collect()
     except BaseException as close_error:
         if primary_error is None:
             raise
@@ -1709,7 +2010,7 @@ class _AgentTeam:
         self.kw = {k: v for k, v in llm_kwargs.items()
                    if k in ("cloud_url", "cloud_model", "cloud_key",
                             "ollama_url", "ollama_model", "gemini_key",
-                            "llm_workers", "thinking")}
+                            "llm_workers", "thinking", "security_policy")}
         self.audit: list[dict] = []
         self.flagged: list[str] = []
 
@@ -1986,100 +2287,78 @@ class _AgentTeam:
 # Book scaffold — TOC / Contents / Index as authoritative hierarchy
 # ---------------------------------------------------------------------------
 
-def _identify_book_sections(doc: dict) -> dict:
-    """Identify the page ranges of Contents, Table of Contents, and Index.
+def _identify_book_sections(
+        doc: dict, *,
+        structure_profile: (
+            str | _document_profiles.StructureProfile
+        ) = DEFAULT_STRUCTURE_PROFILE,
+) -> dict:
+    """Identify contiguous front- and back-matter page ranges.
 
-    Scans section_header, page_header, and table items to find the
-    authoritative structural sections.  Also detects pages whose tables
-    contain TOC-like entries (chapter titles with page numbers).
-
-    Returns::
-
-        {
-            "contents": {"start": int, "end": int} | None,
-            "toc":      {"start": int, "end": int} | None,
-            "index":    {"start": int, "end": int} | None,
-        }
+    Explicit section/page headers are authoritative. Table-layout evidence is
+    used only to extend a single explicit TOC seed, or as a conservative
+    fallback when no TOC heading survived extraction. An isolated body table
+    must never widen the TOC across intervening chapters.
     """
+    profile = _document_profiles.get_profile(structure_profile)
     texts = doc.get("texts", [])
     tables = doc.get("tables", [])
+    section_pages: dict[str, list[int]] = {
+        rule.key: [] for rule in profile.section_rules}
 
-    # Keywords for each section type
-    # NOTE: "table of cases" is NOT an index — it appears within the
-    # front-matter TOC in many law textbooks.  The back-of-book Index
-    # is labeled "Index" or "Subject Index".
-    _SECTION_KW = {
-        "contents": [
-            r"^contents$",
-            r"^brief contents$", r"^short contents$",
-        ],
-        "summary": [
-            r"^summary of contents$",
-        ],
-        "toc": [
-            r"^table of contents$", r"^detailed contents$",
-        ],
-        "index": [
-            r"^index$", r"^subject index$",
-        ],
-    }
-    _SECTION_RE = {
-        k: [re.compile(p, re.I) for p in pats]
-        for k, pats in _SECTION_KW.items()
-    }
+    def _normalized_heading(raw: str, label: str) -> str:
+        value = re.sub(r"\s+", " ", _decode_pua(raw)).strip(" \t:.-")
+        if label == "page_header":
+            # Running headers may prefix an Arabic or Roman printed page.
+            value = re.sub(
+                r"^(?:(?:[ivxlcdm]+|\d{1,4})\s+)", "", value,
+                flags=re.I,
+            )
+        return value
 
-    section_pages: dict[str, list[int]] = {k: [] for k in _SECTION_RE}
-
-    # 1. Scan section_header / page_header / title items
+    # Running headers define section ends without guessing from table density.
     for item in texts:
         label = item.get("label", "")
         if label not in ("section_header", "page_header", "title"):
             continue
-        raw = _decode_pua(item.get("text", "")).strip()
-        if not raw or len(raw) > 60:
+        raw = _normalized_heading(item.get("text", ""), label)
+        if not raw or len(raw) > 100:
             continue
         prov = item.get("prov", [])
         page = prov[0].get("page_no") if prov else None
         if page is None:
             continue
 
-        for sec_type, patterns in _SECTION_RE.items():
-            if any(p.match(raw) for p in patterns):
-                section_pages[sec_type].append(page)
-                break
+        rule = _document_profiles.section_rule_for_heading(raw, profile)
+        if rule is not None:
+            section_pages[rule.key].append(page)
 
-    # 2. Check page_header running headers (repeat on every page of section)
+    # Find the first observed chapter before considering table-layout
+    # evidence. This hard boundary prevents ordinary body tables from being
+    # interpreted as part of the TOC.
+    chapter_starts: list[int] = []
     for item in texts:
-        if item.get("label") != "page_header":
+        if item.get("label") not in ("section_header", "page_header", "title"):
             continue
-        raw = _decode_pua(item.get("text", "")).strip().lower()
+        raw = re.sub(
+            r"\s+", " ", _decode_pua(item.get("text", ""))).strip()
         prov = item.get("prov", [])
         page = prov[0].get("page_no") if prov else None
-        if page is None:
-            continue
-        if raw == "contents":
-            section_pages["contents"].append(page)
-        elif raw == "summary of contents":
-            section_pages["summary"].append(page)
-        elif raw == "table of contents":
-            section_pages["toc"].append(page)
-        elif raw == "index":
-            section_pages["index"].append(page)
+        if (page is not None
+                and _document_profiles.match_division(
+                    raw, profile, "section_boundary") is not None):
+            chapter_starts.append(page)
 
-    # 3. Scan tables for TOC-like content on early pages.
-    #    TOC tables typically have cells like "Chapter 1 Some Title.......3"
-    #    or "A. First Possession   5".  Detect by looking for cells with
-    #    trailing page numbers in the first ~15% of the document.
-    _toc_entry_re = re.compile(
-        r"(?:chapter|part|preface|appendix|index|"
-        r"acknowledgment|table of cases)\b",
-        re.I)
+    total_pages = len(doc.get("pages", {}))
+    first_chapter = min(chapter_starts) if chapter_starts else None
+    front_cutoff = (
+        max(1, first_chapter - 1)
+        if first_chapter is not None
+        else min(total_pages or 60, max(60, int((total_pages or 400) * 0.1)))
+    )
+
+    # Scan front-matter tables for TOC-like content.
     _trailing_num_re = re.compile(r"\b\d{1,4}\s*$")
-    total_pages = 0
-    if doc.get("pages"):
-        total_pages = len(doc["pages"])
-    front_cutoff = max(60, int(total_pages * 0.15)) if total_pages else 60
-
     toc_table_pages: list[int] = []
     for t in tables:
         prov = t.get("prov", [])
@@ -2093,25 +2372,54 @@ def _identify_book_sections(doc: dict) -> dict:
             txt = _decode_pua(cell.get("text", "")).strip()
             if not txt or len(txt) < 3:
                 continue
-            if _toc_entry_re.search(txt) or _trailing_num_re.search(txt):
+            if (any(re.search(pattern, txt, re.I)
+                    for pattern in profile.toc_entry_hint_patterns)
+                    or _trailing_num_re.search(txt)):
                 toc_hits += 1
         if toc_hits >= 3:
             toc_table_pages.append(page)
 
-    if toc_table_pages:
-        # Merge table-detected pages into toc/contents
-        if not section_pages["toc"] and not section_pages["contents"]:
-            section_pages["contents"].extend(toc_table_pages)
-        elif section_pages["contents"]:
-            # Extend the existing range
-            section_pages["contents"].extend(toc_table_pages)
-        elif section_pages["toc"]:
-            section_pages["toc"].extend(toc_table_pages)
+    def _contiguous_runs(pages: list[int]) -> list[list[int]]:
+        runs: list[list[int]] = []
+        for page in sorted(set(pages)):
+            if not runs or page != runs[-1][-1] + 1:
+                runs.append([page])
+            else:
+                runs[-1].append(page)
+        return runs
+
+    table_runs = _contiguous_runs(toc_table_pages)
+    toc_seed_names = _document_profiles.toc_seed_keys(profile)
+    explicit_toc_pages = {
+        page
+        for section in toc_seed_names
+        for page in section_pages[section]
+    }
+    if explicit_toc_pages:
+        # Repeated running headers already give a complete range. A lone
+        # heading may be extended only through the contiguous run containing
+        # that page.
+        for section in toc_seed_names:
+            seeds = set(section_pages[section])
+            if len(seeds) != 1:
+                continue
+            for run in table_runs:
+                if seeds.intersection(run):
+                    section_pages[section].extend(run)
+                    break
+    else:
+        # With no heading evidence, require multiple consecutive table pages.
+        # Isolated tables are too common in textbook body content.
+        candidates = [run for run in table_runs if len(run) >= 2]
+        if candidates:
+            best = max(candidates, key=lambda run: (len(run), -run[0]))
+            fallback_toc_name = toc_seed_names[0]
+            section_pages[fallback_toc_name].extend(best)
 
     # 4. Fallback: if no TOC/contents detected yet, scan plain "text" items
     #    for TOC keywords.  Some scanned PDFs produce all items as "text"
     #    (e.g., Criminal Law) with no section_header labels.
-    has_toc = any(section_pages[k] for k in ("toc", "contents", "summary"))
+    has_toc = any(section_pages[key] for key in toc_seed_names)
     if not has_toc:
         for item in texts:
             if item.get("label") != "text":
@@ -2120,25 +2428,24 @@ def _identify_book_sections(doc: dict) -> dict:
             if not raw or len(raw) > 60:
                 continue
             # Normalize whitespace for OCR artifacts ("SUMMARY  OF CONTENTS")
-            norm = re.sub(r"\s+", " ", raw).strip().lower()
+            norm = re.sub(r"\s+", " ", raw).strip()
             prov = item.get("prov", [])
             page = prov[0].get("page_no") if prov else None
             if page is None:
                 continue
-            if norm == "summary of contents":
-                section_pages["summary"].append(page)
-            elif norm in ("table of contents", "detailed contents"):
-                section_pages["toc"].append(page)
-            elif norm in ("contents", "brief contents"):
-                section_pages["contents"].append(page)
+            rule = _document_profiles.section_rule_for_heading(norm, profile)
+            if rule is not None and rule.toc_seed:
+                section_pages[rule.key].append(page)
 
-    # Filter index pages: only accept pages in the back half of the book.
-    # "Table of Cases" appears in front matter but is not the back-of-book Index.
+    # Apply profile-declared positional constraints to back matter.  This
+    # prevents front-matter mentions from becoming publication exclusions.
     total_pages = len(doc.get("pages", {})) or 100
-    back_half_start = total_pages // 2
-    if section_pages.get("index"):
-        section_pages["index"] = [p for p in section_pages["index"]
-                                  if p >= back_half_start]
+    for rule in profile.section_rules:
+        if rule.minimum_page_fraction is None:
+            continue
+        earliest = int(total_pages * rule.minimum_page_fraction)
+        section_pages[rule.key] = [
+            page for page in section_pages[rule.key] if page >= earliest]
 
     # Build ranges
     result = {}
@@ -2148,26 +2455,20 @@ def _identify_book_sections(doc: dict) -> dict:
         else:
             result[sec_type] = None
 
-    # Merge toc/contents/summary into a usable set:
+    # Merge toc/contents/summary into a usable scaffold span:
     # - "summary" is the brief Summary of Contents (e.g., ConLaw p.9)
     # - "contents" is the detailed Contents listing
     # - "toc" is the "Table of Contents" header
     # If only one exists, alias the others.
-    all_toc_types = [k for k in ("contents", "toc", "summary")
-                     if result.get(k)]
+    all_toc_types = [key for key in toc_seed_names if result.get(key)]
     if all_toc_types:
-        # The widest range across all TOC-type sections is the full TOC
+        # ``toc`` is the canonical full scaffold span. Keep the distinct
+        # summary and detailed-contents ranges for precise filtering.
         widest_start = min(result[k]["start"] for k in all_toc_types)
         widest_end = max(result[k]["end"] for k in all_toc_types)
-        # Ensure "toc" and "contents" are set to the widest range
-        if not result.get("toc"):
-            result["toc"] = {"start": widest_start, "end": widest_end}
+        result["toc"] = {"start": widest_start, "end": widest_end}
         if not result.get("contents"):
             result["contents"] = {"start": widest_start, "end": widest_end}
-        # If there's a "summary" but also a separate "contents", keep them distinct
-        # Otherwise merge them
-        if result.get("summary") and not result.get("contents"):
-            result["contents"] = result["summary"]
 
     found = [f"{k}: pp.{v['start']}-{v['end']}"
              for k, v in result.items() if v]
@@ -2251,7 +2552,8 @@ def _calculate_page_delta(doc: dict) -> int:
     return delta
 
 
-_TOC_LAYOUT_PROMPT = """You are analyzing a Table of Contents from a law school textbook.
+_TOC_LAYOUT_PROMPT = """You are analyzing a Table of Contents from this reviewed document family:
+{profile_description}
 Your job is to identify the LAYOUT PATTERNS used to organize entries on these pages.
 Study the text carefully and answer:
 
@@ -2259,9 +2561,8 @@ Study the text carefully and answer:
    "trailing after dots/leaders", "in a separate column"). What format are they in?
    (plain digits, Roman numerals, etc.)
 
-2. CHAPTER DESIGNATION: How are chapters identified? (e.g., "Chapter 1", "CHAPTER ONE",
-   "Part I", bold/caps text, numbered without the word "Chapter"). What is the exact
-   pattern? List the chapter designations you see.
+2. PRIMARY DIVISION DESIGNATION: How are top-level divisions identified? What is the
+   exact pattern? List the designations you see without inventing absent levels.
 
 3. SECTION MARKERS: How are major sections within chapters marked?
    (e.g., "A.", "B.", "I.", "II.", bold text, indented). List examples.
@@ -2269,25 +2570,23 @@ Study the text carefully and answer:
 4. SUBSECTION MARKERS: How are sub-sections marked?
    (e.g., "1.", "2.", "a.", "b.", further indentation). List examples.
 
-5. CASE NAMES: How are case names formatted in the TOC?
-   (e.g., italicized, "v." present, indented under sections). List examples.
+5. NAMED ITEMS: How are the narrowest named items formatted and nested? List examples.
 
 6. OTHER ELEMENTS: Any other notable elements (e.g., "Notes and Questions",
    "Problems", part/unit groupings, appendices).
 
 7. HIERARCHY SUMMARY: Describe the complete nesting order from broadest to narrowest.
-   Example: "Part (Roman) > Chapter (Arabic) > Section (Letter) > Subsection (Number) > Case/Notes"
 
 Output ONLY valid JSON:
 {{
     "page_number_format": "description",
-    "chapter_pattern": "regex-friendly pattern description",
-    "chapter_examples": ["Chapter 1 ...", "Chapter 2 ..."],
+    "division_pattern": "regex-friendly pattern description",
+    "division_examples": ["first observed primary division", "second observed primary division"],
     "section_markers": ["A.", "B.", "I.", "II."],
     "subsection_markers": ["1.", "2.", "a.", "b."],
-    "case_name_format": "description",
+    "named_item_format": "description",
     "other_elements": ["Notes and Questions", "Problems"],
-    "hierarchy_order": ["Part", "Chapter", "Section", "Subsection", "Case/Notes"],
+    "hierarchy_order": ["Primary division", "Section", "Subsection", "Named item"],
     "hierarchy_levels": {{
         "1": "description of what level 1 represents",
         "2": "description of what level 2 represents",
@@ -2303,7 +2602,13 @@ Table of Contents text:
 JSON:"""
 
 
-def _analyze_toc_layout(toc_text: str, **llm_kwargs) -> dict:
+def _analyze_toc_layout(
+        toc_text: str, *,
+        structure_profile: (
+            str | _document_profiles.StructureProfile
+        ) = DEFAULT_STRUCTURE_PROFILE,
+        **llm_kwargs,
+) -> dict:
     """Ask LLM to identify the organizational patterns in the TOC.
 
     Returns a layout schema describing how chapters, sections, cases, and
@@ -2313,7 +2618,9 @@ def _analyze_toc_layout(toc_text: str, **llm_kwargs) -> dict:
     lines = toc_text.split("\n")
     sample = "\n".join(lines[:120])
 
-    prompt = _TOC_LAYOUT_PROMPT.format(toc_text=sample)
+    profile = _document_profiles.get_profile(structure_profile)
+    prompt = _TOC_LAYOUT_PROMPT.format(
+        toc_text=sample, profile_description=profile.document_description)
     result = _call_llm(
         prompt, max_tokens=1200, operation="toc.layout", **llm_kwargs)
     if not result:
@@ -2332,8 +2639,9 @@ def _analyze_toc_layout(toc_text: str, **llm_kwargs) -> dict:
         schema = json.loads(result[start:end + 1])
         log.info(f"TOC layout schema: hierarchy = "
                  f"{' > '.join(schema.get('hierarchy_order', []))}")
-        if schema.get("chapter_examples"):
-            log.info(f"  Chapter examples: {schema['chapter_examples'][:3]}")
+        if schema.get("division_examples"):
+            log.info(
+                f"  Division examples: {schema['division_examples'][:3]}")
         if schema.get("section_markers"):
             log.info(f"  Section markers: {schema['section_markers'][:6]}")
         return schema
@@ -2516,12 +2824,18 @@ def _verify_scaffold_against_pages(
 
 
 def _build_scaffold(doc: dict, book_sections: dict, *,
+                    structure_profile: (
+                        str | _document_profiles.StructureProfile
+                    ) = DEFAULT_STRUCTURE_PROFILE,
                     cloud_url: str = "", cloud_model: str = "",
                     cloud_key: str = "", ollama_url: str = "",
                     ollama_model: str = "", gemini_key: str = "",
                     llm_workers: int = DEFAULT_LLM_WORKERS,
                     thinking: bool = False,
                     use_llm: bool = False,
+                    security_policy: (
+                        _release_security.ReleaseSecurityPolicy | None
+                    ) = None,
                     ) -> list[dict]:
     """Build an authoritative book scaffold from TOC/Contents text items.
 
@@ -2533,20 +2847,28 @@ def _build_scaffold(doc: dict, book_sections: dict, *,
     Returns sorted hierarchy entries with level, title, page, chapter number,
     and full hierarchical path.
     """
+    profile = _document_profiles.get_profile(structure_profile)
     llm_kwargs = dict(cloud_url=cloud_url, cloud_model=cloud_model,
                       cloud_key=cloud_key, ollama_url=ollama_url,
                       ollama_model=ollama_model, gemini_key=gemini_key,
-                      llm_workers=llm_workers, thinking=thinking)
+                      llm_workers=llm_workers, thinking=thinking,
+                      security_policy=security_policy)
 
     texts = doc.get("texts", [])
     tables = doc.get("tables", [])
+
+    def _raise_profile_layout_error(reason: str) -> None:
+        log.warning(reason)
+        raise ValueError(
+            f"TOC layout does not match structure profile "
+            f"{profile.name!r}; choose the reviewed profile for this "
+            "publisher before chunking")
 
     # Determine TOC page range (use the widest available)
     toc_range = book_sections.get("toc") or book_sections.get("contents")
     contents_range = book_sections.get("contents")
     if not toc_range:
-        log.warning("No TOC page range — scaffold will be empty")
-        return []
+        _raise_profile_layout_error("No TOC page range was recognized")
 
     # Use the widest range across toc and contents
     toc_start = toc_range["start"]
@@ -2563,10 +2885,10 @@ def _build_scaffold(doc: dict, book_sections: dict, *,
     # like "Chapter 1 The Concept of Property ....1" or "A. First Possession  5"
     # with the printed page number at the end.
     toc_lines: list[str] = []
-    _skip_header_re = re.compile(
-        r"^(table of )?contents$|^summary of contents$|"
-        r"^detailed contents$|^brief contents$",
-        re.I)
+    def _is_toc_header(value: str) -> bool:
+        return any(
+            re.fullmatch(pattern, value, re.I)
+            for pattern in profile.toc_skip_patterns)
 
     for t in tables:
         prov = t.get("prov", [])
@@ -2578,7 +2900,7 @@ def _build_scaffold(doc: dict, book_sections: dict, *,
             raw = _decode_pua(cell.get("text", "")).strip()
             if not raw or len(raw) < 3:
                 continue
-            if _skip_header_re.match(raw):
+            if _is_toc_header(raw):
                 continue
             toc_lines.append(raw)
 
@@ -2594,25 +2916,73 @@ def _build_scaffold(doc: dict, book_sections: dict, *,
         raw = _decode_pua(item.get("text", "")).strip()
         if not raw or len(raw) < 3:
             continue
-        if _skip_header_re.match(raw):
+        if _is_toc_header(raw):
             continue
         # Avoid duplicates (table cells may repeat text items)
         if raw not in toc_lines:
             toc_lines.append(raw)
 
     if not toc_lines:
-        log.warning("No TOC entries found in tables or text items")
-        return []
+        _raise_profile_layout_error(
+            "No TOC entries were found in tables or text items")
 
     toc_text = "\n".join(toc_lines)
     log.info(f"TOC: {len(toc_lines)} entries from pp.{toc_start}-{toc_end} "
              f"(page delta: +{page_delta})")
 
+    # Pin profile evidence to deterministic source parsing. LLM output may
+    # enrich hierarchy, but it cannot invent a profile-conforming division
+    # that is absent from the source TOC.
+    table_scaffold = _parse_toc_tables(
+        doc, toc_start, toc_end, structure_profile=profile)
+
+    def _division_key(title: object) -> tuple[str, int] | None:
+        division = _document_profiles.match_division(
+            str(title), profile, "toc_entry")
+        if division is None:
+            return None
+        return division.kind.casefold(), division.ordinal
+
+    table_primary = [
+        entry for entry in table_scaffold if entry.get("level") == 1
+    ]
+    source_primary: dict[tuple[str, int], dict] = {}
+    for value in table_primary or toc_lines:
+        title = value if isinstance(value, str) else value.get("title", "")
+        key = _division_key(title)
+        if key is None:
+            continue
+        source_title = _chunking_core.clean_heading_text(str(title))
+        if isinstance(value, str):
+            division = _document_profiles.match_division(
+                source_title, profile, "toc_entry")
+            if division is not None and division.title:
+                source_title = re.sub(
+                    r"(?:\s*[.\u2026·]){2,}\s*\d{1,4}\s*$", "",
+                    source_title).strip()
+                source_title = re.sub(
+                    r"\s+\d{1,4}\s*$", "", source_title).strip()
+        source_primary.setdefault(key, {
+            "title": source_title,
+            "page": (
+                value.get("page", 0) if isinstance(value, dict) else 0),
+        })
+    source_division_keys = set(source_primary)
+
+    def _division_keys(values) -> set[tuple[str, int]]:
+        return {
+            key for value in values
+            if (key := _division_key(
+                value if isinstance(value, str)
+                else value.get("title", ""))) is not None
+        }
+
     def _expert_build_scaffold():
         """Expert (IV): Layout analysis → hierarchy parsing → delta conversion."""
         # Phase 1: Layout analysis
         layout = (
-            _analyze_toc_layout(toc_text, **llm_kwargs)
+            _analyze_toc_layout(
+                toc_text, structure_profile=profile, **llm_kwargs)
             if use_llm else {}
         )
 
@@ -2620,14 +2990,27 @@ def _build_scaffold(doc: dict, book_sections: dict, *,
         s = []
         if use_llm and (cloud_key or gemini_key or ollama_url):
             s = _llm_parse_scaffold(
-                toc_text, layout_schema=layout, **llm_kwargs)
+                toc_text, layout_schema=layout,
+                structure_profile=profile, **llm_kwargs)
 
         # Table-based fallback/merge
-        ts = _parse_toc_tables(doc, toc_start, toc_end)
+        ts = [dict(entry) for entry in table_scaffold]
         if ts and not s:
             s = ts
         elif ts and s:
             _merge_page_numbers(s, ts)
+
+        # Primary display titles and pages remain deterministic source facts.
+        # The LLM may enrich only the subordinate hierarchy around them.
+        for entry in s:
+            if entry.get("level") != 1:
+                continue
+            source = source_primary.get(_division_key(entry.get("title", "")))
+            if source is None:
+                continue
+            entry["title"] = source["title"]
+            if source["page"] > 0:
+                entry["page"] = source["page"]
 
         # Phase 3: Convert printed page numbers → PDF page numbers
         # TOC entries contain printed page numbers (e.g., "Chapter 1...1")
@@ -2644,13 +3027,15 @@ def _build_scaffold(doc: dict, book_sections: dict, *,
                      f"(printed + {page_delta} = PDF page)")
 
         # Assign chapter numbers
-        ch_re = re.compile(r"(?:Chapter|Part|Unit)\s+(\d{1,2})", re.I)
         cur_ch = None
         for e in s:
             if e["level"] == 1:
-                m = ch_re.search(e["title"])
-                if m:
-                    cur_ch = int(m.group(1))
+                division = _document_profiles.match_division(
+                    e["title"], profile, "toc_entry")
+                if division is not None:
+                    cur_ch = division.ordinal
+                    e["division_kind"] = division.kind
+                    e["division_number"] = division.raw_number
             e["chapter_num"] = cur_ch
 
         # Build hierarchical paths
@@ -2700,9 +3085,22 @@ def _build_scaffold(doc: dict, book_sections: dict, *,
         return _verify_scaffold_against_pages(
             scaffold, doc, max_checks=5, **llm_kwargs)
 
+    def _require_profile_divisions(scaffold: list[dict]) -> None:
+        """Fail closed when a TOC does not match the selected profile."""
+        primary = [entry for entry in scaffold if entry.get("level") == 1]
+        generated_keys = _division_keys(primary)
+        if (not primary or len(generated_keys) != len(primary)
+                or not source_division_keys
+                or generated_keys != source_division_keys):
+            _raise_profile_layout_error(
+                "The generated scaffold does not exactly match deterministic "
+                "source evidence for the primary divisions")
+
     if not use_llm:
         log.info("Scaffold: deterministic TOC parsing (LLM review disabled)")
-        return _expert_build_scaffold()
+        deterministic = _expert_build_scaffold()
+        _require_profile_divisions(deterministic)
+        return deterministic
 
     # ── Optional LLM team review ──
     team = _AgentTeam(
@@ -2719,6 +3117,7 @@ def _build_scaffold(doc: dict, book_sections: dict, *,
     )
 
     scaffold = outcome["result"] or []
+    _require_profile_divisions(scaffold)
 
     # Write flagged issues if any
     if outcome["flagged"]:
@@ -2727,8 +3126,13 @@ def _build_scaffold(doc: dict, book_sections: dict, *,
     return scaffold
 
 
-def _llm_parse_scaffold(toc_text: str, *, layout_schema: dict = None,
-                        **llm_kwargs) -> list[dict]:
+def _llm_parse_scaffold(
+        toc_text: str, *, layout_schema: dict = None,
+        structure_profile: (
+            str | _document_profiles.StructureProfile
+        ) = DEFAULT_STRUCTURE_PROFILE,
+        **llm_kwargs,
+) -> list[dict]:
     """Send TOC text to LLM for authoritative hierarchy parsing.
 
     If *layout_schema* is provided (from ``_analyze_toc_layout``), it is
@@ -2736,25 +3140,29 @@ def _llm_parse_scaffold(toc_text: str, *, layout_schema: dict = None,
     chapters, sections, cases, and page numbers.
     """
     # Build a layout hint block from the schema
+    profile = _document_profiles.get_profile(structure_profile)
     layout_hint = ""
     if layout_schema:
         parts = []
         if layout_schema.get("hierarchy_order"):
             parts.append("Hierarchy (broadest → narrowest): "
                          + " > ".join(layout_schema["hierarchy_order"]))
-        if layout_schema.get("chapter_pattern"):
-            parts.append(f"Chapter designation: {layout_schema['chapter_pattern']}")
-        if layout_schema.get("chapter_examples"):
-            parts.append("Chapter examples: " +
-                         ", ".join(layout_schema["chapter_examples"][:4]))
+        if layout_schema.get("division_pattern"):
+            parts.append(
+                f"Primary-division designation: "
+                f"{layout_schema['division_pattern']}")
+        if layout_schema.get("division_examples"):
+            parts.append("Division examples: " +
+                         ", ".join(layout_schema["division_examples"][:4]))
         if layout_schema.get("section_markers"):
             parts.append("Section markers: " +
                          ", ".join(layout_schema["section_markers"][:6]))
         if layout_schema.get("subsection_markers"):
             parts.append("Subsection markers: " +
                          ", ".join(layout_schema["subsection_markers"][:6]))
-        if layout_schema.get("case_name_format"):
-            parts.append(f"Case names: {layout_schema['case_name_format']}")
+        if layout_schema.get("named_item_format"):
+            parts.append(
+                f"Named items: {layout_schema['named_item_format']}")
         if layout_schema.get("page_number_format"):
             parts.append(f"Page numbers: {layout_schema['page_number_format']}")
         hl = layout_schema.get("hierarchy_levels", {})
@@ -2765,14 +3173,19 @@ def _llm_parse_scaffold(toc_text: str, *, layout_schema: dict = None,
             layout_hint = ("\n\nBOOK-SPECIFIC LAYOUT (use this to assign levels "
                            "correctly):\n" + "\n".join(parts) + "\n")
 
+    hierarchy_guidance = [
+        "Level 1: a primary division matching the selected reviewed profile.",
+        *[
+            f"Level {rule.level}: a title matching /{rule.pattern}/."
+            for rule in profile.hierarchy_rules
+        ],
+    ]
     scaffold_prompt = (
-        "You are parsing a Table of Contents from a law school textbook.\n"
-        "Convert this into a structured hierarchy. For each entry, assign a heading level:\n\n"
-        "Level 1: Part or Chapter (e.g., \"Chapter 3 Personal Jurisdiction\", \"Part II\")\n"
-        "Level 2: Major section with letter or Roman numeral (e.g., \"A. The Study of Procedure\", \"II. Standing\")\n"
-        "Level 3: Numbered subsection (e.g., \"1. Trial Courts\", \"2. Appellate Courts\")\n"
-        "Level 4: Lettered sub-subsection (e.g., \"a. Introduction\", \"b. The Complete Diversity Rule\")\n"
-        "Level 5: Case name or \"Notes and Questions\" (e.g., \"International Shoe Co. v. Washington\")\n"
+        "You are parsing a Table of Contents from this reviewed document "
+        f"family: {profile.document_description}.\n"
+        "Convert it into a structured hierarchy. Assign levels only from "
+        "the following deterministic policy:\n\n"
+        + "\n".join(hierarchy_guidance) + "\n"
         + layout_hint +
         "\nExtract the page number from each line (usually the last number on the line).\n\n"
         "Output ONLY a JSON array. Each entry: {{\"level\": N, \"title\": \"...\", \"page\": N}}\n"
@@ -2798,7 +3211,7 @@ def _llm_parse_scaffold(toc_text: str, *, layout_schema: dict = None,
                 k: v for k, v in llm_kwargs.items()
                 if k in ("cloud_url", "cloud_model", "cloud_key",
                           "ollama_url", "ollama_model", "gemini_key",
-                          "llm_workers", "thinking")})
+                          "llm_workers", "thinking", "security_policy")})
         except (LLMBudgetExceeded, LLMExecutionError):
             raise
         except Exception:
@@ -2834,7 +3247,70 @@ def _llm_parse_scaffold(toc_text: str, *, layout_schema: dict = None,
     return all_entries
 
 
-def _parse_toc_tables(doc: dict, toc_start: int, toc_end: int) -> list[dict]:
+def _toc_visual_subrows(cells: list[dict]) -> list[list[dict]]:
+    """Split unreliable declared table rows using vertical cell geometry.
+
+    Docling occasionally assigns the last line on a page and the next chapter
+    heading to one logical row. Cells in a real visual row overlap vertically;
+    disjoint bands are therefore safer than the declared row index alone.
+    If geometry is missing, preserve the declared row unchanged.
+    """
+    declared: dict[int, list[dict]] = {}
+    for cell in cells:
+        declared.setdefault(cell.get("start_row_offset_idx", 0), []).append(cell)
+
+    output: list[list[dict]] = []
+    for row_idx in sorted(declared):
+        row_cells = declared[row_idx]
+        if len(row_cells) < 2 or any(
+                not isinstance(cell.get("bbox"), dict)
+                or cell["bbox"].get("t") is None
+                or cell["bbox"].get("b") is None
+                for cell in row_cells):
+            output.append(row_cells)
+            continue
+
+        bands: list[dict] = []
+        positioned = []
+        for cell in row_cells:
+            bbox = cell["bbox"]
+            low = min(float(bbox["t"]), float(bbox["b"]))
+            high = max(float(bbox["t"]), float(bbox["b"]))
+            positioned.append(((low + high) / 2, low, high, cell))
+
+        for center, low, high, cell in sorted(positioned, key=lambda x: x[0]):
+            overlapping = [
+                band for band in bands
+                if low <= band["high"] + 2.0 and high >= band["low"] - 2.0
+            ]
+            if overlapping:
+                band = min(overlapping, key=lambda value: abs(
+                    center - value["center"]))
+                band["cells"].append(cell)
+                band["low"] = min(band["low"], low)
+                band["high"] = max(band["high"], high)
+                band["center"] = sum(
+                    (min(float(item["bbox"]["t"]), float(item["bbox"]["b"]))
+                     + max(float(item["bbox"]["t"]), float(item["bbox"]["b"])))
+                    / 2 for item in band["cells"]
+                ) / len(band["cells"])
+            else:
+                bands.append({
+                    "center": center, "low": low, "high": high,
+                    "cells": [cell],
+                })
+
+        for band in sorted(bands, key=lambda value: value["center"]):
+            output.append(band["cells"])
+    return output
+
+
+def _parse_toc_tables(
+        doc: dict, toc_start: int, toc_end: int, *,
+        structure_profile: (
+            str | _document_profiles.StructureProfile
+        ) = DEFAULT_STRUCTURE_PROFILE,
+) -> list[dict]:
     """Parse TOC from DoclingDocument tables via row reconstruction.
 
     Handles three live textbook formats:
@@ -2848,6 +3324,7 @@ def _parse_toc_tables(doc: dict, toc_start: int, toc_end: int) -> list[dict]:
     from each row as a unit.  This avoids the old single-cell / multi-column
     split that produced wrong results when cells partially matched.
     """
+    profile = _document_profiles.get_profile(structure_profile)
     tables = doc.get("tables", [])
     if not tables:
         return []
@@ -2858,10 +3335,12 @@ def _parse_toc_tables(doc: dict, toc_start: int, toc_end: int) -> list[dict]:
     _trailing_roman = re.compile(
         r"[.\u2026·\s]{2,}\s*((?:x{0,3}(?:ix|iv|v?i{0,3})|"
         r"(?:l?x{0,3})(?:ix|iv|v?i{0,3})))\s*$", re.I)
-    _chapter_re = re.compile(r"^(?:Chapter|Part|Unit)\s+\d", re.I)
-    _skip_re = re.compile(
-        r"^(table of )?contents$|^summary of contents$|"
-        r"^detailed contents$|^page$", re.I)
+    _leader_run = re.compile(r"(?:\s*[.\u2026·]\s*){2,}")
+
+    def _skip_row(value: str) -> bool:
+        return any(
+            re.fullmatch(pattern, value, re.I)
+            for pattern in profile.toc_skip_patterns)
 
     entries: list[dict] = []
     pending_chapter: str | None = None  # ConLaw: CHAPTER row without page
@@ -2876,31 +3355,69 @@ def _parse_toc_tables(doc: dict, toc_start: int, toc_end: int) -> list[dict]:
         if not cells:
             continue
 
-        # --- Step 1: reconstruct rows from cells -----------------------
-        rows: dict[int, dict[int, str]] = {}
-        col_spans: dict[int, dict[int, tuple[int, int]]] = {}
-        for cell in cells:
-            row_idx = cell.get("start_row_offset_idx", 0)
-            col_start = cell.get("start_col_offset_idx", 0)
-            col_end = cell.get("end_col_offset_idx", col_start + 1)
-            text = _decode_pua(cell.get("text", "")).strip()
-            if text:
-                rows.setdefault(row_idx, {})[col_start] = text
-                col_spans.setdefault(row_idx, {})[col_start] = (
-                    col_start, col_end)
+        # --- Step 1: reconstruct visual rows from cells ----------------
+        visual_rows = _toc_visual_subrows(cells)
+        row_queue = list(visual_rows)
 
-        # --- Step 2: parse each row ------------------------------------
-        for row_idx in sorted(rows):
-            row = rows[row_idx]
-            spans = col_spans.get(row_idx, {})
+        # --- Step 2: parse each visual row ------------------------------
+        while row_queue:
+            row_cells = row_queue.pop(0)
+            row: dict[int, str] = {}
+            spans: dict[int, tuple[int, int]] = {}
+            for cell in sorted(
+                    row_cells,
+                    key=lambda value: value.get("start_col_offset_idx", 0)):
+                col_start = cell.get("start_col_offset_idx", 0)
+                col_end = cell.get("end_col_offset_idx", col_start + 1)
+                text = _decode_pua(cell.get("text", "")).strip()
+                if not text:
+                    continue
+                row[col_start] = " ".join(
+                    part for part in (row.get(col_start, ""), text) if part)
+                old_span = spans.get(col_start, (col_start, col_end))
+                spans[col_start] = (
+                    min(old_span[0], col_start), max(old_span[1], col_end))
+            if not row:
+                continue
             max_col = max(row.keys()) if row else 0
+
+            # Some merged cells contain two visual lines and the page column
+            # contains the corresponding two numbers. Recover those pairs
+            # before applying the ordinary single-row parser.
+            if max_col > 0:
+                page_values = re.findall(r"\b\d{1,4}\b", row[max_col])
+                joined_title = " ".join(
+                    row[col] for col in sorted(row) if col != max_col)
+                title_segments = [
+                    segment.strip()
+                    for segment in _leader_run.split(joined_title)
+                    if segment.strip()
+                ]
+                if (len(page_values) > 1
+                        and len(title_segments) == len(page_values)):
+                    synthetic_rows = []
+                    for segment, value in zip(title_segments, page_values):
+                        synthetic_rows.append([
+                            {
+                                "text": segment,
+                                "start_col_offset_idx": 0,
+                                "end_col_offset_idx": max_col,
+                            },
+                            {
+                                "text": value,
+                                "start_col_offset_idx": max_col,
+                                "end_col_offset_idx": max_col + 1,
+                            },
+                        ])
+                    row_queue[0:0] = synthetic_rows
+                    continue
 
             # Collect all text from this row
             all_texts = [row[c] for c in sorted(row.keys())]
             full_text = " ".join(all_texts).strip()
 
             # Skip header/label rows
-            if _skip_re.match(full_text):
+            if _skip_row(full_text):
                 continue
             if len(full_text) < 3:
                 continue
@@ -2956,7 +3473,9 @@ def _parse_toc_tables(doc: dict, toc_start: int, toc_end: int) -> list[dict]:
             # Distinguish by checking if col-0 cell spans most columns
             # (full-width = self-contained header, narrow = split label).
             row_text_bare = row.get(0, "")
-            if _chapter_re.match(row_text_bare):
+            row_division = _document_profiles.match_division(
+                row_text_bare, profile, "toc_entry")
+            if row_division is not None:
                 col0_span = spans.get(0, (0, 1))
                 col0_width = col0_span[1] - col0_span[0]
                 # Two split-chapter scenarios:
@@ -2988,21 +3507,23 @@ def _parse_toc_tables(doc: dict, toc_start: int, toc_end: int) -> list[dict]:
             if not title:
                 continue
 
+            # Clean the fully joined title, not merely its final cell.
+            clean = _chunking_core.clean_heading_text(title)
+            clean = re.sub(r"\s+", " ", _leader_run.sub(" ", clean)).strip()
+            if not clean:
+                continue
+
+            # A Table-of-Problems row can contain a chapter title followed by
+            # "N-1 Problem". It is not a second chapter boundary.
+            division_match = _document_profiles.match_division(
+                clean, profile, "toc_entry")
+            if (division_match is not None
+                    and _document_profiles.contains_division_subnumber(
+                        clean, division_match)):
+                continue
+
             # --- Infer hierarchy level ---------------------------------
-            level = 3  # default: subsection
-            clean = title.strip()
-            if _chapter_re.match(clean):
-                level = 1
-            elif re.match(r"^[A-Z]\.\s", clean):
-                level = 2
-            elif re.match(r"^\d+\.\s", clean):
-                level = 3
-            elif re.match(r"^[a-z]\.\s", clean):
-                level = 4
-            elif re.match(r"^[ivxlc]+\.\s", clean, re.I):
-                level = 3
-            elif "v." in clean or " v " in clean:
-                level = 5  # case name
+            level = _document_profiles.hierarchy_level(clean, profile)
 
             entries.append({
                 "level": level,
@@ -3076,7 +3597,21 @@ def _build_scaffold_lookup(scaffold: list[dict],
     for entry in scaffold:
         pg = entry.get("page", 0)
         if pg > 0:
-            page_map[pg] = entry
+            previous = page_map.get(pg)
+            previous_chapter = (
+                previous.get("chapter_num") if previous else None)
+            current_chapter = entry.get("chapter_num")
+            # On a shared boundary page, a new chapter must reset any
+            # preceding-chapter subsection. Within one chapter, retain the
+            # last (deepest) entry on that page.
+            if (previous is None
+                    or previous_chapter == current_chapter
+                    or ((entry.get("level") == 1
+                         or (entry.get("path")
+                             and " > " not in entry["path"]))
+                        and current_chapter is not None
+                        and current_chapter != previous_chapter)):
+                page_map[pg] = entry
 
     # Forward-fill: each page inherits the most recent scaffold entry
     lookup: dict[int, dict] = {}
@@ -3090,6 +3625,90 @@ def _build_scaffold_lookup(scaffold: list[dict],
             lookup[pg] = current
 
     return lookup
+
+
+def _canonical_chapter_titles(
+        scaffold: list[dict], chapter_map: dict[int, dict], *,
+        structure_profile: (
+            str | _document_profiles.StructureProfile
+        ) = DEFAULT_STRUCTURE_PROFILE,
+) -> dict[int, str]:
+    """Choose one clean, stable title for every observed chapter."""
+    profile = _document_profiles.get_profile(structure_profile)
+    canonical: dict[int, str] = {}
+
+    indexed = list(enumerate(scaffold))
+    indexed.sort(key=lambda pair: (pair[1].get("page", 0), pair[0]))
+    for _, entry in indexed:
+        if entry.get("level") != 1:
+            continue
+        title = _chunking_core.clean_heading_text(entry.get("title", ""))
+        division = _document_profiles.match_division(
+            title, profile, "canonical_title")
+        if division is None:
+            continue
+        chapter_num = division.ordinal
+        if entry.get("chapter_num") not in (None, chapter_num):
+            continue
+        if _document_profiles.contains_division_subnumber(
+                title, division) or re.search(
+                r"\s+(?:Chapter|Part|Unit)\s+"
+                r"(?:\d{1,3}|[IVXLCDM]+)\b", title, re.I):
+            continue
+        canonical.setdefault(chapter_num, title)
+
+    for chapter_num, info in sorted(chapter_map.items()):
+        if chapter_num in canonical:
+            continue
+        title = _chunking_core.clean_heading_text(info.get("title", ""))
+        title = re.sub(r"^[^A-Za-z0-9]+\s*", "", title)
+        if title:
+            division = _document_profiles.match_division(
+                title, profile, "canonical_title")
+            if division is not None:
+                if not _document_profiles.contains_division_subnumber(
+                        title, division):
+                    canonical[chapter_num] = title
+            else:
+                raw_number = str(info.get("division_number") or chapter_num)
+                kind = str(info.get("division_kind") or "Chapter")
+                synthesized = _document_profiles.DivisionMatch(
+                    ordinal=chapter_num,
+                    raw_number=raw_number,
+                    kind=kind,
+                    title=title,
+                    matched_text=title,
+                )
+                if not _document_profiles.contains_division_subnumber(
+                        title, synthesized):
+                    canonical[chapter_num] = (
+                        _document_profiles.canonical_division_title(
+                            synthesized, profile))
+    return canonical
+
+
+def _normalize_scaffold_metadata(
+        scaffold: list[dict], chapter_titles: dict[int, str]) -> list[dict]:
+    """Clean scaffold titles and rebuild canonical hierarchical paths."""
+    stack: dict[int, str] = {}
+    normalized: list[dict] = []
+    for entry in scaffold:
+        title = _chunking_core.clean_heading_text(entry.get("title", ""))
+        chapter_num = entry.get("chapter_num")
+        if entry.get("level") == 1 and chapter_num in chapter_titles:
+            title = chapter_titles[chapter_num]
+        if not title:
+            continue
+        entry = dict(entry)
+        entry["title"] = title
+        level = entry.get("level", 3)
+        for prior_level in list(stack):
+            if prior_level >= level:
+                del stack[prior_level]
+        stack[level] = title
+        entry["path"] = " > ".join(stack[key] for key in sorted(stack))
+        normalized.append(entry)
+    return normalized
 
 
 # ---------------------------------------------------------------------------
@@ -3204,7 +3823,12 @@ def _validate_against_scaffold(
     return result
 
 
-def _build_chapter_map(doc_path: Path) -> dict[int, dict]:
+def _build_chapter_map(
+        doc_path: Path, *,
+        structure_profile: (
+            str | _document_profiles.StructureProfile
+        ) = DEFAULT_STRUCTURE_PROFILE,
+) -> dict[int, dict]:
     """Extract chapter-to-page-range mapping from DoclingDocument page headers.
 
     Docling labels running page headers as 'page_header'. These contain chapter
@@ -3227,26 +3851,22 @@ def _build_chapter_map(doc_path: Path) -> dict[int, dict]:
         else:
             return {}
 
+    return _build_chapter_map_from_document(
+        doc, structure_profile=structure_profile)
+
+
+def _build_chapter_map_from_document(
+        doc: dict, *,
+        structure_profile: (
+            str | _document_profiles.StructureProfile
+        ) = DEFAULT_STRUCTURE_PROFILE,
+) -> dict[int, dict]:
+    """Build chapter ranges from one already-captured document mapping."""
+
+    profile = _document_profiles.get_profile(structure_profile)
     texts = doc.get("texts", [])
     if not texts:
         return {}
-
-    # Multiple regex patterns to catch different textbook formats:
-    # "3 · PERSONAL JURISDICTION", "Chapter 4  Limits on...",
-    # "CHAPTER FIVE: ...", "Part III - ...", "Unit 4: ..."
-    _WORD_TO_NUM = {
-        "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
-        "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
-        "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14,
-        "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18,
-        "nineteen": 19, "twenty": 20,
-    }
-    _ROMAN_TO_NUM = {
-        "i": 1, "ii": 2, "iii": 3, "iv": 4, "v": 5, "vi": 6,
-        "vii": 7, "viii": 8, "ix": 9, "x": 10, "xi": 11, "xii": 12,
-        "xiii": 13, "xiv": 14, "xv": 15, "xvi": 16, "xvii": 17,
-        "xviii": 18, "xix": 19, "xx": 20,
-    }
 
     # --- Private Use Area (PUA) digit decoder ---
     # Some PDFs use custom font glyphs (U+F643..U+F64C) instead of ASCII
@@ -3259,34 +3879,6 @@ def _build_chapter_map(doc_path: Path) -> dict[int, dict]:
         if not any(0xE000 <= ord(c) <= 0xF8FF for c in s):
             return s
         return "".join(_PUA_DIGIT_MAP.get(c, c) for c in s)
-
-    chapter_patterns = [
-        # "Chapter 4  Limits on..." or "Chapter 4: Limits on..."
-        re.compile(r"Chapter\s+(\d{1,2})\s*[:\-\xb7\u00b7\u2022\u2013\u2014]?\s+(.+)", re.I),
-        # "3 · PERSONAL JURISDICTION" (number + separator + title)
-        re.compile(r"(\d{1,2})\s*[\xb7\u00b7\u2022\-\u2013\u2014]\s+(.+)", re.I),
-        # "CHAPTER FIVE: The Federal..." (word numbers)
-        re.compile(r"Chapter\s+(\w+)\s*[:\-\xb7\u00b7\u2022\u2013\u2014]?\s+(.+)", re.I),
-        # "Part III - Due Process" (Roman numerals)
-        re.compile(r"(?:Part|Unit)\s+(\w+)\s*[:\-\xb7\u00b7\u2022\u2013\u2014]?\s+(.+)", re.I),
-    ]
-
-    def _extract_chapter_num(match_group_1: str) -> int | None:
-        """Convert matched group to integer chapter number."""
-        s = match_group_1.strip()
-        # Direct digit
-        if s.isdigit():
-            n = int(s)
-            return n if 1 <= n <= 50 else None
-        # Word number
-        n = _WORD_TO_NUM.get(s.lower())
-        if n:
-            return n
-        # Roman numeral
-        n = _ROMAN_TO_NUM.get(s.lower())
-        if n:
-            return n
-        return None
 
     chapter_pages: dict[int, dict] = {}
     for t in texts:
@@ -3305,30 +3897,24 @@ def _build_chapter_map(doc_path: Path) -> dict[int, dict]:
         # Decode PUA font glyphs to ASCII digits before matching
         text = _decode_pua_digits(text)
 
-        # Try each pattern
-        for pat in chapter_patterns:
-            m = pat.match(text)
-            if not m:
-                continue
-            ch_num = _extract_chapter_num(m.group(1))
-            if ch_num is None:
-                continue
-            ch_title = m.group(2).strip()
-            # Skip if title is too short (likely a false positive)
-            if len(ch_title) < 3:
-                continue
-            if ch_num not in chapter_pages:
-                chapter_pages[ch_num] = {
-                    "title": ch_title.title(),
-                    "min_page": page,
-                    "max_page": page,
-                }
-            else:
-                chapter_pages[ch_num]["min_page"] = min(
-                    chapter_pages[ch_num]["min_page"], page)
-                chapter_pages[ch_num]["max_page"] = max(
-                    chapter_pages[ch_num]["max_page"], page)
-            break  # first matching pattern wins
+        division = _document_profiles.match_division(
+            text, profile, "running_header")
+        if division is None or len(division.title) < 3:
+            continue
+        ch_num = division.ordinal
+        if ch_num not in chapter_pages:
+            chapter_pages[ch_num] = {
+                "title": division.title.title(),
+                "division_kind": division.kind,
+                "division_number": division.raw_number,
+                "min_page": page,
+                "max_page": page,
+            }
+        else:
+            chapter_pages[ch_num]["min_page"] = min(
+                chapter_pages[ch_num]["min_page"], page)
+            chapter_pages[ch_num]["max_page"] = max(
+                chapter_pages[ch_num]["max_page"], page)
 
     # --- Fallback: if page headers yielded nothing, scan section_header items ---
     if not chapter_pages:
@@ -3345,24 +3931,19 @@ def _build_chapter_map(doc_path: Path) -> dict[int, dict]:
             page = prov[0].get("page_no")
             if page is None:
                 continue
-            for pat in chapter_patterns:
-                m = pat.match(text)
-                if not m:
-                    continue
-                ch_num = _extract_chapter_num(m.group(1))
-                if ch_num is None:
-                    continue
-                ch_title = m.group(2).strip()
-                if len(ch_title) < 3:
-                    continue
-                if ch_num not in chapter_pages:
-                    chapter_pages[ch_num] = {
-                        "title": ch_title.title(),
-                        "min_page": page,
-                        "max_page": page,
-                    }
-                # Don't expand page ranges from section headers (less reliable)
-                break
+            division = _document_profiles.match_division(
+                text, profile, "running_header")
+            if division is None or len(division.title) < 3:
+                continue
+            ch_num = division.ordinal
+            if ch_num not in chapter_pages:
+                chapter_pages[ch_num] = {
+                    "title": division.title.title(),
+                    "division_kind": division.kind,
+                    "division_number": division.raw_number,
+                    "min_page": page,
+                    "max_page": page,
+                }
 
     if chapter_pages:
         log.info(f"Chapter map: {len(chapter_pages)} chapters from page headers")
@@ -3372,7 +3953,12 @@ def _build_chapter_map(doc_path: Path) -> dict[int, dict]:
     return chapter_pages
 
 
-def _build_toc_hierarchy(doc_path: Path) -> list[dict]:
+def _build_toc_hierarchy(
+        doc_path: Path, *,
+        structure_profile: (
+            str | _document_profiles.StructureProfile
+        ) = DEFAULT_STRUCTURE_PROFILE,
+) -> list[dict]:
     """Parse the Table of Contents from DoclingDocument tables.
 
     The TOC is the authoritative source for document hierarchy. It contains
@@ -3382,6 +3968,7 @@ def _build_toc_hierarchy(doc_path: Path) -> list[dict]:
     Returns a sorted list of:
       {"level": 1-4, "marker": "B.", "title": "Federalism", "page": 5}
     """
+    profile = _document_profiles.get_profile(structure_profile)
     try:
         raw = doc_path.read_bytes()
         doc = json.loads(raw)
@@ -3424,7 +4011,6 @@ def _build_toc_hierarchy(doc_path: Path) -> list[dict]:
             row = rows[row_idx]
             page_num = None
             title = ""
-            level = 0
 
             # Last column is typically the page number
             max_col = max(row.keys()) if row else 0
@@ -3435,20 +4021,19 @@ def _build_toc_hierarchy(doc_path: Path) -> list[dict]:
             # Hierarchy from column position
             if 0 in row:
                 title = row.get(1, row.get(2, ""))
-                level = 1
             elif 1 in row:
                 title = row.get(2, row[1])
-                level = 2
             elif 2 in row:
                 title = row[2]
-                level = 3
 
             if title and page_num and page_num > 0:
                 marker = row.get(0, row.get(1, ""))
+                normalized_title = _normalize_text(title)
                 toc_entries.append({
-                    "level": level,
+                    "level": _document_profiles.hierarchy_level(
+                        f"{marker} {normalized_title}".strip(), profile),
                     "marker": marker.strip(),
-                    "title": _normalize_text(title),
+                    "title": normalized_title,
                     "page": page_num,
                 })
 
@@ -3458,14 +4043,11 @@ def _build_toc_hierarchy(doc_path: Path) -> list[dict]:
     return toc_entries
 
 
-_TOC_HIERARCHY_PROMPT = """You are analyzing a Table of Contents from a law school textbook.
+_TOC_HIERARCHY_PROMPT = """You are analyzing a Table of Contents from this reviewed document family:
+{profile_description}
 Parse this TOC into a structured hierarchy. For each entry, assign a heading level:
 
-Level 1: Chapter (e.g., "Chapter 3 · Personal Jurisdiction")
-Level 2: Major section (e.g., "A. The Study of Procedure", "B. Federalism")
-Level 3: Numbered subsection (e.g., "1. Trial Courts", "2. Intermediate Appellate Courts")
-Level 4: Lettered sub-subsection (e.g., "a. Introductory Note", "b. The Complete Diversity Rule")
-Level 5: Case name or Notes and Questions (e.g., "Strawbridge v. Curtiss", "Notes and Questions")
+{hierarchy_guidance}
 
 Output ONLY a JSON array. Each entry: {{"level": N, "title": "...", "page": N}}
 No explanation, no markdown, ONLY the JSON array.
@@ -3484,28 +4066,46 @@ def _llm_parse_toc(toc_text: str, *,
                    ollama_model: str = DEFAULT_OLLAMA_MODEL,
                    gemini_key: str = "",
                    llm_workers: int = DEFAULT_LLM_WORKERS,
-                   thinking: bool = False) -> list[dict]:
-    """Send the raw TOC text to M2.7 and get back a structured hierarchy.
+                   thinking: bool = False,
+                   structure_profile: (
+                       str | _document_profiles.StructureProfile
+                   ) = DEFAULT_STRUCTURE_PROFILE,
+                   security_policy: (
+                       _release_security.ReleaseSecurityPolicy | None
+                   ) = None) -> list[dict]:
+    """Send raw TOC text through the configured LLM provider and parse it.
 
     The LLM understands the textbook's structure better than regex —
     it can distinguish chapters from sections from subsections from
     case names based on context and formatting patterns.
     """
-    # Send TOC in chunks of ~100 lines (M2.7 handles 204K context but
-    # output length is the bottleneck — fewer entries = better JSON output)
+    profile = _document_profiles.get_profile(structure_profile)
+    hierarchy_guidance = "\n".join([
+        "Level 1: a primary division matching the selected profile.",
+        *[
+            f"Level {rule.level}: a title matching /{rule.pattern}/."
+            for rule in profile.hierarchy_rules
+        ],
+    ])
+    # Send TOC in chunks of ~100 lines. Output length, rather than the large
+    # reviewed provider context windows, is the practical JSON bottleneck.
     lines = toc_text.strip().split("\n")
     all_entries = []
 
     CHUNK_SIZE = 100
     for start in range(0, len(lines), CHUNK_SIZE):
         batch = "\n".join(lines[start:start + CHUNK_SIZE])
-        prompt = _TOC_HIERARCHY_PROMPT.format(toc_text=batch)
+        prompt = _TOC_HIERARCHY_PROMPT.format(
+            toc_text=batch,
+            profile_description=profile.document_description,
+            hierarchy_guidance=hierarchy_guidance)
         result = _call_llm(
             prompt, cloud_url=cloud_url, cloud_model=cloud_model,
             cloud_key=cloud_key, ollama_url=ollama_url,
             ollama_model=ollama_model, gemini_key=gemini_key,
             llm_workers=llm_workers, thinking=thinking,
-            max_tokens=4000, timeout=60, operation="toc.parse")
+            max_tokens=4000, timeout=60, operation="toc.parse",
+            security_policy=security_policy)
         if result:
             result = _THINK_TAG_RE.sub("", result).strip()
             s = result.find("[")
@@ -3534,8 +4134,12 @@ def _llm_parse_toc(toc_text: str, *,
     return []
 
 
-def _build_section_lookup(toc: list[dict],
-                          chapter_map: dict[int, dict]) -> dict[int, str]:
+def _build_section_lookup(
+        toc: list[dict], chapter_map: dict[int, dict], *,
+        structure_profile: (
+            str | _document_profiles.StructureProfile
+        ) = DEFAULT_STRUCTURE_PROFILE,
+) -> dict[int, str]:
     """Build a page -> section_path lookup from the TOC hierarchy.
 
     For each page in the document, determines the full hierarchical section
@@ -3544,6 +4148,7 @@ def _build_section_lookup(toc: list[dict],
 
     Returns: {page_number: "Chapter N > Section > Subsection > ..."}
     """
+    profile = _document_profiles.get_profile(structure_profile)
     if not toc:
         return {}
 
@@ -3572,7 +4177,13 @@ def _build_section_lookup(toc: list[dict],
         for ch_num in sorted(chapter_map):
             info = chapter_map[ch_num]
             if info["min_page"] <= page <= info["max_page"]:
-                ch_prefix = f"Chapter {ch_num}"
+                raw_number = str(info.get("division_number") or ch_num)
+                kind = str(info.get("division_kind") or "Chapter")
+                division = _document_profiles.DivisionMatch(
+                    ordinal=ch_num, raw_number=raw_number, kind=kind,
+                    title=str(info.get("title") or ""), matched_text="")
+                ch_prefix = _document_profiles.canonical_division_title(
+                    division, profile)
                 break
 
         # Build full path from stack
@@ -3645,16 +4256,114 @@ def _provider_call_error(exc: BaseException, *,
         error_category_fn=_provider_error_category)
 
 
+def _post_loopback_without_environment(url: str, **kwargs):
+    """POST to a literal loopback target without ambient proxy settings."""
+    session = requests.Session()
+    session.trust_env = False
+    kwargs.setdefault("stream", True)
+    try:
+        return _provider_transport.OwnedHttpResponse(
+            session.post(url, **kwargs), session)
+    except BaseException:
+        try:
+            session.close()
+        except Exception:
+            pass
+        raise
+
+
+_DEFAULT_RELEASE_SECURITY_POLICY = _release_security.ReleaseSecurityPolicy()
+
+
+def _effective_security_policy(
+        policy: _release_security.ReleaseSecurityPolicy | None,
+) -> _release_security.ReleaseSecurityPolicy:
+    """Apply fail-closed release defaults to direct Python callers too."""
+    if policy is None:
+        return _DEFAULT_RELEASE_SECURITY_POLICY
+    if not isinstance(policy, _release_security.ReleaseSecurityPolicy):
+        raise TypeError("invalid release security policy")
+    return policy
+
+
+def _post_cloud_with_policy(
+        policy: _release_security.ReleaseSecurityPolicy,
+        url: str, **kwargs):
+    """POST with ambient proxy/CA/netrc state disabled unless reviewed."""
+    policy = _effective_security_policy(policy)
+    session = requests.Session()
+    session.trust_env = policy.trust_environment_network
+    kwargs.setdefault("stream", True)
+    try:
+        return _provider_transport.OwnedHttpResponse(
+            session.post(url, **kwargs), session)
+    except BaseException:
+        try:
+            session.close()
+        except Exception:
+            pass
+        raise
+
+
+def _require_no_cloud_redirect(response: object, feature: str) -> None:
+    status_code = getattr(response, "status_code", None)
+    if isinstance(status_code, int) and 300 <= status_code < 400:
+        raise RuntimeError(f"{feature} endpoint returned a redirect")
+
+
+def _read_provider_json_response(
+        response: object, *, feature: str, max_bytes: int,
+        deadline_seconds: float) -> object:
+    """Validate status then consume one owned provider response safely."""
+    try:
+        _require_no_cloud_redirect(response, feature)
+        response.raise_for_status()
+    except BaseException:
+        _provider_transport.close_http_response(response)
+        raise
+    return _provider_transport.read_bounded_json_response(
+        response,
+        max_bytes=max_bytes,
+        deadline_seconds=deadline_seconds,
+    )
+
+
+def _require_endpoint_egress(
+        policy: _release_security.ReleaseSecurityPolicy,
+        endpoint: _endpoint_policy.ValidatedEndpoint,
+        *, feature: str) -> None:
+    """Allow literal loopback locally and gate every other endpoint."""
+    if endpoint.is_loopback:
+        return
+    _release_security.require_cloud_egress(
+        policy,
+        feature=feature,
+        custom_gateway=endpoint.provider == "custom",
+    )
+
+
 def _call_ollama_result(prompt: str, *, url: str = DEFAULT_OLLAMA_URL,
                         model: str = DEFAULT_OLLAMA_MODEL,
                         thinking: bool = False,
                         max_tokens: int = 256,
-                        timeout: int = 30) -> ProviderResponse:
+                        timeout: int = 30,
+                        security_policy: (
+                            _release_security.ReleaseSecurityPolicy | None
+                        ) = None) -> ProviderResponse:
     """Return Ollama text with its native prompt/output token counts."""
+    endpoint = _validate_cloud_endpoint(url)
+    assert endpoint is not None
+    policy = _effective_security_policy(security_policy)
+    _require_endpoint_egress(
+        policy, endpoint,
+        feature="Ollama generation")
     return _llm_adapters._call_ollama_result(
-        prompt, url=url, model=model, thinking=thinking,
+        prompt, url=endpoint.base_url, model=model, thinking=thinking,
         max_tokens=max_tokens, timeout=timeout,
-        post_fn=requests.post,
+        post_fn=lambda target, **kwargs: _post_cloud_with_policy(
+            policy, target, **kwargs),
+        loopback_post_fn=_post_loopback_without_environment,
+        validate_endpoint_fn=_validate_cloud_endpoint,
         provider_token_count_fn=_provider_token_count,
         provider_call_error_fn=_provider_call_error)
 
@@ -3664,13 +4373,17 @@ def _call_ollama(prompt: str, *, url: str = DEFAULT_OLLAMA_URL,
                  thinking: bool = False,
                  max_tokens: int = 256,
                  timeout: int = 30,
-                 _structured: bool = False
+                 _structured: bool = False,
+                 security_policy: (
+                     _release_security.ReleaseSecurityPolicy | None
+                 ) = None,
                  ) -> Optional[str] | ProviderResponse:
     """Call Ollama generate endpoint. Returns response text or None on failure."""
     try:
         result = _call_ollama_result(
             prompt, url=url, model=model, thinking=thinking,
-            max_tokens=max_tokens, timeout=timeout)
+            max_tokens=max_tokens, timeout=timeout,
+            security_policy=security_policy)
         return result if _structured else result.text
     except ProviderCallError as exc:
         log.debug("Ollama call failed: %s", exc.category)
@@ -3681,6 +4394,7 @@ def _call_ollama(prompt: str, *, url: str = DEFAULT_OLLAMA_URL,
 
 _gemini_client_cache = None
 _gemini_client_key = ""
+_gemini_client_trust_environment: bool | None = None
 _gemini_client_lock = _threading.Lock()
 
 
@@ -3689,9 +4403,17 @@ def _gemini_content_filtered(response: object) -> bool:
         response, provider_value_fn=_provider_value)
 
 
-def _load_gemini_client(api_key: str) -> tuple[object, object]:
+def _load_gemini_client(
+        api_key: str, *,
+        security_policy: (
+            _release_security.ReleaseSecurityPolicy | None) = None,
+) -> tuple[object, object]:
     """Lazily create the cached Gemini client through facade-owned state."""
     global _gemini_client_cache, _gemini_client_key
+    global _gemini_client_trust_environment
+    policy = _effective_security_policy(security_policy)
+    _release_security.require_cloud_egress(
+        policy, feature="Gemini generation")
     try:
         from google import genai
         from google.genai import types
@@ -3704,9 +4426,36 @@ def _load_gemini_client(api_key: str) -> tuple[object, object]:
     try:
         with _gemini_client_lock:
             if (_gemini_client_cache is None
-                    or _gemini_client_key != api_key):
-                _gemini_client_cache = genai.Client(api_key=api_key)
+                    or _gemini_client_key != api_key
+                    or _gemini_client_trust_environment
+                    != policy.trust_environment_network):
+                transport_args = {
+                    "trust_env": policy.trust_environment_network,
+                    "follow_redirects": False,
+                    "verify": True,
+                }
+                new_client = genai.Client(
+                    vertexai=False,
+                    api_key=api_key,
+                    http_options=types.HttpOptions(
+                        base_url=_GEMINI_API_BASE_URL,
+                        api_version="v1beta",
+                        timeout=60_000,
+                        retry_options=types.HttpRetryOptions(attempts=1),
+                        client_args=dict(transport_args),
+                        async_client_args=dict(transport_args),
+                    ),
+                )
+                _gemini_client_cache = new_client
                 _gemini_client_key = api_key
+                _gemini_client_trust_environment = (
+                    policy.trust_environment_network)
+                # Do not close the displaced client here.  Another admitted
+                # call can still hold it while performing generate_content;
+                # eager close turns a concurrent policy/key rotation into a
+                # spurious provider failure.  Its caller reference keeps it
+                # alive through the request, after which normal object/process
+                # cleanup can reclaim the transport.
             return _gemini_client_cache, types
     except Exception:
         raise ProviderCallError(
@@ -3716,12 +4465,22 @@ def _load_gemini_client(api_key: str) -> tuple[object, object]:
 def _call_gemini_result(prompt: str, *, api_key: str = "",
                         model: str = DEFAULT_GEMINI_MODEL,
                         max_tokens: int = 256,
-                        timeout: int = 30) -> ProviderResponse:
+                        timeout: int = 30,
+                        thinking_level: str | None = None,
+                        security_policy: (
+                            _release_security.ReleaseSecurityPolicy | None
+                        ) = None) -> ProviderResponse:
     """Return Gemini text and usage with SDK retries explicitly disabled."""
+    policy = _effective_security_policy(security_policy)
+    _release_security.require_cloud_egress(
+        policy,
+        feature="Gemini generation")
     return _llm_adapters._call_gemini_result(
         prompt, api_key=api_key, model=model,
         max_tokens=max_tokens, timeout=timeout,
-        client_loader_fn=_load_gemini_client,
+        thinking_level=thinking_level,
+        client_loader_fn=lambda key: _load_gemini_client(
+            key, security_policy=policy),
         environment_get_fn=os.environ.get,
         provider_value_fn=_provider_value,
         provider_token_count_fn=_provider_token_count,
@@ -3733,13 +4492,19 @@ def _call_gemini(prompt: str, *, api_key: str = "",
                  model: str = DEFAULT_GEMINI_MODEL,
                  max_tokens: int = 256,
                  timeout: int = 30,
-                 _structured: bool = False
+                 thinking_level: str | None = None,
+                 _structured: bool = False,
+                 security_policy: (
+                     _release_security.ReleaseSecurityPolicy | None
+                 ) = None,
                  ) -> Optional[str] | ProviderResponse:
     """Call Gemini generate endpoint. Returns response text or None on failure."""
     try:
         result = _call_gemini_result(
             prompt, api_key=api_key, model=model,
-            max_tokens=max_tokens, timeout=timeout)
+            max_tokens=max_tokens, timeout=timeout,
+            thinking_level=thinking_level,
+            security_policy=security_policy)
         return result if _structured else result.text
     except ProviderCallError as exc:
         log.debug("Gemini call failed: %s", exc.category)
@@ -3777,14 +4542,30 @@ def _call_openai_compatible_result(
         thinking: bool = False, max_tokens: int = 256,
         max_workers: int = DEFAULT_LLM_WORKERS,
         timeout: int = 30,
-        _admit_retry: Callable[[], None] | None = None) -> ProviderResponse:
+        _admit_retry: Callable[[], None] | None = None,
+        security_policy: (
+            _release_security.ReleaseSecurityPolicy | None
+        ) = None) -> ProviderResponse:
     """Return OpenAI-compatible text, native usage, and retry provenance."""
+    try:
+        endpoint = _validate_cloud_endpoint(base_url)
+    except (TypeError, ValueError):
+        raise ProviderCallError(
+            "configuration_error", transport_attempts=0) from None
+    assert endpoint is not None
+    policy = _effective_security_policy(security_policy)
+    _require_endpoint_egress(
+        policy, endpoint,
+        feature="OpenAI-compatible generation")
     return _llm_adapters._call_openai_compatible_result(
-        prompt, base_url=base_url, model=model, api_key=api_key,
+        prompt, base_url=endpoint.base_url, model=model, api_key=api_key,
         thinking=thinking, max_tokens=max_tokens,
         max_workers=max_workers, timeout=timeout,
-        post_fn=requests.post, get_throttle_fn=_get_throttle,
-        sleep_fn=time.sleep, is_deepseek_fn=_is_deepseek_cloud,
+        post_fn=lambda url, **kwargs: _post_cloud_with_policy(
+            policy, url, **kwargs),
+        loopback_post_fn=_post_loopback_without_environment,
+        get_throttle_fn=_get_throttle,
+        sleep_fn=time.sleep, validate_endpoint_fn=_validate_cloud_endpoint,
         provider_token_count_fn=_provider_token_count,
         provider_value_fn=_provider_value,
         provider_call_error_fn=_provider_call_error,
@@ -3800,6 +4581,9 @@ def _call_openai_compatible(prompt: str, *, base_url: str,
                             timeout: int = 30,
                             _structured: bool = False,
                             _admit_retry: Callable[[], None] | None = None,
+                            security_policy: (
+                                _release_security.ReleaseSecurityPolicy | None
+                            ) = None,
                             ) -> Optional[str] | ProviderResponse:
     """Compatibility facade for an OpenAI-compatible chat completion."""
     try:
@@ -3807,7 +4591,8 @@ def _call_openai_compatible(prompt: str, *, base_url: str,
             prompt, base_url=base_url, model=model, api_key=api_key,
             thinking=thinking, max_tokens=max_tokens,
             max_workers=max_workers, timeout=timeout,
-            _admit_retry=_admit_retry)
+            _admit_retry=_admit_retry,
+            security_policy=security_policy)
         return result if _structured else result.text
     except ProviderCallError as exc:
         log.debug("OpenAI-compatible call failed: %s", exc.category)
@@ -3828,14 +4613,47 @@ def _call_llm_result(
         operation: str = "generic", prompt_version: str = "1",
         timeout: int = 30, fallback_policy: str | None = None,
         failure_policy: str | None = None, cache_mode: str | None = None,
-        cache_dir: Path | str | None = None) -> LLMResult:
+        cache_dir: Path | str | None = None,
+        security_policy: (
+            _release_security.ReleaseSecurityPolicy | None
+        ) = None) -> LLMResult:
     """Execute an LLM request with structured provenance and run controls."""
+    # Validate every enabled caller-supplied transport before constructing a
+    # cache key or consulting a cache.  The adapters repeat this check at the
+    # final network boundary, but that alone would let a malformed endpoint
+    # reuse a pre-existing cache entry without ever reaching the adapter.
+    policy = _effective_security_policy(security_policy)
+    minimax_enabled = False
+    if cloud_url and cloud_key:
+        cloud_endpoint = _validate_cloud_endpoint(cloud_url)
+        assert cloud_endpoint is not None
+        _require_endpoint_egress(
+            policy, cloud_endpoint,
+            feature="OpenAI-compatible generation")
+        cloud_url = cloud_endpoint.base_url
+        minimax_enabled = cloud_endpoint.provider == "minimax"
+    if ollama_url:
+        ollama_endpoint = _validate_cloud_endpoint(ollama_url)
+        assert ollama_endpoint is not None
+        _require_endpoint_egress(
+            policy, ollama_endpoint, feature="Ollama generation")
+        ollama_url = ollama_endpoint.base_url
+
     runtime_config = _llm_runtime.config
+    effective_cloud_model = cloud_model or ollama_model
+    minimax_m2_enabled = (
+        minimax_enabled
+        and effective_cloud_model.casefold().startswith("minimax-m2"))
+    # MiniMax M2.x always reasons inside the completion-token allowance.  A
+    # tiny shared operation budget can end before final content appears, so
+    # bind a provider-safe floor before runtime token admission/accounting.
+    effective_max_tokens = (
+        max(max_tokens, 512) if minimax_m2_enabled else max_tokens)
     request = LLMRequest(
         prompt=prompt,
         operation=operation,
         prompt_version=prompt_version,
-        max_tokens=max_tokens,
+        max_tokens=effective_max_tokens,
         thinking=thinking,
         timeout=timeout,
         fallback_policy=fallback_policy or runtime_config.fallback_policy,
@@ -3846,8 +4664,6 @@ def _call_llm_result(
     providers: list[ProviderSpec] = []
 
     if cloud_url and cloud_key:
-        effective_cloud_model = cloud_model or ollama_model
-
         def invoke_cloud(
                 req: LLMRequest) -> Optional[str] | ProviderResponse:
             return _call_openai_compatible(
@@ -3855,11 +4671,14 @@ def _call_llm_result(
                 api_key=cloud_key, max_workers=llm_workers,
                 thinking=req.thinking, max_tokens=req.max_tokens,
                 timeout=req.timeout, _structured=True,
-                _admit_retry=req.admit_transport_retry)
+                _admit_retry=req.admit_transport_retry,
+                security_policy=policy)
 
         providers.append(ProviderSpec(
             name="cloud", model=effective_cloud_model,
-            endpoint_id=_llm_endpoint_id(cloud_url), invoke=invoke_cloud))
+            endpoint_id=_llm_endpoint_id(cloud_url), invoke=invoke_cloud,
+            cache_namespace_id=(
+                policy.cache_namespace_id or "v1:default")))
 
     if ollama_url:
         def invoke_ollama(
@@ -3867,25 +4686,45 @@ def _call_llm_result(
             return _call_ollama(
                 req.prompt, url=ollama_url, model=ollama_model,
                 thinking=req.thinking, max_tokens=req.max_tokens,
-                timeout=req.timeout, _structured=True)
+                timeout=req.timeout, _structured=True,
+                security_policy=policy)
 
         providers.append(ProviderSpec(
             name="ollama", model=ollama_model,
-            endpoint_id=_llm_endpoint_id(ollama_url), invoke=invoke_ollama))
+            endpoint_id=_llm_endpoint_id(ollama_url), invoke=invoke_ollama,
+            cache_namespace_id=(
+                policy.cache_namespace_id or "v1:default")))
 
-    effective_gemini_key = gemini_key or os.environ.get("GEMINI_API_KEY", "")
+    # Ambient cloud credentials do not turn a local-only execution into an
+    # error or a cloud-capable chain.  An explicitly supplied key still fails
+    # closed, while allow-cloud mode may discover the environment key only
+    # after the network policy has been checked.
+    gemini_configured = bool(gemini_key)
+    if not gemini_configured and policy.network_policy == "allow-cloud":
+        gemini_configured = "GEMINI_API_KEY" in os.environ
+    if gemini_configured:
+        _release_security.require_cloud_egress(
+            policy, feature="Gemini generation")
+    effective_gemini_key = (
+        gemini_key or os.environ.get("GEMINI_API_KEY", "")
+        if gemini_configured else ""
+    )
     if effective_gemini_key:
         def invoke_gemini(
                 req: LLMRequest) -> Optional[str] | ProviderResponse:
             return _call_gemini(
                 req.prompt, api_key=effective_gemini_key,
                 model=DEFAULT_GEMINI_MODEL, max_tokens=req.max_tokens,
-                timeout=req.timeout, _structured=True)
+                timeout=req.timeout, _structured=True,
+                thinking_level=("high" if req.thinking else "minimal"),
+                security_policy=policy)
 
         providers.append(ProviderSpec(
             name="gemini", model=DEFAULT_GEMINI_MODEL,
             endpoint_id="generativelanguage.googleapis.com/v1beta",
-            invoke=invoke_gemini))
+            invoke=invoke_gemini,
+            cache_namespace_id=(
+                policy.cache_namespace_id or "v1:default")))
 
     return _llm_runtime.execute(request, providers)
 
@@ -3900,7 +4739,10 @@ def _call_llm(prompt: str, *, ollama_url: str = DEFAULT_OLLAMA_URL,
               timeout: int = 30, fallback_policy: str | None = None,
               failure_policy: str | None = None,
               cache_mode: str | None = None,
-              cache_dir: Path | str | None = None) -> Optional[str]:
+              cache_dir: Path | str | None = None,
+              security_policy: (
+                  _release_security.ReleaseSecurityPolicy | None
+              ) = None) -> Optional[str]:
     """Compatibility facade returning text from the structured LLM runtime."""
     result = _call_llm_result(
         prompt, ollama_url=ollama_url, ollama_model=ollama_model,
@@ -3910,7 +4752,8 @@ def _call_llm(prompt: str, *, ollama_url: str = DEFAULT_OLLAMA_URL,
         max_tokens=max_tokens, operation=operation,
         prompt_version=prompt_version, timeout=timeout,
         fallback_policy=fallback_policy, failure_policy=failure_policy,
-        cache_mode=cache_mode, cache_dir=cache_dir)
+        cache_mode=cache_mode, cache_dir=cache_dir,
+        security_policy=security_policy)
     return result.text or None
 
 
@@ -3960,7 +4803,10 @@ def _llm_classify(text: str, headings: list[str] | None, *,
                   cloud_url: str = "", cloud_model: str = "",
                   cloud_key: str = "",
                   llm_workers: int = DEFAULT_LLM_WORKERS,
-                  thinking: bool = False) -> Optional[str]:
+                  thinking: bool = False,
+                  security_policy: (
+                      _release_security.ReleaseSecurityPolicy | None
+                  ) = None) -> Optional[str]:
     """Classify a chunk using LLM. Returns label or None on failure."""
     heading_str = " > ".join(headings) if headings else "(none)"
     prompt = _CLASSIFY_PROMPT.format(headings=heading_str, text=text[:600])
@@ -3968,7 +4814,8 @@ def _llm_classify(text: str, headings: list[str] | None, *,
                        gemini_key=gemini_key, cloud_url=cloud_url,
                        cloud_model=cloud_model, cloud_key=cloud_key,
                        llm_workers=llm_workers, thinking=thinking,
-                       max_tokens=32, operation="chunk.classify")
+                       max_tokens=256, operation="chunk.classify",
+                       security_policy=security_policy)
     if not result:
         return None
     # Clean thinking tags and extract the label
@@ -4050,7 +4897,10 @@ def _generate_context(text: str, headings: list[str] | None,
                       cloud_url: str = "", cloud_model: str = "",
                       cloud_key: str = "",
                       llm_workers: int = DEFAULT_LLM_WORKERS,
-                      thinking: bool = False) -> str:
+                      thinking: bool = False,
+                      security_policy: (
+                          _release_security.ReleaseSecurityPolicy | None
+                      ) = None) -> str:
     """Generate a contextual retrieval prefix for a chunk."""
     heading_str = " > ".join(headings) if headings else "(none)"
     prompt = _CONTEXT_PROMPT.format(
@@ -4062,7 +4912,8 @@ def _generate_context(text: str, headings: list[str] | None,
                        gemini_key=gemini_key, cloud_url=cloud_url,
                        cloud_model=cloud_model, cloud_key=cloud_key,
                        llm_workers=llm_workers, thinking=thinking,
-                       max_tokens=160, operation="chunk.contextualize")
+                       max_tokens=160, operation="chunk.contextualize",
+                       security_policy=security_policy)
     if not result:
         return ""
     # Clean up: remove thinking tags that deepseek-r1 sometimes emits
@@ -4076,7 +4927,9 @@ def _generate_context(text: str, headings: list[str] | None,
 # Reranker — lazy-loaded, model-keyed cache
 # ---------------------------------------------------------------------------
 
-_reranker_instances: dict[str, object] = {}
+_reranker_instances: dict[
+    tuple[str, _release_security.ReleaseSecurityPolicy], object
+] = {}
 _reranker_lock = _threading.Lock()
 _RERANKER_METADATA_CHAR_LIMIT = 1600
 
@@ -4107,28 +4960,69 @@ def _reranker_document(document: str, metadata: dict) -> str:
     return "\n".join(context_parts) + "\n\nText:\n" + document
 
 
-def _get_reranker(model_name: str = DEFAULT_RERANKER_MODEL):
-    """Lazy-load and cache each local reranker by its exact model name."""
+def _get_reranker(
+        model_name: str = DEFAULT_RERANKER_MODEL, *,
+        security_policy: (
+            _release_security.ReleaseSecurityPolicy | None) = None):
+    """Lazy-load a local reranker within one immutable security policy."""
     if model_name.startswith(("cohere-rerank", "jina-reranker")):
         return None
-    if model_name not in _reranker_instances:
+    policy = _effective_security_policy(security_policy)
+    cache_key = (model_name, policy)
+    if cache_key not in _reranker_instances:
         with _reranker_lock:
-            if model_name in _reranker_instances:
-                return _reranker_instances[model_name]
+            if cache_key in _reranker_instances:
+                return _reranker_instances[cache_key]
             from FlagEmbedding import FlagReranker
             log.info(f"Loading reranker: {model_name}")
             model_source, verified = _model_loader_source(
-                model_name, "reranker")
-            _reranker_instances[model_name] = FlagReranker(
+                model_name, "reranker", security_policy=policy)
+            _reranker_instances[cache_key] = FlagReranker(
                 model_source, use_fp16=True,
                 trust_remote_code=not verified,
             )
-    return _reranker_instances[model_name]
+    return _reranker_instances[cache_key]
+
+
+def _validated_reranker_rows(
+        payload: object, *, document_count: int, top_k: int,
+        provider: str) -> list[tuple[int, float]]:
+    if not isinstance(payload, dict) or not isinstance(
+            payload.get("results"), list):
+        raise RuntimeError(f"{provider} returned an invalid rerank response")
+    raw_results = payload["results"]
+    if len(raw_results) > min(document_count, top_k):
+        raise RuntimeError(f"{provider} returned too many rerank results")
+    rows = []
+    seen = set()
+    for item in raw_results:
+        if not isinstance(item, dict):
+            raise RuntimeError(f"{provider} returned an invalid rerank result")
+        index = item.get("index")
+        score = item.get("relevance_score")
+        if (
+            isinstance(index, bool)
+            or not isinstance(index, int)
+            or not 0 <= index < document_count
+            or index in seen
+        ):
+            raise RuntimeError(f"{provider} returned an invalid rerank index")
+        if isinstance(score, bool) or not isinstance(score, (int, float)):
+            raise RuntimeError(f"{provider} returned an invalid rerank score")
+        numeric_score = float(score)
+        if not math.isfinite(numeric_score):
+            raise RuntimeError(f"{provider} returned an invalid rerank score")
+        seen.add(index)
+        rows.append((index, numeric_score))
+    return rows
 
 
 def _rerank(query: str, documents: list[str], metadatas: list[dict],
             distances: list[float], top_k: int, *,
-            reranker_model: str = DEFAULT_RERANKER_MODEL) -> tuple:
+            reranker_model: str = DEFAULT_RERANKER_MODEL,
+            security_policy: (
+                _release_security.ReleaseSecurityPolicy | None
+            ) = None) -> tuple:
     """Rerank retrieved documents using cross-encoder or API reranker.
 
     Supports:
@@ -4142,48 +5036,76 @@ def _rerank(query: str, documents: list[str], metadatas: list[dict],
         _reranker_document(document, metadata or {})
         for document, metadata in zip(documents, metadatas)
     ]
+    if reranker_model.startswith(("cohere-rerank", "jina-reranker")):
+        policy = _effective_security_policy(security_policy)
+        _release_security.require_cloud_egress(
+            policy,
+            feature="cloud reranking")
+    else:
+        policy = _effective_security_policy(security_policy)
 
     # --- Cohere Rerank API ---
     if reranker_model.startswith("cohere-rerank"):
-        import cohere
         api_key = os.environ.get("COHERE_API_KEY", "")
         if not api_key:
             raise ValueError("COHERE_API_KEY env var required for Cohere reranker")
-        client = cohere.Client(api_key)
         model_id = reranker_model.removeprefix("cohere-")
-        resp = client.rerank(
-            model=model_id, query=query,
-            documents=reranker_documents, top_n=top_k,
+        resp = _post_cloud_with_policy(
+            policy, _COHERE_RERANK_URL,
+            headers={"Accept": "application/json"},
+            auth=_llm_adapters._BearerAuth(api_key),
+            json={"model": model_id, "query": query,
+                  "documents": reranker_documents, "top_n": top_k},
+            timeout=60, allow_redirects=False, stream=True,
         )
-        ranked_docs = []
-        ranked_metas = []
-        ranked_scores = []
-        for r in resp.results:
-            ranked_docs.append(documents[r.index])
-            ranked_metas.append(metadatas[r.index])
-            ranked_scores.append(r.relevance_score)
-        return ranked_docs, ranked_metas, ranked_scores
+        payload = _read_provider_json_response(
+            resp,
+            feature="Cohere reranker",
+            max_bytes=_provider_transport.RERANK_RESPONSE_MAX_BYTES,
+            deadline_seconds=60,
+        )
+        rows = _validated_reranker_rows(
+            payload, document_count=len(documents), top_k=top_k,
+            provider="Cohere")
+        return (
+            [documents[index] for index, _ in rows],
+            [metadatas[index] for index, _ in rows],
+            [score for _, score in rows],
+        )
 
     # --- Jina Rerank API ---
     if reranker_model.startswith("jina-reranker"):
         api_key = os.environ.get("JINA_API_KEY", "")
         if not api_key:
             raise ValueError("JINA_API_KEY env var required for Jina reranker")
-        resp = requests.post(
-            "https://api.jina.ai/v1/rerank",
-            headers={"Authorization": f"Bearer {api_key}"},
+        resp = _post_cloud_with_policy(
+            policy, _JINA_RERANK_URL,
+            headers={"Accept": "application/json"},
+            auth=_llm_adapters._BearerAuth(api_key),
             json={"model": reranker_model, "query": query,
                   "documents": reranker_documents, "top_n": top_k},
+            timeout=60,
+            allow_redirects=False,
+            stream=True,
         )
-        resp.raise_for_status()
-        results = resp.json()["results"]
-        ranked_docs = [documents[r["index"]] for r in results]
-        ranked_metas = [metadatas[r["index"]] for r in results]
-        ranked_scores = [r["relevance_score"] for r in results]
-        return ranked_docs, ranked_metas, ranked_scores
+        payload = _read_provider_json_response(
+            resp,
+            feature="Jina reranker",
+            max_bytes=_provider_transport.RERANK_RESPONSE_MAX_BYTES,
+            deadline_seconds=60,
+        )
+        rows = _validated_reranker_rows(
+            payload, document_count=len(documents), top_k=top_k,
+            provider="Jina")
+        return (
+            [documents[index] for index, _ in rows],
+            [metadatas[index] for index, _ in rows],
+            [score for _, score in rows],
+        )
 
     # --- Local FlagReranker (BGE, etc.) ---
-    reranker = _get_reranker(reranker_model)
+    reranker = _get_reranker(
+        reranker_model, security_policy=security_policy)
     pairs = [[query, document] for document in reranker_documents]
     scores = reranker.compute_score(pairs, normalize=True)
     if isinstance(scores, float):
@@ -4253,14 +5175,51 @@ _make_trigrams = _chunking_core._make_trigrams
 
 def _deduplicate_chunks(chunks: list[dict],
                         threshold: float = DEDUP_THRESHOLD) -> list[dict]:
-    """Deduplicate through the facade's current helpers and logger."""
+    """Deduplicate only when doing so cannot orphan source identities."""
+
+    def source_refs(record: dict) -> set[str] | None:
+        values = record.get("metadata", {}).get("source_items")
+        if values is None:
+            return None
+        return {
+            item["ref"] for item in values
+            if isinstance(item, dict) and isinstance(item.get("ref"), str)
+        }
+
+    def can_deduplicate(kept: dict, candidate: dict) -> bool:
+        kept_metadata = kept.get("metadata", {})
+        candidate_metadata = candidate.get("metadata", {})
+        if (isinstance(kept_metadata, dict)
+                and _table_retrieval_core.TABLE_FRAGMENT_OCCURRENCE_FIELD
+                in kept_metadata
+                or isinstance(candidate_metadata, dict)
+                and _table_retrieval_core.TABLE_FRAGMENT_OCCURRENCE_FIELD
+                in candidate_metadata):
+            return False
+        kept_refs = source_refs(kept)
+        candidate_refs = source_refs(candidate)
+        if kept_refs is None and candidate_refs is None:
+            return True
+        if not kept_refs or not candidate_refs:
+            return False
+        # Similarity alone is not proof that two fragments from the same
+        # source item carry the same proposition.  For source-lineaged data,
+        # remove only byte-identical text whose identities are already fully
+        # represented by the retained record.
+        return (
+            candidate_refs.issubset(kept_refs)
+            and candidate.get("text") == kept.get("text")
+        )
+
     return _chunking_core._deduplicate_chunks(
         chunks,
         threshold,
         text_fingerprint_fn=_text_fingerprint,
         make_trigrams_fn=_make_trigrams,
+        can_deduplicate_fn=can_deduplicate,
         removed_callback=lambda removed: log.info(
-            f"Deduplication: removed {removed} near-duplicate chunks"),
+            "Deduplication: removed "
+            f"{removed} source-overlapping near-duplicate chunks"),
     )
 
 
@@ -4547,6 +5506,8 @@ def _pin_docling_layout_revision(pipeline_options) -> str | None:
 
 def _configure_docling_model_artifacts(
         pipeline_options, *, include_ocr: bool,
+        security_policy: (
+            _release_security.ReleaseSecurityPolicy | None) = None,
 ) -> Path:
     """Force Docling onto verified local models and deterministic modes."""
     from docling.datamodel.pipeline_options import (
@@ -4555,8 +5516,18 @@ def _configure_docling_model_artifacts(
         TableStructureOptions,
     )
 
+    policy = _effective_security_policy(security_policy)
+    allow_download = (
+        policy.model_download_policy == "allow-reviewed-sync")
     root = _model_artifacts.verified_docling_artifact_directory(
-        include_ocr=include_ocr)
+        include_ocr=include_ocr,
+        allow_download=allow_download,
+        authorize_download_fn=(
+            lambda: _release_security.require_model_download(
+                policy, feature="Docling model synchronization")
+        ) if allow_download else None,
+        **(_model_download_transport(policy) if allow_download else {}),
+    )
     pipeline_options.artifacts_path = root
     pipeline_options.table_structure_options = TableStructureOptions(
         do_cell_matching=True,
@@ -4583,25 +5554,79 @@ def _configure_docling_model_artifacts(
 
 def _converted_outputs_complete(
         pdf_path: Path, doc_output: Path, markdown_output: Path, *,
-        parameters: dict) -> bool:
+        parameters: dict,
+        preprocessed_output: Path | None = None) -> bool:
+    """Validate conversion evidence under the complete output-set lease."""
+    doc_output = Path(doc_output)
+    markdown_output = Path(markdown_output)
+    preprocessed_path = preprocessed_output or doc_output.with_name(
+        f"{doc_output.stem}_preprocessed.pdf")
+    completion_path = _artifact_completion_path(
+        doc_output, stage="conversion")
+    with _conversion_output_lease(
+            doc_output, markdown_output, preprocessed_path, completion_path):
+        return _converted_outputs_complete_locked(
+            pdf_path, doc_output, markdown_output,
+            parameters=parameters,
+            preprocessed_output=preprocessed_path,
+        )
+
+
+def _converted_outputs_complete_locked(
+        pdf_path: Path, doc_output: Path, markdown_output: Path, *,
+        parameters: dict,
+        preprocessed_output: Path | None = None) -> bool:
+    """Validate conversion evidence while its output-set lease is held."""
+    preprocessed_path = preprocessed_output or doc_output.with_name(
+        f"{doc_output.stem}_preprocessed.pdf")
     try:
-        source_sha256 = _cached_artifact_sha256(pdf_path)
+        source_generation = _hash_file_generation(pdf_path)
     except (OSError, RuntimeError):
         return False
     manifest_path = _artifact_completion_path(
         doc_output, stage="conversion")
-    if not _fixed_artifacts_complete(
-            manifest_path, stage="conversion",
-            source_sha256=source_sha256, source_record_count=None,
-            parameters=parameters,
-            outputs={"docling_json": doc_output,
-                     "docling_markdown": markdown_output}):
-        return False
     try:
-        document = json.loads(doc_output.read_text(encoding="utf-8"))
-        return isinstance(document, dict) and bool(
-            markdown_output.read_text(encoding="utf-8").strip())
-    except (OSError, UnicodeError, json.JSONDecodeError):
+        document_raw, document_sha256, _ = (
+            _read_index_artifact_snapshot(doc_output))
+        document = json.loads(document_raw)
+        binding = _load_conversion_source_binding(
+            doc_output,
+            document_sha256=document_sha256,
+            document_size=len(document_raw),
+        )
+        if (binding is None
+                or binding.source_name != Path(pdf_path).name
+                or binding.source_sha256 != source_generation.sha256
+                or binding.source_size != source_generation.size):
+            return False
+        outputs = {
+            "docling_json": doc_output,
+            "docling_markdown": markdown_output,
+        }
+        if binding.effective_input_kind == "preprocessed":
+            if preprocessed_path.name != binding.effective_input_name:
+                return False
+            outputs["preprocessed_pdf"] = preprocessed_path
+        v2_complete = _fixed_artifacts_complete(
+            manifest_path, stage="conversion",
+            source_sha256=source_generation.sha256,
+            source_record_count=None, parameters=parameters,
+            outputs=outputs,
+            source_name=Path(pdf_path).name,
+            schema_version=CONVERSION_COMPLETION_SCHEMA_VERSION)
+        if not v2_complete:
+            # Schema-v1 cannot prove immutable capture or a correctly derived
+            # preprocessed input.  Regenerate it once under the v2 contract.
+            return False
+        if (not isinstance(document, dict)
+                or not markdown_output.read_text(
+                    encoding="utf-8").strip()):
+            return False
+        final_source = _hash_file_generation(
+            pdf_path, expected_sha256=source_generation.sha256)
+        return final_source.size == source_generation.size
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError,
+            RuntimeError):
         return False
 
 
@@ -4613,26 +5638,161 @@ def convert_pdf(pdf_path: Path, doc_output: Path, *,
                 auto_preprocess: bool = True,
                 ocr: bool | None = None,
                 preprocessed_output: Path | None = None,
-                markdown_output: Path | None = None) -> None:
-    """Convert PDF to Docling's internal document representation."""
-    import os
+                markdown_output: Path | None = None,
+                security_policy: (
+                    _release_security.ReleaseSecurityPolicy | None) = None,
+                ) -> None:
+    """Convert under path-wide leases for the complete artifact set."""
+    doc_output = Path(doc_output)
+    markdown_path = markdown_output or doc_output.with_name(
+        f"{doc_output.stem}_docling.md")
+    preprocessed_path = preprocessed_output or doc_output.with_name(
+        f"{doc_output.stem}_preprocessed.pdf")
+    completion_path = _artifact_completion_path(
+        doc_output, stage="conversion")
+    _run_telemetry.validate_distinct_output_paths({
+        "source PDF": Path(pdf_path),
+        "Docling JSON": doc_output,
+        "Docling Markdown": markdown_path,
+        "preprocessed PDF": preprocessed_path,
+        "conversion completion": completion_path,
+    })
+    with _conversion_output_lease(
+            doc_output, markdown_path, preprocessed_path, completion_path):
+        _convert_pdf_locked(
+            pdf_path, doc_output,
+            batch_size_override=batch_size_override,
+            backend=backend, force=force, watermark=watermark,
+            auto_preprocess=auto_preprocess, ocr=ocr,
+            preprocessed_output=preprocessed_output,
+            markdown_output=markdown_output,
+            security_policy=security_policy)
 
+
+def _convert_pdf_locked(pdf_path: Path, doc_output: Path, *,
+                batch_size_override: int | None = None,
+                backend: str = "pypdfium2",
+                force: bool = False,
+                watermark: Optional[re.Pattern] = None,
+                auto_preprocess: bool = True,
+                ocr: bool | None = None,
+                preprocessed_output: Path | None = None,
+                markdown_output: Path | None = None,
+                security_policy: (
+                    _release_security.ReleaseSecurityPolicy | None) = None,
+                ) -> None:
+    """Convert one immutable PDF generation and bind its exact source."""
     source_pdf_path = Path(pdf_path)
     _require_file(source_pdf_path, "PDF file")
-    pdf_path = source_pdf_path
-
     md_path = markdown_output or doc_output.with_name(
         f"{doc_output.stem}_docling.md")
+    preprocessed_path = preprocessed_output or doc_output.with_name(
+        f"{doc_output.stem}_preprocessed.pdf")
     completion_parameters = _conversion_parameters(
         batch_size_override=batch_size_override, backend=backend,
         auto_preprocess=auto_preprocess, ocr=ocr, watermark=watermark)
 
-    if (not force and _converted_outputs_complete(
+    if (not force and _converted_outputs_complete_locked(
             source_pdf_path, doc_output, md_path,
-            parameters=completion_parameters)):
+            parameters=completion_parameters,
+            preprocessed_output=preprocessed_path)):
         log.info(f"Conversion outputs already complete: {doc_output}")
         log.info("  Use --force to overwrite, or skip to the next step.")
         return
+
+    with ExitStack() as snapshot_stack:
+        source_snapshot = snapshot_stack.enter_context(
+            _immutable_file_snapshot(source_pdf_path))
+        original_input = ConversionInputBinding(
+            kind="original", name=source_snapshot.source_name,
+            sha256=source_snapshot.sha256, size=source_snapshot.size)
+        effective_input = _convert_pdf_generation(
+            source_snapshot.path, doc_output,
+            snapshot_stack=snapshot_stack,
+            original_input=original_input,
+            batch_size_override=batch_size_override, backend=backend,
+            force=force, watermark=watermark,
+            auto_preprocess=auto_preprocess, ocr=ocr,
+            preprocessed_output=preprocessed_path,
+            markdown_output=markdown_output,
+            security_policy=security_policy)
+        if _cached_artifact_sha256(source_pdf_path) != source_snapshot.sha256:
+            raise RuntimeError(
+                f"PDF source changed while converting: {source_pdf_path}")
+
+    conversion_outputs = {
+        "docling_json": doc_output,
+        "docling_markdown": md_path,
+    }
+    if effective_input.kind == "preprocessed":
+        if effective_input.name != preprocessed_path.name:
+            raise RuntimeError(
+                "Preprocessed conversion input does not match its output path")
+        published_generation = _hash_file_generation(
+            preprocessed_path, expected_sha256=effective_input.sha256)
+        if published_generation.size != effective_input.size:
+            raise RuntimeError(
+                "Preprocessed conversion output size changed before commit")
+        conversion_outputs["preprocessed_pdf"] = preprocessed_path
+    else:
+        # This path is a declared, lease-protected pipeline output.  Remove a
+        # prior derived generation when the current conversion used the
+        # original PDF so callers never mistake stale sensitive bytes for a
+        # member of the newly committed artifact set.
+        try:
+            preprocessed_path.unlink(missing_ok=True)
+        except OSError as exc:
+            raise RuntimeError(
+                "Could not remove stale preprocessed conversion output: "
+                f"{preprocessed_path}") from exc
+    _write_artifact_completion(
+        _artifact_completion_path(doc_output, stage="conversion"),
+        stage="conversion", source_sha256=source_snapshot.sha256,
+        source_name=source_pdf_path.name,
+        source_record_count=None, parameters=completion_parameters,
+        outputs=conversion_outputs,
+        schema_version=CONVERSION_COMPLETION_SCHEMA_VERSION,
+        extra_fields={
+            "source": {
+                "name": source_snapshot.source_name,
+                "size": source_snapshot.size,
+                "sha256": source_snapshot.sha256,
+                "capture_policy": source_snapshot.capture_policy,
+            },
+            "effective_input": {
+                "kind": effective_input.kind,
+                "name": effective_input.name,
+                "size": effective_input.size,
+                "sha256": effective_input.sha256,
+            },
+        })
+    if _cached_artifact_sha256(source_pdf_path) != source_snapshot.sha256:
+        raise RuntimeError(
+            f"PDF source changed while committing conversion: "
+            f"{source_pdf_path}")
+
+
+def _convert_pdf_generation(
+                pdf_path: Path, doc_output: Path, *,
+                snapshot_stack: ExitStack,
+                original_input: "ConversionInputBinding",
+                batch_size_override: int | None = None,
+                backend: str = "pypdfium2",
+                force: bool = False,
+                watermark: Optional[re.Pattern] = None,
+                auto_preprocess: bool = True,
+                ocr: bool | None = None,
+                preprocessed_output: Path | None = None,
+                markdown_output: Path | None = None,
+                security_policy: (
+                    _release_security.ReleaseSecurityPolicy | None) = None,
+                ) -> "ConversionInputBinding":
+    """Convert an already-pinned PDF pathname generation."""
+    import os
+
+    md_path = markdown_output or doc_output.with_name(
+        f"{doc_output.stem}_docling.md")
+    effective_input = original_input
 
     # --- Assess text layer, then preprocess or OCR scans safely ---
     stats = None
@@ -4659,22 +5819,51 @@ def convert_pdf(pdf_path: Path, doc_output: Path, *,
         )
 
     if auto_preprocess and stats is not None and not effective_ocr:
+        private_cleaned_path: Path | None = None
         try:
             ratio = stats["pages_with_large_images"] / max(stats["total_pages"], 1)
             if ratio > 0.1:
                 log.info(f"Detected background scans on {stats['pages_with_large_images']}"
                          f"/{stats['total_pages']} pages — auto-preprocessing")
-                cleaned_path = preprocessed_output or doc_output.with_name(
+                published_cleaned_path = preprocessed_output or doc_output.with_name(
                     f"{doc_output.stem}_preprocessed.pdf")
-                cleaned = preprocess_pdf(pdf_path, cleaned_path,
-                                         force=force, _analysis_cache=stats)
+                # Keep owned scratch trees flat so stale cleanup never has to
+                # traverse a replaceable directory component.
+                private_cleaned_path = (
+                    pdf_path.parent / f".rag-preprocess-{uuid4().hex}.pdf")
+                cleaned = preprocess_pdf(pdf_path, private_cleaned_path,
+                                         force=True, _analysis_cache=stats)
                 if cleaned:
-                    pdf_path = cleaned
+                    cleaned_snapshot = snapshot_stack.enter_context(
+                        _immutable_file_snapshot(
+                            cleaned,
+                            snapshot_name=published_cleaned_path.name,
+                        ))
+                    _storage_policy.atomic_publish_private_file(
+                        published_cleaned_path,
+                        lambda staging: shutil.copyfile(
+                            cleaned_snapshot.path, staging),
+                    )
+                    pdf_path = cleaned_snapshot.path
+                    effective_input = ConversionInputBinding(
+                        kind="preprocessed",
+                        name=published_cleaned_path.name,
+                        sha256=cleaned_snapshot.sha256,
+                        size=cleaned_snapshot.size,
+                    )
         except ImportError:
             log.debug(
                 "PyMuPDF not installed — skipping auto-preprocess "
                 "(pip install PyMuPDF)"
             )
+        finally:
+            if private_cleaned_path is not None:
+                try:
+                    private_cleaned_path.unlink(missing_ok=True)
+                except OSError as exc:
+                    _log_cleanup_error(
+                        "Could not remove private preprocessed PDF %s",
+                        private_cleaned_path, error=exc)
     elif (auto_preprocess and stats is not None and effective_ocr
           and stats.get("pages_with_large_images", 0)):
         log.info(
@@ -4736,7 +5925,8 @@ def convert_pdf(pdf_path: Path, doc_output: Path, *,
     if revision := _pin_docling_layout_revision(pipeline_opts):
         log.info(f"Docling layout revision: {revision}")
     artifacts_root = _configure_docling_model_artifacts(
-        pipeline_opts, include_ocr=effective_ocr)
+        pipeline_opts, include_ocr=effective_ocr,
+        security_policy=security_policy)
     log.info(f"Docling verified model artifacts: {artifacts_root}")
 
     converter = DocumentConverter(
@@ -4808,14 +5998,8 @@ def convert_pdf(pdf_path: Path, doc_output: Path, *,
     # Markdown export — normalize encoding + strip watermark
     md_text = _normalize_text(strip_watermark(dl_doc.export_to_markdown(), watermark))
     _atomic_write_text(md_path, md_text)
-    _write_artifact_completion(
-        _artifact_completion_path(doc_output, stage="conversion"),
-        stage="conversion",
-        source_sha256=_cached_artifact_sha256(source_pdf_path),
-        source_record_count=None, parameters=completion_parameters,
-        outputs={"docling_json": doc_output,
-                 "docling_markdown": md_path})
     log.info(f"Markdown export  → {md_path}")
+    return effective_input
 
 
 # ---------------------------------------------------------------------------
@@ -4865,10 +6049,30 @@ _FOOTNOTE_NUM_RE = _chunking_core._FOOTNOTE_NUM_RE
 _FOOTNOTE_CITE_MARKERS = _chunking_core._FOOTNOTE_CITE_MARKERS
 
 
-def classify_content_type(text: str, headings: list[str] | None) -> str:
+def classify_content_type(
+        text: str, headings: list[str] | None, *,
+        structure_profile: (
+            str | _document_profiles.StructureProfile
+        ) = DEFAULT_STRUCTURE_PROFILE,
+) -> str:
     """Classify through the facade's current structural-content helper."""
+    profile = _document_profiles.get_profile(structure_profile)
+
+    def structural_content(value: str, values: list[str] | None) -> bool:
+        if profile.name == DEFAULT_STRUCTURE_PROFILE:
+            return _is_structural_content(value, values)
+        return _chunking_core._is_structural_content(
+            value, values,
+            structural_patterns=(
+                _document_profiles.structural_heading_patterns(profile)))
+
     return _chunking_core.classify_content_type(
-        text, headings, structural_content_fn=_is_structural_content)
+        text, headings,
+        structural_content_fn=structural_content,
+        chapter_heading_fn=lambda heading: (
+            _document_profiles.match_division(
+                heading, profile, "chunk_heading") is not None),
+    )
 
 
 extract_case_names = _chunking_core.extract_case_names
@@ -4884,9 +6088,15 @@ def enrich_chunk(chunk_text: str, headings: list[str] | None,
                  chunk_index: int, total_chunks: int,
                  total_pages: int,
                  doc_items: list | None = None,
-                 source_file: str = "") -> dict:
+                 source_file: str = "",
+                 source_items: list[dict] | None = None, *,
+                 structure_profile: (
+                     str | _document_profiles.StructureProfile
+                 ) = DEFAULT_STRUCTURE_PROFILE) -> dict:
     """Build an enriched chunk record with legal-textbook metadata."""
-    content_type = classify_content_type(chunk_text, headings)
+    profile = _document_profiles.get_profile(structure_profile)
+    content_type = classify_content_type(
+        chunk_text, headings, structure_profile=profile)
     case_names = extract_case_names(chunk_text)
     section_path = build_section_path(headings)
 
@@ -4894,19 +6104,21 @@ def enrich_chunk(chunk_text: str, headings: list[str] | None,
     chapter_title = None
     for h in (headings or []):
         h_clean = _normalize_text(h)
-        m = CHAPTER_RE.match(h_clean) or CHAPTER_CAPS_RE.match(h_clean)
-        if m:
-            chapter_num = int(m.group(1))
-            chapter_title = m.group(2).strip().title()
+        division = _document_profiles.match_division(
+            h_clean, profile, "chunk_heading")
+        if division is not None:
+            chapter_num = division.ordinal
+            chapter_title = division.title.title()
             break
     # Fallback: scan section_path for chapter numbers
     if chapter_num is None and headings:
         sp = build_section_path(headings)
         sp_clean = _normalize_text(sp)
-        m = CHAPTER_RE.search(sp_clean) or CHAPTER_CAPS_RE.search(sp_clean)
-        if m:
-            chapter_num = int(m.group(1))
-            chapter_title = m.group(2).strip().title()
+        division = _document_profiles.match_division(
+            sp_clean, profile, "chunk_heading")
+        if division is not None:
+            chapter_num = division.ordinal
+            chapter_title = division.title.title()
 
     page_numbers = []
     if doc_items:
@@ -4921,14 +6133,16 @@ def enrich_chunk(chunk_text: str, headings: list[str] | None,
         else estimate_page_range(chunk_index, total_chunks, total_pages)
     )
 
-    xrefs = re.findall(
-        r"Chapter\s+(\d+)(?:,\s*Section\s*([A-Z](?:\.\d+)*))?",
-        chunk_text,
-    )
-    cross_refs = [
-        f"Ch.{num}" + (f".{sec}" if sec else "")
-        for num, sec in xrefs
-    ]
+    cross_refs = []
+    for division in _document_profiles.find_divisions(
+            chunk_text, profile, "cross_reference"):
+        prefix = "Ch" if division.kind.casefold() == "chapter" else division.kind
+        number = (
+            str(division.ordinal)
+            if division.kind.casefold() == "chapter" else division.raw_number)
+        cross_refs.append(
+            f"{prefix}.{number}"
+            + (f".{division.title}" if division.title else ""))
 
     content_source_map = {
         "case_opinion": "body",
@@ -4992,6 +6206,10 @@ def enrich_chunk(chunk_text: str, headings: list[str] | None,
         "chunk_index": chunk_index,
         "context": "",
     }
+    if source_items is not None:
+        metadata["source_lineage_schema_version"] = (
+            _quality_core.SOURCE_LINEAGE_SCHEMA_VERSION)
+        metadata["source_items"] = source_items
     if content_type == "table":
         metadata["table_rows"] = table_rows
         metadata["table_cols"] = table_cols
@@ -5002,10 +6220,1416 @@ def enrich_chunk(chunk_text: str, headings: list[str] | None,
     }
 
 
-_HEADING_PROMPT = """This text is from Chapter {chapter_num}: {chapter_title} of a law textbook.
+def _chunk_heading_key(record: dict) -> tuple[str, ...]:
+    headings = record.get("metadata", {}).get("headings") or []
+    return tuple(
+        _chunking_core.clean_heading_text(str(heading)).casefold()
+        for heading in headings
+        if _chunking_core.clean_heading_text(str(heading))
+    )
+
+
+def _merge_enriched_chunk_group(
+        group: list[dict], token_counter: Callable[[str], int], *,
+        structure_profile: (
+            str | _document_profiles.StructureProfile
+        ) = DEFAULT_STRUCTURE_PROFILE,
+) -> dict:
+    """Merge source-adjacent records and recompute all text-derived fields."""
+    merged = {
+        "text": "\n\n".join(
+            record["text"].strip() for record in group if record["text"].strip()),
+        "metadata": dict(group[0]["metadata"]),
+    }
+    metadata = merged["metadata"]
+    starts = [
+        record["metadata"].get("page_start") for record in group
+        if record["metadata"].get("page_start") is not None
+    ]
+    ends = [
+        record["metadata"].get("page_end") for record in group
+        if record["metadata"].get("page_end") is not None
+    ]
+    metadata["page_start"] = min(starts) if starts else None
+    metadata["page_end"] = max(ends) if ends else None
+    if starts and ends:
+        metadata["page_range"] = f"pp.{min(starts)}-{max(ends)}"
+    headings = metadata.get("headings") or []
+    metadata["section_path"] = build_section_path(headings)
+    metadata["content_type"] = classify_content_type(
+        merged["text"], headings, structure_profile=structure_profile)
+    case_names = extract_case_names(merged["text"])
+    metadata["case_names"] = case_names
+    metadata["primary_case"] = case_names[0] if case_names else None
+    metadata["cross_references"] = list(dict.fromkeys(
+        reference
+        for record in group
+        for reference in record["metadata"].get("cross_references", [])
+    ))
+    source_items: list[dict] = []
+    seen_source_items: set[str] = set()
+    for record in group:
+        for source_item in record["metadata"].get("source_items", []):
+            key = json.dumps(
+                source_item, ensure_ascii=False, sort_keys=True,
+                separators=(",", ":"))
+            if key not in seen_source_items:
+                seen_source_items.add(key)
+                source_items.append(source_item)
+    if source_items:
+        metadata["source_lineage_schema_version"] = (
+            _quality_core.SOURCE_LINEAGE_SCHEMA_VERSION)
+        metadata["source_items"] = source_items
+    sources = {
+        record["metadata"].get("content_source", "body") for record in group
+    }
+    metadata["content_source"] = (
+        next(iter(sources)) if len(sources) == 1 else "mixed")
+    metadata["token_count"] = int(token_counter(merged["text"]))
+    return merged
+
+
+def _coalesce_chunk_boundaries(
+        records: list[dict], token_counter: Callable[[str], int],
+        max_tokens: int, *, hard_max_tokens: int | None = None,
+        structure_profile: (
+            str | _document_profiles.StructureProfile
+        ) = DEFAULT_STRUCTURE_PROFILE,
+) -> list[dict]:
+    """Repair split sentences and alternating rule/explanation layout lanes."""
+    if len(records) < 2:
+        return records
+
+    def _pages_touch(left: dict, right: dict) -> bool:
+        left_end = left["metadata"].get("page_end")
+        right_start = right["metadata"].get("page_start")
+        if left_end is None or right_start is None:
+            return False
+        return left_end <= right_start <= left_end + 1
+
+    def _lane(record: dict) -> str | None:
+        metadata = record.get("metadata", {})
+        if (metadata.get("content_source") == "table"
+                or metadata.get("content_type") == "table"):
+            return None
+        heading = " ".join(_chunk_heading_key(record))
+        opening = record.get("text", "").lstrip()[:100]
+        if (re.search(r"\brule language\b|\bstatutory text\b", heading)
+                or re.match(r"rule language\s*\**(?:\s|$)", opening, re.I)):
+            return "rule"
+        if (re.search(r"\bauthors?['’] explanation\b", heading)
+                or re.match(
+                    r"authors?['’] explanation\s*\**(?:\s|$)",
+                    opening,
+                    re.I,
+                )):
+            return "explanation"
+        return None
+
+    def _pack(group: list[dict]) -> list[dict]:
+        packed: list[dict] = []
+        current: list[dict] = []
+        for record in group:
+            candidate = current + [record]
+            combined_text = "\n\n".join(item["text"] for item in candidate)
+            if current and token_counter(combined_text) > max_tokens:
+                packed.append(_merge_enriched_chunk_group(
+                    current, token_counter,
+                    structure_profile=structure_profile))
+                current = [record]
+            else:
+                current = candidate
+        if current:
+            packed.append(_merge_enriched_chunk_group(
+                current, token_counter,
+                structure_profile=structure_profile))
+        return packed
+
+    # Reconstruct alternating two-column source layout as two coherent lanes.
+    lane_repaired: list[dict] = []
+    index = 0
+    while index < len(records):
+        if _lane(records[index]) is None:
+            lane_repaired.append(records[index])
+            index += 1
+            continue
+        end = index + 1
+        while (end < len(records)
+               and _lane(records[end]) is not None
+               and _pages_touch(records[end - 1], records[end])):
+            end += 1
+        run = records[index:end]
+        keys = list(dict.fromkeys(
+            (_lane(record), _chunk_heading_key(record)) for record in run))
+        # Source columns may be extracted in either visual order. Publish the
+        # complete rule lane before its explanation consistently.
+        keys.sort(key=lambda item: 0 if item[0] == "rule" else 1)
+        if len(run) >= 3 and len(keys) >= 2:
+            for lane, key in keys:
+                lane_repaired.extend(_pack([
+                    record for record in run
+                    if (_lane(record), _chunk_heading_key(record)) == (lane, key)
+                ]))
+        else:
+            lane_repaired.extend(run)
+        index = end
+
+    def _edge_footnotes(text: str, *, leading: bool) -> tuple[str, list[str]]:
+        lines = text.splitlines()
+        footnotes: list[str] = []
+        if leading:
+            while lines and _FOOTNOTE_NUM_RE.match(lines[0]):
+                footnotes.append(lines.pop(0))
+        else:
+            while lines and _FOOTNOTE_NUM_RE.match(lines[-1]):
+                footnotes.insert(0, lines.pop())
+        return "\n".join(lines).strip(), footnotes
+
+    def _continues_sentence(left: str, right: str) -> bool:
+        left_core = left.rstrip().rstrip('"\'\u2019\u201d)]}')
+        right_core = right.lstrip()
+        if not left_core or not right_core:
+            return False
+        if left_core.endswith((".", "?", "!")):
+            return False
+        return (right_core[0].islower()
+                or right_core[0] in ",.;:)]}'\"’”"
+                or left_core.endswith(("-", "–", "—", ",", ";", ":")))
+
+    # Merge ordinary same-heading chunks only when the boundary is visibly a
+    # sentence continuation and the configured token cap remains satisfied.
+    repaired: list[dict] = []
+    for record in lane_repaired:
+        if not repaired:
+            repaired.append(record)
+            continue
+        previous = repaired[-1]
+        same_heading = _chunk_heading_key(previous) == _chunk_heading_key(record)
+        non_table = all(
+            item["metadata"].get("content_type") != "table"
+            for item in (previous, record)
+        )
+        left_body, trailing_footnotes = _edge_footnotes(
+            previous["text"], leading=False)
+        right_body, leading_footnotes = _edge_footnotes(
+            record["text"], leading=True)
+        reordered_text = f"{left_body.rstrip()} {right_body.lstrip()}".strip()
+        boundary_footnotes = trailing_footnotes + leading_footnotes
+        if boundary_footnotes:
+            reordered_text += "\n\n" + "\n".join(boundary_footnotes)
+        combined_limit = max_tokens + max(128, max_tokens // 4)
+        if hard_max_tokens is not None:
+            combined_limit = min(combined_limit, hard_max_tokens)
+        if (same_heading and non_table and _pages_touch(previous, record)
+                and _continues_sentence(left_body, right_body)
+                and token_counter(reordered_text) <= combined_limit):
+            previous_copy = {
+                "text": reordered_text,
+                "metadata": dict(previous["metadata"]),
+            }
+            record_copy = {
+                "text": "",
+                "metadata": dict(record["metadata"]),
+            }
+            repaired[-1] = _merge_enriched_chunk_group(
+                [previous_copy, record_copy], token_counter,
+                structure_profile=structure_profile)
+        else:
+            repaired.append(record)
+    return repaired
+
+
+def _validate_chunk_structure_for_publication(
+        records: list[dict], *, scaffold: list[dict],
+        book_sections: dict, chapter_map: dict[int, dict],
+        chapter_titles: dict[int, str],
+        structure_profile: (
+            str | _document_profiles.StructureProfile
+        ) = DEFAULT_STRUCTURE_PROFILE,
+) -> None:
+    """Reject a corpus with leaked structural pages or corrupt hierarchy."""
+    profile = _document_profiles.get_profile(structure_profile)
+    structural_names = _document_profiles.structural_section_keys(profile)
+    structural_ranges = {
+        (value["start"], value["end"])
+        for name in structural_names
+        if (value := book_sections.get(name)) is not None
+    }
+
+    starts: dict[int, int] = {}
+    for entry in scaffold:
+        chapter_num = entry.get("chapter_num")
+        page = entry.get("page")
+        if entry.get("level") == 1 and chapter_num is not None and page:
+            starts.setdefault(chapter_num, page)
+    for chapter_num, info in chapter_map.items():
+        page = info.get("min_page")
+        if page:
+            starts[chapter_num] = min(starts.get(chapter_num, page), page)
+
+    ordered_starts = sorted((page, chapter) for chapter, page in starts.items())
+    bounds: dict[int, tuple[int, int]] = {}
+    first_backmatter = min(
+        (start for start, _ in structural_ranges
+         if not ordered_starts or start > ordered_starts[-1][0]),
+        default=0,
+    )
+    for index, (start, chapter_num) in enumerate(ordered_starts):
+        if index + 1 < len(ordered_starts):
+            end = ordered_starts[index + 1][0] - 1
+        else:
+            observed_end = chapter_map.get(chapter_num, {}).get("max_page", start)
+            end = first_backmatter - 1 if first_backmatter else observed_end
+        bounds[chapter_num] = (start, end)
+
+    issues: list[str] = []
+    for index, record in enumerate(records):
+        metadata = record.get("metadata", {})
+        text = record.get("text", "")
+        page_start = metadata.get("page_start")
+        page_end = metadata.get("page_end")
+        if page_start is not None and page_end is not None and any(
+                start <= page_start and page_end <= end
+                for start, end in structural_ranges):
+            issues.append(
+                f"chunk {index} retains structural pp.{page_start}-{page_end}")
+
+        if re.search(r"(?<=[A-Za-z0-9])-\s+(?=[A-Za-z0-9])", text):
+            issues.append(f"chunk {index} retains a split-hyphen artifact")
+        if re.search(
+                r"https?://\s|\bwww\s+\.|\bperma\.cc/\s", text, re.I):
+            issues.append(f"chunk {index} retains a split URL")
+        if "This and other authors' explanations draw" in text:
+            issues.append(f"chunk {index} retains editorial boilerplate")
+        if re.search(
+                r"\b(?:clientlawyer|lawyerclient|plaintiffdefendant|"
+                r"threejudge|Aconcluding)\b", text, re.I):
+            issues.append(f"chunk {index} retains a known fused term")
+
+        headings_text = " ".join(metadata.get("headings") or [])
+        content_type = metadata.get("content_type")
+        if re.search(
+                r"(?:\s*[.\u2026·]){3,}",
+                metadata.get("section_path", "")):
+            issues.append(f"chunk {index} section path contains TOC leaders")
+        content_source = metadata.get("content_source")
+        source_is_table = content_source == "table"
+        source_is_nonprose = content_source in {"table", "footnote"}
+        explicit_rule_lane = (
+            bool(re.search(r"\brule language\b", headings_text, re.I))
+            or bool(re.match(
+                r"\s*rule language\s*\**(?:\s|$)", text, re.I)))
+        explicit_explanation_lane = (
+            bool(re.search(
+                r"\bauthors?['’] explanation\b", headings_text, re.I))
+            or bool(re.match(
+                r"\s*authors?['’] explanation\s*\**(?:\s|$)",
+                text,
+                re.I,
+            )))
+        if (explicit_rule_lane
+                and content_type != "statutory_excerpt"
+                and not source_is_nonprose):
+            issues.append(f"chunk {index} misclassifies explicit rule language")
+        if (explicit_explanation_lane
+                and content_type != "author_narrative"
+                and not source_is_nonprose):
+            issues.append(f"chunk {index} misclassifies author explanation")
+        if (content_type == "footnote"
+                and content_source != "footnote"
+                and not _FOOTNOTE_NUM_RE.match(text)
+                ):
+            issues.append(f"chunk {index} footnote does not open as a footnote")
+        if source_is_table:
+            if content_type != "table":
+                issues.append(f"chunk {index} source table is not classified as table")
+            if not any(line.lstrip().startswith("|") for line in text.splitlines()):
+                issues.append(f"chunk {index} source table lost its Markdown header")
+        for case_name in metadata.get("case_names", []):
+            if (len(case_name) > 160
+                    or not (" v. " in case_name
+                            or case_name.startswith(("In re ", "Ex parte ")))):
+                issues.append(f"chunk {index} has an invalid case entity")
+
+        chapter_num = metadata.get("chapter_num")
+        if chapter_num is None:
+            continue
+        expected_title = chapter_titles.get(chapter_num)
+        actual_title = metadata.get("chapter_title")
+        if not expected_title or actual_title != expected_title:
+            issues.append(
+                f"chunk {index} chapter {chapter_num} has noncanonical title")
+        actual_division = (
+            _document_profiles.match_division(
+                actual_title, profile, "canonical_title")
+            if actual_title else None
+        )
+        if actual_title and (
+                re.search(r"(?:\s*[.\u2026·]){3,}", actual_title)
+                or (actual_division is not None
+                    and _document_profiles.contains_division_subnumber(
+                        actual_title, actual_division))):
+            issues.append(f"chunk {index} chapter title contains TOC artifacts")
+        section_path = metadata.get("section_path", "")
+        if expected_title and not section_path.startswith(expected_title):
+            issues.append(
+                f"chunk {index} section path does not start with chapter title")
+        if (page_start is not None and page_end is not None
+                and chapter_num in bounds):
+            lower, upper = bounds[chapter_num]
+            if page_start < lower or page_end > upper:
+                issues.append(
+                    f"chunk {index} chapter {chapter_num} lies outside "
+                    f"pp.{lower}-{upper}: pp.{page_start}-{page_end}")
+
+    if issues:
+        preview = "; ".join(issues[:10])
+        suffix = f"; and {len(issues) - 10} more" if len(issues) > 10 else ""
+        raise RuntimeError(
+            f"Structural metadata quality gate failed: {preview}{suffix}")
+
+
+def _split_markdown_table_by_rows(
+        markdown: str, token_counter: Callable[[str], int],
+        max_tokens: int) -> list[str]:
+    """Pack source table rows into independently valid Markdown tables.
+
+    Docling's hybrid chunker sizes a flattened table representation. Restoring
+    the richer source Markdown can therefore exceed the embedding limit even
+    when the original raw chunk fit. Repeat the header and separator for each
+    row group so every published child remains understandable and retrievable.
+    A single row that cannot fit is left intact for the exact model-input gate
+    to reject rather than being silently truncated or converted to prose.
+    """
+    markdown = markdown.strip()
+    if not markdown or token_counter(markdown) <= max_tokens:
+        return [markdown] if markdown else []
+    table = _table_retrieval_core._parse_markdown_table(markdown)
+    if table is None:
+        return [markdown]
+
+    preamble = list(table.preamble)
+    header = [table.header, table.separator]
+    groups: list[list[str]] = []
+    current_rows: list[str] = []
+    for row in table.rows:
+        candidate = "\n".join(preamble + header + current_rows + [row])
+        if current_rows and token_counter(candidate) > max_tokens:
+            groups.append(current_rows)
+            current_rows = [row]
+        else:
+            current_rows.append(row)
+    if current_rows:
+        groups.append(current_rows)
+    return ["\n".join(preamble + header + rows) for rows in groups]
+
+
+def _doc_item_label(item) -> str:
+    """Return a stable lowercase Docling item label."""
+    label = getattr(item, "label", "")
+    return str(getattr(label, "value", label)).lower()
+
+
+def _docling_lineage_catalog(
+        dl_doc,
+) -> tuple[dict[str, object], dict[str, set[str]], dict[str, list[str]]]:
+    """Index Docling items and their source-level parent relationships."""
+    item_by_ref: dict[str, object] = {}
+    for collection_name in (
+            "texts", "pictures", "tables", "key_value_items", "form_items"):
+        for item in getattr(dl_doc, collection_name, []) or []:
+            ref = str(getattr(item, "self_ref", ""))
+            if ref:
+                item_by_ref[ref] = item
+
+    parent_refs_by_child: dict[str, set[str]] = {}
+    caption_refs_by_parent: dict[str, list[str]] = {}
+    for parent_ref, item in item_by_ref.items():
+        direct_parent = str(getattr(
+            getattr(item, "parent", None), "cref", ""))
+        if direct_parent in item_by_ref:
+            parent_refs_by_child.setdefault(parent_ref, set()).add(
+                direct_parent)
+        for relationship in ("captions", "footnotes", "children"):
+            child_refs = [
+                str(getattr(reference, "cref", ""))
+                for reference in (getattr(item, relationship, None) or [])
+            ]
+            child_refs = [ref for ref in child_refs if ref in item_by_ref]
+            for child_ref in child_refs:
+                parent_refs_by_child.setdefault(child_ref, set()).add(
+                    parent_ref)
+            if relationship == "captions" and child_refs:
+                caption_refs_by_parent[parent_ref] = list(dict.fromkeys(
+                    child_refs))
+    return item_by_ref, parent_refs_by_child, caption_refs_by_parent
+
+
+def _finite_source_coordinate(value: object) -> float | None:
+    try:
+        coordinate = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(coordinate):
+        return None
+    return round(coordinate, 3)
+
+
+def _source_lineage_for_items(
+        doc_items: list | None, *, item_by_ref: dict[str, object],
+        parent_refs_by_child: dict[str, set[str]],
+        caption_refs_by_parent: dict[str, list[str]],
+) -> list[dict]:
+    """Serialize deterministic source identities and page/geometry spans."""
+    refs = [
+        str(getattr(item, "self_ref", ""))
+        for item in (doc_items or [])
+        if getattr(item, "self_ref", "")
+    ]
+    for parent_ref in list(refs):
+        refs.extend(caption_refs_by_parent.get(parent_ref, []))
+    refs = list(dict.fromkeys(refs))
+
+    source_items = []
+    for ref in refs:
+        item = item_by_ref.get(ref)
+        if item is None:
+            continue
+        spans = []
+        for provenance in getattr(item, "prov", None) or []:
+            page = getattr(provenance, "page_no", None)
+            if (not isinstance(page, int) or isinstance(page, bool)
+                    or page < 1):
+                continue
+            span: dict[str, object] = {"page": page}
+            bbox = getattr(provenance, "bbox", None)
+            if bbox is not None:
+                coordinates = [
+                    _finite_source_coordinate(getattr(bbox, name, None))
+                    for name in ("l", "t", "r", "b")
+                ]
+                if all(value is not None for value in coordinates):
+                    span["bbox"] = coordinates
+                    origin = str(getattr(
+                        getattr(bbox, "coord_origin", ""), "value",
+                        getattr(bbox, "coord_origin", "")))
+                    if origin:
+                        span["origin"] = origin.upper()
+            spans.append(span)
+        spans.sort(key=lambda value: (
+            value["page"], value.get("bbox", []), value.get("origin", "")))
+        source_items.append({
+            "ref": ref,
+            "label": _doc_item_label(item),
+            "parent_refs": sorted(parent_refs_by_child.get(ref, set())),
+            "spans": spans,
+        })
+    return source_items
+
+
+@dataclass(frozen=True, slots=True)
+class ConversionInputBinding:
+    """Hash-bound original or derived PDF input used by conversion."""
+
+    kind: str
+    name: str
+    sha256: str
+    size: int
+
+
+@dataclass(frozen=True, slots=True)
+class ConversionSourceBinding:
+    """Strict capture proof loaded from a conversion-v2 completion."""
+
+    manifest_path: Path
+    manifest_sha256: str
+    schema_version: int
+    capture_verified: bool
+    source_name: str
+    source_sha256: str
+    source_size: int
+    effective_input_kind: str
+    effective_input_name: str
+    effective_input_sha256: str
+    effective_input_size: int
+
+
+@dataclass(frozen=True, slots=True)
+class TableRecoverySource:
+    """Private PDF generation and conversion proof used for table checks."""
+
+    pdf: _artifact_io.ImmutableFileSnapshot
+    conversion: ConversionSourceBinding
+    discovery: str
+    source_path: Path
+
+    def manifest_input(self) -> dict:
+        return {
+            "pdf": {
+                "name": self.pdf.source_name,
+                "size": self.pdf.size,
+                "sha256": self.pdf.sha256,
+                "capture_policy": self.pdf.capture_policy,
+            },
+            "conversion_manifest": {
+                "name": self.conversion.manifest_path.name,
+                "sha256": self.conversion.manifest_sha256,
+                "schema_version": self.conversion.schema_version,
+            },
+            "discovery": self.discovery,
+        }
+
+
+def _strict_json_object(raw: bytes, *, description: str) -> dict:
+    """Decode one UTF-8 JSON object while rejecting ambiguous syntax."""
+    def reject_constant(value: str):
+        raise ValueError(f"invalid JSON numeric constant: {value}")
+
+    def reject_duplicate_keys(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"duplicate {description} field: {key}")
+            result[key] = value
+        return result
+
+    try:
+        payload = json.loads(
+            raw.decode("utf-8"),
+            parse_constant=reject_constant,
+            object_pairs_hook=reject_duplicate_keys,
+        )
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"cannot parse {description}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"{description} must be a JSON object")
+    return payload
+
+
+def _valid_manifest_file_record(value: object) -> bool:
+    if not isinstance(value, dict) or set(value) != {
+            "name", "size", "sha256"}:
+        return False
+    name = value.get("name")
+    size = value.get("size")
+    digest = value.get("sha256")
+    return (
+        isinstance(name, str) and bool(name) and Path(name).name == name
+        and isinstance(size, int) and not isinstance(size, bool) and size > 0
+        and isinstance(digest, str)
+        and re.fullmatch(r"[0-9a-f]{64}", digest) is not None
+    )
+
+
+def _load_conversion_source_binding(
+        doc_path: Path, *, document_sha256: str,
+        document_size: int) -> ConversionSourceBinding | None:
+    """Load strict v2 capture proof for one already-snapshotted document.
+
+    Legacy v1 completion files are readable migration inputs, but are returned
+    as unverified and force one rebuild before they can authorize source-PDF
+    table recovery or resume.
+    """
+    manifest_path = _artifact_completion_path(doc_path, stage="conversion")
+    try:
+        raw, manifest_sha256, _ = _read_index_artifact_snapshot(
+            manifest_path, max_bytes=_MAX_CONVERSION_MANIFEST_BYTES)
+    except FileNotFoundError:
+        return None
+    payload = _strict_json_object(raw, description="conversion completion")
+    if payload.get("schema_version") != CONVERSION_COMPLETION_SCHEMA_VERSION:
+        return None
+    expected_root_fields = {
+        "schema_version", "stage", "source_sha256", "source_name",
+        "source_record_count", "parameters_sha256", "outputs", "source",
+        "effective_input",
+    }
+    if set(payload) != expected_root_fields:
+        raise ValueError("conversion completion has an invalid field set")
+    if (payload.get("stage") != "conversion"
+            or payload.get("source_record_count") is not None
+            or not isinstance(payload.get("parameters_sha256"), str)
+            or re.fullmatch(
+                r"[0-9a-f]{64}", payload["parameters_sha256"]) is None):
+        raise ValueError("conversion completion header is invalid")
+
+    source = payload.get("source")
+    if (not isinstance(source, dict)
+            or set(source) != {"name", "size", "sha256", "capture_policy"}
+            or source.get("capture_policy") != _CONVERSION_CAPTURE_POLICY
+            or not _valid_manifest_file_record({
+                key: source.get(key) for key in ("name", "size", "sha256")
+            })):
+        raise ValueError("conversion completion source binding is invalid")
+    if (payload.get("source_name") != source["name"]
+            or payload.get("source_sha256") != source["sha256"]):
+        raise ValueError("conversion completion source fields disagree")
+
+    effective_input = payload.get("effective_input")
+    if (not isinstance(effective_input, dict)
+            or set(effective_input) != {"kind", "name", "size", "sha256"}
+            or effective_input.get("kind") not in {"original", "preprocessed"}
+            or not _valid_manifest_file_record({
+                key: effective_input.get(key)
+                for key in ("name", "size", "sha256")
+            })):
+        raise ValueError(
+            "conversion completion effective-input binding is invalid")
+    if (effective_input["kind"] == "original"
+            and any(effective_input[key] != source[key]
+                    for key in ("name", "size", "sha256"))):
+        raise ValueError("original effective input must equal captured source")
+
+    records = payload.get("outputs")
+    if not isinstance(records, list):
+        raise ValueError("conversion completion outputs are invalid")
+    expected_roles = {"docling_json", "docling_markdown"}
+    if effective_input["kind"] == "preprocessed":
+        expected_roles.add("preprocessed_pdf")
+    if (len(records) != len(expected_roles)
+            or any(not isinstance(record, dict)
+                   or set(record) != {"role", "name", "size", "sha256"}
+                   or not isinstance(record.get("role"), str)
+                   or record["role"] not in expected_roles
+                   or not _valid_manifest_file_record({
+                       key: record.get(key)
+                       for key in ("name", "size", "sha256")
+                   }) for record in records)):
+        raise ValueError("conversion completion output records are invalid")
+    by_role = {record["role"]: record for record in records}
+    if len(by_role) != len(expected_roles) or set(by_role) != expected_roles:
+        raise ValueError("conversion completion output roles are invalid")
+    document_record = by_role["docling_json"]
+    if (document_record["name"] != doc_path.name
+            or document_record["size"] != document_size
+            or document_record["sha256"] != document_sha256):
+        raise ValueError(
+            "conversion completion does not bind this document generation")
+    if effective_input["kind"] == "preprocessed":
+        preprocessed_record = by_role["preprocessed_pdf"]
+        if any(
+                preprocessed_record[key] != effective_input[key]
+                for key in ("name", "size", "sha256")):
+            raise ValueError(
+                "conversion completion does not bind its preprocessed input")
+
+    return ConversionSourceBinding(
+        manifest_path=manifest_path,
+        manifest_sha256=manifest_sha256,
+        schema_version=CONVERSION_COMPLETION_SCHEMA_VERSION,
+        capture_verified=True,
+        source_name=source["name"],
+        source_sha256=source["sha256"],
+        source_size=source["size"],
+        effective_input_kind=effective_input["kind"],
+        effective_input_name=effective_input["name"],
+        effective_input_sha256=effective_input["sha256"],
+        effective_input_size=effective_input["size"],
+    )
+
+
+def _conversion_source_identity(
+        doc_path: Path, *, document_sha256: str, document_size: int,
+        origin_filename: str | None = None) -> tuple[str, str] | None:
+    """Compatibility view over strict capture-verified conversion lineage."""
+    del origin_filename
+    binding = _load_conversion_source_binding(
+        doc_path,
+        document_sha256=document_sha256,
+        document_size=document_size,
+    )
+    if binding is None:
+        return None
+    return binding.source_name, binding.source_sha256
+
+
+def _find_docling_source_pdf(
+        doc_path: Path, doc_dict: dict, *,
+        source_identity: tuple[str, str] | None = None) -> Path | None:
+    """Find only a source PDF whose bytes match proven conversion lineage."""
+    del doc_dict  # Kept in the facade signature for compatibility.
+    if source_identity is None:
+        return None
+    filename, expected_sha256 = source_identity
+    if (not filename or Path(filename).name != filename
+            or re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None):
+        return None
+
+    seen: set[Path] = set()
+    candidates = [doc_path.parent / filename]
+    candidates.extend(parent / filename for parent in doc_path.parents[1:])
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve(strict=True)
+            if resolved in seen or not resolved.is_file():
+                continue
+            seen.add(resolved)
+            candidate_generation = _hash_file_generation(
+                resolved, expected_sha256=expected_sha256)
+            if candidate_generation.sha256 == expected_sha256:
+                return resolved
+        except (OSError, RuntimeError):
+            continue
+    return None
+
+
+@contextmanager
+def _open_docling_source_pdf_snapshot(
+        doc_path: Path, binding: ConversionSourceBinding | None, *,
+        explicit_source_pdf: Path | None = None):
+    """Yield the only source-PDF pathname permitted to reach PyMuPDF."""
+    if binding is None:
+        if explicit_source_pdf is not None:
+            raise ValueError(
+                "--source-pdf requires a capture-verified conversion-v2 "
+                "completion manifest")
+        yield None
+        return
+
+    if explicit_source_pdf is not None:
+        candidate = Path(explicit_source_pdf)
+        _require_file(candidate, "source PDF")
+        candidate = candidate.resolve(strict=True)
+        discovery = "explicit"
+    else:
+        candidate = _find_docling_source_pdf(
+            doc_path, {},
+            source_identity=(binding.source_name, binding.source_sha256),
+        )
+        if candidate is None:
+            yield None
+            return
+        discovery = (
+            "adjacent" if candidate.parent == Path(doc_path).parent.resolve()
+            else "ancestor")
+
+    with _immutable_file_snapshot(
+            candidate, expected_sha256=binding.source_sha256) as snapshot:
+        yield TableRecoverySource(
+            pdf=snapshot, conversion=binding, discovery=discovery,
+            source_path=candidate)
+
+
+class _SourceOutputAliasError(ValueError):
+    """A recovered source PDF aliases an artifact that would overwrite it."""
+
+
+def _recover_bound_table_markdown(
+        dl_doc, doc_path: Path, binding: ConversionSourceBinding | None, *,
+        source_pdf_path: Path | None = None,
+        forbidden_output_paths: dict[str, Path] | None = None,
+) -> tuple[dict[str, str], dict | None]:
+    """Recover table text transactionally from a verified private PDF."""
+    candidate_overrides: dict[str, str] = {}
+    candidate_input: dict | None = None
+    try:
+        with _open_docling_source_pdf_snapshot(
+                doc_path, binding,
+                explicit_source_pdf=source_pdf_path) as recovery_source:
+            if recovery_source is not None:
+                if forbidden_output_paths:
+                    try:
+                        _run_telemetry.validate_distinct_output_paths({
+                            "recovery source PDF": recovery_source.source_path,
+                            **forbidden_output_paths,
+                        })
+                    except ValueError as exc:
+                        raise _SourceOutputAliasError(str(exc)) from exc
+                candidate_overrides = _recover_incomplete_table_markdown(
+                    dl_doc, recovery_source.pdf.path)
+                candidate_input = recovery_source.manifest_input()
+    except _SourceOutputAliasError:
+        raise
+    except Exception as exc:
+        if source_pdf_path is not None:
+            raise RuntimeError(
+                f"Explicit source PDF could not be verified: "
+                f"{source_pdf_path}") from exc
+        log.warning(
+            "Could not verify Docling tables against its bound source PDF: %s",
+            exc)
+        return {}, None
+    # Returning only after context exit makes verification part of the commit.
+    return candidate_overrides, candidate_input
+
+
+def _markdown_table_cell(text: str, *, preserve_lines: bool = False) -> str:
+    """Normalize extracted PDF text for one safe Markdown table cell."""
+    text = text.replace("\u200b", "").replace("|", "\\|").strip()
+    if preserve_lines:
+        lines = [re.sub(r"[^\S\n]+", " ", line).strip()
+                 for line in text.splitlines()]
+        return "<br>".join(line for line in lines if line)
+    paragraphs = [
+        re.sub(r"\s+", " ", paragraph).strip()
+        for paragraph in re.split(r"\n\s*\n", text)
+    ]
+    return "<br><br>".join(paragraph for paragraph in paragraphs if paragraph)
+
+
+def _source_table_needs_recovery(pdf_text: str, cell_text: str) -> bool:
+    """Return whether source PDF text contains a real table-cell omission.
+
+    Token-boundary differences such as ``New York`` versus ``NewYork`` do not
+    lose information and should retain Docling's richer table structure.  In
+    addition to large proportional omissions, recover a table when the missing
+    token text contains at least eight more alphanumeric characters than the
+    apparent replacement text.  That catches short but meaningful truncations
+    such as a dropped final word or clause.
+    """
+    from collections import Counter
+
+    def tokens(text: str) -> Counter:
+        return Counter(re.findall(
+            r"[a-z0-9]+", text.replace("\u200b", "").lower()))
+
+    pdf_tokens = tokens(pdf_text)
+    cell_tokens = tokens(cell_text)
+    missing_tokens = pdf_tokens - cell_tokens
+    missing_count = sum(missing_tokens.values())
+    if not missing_count:
+        return False
+    extra_tokens = cell_tokens - pdf_tokens
+    missing_characters = sum(
+        len(token) * count for token, count in missing_tokens.items())
+    extra_characters = sum(
+        len(token) * count for token, count in extra_tokens.items())
+    unexplained_missing_characters = max(
+        0, missing_characters - extra_characters)
+    if not unexplained_missing_characters:
+        return False
+    missing_ratio = missing_count / max(1, sum(pdf_tokens.values()))
+    return (
+        (missing_count >= 4 and missing_ratio > 0.10)
+        or unexplained_missing_characters >= 8
+    )
+
+
+def _prepend_source_table_captions(
+        markdown: str, table, text_by_ref: dict[str, object]) -> str:
+    """Preserve Docling caption text when a table body comes from the PDF."""
+    captions = []
+    for reference in (getattr(table, "captions", None) or []):
+        item = text_by_ref.get(str(getattr(reference, "cref", "")))
+        caption = (
+            getattr(item, "text", "") or getattr(item, "orig", "")
+            if item is not None else ""
+        )
+        if caption and caption.strip():
+            captions.append(caption.strip())
+    if not captions:
+        return markdown
+    return "\n\n".join([*captions, markdown])
+
+
+def _recover_incomplete_table_markdown(
+        dl_doc, pdf_path: Path) -> dict[str, str]:
+    """Recover tables whose Docling cells omit text present in the source PDF.
+
+    The recovery is deliberately narrow: compare token multisets inside each
+    table's source bounding box and replace tables with either a large
+    proportional omission or a smaller omission that cannot be explained by
+    token fusion.  Ordinary tables continue to use Docling's richer row/column
+    model.
+    """
+    import pymupdf
+    recovered: dict[str, str] = {}
+    text_by_ref = {
+        str(getattr(item, "self_ref", "")): item
+        for item in (getattr(dl_doc, "texts", None) or [])
+        if getattr(item, "self_ref", "")
+    }
+    with pymupdf.open(str(pdf_path)) as pdf:
+        for table in getattr(dl_doc, "tables", []) or []:
+            if _doc_item_label(table) != "table" or not table.prov:
+                continue
+            provenance = table.prov[0]
+            page_number = int(provenance.page_no)
+            if not 1 <= page_number <= len(pdf):
+                continue
+            page = pdf[page_number - 1]
+            bbox = provenance.bbox
+            origin = str(getattr(bbox.coord_origin, "value", bbox.coord_origin))
+            if origin.upper() == "BOTTOMLEFT":
+                rectangle = pymupdf.Rect(
+                    bbox.l, page.rect.height - bbox.t,
+                    bbox.r, page.rect.height - bbox.b)
+            else:
+                rectangle = pymupdf.Rect(bbox.l, bbox.t, bbox.r, bbox.b)
+            pdf_text = page.get_text("text", clip=rectangle, sort=True).strip()
+            cells = list(getattr(table.data, "table_cells", []) or [])
+            cell_text = " ".join(str(getattr(cell, "text", ""))
+                                 for cell in cells)
+            if not _source_table_needs_recovery(pdf_text, cell_text):
+                continue
+
+            first_row = sorted(
+                (cell for cell in cells
+                 if int(cell.start_row_offset_idx) == 0),
+                key=lambda cell: int(cell.start_col_offset_idx),
+            )
+            is_case_layout = bool(
+                first_row and re.match(
+                    r"\s*case\s+\d+\s*:", first_row[0].text, re.I))
+            if (int(getattr(table.data, "num_cols", 0)) == 2
+                    and len(first_row) >= 2 and not is_case_layout):
+                left_cells = [cell for cell in cells
+                              if int(cell.start_col_offset_idx) == 0]
+                right_cells = [cell for cell in cells
+                               if int(cell.start_col_offset_idx) == 1]
+                boundary = (
+                    max(cell.bbox.r for cell in left_cells)
+                    + min(cell.bbox.l for cell in right_cells)
+                ) / 2
+                body_top = max(cell.bbox.b for cell in first_row) + 1
+                def column_text(column_rectangle) -> str:
+                    blocks = page.get_text(
+                        "blocks", clip=column_rectangle, sort=True)
+                    return "\n\n".join(
+                        str(block[4]).strip() for block in blocks
+                        if str(block[4]).strip()
+                    )
+
+                left_text = column_text(pymupdf.Rect(
+                    rectangle.x0, body_top, boundary, rectangle.y1))
+                right_text = column_text(pymupdf.Rect(
+                    boundary, body_top, rectangle.x1, rectangle.y1))
+                left_header = _markdown_table_cell(first_row[0].text)
+                right_header = _markdown_table_cell(first_row[1].text)
+                markdown = (
+                    f"| {left_header} | {right_header} |\n"
+                    "|---|---|\n"
+                    f"| {_markdown_table_cell(left_text)} | "
+                    f"{_markdown_table_cell(right_text)} |"
+                )
+            else:
+                markdown = (
+                    "| Source table layout |\n|---|\n"
+                    f"| {_markdown_table_cell(pdf_text, preserve_lines=True)} |"
+                )
+            recovered[str(table.self_ref)] = _prepend_source_table_captions(
+                markdown, table, text_by_ref)
+    return recovered
+
+
+def _prepare_source_preserving_chunks(
+        raw_chunks: list, dl_doc, token_counter: Callable[[str], int],
+        max_tokens: int, *,
+        table_markdown_overrides: dict[str, str] | None = None,
+        structural_ranges: set[tuple[int, int]] | None = None,
+        ) -> list[tuple[str, list | None, list | None, bool]]:
+    """Separate mixed Docling tables from prose without duplicating either.
+
+    HybridChunker serializes a table as flattened ``key = value`` prose when
+    it shares a chunk with surrounding text.  Rebuild those mixed chunks from
+    their source DocItems, emit each table once as Markdown, and retain every
+    adjacent text item in source order.  The final boolean marks source-bound
+    fragments that must survive the generic minimum-word filter.
+    """
+    item_by_ref, _, _ = _docling_lineage_catalog(dl_doc)
+
+    table_markdown_by_ref: dict[str, str] = {}
+    table_caption_refs: set[str] = set()
+    for table_index, table in enumerate(getattr(dl_doc, "tables", []) or []):
+        if _doc_item_label(table) != "table":
+            continue
+        try:
+            markdown = table.export_to_markdown(doc=dl_doc)
+        except Exception:
+            continue
+        if not markdown or not markdown.strip():
+            continue
+        ref = str(getattr(table, "self_ref", f"#/tables/{table_index}"))
+        table_markdown_by_ref[ref] = (
+            (table_markdown_overrides or {}).get(ref, markdown).strip())
+        table_markdown_by_ref.setdefault(
+            f"#/tables/{table_index}", markdown.strip())
+        table_caption_refs.update(
+            str(getattr(caption, "cref", ""))
+            for caption in (getattr(table, "captions", []) or [])
+            if getattr(caption, "cref", "")
+        )
+
+    nested_footnotes_by_parent: dict[str, list[object]] = {}
+    for parent in list(getattr(dl_doc, "tables", []) or []) + list(
+            getattr(dl_doc, "pictures", []) or []):
+        parent_ref = str(getattr(parent, "self_ref", ""))
+        footnotes = [
+            item_by_ref.get(str(getattr(reference, "cref", "")))
+            for reference in (getattr(parent, "footnotes", []) or [])
+        ]
+        footnotes = [
+            footnote for footnote in footnotes
+            if footnote is not None
+            and "This and other authors' explanations draw" not in (
+                getattr(footnote, "text", "")
+                or getattr(footnote, "orig", "")
+            )
+        ]
+        if parent_ref and footnotes:
+            nested_footnotes_by_parent[parent_ref] = footnotes
+
+    nested_footnote_refs = {
+        str(getattr(footnote, "self_ref", ""))
+        for footnotes in nested_footnotes_by_parent.values()
+        for footnote in footnotes
+    }
+
+    prepared: list[tuple[str, list | None, list | None, bool]] = []
+    emitted_tables: set[str] = set()
+    emitted_nested_footnotes: set[str] = set()
+
+    page_headers: dict[int, list[tuple[float, str]]] = {}
+
+    def source_position(item) -> tuple[int, float] | None:
+        provenance = list(getattr(item, "prov", None) or [])
+        if not provenance:
+            return None
+        first = provenance[0]
+        bbox = getattr(first, "bbox", None)
+        if bbox is None:
+            return None
+        origin = str(getattr(bbox.coord_origin, "value", bbox.coord_origin))
+        vertical = (
+            -float(bbox.t) if origin.upper() == "BOTTOMLEFT"
+            else float(bbox.t)
+        )
+        return int(first.page_no), vertical
+
+    for item in getattr(dl_doc, "texts", []) or []:
+        if _doc_item_label(item) != "section_header":
+            continue
+        if (position := source_position(item)) is None:
+            continue
+        header_text = (
+            getattr(item, "text", "") or getattr(item, "orig", ""))
+        if header_text and header_text.strip():
+            page_headers.setdefault(position[0], []).append(
+                (position[1], header_text.strip()))
+    for headers in page_headers.values():
+        headers.sort()
+
+    def source_pages(item) -> list[int]:
+        return [
+            int(provenance.page_no)
+            for provenance in (getattr(item, "prov", None) or [])
+            if getattr(provenance, "page_no", None) is not None
+        ]
+
+    def fully_inside_structural_range(item) -> bool | None:
+        pages = source_pages(item)
+        if not pages:
+            return None
+        return all(
+            any(start <= page <= end for start, end in structural_ranges or ())
+            for page in pages
+        )
+
+    source_heading_by_ref: dict[str, str] = {}
+    for ref, item in item_by_ref.items():
+        if _doc_item_label(item) == "section_header":
+            continue
+        if (position := source_position(item)) is None:
+            continue
+        preceding = [
+            (vertical, heading) for vertical, heading
+            in page_headers.get(position[0], [])
+            if vertical < position[1]
+        ]
+        if preceding:
+            source_heading_by_ref[ref] = preceding[-1][1]
+
+    def missing_nested_footnote_entry(
+            parent_ref: str, headings: list | None):
+        missing_footnotes = []
+        missing_texts = []
+        for footnote in nested_footnotes_by_parent.get(parent_ref, []):
+            footnote_ref = str(getattr(footnote, "self_ref", ""))
+            if footnote_ref in emitted_nested_footnotes:
+                continue
+            footnote_text = (
+                getattr(footnote, "text", "")
+                or getattr(footnote, "orig", "")
+            )
+            if not footnote_text or not footnote_text.strip():
+                raise RuntimeError(
+                    f"Nested footnote {footnote_ref} has no source text")
+            missing_footnotes.append(footnote)
+            missing_texts.append(footnote_text.strip())
+            emitted_nested_footnotes.add(footnote_ref)
+        if not missing_footnotes:
+            return None
+        return (
+            "\n".join(missing_texts), headings, missing_footnotes, True,
+        )
+
+    def append_missing_nested_footnotes(
+            parent_ref: str, headings: list | None) -> None:
+        entry = missing_nested_footnote_entry(parent_ref, headings)
+        if entry is not None:
+            prepared.append(entry)
+
+    for chunk in raw_chunks:
+        items = list(
+            getattr(getattr(chunk, "meta", None), "doc_items", None) or [])
+        headings = getattr(getattr(chunk, "meta", None), "headings", None)
+        mapped_headings = [
+            source_heading_by_ref.get(
+                str(getattr(item, "self_ref", "")))
+            for item in items
+        ]
+        distinct_mapped_headings = list(dict.fromkeys(
+            heading for heading in mapped_headings if heading))
+        known_table_refs = {
+            str(getattr(item, "self_ref", ""))
+            for item in items
+            if _doc_item_label(item) == "table"
+            and str(getattr(item, "self_ref", "")) in table_markdown_by_ref
+        }
+        structural_flags = {
+            flag for item in items
+            if (flag := fully_inside_structural_range(item)) is not None
+        }
+        crosses_structural_boundary = structural_flags == {False, True}
+        if ((len(distinct_mapped_headings) > 1
+             or crosses_structural_boundary)
+                and not known_table_refs):
+            for item, mapped_heading in zip(items, mapped_headings):
+                ref = str(getattr(item, "self_ref", ""))
+                if ref in nested_footnote_refs:
+                    continue
+                source_item = item_by_ref.get(ref, item)
+                source_text = (
+                    getattr(source_item, "text", "")
+                    or getattr(source_item, "orig", "")
+                )
+                item_headings = (
+                    [mapped_heading] if mapped_heading else headings)
+                if source_text and source_text.strip():
+                    prepared.append((
+                        source_text.strip(), item_headings,
+                        [source_item], True,
+                    ))
+                append_missing_nested_footnotes(
+                    str(getattr(source_item, "self_ref", "")),
+                    item_headings)
+            continue
+        if not known_table_refs:
+            has_nested_footnotes = any(
+                str(getattr(item, "self_ref", "")) in nested_footnote_refs
+                for item in items
+            )
+            if has_nested_footnotes:
+                retained_items = [
+                    item_by_ref.get(
+                        str(getattr(item, "self_ref", "")), item)
+                    for item in items
+                    if str(getattr(item, "self_ref", ""))
+                    not in nested_footnote_refs
+                ]
+                retained_text = [
+                    (getattr(item, "text", "")
+                     or getattr(item, "orig", "")).strip()
+                    for item in retained_items
+                    if (getattr(item, "text", "")
+                        or getattr(item, "orig", "")).strip()
+                ]
+                if retained_text:
+                    prepared.append((
+                        "\n\n".join(retained_text), headings,
+                        retained_items, True,
+                    ))
+            else:
+                prepared.append((chunk.text, headings, items, False))
+            for item in items:
+                append_missing_nested_footnotes(
+                    str(getattr(item, "self_ref", "")), headings)
+            continue
+
+        pending_text: list[str] = []
+        pending_items: list[object] = []
+
+        def flush_text_items() -> None:
+            if not pending_text:
+                return
+            prepared.append((
+                "\n\n".join(pending_text), headings,
+                list(pending_items), True,
+            ))
+            pending_text.clear()
+            pending_items.clear()
+
+        for item in items:
+            ref = str(getattr(item, "self_ref", ""))
+            source_item = item_by_ref.get(ref, item)
+            if ref in nested_footnote_refs:
+                continue
+            if _doc_item_label(source_item) == "table" and ref in known_table_refs:
+                flush_text_items()
+                if ref in emitted_tables:
+                    continue
+                for table_part in _split_markdown_table_by_rows(
+                        table_markdown_by_ref[ref], token_counter, max_tokens):
+                    prepared.append((table_part, headings, [source_item], True))
+                emitted_tables.add(ref)
+                append_missing_nested_footnotes(ref, headings)
+                continue
+            if ref in nested_footnotes_by_parent:
+                flush_text_items()
+                append_missing_nested_footnotes(ref, headings)
+                continue
+            if ref in table_caption_refs:
+                # Docling includes a table's caption in export_to_markdown().
+                continue
+            source_text = (
+                getattr(source_item, "text", "")
+                or getattr(source_item, "orig", "")
+            )
+            if source_text and source_text.strip():
+                pending_text.append(source_text.strip())
+                pending_items.append(source_item)
+        flush_text_items()
+
+    def item_page(item) -> int | None:
+        pages = [
+            int(provenance.page_no)
+            for provenance in (getattr(item, "prov", None) or [])
+            if getattr(provenance, "page_no", None) is not None
+        ]
+        return min(pages) if pages else None
+
+    def prepared_page(entry) -> int | None:
+        pages = [
+            page
+            for item in (entry[2] or [])
+            if (page := item_page(item)) is not None
+        ]
+        return min(pages) if pages else None
+
+    orphaned_parents = [
+        (parent_ref, footnotes)
+        for parent_ref, footnotes in nested_footnotes_by_parent.items()
+        if any(
+            str(getattr(footnote, "self_ref", ""))
+            not in emitted_nested_footnotes
+            for footnote in footnotes
+        )
+    ]
+    orphaned_parents.sort(key=lambda pair: min(
+        (item_page(footnote) for footnote in pair[1]
+         if item_page(footnote) is not None),
+        default=sys.maxsize,
+    ))
+    for parent_ref, footnotes in orphaned_parents:
+        page = min(
+            (item_page(footnote) for footnote in footnotes
+             if item_page(footnote) is not None),
+            default=None,
+        )
+        if page is None:
+            raise RuntimeError(
+                f"Cannot place nested footnotes for {parent_ref}: "
+                "missing source page")
+        insert_at = 0
+        for index, entry in enumerate(prepared):
+            entry_page = prepared_page(entry)
+            if entry_page is not None and entry_page <= page:
+                insert_at = index + 1
+        inherited_headings = (
+            prepared[insert_at - 1][1] if insert_at else None)
+        entry = missing_nested_footnote_entry(
+            parent_ref, inherited_headings)
+        if entry is not None:
+            prepared.insert(insert_at, entry)
+
+    # HybridChunker can omit a small source item while retaining the same
+    # words in a neighboring mixed-layout chunk (for example, a one-word
+    # figure caption beside wrapped prose). Attach that source identity to the
+    # exact matching text; if its words are genuinely absent, publish a
+    # source-positioned fragment instead of silently losing the item.
+    represented_refs = {
+        str(getattr(item, "self_ref", ""))
+        for entry in prepared
+        for item in (entry[2] or [])
+        if getattr(item, "self_ref", "")
+    }
+    recovered_matching_items = 0
+    recovered_standalone_items = 0
+    eligible_labels = {
+        "text", "list_item", "footnote", "caption", "code", "table",
+    }
+    for ref, item in item_by_ref.items():
+        if ref in represented_refs or ref in table_caption_refs:
+            continue
+        label = _doc_item_label(item)
+        if label not in eligible_labels:
+            continue
+        content_layer = str(getattr(item, "content_layer", "")).lower()
+        if "furniture" in content_layer:
+            continue
+        if fully_inside_structural_range(item) is not False:
+            continue
+        source_text = (
+            getattr(item, "text", "") or getattr(item, "orig", ""))
+        source_text = source_text.strip()
+        if (label != "table" and not source_text
+                or re.fullmatch(
+                    r"\**\s*all\s+emphasis\s+added\.?\s*\**",
+                    source_text, re.I)
+                or "This and other authors' explanations draw" in source_text):
+            continue
+        page = item_page(item)
+        source_fingerprint = _text_fingerprint(source_text)
+        matching_index = next((
+            index for index, entry in enumerate(prepared)
+            if page is not None and prepared_page(entry) == page
+            and len(source_fingerprint) >= 5
+            and source_fingerprint in _text_fingerprint(entry[0])
+        ), None)
+        if matching_index is not None:
+            text, headings, items, preserve_short = prepared[matching_index]
+            prepared[matching_index] = (
+                text, headings, [*(items or []), item], True)
+            represented_refs.add(ref)
+            recovered_matching_items += 1
+            continue
+
+        if label == "table" and ref in table_markdown_by_ref:
+            orphan_parts = _split_markdown_table_by_rows(
+                table_markdown_by_ref[ref], token_counter, max_tokens)
+        else:
+            orphan_parts = [source_text] if source_text else []
+        if not orphan_parts or page is None:
+            continue
+        insert_at = 0
+        for index, entry in enumerate(prepared):
+            entry_page = prepared_page(entry)
+            if entry_page is not None and entry_page <= page:
+                insert_at = index + 1
+        inherited_headings = (
+            [source_heading_by_ref[ref]]
+            if ref in source_heading_by_ref else
+            prepared[insert_at - 1][1] if insert_at else None)
+        for part in orphan_parts:
+            prepared.insert(
+                insert_at, (part, inherited_headings, [item], True))
+            insert_at += 1
+        represented_refs.add(ref)
+        recovered_standalone_items += 1
+
+    if recovered_matching_items or recovered_standalone_items:
+        log.info(
+            "Recovered %s omitted source identities from matching chunks; "
+            "%s required standalone source fragments",
+            recovered_matching_items, recovered_standalone_items)
+
+    return prepared
+
+
+_HEADING_PROMPT = """This text belongs to the document division "{division_title}".
 The current section heading is "{heading}" which lacks context.
 Based on the text content, what is the full hierarchical section path?
-Format: "Chapter {chapter_num} > [Section Letter]. [Section Name] > [Subsection]"
+Begin the path with the exact division title and separate levels with " > ".
 Reply with ONLY the path, nothing else.
 
 Text (first 400 chars):
@@ -5014,7 +7638,13 @@ Text (first 400 chars):
 Full section path:"""
 
 
-def _reconstruct_heading(text, heading, chapter_num, chapter_title, **llm_kwargs):
+def _reconstruct_heading(
+        text, heading, chapter_num, chapter_title, *,
+        structure_profile: (
+            str | _document_profiles.StructureProfile
+        ) = DEFAULT_STRUCTURE_PROFILE,
+        **llm_kwargs,
+):
     """Use LLM to reconstruct a full section path from a bare heading.
 
     Only processes headings that are < 5 characters (bare "B", "III", "2", etc.).
@@ -5022,9 +7652,11 @@ def _reconstruct_heading(text, heading, chapter_num, chapter_title, **llm_kwargs
     """
     if len(heading) >= 5:
         return None
+    profile = _document_profiles.get_profile(structure_profile)
+    division_title = chapter_title or (
+        _document_profiles.fallback_division_title(profile, chapter_num))
     prompt = _HEADING_PROMPT.format(
-        chapter_num=chapter_num,
-        chapter_title=chapter_title or f"Chapter {chapter_num}",
+        division_title=division_title,
         heading=heading,
         text=text[:400],
     )
@@ -5033,13 +7665,30 @@ def _reconstruct_heading(text, heading, chapter_num, chapter_title, **llm_kwargs
     if not result:
         return None
     result = _THINK_TAG_RE.sub("", result).strip()
-    # Sanity check: result should contain the chapter number
-    if str(chapter_num) not in result:
+    # The profile-native title is always available, so a bare normalized
+    # ordinal is not enough to keep an LLM reconstruction in this division.
+    def normalize_title(value: str) -> str:
+        return re.sub(r"\s+", " ", value).strip().casefold()
+
+    first_component = re.split(r"\s*>\s*", result, maxsplit=1)[0]
+    if normalize_title(first_component) != normalize_title(division_title):
         return None
     # Cap length — should be a section path, not a paragraph
     if len(result) > 200:
         return None
     return result
+
+
+def _endpoint_parameter_binding(url: str) -> dict:
+    """Represent an exact endpoint without retaining credential material."""
+    endpoint = _validate_cloud_endpoint(url, allow_disabled=True)
+    return {
+        "policy_version": _endpoint_policy.ENDPOINT_POLICY_VERSION,
+        "endpoint_id": (
+            endpoint.endpoint_id if endpoint is not None
+            else _endpoint_policy.cloud_endpoint_identity("")
+        ),
+    }
 
 
 def _chunk_parameters(*, embedding_model: str, max_tokens: int,
@@ -5050,14 +7699,32 @@ def _chunk_parameters(*, embedding_model: str, max_tokens: int,
                       ollama_model: str, gemini_key: str,
                       cloud_url: str, cloud_model: str, cloud_key: str,
                       llm_workers: int, thinking: bool,
-                      reconstruct_headings: bool, quality_score: bool,
-                      llm_scaffold: bool) -> dict:
+                       reconstruct_headings: bool, quality_score: bool,
+                       llm_scaffold: bool,
+                       table_children: bool = False,
+                       structure_profile: (
+                          str | _document_profiles.StructureProfile
+                      ) = DEFAULT_STRUCTURE_PROFILE,
+                       security_policy: (
+                           _release_security.ReleaseSecurityPolicy | None
+                       ) = None) -> dict:
     """Return credential-free parameters that determine chunking output."""
+    profile = _document_profiles.get_profile(structure_profile)
+    llm_generation_enabled = any((
+        llm_classify,
+        contextualize,
+        reconstruct_headings,
+        quality_score,
+        llm_scaffold,
+    ))
+    policy = _effective_security_policy(security_policy)
     gemini_enabled = bool(
-        gemini_key or os.environ.get("GEMINI_API_KEY", ""))
+        llm_generation_enabled
+        and policy.network_policy == "allow-cloud"
+        and (gemini_key or "GEMINI_API_KEY" in os.environ))
     llm_config = _llm_runtime.config
     return {
-        "chunking_policy_version": 1,
+        "chunking_policy_version": 23,
         "classification_prompt_version": 1,
         "embedding_model": embedding_model,
         "max_tokens": max_tokens,
@@ -5070,13 +7737,14 @@ def _chunk_parameters(*, embedding_model: str, max_tokens: int,
         "zeroshot_model": (
             DEFAULT_ZEROSHOT_MODEL if zeroshot_classify else None),
         "contextualize": contextualize,
-        "ollama_url": ollama_url,
+        "ollama_url": _endpoint_parameter_binding(ollama_url),
         "ollama_model": ollama_model,
         "gemini_enabled": gemini_enabled,
         "gemini_model": DEFAULT_GEMINI_MODEL if gemini_enabled else None,
-        "cloud_url": cloud_url,
+        "cloud_url": _endpoint_parameter_binding(cloud_url),
         "cloud_model": cloud_model,
-        "cloud_enabled": bool(cloud_url and cloud_key),
+        "cloud_enabled": bool(
+            llm_generation_enabled and cloud_url and cloud_key),
         "llm_workers": llm_workers,
         "llm_fallback_policy": llm_config.fallback_policy,
         "llm_failure_policy": llm_config.failure_policy,
@@ -5087,27 +7755,445 @@ def _chunk_parameters(*, embedding_model: str, max_tokens: int,
         "reconstruct_headings": reconstruct_headings,
         "quality_score": quality_score,
         "llm_scaffold": llm_scaffold,
+        "table_children": table_children,
+        "table_retrieval_schema_version": (
+            _table_retrieval_core.TABLE_RETRIEVAL_SCHEMA_VERSION),
+        "table_child_min_rows": (
+            _table_retrieval_core.DEFAULT_TABLE_CHILD_MIN_ROWS),
+        "table_child_parent_cap": (
+            _table_retrieval_core.MAX_TABLE_CHILDREN_PER_PARENT),
+        "table_child_corpus_cap": (
+            _table_retrieval_core.MAX_TABLE_CHILDREN_PER_CORPUS),
+        "structure_profile": _document_profiles.profile_provenance(profile),
         "model_artifact_lock_sha256": _model_artifact_lock_sha256(),
+        "release_security": policy.provenance(),
     }
 
 
+_STRUCTURAL_SECTION_NAMES = (
+    _document_profiles.structural_section_keys(
+        _document_profiles.get_profile(DEFAULT_STRUCTURE_PROFILE)))
+
+
+def _book_structural_ranges(
+        book_sections: dict, *,
+        structure_profile: (
+            str | _document_profiles.StructureProfile
+        ) = DEFAULT_STRUCTURE_PROFILE,
+) -> set[tuple[int, int]]:
+    """Return the exact source-page ranges excluded from publication."""
+    profile = _document_profiles.get_profile(structure_profile)
+    structural_names = _document_profiles.structural_section_keys(profile)
+    ranges = {
+        (section["start"], section["end"])
+        for name in structural_names
+        if (section := book_sections.get(name)) is not None
+    }
+    opening_starts = [
+        section["start"]
+        for name in _document_profiles.toc_seed_keys(profile)
+        if (section := book_sections.get(name)) is not None
+    ]
+    if opening_starts and min(opening_starts) > 1:
+        ranges.add((1, min(opening_starts) - 1))
+    return ranges
+
+
+def _load_chunk_completion_inputs(
+        doc_path: Path, chunks_output: Path, *,
+        document_sha256: str, document_size: int,
+        chunks_sha256: str, chunks_size: int, parameters: dict,
+        records: list[dict], source_pdf_path: Path | None = None,
+) -> dict | None:
+    """Strictly validate chunk-v3 inputs against current exact artifacts."""
+    manifest_path = _artifact_completion_path(
+        chunks_output, stage="chunking")
+    try:
+        raw, _, _ = _read_index_artifact_snapshot(
+            manifest_path, max_bytes=_MAX_CHUNK_COMPLETION_BYTES)
+    except FileNotFoundError:
+        return None
+    payload = _strict_json_object(raw, description="chunk completion")
+    if payload.get("schema_version") != CHUNK_COMPLETION_SCHEMA_VERSION:
+        return None
+    if set(payload) != {
+            "schema_version", "stage", "source_sha256",
+            "source_record_count", "parameters_sha256", "outputs",
+            "inputs", "structure_profile",
+            "structure_profile_parameters_sha256"}:
+        raise ValueError("chunk completion has an invalid field set")
+    if (payload.get("stage") != "chunking"
+            or payload.get("source_sha256") != document_sha256
+            or payload.get("source_record_count") is not None
+            or payload.get("parameters_sha256")
+            != _artifact_parameters_sha256(parameters)):
+        raise ValueError("chunk completion header is invalid")
+    profile = _document_profiles.profile_from_provenance(
+        parameters.get("structure_profile"))
+    if payload.get("structure_profile") != (
+            _document_profiles.profile_provenance(profile)):
+        raise ValueError("chunk completion structure profile is invalid")
+    if payload.get("structure_profile_parameters_sha256") != (
+            _structure_profile_parameters_binding(
+                payload["parameters_sha256"], payload["structure_profile"])):
+        raise ValueError(
+            "chunk completion structure profile is detached from parameters")
+
+    outputs = payload.get("outputs")
+    if (not isinstance(outputs, list) or len(outputs) != 1
+            or not isinstance(outputs[0], dict)
+            or set(outputs[0]) != {"role", "name", "size", "sha256"}
+            or outputs[0].get("role") != "chunks_jsonl"
+            or outputs[0].get("name") != chunks_output.name
+            or outputs[0].get("size") != chunks_size
+            or outputs[0].get("sha256") != chunks_sha256):
+        raise ValueError("chunk completion output binding is invalid")
+
+    inputs = payload.get("inputs")
+    if (not isinstance(inputs, dict)
+            or set(inputs) != {
+                "docling_json", "conversion_manifest", "table_recovery"}):
+        raise ValueError("chunk completion inputs are invalid")
+    document_input = inputs.get("docling_json")
+    if (not _valid_manifest_file_record(document_input)
+            or document_input != {
+                "name": doc_path.name,
+                "size": document_size,
+                "sha256": document_sha256,
+            }):
+        raise ValueError("chunk completion Docling input is invalid")
+
+    conversion_binding = _load_conversion_source_binding(
+        doc_path,
+        document_sha256=document_sha256,
+        document_size=document_size,
+    )
+    conversion_input = inputs.get("conversion_manifest")
+    expected_conversion_input = (
+        {
+            "name": conversion_binding.manifest_path.name,
+            "sha256": conversion_binding.manifest_sha256,
+            "schema_version": conversion_binding.schema_version,
+        }
+        if conversion_binding is not None else None
+    )
+    if conversion_input != expected_conversion_input:
+        raise ValueError("chunk completion conversion input is invalid")
+
+    table_recovery = inputs.get("table_recovery")
+    if table_recovery is not None:
+        if (conversion_binding is None
+                or not isinstance(table_recovery, dict)
+                or set(table_recovery) != {
+                    "pdf", "conversion_manifest", "discovery"}
+                or table_recovery.get("conversion_manifest")
+                != expected_conversion_input
+                or table_recovery.get("discovery")
+                not in {"explicit", "adjacent", "ancestor"}):
+            raise ValueError("chunk completion table recovery is invalid")
+        pdf_input = table_recovery.get("pdf")
+        if (not isinstance(pdf_input, dict)
+                or set(pdf_input) != {
+                    "name", "size", "sha256", "capture_policy"}
+                or pdf_input.get("capture_policy")
+                != _CONVERSION_CAPTURE_POLICY
+                or not _valid_manifest_file_record({
+                    key: pdf_input.get(key)
+                    for key in ("name", "size", "sha256")
+                })
+                or pdf_input.get("size") != conversion_binding.source_size
+                or pdf_input.get("sha256")
+                != conversion_binding.source_sha256):
+            raise ValueError("chunk completion recovery PDF is invalid")
+
+    recovered_tables = any(
+        (record.get("metadata") or {}).get("table_recovered_from_pdf")
+        for record in records)
+    if recovered_tables and table_recovery is None:
+        raise ValueError(
+            "recovered tables lack a bound source-PDF input")
+
+    if source_pdf_path is not None:
+        if conversion_binding is None or table_recovery is None:
+            raise ValueError(
+                "explicit source PDF was not inspected by this chunk artifact")
+        source_generation = _hash_file_generation(
+            source_pdf_path,
+            expected_sha256=conversion_binding.source_sha256,
+        )
+        if (source_generation.size != conversion_binding.source_size
+                or table_recovery["pdf"]["sha256"]
+                != source_generation.sha256):
+            raise ValueError("explicit source PDF binding changed")
+    return inputs
+
+
 def _chunks_complete(doc_path: Path, chunks_output: Path, *,
-                     parameters: dict) -> bool:
+                     parameters: dict,
+                     source_pdf_path: Path | None = None) -> bool:
+    """Validate chunk completeness under the artifact-set lease."""
+    with _chunk_output_lease(chunks_output):
+        return _chunks_complete_locked(
+            doc_path, chunks_output,
+            parameters=parameters,
+            source_pdf_path=source_pdf_path,
+        )
+
+
+def _chunks_complete_locked(
+        doc_path: Path, chunks_output: Path, *, parameters: dict,
+        source_pdf_path: Path | None = None) -> bool:
     """Validate a chunk artifact and its source/configuration completion."""
     try:
-        source_sha256 = _cached_artifact_sha256(doc_path)
-    except (OSError, RuntimeError):
+        document_raw, source_sha256, _ = _read_index_artifact_snapshot(
+            doc_path)
+        chunks_raw, chunks_sha256, _ = _read_index_artifact_snapshot(
+            chunks_output)
+        records = _parse_index_records_strict(chunks_raw, chunks_output)
+        inputs = _load_chunk_completion_inputs(
+            doc_path, chunks_output,
+            document_sha256=source_sha256,
+            document_size=len(document_raw),
+            chunks_sha256=chunks_sha256,
+            chunks_size=len(chunks_raw),
+            parameters=parameters,
+            records=records,
+            source_pdf_path=source_pdf_path,
+        )
+    except (OSError, RuntimeError, ValueError):
         return False
-    if not _fixed_artifacts_complete(
-            _artifact_completion_path(chunks_output, stage="chunking"),
-            stage="chunking", source_sha256=source_sha256,
-            source_record_count=None, parameters=parameters,
-            outputs={"chunks_jsonl": chunks_output}):
+    if inputs is not None:
+        return bool(records)
+    # Schema-v1 cannot attest one Docling generation or supplemental PDF
+    # recovery.  It is readable for migration tooling but never "complete".
+    return False
+
+
+def _quality_report_complete(doc_path: Path, chunks_output: Path, *,
+                             parameters: dict) -> bool:
+    """Validate one quality report under its artifact-set lease."""
+    with _chunk_output_lease(chunks_output):
+        return _quality_report_complete_locked(
+            doc_path, chunks_output, parameters=parameters)
+
+
+def _quality_report_complete_locked(
+        doc_path: Path, chunks_output: Path, *, parameters: dict) -> bool:
+    """Validate the report against exact source, chunks, and parameters."""
+    try:
+        source_raw, source_sha256, _ = _read_index_artifact_snapshot(doc_path)
+        if not isinstance(json.loads(source_raw), dict):
+            return False
+        chunks_raw, chunks_sha256, _ = _read_index_artifact_snapshot(
+            chunks_output)
+        records = _parse_index_records_strict(chunks_raw, chunks_output)
+        input_bindings = _load_chunk_completion_inputs(
+            doc_path, chunks_output,
+            document_sha256=source_sha256,
+            document_size=len(source_raw),
+            chunks_sha256=chunks_sha256,
+            chunks_size=len(chunks_raw),
+            parameters=parameters,
+            records=records,
+        )
+        if input_bindings is None:
+            return False
+        schema_version, report_sha256, _ = _validated_quality_report_binding(
+            chunks_output,
+            records,
+            chunks_sha256,
+            len(chunks_raw),
+            source_name=Path(doc_path).name,
+            source_sha256=source_sha256,
+            parameters_sha256=_artifact_io._artifact_parameters_sha256(
+                parameters),
+            embedding_model=parameters.get("embedding_model"),
+            embedding_limit=EMBEDDING_MAX_TOKENS.get(
+                parameters.get("embedding_model")),
+            input_bindings=input_bindings,
+        )
+        return (
+            schema_version == _quality_core.QUALITY_REPORT_SCHEMA_VERSION
+            and isinstance(report_sha256, str)
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError,
+            RuntimeError):
         return False
-    return _chunk_record_count(chunks_output) is not None
+
+
+def _recovered_table_refs_from_records(records: list[dict]) -> set[str]:
+    refs = set()
+    for record in records:
+        metadata = record.get("metadata", {})
+        if not metadata.get("table_recovered_from_pdf"):
+            continue
+        for source_item in metadata.get("source_items", []):
+            if (isinstance(source_item, dict)
+                    and source_item.get("label") == "table"
+                    and isinstance(source_item.get("ref"), str)):
+                refs.add(source_item["ref"])
+    return refs
+
+
+def _publish_corpus_quality_report(
+        doc_path: Path, chunks_output: Path, *, parameters: dict,
+        structural_ranges: set[tuple[int, int]] | None = None,
+        document_snapshot: tuple[dict, str, int] | None = None,
+        chunk_inputs: dict | None = None,
+        structure_profile: (
+            str | _document_profiles.StructureProfile | None
+        ) = None,
+) -> dict:
+    """Publish quality evidence under the chunk artifact-set lease."""
+    with _chunk_output_lease(chunks_output):
+        return _publish_corpus_quality_report_locked(
+            doc_path, chunks_output,
+            parameters=parameters,
+            structural_ranges=structural_ranges,
+            document_snapshot=document_snapshot,
+            chunk_inputs=chunk_inputs,
+            structure_profile=structure_profile,
+        )
+
+
+def _publish_corpus_quality_report_locked(
+        doc_path: Path, chunks_output: Path, *, parameters: dict,
+        structural_ranges: set[tuple[int, int]] | None = None,
+        document_snapshot: tuple[dict, str, int] | None = None,
+        chunk_inputs: dict | None = None,
+        structure_profile: (
+            str | _document_profiles.StructureProfile | None
+        ) = None,
+) -> dict:
+    """Build and atomically publish a report over exact artifact snapshots."""
+    doc_path = Path(doc_path)
+    chunks_output = Path(chunks_output)
+    if document_snapshot is None:
+        source_raw, source_sha256, _ = _read_index_artifact_snapshot(doc_path)
+        source_size = len(source_raw)
+        try:
+            document = json.loads(source_raw)
+        except (UnicodeError, json.JSONDecodeError) as exc:
+            raise ValueError(f"Invalid Docling source JSON: {doc_path}") from exc
+        if not isinstance(document, dict):
+            raise ValueError(
+                f"Docling source must be a JSON object: {doc_path}")
+    else:
+        document, source_sha256, source_size = document_snapshot
+        if (not isinstance(document, dict)
+                or not isinstance(source_size, int) or source_size <= 0
+                or re.fullmatch(r"[0-9a-f]{64}", source_sha256) is None):
+            raise ValueError("Invalid captured Docling source snapshot")
+
+    chunks_raw, chunks_sha256, _ = _read_index_artifact_snapshot(
+        chunks_output)
+    records = _parse_index_records_strict(chunks_raw, chunks_output)
+    validated_chunk_inputs = _load_chunk_completion_inputs(
+        doc_path, chunks_output,
+        document_sha256=source_sha256,
+        document_size=source_size,
+        chunks_sha256=chunks_sha256,
+        chunks_size=len(chunks_raw),
+        parameters=parameters,
+        records=records,
+    )
+    if validated_chunk_inputs is None:
+        raise ValueError(
+            "Corpus quality requires a verified chunk-v3 completion")
+    if chunk_inputs is not None and chunk_inputs != validated_chunk_inputs:
+        raise RuntimeError(
+            "Chunk inputs changed before quality report publication")
+    chunk_inputs = validated_chunk_inputs
+    profile = _document_profiles.profile_from_provenance(
+        parameters.get("structure_profile"))
+    if (structure_profile is not None
+            and _document_profiles.get_profile(structure_profile) is not profile):
+        raise ValueError(
+            "quality-report structure profile does not match the attested "
+            "chunk parameters")
+    if structural_ranges is None:
+        structural_ranges = _book_structural_ranges(
+            _identify_book_sections(
+                document, structure_profile=profile),
+            structure_profile=profile)
+    stable_ids = [_retrieval_core._chunk_id(record) for record in records]
+    chunk_hashes = [_retrieval_core._chunk_hash(record) for record in records]
+    embedding_model = str(parameters.get("embedding_model") or "")
+    report = _quality_core.build_quality_report(
+        records=records,
+        stable_ids=stable_ids,
+        chunk_hashes=chunk_hashes,
+        document=document,
+        structural_ranges=structural_ranges,
+        recovered_table_refs=_recovered_table_refs_from_records(records),
+        source_name=doc_path.name,
+        source_sha256=source_sha256,
+        chunks_name=chunks_output.name,
+        chunks_sha256=chunks_sha256,
+        chunks_size=len(chunks_raw),
+        parameters_sha256=_artifact_io._artifact_parameters_sha256(
+            parameters),
+        embedding_model=embedding_model,
+        embedding_limit=EMBEDDING_MAX_TOKENS.get(embedding_model),
+        input_bindings=chunk_inputs,
+    )
+    report_path = _quality_core.quality_report_path(chunks_output)
+    _atomic_write_json(report_path, report)
+    if report["status"] != "pass":
+        failed = [
+            check["name"] for check in report["checks"]
+            if check["status"] == "fail"
+        ]
+        raise RuntimeError(
+            "Corpus quality gate failed: " + ", ".join(failed))
+
+    _validated_quality_report_binding(
+        chunks_output,
+        records,
+        chunks_sha256,
+        len(chunks_raw),
+        source_name=doc_path.name,
+        source_sha256=source_sha256,
+        parameters_sha256=_artifact_io._artifact_parameters_sha256(
+            parameters),
+        embedding_model=embedding_model,
+        embedding_limit=EMBEDDING_MAX_TOKENS.get(embedding_model),
+        input_bindings=chunk_inputs,
+    )
+    if (_cached_artifact_sha256(doc_path) != source_sha256
+            or _cached_artifact_sha256(chunks_output) != chunks_sha256):
+        raise RuntimeError(
+            "Source or chunks changed while publishing the quality report")
+    return report
+
+
+def _load_docling_document_snapshot(
+        doc_path: Path, document_type) -> tuple[object, dict, str, int]:
+    """Parse the model and mapping views from one exact JSON generation."""
+    raw, source_sha256, _ = _read_index_artifact_snapshot(doc_path)
+    last_error: Exception | None = None
+    for encoding in ("utf-8-sig", "latin-1"):
+        try:
+            decoded = raw.decode(encoding)
+            mapping = json.loads(decoded)
+            if not isinstance(mapping, dict):
+                raise ValueError("DoclingDocument JSON must be an object")
+        except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+            last_error = exc
+            continue
+        try:
+            document = document_type.model_validate(mapping)
+            return document, mapping, source_sha256, len(raw)
+        except Exception as exc:
+            # Pydantic/Docling validation failures are content failures, not a
+            # reason to parse the same mapping again under another encoding.
+            last_error = exc
+            break
+    raise ValueError(f"Cannot parse DoclingDocument: {doc_path}") from last_error
 
 
 def chunk_document(doc_path: Path, chunks_output: Path, *,
+                   source_pdf_path: Path | None = None,
                    embedding_model: str = DEFAULT_EMBEDDING_MODEL,
                    max_tokens: int = DEFAULT_MAX_TOKENS,
                    min_words: int = MIN_CHUNK_WORDS,
@@ -5126,7 +8212,85 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
                    thinking: bool = False,
                    reconstruct_headings: bool = False,
                    quality_score: bool = False,
-                   llm_scaffold: bool = False) -> None:
+                   llm_scaffold: bool = False,
+                   table_children: bool = False,
+                   structure_profile: (
+                       str | _document_profiles.StructureProfile
+                   ) = DEFAULT_STRUCTURE_PROFILE,
+                   security_policy: (
+                       _release_security.ReleaseSecurityPolicy | None
+                   ) = None) -> None:
+    """Build one complete chunk artifact set under a path-wide lease."""
+    profile = _document_profiles.get_profile(structure_profile)
+    chunks_output = Path(chunks_output)
+    _run_telemetry.validate_distinct_output_paths({
+        "Docling JSON": Path(doc_path),
+        "source PDF": (
+            Path(source_pdf_path) if source_pdf_path is not None else None),
+        "chunks JSONL": chunks_output,
+        "conversion completion": _artifact_completion_path(
+            Path(doc_path), stage="conversion"),
+        "chunk completion": _artifact_completion_path(
+            chunks_output, stage="chunking"),
+        "quality report": _quality_core.quality_report_path(chunks_output),
+    })
+    with _chunk_output_lease(chunks_output):
+        _chunk_document_locked(
+            doc_path, chunks_output,
+            source_pdf_path=source_pdf_path,
+            embedding_model=embedding_model,
+            max_tokens=max_tokens,
+            min_words=min_words,
+            dedup_threshold=dedup_threshold,
+            watermark=watermark,
+            llm_classify=llm_classify,
+            zeroshot_classify=zeroshot_classify,
+            contextualize=contextualize,
+            ollama_url=ollama_url,
+            ollama_model=ollama_model,
+            gemini_key=gemini_key,
+            cloud_url=cloud_url,
+            cloud_model=cloud_model,
+            cloud_key=cloud_key,
+            llm_workers=llm_workers,
+            thinking=thinking,
+            reconstruct_headings=reconstruct_headings,
+            quality_score=quality_score,
+            llm_scaffold=llm_scaffold,
+            table_children=table_children,
+            structure_profile=profile,
+            security_policy=security_policy,
+        )
+
+
+def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
+                   source_pdf_path: Path | None = None,
+                   embedding_model: str = DEFAULT_EMBEDDING_MODEL,
+                   max_tokens: int = DEFAULT_MAX_TOKENS,
+                   min_words: int = MIN_CHUNK_WORDS,
+                   dedup_threshold: float = DEDUP_THRESHOLD,
+                   watermark: Optional[re.Pattern] = None,
+                   llm_classify: bool = False,
+                   zeroshot_classify: bool = False,
+                   contextualize: bool = False,
+                   ollama_url: str = DEFAULT_OLLAMA_URL,
+                   ollama_model: str = DEFAULT_OLLAMA_MODEL,
+                   gemini_key: str = "",
+                   cloud_url: str = DEFAULT_CLOUD_URL,
+                   cloud_model: str = DEFAULT_CLOUD_MODEL,
+                   cloud_key: str = "",
+                   llm_workers: int = DEFAULT_LLM_WORKERS,
+                   thinking: bool = False,
+                   reconstruct_headings: bool = False,
+                   quality_score: bool = False,
+                   llm_scaffold: bool = False,
+                   table_children: bool = False,
+                   structure_profile: (
+                       str | _document_profiles.StructureProfile
+                   ) = DEFAULT_STRUCTURE_PROFILE,
+                   security_policy: (
+                       _release_security.ReleaseSecurityPolicy | None
+                   ) = None) -> None:
     """Load a DoclingDocument, chunk with HybridChunker, and enrich."""
     from docling_core.types import DoclingDocument
     from docling_core.transforms.chunker import HybridChunker
@@ -5135,6 +8299,7 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
     )
     from tqdm import tqdm
 
+    profile = _document_profiles.get_profile(structure_profile)
     _require_file(doc_path, "DoclingDocument JSON")
 
     completion_parameters = _chunk_parameters(
@@ -5147,9 +8312,10 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
         cloud_url=cloud_url, cloud_model=cloud_model, cloud_key=cloud_key,
         llm_workers=llm_workers, thinking=thinking,
         reconstruct_headings=reconstruct_headings,
-        quality_score=quality_score, llm_scaffold=llm_scaffold)
-    source_sha256 = _cached_artifact_sha256(doc_path)
-
+        quality_score=quality_score, llm_scaffold=llm_scaffold,
+        table_children=table_children,
+        structure_profile=profile,
+        security_policy=security_policy)
     requested_max_tokens = max_tokens
     reserve_tokens = _CONTEXT_TOKEN_RESERVE if contextualize else 0
     max_tokens = _effective_chunk_token_limit(
@@ -5169,23 +8335,13 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
         )
 
     log.info(f"Loading DoclingDocument from {doc_path}")
-    # Try bytes first (fast, avoids encoding issues for valid UTF-8 JSON).
-    # Fall back to string with encoding detection for legacy files.
     try:
-        dl_doc = DoclingDocument.model_validate_json(doc_path.read_bytes())
-    except Exception:
-        dl_doc = None
-        for enc in ("utf-8", "latin-1"):
-            try:
-                raw_json = doc_path.read_text(encoding=enc)
-                dl_doc = DoclingDocument.model_validate_json(raw_json)
-                break
-            except (UnicodeDecodeError, Exception):
-                continue
-        if dl_doc is None:
-            log.error(f"Cannot parse DoclingDocument: {doc_path}")
-            log.error("  File may be corrupted. Re-run 'convert' to regenerate.")
-            sys.exit(1)
+        dl_doc, doc_dict, source_sha256, source_size = (
+            _load_docling_document_snapshot(doc_path, DoclingDocument))
+    except (OSError, RuntimeError, ValueError):
+        log.error(f"Cannot parse DoclingDocument: {doc_path}")
+        log.error("  File may be corrupted. Re-run 'convert' to regenerate.")
+        sys.exit(1)
 
     # Derive total page count from the document itself
     total_pages = 0
@@ -5193,6 +8349,40 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
         total_pages = len(dl_doc.pages)
     if total_pages == 0:
         total_pages = 1  # prevent division by zero in fallback estimator
+
+    # Structural ranges must be known before enrichment so TOC/back-matter
+    # chunks cannot enter classification or inherit chapter metadata.
+    chapter_map = _build_chapter_map_from_document(
+        doc_dict, structure_profile=profile)
+    book_sections = _identify_book_sections(
+        doc_dict, structure_profile=profile)
+    has_toc = any(
+        book_sections.get(name) is not None
+        for name in _document_profiles.toc_seed_keys(profile)
+    )
+    if not has_toc:
+        log.error("FATAL: No Table of Contents or Contents section found.")
+        log.error(
+            "  The selected structure profile requires a recognized "
+            "TOC/Contents section. Cannot proceed.")
+        log.error(f"  Structure profile: {profile.name}")
+        log.error(f"  Document: {doc_path}")
+        sys.exit(1)
+
+    structural_ranges = _book_structural_ranges(
+        book_sections, structure_profile=profile)
+
+    # Validate the selected publisher policy before loading tokenizers or
+    # producing raw chunks.  A wrong profile must fail without publishing or
+    # spending the bulk of a chunking run on an unrecognized hierarchy.
+    llm_kwargs = dict(cloud_url=cloud_url, cloud_model=cloud_model,
+                      cloud_key=cloud_key, ollama_url=ollama_url,
+                      ollama_model=ollama_model, gemini_key=gemini_key,
+                      llm_workers=llm_workers, thinking=thinking,
+                      security_policy=security_policy)
+    scaffold = _build_scaffold(
+        doc_dict, book_sections, structure_profile=profile,
+        use_llm=llm_scaffold, **llm_kwargs)
 
     # The chunker tokenizer is for token counting only — it doesn't need to
     # match the embedding model exactly. API models (voyage-*, text-embedding-*,
@@ -5203,7 +8393,8 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
         log.info(f"Using {tokenizer_model} tokenizer for chunking "
                  f"(embedding model {embedding_model} is API-only)")
     tokenizer_source, tokenizer_verified = _model_loader_source(
-        tokenizer_model, "chunk_tokenizer")
+        tokenizer_model, "chunk_tokenizer",
+        security_policy=security_policy)
     tokenizer = HuggingFaceTokenizer.from_pretrained(
         model_name=tokenizer_source,
         max_tokens=max_tokens,
@@ -5217,8 +8408,66 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
     log.info(f"Chunking with model={embedding_model}, max_tokens={max_tokens}")
     raw_chunks = list(tqdm(chunker.chunk(dl_doc), desc="Chunking", unit="chunk"))
     log.info(f"HybridChunker produced {len(raw_chunks)} raw chunks")
+
+    conversion_binding = _load_conversion_source_binding(
+        doc_path,
+        document_sha256=source_sha256,
+        document_size=source_size,
+    )
+    table_markdown_overrides, table_recovery_input = (
+        _recover_bound_table_markdown(
+            dl_doc, doc_path, conversion_binding,
+            source_pdf_path=source_pdf_path,
+            forbidden_output_paths={
+                "chunks JSONL": chunks_output,
+                "chunk completion": _artifact_completion_path(
+                    chunks_output, stage="chunking"),
+                "quality report": _quality_core.quality_report_path(
+                    chunks_output),
+            }))
+    if table_markdown_overrides:
+        log.info(
+            "Recovered %s incomplete tables from source PDF text",
+            len(table_markdown_overrides))
+    elif conversion_binding is not None and table_recovery_input is None:
+        log.warning(
+            "No source PDF matching conversion hash is available; "
+            "skipping table-text recovery")
+    if conversion_binding is None:
+        log.debug(
+            "Capture-verified conversion lineage is unavailable; "
+            "skipping unbound table-text recovery")
+    chunk_input_bindings = {
+        "docling_json": {
+            "name": doc_path.name,
+            "size": source_size,
+            "sha256": source_sha256,
+        },
+        "conversion_manifest": (
+            {
+                "name": conversion_binding.manifest_path.name,
+                "sha256": conversion_binding.manifest_sha256,
+                "schema_version": conversion_binding.schema_version,
+            }
+            if conversion_binding is not None else None
+        ),
+        "table_recovery": table_recovery_input,
+    }
+    prepared_chunks = _prepare_source_preserving_chunks(
+        raw_chunks, dl_doc,
+        lambda value: int(tokenizer.count_tokens(value)), max_tokens,
+        table_markdown_overrides=table_markdown_overrides,
+        structural_ranges=structural_ranges)
+    (lineage_item_by_ref, lineage_parent_refs,
+     lineage_caption_refs) = _docling_lineage_catalog(dl_doc)
+
+    if len(prepared_chunks) != len(raw_chunks):
+        log.info(
+            f"Prepared {len(prepared_chunks)} source-preserving chunks from "
+            f"{len(raw_chunks)} raw chunks")
     raw_token_counts = [
-        int(tokenizer.count_tokens(chunk.text)) for chunk in raw_chunks
+        int(tokenizer.count_tokens(text))
+        for text, _, _, _ in prepared_chunks
     ]
 
     enriched = []
@@ -5230,23 +8479,68 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
     import multiprocessing
 
     source_file = doc_path.stem
+    def _fully_inside_structural_range(metadata: dict) -> bool:
+        page_start = metadata.get("page_start")
+        page_end = metadata.get("page_end")
+        if page_start is None or page_end is None:
+            return False
+        return any(
+            range_start <= page_start and page_end <= range_end
+            for range_start, range_end in structural_ranges
+        )
+
+    def _content_source_from_items(doc_items: list | None) -> str | None:
+        labels = {
+            _doc_item_label(item) for item in (doc_items or [])
+            if _doc_item_label(item)
+        }
+        if labels == {"table"}:
+            return "table"
+        if "footnote" in labels:
+            return "footnote" if labels == {"footnote"} else "mixed"
+        return "body" if labels else None
 
     def _enrich_one(args):
         """Pure function: clean + enrich a single chunk. No shared state."""
-        (i, chunk_text, headings, doc_items, total_c, total_p, wm_pattern,
-         src_file, token_count) = args
+        (i, chunk_text, headings, doc_items, preserve_short, total_c, total_p,
+         wm_pattern, src_file, token_count) = args
         clean = _normalize_text(
             strip_watermark(chunk_text, _compile_watermark(wm_pattern) if wm_pattern else None))
-        if len(clean.split()) < min_words:
+        content_source = _content_source_from_items(doc_items)
+        substantive_labels = {
+            _doc_item_label(item) for item in (doc_items or [])
+        } & {"text", "list_item", "footnote", "caption", "section_header",
+             }
+        if (len(clean.split()) < min_words
+                and content_source != "table" and not preserve_short
+                and not substantive_labels):
             return None, "tiny"
         record = enrich_chunk(
             chunk_text=clean, headings=headings,
             chunk_index=i, total_chunks=total_c,
             total_pages=total_p, doc_items=doc_items,
             source_file=src_file,
+            source_items=_source_lineage_for_items(
+                doc_items,
+                item_by_ref=lineage_item_by_ref,
+                parent_refs_by_child=lineage_parent_refs,
+                caption_refs_by_parent=lineage_caption_refs,
+            ),
+            structure_profile=profile,
         )
-        if record["metadata"]["content_type"] == "structural":
+        if (_fully_inside_structural_range(record["metadata"])
+                or record["metadata"]["content_type"] == "structural"):
             return None, "structural"
+        if content_source:
+            record["metadata"]["content_source"] = content_source
+        if content_source == "footnote":
+            record["metadata"]["content_type"] = "footnote"
+        item_refs = {
+            str(getattr(item, "self_ref", ""))
+            for item in (doc_items or [])
+        }
+        if item_refs & set(table_markdown_overrides):
+            record["metadata"]["table_recovered_from_pdf"] = True
         record["metadata"]["token_count"] = token_count
         return record, "ok"
 
@@ -5254,17 +8548,18 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
     wm_str = watermark.pattern if watermark else ""
     enrich_args = [
         (i,
-         chunk.text,
-         chunk.meta.headings if hasattr(chunk.meta, "headings") else None,
-         chunk.meta.doc_items if hasattr(chunk.meta, "doc_items") else None,
-         len(raw_chunks), total_pages, wm_str, source_file)
+         chunk_text,
+         headings,
+         doc_items, preserve_short,
+         len(prepared_chunks), total_pages, wm_str, source_file)
         + (raw_token_counts[i],)
-        for i, chunk in enumerate(raw_chunks)
+        for i, (chunk_text, headings, doc_items, preserve_short)
+        in enumerate(prepared_chunks)
     ]
 
     # Use threads (not processes) to avoid pickling issues with doc_items
-    n_workers = min(multiprocessing.cpu_count(), 8, len(raw_chunks))
-    if n_workers > 1 and len(raw_chunks) > 200:
+    n_workers = min(multiprocessing.cpu_count(), 8, len(prepared_chunks))
+    if n_workers > 1 and len(prepared_chunks) > 200:
         with ThreadPoolExecutor(max_workers=n_workers) as pool:
             results = list(tqdm(pool.map(_enrich_one, enrich_args),
                                 total=len(enrich_args),
@@ -5285,60 +8580,63 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
         log.info(f"Filtered: {filtered_structural} structural (TOC/index), "
                  f"{filtered_tiny} tiny (<{min_words} words)")
 
+    before_coalescing = len(enriched)
+    enriched = _coalesce_chunk_boundaries(
+        enriched,
+        lambda value: int(tokenizer.count_tokens(value)),
+        max_tokens,
+        hard_max_tokens=max(
+            max_tokens,
+            _effective_chunk_token_limit(
+                embedding_model,
+                EMBEDDING_MAX_TOKENS.get(embedding_model, max_tokens),
+                reserve_tokens=reserve_tokens,
+            ),
+        ),
+        structure_profile=profile,
+    )
+    if len(enriched) != before_coalescing:
+        log.info(
+            f"Boundary repair coalesced {before_coalescing - len(enriched)} "
+            "split chunks")
+
     # --- Pass 2: Chapter assignment (team-orchestrated) ---
     # Uses the 4-tier agent team hierarchy:
     #   Director (I) → Manager (II) → QC (III) → Expert(s) (IV)
     # Scaffold from TOC is the single source of truth.
 
-    llm_kwargs = dict(cloud_url=cloud_url, cloud_model=cloud_model,
-                      cloud_key=cloud_key, ollama_url=ollama_url,
-                      ollama_model=ollama_model, gemini_key=gemini_key,
-                      llm_workers=llm_workers, thinking=thinking)
-
-    # Load raw doc dict for scaffold functions
-    try:
-        doc_dict = json.loads(doc_path.read_bytes())
-    except Exception:
-        log.error(f"Cannot parse DoclingDocument JSON: {doc_path}")
-        sys.exit(1)
-
-    chapter_map = _build_chapter_map(doc_path)
-    book_sections = _identify_book_sections(doc_dict)
-    has_toc = (book_sections.get("toc") is not None
-               or book_sections.get("contents") is not None
-               or book_sections.get("summary") is not None)
-    if not has_toc:
-        log.error("FATAL: No Table of Contents or Contents section found.")
-        log.error("  Every book must have a TOC/Contents. Cannot proceed.")
-        log.error(f"  Document: {doc_path}")
-        sys.exit(1)
-
     # ── Team 1: Scaffold Construction ──
-    # (orchestrated inside _build_scaffold via its own _AgentTeam)
-    scaffold = _build_scaffold(
-        doc_dict, book_sections, use_llm=llm_scaffold, **llm_kwargs)
-    if not scaffold:
-        log.error("FATAL: TOC/Contents found but scaffold construction failed.")
-        if llm_scaffold:
-            log.error("  The deterministic and LLM parsers could not parse the TOC.")
-        else:
-            log.error("  Retry with --llm-scaffold to enable LLM-assisted parsing.")
-        log.error(f"  Document: {doc_path}")
-        sys.exit(1)
+    # (already orchestrated before tokenizer loading so profile mismatches
+    # fail early and cannot publish a guessed hierarchy)
 
-    scaffold_lookup = _build_scaffold_lookup(scaffold, max_page=total_pages + 50)
+    _scaffold_ch_titles = _canonical_chapter_titles(
+        scaffold, chapter_map, structure_profile=profile)
+    scaffold = _normalize_scaffold_metadata(scaffold, _scaffold_ch_titles)
+    observed_chapter_end = max(
+        (info.get("max_page", 0) for info in chapter_map.values()),
+        default=max((entry.get("page", 0) for entry in scaffold), default=0),
+    )
+    scaffold_lookup = _build_scaffold_lookup(
+        scaffold, max_page=observed_chapter_end)
     log.info(f"Scaffold: {len(scaffold)} entries, "
              f"lookup covers {len(scaffold_lookup)} pages")
-
-    # Build chapter_num → chapter_title map from scaffold level-1 entries
-    _scaffold_ch_titles = {}
-    for e in scaffold:
-        if e.get("level") == 1 and e.get("chapter_num") is not None:
-            _scaffold_ch_titles[e["chapter_num"]] = e.get("title", "")
 
     def _apply_scaffold_to_chunks(chunks, s_lookup, ch_map, ch_titles):
         """Assign chapter/section metadata from scaffold lookup."""
         assigned = 0
+
+        def _canonical_path(path: str, chapter_num: int | None) -> str:
+            chapter_title = ch_titles.get(chapter_num) if chapter_num else None
+            if not chapter_title:
+                return path
+            parts = [part.strip() for part in path.split(" > ") if part.strip()]
+            if (parts and _document_profiles.match_division(
+                    parts[0], profile, "canonical_title") is not None):
+                parts[0] = chapter_title
+            elif not parts or parts[0] != chapter_title:
+                parts.insert(0, chapter_title)
+            return " > ".join(parts)
+
         for rec in chunks:
             page = rec["metadata"].get("page_start")
             if page is None:
@@ -5355,12 +8653,16 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
                         ch_num, entry.get("title", ""))
                     assigned += 1
                 if entry.get("path"):
-                    rec["metadata"]["section_path"] = entry["path"]
+                    rec["metadata"]["section_path"] = _canonical_path(
+                        entry["path"], ch_num)
             elif page and ch_map:
                 ch_num, ch_title = _assign_chapter_by_page(page, ch_map)
                 if ch_num is not None:
                     rec["metadata"]["chapter_num"] = ch_num
-                    rec["metadata"]["chapter_title"] = ch_title
+                    rec["metadata"]["chapter_title"] = ch_titles.get(
+                        ch_num, ch_title)
+                    rec["metadata"]["section_path"] = _canonical_path(
+                        rec["metadata"].get("section_path", ""), ch_num)
                     assigned += 1
         return assigned
 
@@ -5392,7 +8694,7 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
                     ch, ct = _assign_chapter_by_page(pg, ch_map)
                     if ch is not None:
                         rec["metadata"]["chapter_num"] = ch
-                        rec["metadata"]["chapter_title"] = ct
+                        rec["metadata"]["chapter_title"] = ch_titles.get(ch, ct)
                         fixed += 1
         return fixed
 
@@ -5507,7 +8809,8 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
         llm_kwargs = dict(ollama_url=ollama_url, ollama_model=ollama_model,
                           gemini_key=gemini_key, cloud_url=cloud_url,
                           cloud_model=cloud_model, cloud_key=cloud_key,
-                          llm_workers=llm_workers, thinking=thinking)
+                          llm_workers=llm_workers, thinking=thinking,
+                          security_policy=security_policy)
 
         # Only reconstruct low-quality headings (bare letters/numerals)
         low_quality = [r for r in enriched
@@ -5525,7 +8828,8 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
             ch_title = rec["metadata"].get("chapter_title", "")
             heading = sp if sp else "(none)"
             return _reconstruct_heading(
-                rec["text"], heading, ch_num, ch_title, **llm_kwargs)
+                rec["text"], heading, ch_num, ch_title,
+                structure_profile=profile, **llm_kwargs)
 
         if workers > 1 and len(low_quality) > 0:
             with ThreadPoolExecutor(max_workers=workers) as pool:
@@ -5565,7 +8869,8 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
                 log.info(
                     f"Loading zero-shot classifier: {DEFAULT_ZEROSHOT_MODEL}")
                 model_source, verified = _model_loader_source(
-                    DEFAULT_ZEROSHOT_MODEL, "zero_shot_classifier")
+                    DEFAULT_ZEROSHOT_MODEL, "zero_shot_classifier",
+                    security_policy=security_policy)
                 _zeroshot_classifier = hf_pipeline(
                     "zero-shot-classification",
                     model=model_source,
@@ -5632,8 +8937,9 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
                 desc.append(f"classifying ({ollama_model})")
         if contextualize:
             desc.append("contextualizing")
-        provider_chain = (f"Cloud ({cloud_url.split('//')[1].split('/')[0]}) -> "
-                          if cloud_url and cloud_key else "")
+        provider_chain = (
+            f"Cloud ({_llm_endpoint_id(cloud_url)}) -> "
+            if cloud_url and cloud_key else "")
 
         # Parallel when using cloud API, sequential for local Ollama
         is_cloud = bool(cloud_url and cloud_key)
@@ -5645,7 +8951,8 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
         llm_kwargs = dict(ollama_url=ollama_url, ollama_model=ollama_model,
                           gemini_key=gemini_key, cloud_url=cloud_url,
                           cloud_model=cloud_model, cloud_key=cloud_key,
-                          llm_workers=llm_workers, thinking=thinking)
+                          llm_workers=llm_workers, thinking=thinking,
+                          security_policy=security_policy)
         _lock = threading.Lock()
 
         def _process_chunk(rec):
@@ -5724,12 +9031,50 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
             score_dist[s] = score_dist.get(s, 0) + 1
         log.info(f"Quality distribution: {dict(sorted(score_dist.items()))}")
 
+    # Preserve repeated source-table rows that row packing renders as
+    # byte-identical fragments.  The first occurrence keeps its historical ID;
+    # later occurrences receive deterministic disambiguators.
+    annotated_fragments = (
+        _table_retrieval_core.annotate_table_fragment_occurrences(
+            enriched, stable_id_fn=_chunk_id))
+    if annotated_fragments:
+        log.info(
+            "Disambiguated %s otherwise identical table fragments",
+            annotated_fragments,
+        )
+
     # Deduplicate near-identical chunks
     enriched = _deduplicate_chunks(enriched, threshold=dedup_threshold)
+
+    if table_children:
+        primary_count = len(enriched)
+        enriched = _table_retrieval_core.expand_table_records(
+            enriched,
+            stable_id_fn=_chunk_id,
+            token_count_fn=lambda value: int(tokenizer.count_tokens(value)),
+        )
+        child_count = len(enriched) - primary_count
+        log.info(
+            "Generated %s header-propagated table retrieval children",
+            child_count,
+        )
 
     # Re-index chunk_index after filtering
     for i, rec in enumerate(enriched):
         rec["metadata"]["chunk_index"] = i
+
+    # Stable adjacency is meaningful only after every filter, merge, and
+    # deduplication decision has established the canonical published order.
+    _retrieval_core._attach_retrieval_linkage(enriched)
+
+    _validate_chunk_structure_for_publication(
+        enriched,
+        scaffold=scaffold,
+        book_sections=book_sections,
+        chapter_map=chapter_map,
+        chapter_titles=_scaffold_ch_titles,
+        structure_profile=profile,
+    )
 
     # Record the final embedding payload size with the provider/model tokenizer
     # where available, including special tokens and contextual prefixes.
@@ -5753,7 +9098,25 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
         _artifact_completion_path(chunks_output, stage="chunking"),
         stage="chunking", source_sha256=source_sha256,
         source_record_count=None, parameters=completion_parameters,
-        outputs={"chunks_jsonl": chunks_output})
+        outputs={"chunks_jsonl": chunks_output},
+        schema_version=CHUNK_COMPLETION_SCHEMA_VERSION,
+        extra_fields={
+            "inputs": chunk_input_bindings,
+            "structure_profile": completion_parameters["structure_profile"],
+            "structure_profile_parameters_sha256": (
+                _structure_profile_parameters_binding(
+                    _artifact_parameters_sha256(completion_parameters),
+                    completion_parameters["structure_profile"])),
+        })
+    quality_report = _publish_corpus_quality_report_locked(
+        doc_path,
+        chunks_output,
+        parameters=completion_parameters,
+        structural_ranges=structural_ranges,
+        document_snapshot=(doc_dict, source_sha256, source_size),
+        chunk_inputs=chunk_input_bindings,
+        structure_profile=profile,
+    )
 
     # Stats
     type_counts: dict[str, int] = {}
@@ -5765,6 +9128,11 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
     avg_wc = sum(word_counts) / len(word_counts) if word_counts else 0
 
     log.info(f"Wrote {len(enriched)} enriched chunks → {chunks_output}")
+    log.info(
+        "Corpus quality: %s → %s",
+        quality_report["status"].upper(),
+        _quality_core.quality_report_path(chunks_output),
+    )
     log.info(f"Content types: {json.dumps(type_counts, indent=2)}")
     if word_counts:
         log.info(f"Word counts — min: {min(word_counts)}, "
@@ -5794,9 +9162,7 @@ def _prepare_chroma_batch(
         "page_start", "page_end", "chapter_num", "table_rows", "table_cols",
     }
     for record, document, stable_id in zip(batch, documents, ids):
-        context = record["metadata"].get("context", "")
-        embedding_inputs.append(
-            f"{context}\n\n{document}" if context else document)
+        embedding_inputs.append(_embedding_text(record))
 
         metadata = record["metadata"].copy()
         # Chroma uses this value as the document ID but does not return IDs in
@@ -5960,13 +9326,73 @@ def _require_chroma_stable_ids(
     return physical_ids
 
 
+def _new_vector_update_lifecycle(
+        db_dir: Path, *, backend: str, collection_name: str,
+        source_sha256: str, source_record_count: int,
+        target_ids: set[str] | frozenset[str],
+        active_update_token: str | None,
+        ) -> _vector_lifecycle.VectorUpdateLifecycle:
+    """Compose backend-neutral lifecycle policy with late-bound facades."""
+    if backend == "chroma":
+        marker_path = _chroma_update_marker_path(
+            db_dir, collection_name=collection_name)
+
+        def begin_update(owner_token: str, replace_existing: bool):
+            return _begin_chroma_index_update(
+                db_dir, collection_name=collection_name,
+                source_sha256=source_sha256,
+                source_record_count=source_record_count,
+                owner_token=owner_token,
+                replace_existing=replace_existing)
+    elif backend == "qdrant":
+        marker_path = _qdrant_update_marker_path(
+            db_dir, collection_name=collection_name)
+
+        def begin_update(owner_token: str, replace_existing: bool):
+            return _begin_qdrant_index_update(
+                db_dir, collection_name=collection_name,
+                source_sha256=source_sha256,
+                source_record_count=source_record_count,
+                owner_token=owner_token,
+                replace_existing=replace_existing)
+    else:
+        raise ValueError(f"Unsupported vector lifecycle backend: {backend}")
+
+    def marker_owned(owner_token: str | None) -> bool:
+        return _index_update_marker_owned_by(
+            marker_path, owner_token, backend=backend,
+            collection_name=collection_name)
+
+    def finish_update(owner_token: str) -> None:
+        _finish_index_update(
+            marker_path, owner_token=owner_token, backend=backend,
+            collection_name=collection_name)
+
+    guard = _vector_lifecycle.UpdateGuard(
+        backend=backend,
+        collection_name=collection_name,
+        marker_path=marker_path,
+        active_token=active_update_token,
+        marker_owned_fn=marker_owned,
+        begin_update_fn=begin_update,
+        finish_update_fn=finish_update,
+        token_factory=lambda: uuid4().hex,
+    )
+    return _vector_lifecycle.VectorUpdateLifecycle(
+        target_ids=target_ids, guard=guard)
+
+
 def _index_chunks_chroma_impl(
         chunks_path: Path, chroma_dir: Path, *,
         collection_name: str = DEFAULT_COLLECTION,
         embedding_model: str = DEFAULT_EMBEDDING_MODEL,
         full_reindex: bool = False,
+        security_policy: (
+            _release_security.ReleaseSecurityPolicy | None
+        ) = None,
         _active_update_token: str | None = None,
         _client_owner: _VectorClientOwner,
+        _operation_tracker: _IndexOperationalTracker,
         ) -> _operation_contracts.IndexOutcome:
     """Load enriched chunks and index into a local ChromaDB collection."""
     import chromadb
@@ -5975,8 +9401,12 @@ def _index_chunks_chroma_impl(
     _require_file(chunks_path, "Chunks JSONL")
 
     log.info(f"Loading chunks from {chunks_path}")
-    records, source_sha256, _ = _load_index_snapshot_strict(chunks_path)
+    (records, source_sha256, _,
+     quality_binding) = _load_index_snapshot_with_quality(
+         chunks_path, allow_legacy_quality=False)
+    quality_schema_version, quality_report_sha256 = quality_binding
     source_record_count = len(records)
+    table_child_count = _table_retrieval_core.table_child_count(records)
     _validate_embedding_token_counts(
         records, embedding_model, recompute=True)
     chunk_info = [(record, _chunk_id(record), _chunk_hash(record))
@@ -5990,7 +9420,8 @@ def _index_chunks_chroma_impl(
 
     chroma_dir = _storage_policy.ensure_private_tree(chroma_dir)
     client = _client_owner.own(
-        chromadb.PersistentClient(path=str(chroma_dir)))
+        chromadb.PersistentClient(
+            path=str(chroma_dir), **_chroma_settings_kwargs(chromadb)))
 
     try:
         collection = client.get_collection(collection_name)
@@ -5999,7 +9430,8 @@ def _index_chunks_chroma_impl(
         collection = None
         collection_exists = False
 
-    embedding_dimension = _embedding_dimension(embedding_model)
+    embedding_dimension = _embedding_dimension(
+        embedding_model, security_policy=security_policy)
     old_hashes, rebuild_collection, rebuild_reason = (
         _resolve_incremental_index_state(
             chroma_dir, backend="chroma", collection_name=collection_name,
@@ -6011,118 +9443,96 @@ def _index_chunks_chroma_impl(
         )
     )
     collection_existed_at_start = collection_exists
-    changed_count = source_record_count
-    unchanged_count = 0
-    removed_count = 0
-    reuse_existing_collection = collection_exists and not rebuild_collection
-    update_marker_path = _chroma_update_marker_path(
-        chroma_dir, collection_name=collection_name)
-    update_token = (
-        _active_update_token
-        if _index_update_marker_owned_by(
-            update_marker_path, _active_update_token, backend="chroma",
-            collection_name=collection_name)
-        else None
-    )
-    update_guarded = update_token is not None
-
-    def _ensure_update_guard() -> None:
-        nonlocal update_guarded, update_token
-        if update_guarded:
-            if not _index_update_marker_owned_by(
-                    update_marker_path, update_token, backend="chroma",
-                    collection_name=collection_name):
-                raise RuntimeError(
-                    "Chroma index update marker ownership was lost before "
-                    "physical mutation")
-            return
-        update_token = uuid4().hex
-        try:
-            _begin_chroma_index_update(
-                chroma_dir, collection_name=collection_name,
-                source_sha256=source_sha256,
-                source_record_count=source_record_count,
-                owner_token=update_token,
-                replace_existing=update_marker_path.exists())
-        except BaseException:
-            update_token = None
-            raise
-        update_guarded = True
+    plan = _vector_lifecycle.plan_reconciliation(chunk_info, old_hashes)
+    new_hashes = plan.new_hashes
+    update_lifecycle = _new_vector_update_lifecycle(
+        chroma_dir, backend="chroma", collection_name=collection_name,
+        source_sha256=source_sha256,
+        source_record_count=source_record_count,
+        target_ids=plan.target_ids,
+        active_update_token=_active_update_token)
+    operation_tracker = _operation_tracker
 
     if rebuild_collection:
         log.info("Rebuilding Chroma collection '%s': %s",
                  collection_name, rebuild_reason)
-        _ensure_update_guard()
-        client.delete_collection(collection_name)
-        collection = None
-        collection_exists = False
 
-    if not collection_exists:
-        _ensure_update_guard()
-        collection = client.get_or_create_collection(
+    def _delete_collection() -> None:
+        operation_tracker.collection_delete_calls += 1
+        client.delete_collection(collection_name)
+
+    def _create_collection():
+        operation_tracker.collection_create_calls += 1
+        return client.get_or_create_collection(
             name=collection_name,
             metadata={"hnsw:space": "cosine"},
         )
 
-    # --- Incremental indexing: skip unchanged chunks ---
-    if old_hashes:
-        changed_info = [
-            (record, chunk_id, chunk_hash)
-            for record, chunk_id, chunk_hash in chunk_info
-            if chunk_hash != old_hashes.get(chunk_id)
-        ]
-        changed = [record for record, _, _ in changed_info]
-        removed_ids = [k for k in old_hashes if k not in new_hashes]
-        changed_count = len(changed)
-        unchanged_count = source_record_count - changed_count
-        removed_count = len(removed_ids)
-        changed_existing_ids = [
-            chunk_id for _, chunk_id, _ in changed_info
-            if chunk_id in old_hashes
-        ]
-        deletion_ids = removed_ids + changed_existing_ids
-        _require_chroma_stable_ids(
-            collection, collection_name, set(old_hashes))
-        if deletion_ids:
-            delete_batch_size = _chroma_mutation_batch_size(client)
-            _ensure_update_guard()
-            for start in range(0, len(deletion_ids), delete_batch_size):
-                collection.delete(
-                    ids=deletion_ids[start:start + delete_batch_size])
-            _require_chroma_stable_ids(
-                collection, collection_name,
-                set(old_hashes).difference(deletion_ids))
+    def _verify_stable_ids(handle, expected):
+        return _require_chroma_stable_ids(
+            handle, collection_name, expected)
 
-        unchanged = len(records) - len(changed)
-        log.info(f"Incremental: {len(changed)} changed, {unchanged} unchanged "
-                 f"(skipped), {len(removed_ids)} removed")
-        if not changed:
-            _client_owner.close(client)
-            _save_index_manifest(
-                chroma_dir, backend="chroma",
-                collection_name=collection_name,
-                embedding_model=embedding_model,
-                embedding_dimension=embedding_dimension,
-                chunk_hashes=new_hashes, source_sha256=source_sha256,
-                source_record_count=source_record_count)
-            if update_guarded:
-                _finish_index_update(
-                    update_marker_path, owner_token=update_token,
-                    backend="chroma", collection_name=collection_name)
-            disposition = "updated" if removed_count else "unchanged"
-            return _operation_contracts.IndexOutcome(
-                backend="chroma", disposition=disposition,
-                total_records=source_record_count,
-                changed_records=changed_count,
-                unchanged_records=unchanged_count,
-                removed_records=removed_count,
-                upserted_records=0, batch_count=0,
-                physical_count=source_record_count, committed=True)
-        records = changed
-    elif reuse_existing_collection:
-        # A compatible empty manifest is safe to populate only if the physical
-        # collection is also empty.
-        _require_chroma_stable_ids(collection, collection_name, set())
+    def _delete_stable_ids(handle, stable_ids, _verified) -> None:
+        delete_batch_size = _chroma_mutation_batch_size(client)
+        for start in range(0, len(stable_ids), delete_batch_size):
+            operation_tracker.record_delete_calls += 1
+            handle.delete(
+                ids=list(stable_ids[start:start + delete_batch_size]))
+
+    reconciled = _vector_lifecycle.reconcile_collection(
+        lifecycle=update_lifecycle,
+        plan=plan,
+        handle=collection,
+        collection_exists=collection_exists,
+        rebuild_collection=rebuild_collection,
+        delete_collection_fn=_delete_collection,
+        create_collection_fn=_create_collection,
+        verify_stable_ids_fn=_verify_stable_ids,
+        delete_stable_ids_fn=_delete_stable_ids,
+    )
+    collection = reconciled.handle
+
+    def _save_manifest():
+        return _save_index_manifest(
+            chroma_dir, backend="chroma",
+            collection_name=collection_name,
+            embedding_model=embedding_model,
+            embedding_dimension=embedding_dimension,
+            chunk_hashes=new_hashes, source_sha256=source_sha256,
+            source_record_count=source_record_count,
+            table_child_count=table_child_count,
+            quality_report_schema_version=quality_schema_version,
+            quality_report_sha256=quality_report_sha256)
+
+    if old_hashes:
+        log.info(
+            "Incremental: %d changed, %d unchanged (skipped), %d removed",
+            plan.changed_count, plan.unchanged_count, plan.removed_count)
+
+    if not plan.changed_items:
+        if reconciled.receipt is None:
+            raise RuntimeError(
+                "Vector reconciliation produced no final verification")
+        verified_ids = update_lifecycle.commit(
+            reconciled.receipt,
+            close_client_fn=lambda: _client_owner.close(client),
+            save_manifest_fn=_save_manifest)
+        operation_tracker.committed = True
+        disposition = (
+            "created" if not collection_existed_at_start else
+            "rebuilt" if rebuild_collection else
+            "updated" if plan.removed_count else
+            "unchanged")
+        return _operation_contracts.IndexOutcome(
+            backend="chroma", disposition=disposition,
+            total_records=source_record_count,
+            changed_records=plan.changed_count,
+            unchanged_records=plan.unchanged_count,
+            removed_records=plan.removed_count,
+            upserted_records=0, batch_count=0,
+            physical_count=len(verified_ids), committed=True,
+            operations=operation_tracker.contract())
+    records = list(plan.changed_records)
 
     # --- Parallel embedding + pipelined upsert ---
     # For API-based embeddings (Voyage, OpenAI, Cohere), embed batches in
@@ -6133,7 +9543,7 @@ def _index_chunks_chroma_impl(
                        for p in ("voyage-", "text-embedding-", "embed-", "cohere-",
                                  "embo-", "minimax-emb"))
     # API models have per-batch token limits (Voyage: 120K tokens).
-    # With 4096-token chunks, 25 chunks × 4096 ≈ 100K tokens (safely under 120K).
+    # The configured default leaves ample room under API batch-token limits.
     # Local models can handle larger batches since there's no API limit.
     BATCH_SIZE = 25 if is_api_model else 100
     embed_workers = 4 if is_api_model else 1
@@ -6141,13 +9551,24 @@ def _index_chunks_chroma_impl(
     def _embed_batch(batch_data):
         """Embed a batch and return (ids, embeddings, documents, metadatas)."""
         ids, embedding_inputs, documents, metadatas = batch_data
-        embeddings = _embed_texts(embedding_inputs, embedding_model)
+        embeddings = _embed_texts(
+            embedding_inputs, embedding_model,
+            security_policy=security_policy)
         return ids, embeddings, documents, metadatas
 
     batches = _batch_index_records(
         records, embedding_model, max_records=BATCH_SIZE)
     prepared = [_prepare_chroma_batch(batch) for batch in batches]
-    _ensure_update_guard()
+    update_lifecycle.prepare_mutation()
+
+    def _upsert_prepared(ids, embeddings, documents, metadatas) -> None:
+        def _upsert() -> None:
+            operation_tracker.upsert_calls += 1
+            collection.upsert(
+                ids=ids, embeddings=embeddings,
+                documents=documents, metadatas=metadatas)
+
+        update_lifecycle.mutate(_upsert)
 
     if embed_workers > 1:
         # Parallel embedding for API models (network I/O bound)
@@ -6167,8 +9588,8 @@ def _index_chunks_chroma_impl(
             # Upsert in order
             for i in range(len(batches)):
                 ids, embeddings, documents, metadatas = results_map[i]
-                collection.upsert(ids=ids, embeddings=embeddings,
-                                  documents=documents, metadatas=metadatas)
+                _upsert_prepared(
+                    ids, embeddings, documents, metadatas)
                 pbar.update(1)
         except BaseException as exc:
             parallel_error = exc
@@ -6187,8 +9608,7 @@ def _index_chunks_chroma_impl(
                 if item is None:
                     break
                 ids, embs, docs, metas = item
-                collection.upsert(ids=ids, embeddings=embs,
-                                  documents=docs, metadatas=metas)
+                _upsert_prepared(ids, embs, docs, metas)
                 pbar.update(1)
                 upsert_q.task_done()
 
@@ -6205,6 +9625,7 @@ def _index_chunks_chroma_impl(
                     upsert_q,
                     (ids, embeddings, documents, metadatas),
                     upsert_future,
+                    metrics=operation_tracker.queue,
                 )
         except BaseException as exc:
             pipeline_error = exc
@@ -6215,18 +9636,15 @@ def _index_chunks_chroma_impl(
                 worker_name="Chroma upsert worker",
                 primary_error=pipeline_error)
 
-    verified_ids = _require_chroma_stable_ids(
-        collection, collection_name, set(new_hashes))
-    _client_owner.close(client)
-    _save_index_manifest(
-        chroma_dir, backend="chroma", collection_name=collection_name,
-        embedding_model=embedding_model,
-        embedding_dimension=embedding_dimension,
-        chunk_hashes=new_hashes, source_sha256=source_sha256,
-        source_record_count=source_record_count)
-    _finish_index_update(
-        update_marker_path, owner_token=update_token, backend="chroma",
-        collection_name=collection_name)
+    verification = update_lifecycle.verify(
+        plan.target_ids,
+        lambda expected: _require_chroma_stable_ids(
+            collection, collection_name, expected))
+    verified_ids = update_lifecycle.commit(
+        verification,
+        close_client_fn=lambda: _client_owner.close(client),
+        save_manifest_fn=_save_manifest)
+    operation_tracker.committed = True
 
     log.info(
         "Collection '%s' → %d documents",
@@ -6242,48 +9660,64 @@ def _index_chunks_chroma_impl(
     return _operation_contracts.IndexOutcome(
         backend="chroma", disposition=disposition,
         total_records=source_record_count,
-        changed_records=changed_count,
-        unchanged_records=unchanged_count,
-        removed_records=removed_count,
-        upserted_records=changed_count, batch_count=len(batches),
-        physical_count=len(verified_ids), committed=True)
+        changed_records=plan.changed_count,
+        unchanged_records=plan.unchanged_count,
+        removed_records=plan.removed_count,
+        upserted_records=plan.changed_count, batch_count=len(batches),
+        physical_count=len(verified_ids), committed=True,
+        operations=operation_tracker.contract())
 
 
 def index_chunks(chunks_path: Path, chroma_dir: Path, *,
                  collection_name: str = DEFAULT_COLLECTION,
                  embedding_model: str = DEFAULT_EMBEDDING_MODEL,
                  full_reindex: bool = False,
+                 security_policy: (
+                     _release_security.ReleaseSecurityPolicy | None
+                 ) = None,
                  lock_timeout: float = DEFAULT_DB_LOCK_TIMEOUT,
                  _active_update_token: str | None = None,
+                 _operation_observer: Callable[
+                     [dict[str, int | float | bool]], None] | None = None,
                  ) -> _operation_contracts.IndexOutcome:
     """Index Chroma under a path-wide, process-safe exclusive lease."""
-    with _vector_store_lock(
-            chroma_dir, backend="chroma",
-            collection_name=collection_name,
-            operation="Chroma indexing", timeout=lock_timeout):
-        client_owner = _VectorClientOwner("Chroma")
-        operation_error = None
-        try:
-            return _index_chunks_chroma_impl(
-                chunks_path, chroma_dir,
+    operation_tracker = _IndexOperationalTracker()
+    try:
+        with _vector_store_lock(
+                chroma_dir, backend="chroma",
                 collection_name=collection_name,
-                embedding_model=embedding_model,
-                full_reindex=full_reindex,
-                _active_update_token=_active_update_token,
-                _client_owner=client_owner,
-            )
-        except BaseException as exc:
-            operation_error = exc
-            raise
-        finally:
-            client_owner.finish(operation_error)
+                operation="Chroma indexing", timeout=lock_timeout):
+            client_owner = _VectorClientOwner("Chroma")
+            operation_error = None
+            try:
+                return _index_chunks_chroma_impl(
+                    chunks_path, chroma_dir,
+                    collection_name=collection_name,
+                    embedding_model=embedding_model,
+                    full_reindex=full_reindex,
+                    security_policy=security_policy,
+                    _active_update_token=_active_update_token,
+                    _client_owner=client_owner,
+                    _operation_tracker=operation_tracker,
+                )
+            except BaseException as exc:
+                operation_error = exc
+                raise
+            finally:
+                client_owner.finish(operation_error)
+    except BaseException:
+        _observe_failed_index_operation(
+            _operation_observer, operation_tracker)
+        raise
 
 
 # ---------------------------------------------------------------------------
 # Step 3b: Index into Qdrant
 # ---------------------------------------------------------------------------
 
-_embed_fn_cache: dict[tuple[str, str], object] = {}
+_embed_fn_cache: dict[
+    tuple[str, str, _release_security.ReleaseSecurityPolicy], object
+] = {}
 
 
 _stable_token_hash = _retrieval_core._stable_token_hash
@@ -6354,29 +9788,46 @@ _artifact_parameters_sha256 = _artifact_io._artifact_parameters_sha256
 _artifact_completion_path = _artifact_io._artifact_completion_path
 
 
+_hash_file_generation = _artifact_io.hash_file_generation
+
+
+def _immutable_file_snapshot(path: Path, **kwargs):
+    """Capture through the configured private scratch location."""
+    if ("temporary_root" not in kwargs and "scratch_root" not in kwargs
+            and (configured := os.environ.get(_SNAPSHOT_SCRATCH_ENV))):
+        kwargs["scratch_root"] = Path(configured)
+    kwargs.setdefault("cleanup_error_fn", _log_cleanup_error)
+    return _artifact_io.immutable_file_snapshot(path, **kwargs)
+
+
 def _write_artifact_completion(
         manifest_path: Path, *, stage: str, source_sha256: str,
         source_record_count: int | None, parameters: dict,
-        outputs: dict[str, Path]) -> None:
+        outputs: dict[str, Path], source_name: str | None = None,
+        schema_version: int = ARTIFACT_COMPLETION_SCHEMA_VERSION,
+        extra_fields: dict[str, object] | None = None) -> None:
     """Commit completion through the facade's current hash/write hooks."""
     _artifact_io._write_artifact_completion(
         manifest_path, stage=stage, source_sha256=source_sha256,
         source_record_count=source_record_count, parameters=parameters,
-        outputs=outputs, schema_version=ARTIFACT_COMPLETION_SCHEMA_VERSION,
+        outputs=outputs, schema_version=schema_version,
         artifact_sha256_fn=_cached_artifact_sha256,
-        atomic_write_json_fn=_atomic_write_json)
+        atomic_write_json_fn=_atomic_write_json,
+        source_name=source_name, extra_fields=extra_fields)
 
 
 def _fixed_artifacts_complete(
         manifest_path: Path, *, stage: str, source_sha256: str,
         source_record_count: int | None, parameters: dict,
-        outputs: dict[str, Path]) -> bool:
+        outputs: dict[str, Path], source_name: str | None = None,
+        schema_version: int = ARTIFACT_COMPLETION_SCHEMA_VERSION) -> bool:
     """Validate completion through the facade's current hashing policy."""
     return _artifact_io._fixed_artifacts_complete(
         manifest_path, stage=stage, source_sha256=source_sha256,
         source_record_count=source_record_count, parameters=parameters,
-        outputs=outputs, schema_version=ARTIFACT_COMPLETION_SCHEMA_VERSION,
-        artifact_sha256_fn=_cached_artifact_sha256)
+        outputs=outputs, schema_version=schema_version,
+        artifact_sha256_fn=_cached_artifact_sha256,
+        source_name=source_name)
 
 
 def _atomic_write_json(path: Path, payload: object) -> None:
@@ -6501,7 +9952,9 @@ def _index_manifest_mismatch(
         embedding_model=embedding_model,
         embedding_dimension=embedding_dimension,
         model_artifact_lock_sha256=_model_artifact_lock_sha256(),
-        manifest_schema_version=INDEX_MANIFEST_SCHEMA_VERSION)
+        manifest_schema_version=INDEX_MANIFEST_SCHEMA_VERSION,
+        quality_report_schema_version=(
+            _quality_core.QUALITY_REPORT_SCHEMA_VERSION))
 
 
 def _resolve_incremental_index_state(
@@ -6533,7 +9986,10 @@ def _save_index_manifest(
         db_dir: Path, *, backend: str, collection_name: str,
         embedding_model: str, embedding_dimension: int,
         chunk_hashes: dict[str, str], source_sha256: str | None = None,
-        source_record_count: int | None = None) -> Path:
+        source_record_count: int | None = None,
+        quality_report_schema_version: int | None = None,
+        quality_report_sha256: str | None = None,
+        table_child_count: int = 0) -> Path:
     """Atomically persist versioned incremental state for one collection."""
     return _index_state._save_index_manifest(
         db_dir, backend=backend, collection_name=collection_name,
@@ -6542,14 +9998,20 @@ def _save_index_manifest(
         model_artifact_lock_sha256=_model_artifact_lock_sha256(),
         chunk_hashes=chunk_hashes, source_sha256=source_sha256,
         source_record_count=source_record_count,
+        quality_report_schema_version=quality_report_schema_version,
+        quality_report_sha256=quality_report_sha256,
+        table_child_count=table_child_count,
         manifest_schema_version=INDEX_MANIFEST_SCHEMA_VERSION,
+        quality_report_policy_schema_version=(
+            _quality_core.QUALITY_REPORT_SCHEMA_VERSION),
         manifest_path_fn=_index_manifest_path,
         atomic_write_json_fn=_atomic_write_json)
 
 
 def _query_manifest_dimension_impl(
         db_dir: Path, *, backend: str, collection_name: str,
-        embedding_model: str) -> int | None:
+        embedding_model: str,
+        allow_legacy: bool = True) -> int | None:
     """Validate query/index compatibility and return the indexed dimension.
 
     Legacy collections without a manifest remain queryable. Once a manifest
@@ -6561,14 +10023,20 @@ def _query_manifest_dimension_impl(
         embedding_model=embedding_model,
         model_artifact_lock_sha256=_model_artifact_lock_sha256(),
         manifest_schema_version=INDEX_MANIFEST_SCHEMA_VERSION,
+        quality_report_schema_version=(
+            _quality_core.QUALITY_REPORT_SCHEMA_VERSION),
         marker_path_fn=_index_update_marker_path,
         manifest_path_fn=_index_manifest_path,
-        load_manifest_fn=_load_index_manifest)
+        load_manifest_fn=_load_index_manifest,
+        compatible_schema_bindings=(
+            _LEGACY_QUERY_SCHEMA_BINDINGS
+            if allow_legacy else _CONTEXT_QUERY_SCHEMA_BINDINGS))
 
 
 def _query_manifest_dimension(
         db_dir: Path, *, backend: str, collection_name: str,
         embedding_model: str,
+        allow_legacy: bool = True,
         lock_timeout: float = DEFAULT_DB_LOCK_TIMEOUT) -> int | None:
     """Validate query/index compatibility under the database lease."""
     with _vector_store_lock(
@@ -6576,7 +10044,22 @@ def _query_manifest_dimension(
             operation="manifest inspection", timeout=lock_timeout):
         return _query_manifest_dimension_impl(
             db_dir, backend=backend, collection_name=collection_name,
-            embedding_model=embedding_model)
+            embedding_model=embedding_model, allow_legacy=allow_legacy)
+
+
+def _indexed_table_child_count(
+        db_dir: Path, *, backend: str, collection_name: str,
+) -> int:
+    """Return the manifested row-child count for a current index generation."""
+    manifest = _load_index_manifest(
+        db_dir, backend=backend, collection_name=collection_name)
+    if (manifest is None
+            or manifest.get("schema_version") != INDEX_MANIFEST_SCHEMA_VERSION):
+        return 0
+    count = manifest.get("table_child_count")
+    if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+        raise ValueError("current index manifest has an invalid table child count")
+    return count
 
 
 _artifact_sha256_cache: dict[
@@ -6584,32 +10067,35 @@ _artifact_sha256_cache: dict[
 ] = {}
 _artifact_sha256_cache_lock = _threading.Lock()
 _ARTIFACT_SHA256_CACHE_MAX = 16
+# Windows ``st_ctime`` is creation time rather than an inode change counter.
+# Same-size bytes can therefore alias a restored mtime/ctime fingerprint, so a
+# stat-only cache hit cannot prove content identity there.
+_ARTIFACT_STAT_HASH_CACHE_SAFE = os.name != "nt"
 
 
 def _cached_artifact_sha256(path: Path) -> str:
     """Hash one stable artifact snapshot, caching by strong stat identity."""
     path = Path(path)
     cache_key = os.path.normcase(str(path.resolve(strict=True)))
-    with path.open("rb") as handle:
-        before = _artifact_stat_fingerprint(os.fstat(handle.fileno()))
-        with _artifact_sha256_cache_lock:
-            cached = _artifact_sha256_cache.get(cache_key)
+    if _ARTIFACT_STAT_HASH_CACHE_SAFE:
+        with path.open("rb") as handle:
+            before = _artifact_stat_fingerprint(os.fstat(handle.fileno()))
+            with _artifact_sha256_cache_lock:
+                cached = _artifact_sha256_cache.get(cache_key)
             if cached is not None and cached[0] == before:
-                return cached[1]
+                after = _artifact_stat_fingerprint(os.fstat(handle.fileno()))
+                if after == before:
+                    return cached[1]
 
-        digest = hashlib.sha256()
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-        after = _artifact_stat_fingerprint(os.fstat(handle.fileno()))
-    if after != before:
-        raise RuntimeError(
-            f"Artifact changed while it was being verified: {path}")
-    value = digest.hexdigest()
-    with _artifact_sha256_cache_lock:
-        _artifact_sha256_cache[cache_key] = (after, value)
-        while len(_artifact_sha256_cache) > _ARTIFACT_SHA256_CACHE_MAX:
-            oldest = next(iter(_artifact_sha256_cache))
-            del _artifact_sha256_cache[oldest]
+    generation = _hash_file_generation(path)
+    value = generation.sha256
+    fingerprint = generation.fingerprint
+    if _ARTIFACT_STAT_HASH_CACHE_SAFE:
+        with _artifact_sha256_cache_lock:
+            _artifact_sha256_cache[cache_key] = (fingerprint, value)
+            while len(_artifact_sha256_cache) > _ARTIFACT_SHA256_CACHE_MAX:
+                oldest = next(iter(_artifact_sha256_cache))
+                del _artifact_sha256_cache[oldest]
     return value
 
 
@@ -6621,18 +10107,23 @@ def _require_hybrid_chunks_snapshot(
         chunks_path, db_dir, backend=backend,
         collection_name=collection_name,
         load_manifest_fn=_load_index_manifest,
-        artifact_sha256_fn=_cached_artifact_sha256)
+        artifact_sha256_fn=_cached_artifact_sha256,
+        quality_report_path_fn=_quality_core.quality_report_path)
 
 
 _validate_query_vector_dimension = (
     _index_state._validate_query_vector_dimension)
 
 
-def _embedding_dimension(model_name: str) -> int:
+def _embedding_dimension(
+        model_name: str, *,
+        security_policy: (
+            _release_security.ReleaseSecurityPolicy | None
+        ) = None) -> int:
     """Probe and validate the configured document embedding dimension."""
     embeddings = _embed_texts(
         ["RAG index embedding-dimension probe"], model_name,
-        input_type="document")
+        input_type="document", security_policy=security_policy)
     if len(embeddings) != 1 or len(embeddings[0]) < 1:
         raise ValueError(
             f"Embedding model '{model_name}' returned no usable vector")
@@ -6816,13 +10307,24 @@ def _qdrant_payload(record: dict, stable_id: str) -> dict:
     }
 
 
-def _embed_texts(texts: list[str], model_name: str, *,
-                 input_type: str = "document") -> list[list[float]]:
+def _embed_texts(
+        texts: list[str], model_name: str, *,
+        input_type: str = "document",
+        security_policy: (
+            _release_security.ReleaseSecurityPolicy | None
+        ) = None) -> list[list[float]]:
     """Embed texts with a cached document- or query-role embedder."""
-    cache_key = (model_name, input_type)
+    policy = _effective_security_policy(security_policy)
+    if model_name.startswith(_API_EMBEDDING_MODEL_PREFIXES):
+        # Re-authorize before cache lookup.  The process can execute operations
+        # with different policies, and ambient network configuration can change
+        # after a provider closure was constructed.
+        _release_security.require_cloud_egress(
+            policy, feature="cloud embedding")
+    cache_key = (model_name, input_type, policy)
     if cache_key not in _embed_fn_cache:
         _embed_fn_cache[cache_key] = _get_embedding_fn(
-            model_name, input_type=input_type)
+            model_name, input_type=input_type, security_policy=policy)
     return _embed_fn_cache[cache_key](texts)
 
 
@@ -6831,8 +10333,12 @@ def _index_chunks_qdrant_impl(
         collection_name: str = DEFAULT_COLLECTION,
         embedding_model: str = DEFAULT_EMBEDDING_MODEL,
         full_reindex: bool = False,
+        security_policy: (
+            _release_security.ReleaseSecurityPolicy | None
+        ) = None,
         _active_update_token: str | None = None,
         _client_owner: _VectorClientOwner,
+        _operation_tracker: _IndexOperationalTracker,
         ) -> _operation_contracts.IndexOutcome:
     """Load enriched chunks and index into a local Qdrant collection.
 
@@ -6847,8 +10353,12 @@ def _index_chunks_qdrant_impl(
     _require_file(chunks_path, "Chunks JSONL")
 
     log.info(f"Loading chunks from {chunks_path}")
-    records, source_sha256, _ = _load_index_snapshot_strict(chunks_path)
+    (records, source_sha256, _,
+     quality_binding) = _load_index_snapshot_with_quality(
+         chunks_path, allow_legacy_quality=False)
+    quality_schema_version, quality_report_sha256 = quality_binding
     source_record_count = len(records)
+    table_child_count = _table_retrieval_core.table_child_count(records)
     _validate_embedding_token_counts(
         records, embedding_model, recompute=True)
     chunk_info = [(record, _chunk_id(record), _chunk_hash(record))
@@ -6866,7 +10376,8 @@ def _index_chunks_qdrant_impl(
     client = _client_owner.own(
         QdrantClient(path=str(qdrant_dir)))
 
-    dim = _embedding_dimension(embedding_model)
+    dim = _embedding_dimension(
+        embedding_model, security_policy=security_policy)
     collection_exists = client.collection_exists(collection_name)
     old_hashes, rebuild_collection, rebuild_reason = (
         _resolve_incremental_index_state(
@@ -6879,54 +10390,26 @@ def _index_chunks_qdrant_impl(
         )
     )
     collection_existed_at_start = collection_exists
-    changed_count = source_record_count
-    unchanged_count = 0
-    removed_count = 0
-    reuse_existing_collection = collection_exists and not rebuild_collection
-    update_marker_path = _qdrant_update_marker_path(
-        qdrant_dir, collection_name=collection_name)
-    update_token = (
-        _active_update_token
-        if _index_update_marker_owned_by(
-            update_marker_path, _active_update_token, backend="qdrant",
-            collection_name=collection_name)
-        else None
-    )
-    update_guarded = update_token is not None
-
-    def _ensure_update_guard() -> None:
-        nonlocal update_guarded, update_token
-        if update_guarded:
-            if not _index_update_marker_owned_by(
-                    update_marker_path, update_token, backend="qdrant",
-                    collection_name=collection_name):
-                raise RuntimeError(
-                    "Qdrant index update marker ownership was lost before "
-                    "physical mutation")
-            return
-        update_token = uuid4().hex
-        try:
-            _begin_qdrant_index_update(
-                qdrant_dir, collection_name=collection_name,
-                source_sha256=source_sha256,
-                source_record_count=source_record_count,
-                owner_token=update_token,
-                replace_existing=update_marker_path.exists())
-        except BaseException:
-            update_token = None
-            raise
-        update_guarded = True
+    plan = _vector_lifecycle.plan_reconciliation(chunk_info, old_hashes)
+    new_hashes = plan.new_hashes
+    update_lifecycle = _new_vector_update_lifecycle(
+        qdrant_dir, backend="qdrant", collection_name=collection_name,
+        source_sha256=source_sha256,
+        source_record_count=source_record_count,
+        target_ids=plan.target_ids,
+        active_update_token=_active_update_token)
+    operation_tracker = _operation_tracker
 
     if rebuild_collection:
         log.info("Rebuilding Qdrant collection '%s': %s",
                  collection_name, rebuild_reason)
-        _ensure_update_guard()
-        client.delete_collection(collection_name)
-        collection_exists = False
 
-    # Create collection if needed (don't recreate on compatible incremental)
-    if not collection_exists:
-        _ensure_update_guard()
+    def _delete_collection() -> None:
+        operation_tracker.collection_delete_calls += 1
+        client.delete_collection(collection_name)
+
+    def _create_collection():
+        operation_tracker.collection_create_calls += 1
         client.create_collection(
             collection_name=collection_name,
             vectors_config=models.VectorParams(
@@ -6939,82 +10422,89 @@ def _index_chunks_qdrant_impl(
                 ),
             },
         )
+        return client
 
-    # --- Incremental indexing via hash comparison ---
-    if old_hashes:
-        changed_info = [
-            (record, chunk_id, chunk_hash)
-            for record, chunk_id, chunk_hash in chunk_info
-            if chunk_hash != old_hashes.get(chunk_id)
-        ]
-        changed = [record for record, _, _ in changed_info]
-        removed_ids = [k for k in old_hashes if k not in new_hashes]
-        changed_count = len(changed)
-        unchanged_count = source_record_count - changed_count
-        removed_count = len(removed_ids)
-        changed_existing_ids = [
-            chunk_id for _, chunk_id, _ in changed_info
-            if chunk_id in old_hashes
-        ]
+    def _verify_stable_ids(handle, expected):
+        return _require_qdrant_stable_ids(
+            handle, collection_name, expected)
+
+    def _delete_stable_ids(handle, stable_ids, verified_point_ids) -> None:
         # Delete removals and stale versions of changed durable IDs first. A
         # post-delete identity check makes a no-op delete fail closed; the
         # final check likewise catches a no-op replacement upsert.
-        deletion_ids = removed_ids + changed_existing_ids
-        existing_point_ids = _require_qdrant_stable_ids(
-            client, collection_name, set(old_hashes))
-        # We can't delete by string ID in Qdrant, so use verified point IDs.
-        if deletion_ids:
-            points_to_delete = [
-                point_id
-                for stable_id in deletion_ids
-                for point_id in existing_point_ids[stable_id]
-            ]
-            if points_to_delete:
-                _ensure_update_guard()
-                delete_result = client.delete(
-                    collection_name,
-                    points_selector=models.PointIdsList(
-                        points=points_to_delete),
-                    wait=True)
-                _require_qdrant_update_completed(
-                    delete_result, "point deletion")
-            _require_qdrant_stable_ids(
-                client, collection_name,
-                set(old_hashes).difference(deletion_ids))
+        points_to_delete = [
+            point_id
+            for stable_id in stable_ids
+            for point_id in verified_point_ids[stable_id]
+        ]
+        if points_to_delete:
+            operation_tracker.record_delete_calls += 1
+            delete_result = handle.delete(
+                collection_name,
+                points_selector=models.PointIdsList(
+                    points=points_to_delete),
+                wait=True)
+            _require_qdrant_update_completed(
+                delete_result, "point deletion")
 
-        unchanged = len(records) - len(changed)
-        log.info(f"Incremental: {len(changed)} changed, {unchanged} unchanged "
-                 f"(skipped), {len(removed_ids)} removed")
-        if not changed:
-            _client_owner.close(client)
-            _save_index_manifest(
-                qdrant_dir, backend="qdrant",
-                collection_name=collection_name,
-                embedding_model=embedding_model,
-                embedding_dimension=dim,
-                chunk_hashes=new_hashes, source_sha256=source_sha256,
-                source_record_count=source_record_count)
-            if update_guarded:
-                _finish_index_update(
-                    update_marker_path, owner_token=update_token,
-                    backend="qdrant", collection_name=collection_name)
-            disposition = "updated" if removed_count else "unchanged"
-            return _operation_contracts.IndexOutcome(
-                backend="qdrant", disposition=disposition,
-                total_records=source_record_count,
-                changed_records=changed_count,
-                unchanged_records=unchanged_count,
-                removed_records=removed_count,
-                upserted_records=0, batch_count=0,
-                physical_count=source_record_count, committed=True)
-        records = changed
-    elif reuse_existing_collection:
-        # A compatible empty manifest is safe to populate only if the physical
-        # collection is also empty.
-        _require_qdrant_stable_ids(client, collection_name, set())
+    reconciled = _vector_lifecycle.reconcile_collection(
+        lifecycle=update_lifecycle,
+        plan=plan,
+        handle=client,
+        collection_exists=collection_exists,
+        rebuild_collection=rebuild_collection,
+        delete_collection_fn=_delete_collection,
+        create_collection_fn=_create_collection,
+        verify_stable_ids_fn=_verify_stable_ids,
+        delete_stable_ids_fn=_delete_stable_ids,
+    )
+
+    def _save_manifest():
+        return _save_index_manifest(
+            qdrant_dir, backend="qdrant",
+            collection_name=collection_name,
+            embedding_model=embedding_model,
+            embedding_dimension=dim,
+            chunk_hashes=new_hashes, source_sha256=source_sha256,
+            source_record_count=source_record_count,
+            table_child_count=table_child_count,
+            quality_report_schema_version=quality_schema_version,
+            quality_report_sha256=quality_report_sha256)
+
+    if old_hashes:
+        log.info(
+            "Incremental: %d changed, %d unchanged (skipped), %d removed",
+            plan.changed_count, plan.unchanged_count, plan.removed_count)
+
+    if not plan.changed_items:
+        if reconciled.receipt is None:
+            raise RuntimeError(
+                "Vector reconciliation produced no final verification")
+        verified_point_ids = update_lifecycle.commit(
+            reconciled.receipt,
+            close_client_fn=lambda: _client_owner.close(client),
+            save_manifest_fn=_save_manifest)
+        operation_tracker.committed = True
+        verified_count = sum(
+            len(ids) for ids in verified_point_ids.values())
+        disposition = (
+            "created" if not collection_existed_at_start else
+            "rebuilt" if rebuild_collection else
+            "updated" if plan.removed_count else
+            "unchanged")
+        return _operation_contracts.IndexOutcome(
+            backend="qdrant", disposition=disposition,
+            total_records=source_record_count,
+            changed_records=plan.changed_count,
+            unchanged_records=plan.unchanged_count,
+            removed_records=plan.removed_count,
+            upserted_records=0, batch_count=0,
+            physical_count=verified_count, committed=True,
+            operations=operation_tracker.contract())
+    records = list(plan.changed_records)
 
     # Pipeline: embed batch N on GPU while upserting batch N-1 to disk
-    _ensure_update_guard()
+    update_lifecycle.prepare_mutation()
     from concurrent.futures import ThreadPoolExecutor
     BATCH_SIZE = 64
     batches = _batch_index_records(
@@ -7028,9 +10518,17 @@ def _index_chunks_qdrant_impl(
             item = upsert_queue.get()
             if item is None:
                 break
-            upsert_result = client.upsert(
-                collection_name=collection_name, points=item, wait=True)
-            _require_qdrant_update_completed(upsert_result, "point upsert")
+
+            def _upsert_points() -> None:
+                operation_tracker.upsert_calls += 1
+                upsert_result = client.upsert(
+                    collection_name=collection_name,
+                    points=item,
+                    wait=True)
+                _require_qdrant_update_completed(
+                    upsert_result, "point upsert")
+
+            update_lifecycle.mutate(_upsert_points)
             pbar.update(1)
             upsert_queue.task_done()
 
@@ -7044,12 +10542,11 @@ def _index_chunks_qdrant_impl(
             # Prepare texts
             texts = []
             for r in batch:
-                ctx = r["metadata"].get("context", "")
-                text = r["text"]
-                texts.append(f"{ctx}\n\n{text}" if ctx else text)
+                texts.append(_embedding_text(r))
 
             # GPU: embed this batch (while previous batch upserts in background)
-            dense_vectors = _embed_texts(texts, embedding_model)
+            dense_vectors = _embed_texts(
+                texts, embedding_model, security_policy=security_policy)
 
             # Build points
             points = []
@@ -7073,7 +10570,8 @@ def _index_chunks_qdrant_impl(
 
             # Queue for background upsert (blocks if queue full — backpressure)
             _put_unless_worker_failed(
-                upsert_queue, points, upsert_future)
+                upsert_queue, points, upsert_future,
+                metrics=operation_tracker.queue)
     except BaseException as exc:
         pipeline_error = exc
         raise
@@ -7083,17 +10581,15 @@ def _index_chunks_qdrant_impl(
             worker_name="Qdrant upsert worker",
             primary_error=pipeline_error)
 
-    verified_point_ids = _require_qdrant_stable_ids(
-        client, collection_name, set(new_hashes))
-    _client_owner.close(client)
-    _save_index_manifest(
-        qdrant_dir, backend="qdrant", collection_name=collection_name,
-        embedding_model=embedding_model, embedding_dimension=dim,
-        chunk_hashes=new_hashes, source_sha256=source_sha256,
-        source_record_count=source_record_count)
-    _finish_index_update(
-        update_marker_path, owner_token=update_token, backend="qdrant",
-        collection_name=collection_name)
+    verification = update_lifecycle.verify(
+        plan.target_ids,
+        lambda expected: _require_qdrant_stable_ids(
+            client, collection_name, expected))
+    verified_point_ids = update_lifecycle.commit(
+        verification,
+        close_client_fn=lambda: _client_owner.close(client),
+        save_manifest_fn=_save_manifest)
+    operation_tracker.committed = True
 
     verified_count = sum(len(ids) for ids in verified_point_ids.values())
     log.info(
@@ -7108,41 +10604,56 @@ def _index_chunks_qdrant_impl(
     return _operation_contracts.IndexOutcome(
         backend="qdrant", disposition=disposition,
         total_records=source_record_count,
-        changed_records=changed_count,
-        unchanged_records=unchanged_count,
-        removed_records=removed_count,
-        upserted_records=changed_count, batch_count=len(batches),
-        physical_count=verified_count, committed=True)
+        changed_records=plan.changed_count,
+        unchanged_records=plan.unchanged_count,
+        removed_records=plan.removed_count,
+        upserted_records=plan.changed_count, batch_count=len(batches),
+        physical_count=verified_count, committed=True,
+        operations=operation_tracker.contract())
 
 
 def index_chunks_qdrant(chunks_path: Path, qdrant_dir: Path, *,
                         collection_name: str = DEFAULT_COLLECTION,
                         embedding_model: str = DEFAULT_EMBEDDING_MODEL,
                         full_reindex: bool = False,
+                        security_policy: (
+                            _release_security.ReleaseSecurityPolicy | None
+                        ) = None,
                         lock_timeout: float = DEFAULT_DB_LOCK_TIMEOUT,
                         _active_update_token: str | None = None,
+                        _operation_observer: Callable[
+                            [dict[str, int | float | bool]], None]
+                        | None = None,
                         ) -> _operation_contracts.IndexOutcome:
     """Index Qdrant under a path-wide, process-safe exclusive lease."""
-    with _vector_store_lock(
-            qdrant_dir, backend="qdrant",
-            collection_name=collection_name,
-            operation="Qdrant indexing", timeout=lock_timeout):
-        client_owner = _VectorClientOwner("Qdrant")
-        operation_error = None
-        try:
-            return _index_chunks_qdrant_impl(
-                chunks_path, qdrant_dir,
+    operation_tracker = _IndexOperationalTracker()
+    try:
+        with _vector_store_lock(
+                qdrant_dir, backend="qdrant",
                 collection_name=collection_name,
-                embedding_model=embedding_model,
-                full_reindex=full_reindex,
-                _active_update_token=_active_update_token,
-                _client_owner=client_owner,
-            )
-        except BaseException as exc:
-            operation_error = exc
-            raise
-        finally:
-            client_owner.finish(operation_error)
+                operation="Qdrant indexing", timeout=lock_timeout):
+            client_owner = _VectorClientOwner("Qdrant")
+            operation_error = None
+            try:
+                return _index_chunks_qdrant_impl(
+                    chunks_path, qdrant_dir,
+                    collection_name=collection_name,
+                    embedding_model=embedding_model,
+                    full_reindex=full_reindex,
+                    security_policy=security_policy,
+                    _active_update_token=_active_update_token,
+                    _client_owner=client_owner,
+                    _operation_tracker=operation_tracker,
+                )
+            except BaseException as exc:
+                operation_error = exc
+                raise
+            finally:
+                client_owner.finish(operation_error)
+    except BaseException:
+        _observe_failed_index_operation(
+            _operation_observer, operation_tracker)
+        raise
 
 
 def query_index_qdrant(query: str, qdrant_dir: Path, *,
@@ -7154,11 +10665,17 @@ def query_index_qdrant(query: str, qdrant_dir: Path, *,
                        output_json: bool = False,
                        use_reranker: bool | None = None,
                        hybrid: bool | None = None,
+                       chunks_path: Path = DEFAULT_CHUNKS_PATH,
                        reranker_model: str = DEFAULT_RERANKER_MODEL,
                        overfetch: int = RERANK_OVERFETCH,
                        rrf_k: int = DEFAULT_RRF_K,
                        dense_weight: float = DEFAULT_DENSE_RRF_WEIGHT,
                        sparse_weight: float = DEFAULT_SPARSE_RRF_WEIGHT,
+                       context_window: int = 0,
+                       context_max_characters: int = (
+                           DEFAULT_CONTEXT_MAX_CHARACTERS),
+                       context_segment_characters: int = (
+                           DEFAULT_CONTEXT_SEGMENT_CHARACTERS),
                        answer: bool = False,
                        cloud_url: str = DEFAULT_CLOUD_URL,
                        cloud_model: str = DEFAULT_CLOUD_MODEL,
@@ -7168,7 +10685,10 @@ def query_index_qdrant(query: str, qdrant_dir: Path, *,
                        gemini_key: str = "",
                        llm_workers: int = DEFAULT_LLM_WORKERS,
                        thinking: bool = False,
-                       lock_timeout: float = DEFAULT_DB_LOCK_TIMEOUT) -> None:
+                       lock_timeout: float = DEFAULT_DB_LOCK_TIMEOUT,
+                       security_policy: (
+                           _release_security.ReleaseSecurityPolicy | None
+                       ) = None) -> None:
     """Query Qdrant and preserve the legacy CLI/JSON output contract."""
     try:
         response = search_index(
@@ -7176,9 +10696,14 @@ def query_index_qdrant(query: str, qdrant_dir: Path, *,
             content_type=content_type, chapter_num=chapter_num,
             collection_name=collection_name, embedding_model=embedding_model,
             use_reranker=use_reranker, hybrid=hybrid,
+            chunks_path=chunks_path,
             reranker_model=reranker_model, overfetch=overfetch, rrf_k=rrf_k,
             dense_weight=dense_weight, sparse_weight=sparse_weight,
+            context_window=context_window,
+            context_max_characters=context_max_characters,
+            context_segment_characters=context_segment_characters,
             lock_timeout=lock_timeout,
+            security_policy=security_policy,
         )
     except (FileNotFoundError, LookupError) as exc:
         log.error(str(exc))
@@ -7191,6 +10716,7 @@ def query_index_qdrant(query: str, qdrant_dir: Path, *,
         cloud_key=cloud_key, ollama_url=ollama_url,
         ollama_model=ollama_model, gemini_key=gemini_key,
         llm_workers=llm_workers, thinking=thinking,
+        security_policy=security_policy,
     )
     _write_search_output(
         query, response, output_json=output_json, llm_answer=llm_answer,
@@ -7335,13 +10861,17 @@ def _search_chroma_candidates_impl(
         sparse_weight: float = DEFAULT_SPARSE_RRF_WEIGHT,
         expected_dimension: int | None = None,
         expected_source_sha256: str | None = None,
+        security_policy: (
+            _release_security.ReleaseSecurityPolicy | None
+        ) = None,
         _client_owner: _VectorClientOwner,
 ) -> tuple[list[str], list[dict], list[float], str]:
     """Retrieve Chroma candidates, falling back cleanly from BM25."""
     import chromadb
 
     client = _client_owner.own(
-        chromadb.PersistentClient(path=str(db_dir)))
+        chromadb.PersistentClient(
+            path=str(db_dir), **_chroma_settings_kwargs(chromadb)))
     try:
         collection = client.get_collection(collection_name)
     except Exception as exc:
@@ -7351,7 +10881,8 @@ def _search_chroma_candidates_impl(
     where = _build_chroma_where(content_type, chapter_num)
     fetch_n = n_results
     query_vector = _embed_texts(
-        [query], embedding_model, input_type="query")[0]
+        [query], embedding_model, input_type="query",
+        security_policy=security_policy)[0]
     _validate_query_vector_dimension(
         query_vector, expected_dimension, embedding_model)
     query_kwargs = {
@@ -7430,6 +10961,9 @@ def _search_chroma_candidates(
         sparse_weight: float = DEFAULT_SPARSE_RRF_WEIGHT,
         expected_dimension: int | None = None,
         expected_source_sha256: str | None = None,
+        security_policy: (
+            _release_security.ReleaseSecurityPolicy | None
+        ) = None,
 ) -> tuple[list[str], list[dict], list[float], str]:
     """Retrieve Chroma candidates and deterministically close the client."""
     client_owner = _VectorClientOwner("Chroma")
@@ -7445,6 +10979,7 @@ def _search_chroma_candidates(
             sparse_weight=sparse_weight,
             expected_dimension=expected_dimension,
             expected_source_sha256=expected_source_sha256,
+            security_policy=security_policy,
             _client_owner=client_owner,
         )
     except BaseException as exc:
@@ -7459,6 +10994,9 @@ def _search_qdrant_candidates(
         content_type: str | None, chapter_num: int | None,
         collection_name: str, embedding_model: str, hybrid: bool,
         warnings: list[str], expected_dimension: int | None = None,
+        security_policy: (
+            _release_security.ReleaseSecurityPolicy | None
+        ) = None,
 ) -> tuple[list[str], list[dict], list[float], str]:
     """Retrieve Qdrant candidates with native dense/sparse fusion."""
     from qdrant_client import QdrantClient, models
@@ -7486,7 +11024,8 @@ def _search_qdrant_candidates(
 
         fetch_n = n_results
         query_vector = _embed_texts(
-            [query], embedding_model, input_type="query")[0]
+            [query], embedding_model, input_type="query",
+            security_policy=security_policy)[0]
         _validate_query_vector_dimension(
             query_vector, expected_dimension, embedding_model)
         effective_mode = "vector"
@@ -7570,7 +11109,15 @@ def _search_index_impl(query: str, db_dir: Path, *,
                        rrf_k: int = DEFAULT_RRF_K,
                        dense_weight: float = DEFAULT_DENSE_RRF_WEIGHT,
                        sparse_weight: float = DEFAULT_SPARSE_RRF_WEIGHT,
+                       context_window: int = 0,
+                       context_max_characters: int = (
+                           DEFAULT_CONTEXT_MAX_CHARACTERS),
+                       context_segment_characters: int = (
+                           DEFAULT_CONTEXT_SEGMENT_CHARACTERS),
                        lock_timeout: float = DEFAULT_DB_LOCK_TIMEOUT,
+                       security_policy: (
+                           _release_security.ReleaseSecurityPolicy | None
+                       ) = None,
                        ) -> SearchResponse:
     """Search either supported vector backend and return structured results.
 
@@ -7579,6 +11126,16 @@ def _search_index_impl(query: str, db_dir: Path, *,
     ``effective_mode``, ``reranker_applied``, and ``warnings`` rather than being
     mislabeled as a successful requested mode.
     """
+    policy = _effective_security_policy(security_policy)
+    if embedding_model.startswith(_API_EMBEDDING_MODEL_PREFIXES):
+        _release_security.require_cloud_egress(
+            policy, feature="cloud embedding")
+    if (
+        use_reranker is not False
+        and reranker_model.startswith(("cohere-rerank", "jina-reranker"))
+    ):
+        _release_security.require_cloud_egress(
+            policy, feature="cloud reranking")
     backend = db_backend.lower()
     if backend not in {"chroma", "qdrant"}:
         raise ValueError("db_backend must be 'chroma' or 'qdrant'")
@@ -7591,6 +11148,24 @@ def _search_index_impl(query: str, db_dir: Path, *,
         raise ValueError("overfetch must be an integer from 1 to 20")
     if isinstance(rrf_k, bool) or not isinstance(rrf_k, int) or rrf_k < 1:
         raise ValueError("rrf_k must be a positive integer")
+    if (isinstance(context_window, bool)
+            or not isinstance(context_window, int)
+            or not 0 <= context_window <= MAX_CONTEXT_WINDOW):
+        raise ValueError(
+            f"context_window must be an integer from 0 to {MAX_CONTEXT_WINDOW}")
+    if (isinstance(context_max_characters, bool)
+            or not isinstance(context_max_characters, int)
+            or not 1 <= context_max_characters <= MAX_CONTEXT_CHARACTERS):
+        raise ValueError(
+            "context_max_characters must be an integer from 1 to "
+            f"{MAX_CONTEXT_CHARACTERS}")
+    if (isinstance(context_segment_characters, bool)
+            or not isinstance(context_segment_characters, int)
+            or not 1 <= context_segment_characters
+            <= MAX_CONTEXT_SEGMENT_CHARACTERS):
+        raise ValueError(
+            "context_segment_characters must be an integer from 1 to "
+            f"{MAX_CONTEXT_SEGMENT_CHARACTERS}")
     try:
         dense_weight = float(dense_weight)
         sparse_weight = float(sparse_weight)
@@ -7610,6 +11185,15 @@ def _search_index_impl(query: str, db_dir: Path, *,
         "auto" if hybrid is None else "hybrid" if hybrid else "vector")
     warnings: list[str] = []
     chunks_file = Path(chunks_path)
+    context_records: list[dict] | None = None
+    context_source_sha256: str | None = None
+    indexed_table_children = 0
+    if context_window:
+        if not chunks_file.is_file():
+            raise FileNotFoundError(
+                f"Context assembly requires chunks JSONL: {chunks_file}")
+        context_records, context_source_sha256, _, _ = (
+            _load_index_snapshot_with_quality(chunks_file))
     hybrid_enabled = (
         backend == "qdrant" or chunks_file.is_file()) if hybrid is None else hybrid
     if backend == "qdrant" and hybrid_enabled and rrf_k != DEFAULT_RRF_K:
@@ -7630,12 +11214,26 @@ def _search_index_impl(query: str, db_dir: Path, *,
         db_path = _storage_policy.ensure_private_tree(db_path)
         expected_dimension = _query_manifest_dimension(
             db_path, backend=backend, collection_name=collection_name,
-            embedding_model=embedding_model)
+            embedding_model=embedding_model,
+            allow_legacy=not bool(context_window))
+        indexed_table_children = _indexed_table_child_count(
+            db_path, backend=backend, collection_name=collection_name)
         hybrid_source_sha256 = None
-        if backend == "chroma" and hybrid_enabled and chunks_file.is_file():
-            hybrid_source_sha256 = _require_hybrid_chunks_snapshot(
+        if context_records is not None:
+            manifested_source_sha256 = _require_hybrid_chunks_snapshot(
                 chunks_file, db_path, backend=backend,
                 collection_name=collection_name)
+            if (manifested_source_sha256 is None
+                    or manifested_source_sha256 != context_source_sha256):
+                raise ValueError(
+                    "Context chunks snapshot does not match the indexed corpus")
+            if backend == "chroma":
+                hybrid_source_sha256 = manifested_source_sha256
+        if backend == "chroma" and hybrid_enabled and chunks_file.is_file():
+            if hybrid_source_sha256 is None:
+                hybrid_source_sha256 = _require_hybrid_chunks_snapshot(
+                    chunks_file, db_path, backend=backend,
+                    collection_name=collection_name)
             if hybrid_source_sha256 is None:
                 _record_search_warning(
                     warnings,
@@ -7645,7 +11243,8 @@ def _search_index_impl(query: str, db_dir: Path, *,
                 hybrid_enabled = False
         fetch_n = (
             n_results * overfetch
-            if (hybrid_enabled or use_reranker is not False) else n_results)
+            if (hybrid_enabled or use_reranker is not False
+                or indexed_table_children) else n_results)
 
         if backend == "chroma":
             docs, metas, scores, effective_mode = _search_chroma_candidates(
@@ -7658,6 +11257,7 @@ def _search_index_impl(query: str, db_dir: Path, *,
                 dense_weight=dense_weight, sparse_weight=sparse_weight,
                 expected_dimension=expected_dimension,
                 expected_source_sha256=hybrid_source_sha256,
+                security_policy=policy,
             )
         else:
             docs, metas, scores, effective_mode = _search_qdrant_candidates(
@@ -7666,6 +11266,7 @@ def _search_index_impl(query: str, db_dir: Path, *,
                 collection_name=collection_name,
                 embedding_model=embedding_model, hybrid=hybrid_enabled,
                 warnings=warnings, expected_dimension=expected_dimension,
+                security_policy=policy,
             )
 
         if (backend == "chroma" and effective_mode == "hybrid"
@@ -7677,6 +11278,10 @@ def _search_index_impl(query: str, db_dir: Path, *,
                 chunks_file, db_path, backend=backend,
                 collection_name=collection_name)
 
+    if indexed_table_children:
+        docs, metas, scores = _table_retrieval_core.collapse_table_families(
+            docs, metas, scores)
+
     reranker_enabled = (
         effective_mode == "vector" if use_reranker is None else use_reranker)
     reranker_applied = False
@@ -7685,6 +11290,7 @@ def _search_index_impl(query: str, db_dir: Path, *,
             docs, metas, scores = _rerank(
                 query, docs, metas, [1.0 - score for score in scores],
                 n_results, reranker_model=reranker_model,
+                security_policy=policy,
             )
             reranker_applied = True
         except Exception as exc:
@@ -7706,13 +11312,24 @@ def _search_index_impl(query: str, db_dir: Path, *,
             text=doc, metadata=dict(meta or {}), score=float(score))
         hit.source_id = _search_hit_source_id(hit)
         hits.append(hit)
-    return SearchResponse(
+    response = SearchResponse(
         hits=hits, backend=backend, requested_mode=requested_mode,
         effective_mode=effective_mode,
         reranker_applied=reranker_applied, warnings=warnings,
         candidate_depth=fetch_n,
         reranker_model=reranker_model if reranker_applied else None,
     )
+    if context_records is not None:
+        _retrieval_core._assemble_retrieval_context(
+            response, context_records,
+            context_window=context_window,
+            content_type=content_type,
+            chapter_num=chapter_num,
+            max_characters=context_max_characters,
+            segment_characters=context_segment_characters,
+            source_id_fn=_search_hit_source_id,
+        )
+    return response
 
 
 def search_index(query: str, db_dir: Path, *,
@@ -7730,7 +11347,15 @@ def search_index(query: str, db_dir: Path, *,
                  rrf_k: int = DEFAULT_RRF_K,
                  dense_weight: float = DEFAULT_DENSE_RRF_WEIGHT,
                  sparse_weight: float = DEFAULT_SPARSE_RRF_WEIGHT,
+                 context_window: int = 0,
+                 context_max_characters: int = (
+                     DEFAULT_CONTEXT_MAX_CHARACTERS),
+                 context_segment_characters: int = (
+                     DEFAULT_CONTEXT_SEGMENT_CHARACTERS),
                  lock_timeout: float = DEFAULT_DB_LOCK_TIMEOUT,
+                 security_policy: (
+                     _release_security.ReleaseSecurityPolicy | None
+                 ) = None,
                  ) -> SearchResponse:
     """Search a coherent local index generation under its exclusive lease."""
     backend = db_backend.lower()
@@ -7744,7 +11369,11 @@ def search_index(query: str, db_dir: Path, *,
             hybrid=hybrid, chunks_path=chunks_path,
             reranker_model=reranker_model, overfetch=overfetch, rrf_k=rrf_k,
             dense_weight=dense_weight, sparse_weight=sparse_weight,
-            lock_timeout=lock_timeout)
+            context_window=context_window,
+            context_max_characters=context_max_characters,
+            context_segment_characters=context_segment_characters,
+            lock_timeout=lock_timeout,
+            security_policy=security_policy)
     db_path = Path(db_dir)
     return _search_index_impl(
         query, db_path, db_backend=backend, n_results=n_results,
@@ -7754,7 +11383,11 @@ def search_index(query: str, db_dir: Path, *,
         hybrid=hybrid, chunks_path=chunks_path,
         reranker_model=reranker_model, overfetch=overfetch, rrf_k=rrf_k,
         dense_weight=dense_weight, sparse_weight=sparse_weight,
-        lock_timeout=lock_timeout)
+        context_window=context_window,
+        context_max_characters=context_max_characters,
+        context_segment_characters=context_segment_characters,
+        lock_timeout=lock_timeout,
+        security_policy=security_policy)
 
 
 _ANSWER_SOURCE_LIMIT = _retrieval_core._ANSWER_SOURCE_LIMIT
@@ -7789,7 +11422,10 @@ def _answer_search_results(query: str, response: SearchResponse, *,
                            cloud_key: str, ollama_url: str,
                            ollama_model: str, gemini_key: str,
                            llm_workers: int = DEFAULT_LLM_WORKERS,
-                           thinking: bool = False) -> GroundedAnswer | None:
+                           thinking: bool = False,
+                           security_policy: (
+                               _release_security.ReleaseSecurityPolicy | None
+                           ) = None) -> GroundedAnswer | None:
     """Optionally generate a source-grounded answer from structured hits."""
     if not answer:
         return None
@@ -7809,6 +11445,7 @@ def _answer_search_results(query: str, response: SearchResponse, *,
         ollama_model=ollama_model, gemini_key=gemini_key,
         llm_workers=llm_workers, thinking=thinking,
         operation="query.grounded_answer",
+        security_policy=security_policy,
     )
     if not llm_answer:
         return GroundedAnswer(
@@ -7826,16 +11463,42 @@ def _write_search_output(query: str, response: SearchResponse, *,
                          content_type: str | None,
                          chapter_num: int | None) -> None:
     """Render structured results using the existing CLI/JSON schema."""
-    output_hits = [
-        {
+    output_hits = []
+    for hit in response.hits:
+        output_hit = {
             "score": round(hit.score, 4),
             "search_mode": response.effective_mode,
             "reranked": response.reranker_applied,
             "text": hit.text,
             "metadata": hit.metadata,
         }
-        for hit in response.hits
-    ]
+        if response.context_window:
+            output_hit["source_id"] = hit.source_id
+            output_hit["equivalent_sources"] = [
+                {
+                    "source_id": alias.source_id,
+                    "metadata": alias.metadata,
+                }
+                for alias in hit.source_aliases
+            ]
+            output_hit["context"] = [
+                {
+                    "source_id": segment.source_id,
+                    "relation": segment.relation,
+                    "distance": segment.distance,
+                    "text": segment.text,
+                    "metadata": segment.metadata,
+                    "equivalent_sources": [
+                        {
+                            "source_id": alias.source_id,
+                            "metadata": alias.metadata,
+                        }
+                        for alias in segment.source_aliases
+                    ],
+                }
+                for segment in hit.context_segments
+            ]
+        output_hits.append(output_hit)
     if output_json:
         payload: object = output_hits
         if llm_answer:
@@ -7913,6 +11576,11 @@ def _write_search_output(query: str, response: SearchResponse, *,
         if context:
             print(f"  Context: {context}")
         print(f"  Text:    {hit.text[:300]}...")
+        for segment in hit.context_segments:
+            label = f"{segment.relation} {segment.distance}"
+            print(
+                f"  Neighbor ({label}, {segment.source_id}): "
+                f"{segment.text[:300]}...")
         print()
 
 
@@ -7931,6 +11599,11 @@ def query_index(query: str, chroma_dir: Path, *,
                 rrf_k: int = DEFAULT_RRF_K,
                 dense_weight: float = DEFAULT_DENSE_RRF_WEIGHT,
                 sparse_weight: float = DEFAULT_SPARSE_RRF_WEIGHT,
+                context_window: int = 0,
+                context_max_characters: int = (
+                    DEFAULT_CONTEXT_MAX_CHARACTERS),
+                context_segment_characters: int = (
+                    DEFAULT_CONTEXT_SEGMENT_CHARACTERS),
                 answer: bool = False,
                 cloud_url: str = DEFAULT_CLOUD_URL,
                 cloud_model: str = DEFAULT_CLOUD_MODEL,
@@ -7940,7 +11613,10 @@ def query_index(query: str, chroma_dir: Path, *,
                 gemini_key: str = "",
                 llm_workers: int = DEFAULT_LLM_WORKERS,
                 thinking: bool = False,
-                lock_timeout: float = DEFAULT_DB_LOCK_TIMEOUT) -> None:
+                lock_timeout: float = DEFAULT_DB_LOCK_TIMEOUT,
+                security_policy: (
+                    _release_security.ReleaseSecurityPolicy | None
+                ) = None) -> None:
     """Query Chroma and preserve the legacy CLI/JSON output contract."""
     try:
         response = search_index(
@@ -7951,7 +11627,11 @@ def query_index(query: str, chroma_dir: Path, *,
             chunks_path=chunks_path,
             reranker_model=reranker_model, overfetch=overfetch, rrf_k=rrf_k,
             dense_weight=dense_weight, sparse_weight=sparse_weight,
+            context_window=context_window,
+            context_max_characters=context_max_characters,
+            context_segment_characters=context_segment_characters,
             lock_timeout=lock_timeout,
+            security_policy=security_policy,
         )
     except (FileNotFoundError, LookupError) as exc:
         log.error(str(exc))
@@ -7964,6 +11644,7 @@ def query_index(query: str, chroma_dir: Path, *,
         cloud_key=cloud_key, ollama_url=ollama_url,
         ollama_model=ollama_model, gemini_key=gemini_key,
         llm_workers=llm_workers, thinking=thinking,
+        security_policy=security_policy,
     )
     _write_search_output(
         query, response, output_json=output_json, llm_answer=llm_answer,
@@ -8044,6 +11725,8 @@ def _filter_chunk_records(records: list[dict], *,
 
     filtered = []
     for rec in records:
+        if _table_retrieval_core.is_table_child(rec.get("metadata")):
+            continue
         ct = rec["metadata"]["content_type"]
         if ct in exclude_types:
             continue
@@ -8064,8 +11747,9 @@ def _load_and_filter_chunks(chunks_path: Path, *,
                             chapters: list[int] | None = None) -> list[dict]:
     """Load chunks JSONL and apply filters."""
     _require_file(chunks_path, "Chunks JSONL")
+    records, _, _ = _load_index_snapshot_strict(chunks_path)
     return _filter_chunk_records(
-        _load_jsonl(chunks_path), include_types=include_types,
+        records, include_types=include_types,
         exclude_types=exclude_types, chapters=chapters)
 
 
@@ -8090,6 +11774,19 @@ def _section_heading_level(part: str, depth: int) -> str:
     return "#####"
 
 
+def _display_division_title(ordinal: int, title: str) -> str:
+    """Render a normalized division without duplicating its designation."""
+    cleaned = str(title or "").strip()
+    if re.match(
+            r"^(?:Chapter|Part|Unit)\s+"
+            r"(?:\d{1,3}|[IVXLCDM]+|[A-Za-z-]+)\b",
+            cleaned, re.I):
+        return cleaned
+    if cleaned:
+        return f"Chapter {ordinal} - {cleaned}"
+    return f"Chapter {ordinal}"
+
+
 def _assemble_markdown(chunks: list[dict]) -> str:
     """Assemble filtered chunks into a single structured markdown string."""
     lines: list[str] = []
@@ -8104,7 +11801,8 @@ def _assemble_markdown(chunks: list[dict]) -> str:
         ch_title = meta.get("chapter_title", "")
         if ch and ch != current_chapter:
             current_chapter = ch
-            lines.append(f"\n\n---\n\n# Chapter {ch} - {ch_title}\n")
+            lines.append(
+                f"\n\n---\n\n# {_display_division_title(ch, ch_title)}\n")
             emitted_sections.clear()
 
         sp = meta.get("section_path", "")
@@ -8113,7 +11811,10 @@ def _assemble_markdown(chunks: list[dict]) -> str:
             # Scaffold, deterministic, and legacy paths use three separators.
             parts = re.split(r"\s+(?:\u2192|->|>)\s+", sp)
             # Skip the chapter part if it's repeated as parts[0]
-            if parts and parts[0].lower().startswith("chapter"):
+            if (parts and (
+                    parts[0].strip() == str(ch_title).strip()
+                    or re.match(
+                        r"^(?:Chapter|Part|Unit)\s+", parts[0], re.I))):
                 parts = parts[1:]
             # Emit each new level heading that hasn't been emitted yet
             for depth_idx, part in enumerate(parts):
@@ -8305,7 +12006,10 @@ def export_markdown(chunks_path: Path, export_path: Path, *,
                     ollama_model: str = DEFAULT_OLLAMA_MODEL,
                     gemini_key: str = "",
                     llm_workers: int = DEFAULT_LLM_WORKERS,
-                    thinking: bool = False) -> None:
+                    thinking: bool = False,
+                    security_policy: (
+                        _release_security.ReleaseSecurityPolicy | None
+                    ) = None) -> None:
     """Produce clean export file(s) optimized for LLM consumption.
 
     With --format plaintext: writes a .txt + .metadata.json sidecar
@@ -8343,7 +12047,8 @@ def export_markdown(chunks_path: Path, export_path: Path, *,
                            cloud_url=cloud_url, cloud_model=cloud_model,
                            cloud_key=cloud_key, ollama_url=ollama_url,
                            ollama_model=ollama_model, gemini_key=gemini_key,
-                           llm_workers=llm_workers, thinking=thinking)
+                           llm_workers=llm_workers, thinking=thinking,
+                           security_policy=security_policy)
         return
 
     if split_chapters:
@@ -8402,10 +12107,16 @@ def export_markdown(chunks_path: Path, export_path: Path, *,
                 xref_chapters = set()
                 for rec in ch_chunks:
                     for xref in rec["metadata"].get("cross_references", []):
-                        # Parse "Ch.12" -> 12
-                        m = re.match(r"Ch\.(\d+)", xref)
+                        # Normalize built-in profile displays (``Ch.12`` or
+                        # ``Part.IV``) back to the integer division contract.
+                        m = re.match(
+                            r"(?:Ch|Chapter|Part|Unit)\."
+                            r"([A-Za-z0-9-]+)", xref, re.I)
                         if m:
-                            ref_ch = int(m.group(1))
+                            ref_ch = _document_profiles.parse_division_ordinal(
+                                m.group(1), maximum=3999)
+                            if ref_ch is None:
+                                continue
                             if ref_ch != ch_num and ref_ch in chapter_index:
                                 xref_chapters.add(ref_ch)
 
@@ -8420,7 +12131,8 @@ def export_markdown(chunks_path: Path, export_path: Path, *,
                                 if t:
                                     ref_title = t
                                     break
-                        md += f"- [Chapter {ref_ch} - {ref_title}]({ref_file})\n"
+                        label = _display_division_title(ref_ch, ref_title)
+                        md += f"- [{label}]({ref_file})\n"
 
             filepath = out_dir / filename
             _atomic_write_text(filepath, md)
@@ -8477,7 +12189,8 @@ def extract_questions(chunks_path: Path, output_path: Path) -> None:
     flashcard generation, fine-tuning, or evaluation harnesses.
     """
     _require_file(chunks_path, "Chunks JSONL")
-    all_chunks = _load_jsonl(chunks_path)
+    all_chunks, _, _ = _load_index_snapshot_strict(chunks_path)
+    all_chunks = _table_retrieval_core.canonical_records(all_chunks)
     chunk_by_idx = {r["metadata"]["chunk_index"]: r for r in all_chunks}
 
     # Filter to notes_and_questions
@@ -8570,7 +12283,10 @@ def generate_exam_questions(chunks_path: Path, output_path: Path, *,
                             ollama_model: str = DEFAULT_OLLAMA_MODEL,
                             gemini_key: str = "",
                             llm_workers: int = DEFAULT_LLM_WORKERS,
-                            thinking: bool = False) -> None:
+                            thinking: bool = False,
+                            security_policy: (
+                                _release_security.ReleaseSecurityPolicy | None
+                            ) = None) -> None:
     """Generate exam-style questions from chapter chunks via LLM.
 
     Groups chunks by chapter, selects representative passages (mix of
@@ -8580,7 +12296,8 @@ def generate_exam_questions(chunks_path: Path, output_path: Path, *,
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     _require_file(chunks_path, "Chunks JSONL")
-    all_chunks = _load_jsonl(chunks_path)
+    all_chunks, _, _ = _load_index_snapshot_strict(chunks_path)
+    all_chunks = _table_retrieval_core.canonical_records(all_chunks)
 
     by_chapter: dict[int, list[dict]] = {}
     for rec in all_chunks:
@@ -8599,6 +12316,7 @@ def generate_exam_questions(chunks_path: Path, output_path: Path, *,
         gemini_key=gemini_key, cloud_url=cloud_url,
         cloud_model=cloud_model, cloud_key=cloud_key,
         llm_workers=llm_workers, thinking=thinking,
+        security_policy=security_policy,
     )
 
     def _generate_for_chapter(ch_num, ch_chunks):
@@ -8864,13 +12582,17 @@ def generate_briefs(chunks_path: Path, output_path: Path, *,
                     ollama_model: str = DEFAULT_OLLAMA_MODEL,
                     gemini_key: str = "",
                     llm_workers: int = DEFAULT_LLM_WORKERS,
-                    thinking: bool = False) -> None:
+                    thinking: bool = False,
+                    security_policy: (
+                        _release_security.ReleaseSecurityPolicy | None
+                    ) = None) -> None:
     """Generate case briefs for all case_opinion chunks via LLM."""
     from concurrent.futures import ThreadPoolExecutor, as_completed
     from tqdm import tqdm
 
     _require_file(chunks_path, "Chunks JSONL")
-    records = _load_jsonl(chunks_path)
+    records, _, _ = _load_index_snapshot_strict(chunks_path)
+    records = _table_retrieval_core.canonical_records(records)
 
     # Filter to case opinions only
     case_chunks = [r for r in records
@@ -8885,7 +12607,8 @@ def generate_briefs(chunks_path: Path, output_path: Path, *,
     llm_kwargs = dict(ollama_url=ollama_url, ollama_model=ollama_model,
                       gemini_key=gemini_key, cloud_url=cloud_url,
                       cloud_model=cloud_model, cloud_key=cloud_key,
-                      llm_workers=llm_workers, thinking=thinking)
+                      llm_workers=llm_workers, thinking=thinking,
+                      security_policy=security_policy)
 
     def _parse_brief(response: str) -> dict:
         """Parse a brief response into structured fields."""
@@ -9006,7 +12729,10 @@ def _export_flashcards(chunks: list[dict], export_path: Path, *,
                        ollama_model: str = DEFAULT_OLLAMA_MODEL,
                        gemini_key: str = "",
                        llm_workers: int = DEFAULT_LLM_WORKERS,
-                       thinking: bool = False) -> None:
+                       thinking: bool = False,
+                       security_policy: (
+                           _release_security.ReleaseSecurityPolicy | None
+                       ) = None) -> None:
     """Generate Anki-compatible flashcards from chunks via LLM."""
     from concurrent.futures import ThreadPoolExecutor, as_completed
     from tqdm import tqdm
@@ -9016,7 +12742,8 @@ def _export_flashcards(chunks: list[dict], export_path: Path, *,
     llm_kwargs = dict(ollama_url=ollama_url, ollama_model=ollama_model,
                       gemini_key=gemini_key, cloud_url=cloud_url,
                       cloud_model=cloud_model, cloud_key=cloud_key,
-                      llm_workers=llm_workers, thinking=thinking)
+                      llm_workers=llm_workers, thinking=thinking,
+                      security_policy=security_policy)
 
     def _generate_card(rec):
         meta = rec["metadata"]
@@ -9156,26 +12883,37 @@ def _cluster_embeddings(embeddings: list[list[float]], k: int) -> list[list[int]
 def _raptor_parameters(*, embedding_model: str, cloud_url: str,
                        cloud_model: str, cloud_key: str,
                        ollama_url: str, ollama_model: str,
-                       gemini_key: str, thinking: bool) -> dict:
+                       gemini_key: str, thinking: bool,
+                       security_policy: (
+                           _release_security.ReleaseSecurityPolicy | None
+                       ) = None) -> dict:
+    policy = _effective_security_policy(security_policy)
+    gemini_configured = bool(
+        policy.network_policy == "allow-cloud"
+        and (gemini_key or "GEMINI_API_KEY" in os.environ))
     return {
         "embedding_model": embedding_model,
-        "cloud_url": cloud_url,
+        "cloud_url": _endpoint_parameter_binding(cloud_url),
         "cloud_model": cloud_model,
         "cloud_configured": bool(cloud_url and cloud_key),
-        "ollama_url": ollama_url,
+        "ollama_url": _endpoint_parameter_binding(ollama_url),
         "ollama_model": ollama_model,
-        "gemini_configured": bool(gemini_key),
+        "gemini_configured": gemini_configured,
         "thinking": thinking,
         "prompt_version": 1,
+        "release_security": policy.provenance(),
     }
 
 
 def _raptor_output_complete(chunks_path: Path, output_path: Path, *,
                             parameters: dict) -> bool:
-    identity = _chunks_identity(chunks_path)
-    if identity is None:
+    try:
+        source_records, source_sha256, _ = _load_index_snapshot_strict(
+            chunks_path)
+    except (OSError, UnicodeError, ValueError, RuntimeError):
         return False
-    source_sha256, source_count = identity
+    source_count = len(
+        _table_retrieval_core.canonical_records(source_records))
     try:
         tree = json.loads(output_path.read_text(encoding="utf-8"))
         if not isinstance(tree, dict):
@@ -9244,7 +12982,10 @@ def build_raptor_tree(chunks_path: Path, output_path: Path, *,
                       ollama_model: str = DEFAULT_OLLAMA_MODEL,
                       gemini_key: str = "",
                       llm_workers: int = DEFAULT_LLM_WORKERS,
-                      thinking: bool = False) -> None:
+                      thinking: bool = False,
+                      security_policy: (
+                          _release_security.ReleaseSecurityPolicy | None
+                      ) = None) -> None:
     """Build a 3-level RAPTOR tree over chunks.
 
     Level 0: Raw chunks (from JSONL)
@@ -9258,12 +12999,14 @@ def build_raptor_tree(chunks_path: Path, output_path: Path, *,
     from tqdm import tqdm
 
     records, source_sha256, _ = _load_index_snapshot_strict(chunks_path)
+    records = _table_retrieval_core.canonical_records(records)
     source_record_count = len(records)
     parameters = _raptor_parameters(
         embedding_model=embedding_model, cloud_url=cloud_url,
         cloud_model=cloud_model, cloud_key=cloud_key,
         ollama_url=ollama_url, ollama_model=ollama_model,
-        gemini_key=gemini_key, thinking=thinking)
+        gemini_key=gemini_key, thinking=thinking,
+        security_policy=security_policy)
     log.info(f"RAPTOR: building tree over {len(records)} chunks")
 
     if not records:
@@ -9274,7 +13017,8 @@ def build_raptor_tree(chunks_path: Path, output_path: Path, *,
     llm_kwargs = dict(ollama_url=ollama_url, ollama_model=ollama_model,
                       gemini_key=gemini_key, cloud_url=cloud_url,
                       cloud_model=cloud_model, cloud_key=cloud_key,
-                      llm_workers=llm_workers, thinking=thinking)
+                      llm_workers=llm_workers, thinking=thinking,
+                      security_policy=security_policy)
 
     def _summarize(texts: list[str]) -> str:
         """Summarize a cluster of texts via LLM."""
@@ -9291,7 +13035,8 @@ def build_raptor_tree(chunks_path: Path, output_path: Path, *,
     log.info("RAPTOR Level 0: Embedding chunks...")
     texts_l0 = [r["text"] for r in records]
     try:
-        embeddings_l0 = _embed_texts(texts_l0, embedding_model)
+        embeddings_l0 = _embed_texts(
+            texts_l0, embedding_model, security_policy=security_policy)
     except Exception as e:
         log.error(f"RAPTOR embedding failed: {e}")
         log.error("  Check --embedding-model and API keys.")
@@ -9374,7 +13119,8 @@ def build_raptor_tree(chunks_path: Path, output_path: Path, *,
     # --- Level 2: Chapter summaries (cluster Level 1 nodes) ---
     log.info("RAPTOR Level 2: Embedding section summaries...")
     try:
-        embeddings_l1 = _embed_texts(texts_l1, embedding_model)
+        embeddings_l1 = _embed_texts(
+            texts_l1, embedding_model, security_policy=security_policy)
     except Exception as e:
         log.error(f"RAPTOR Level 2 embedding failed: {e}")
         log.error("  Saving partial tree (Level 0 + Level 1 only).")
@@ -9518,6 +13264,7 @@ def show_info(chroma_dir: Path, collection_name: str = DEFAULT_COLLECTION, *,
         and "citation" not in p.stem.lower()
     )
     chunks = sorted(out.rglob("*_chunks.jsonl"))
+    quality_reports = sorted(out.rglob("*_chunks.quality.json"))
     questions_jsonls = sorted(out.rglob("*questions*.jsonl"))
     citations_jsons = sorted(out.rglob("*citations*.json"))
     markdowns = sorted(out.rglob("*.md"))
@@ -9546,6 +13293,23 @@ def show_info(chroma_dir: Path, collection_name: str = DEFAULT_COLLECTION, *,
         print("  Chunk files:")
         for p in chunks:
             _show_file("", p)
+
+    if quality_reports:
+        print("  Corpus quality reports:")
+        for report_path in quality_reports:
+            chunks_path = report_path.with_name(
+                report_path.name.removesuffix(".quality.json") + ".jsonl")
+            try:
+                records, _, _ = _load_index_snapshot_strict(chunks_path)
+                payload = json.loads(report_path.read_text(encoding="utf-8"))
+                label = (
+                    f"PASS v{payload.get('schema_version')} "
+                    f"({len(records)} chunks)"
+                )
+            except (OSError, UnicodeError, json.JSONDecodeError, ValueError,
+                    RuntimeError):
+                label = "FAIL"
+            _show_file(label, report_path)
 
     if questions_jsonls:
         print("  Questions files:")
@@ -9718,8 +13482,17 @@ def _resolve_cloud_endpoint(args) -> tuple[str, str]:
     return _cli_policy._resolve_cloud_endpoint(
         args,
         defaults=_provider_cli_defaults(),
-        is_deepseek_cloud_fn=_is_deepseek_cloud,
+        validate_cloud_endpoint_fn=_validate_cloud_endpoint,
     )
+
+
+def _cloud_endpoint_arg(value: str) -> str:
+    """Argparse type that canonicalizes URLs without echoing rejected text."""
+    try:
+        endpoint = _validate_cloud_endpoint(value, allow_disabled=True)
+    except (TypeError, ValueError) as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from None
+    return endpoint.base_url if endpoint is not None else ""
 
 
 def _resolve_cloud_key(args, *, cloud_url: str = "",
@@ -9730,13 +13503,14 @@ def _resolve_cloud_key(args, *, cloud_url: str = "",
         cloud_url=cloud_url,
         cloud_model=cloud_model,
         resolve_cloud_endpoint_fn=_resolve_cloud_endpoint,
-        is_deepseek_cloud_fn=_is_deepseek_cloud,
-        is_minimax_cloud_fn=_is_minimax_cloud,
+        validate_cloud_endpoint_fn=_validate_cloud_endpoint,
         environment_get_fn=os.environ.get,
     )
 
 
-def _llm_kwargs_from_args(args, *, include_workers: bool = False) -> dict:
+def _llm_kwargs_from_args(
+        args, *, include_workers: bool = False,
+        resolve_credentials: bool = True) -> dict:
     """Collect provider options shared by LLM-backed operations."""
     return _cli_policy._llm_kwargs_from_args(
         args,
@@ -9744,7 +13518,11 @@ def _llm_kwargs_from_args(args, *, include_workers: bool = False) -> dict:
         defaults=_provider_cli_defaults(),
         resolve_cloud_endpoint_fn=_resolve_cloud_endpoint,
         resolve_cloud_key_fn=_resolve_cloud_key,
+        resolve_credentials=resolve_credentials,
     )
+
+
+_namespace_uses_llm = _cli_policy._namespace_uses_llm
 
 
 def _configure_llm_runtime_from_args(args) -> None:
@@ -9759,19 +13537,30 @@ def _index_chunks_for_backend(chunks_path: Path, db_dir: Path, *,
                               db_backend: str, collection_name: str,
                               embedding_model: str,
                               full_reindex: bool = False,
+                              security_policy: (
+                                  _release_security.ReleaseSecurityPolicy | None
+                              ) = None,
                               lock_timeout: float = (
                                   DEFAULT_DB_LOCK_TIMEOUT),
                               _active_update_token: str | None = None,
+                              _operation_observer: Callable[
+                                  [dict[str, int | float | bool]], None]
+                              | None = None,
                               ) -> _operation_contracts.IndexOutcome:
     """Dispatch indexing to the configured storage backend."""
+    observer_kwargs = (
+        {"_operation_observer": _operation_observer}
+        if _operation_observer is not None else {})
     if db_backend == "qdrant":
         return index_chunks_qdrant(
             chunks_path, db_dir,
             collection_name=collection_name,
             embedding_model=embedding_model,
             full_reindex=full_reindex,
+            security_policy=security_policy,
             lock_timeout=lock_timeout,
             _active_update_token=_active_update_token,
+            **observer_kwargs,
         )
     else:
         return index_chunks(
@@ -9779,8 +13568,10 @@ def _index_chunks_for_backend(chunks_path: Path, db_dir: Path, *,
             collection_name=collection_name,
             embedding_model=embedding_model,
             full_reindex=full_reindex,
+            security_policy=security_policy,
             lock_timeout=lock_timeout,
             _active_update_token=_active_update_token,
+            **observer_kwargs,
         )
 
 
@@ -9788,7 +13579,6 @@ def _query_index_for_backend(query_text: str, db_dir: Path, *,
                              db_backend: str, **kwargs) -> None:
     """Dispatch a CLI query while preserving the backend-specific wrappers."""
     if db_backend == "qdrant":
-        kwargs.pop("chunks_path", None)
         query_index_qdrant(query_text, db_dir, **kwargs)
     else:
         query_index(query_text, db_dir, **kwargs)
@@ -9807,7 +13597,20 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
     db_backend = getattr(args, "db_backend", DEFAULT_DB_BACKEND)
     collection = getattr(args, "collection", None) or paths["collection"]
     db_dir = paths["qdrant"] if db_backend == "qdrant" else paths["chroma"]
-    llm_kwargs = _llm_kwargs_from_args(args, include_workers=True)
+    quality_report_path = paths.get(
+        "quality_report", _quality_core.quality_report_path(paths["chunks"]))
+    llm_kwargs = _llm_kwargs_from_args(
+        args,
+        include_workers=True,
+        resolve_credentials=_cli_policy._pipeline_features_use_llm(args),
+    )
+    llm_kwargs.setdefault(
+        "security_policy",
+        _effective_security_policy(
+            getattr(args, "_release_security_policy", None)),
+    )
+    structure_profile = _document_profiles.get_profile(
+        getattr(args, "structure_profile", DEFAULT_STRUCTURE_PROFILE))
 
     def observed_stage(name: str) -> str:
         return f"{stage_scope}.{name}" if stage_scope else name
@@ -9823,6 +13626,7 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
                 observed_stage(name), status=status, metrics=metrics)
 
     current_stage = "convert"
+    index_attempt_metrics: dict[str, int | float | bool] = {}
     try:
         stage_started(current_stage)
         conversion_parameters = _conversion_parameters(
@@ -9831,7 +13635,8 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
             ocr=getattr(args, "ocr", None), watermark=watermark)
         if resume and _converted_outputs_complete(
                 pdf_path, paths["doc"], paths["converted_markdown"],
-                parameters=conversion_parameters):
+                parameters=conversion_parameters,
+                preprocessed_output=paths["preprocessed"]):
             log.info(f"  [SKIP] convert (output exists: {paths['doc']})")
             stage_finished(current_stage, status="skipped")
         else:
@@ -9846,10 +13651,12 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
                 ocr=getattr(args, "ocr", None),
                 preprocessed_output=paths["preprocessed"],
                 markdown_output=paths["converted_markdown"],
+                security_policy=llm_kwargs["security_policy"],
             )
             if not _converted_outputs_complete(
                     pdf_path, paths["doc"], paths["converted_markdown"],
-                    parameters=conversion_parameters):
+                    parameters=conversion_parameters,
+                    preprocessed_output=paths["preprocessed"]):
                 raise RuntimeError(
                     "Conversion did not publish a complete artifact set")
             log.info(f"  [DONE] convert -> {paths['doc']}")
@@ -9876,22 +13683,27 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
                 reconstruct_headings=args.reconstruct_headings,
                 quality_score=args.quality_score,
                 llm_scaffold=getattr(args, "llm_scaffold", False),
+                table_children=getattr(args, "table_children", False),
+                structure_profile=structure_profile,
                 **llm_kwargs)
             chunk_count = (
                 _chunk_record_count(paths["chunks"])
                 if _chunks_complete(
                     paths["doc"], paths["chunks"],
-                    parameters=chunk_parameters)
+                    parameters=chunk_parameters,
+                    source_pdf_path=pdf_path)
                 else None
             )
             active_update_token = None
             if resume and chunk_count is not None:
+                chunk_was_skipped = True
                 log.info(
                     f"  [SKIP] chunk (verified complete: {paths['chunks']})")
                 stage_finished(
                     current_stage, status="skipped",
                     metrics={"records": chunk_count})
             else:
+                chunk_was_skipped = False
                 marker_path = _index_update_marker_path(
                     db_dir, backend=db_backend,
                     collection_name=collection)
@@ -9906,6 +13718,7 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
                 chunk_document(
                     paths["doc"],
                     paths["chunks"],
+                    source_pdf_path=pdf_path,
                     embedding_model=args.embedding_model,
                     max_tokens=args.max_tokens,
                     min_words=args.min_words,
@@ -9917,17 +13730,53 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
                     reconstruct_headings=args.reconstruct_headings,
                     quality_score=args.quality_score,
                     llm_scaffold=getattr(args, "llm_scaffold", False),
+                    table_children=getattr(args, "table_children", False),
+                    structure_profile=structure_profile,
                     **llm_kwargs,
                 )
                 if not _chunks_complete(
                         paths["doc"], paths["chunks"],
-                        parameters=chunk_parameters):
+                        parameters=chunk_parameters,
+                        source_pdf_path=pdf_path):
                     raise RuntimeError(
                         "Chunking did not publish a complete artifact set")
                 log.info(f"  [DONE] chunk -> {paths['chunks']}")
                 chunk_count = _chunk_record_count(paths["chunks"])
                 stage_finished(
                     current_stage, metrics={"records": chunk_count})
+
+            current_stage = "quality"
+            stage_started(current_stage, metrics={"records": chunk_count})
+            if _quality_report_complete(
+                    paths["doc"], paths["chunks"],
+                    parameters=chunk_parameters):
+                log.info(
+                    "  [CHECK] corpus quality PASS -> %s",
+                    quality_report_path,
+                )
+                stage_finished(
+                    current_stage,
+                    status="skipped" if chunk_was_skipped else "completed",
+                    metrics={"records": chunk_count, "passed": True},
+                )
+            else:
+                report = _publish_corpus_quality_report(
+                    paths["doc"], paths["chunks"],
+                    parameters=chunk_parameters,
+                    structure_profile=structure_profile)
+                if not _quality_report_complete(
+                        paths["doc"], paths["chunks"],
+                        parameters=chunk_parameters):
+                    raise RuntimeError(
+                        "Corpus quality report publication did not verify")
+                log.info(
+                    "  [DONE] quality %s -> %s",
+                    report["status"].upper(), quality_report_path,
+                )
+                stage_finished(
+                    current_stage,
+                    metrics={"records": chunk_count, "passed": True},
+                )
 
             current_stage = "index"
             stage_started(current_stage, metrics={"records": chunk_count})
@@ -9942,8 +13791,10 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
                 collection_name=collection,
                 embedding_model=args.embedding_model,
                 full_reindex=getattr(args, "full_reindex", False),
+                security_policy=llm_kwargs["security_policy"],
                 lock_timeout=lock_timeout,
                 _active_update_token=active_update_token,
+                _operation_observer=index_attempt_metrics.update,
             )
             log.info(f"  [DONE] index -> {db_dir}")
             stage_finished(
@@ -10010,7 +13861,8 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
                 ollama_url=llm_kwargs["ollama_url"],
                 ollama_model=llm_kwargs["ollama_model"],
                 gemini_key=llm_kwargs["gemini_key"],
-                thinking=llm_kwargs["thinking"])
+                thinking=llm_kwargs["thinking"],
+                security_policy=llm_kwargs["security_policy"])
             if resume and _raptor_output_complete(
                     paths["chunks"], raptor_out,
                     parameters=raptor_parameters):
@@ -10033,20 +13885,32 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
 
     except KeyboardInterrupt as exc:
         if telemetry is not None:
-            telemetry.stage_cancelled(observed_stage(current_stage), exc)
+            telemetry.stage_cancelled(
+                observed_stage(current_stage), exc,
+                metrics=(index_attempt_metrics
+                         if current_stage == "index" else None))
         raise
     except SystemExit as exc:
         if telemetry is not None:
             if exc.code == 130:
-                telemetry.stage_cancelled(observed_stage(current_stage), exc)
+                telemetry.stage_cancelled(
+                    observed_stage(current_stage), exc,
+                    metrics=(index_attempt_metrics
+                             if current_stage == "index" else None))
             else:
-                telemetry.stage_failed(observed_stage(current_stage), exc)
+                telemetry.stage_failed(
+                    observed_stage(current_stage), exc,
+                    metrics=(index_attempt_metrics
+                             if current_stage == "index" else None))
         if exc.code == 130:
             raise
         raise _PipelineStageError(current_stage, exc) from exc
     except Exception as exc:
         if telemetry is not None:
-            telemetry.stage_failed(observed_stage(current_stage), exc)
+            telemetry.stage_failed(
+                observed_stage(current_stage), exc,
+                metrics=(index_attempt_metrics
+                         if current_stage == "index" else None))
         raise _PipelineStageError(current_stage, exc) from exc
 
     return {
@@ -10174,409 +14038,37 @@ def _cli_operation_timeout(argv: list[str], operation: str) -> float:
     )
 
 
-class _WindowsKillJob:
-    """Windows Job Object that kills every assigned process when closed."""
-
-    _KILL_ON_JOB_CLOSE = 0x00002000
-    _EXTENDED_LIMIT_INFORMATION = 9
-
-    def __init__(self):
-        import ctypes
-        from ctypes import wintypes
-
-        class _IoCounters(ctypes.Structure):
-            _fields_ = [
-                ("ReadOperationCount", ctypes.c_ulonglong),
-                ("WriteOperationCount", ctypes.c_ulonglong),
-                ("OtherOperationCount", ctypes.c_ulonglong),
-                ("ReadTransferCount", ctypes.c_ulonglong),
-                ("WriteTransferCount", ctypes.c_ulonglong),
-                ("OtherTransferCount", ctypes.c_ulonglong),
-            ]
-
-        class _BasicLimitInformation(ctypes.Structure):
-            _fields_ = [
-                ("PerProcessUserTimeLimit", wintypes.LARGE_INTEGER),
-                ("PerJobUserTimeLimit", wintypes.LARGE_INTEGER),
-                ("LimitFlags", wintypes.DWORD),
-                ("MinimumWorkingSetSize", ctypes.c_size_t),
-                ("MaximumWorkingSetSize", ctypes.c_size_t),
-                ("ActiveProcessLimit", wintypes.DWORD),
-                ("Affinity", ctypes.c_size_t),
-                ("PriorityClass", wintypes.DWORD),
-                ("SchedulingClass", wintypes.DWORD),
-            ]
-
-        class _ExtendedLimitInformation(ctypes.Structure):
-            _fields_ = [
-                ("BasicLimitInformation", _BasicLimitInformation),
-                ("IoInfo", _IoCounters),
-                ("ProcessMemoryLimit", ctypes.c_size_t),
-                ("JobMemoryLimit", ctypes.c_size_t),
-                ("PeakProcessMemoryUsed", ctypes.c_size_t),
-                ("PeakJobMemoryUsed", ctypes.c_size_t),
-            ]
-
-        class _BasicAccountingInformation(ctypes.Structure):
-            _fields_ = [
-                ("TotalUserTime", wintypes.LARGE_INTEGER),
-                ("TotalKernelTime", wintypes.LARGE_INTEGER),
-                ("ThisPeriodTotalUserTime", wintypes.LARGE_INTEGER),
-                ("ThisPeriodTotalKernelTime", wintypes.LARGE_INTEGER),
-                ("TotalPageFaultCount", wintypes.DWORD),
-                ("TotalProcesses", wintypes.DWORD),
-                ("ActiveProcesses", wintypes.DWORD),
-                ("TotalTerminatedProcesses", wintypes.DWORD),
-            ]
-
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        create_job = kernel32.CreateJobObjectW
-        create_job.argtypes = [wintypes.LPVOID, wintypes.LPCWSTR]
-        create_job.restype = wintypes.HANDLE
-        set_information = kernel32.SetInformationJobObject
-        set_information.argtypes = [
-            wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD,
-        ]
-        set_information.restype = wintypes.BOOL
-        assign_process = kernel32.AssignProcessToJobObject
-        assign_process.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
-        assign_process.restype = wintypes.BOOL
-        terminate_job = kernel32.TerminateJobObject
-        terminate_job.argtypes = [wintypes.HANDLE, wintypes.UINT]
-        terminate_job.restype = wintypes.BOOL
-        query_information = kernel32.QueryInformationJobObject
-        query_information.argtypes = [
-            wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD,
-            ctypes.POINTER(wintypes.DWORD),
-        ]
-        query_information.restype = wintypes.BOOL
-        close_handle = kernel32.CloseHandle
-        close_handle.argtypes = [wintypes.HANDLE]
-        close_handle.restype = wintypes.BOOL
-        set_handle_information = kernel32.SetHandleInformation
-        set_handle_information.argtypes = [
-            wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD,
-        ]
-        set_handle_information.restype = wintypes.BOOL
-
-        handle = create_job(None, None)
-        if not handle:
-            raise ctypes.WinError(ctypes.get_last_error())
-        if not set_handle_information(handle, 0x00000001, 0):
-            error = ctypes.WinError(ctypes.get_last_error())
-            close_handle(handle)
-            raise error
-        limits = _ExtendedLimitInformation()
-        limits.BasicLimitInformation.LimitFlags = self._KILL_ON_JOB_CLOSE
-        if not set_information(
-                handle, self._EXTENDED_LIMIT_INFORMATION,
-                ctypes.byref(limits), ctypes.sizeof(limits)):
-            error = ctypes.WinError(ctypes.get_last_error())
-            close_handle(handle)
-            raise error
-        self._ctypes = ctypes
-        self._wintypes = wintypes
-        self._assign_process = assign_process
-        self._terminate_job = terminate_job
-        self._query_information = query_information
-        self._close_handle = close_handle
-        self._basic_accounting_type = _BasicAccountingInformation
-        self._handle = handle
-
-    def assign(self, process) -> None:
-        if not self._assign_process(
-                self._handle, self._wintypes.HANDLE(int(process._handle))):
-            raise self._ctypes.WinError(self._ctypes.get_last_error())
-
-    def close(self) -> bool:
-        if self._handle:
-            closed = bool(self._close_handle(self._handle))
-            self._handle = None
-            return closed
-        return True
-
-    def terminate(self, exit_code: int = 124) -> bool:
-        if not self._handle:
-            return True
-        return bool(self._terminate_job(self._handle, exit_code))
-
-    def active_processes(self) -> int:
-        if not self._handle:
-            return 0
-        information = self._basic_accounting_type()
-        returned = self._wintypes.DWORD()
-        if not self._query_information(
-                self._handle, 1, self._ctypes.byref(information),
-                self._ctypes.sizeof(information),
-                self._ctypes.byref(returned)):
-            raise self._ctypes.WinError(self._ctypes.get_last_error())
-        return int(information.ActiveProcesses)
-
-    def terminate_and_confirm(
-            self, *, exit_code: int = 124,
-            timeout: float = _SUPERVISED_TERMINATE_GRACE) -> bool:
-        """Terminate every assigned process and confirm the Job is empty."""
-        confirmed = False
-        try:
-            if not self.terminate(exit_code):
-                return False
-            deadline = time.monotonic() + timeout
-            while True:
-                if self.active_processes() == 0:
-                    confirmed = True
-                    break
-                if time.monotonic() >= deadline:
-                    break
-                time.sleep(0.025)
-        except OSError:
-            confirmed = False
-        finally:
-            closed = self.close()
-        return confirmed and closed
-
-
-class _PosixSupervisedStartGate:
-    """Startup gate whose open writer also proves supervisor liveness."""
-
-    kind = "posix-pipe"
-
-    def __init__(self):
-        self._read_descriptor, self._write_descriptor = os.pipe()
-
-    @property
-    def child_value(self) -> str:
-        return str(self._read_descriptor)
-
-    def popen_options(self) -> dict:
-        return {
-            "close_fds": True,
-            "pass_fds": (self._read_descriptor,),
-        }
-
-    def release(self) -> None:
-        if self._write_descriptor < 0:
-            raise RuntimeError("supervised worker start gate is closed")
-        if os.write(self._write_descriptor, b"\x01") != 1:
-            raise OSError("supervised worker start gate release was incomplete")
-        # The child retains the read end after consuming this byte.  Keep the
-        # write end open until normal tree cleanup; abrupt supervisor death
-        # then delivers EOF to the child's watchdog.
-        descriptor = self._read_descriptor
-        self._read_descriptor = -1
-        if descriptor >= 0:
-            os.close(descriptor)
-
-    def close(self) -> None:
-        for attribute in ("_write_descriptor", "_read_descriptor"):
-            descriptor = getattr(self, attribute)
-            if descriptor < 0:
-                continue
-            setattr(self, attribute, -1)
-            try:
-                os.close(descriptor)
-            except OSError:
-                pass
-
-
-class _WindowsSupervisedStartGate:
-    """One-shot inherited event used to release a contained Windows worker."""
-
-    kind = "windows-event"
-
-    def __init__(self):
-        import ctypes
-        from ctypes import wintypes
-
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        create_event = kernel32.CreateEventW
-        create_event.argtypes = [
-            wintypes.LPVOID, wintypes.BOOL, wintypes.BOOL, wintypes.LPCWSTR,
-        ]
-        create_event.restype = wintypes.HANDLE
-        set_event = kernel32.SetEvent
-        set_event.argtypes = [wintypes.HANDLE]
-        set_event.restype = wintypes.BOOL
-        set_handle_information = kernel32.SetHandleInformation
-        set_handle_information.argtypes = [
-            wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD,
-        ]
-        set_handle_information.restype = wintypes.BOOL
-        close_handle = kernel32.CloseHandle
-        close_handle.argtypes = [wintypes.HANDLE]
-        close_handle.restype = wintypes.BOOL
-        handle = create_event(None, True, False, None)
-        if not handle:
-            raise ctypes.WinError(ctypes.get_last_error())
-        if not set_handle_information(handle, 0x00000001, 0x00000001):
-            error = ctypes.WinError(ctypes.get_last_error())
-            close_handle(handle)
-            raise error
-        self._ctypes = ctypes
-        self._set_event = set_event
-        self._close_handle = close_handle
-        self._handle = handle
-
-    @property
-    def child_value(self) -> str:
-        return str(int(self._handle))
-
-    def popen_options(self) -> dict:
-        startup = subprocess.STARTUPINFO()
-        startup.lpAttributeList = {"handle_list": [int(self._handle)]}
-        return {"close_fds": True, "startupinfo": startup}
-
-    def release(self) -> None:
-        if not self._handle:
-            raise RuntimeError("supervised worker start gate is closed")
-        if not self._set_event(self._handle):
-            raise self._ctypes.WinError(self._ctypes.get_last_error())
-        self.close()
-
-    def close(self) -> None:
-        if self._handle:
-            self._close_handle(self._handle)
-            self._handle = None
+_WindowsKillJob = _process_supervision._WindowsKillJob
+_PosixSupervisedStartGate = _process_supervision._PosixSupervisedStartGate
+_WindowsSupervisedStartGate = _process_supervision._WindowsSupervisedStartGate
+_SupervisorSignal = _process_supervision._SupervisorSignal
+_SupervisorCleanupError = _process_supervision._SupervisorCleanupError
 
 
 def _new_supervised_start_gate():
+    """Build a platform gate through facade-replaceable class globals."""
     return (_WindowsSupervisedStartGate()
             if os.name == "nt" else _PosixSupervisedStartGate())
 
 
-class _SupervisorSignal(BaseException):
-    """Internal control flow used to clean up before honoring a signal."""
-
-    def __init__(self, signum: int):
-        self.signum = signum
-        super().__init__(signum)
-
-
-class _SupervisorCleanupError(RuntimeError):
-    """Raised only after owned process-tree cleanup remains unconfirmed."""
+def _supervision_config() -> _process_supervision.SupervisionConfig:
+    """Snapshot facade-owned supervision constants for one operation."""
+    return _process_supervision.SupervisionConfig(
+        supervised_child_env=_SUPERVISED_CHILD_ENV,
+        run_id_env=_RUN_ID_ENV,
+        terminate_grace=_SUPERVISED_TERMINATE_GRACE,
+        poll_interval=_SUPERVISED_POLL_INTERVAL,
+        start_gate_timeout=_SUPERVISED_START_GATE_TIMEOUT,
+    )
 
 
 def _terminate_supervised_process(process, *, kill_job=None) -> bool:
-    """Terminate a supervised tree and confirm the direct worker was reaped."""
-    if kill_job is not None:
-        # The Job remains authoritative even if the direct worker exited before
-        # one of its descendants.  Confirm it is empty before reporting cleanup.
-        try:
-            confirm = getattr(kill_job, "terminate_and_confirm", None)
-            if confirm is not None:
-                tree_gone = bool(confirm(
-                    timeout=_SUPERVISED_TERMINATE_GRACE))
-            else:
-                tree_gone = bool(kill_job.terminate())
-                tree_gone = bool(kill_job.close()) and tree_gone
-        except BaseException:
-            tree_gone = False
-            try:
-                kill_job.close()
-            except BaseException:
-                pass
-        try:
-            process.wait(timeout=_SUPERVISED_TERMINATE_GRACE)
-        except subprocess.TimeoutExpired:
-            if process.poll() is None:
-                try:
-                    process.kill()
-                except OSError:
-                    pass
-            try:
-                process.wait(timeout=_SUPERVISED_TERMINATE_GRACE)
-            except subprocess.TimeoutExpired:
-                return False
-        return process.poll() is not None and tree_gone
-
-    if os.name == "nt":
-        # ``Popen.terminate()`` only kills the direct Windows process. The
-        # vector client or model runtime may have descendants that retain DB
-        # handles, so ask the OS to terminate the exact PID tree instead.
-        taskkill_options = {
-            "stdout": subprocess.DEVNULL,
-            "stderr": subprocess.DEVNULL,
-            "check": False,
-            "timeout": _SUPERVISED_TERMINATE_GRACE,
-        }
-        create_no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        if create_no_window:
-            taskkill_options["creationflags"] = create_no_window
-        taskkill_succeeded = False
-        try:
-            completed = subprocess.run(
-                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
-                **taskkill_options,
-            )
-            taskkill_succeeded = completed.returncode == 0
-            if completed.returncode and process.poll() is None:
-                process.kill()
-        except (OSError, subprocess.SubprocessError):
-            if process.poll() is None:
-                try:
-                    process.kill()
-                except OSError:
-                    pass
-        try:
-            process.wait(timeout=_SUPERVISED_TERMINATE_GRACE)
-        except subprocess.TimeoutExpired:
-            if process.poll() is None:
-                try:
-                    process.kill()
-                except OSError:
-                    pass
-            try:
-                process.wait(timeout=_SUPERVISED_TERMINATE_GRACE)
-            except subprocess.TimeoutExpired:
-                pass
-        return process.poll() is not None and taskkill_succeeded
-
-    def send_signal(sig) -> None:
-        try:
-            os.killpg(process.pid, sig)
-        except ProcessLookupError:
-            pass
-
-    try:
-        send_signal(signal.SIGTERM)
-    except OSError:
-        if process.poll() is None:
-            process.kill()
-
-    deadline = time.monotonic() + _SUPERVISED_TERMINATE_GRACE
-    while time.monotonic() < deadline:
-        process.poll()  # reap the direct worker so only live descendants count
-        try:
-            os.killpg(process.pid, 0)
-        except ProcessLookupError:
-            break
-        except PermissionError:
-            # The group still exists even if the current account cannot signal
-            # one of its members.
-            pass
-        time.sleep(0.05)
-    try:
-        send_signal(signal.SIGKILL)
-    except OSError:
-        pass
-    worker_reaped = process.poll() is not None
-    if not worker_reaped:
-        try:
-            process.wait(timeout=_SUPERVISED_TERMINATE_GRACE)
-        except subprocess.TimeoutExpired:
-            return False
-        worker_reaped = True
-    group_gone = False
-    deadline = time.monotonic() + _SUPERVISED_TERMINATE_GRACE
-    while time.monotonic() < deadline:
-        try:
-            os.killpg(process.pid, 0)
-        except ProcessLookupError:
-            group_gone = True
-            break
-        except PermissionError:
-            pass
-        time.sleep(0.05)
-    return worker_reaped and group_gone
+    """Terminate a supervised tree through the extracted runtime core."""
+    return _process_supervision._terminate_supervised_process(
+        process,
+        kill_job=kill_job,
+        terminate_grace=_SUPERVISED_TERMINATE_GRACE,
+    )
 
 
 def _supervised_telemetry_requested(
@@ -10605,6 +14097,15 @@ def _finalize_supervised_run_telemetry(
         )
 
 
+def _start_supervised_run_telemetry(
+        operation: str, *, run_id: str | None,
+        run_events: Path | None, run_report: Path | None) -> None:
+    if _supervised_telemetry_requested(run_id, run_events, run_report):
+        _run_telemetry.RunTelemetry(
+            operation, run_id=run_id, events_path=run_events,
+            report_path=run_report).start()
+
+
 def _run_cli_with_deadline(script_path: Path, argv: list[str], *,
                            operation: str, timeout: float,
                            working_directory: Path | None = None,
@@ -10620,219 +14121,36 @@ def _run_cli_with_deadline(script_path: Path, argv: list[str], *,
                            heartbeat: Callable[[Any], None] | None = None,
                            stdout_target: Any = None,
                            stderr_target: Any = None) -> int:
-    """Run one CLI operation in a killable process with a wall-clock deadline."""
-    timeout = _normalize_operation_timeout(timeout)
-    environment = os.environ.copy()
-    environment[_SUPERVISED_CHILD_ENV] = "1"
-    for name, value in (environment_overrides or {}).items():
-        if value is None:
-            environment.pop(name, None)
-        else:
-            environment[name] = value
-    if run_id is not None:
-        environment[_RUN_ID_ENV] = run_id
-    if _supervised_telemetry_requested(run_id, run_events, run_report):
-        _run_telemetry.RunTelemetry(
-            operation, run_id=run_id, events_path=run_events,
-            report_path=run_report).start()
-    target_script = str(Path(script_path).resolve())
-    bootstrap_script = str(
-        Path(__file__).with_name("supervised_worker.py").resolve())
-    process_options = {"env": environment}
-    if working_directory is not None:
-        process_options["cwd"] = os.fspath(working_directory)
-    if stdout_target is not None:
-        process_options["stdout"] = stdout_target
-    if stderr_target is not None:
-        process_options["stderr"] = stderr_target
-    kill_job = None
-    start_gate = None
-    try:
-        if os.name == "nt":
-            process_options["creationflags"] = getattr(
-                subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-            kill_job = _WindowsKillJob()
-        else:
-            process_options["start_new_session"] = True
-        start_gate = _new_supervised_start_gate()
-        process_options.update(start_gate.popen_options())
-        command = [
-            sys.executable, "-u", bootstrap_script,
-            start_gate.kind, start_gate.child_value,
-            str(_SUPERVISED_START_GATE_TIMEOUT), target_script, *argv,
-        ]
-        process = subprocess.Popen(command, **process_options)
-    except BaseException as exc:
-        if start_gate is not None:
-            start_gate.close()
-        if kill_job is not None:
-            kill_job.close()
-        _finalize_supervised_run_telemetry(
-            operation, run_id=run_id, run_events=run_events,
-            run_report=run_report,
-            status="cancelled" if isinstance(exc, KeyboardInterrupt)
-            else "failed",
-            exc=exc)
-        raise
-    try:
-        if kill_job is not None:
-            kill_job.assign(process)
-        if on_child_started is not None:
-            on_child_started(process)
-        start_gate.release()
-    except BaseException as exc:
-        start_gate.close()
-        cleanup_complete = _terminate_supervised_process(
-            process, kill_job=kill_job)
-        if cleanup_complete:
-            _finalize_supervised_run_telemetry(
-                operation, run_id=run_id, run_events=run_events,
-                run_report=run_report, status="failed", exc=exc)
-        else:
-            raise _SupervisorCleanupError(
-                "supervised worker tree cleanup could not be confirmed"
-            ) from exc
-        raise
+    """Run one CLI operation through the extracted supervision core.
 
-    previous_handlers = {}
-    try:
-        if (os.name != "nt"
-                and _threading.current_thread() is _threading.main_thread()):
-            def raise_supervisor_signal(received, _frame):
-                raise _SupervisorSignal(received)
-
-            for signal_name in ("SIGTERM", "SIGHUP"):
-                signum = getattr(signal, signal_name, None)
-                if signum is None:
-                    continue
-                previous_handlers[signum] = signal.getsignal(signum)
-                signal.signal(signum, raise_supervisor_signal)
-    except BaseException as exc:
-        start_gate.close()
-        cleanup_complete = _terminate_supervised_process(
-            process, kill_job=kill_job)
-        for signum, previous in previous_handlers.items():
-            signal.signal(signum, previous)
-        if not cleanup_complete:
-            raise _SupervisorCleanupError(
-                "supervised worker tree cleanup could not be confirmed"
-            ) from exc
-        raise
-    try:
-        deadline = time.monotonic() + timeout
-        poll_callbacks = cancel_requested is not None or heartbeat is not None
-        while True:
-            if cancel_requested is not None and cancel_requested():
-                observed_exit = process.poll()
-                if observed_exit is not None:
-                    exit_code = int(observed_exit)
-                    break
-                cleanup_complete = _terminate_supervised_process(
-                    process, kill_job=kill_job)
-                if cleanup_complete:
-                    _finalize_supervised_run_telemetry(
-                        operation, run_id=run_id, run_events=run_events,
-                        run_report=run_report, status="cancelled",
-                        exc=KeyboardInterrupt())
-                else:
-                    raise _SupervisorCleanupError(
-                        "supervised worker tree cleanup could not be confirmed")
-                return 130
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise subprocess.TimeoutExpired(command, timeout)
-            wait_timeout = (
-                min(remaining, _SUPERVISED_POLL_INTERVAL)
-                if poll_callbacks else remaining
-            )
-            try:
-                exit_code = int(process.wait(timeout=wait_timeout))
-                break
-            except subprocess.TimeoutExpired:
-                if heartbeat is not None:
-                    heartbeat(process)
-                if not poll_callbacks or time.monotonic() >= deadline:
-                    raise
-        cleanup_complete = _terminate_supervised_process(
-            process, kill_job=kill_job)
-        if not cleanup_complete:
-            raise _SupervisorCleanupError(
-                "supervised worker tree cleanup could not be confirmed")
-        if exit_code:
-            _finalize_supervised_run_telemetry(
-                operation, run_id=run_id, run_events=run_events,
-                run_report=run_report,
-                status="cancelled" if exit_code == 130 else "failed",
-                exc=SystemExit(exit_code))
-        return exit_code
-    except subprocess.TimeoutExpired:
-        cleanup_complete = _terminate_supervised_process(
-            process, kill_job=kill_job)
-        if cleanup_complete:
-            _finalize_supervised_run_telemetry(
-                operation, run_id=run_id, run_events=run_events,
-                run_report=run_report, status="failed",
-                exc=TimeoutError("supervised operation deadline exceeded"))
-        cleanup_status = (
-            "Any operating-system vector-store lease was released; retry "
-            "the command to recover an interrupted index."
-            if cleanup_complete else
-            "Worker cleanup could not be confirmed; verify that no child "
-            "process remains before retrying the index."
-        )
-        print(
-            f"Operation '{operation}' exceeded its {timeout:g}s deadline and "
-            f"was terminated. {cleanup_status}",
-            file=sys.stderr,
-        )
-        if not cleanup_complete:
-            raise _SupervisorCleanupError(
-                "supervised worker tree cleanup could not be confirmed")
-        return 124
-    except _SupervisorSignal as exc:
-        cleanup_complete = _terminate_supervised_process(
-            process, kill_job=kill_job)
-        if cleanup_complete:
-            _finalize_supervised_run_telemetry(
-                operation, run_id=run_id, run_events=run_events,
-                run_report=run_report, status="cancelled",
-                exc=KeyboardInterrupt())
-        else:
-            raise _SupervisorCleanupError(
-                "supervised worker tree cleanup could not be confirmed") from exc
-        return 128 + exc.signum
-    except KeyboardInterrupt as exc:
-        cleanup_complete = _terminate_supervised_process(
-            process, kill_job=kill_job)
-        if cleanup_complete:
-            _finalize_supervised_run_telemetry(
-                operation, run_id=run_id, run_events=run_events,
-                run_report=run_report, status="cancelled", exc=exc)
-        else:
-            raise _SupervisorCleanupError(
-                "supervised worker tree cleanup could not be confirmed") from exc
-        return 130
-    except _SupervisorCleanupError:
-        # Cleanup already exhausted its graceful and forced confirmation
-        # windows. Do not claim a terminal telemetry state or retry blindly.
-        raise
-    except BaseException as exc:
-        cleanup_complete = _terminate_supervised_process(
-            process, kill_job=kill_job)
-        if cleanup_complete:
-            _finalize_supervised_run_telemetry(
-                operation, run_id=run_id, run_events=run_events,
-                run_report=run_report, status="failed", exc=exc)
-        else:
-            raise _SupervisorCleanupError(
-                "supervised worker tree cleanup could not be confirmed") from exc
-        raise
-    finally:
-        for signum, previous in previous_handlers.items():
-            signal.signal(signum, previous)
-        start_gate.close()
-        if kill_job is not None:
-            kill_job.close()
+    Mutable collaborators are resolved from this facade for every call so the
+    established monkeypatch and consumer seams remain compatible.
+    """
+    return _process_supervision._run_cli_with_deadline(
+        script_path,
+        argv,
+        operation=operation,
+        timeout=timeout,
+        config=_supervision_config(),
+        normalize_timeout_fn=_normalize_operation_timeout,
+        telemetry_start_fn=_start_supervised_run_telemetry,
+        telemetry_finalize_fn=_finalize_supervised_run_telemetry,
+        kill_job_factory=_WindowsKillJob,
+        start_gate_factory=_new_supervised_start_gate,
+        terminate_fn=_terminate_supervised_process,
+        supervisor_signal_type=_SupervisorSignal,
+        cleanup_error_type=_SupervisorCleanupError,
+        working_directory=working_directory,
+        environment_overrides=environment_overrides,
+        run_id=run_id,
+        run_events=run_events,
+        run_report=run_report,
+        cancel_requested=cancel_requested,
+        on_child_started=on_child_started,
+        heartbeat=heartbeat,
+        stdout_target=stdout_target,
+        stderr_target=stderr_target,
+    )
 
 
 _rag_cli_command = _cli_policy._rag_cli_command
@@ -10842,53 +14160,21 @@ _cli_run_telemetry_options = _cli_policy._cli_run_telemetry_options
 def _run_rag_entrypoint(
         argv: list[str] | None = None, *,
         environment_overrides: dict[str, str | None] | None = None) -> int:
-    """Run the CLI, supervising vector-using commands in a child process."""
-    cli_args = list(sys.argv[1:] if argv is None else argv)
-    command = _rag_cli_command(cli_args)
-    if not cli_args or command == "menu":
-        interactive_menu()
-        return 0
-    if (command in DEFAULT_OPERATION_TIMEOUTS
-            and os.environ.get(_SUPERVISED_CHILD_ENV) != "1"):
-        telemetry_options = _cli_run_telemetry_options(cli_args, command)
-        explicit_run_id = telemetry_options["run_id"]
-        run_id = (
-            explicit_run_id if explicit_run_id is not None
-            else os.environ.get(_RUN_ID_ENV) or _run_telemetry.new_run_id())
-        supervisor_options = {
-            "operation": command,
-            "timeout": _cli_operation_timeout(cli_args, command),
-            "run_id": run_id,
-            "run_events": (
-                Path(telemetry_options["events_path"])
-                if telemetry_options["events_path"] is not None else None),
-            "run_report": (
-                Path(telemetry_options["report_path"])
-                if telemetry_options["report_path"] is not None else None),
-        }
-        if environment_overrides:
-            supervisor_options["environment_overrides"] = environment_overrides
-        return _run_cli_with_deadline(
-            Path(__file__), cli_args, **supervisor_options)
-
-    previous_environment = {}
-    missing_environment = set()
-    for name, value in (environment_overrides or {}).items():
-        if name in os.environ:
-            previous_environment[name] = os.environ[name]
-        else:
-            missing_environment.add(name)
-        if value is None:
-            os.environ.pop(name, None)
-        else:
-            os.environ[name] = value
-    try:
-        main(cli_args)
-    finally:
-        for name in missing_environment:
-            os.environ.pop(name, None)
-        os.environ.update(previous_environment)
-    return 0
+    """Run the CLI through the generic extracted entrypoint policy."""
+    return _process_supervision._run_supervised_entrypoint(
+        argv,
+        environment_overrides=environment_overrides,
+        config=_supervision_config(),
+        script_path=Path(__file__),
+        command_resolver=_rag_cli_command,
+        operation_timeouts=DEFAULT_OPERATION_TIMEOUTS,
+        telemetry_options_fn=_cli_run_telemetry_options,
+        timeout_fn=_cli_operation_timeout,
+        run_id_factory=_run_telemetry.new_run_id,
+        menu_fn=interactive_menu,
+        main_fn=main,
+        supervisor_fn=_run_cli_with_deadline,
+    )
 
 
 def _render_storage_outcome(payload: dict) -> None:
@@ -10966,6 +14252,43 @@ def _run_storage_command(args) -> dict[str, int]:
             _retention.apply_retention_plan(plan)
             if args.apply else plan.as_dict())
         outcomes = [payload]
+    elif getattr(args, "prune_snapshot_scratch", False):
+        min_age_seconds = args.older_than_days * 24 * 60 * 60
+        planned = _artifact_io.cleanup_stale_snapshot_directories(
+            getattr(args, "snapshot_scratch_root", None),
+            min_age_seconds=min_age_seconds,
+            apply=False,
+        )
+        if args.apply:
+            removed = _artifact_io.cleanup_stale_snapshot_directories(
+                getattr(args, "snapshot_scratch_root", None),
+                min_age_seconds=min_age_seconds,
+                apply=True,
+            )
+            payload = {
+                "schema_version": 1,
+                "action": "prune_snapshot_scratch",
+                "mode": "applied",
+                "deleted_count": len(removed),
+                "deleted_bytes": 0,
+            }
+        else:
+            payload = {
+                "schema_version": 1,
+                "action": "prune_snapshot_scratch",
+                "mode": "dry_run",
+                "apply_required": True,
+                "root": str(_artifact_io._snapshot_scratch_root_path(
+                    getattr(args, "snapshot_scratch_root", None))),
+                "candidate_count": len(planned),
+                "total_bytes": 0,
+                "candidates": [{
+                    "relative_path": path.name,
+                    "size_bytes": 0,
+                    "age_days": args.older_than_days,
+                } for path in planned],
+            }
+        outcomes = [payload]
     else:
         roots = [Path(args.output_root), Path(cache_root)]
         unique_roots = []
@@ -11028,22 +14351,115 @@ def _background_submit_tokens(tokens: list[str]) -> tuple[str, list[str]]:
     return command, command_arguments
 
 
-def _run_jobs_command(args) -> dict[str, int | bool]:
-    import job_manager as _job_manager
+_BACKGROUND_SECURITY_VALUE_OPTIONS = {
+    "--security-profile": "security_profile",
+    "--network-policy": "network_policy",
+    "--model-download-policy": "model_download_policy",
+    "--llm-cache-namespace": "llm_cache_namespace",
+    "--release-cache-namespace-id": "release_cache_namespace_id",
+    "--release-security-policy-version": (
+        "release_security_policy_version"),
+}
 
-    store = _job_runtime.JobStore(args.job_root)
+
+def _canonical_background_security_argv(
+        command: str, arguments: list[str]) -> list[str]:
+    """Replace submitted policy flags with one immutable canonical receipt."""
+    if command not in _job_runtime.ALLOWED_JOB_COMMANDS:
+        return list(arguments)
+    try:
+        terminator_index = arguments.index("--")
+    except ValueError:
+        policy_arguments = list(arguments)
+        positional_suffix: list[str] = []
+    else:
+        policy_arguments = list(arguments[:terminator_index])
+        positional_suffix = list(arguments[terminator_index:])
+    values: dict[str, object] = {
+        "security_profile": "release",
+        "network_policy": "local-only",
+        "model_download_policy": "cache-only",
+        "llm_cache_namespace": "",
+        "release_cache_namespace_id": None,
+        "release_security_policy_version": (
+            _release_security.RELEASE_SECURITY_POLICY_VERSION),
+        "trust_environment_network": False,
+    }
+    cleaned: list[str] = []
+    index = 0
+    while index < len(policy_arguments):
+        token = policy_arguments[index]
+        option, separator, inline_value = token.partition("=")
+        attr = _BACKGROUND_SECURITY_VALUE_OPTIONS.get(option)
+        if attr is not None:
+            if separator:
+                value = inline_value
+            else:
+                index += 1
+                if index >= len(policy_arguments):
+                    raise _job_runtime.JobValidationError(
+                        f"{option} requires a value")
+                value = policy_arguments[index]
+            if attr == "release_security_policy_version":
+                try:
+                    values[attr] = int(value)
+                except ValueError as exc:
+                    raise _job_runtime.JobValidationError(
+                        "invalid release-security policy version") from exc
+            else:
+                values[attr] = value
+        elif option == "--trust-environment-network":
+            if separator:
+                raise _job_runtime.JobValidationError(
+                    "--trust-environment-network accepts no value")
+            values["trust_environment_network"] = True
+        else:
+            cleaned.append(token)
+        index += 1
+    policy = _cli_policy._release_security_policy_from_args(
+        argparse.Namespace(**values))
+    cleaned.extend([
+        "--release-security-policy-version", str(policy.schema_version),
+        "--security-profile", policy.profile,
+        "--network-policy", policy.network_policy,
+        "--model-download-policy", policy.model_download_policy,
+    ])
+    if policy.cache_namespace_id is not None:
+        cleaned.extend([
+            "--release-cache-namespace-id", policy.cache_namespace_id])
+    if policy.trust_environment_network:
+        cleaned.append("--trust-environment-network")
+    return cleaned + positional_suffix
+
+
+_default_job_application_binding = (
+    _job_application.default_job_application_binding)
+
+
+def _run_jobs_command(
+        args, *,
+        job_binding: _job_application.JobApplicationBinding | None = None,
+) -> dict[str, int | bool]:
+    binding = (
+        _default_job_application_binding()
+        if job_binding is None else job_binding)
+    if not isinstance(binding, _job_application.JobApplicationBinding):
+        raise TypeError("job_binding must be a JobApplicationBinding")
+    store = binding.job_store_factory(args.job_root)
     action = args.job_action
     payload: dict | list[dict]
     summaries: list[_job_runtime.JobSummary]
     if action == "submit":
         command, command_arguments = _background_submit_tokens(
             args.job_command)
+        command_arguments = _canonical_background_security_argv(
+            command, command_arguments)
         submitted = store.submit_job(
             command, command_arguments,
             timeout_seconds=args.timeout,
             working_directory=Path.cwd(), output_root=OUTPUT_DIR)
         try:
-            launch = _job_manager.launch_detached(
+            launch = binding.launch_detached(
                 store, submitted.job_id,
                 ready_timeout=args.ready_timeout)
         except BaseException as launch_error:
@@ -11064,29 +14480,29 @@ def _run_jobs_command(args) -> dict[str, int | bool]:
         payload = {"job": summary.as_dict(), "launch": launch.as_dict()}
         summaries = [summary]
     elif action == "list":
-        summaries = _job_manager.reconcile_all_jobs(store)
+        summaries = binding.reconcile_all_jobs(store)
         payload = [summary.as_dict() for summary in summaries]
     elif action == "status":
-        summary = _job_manager.reconcile_job(store, args.job_id)
+        summary = binding.reconcile_job(store, args.job_id)
         summaries = [summary]
         payload = summary.as_dict()
     elif action == "cancel":
         store.request_cancel(args.job_id)
         deadline = time.monotonic() + args.wait_timeout
-        summary = _job_manager.reconcile_job(store, args.job_id)
+        summary = binding.reconcile_job(store, args.job_id)
         while args.wait and not summary.terminal:
-            summary = _job_manager.reconcile_job(store, args.job_id)
+            summary = binding.reconcile_job(store, args.job_id)
             if summary.terminal or time.monotonic() >= deadline:
                 break
             time.sleep(0.1)
         summaries = [summary]
         payload = summary.as_dict()
     elif action == "resume":
-        current = _job_manager.reconcile_job(store, args.job_id)
+        current = binding.reconcile_job(store, args.job_id)
         resumed = store.prepare_resume(
             args.job_id, expected_revision=current.revision)
         try:
-            launch = _job_manager.launch_detached(
+            launch = binding.launch_detached(
                 store, args.job_id, ready_timeout=args.ready_timeout)
         except BaseException as launch_error:
             try:
@@ -11144,6 +14560,19 @@ CONTENT_TYPES = [
 ]
 
 
+class _StrictArgumentParser(argparse.ArgumentParser):
+    """Reject abbreviations and never reproduce submitted values in errors."""
+
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault("allow_abbrev", False)
+        super().__init__(*args, **kwargs)
+
+    def error(self, message):
+        del message
+        super().error(
+            "invalid command line; argument values were omitted (use --help)")
+
+
 def main(argv: list[str] | None = None):
     # Ensure print() handles non-ASCII (case names, Unicode dashes) on Windows
     if sys.stdout and hasattr(sys.stdout, "reconfigure"):
@@ -11152,7 +14581,7 @@ def main(argv: list[str] | None = None):
         except Exception:
             pass
 
-    parser = argparse.ArgumentParser(
+    parser = _StrictArgumentParser(
         description="RAG Pipeline — Docling + HybridChunker + ChromaDB/Qdrant",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -11163,7 +14592,44 @@ def main(argv: list[str] | None = None):
     sub = parser.add_subparsers(dest="command")
 
     # --- Shared flag definitions ---
+    def add_release_security_flags(p):
+        if getattr(p, "_release_security_flags_added", False):
+            return
+        p._release_security_flags_added = True
+        p.add_argument(
+            "--security-profile", choices=["release", "development"],
+            default="release",
+            help=("Trust defaults (release is fail-closed; development "
+                  "retains explicitly selected unsafe conveniences)"))
+        p.add_argument(
+            "--release-security-policy-version", type=int,
+            default=_release_security.RELEASE_SECURITY_POLICY_VERSION,
+            help=argparse.SUPPRESS)
+        p.add_argument(
+            "--network-policy", choices=["local-only", "allow-cloud"],
+            default="local-only",
+            help=("Private-data egress policy (default: local-only; cloud "
+                  "providers require explicit allow-cloud)"))
+        p.add_argument(
+            "--model-download-policy",
+            choices=["cache-only", "allow-reviewed-sync"],
+            default="cache-only",
+            help=("Reviewed model artifact synchronization policy "
+                  "(default: cache-only)"))
+        p.add_argument(
+            "--llm-cache-namespace", default="",
+            help=("Nonsecret trust/tenant label required for custom cloud "
+                  "gateways in release mode; only its hash is reported"))
+        p.add_argument(
+            "--release-cache-namespace-id", default=None,
+            help=argparse.SUPPRESS)
+        p.add_argument(
+            "--trust-environment-network", action="store_true",
+            help=("Allow reviewed proxy and custom-CA environment overrides "
+                  "for release cloud transports"))
+
     def add_embedding_flags(p):
+        add_release_security_flags(p)
         p.add_argument("--embedding-model", type=str,
                         default=DEFAULT_EMBEDDING_MODEL,
                         help=f"Embedding model (default: {DEFAULT_EMBEDDING_MODEL}). "
@@ -11181,6 +14647,15 @@ def main(argv: list[str] | None = None):
         p.add_argument("--db-backend", type=str, default=DEFAULT_DB_BACKEND,
                         choices=["chroma", "qdrant"],
                         help=f"Vector DB backend (default: {DEFAULT_DB_BACKEND})")
+
+    def add_structure_profile_flag(p):
+        p.add_argument(
+            "--structure-profile",
+            choices=_document_profiles.profile_names(),
+            default=DEFAULT_STRUCTURE_PROFILE,
+            help=("Reviewed document-layout policy (default: "
+                  f"{DEFAULT_STRUCTURE_PROFILE})"),
+        )
 
     def add_db_lock_flag(p):
         p.add_argument(
@@ -11227,13 +14702,22 @@ def main(argv: list[str] | None = None):
         p.add_argument("--contextualize", action="store_true",
                         help="Generate contextual retrieval prefixes via LLM")
 
+    def add_table_retrieval_flag(p):
+        p.add_argument(
+            "--table-children", action="store_true",
+            help=("Index one caption/header-propagated retrieval child per row "
+                  "for eligible large Markdown tables"),
+        )
+
     def add_llm_provider_flags(p):
-        p.add_argument("--ollama-url", type=str, default=DEFAULT_OLLAMA_URL,
+        add_release_security_flags(p)
+        p.add_argument("--ollama-url", type=_cloud_endpoint_arg,
+                        default=DEFAULT_OLLAMA_URL,
                         help=f"Ollama API URL (default: {DEFAULT_OLLAMA_URL})")
         p.add_argument("--ollama-model", type=str, default=DEFAULT_OLLAMA_MODEL,
                         help=f"Ollama model (default: {DEFAULT_OLLAMA_MODEL})")
         p.add_argument("--cloud-url", "--llm-url", dest="cloud_url",
-                        type=str, default=DEFAULT_CLOUD_URL,
+                        type=_cloud_endpoint_arg, default=DEFAULT_CLOUD_URL,
                         help=f"OpenAI-compatible API URL (default: {DEFAULT_CLOUD_URL})")
         p.add_argument("--cloud-model", "--llm-model", dest="cloud_model",
                         type=str, default=DEFAULT_CLOUD_MODEL,
@@ -11247,12 +14731,14 @@ def main(argv: list[str] | None = None):
                         help="Gemini API key (or set GEMINI_API_KEY env var)")
         p.add_argument(
             "--thinking", action=argparse.BooleanOptionalAction, default=False,
-            help="Enable DeepSeek/Ollama reasoning; --no-thinking disables it")
+            help=("Use provider reasoning mode (DeepSeek, MiniMax M3, Gemini, "
+                  "or Ollama); --no-thinking selects its minimal/disabled mode"))
         p.add_argument(
-            "--llm-cache-mode", default="readwrite",
+            "--llm-cache-mode", default=None,
             choices=["readwrite", "readonly", "refresh", "off"],
-            help=("LLM response cache policy (default: readwrite; refresh "
-                  "bypasses reads and replaces successful entries)"))
+            help=("LLM response cache policy (release default: off; "
+                  "development default: readwrite; refresh bypasses reads "
+                  "and replaces successful entries)"))
         p.add_argument(
             "--llm-cache-dir", type=Path, default=None,
             help="Persistent LLM response cache directory")
@@ -11313,6 +14799,10 @@ def main(argv: list[str] | None = None):
     p_chunk = sub.add_parser("chunk", help="DoclingDocument to enriched chunks")
     p_chunk.add_argument("--doc", type=Path, default=DEFAULT_DOC_PATH)
     p_chunk.add_argument("--out", type=Path, default=DEFAULT_CHUNKS_PATH)
+    p_chunk.add_argument(
+        "--source-pdf", type=Path, default=None,
+        help=("Exact original PDF for hash-verified table recovery; requires "
+              "a conversion-v2 completion manifest"))
     p_chunk.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS,
                          help=f"Max tokens per chunk (default: {DEFAULT_MAX_TOKENS})")
     p_chunk.add_argument("--min-words", type=int, default=MIN_CHUNK_WORDS,
@@ -11320,8 +14810,10 @@ def main(argv: list[str] | None = None):
     p_chunk.add_argument("--dedup-threshold", type=float, default=DEDUP_THRESHOLD,
                          help=f"Dedup Jaccard threshold 0-1 (default: {DEDUP_THRESHOLD})")
     add_embedding_flags(p_chunk)
+    add_structure_profile_flag(p_chunk)
     add_watermark_flag(p_chunk)
     add_chunk_llm_flags(p_chunk)
+    add_table_retrieval_flag(p_chunk)
     add_llm_provider_flags(p_chunk)
     p_chunk.add_argument("--reconstruct-headings", action="store_true",
                          help="Use LLM to reconstruct low-quality section headings")
@@ -11407,7 +14899,22 @@ def main(argv: list[str] | None = None):
         "--vector-only", dest="hybrid", action="store_const", const=False,
         help="Disable lexical retrieval and use vector search only")
     p_q.add_argument("--chunks", type=Path, default=DEFAULT_CHUNKS_PATH,
-                     help="Chunks JSONL for BM25 (ChromaDB hybrid only)")
+                     help="Exact chunks JSONL for hybrid/context retrieval")
+    p_q.add_argument(
+        "--context-window", type=int, default=0,
+        choices=range(MAX_CONTEXT_WINDOW + 1), metavar="N",
+        help="Attach up to N preceding/following chunks per ranked hit "
+             f"(default: 0; maximum: {MAX_CONTEXT_WINDOW})")
+    p_q.add_argument(
+        "--context-max-characters", type=int,
+        default=DEFAULT_CONTEXT_MAX_CHARACTERS,
+        help="Total supplementary context character budget (default: "
+             f"{DEFAULT_CONTEXT_MAX_CHARACTERS})")
+    p_q.add_argument(
+        "--context-segment-characters", type=int,
+        default=DEFAULT_CONTEXT_SEGMENT_CHARACTERS,
+        help="Maximum characters retained from each neighbor (default: "
+             f"{DEFAULT_CONTEXT_SEGMENT_CHARACTERS})")
     p_q.add_argument(
         "--reranker-model", default=DEFAULT_RERANKER_MODEL,
         help=f"Cross-encoder/API reranker (default: {DEFAULT_RERANKER_MODEL})")
@@ -11482,12 +14989,18 @@ def main(argv: list[str] | None = None):
     storage_action.add_argument(
         "--purge-quarantine", action="store_true",
         help="Purge validated retention quarantine directories by age")
+    storage_action.add_argument(
+        "--prune-snapshot-scratch", action="store_true",
+        help="Prune marker-owned scratch trees whose process is gone")
     p_storage.add_argument(
         "--output-root", type=Path, default=OUTPUT_DIR,
         help=f"Pipeline output root (default: {OUTPUT_DIR})")
     p_storage.add_argument(
         "--llm-cache-dir", type=Path, default=None,
         help="LLM response-cache root (default: runtime cache directory)")
+    p_storage.add_argument(
+        "--snapshot-scratch-root", type=Path, default=None,
+        help="Base directory containing the private snapshot scratch root")
     p_storage.add_argument(
         "--older-than-days", type=float, default=30.0,
         help="Minimum age for prune/purge candidates (default: 30)")
@@ -11585,9 +15098,11 @@ def main(argv: list[str] | None = None):
                         help="Also export split chapter files")
     add_collection_flag(p_full, derive_from_run=True)
     add_embedding_flags(p_full)
+    add_structure_profile_flag(p_full)
     add_watermark_flag(p_full)
     add_ocr_flag(p_full)
     add_chunk_llm_flags(p_full)
+    add_table_retrieval_flag(p_full)
     add_llm_provider_flags(p_full)
     add_db_backend_flag(p_full)
     add_db_lock_flag(p_full)
@@ -11626,9 +15141,11 @@ def main(argv: list[str] | None = None):
                          help="Also export split chapter files")
     add_collection_flag(p_batch, derive_from_run=True)
     add_embedding_flags(p_batch)
+    add_structure_profile_flag(p_batch)
     add_watermark_flag(p_batch)
     add_ocr_flag(p_batch)
     add_chunk_llm_flags(p_batch)
+    add_table_retrieval_flag(p_batch)
     add_llm_provider_flags(p_batch)
     add_db_backend_flag(p_batch)
     add_db_lock_flag(p_batch)
@@ -11650,9 +15167,34 @@ def main(argv: list[str] | None = None):
     for command_parser in (
             p_pre, p_conv, p_chunk, p_idx, p_eq, p_genq, p_cg, p_rap,
             p_brief, p_q, p_exp, p_info, p_storage, p_full, p_batch):
+        add_release_security_flags(command_parser)
         add_run_telemetry_flags(command_parser)
 
-    args = parser.parse_args(argv)
+    parse_argv = list(sys.argv[1:] if argv is None else argv)
+    if _cli_policy._has_ambiguous_sensitive_option(parse_argv):
+        parser.error(
+            "endpoint and credential options must be written in full and "
+            "with exact case")
+    args = parser.parse_args(parse_argv)
+    try:
+        security_policy = _cli_policy._release_security_policy_from_args(args)
+        if (
+            not security_policy.allow_inline_secrets
+            and _cli_policy._argv_has_inline_secret(parse_argv)
+        ):
+            raise _release_security.ReleaseSecurityError(
+                "release mode does not accept credential values in argv; "
+                "use provider environment variables or the interactive "
+                "hidden prompt"
+            )
+        args._release_security_policy = security_policy
+        if (
+            hasattr(args, "llm_cache_mode")
+            and args.llm_cache_mode is None
+        ):
+            args.llm_cache_mode = security_policy.default_llm_cache_mode
+    except (TypeError, ValueError) as exc:
+        parser.error(str(exc))
 
     # --- Configure logging ---
     level = logging.WARNING if args.quiet else (
@@ -11723,7 +15265,15 @@ def main(argv: list[str] | None = None):
         if args.command in _job_runtime.ALLOWED_JOB_COMMANDS:
             worker_job_context = _job_runtime.load_worker_context(
                 args.command)
-        llm_kwargs = _llm_kwargs_from_args(args, include_workers=True)
+        llm_kwargs = (
+            _llm_kwargs_from_args(args, include_workers=True)
+            if _namespace_uses_llm(args) else {}
+        )
+        if args.command in {"chunk", "query"}:
+            # These operations can use embeddings/rerankers even when no LLM
+            # generation feature is selected.  Carry the same immutable
+            # policy to those boundaries and to chunk provenance.
+            llm_kwargs.setdefault("security_policy", security_policy)
         _configure_llm_runtime_from_args(args)
         llm_runtime_configured = True
 
@@ -11731,7 +15281,18 @@ def main(argv: list[str] | None = None):
             run_telemetry.stage_started(args.command)
         # Validate API keys early (before expensive processing)
         if hasattr(args, "embedding_model"):
+            if args.embedding_model.startswith(
+                    _API_EMBEDDING_MODEL_PREFIXES):
+                _release_security.require_cloud_egress(
+                    security_policy, feature="cloud embedding")
             _validate_api_key(args.embedding_model)
+        if (
+            getattr(args, "reranker", False) is not False
+            and getattr(args, "reranker_model", "").startswith(
+                ("cohere-rerank", "jina-reranker"))
+        ):
+            _release_security.require_cloud_egress(
+                security_policy, feature="cloud reranking")
 
         if args.command == "preprocess":
             preprocess_pdf(args.pdf, args.out,
@@ -11746,10 +15307,12 @@ def main(argv: list[str] | None = None):
                         force=args.force,
                         watermark=wm,
                         auto_preprocess=not args.no_preprocess,
-                        ocr=getattr(args, "ocr", None))
+                        ocr=getattr(args, "ocr", None),
+                        security_policy=security_policy)
 
         elif args.command == "chunk":
             chunk_document(args.doc, args.out,
+                           source_pdf_path=args.source_pdf,
                            embedding_model=args.embedding_model,
                            max_tokens=args.max_tokens,
                            min_words=args.min_words,
@@ -11761,6 +15324,8 @@ def main(argv: list[str] | None = None):
                            reconstruct_headings=args.reconstruct_headings,
                            quality_score=args.quality_score,
                            llm_scaffold=args.llm_scaffold,
+                           table_children=args.table_children,
+                           structure_profile=args.structure_profile,
                            **llm_kwargs)
 
         elif args.command == "index":
@@ -11771,7 +15336,9 @@ def main(argv: list[str] | None = None):
                 collection_name=args.collection,
                 embedding_model=args.embedding_model,
                 full_reindex=full_reindex,
+                security_policy=security_policy,
                 lock_timeout=args.db_lock_timeout,
+                _operation_observer=operation_metrics.update,
             )
             operation_metrics.update(index_outcome.telemetry_metrics())
 
@@ -11813,6 +15380,10 @@ def main(argv: list[str] | None = None):
                       rrf_k=args.rrf_k,
                       dense_weight=args.dense_weight,
                       sparse_weight=args.sparse_weight,
+                      context_window=args.context_window,
+                      context_max_characters=args.context_max_characters,
+                      context_segment_characters=(
+                          args.context_segment_characters),
                       lock_timeout=args.db_lock_timeout,
                       answer=args.answer,
                       **llm_kwargs)
@@ -11836,17 +15407,21 @@ def main(argv: list[str] | None = None):
             operation_metrics.update(_run_storage_command(args))
 
         elif args.command == "jobs":
-            import job_manager as _job_manager
-
             if hasattr(args, "wait_timeout"):
                 try:
                     args.wait_timeout = _normalize_operation_timeout(
                         args.wait_timeout)
                 except ValueError as exc:
                     parser.error(str(exc))
+            job_binding = _default_job_application_binding()
+            if not isinstance(
+                    job_binding, _job_application.JobApplicationBinding):
+                raise TypeError(
+                    "default job binding must be a JobApplicationBinding")
             try:
-                operation_metrics.update(_run_jobs_command(args))
-            except _job_manager.JobManagerError as exc:
+                operation_metrics.update(_run_jobs_command(
+                    args, job_binding=job_binding))
+            except job_binding.manager_error_type as exc:
                 raise _job_runtime.JobRuntimeError(str(exc)) from exc
 
         elif args.command == "full":
@@ -11884,6 +15459,7 @@ def main(argv: list[str] | None = None):
             log.info(f"  DoclingDocument: {paths['doc']}")
             log.info(f"  Docling Markdown:{paths['converted_markdown']}")
             log.info(f"  Chunks JSONL:    {paths['chunks']}")
+            log.info(f"  Quality report:  {paths['quality_report']}")
             log.info(f"  Unified MD:      {paths['export']}")
             if args.split_chapters:
                 log.info(f"  Chapters:        {paths['chapters_dir']}/")
@@ -12006,7 +15582,8 @@ def main(argv: list[str] | None = None):
 
     except VectorStoreBusyError as exc:
         if observed_command_stage:
-            run_telemetry.stage_failed(args.command, exc)
+            run_telemetry.stage_failed(
+                args.command, exc, metrics=operation_metrics or None)
         run_telemetry.terminate_active_stages("failed", exc)
         log.error(str(exc))
         sys.exit(1)
@@ -12014,15 +15591,18 @@ def main(argv: list[str] | None = None):
         cancelled = exc.code == 130
         if observed_command_stage:
             if cancelled:
-                run_telemetry.stage_cancelled(args.command, exc)
+                run_telemetry.stage_cancelled(
+                    args.command, exc, metrics=operation_metrics or None)
             else:
-                run_telemetry.stage_failed(args.command, exc)
+                run_telemetry.stage_failed(
+                    args.command, exc, metrics=operation_metrics or None)
         run_telemetry.terminate_active_stages(
             "cancelled" if cancelled else "failed", exc)
         raise
     except KeyboardInterrupt as exc:
         if observed_command_stage:
-            run_telemetry.stage_cancelled(args.command, exc)
+            run_telemetry.stage_cancelled(
+                args.command, exc, metrics=operation_metrics or None)
         run_telemetry.terminate_active_stages("cancelled", exc)
         print("\nInterrupted.", file=sys.stderr)
         sys.exit(130)
@@ -12030,13 +15610,15 @@ def main(argv: list[str] | None = None):
             _retention.RetentionError,
             _storage_policy.StoragePolicyError) as exc:
         if observed_command_stage:
-            run_telemetry.stage_failed(args.command, exc)
+            run_telemetry.stage_failed(
+                args.command, exc, metrics=operation_metrics or None)
         run_telemetry.terminate_active_stages("failed", exc)
         log.error(str(exc))
         sys.exit(1)
     except ImportError as e:
         if observed_command_stage:
-            run_telemetry.stage_failed(args.command, e)
+            run_telemetry.stage_failed(
+                args.command, e, metrics=operation_metrics or None)
         run_telemetry.terminate_active_stages("failed", e)
         mod = str(e).split("'")[1] if "'" in str(e) else str(e)
         log.error(f"Missing dependency: {mod}")
@@ -12044,7 +15626,8 @@ def main(argv: list[str] | None = None):
         sys.exit(1)
     except Exception as exc:
         if observed_command_stage:
-            run_telemetry.stage_failed(args.command, exc)
+            run_telemetry.stage_failed(
+                args.command, exc, metrics=operation_metrics or None)
         run_telemetry.terminate_active_stages("failed", exc)
         raise
     finally:
@@ -12218,7 +15801,35 @@ def _menu_file(prompt: str, extension: str = "", default: Path | None = None,
 _menu_args_use_llm = _cli_policy._menu_args_use_llm
 
 
-def _menu_llm_provider_args() -> list[str]:
+def _menu_cloud_consent_args(
+        feature: str, *, already_allowed: bool = False,
+        ) -> list[str] | None:
+    """Return explicit cloud consent flags, or ``None`` when declined."""
+    if already_allowed:
+        return []
+    if not _menu_yesno(
+            f"Allow this operation to send {feature} to a cloud provider?",
+            default=False):
+        print("  Cloud egress was not enabled. Operation cancelled.")
+        return None
+    return ["--network-policy", "allow-cloud"]
+
+
+def _menu_cache_namespace_args() -> list[str]:
+    """Collect a validated nonsecret trust/tenant label for a custom host."""
+    while True:
+        namespace = input(
+            "  Nonsecret custom-gateway trust/tenant label: ").strip()
+        try:
+            _release_security.cache_namespace_identity(namespace)
+        except (TypeError, ValueError) as exc:
+            print(f"  Invalid label: {exc}")
+            continue
+        return ["--llm-cache-namespace", namespace]
+
+
+def _menu_llm_provider_args(*, cloud_already_allowed: bool = False,
+                            ) -> list[str] | None:
     """Collect provider settings, including a securely typed API key."""
     provider = _menu_choose("LLM provider:", [
         ("automatic", "Automatic fallback chain (environment/defaults)"),
@@ -12231,7 +15842,24 @@ def _menu_llm_provider_args() -> list[str]:
     ])
     provider_args: list[str] = []
 
-    if provider.startswith("deepseek-"):
+    if provider == "automatic":
+        if cloud_already_allowed or _menu_yesno(
+                "Allow automatic fallback to reviewed cloud providers?",
+                default=False):
+            if not cloud_already_allowed:
+                provider_args.extend(["--network-policy", "allow-cloud"])
+        else:
+            print("  Automatic fallback will remain local-only.")
+        if _menu_yesno(
+                "Enable thinking when the selected provider supports it?",
+                default=False):
+            provider_args.append("--thinking")
+    elif provider.startswith("deepseek-"):
+        consent = _menu_cloud_consent_args(
+            "private prompts", already_allowed=cloud_already_allowed)
+        if consent is None:
+            return None
+        provider_args.extend(consent)
         provider_args.extend([
             "--llm-url", DEFAULT_DEEPSEEK_URL,
             "--llm-model", provider,
@@ -12247,6 +15875,11 @@ def _menu_llm_provider_args() -> list[str]:
             else "--no-thinking"
         )
     elif provider == "minimax":
+        consent = _menu_cloud_consent_args(
+            "private prompts", already_allowed=cloud_already_allowed)
+        if consent is None:
+            return None
+        provider_args.extend(consent)
         key = getpass(
             "  MiniMax API key (hidden; Enter for MINIMAX_API_KEY): "
         ).strip()
@@ -12256,6 +15889,16 @@ def _menu_llm_provider_args() -> list[str]:
         url = input(
             f"  Ollama URL (Enter for {DEFAULT_OLLAMA_URL}): "
         ).strip() or DEFAULT_OLLAMA_URL
+        endpoint = _validate_cloud_endpoint(url)
+        assert endpoint is not None
+        url = endpoint.base_url
+        if not endpoint.is_loopback:
+            consent = _menu_cloud_consent_args(
+                "private prompts", already_allowed=cloud_already_allowed)
+            if consent is None:
+                return None
+            provider_args.extend(consent)
+            provider_args.extend(_menu_cache_namespace_args())
         model = input(
             f"  Ollama model (Enter for {DEFAULT_OLLAMA_MODEL}): "
         ).strip() or DEFAULT_OLLAMA_MODEL
@@ -12269,6 +15912,11 @@ def _menu_llm_provider_args() -> list[str]:
             else "--no-thinking"
         )
     elif provider == "gemini":
+        consent = _menu_cloud_consent_args(
+            "private prompts", already_allowed=cloud_already_allowed)
+        if consent is None:
+            return None
+        provider_args.extend(consent)
         key = getpass(
             "  Gemini API key (hidden; Enter for GEMINI_API_KEY): "
         ).strip()
@@ -12276,21 +15924,25 @@ def _menu_llm_provider_args() -> list[str]:
         if key:
             provider_args.extend(["--gemini-key", key])
     elif provider == "custom":
+        consent = _menu_cloud_consent_args(
+            "private prompts", already_allowed=cloud_already_allowed)
+        if consent is None:
+            return None
+        provider_args.extend(consent)
         url = input("  OpenAI-compatible API URL: ").strip()
         model = input("  Model name: ").strip()
         if not url or not model:
             raise ValueError("Custom provider requires both an API URL and model")
+        endpoint = _validate_cloud_endpoint(url)
+        assert endpoint is not None
+        url = endpoint.base_url
+        provider_args.extend(_menu_cache_namespace_args())
         key = getpass(
             "  API key (hidden; Enter for CLOUD_API_KEY): "
         ).strip()
         provider_args.extend(["--llm-url", url, "--llm-model", model])
         if key:
             provider_args.extend(["--api-key", key])
-    elif _menu_yesno(
-            "Enable thinking when the selected provider supports it?",
-            default=False):
-        provider_args.append("--thinking")
-
     return provider_args
 
 
@@ -12306,6 +15958,14 @@ def _menu_secrets_to_environment(
         is_deepseek_cloud_fn=_is_deepseek_cloud,
         is_minimax_cloud_fn=_is_minimax_cloud,
     )
+
+
+def _menu_structure_profile() -> str:
+    """Choose one reviewed immutable document-layout policy."""
+    return _menu_choose("Document structure profile:", [
+        (name, _document_profiles.get_profile(name).document_description)
+        for name in _document_profiles.profile_names()
+    ], default=DEFAULT_STRUCTURE_PROFILE)
 
 
 def interactive_menu():
@@ -12349,18 +16009,29 @@ def interactive_menu():
         emb = _menu_choose("Embedding model:", [
             (DEFAULT_EMBEDDING_MODEL_LEGAL, "Voyage Law 2 — best for legal text (paid, needs VOYAGE_API_KEY)"),
             (DEFAULT_EMBEDDING_MODEL_GENERAL, "Nomic Embed v2 MoE — best free option (local GPU)"),
-            ("nomic-ai/nomic-embed-text-v2-moe", "Nomic Embed v2 MoE — good free alternative"),
             ("text-embedding-3-large", "OpenAI text-embedding-3-large (paid, needs OPENAI_API_KEY)"),
         ])
         args.extend(["--embedding-model", emb])
+        args.extend(["--structure-profile", _menu_structure_profile()])
 
         # Chunk size
-        tokens = _menu_choose("Chunk size (tokens):", [
-            ("4096", "4096 — balanced (default, fits nomic/stella/voyage)"),
-            ("8192", "8192 — large sections (max for nomic/stella)"),
-            ("16000", "16000 — very large (max for voyage-law-2 only)"),
-            ("1024", "1024 — small, precise chunks (legacy)"),
-        ])
+        token_choices = (
+            [
+                (str(DEFAULT_MAX_TOKENS),
+                 f"{DEFAULT_MAX_TOKENS} — default; fits Nomic's 512-token input"),
+                ("256", "256 — smaller, more precise chunks"),
+                ("506", "506 — maximum safe raw Nomic chunk"),
+            ]
+            if emb == DEFAULT_EMBEDDING_MODEL_GENERAL else
+            [
+                (str(DEFAULT_MAX_TOKENS),
+                 f"{DEFAULT_MAX_TOKENS} — default retrieval chunks"),
+                ("1024", "1024 — larger sections"),
+                ("4096", "4096 — large sections"),
+                ("16000", "16000 — Voyage model maximum"),
+            ]
+        )
+        tokens = _menu_choose("Chunk size (tokens):", token_choices)
         args.extend(["--max-tokens", tokens])
 
         # Vector DB backend
@@ -12377,6 +16048,11 @@ def interactive_menu():
         # Contextual retrieval?
         if _menu_yesno("Generate contextual summaries per chunk? (improves retrieval)", default=False):
             args.append("--contextualize")
+
+        if _menu_yesno(
+                "Create row-level retrieval children for large tables?",
+                default=False):
+            args.append("--table-children")
 
         if _menu_yesno("Use LLM review for TOC scaffold construction?", default=False):
             args.append("--llm-scaffold")
@@ -12425,6 +16101,7 @@ def interactive_menu():
             (DEFAULT_EMBEDDING_MODEL_GENERAL, "Nomic Embed v2 MoE (free, local)"),
         ])
         args.extend(["--embedding-model", emb])
+        args.extend(["--structure-profile", _menu_structure_profile()])
 
         backend = _menu_choose("Vector database:", [
             ("chroma", "ChromaDB (default)"),
@@ -12436,6 +16113,10 @@ def interactive_menu():
             args.append("--llm-classify")
         if _menu_yesno("Generate contextual summaries?", default=False):
             args.append("--contextualize")
+        if _menu_yesno(
+                "Create row-level retrieval children for large tables?",
+                default=False):
+            args.append("--table-children")
         if _menu_yesno("Use LLM review for TOC scaffolds?", default=False):
             args.append("--llm-scaffold")
         if _menu_yesno("Export separate chapter files?", default=False):
@@ -12475,6 +16156,14 @@ def interactive_menu():
             args.append("--rerank")
         elif reranker_mode == "off":
             args.append("--no-rerank")
+
+        context_window = _menu_choose("Neighbor context:", [
+            ("0", "Off — ranked chunks only (default)"),
+            ("1", "One preceding/following chunk"),
+            ("2", "Two preceding/following chunks"),
+        ])
+        if context_window != "0":
+            args.extend(["--context-window", context_window])
 
         if _menu_yesno("Generate answer from results?", default=False):
             args.append("--answer")
@@ -12568,16 +16257,22 @@ def interactive_menu():
             args.extend(["--doc", doc])
 
         tokens = _menu_choose("Chunk size:", [
-            ("4096", "4096 tokens (default)"),
-            ("8192", "8192 tokens (large)"),
-            ("1024", "1024 tokens (small, legacy)"),
+            (str(DEFAULT_MAX_TOKENS),
+             f"{DEFAULT_MAX_TOKENS} tokens (default; fits Nomic)"),
+            ("256", "256 tokens (smaller, more precise)"),
+            ("506", "506 tokens (maximum safe raw Nomic chunk)"),
         ])
         args.extend(["--max-tokens", tokens])
+        args.extend(["--structure-profile", _menu_structure_profile()])
 
         if _menu_yesno("Classify chunks with an LLM?", default=False):
             args.append("--llm-classify")
         if _menu_yesno("Generate contextual retrieval prefixes?", default=False):
             args.append("--contextualize")
+        if _menu_yesno(
+                "Create row-level retrieval children for large tables?",
+                default=False):
+            args.append("--table-children")
         if _menu_yesno("Extract an LLM document scaffold?", default=False):
             args.append("--llm-scaffold")
         if _menu_yesno("Reconstruct missing headings with an LLM?", default=False):
@@ -12600,8 +16295,25 @@ def interactive_menu():
         if chunks:
             args.extend(["--chunks", chunks])
 
+    cloud_allowed = False
+    for index, token in enumerate(args[:-1]):
+        if (
+            token == "--embedding-model"
+            and args[index + 1].startswith(_API_EMBEDDING_MODEL_PREFIXES)
+        ):
+            consent = _menu_cloud_consent_args("private embedding text")
+            if consent is None:
+                return
+            args.extend(consent)
+            cloud_allowed = True
+            break
+
     if _menu_args_use_llm(args):
-        args.extend(_menu_llm_provider_args())
+        provider_args = _menu_llm_provider_args(
+            cloud_already_allowed=cloud_allowed)
+        if provider_args is None:
+            return
+        args.extend(provider_args)
 
     # Show the generated command
     display_args = _redact_cli_secrets(args)

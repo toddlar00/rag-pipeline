@@ -7,6 +7,15 @@ import rag
 
 
 def test_effective_chunk_limit_respects_embedding_model_capacity():
+    # Nomic v2 accepts at most 512 tokens. Raw chunks must leave room for the
+    # tokenizer's two special tokens and the four-token document-task prefix.
+    assert rag._effective_chunk_token_limit(
+        rag.DEFAULT_EMBEDDING_MODEL_GENERAL, 4096) == 506
+    assert rag._effective_chunk_token_limit(
+        rag.DEFAULT_EMBEDDING_MODEL_GENERAL,
+        4096,
+        reserve_tokens=192,
+    ) == 314
     assert rag._effective_chunk_token_limit(
         "nlpaueb/legal-bert-base-uncased", 4096) == 510
     assert rag._effective_chunk_token_limit(
@@ -14,8 +23,9 @@ def test_effective_chunk_limit_respects_embedding_model_capacity():
         4096,
         reserve_tokens=192,
     ) == 318
-    assert rag._effective_chunk_token_limit(
-        rag.DEFAULT_EMBEDDING_MODEL_GENERAL, 4096) == 4096
+    assert rag.EMBEDDING_MAX_TOKENS["voyage-law-2"] == 16_000
+    assert rag.EMBEDDING_MAX_TOKENS["voyage-3-large"] == 32_000
+    assert rag.EMBEDDING_MAX_TOKENS["voyage-4-large"] == 32_000
     assert rag._effective_chunk_token_limit("unknown/model", 9000) == 9000
 
 
@@ -64,6 +74,51 @@ def test_embedding_validation_recomputes_instead_of_trusting_metadata(
             "nlpaueb/legal-bert-base-uncased",
             recompute=True,
         )
+
+
+def test_embedding_validation_rejects_actual_prefixed_nomic_count(
+        monkeypatch):
+    encoded_inputs = []
+
+    class FakeTokenizer:
+        @classmethod
+        def from_pretrained(cls, *_args, **_kwargs):
+            return cls()
+
+        def encode(self, text, **kwargs):
+            encoded_inputs.append((text, kwargs))
+            # The unprefixed payload would fit. The actual Nomic document
+            # payload, including its task prefix, crosses the model boundary.
+            size = 513 if text.startswith("search_document: ") else 509
+            return list(range(size))
+
+    monkeypatch.setattr(
+        rag, "_model_loader_source",
+        lambda *_args: ("verified/tokenizer", True),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "transformers",
+        SimpleNamespace(AutoTokenizer=FakeTokenizer),
+    )
+    records = [{
+        "text": "body",
+        "metadata": {"context": "retrieval context"},
+    }]
+
+    with pytest.raises(ValueError) as error:
+        rag._validate_embedding_token_counts(
+            records,
+            rag.DEFAULT_EMBEDDING_MODEL_GENERAL,
+            recompute=True,
+        )
+
+    assert "512-token" in str(error.value)
+    assert "513" in str(error.value)
+    assert encoded_inputs == [(
+        "search_document: retrieval context\n\nbody",
+        {"add_special_tokens": True, "truncation": False},
+    )]
 
 
 def test_api_embedding_batches_respect_aggregate_token_budget(monkeypatch):

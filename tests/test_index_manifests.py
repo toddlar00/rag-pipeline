@@ -44,7 +44,10 @@ def _write_chunks(path: Path) -> None:
 
 
 def _fake_embeddings(calls, dimensions):
-    def embed(texts, model_name, *, input_type="document"):
+    def embed(
+            texts, model_name, *, input_type="document",
+            security_policy=None):
+        del security_policy
         calls.append((list(texts), model_name, input_type))
         dimension = dimensions[model_name]
         return [[float(index) for index in range(dimension)] for _ in texts]
@@ -268,6 +271,9 @@ def test_manifest_is_scoped_versioned_and_atomic(tmp_path):
         "chunk_hashes": hashes,
         "source_sha256": None,
         "source_record_count": None,
+        "table_child_count": 0,
+        "quality_report_schema_version": None,
+        "quality_report_sha256": None,
     }
     assert not list(tmp_path.glob("*.tmp"))
 
@@ -621,6 +627,63 @@ def test_vector_client_cleanup_requires_close_and_closes_once():
         client, client_name="test", primary_error=None)
 
     assert events == ["close"]
+
+
+@pytest.mark.parametrize(
+    ("platform", "client_name", "transport_module", "expected_gc_calls"),
+    [
+        ("win32", "Qdrant", "qdrant_client.local.qdrant_local", 1),
+        ("linux", "Qdrant", "qdrant_client.local.qdrant_local", 0),
+        ("win32", "Qdrant", "qdrant_client.qdrant_remote", 0),
+        ("win32", "Chroma", "qdrant_client.local.qdrant_local", 0),
+    ],
+)
+def test_vector_client_cleanup_collects_local_qdrant_cursors_only_on_windows(
+        monkeypatch, platform, client_name, transport_module,
+        expected_gc_calls):
+    events = []
+    transport_type = type("Transport", (), {"__module__": transport_module})
+    client = SimpleNamespace(
+        _client=transport_type(), close=lambda: events.append("close"))
+    monkeypatch.setattr(rag.sys, "platform", platform)
+    monkeypatch.setattr(
+        rag.gc, "collect", lambda: events.append("collect") or 0)
+
+    rag._finish_vector_client(
+        client, client_name=client_name, primary_error=None)
+
+    assert events == ["close"] + ["collect"] * expected_gc_calls
+
+
+def test_local_qdrant_cursor_collection_failure_obeys_cleanup_precedence(
+        monkeypatch):
+    collection_error = RuntimeError("injected cursor collection failure")
+    transport_type = type(
+        "Transport", (), {"__module__": "qdrant_client.local.qdrant_local"})
+    close_calls = []
+    client = SimpleNamespace(
+        _client=transport_type(), close=lambda: close_calls.append("close"))
+    monkeypatch.setattr(rag.sys, "platform", "win32")
+    monkeypatch.setattr(
+        rag.gc, "collect",
+        lambda: (_ for _ in ()).throw(collection_error))
+
+    with pytest.raises(RuntimeError) as raised:
+        rag._finish_vector_client(
+            client, client_name="Qdrant", primary_error=None)
+    assert raised.value is collection_error
+
+    primary_error = ValueError("active vector operation failure")
+    try:
+        raise primary_error
+    except ValueError as active_error:
+        original_traceback = active_error.__traceback__
+        rag._finish_vector_client(
+            client, client_name="Qdrant", primary_error=active_error)
+        assert active_error is primary_error
+        assert active_error.__traceback__ is original_traceback
+
+    assert close_calls == ["close", "close"]
 
 
 def test_vector_client_cleanup_preserves_primary_error_and_traceback():
@@ -1673,6 +1736,10 @@ def test_qdrant_removed_only_incremental_deletes_later_page_and_saves_manifest(
     assert outcome.removed_records == 1
     assert outcome.upserted_records == 0
     assert outcome.batch_count == 0
+    assert outcome.operations.record_delete_calls == 1
+    assert outcome.operations.upsert_calls == 0
+    assert outcome.operations.queue_put_count == 0
+    assert outcome.operations.physical_mutation_calls == 1
 
 
 def test_qdrant_missing_manifest_removal_fails_without_saving_manifest(
@@ -1840,6 +1907,41 @@ def _prepare_qdrant_changed_existing_incremental(
     )
 
 
+def test_qdrant_append_only_update_commits_without_a_point_delete(
+        monkeypatch, tmp_path):
+    fixture = _prepare_qdrant_changed_existing_incremental(
+        monkeypatch, tmp_path)
+    added_record = {
+        "text": "A newly added rule has no prior point to delete.",
+        "metadata": {
+            "chunk_index": 1,
+            "context": "New doctrine",
+            "embedding_token_count": 7,
+        },
+    }
+    added_id = rag._chunk_id(added_record)
+    fixture.chunks_path.write_text(
+        json.dumps(fixture.old_record) + "\n"
+        + json.dumps(added_record) + "\n",
+        encoding="utf-8",
+    )
+
+    outcome = rag.index_chunks_qdrant(
+        fixture.chunks_path, fixture.db_path,
+        collection_name="book", embedding_model="model-a")
+
+    assert outcome.disposition == "updated"
+    assert outcome.changed_records == 1
+    assert outcome.unchanged_records == 1
+    assert outcome.removed_records == 0
+    assert outcome.operations.record_delete_calls == 0
+    assert outcome.operations.upsert_calls == 1
+    assert outcome.operations.queue_put_count == 1
+    assert fixture.state.deletes == []
+    assert [[point.id for point in batch] for batch in fixture.state.upserts] == [
+        [rag._qdrant_point_id(added_id)]]
+
+
 def test_qdrant_producer_failure_stops_worker_and_preserves_recovery_state(
         monkeypatch, tmp_path):
     resources = _track_queue_worker_resources(
@@ -1972,6 +2074,7 @@ def test_qdrant_worker_failure_closes_resources_and_preserves_manifest(
         raise RuntimeError("injected Qdrant upsert failure")
 
     monkeypatch.setattr(client_type, "upsert", ambiguous_upsert)
+    failure_metrics = {}
 
     # An unrelated outer handler must not make cleanup mistake its exception
     # for an active producer failure and suppress the worker error.
@@ -1982,7 +2085,8 @@ def test_qdrant_worker_failure_closes_resources_and_preserves_manifest(
                 RuntimeError, match="injected Qdrant upsert failure"):
             rag.index_chunks_qdrant(
                 fixture.chunks_path, fixture.db_path,
-                collection_name="book", embedding_model="model-a")
+                collection_name="book", embedding_model="model-a",
+                _operation_observer=failure_metrics.update)
 
     assert len(fixture.state.upserts) == 1
     assert fixture.state.points[fixture.point_id].payload["context"] == (
@@ -1990,6 +2094,18 @@ def test_qdrant_worker_failure_closes_resources_and_preserves_manifest(
     assert fixture.state.scrolls == 2
     assert fixture.marker_path.is_file()
     assert fixture.manifest_path.read_bytes() == original_manifest
+    assert failure_metrics == {
+        "committed": False,
+        "attempted_collection_delete_calls": 0,
+        "attempted_collection_create_calls": 0,
+        "attempted_record_delete_calls": 1,
+        "attempted_upsert_calls": 1,
+        "attempted_physical_mutation_calls": 2,
+        "attempted_queue_put_count": 1,
+        "queue_saturation_events": 0,
+        "queue_wait_ms": failure_metrics["queue_wait_ms"],
+    }
+    assert failure_metrics["queue_wait_ms"] >= 0
 
     executor = resources.executors[0]
     assert executor.shutdown_calls == [(True, False)]
@@ -2173,6 +2289,10 @@ def test_qdrant_changed_existing_is_deleted_then_replaced_before_manifest_save(
     assert outcome.removed_records == 0
     assert outcome.upserted_records == 1
     assert outcome.batch_count == 1
+    assert outcome.operations.record_delete_calls == 1
+    assert outcome.operations.upsert_calls == 1
+    assert outcome.operations.queue_put_count == 1
+    assert outcome.operations.physical_mutation_calls == 2
 
 
 def test_qdrant_client_close_failure_prevents_manifest_commit(
@@ -2421,6 +2541,53 @@ def _prepare_chroma_changed_existing_incremental(
 
 
 @pytest.mark.parametrize("backend", ["chroma", "qdrant"])
+def test_indexer_repairs_legacy_empty_manifest_hash(
+        monkeypatch, tmp_path, backend):
+    if backend == "chroma":
+        fixture = _prepare_chroma_changed_existing_incremental(
+            monkeypatch, tmp_path)
+        run_index = rag.index_chunks
+    else:
+        fixture = _prepare_qdrant_changed_existing_incremental(
+            monkeypatch, tmp_path)
+        run_index = rag.index_chunks_qdrant
+
+    rag._save_index_manifest(
+        fixture.db_path,
+        backend=backend,
+        collection_name="book",
+        embedding_model="model-a",
+        embedding_dimension=2,
+        chunk_hashes={fixture.stable_id: ""},
+        source_sha256="legacy-source",
+        source_record_count=1,
+    )
+
+    outcome = run_index(
+        fixture.chunks_path,
+        fixture.db_path,
+        collection_name="book",
+        embedding_model="model-a",
+    )
+
+    manifest = json.loads(
+        fixture.manifest_path.read_text(encoding="utf-8"))
+    assert manifest["chunk_hashes"] == {
+        fixture.stable_id: fixture.new_hash}
+    assert outcome.changed_records == 1
+    assert outcome.unchanged_records == 0
+    assert outcome.removed_records == 0
+    assert outcome.committed is True
+    assert not fixture.marker_path.exists()
+    if backend == "chroma":
+        assert fixture.collection.rows[fixture.stable_id]["metadata"][
+            "context"] == "Corrected classification"
+    else:
+        assert fixture.state.points[fixture.point_id].payload[
+            "context"] == "Corrected classification"
+
+
+@pytest.mark.parametrize("backend", ["chroma", "qdrant"])
 def test_index_manifest_and_vectors_use_one_chunks_byte_snapshot(
         monkeypatch, tmp_path, backend):
     if backend == "chroma":
@@ -2506,6 +2673,61 @@ def test_indexer_cannot_clean_marker_replaced_after_manifest_commit(
     marker = json.loads(fixture.marker_path.read_text(encoding="utf-8"))
     assert marker["owner_token"] == replacement_token
     assert marker["target_source_sha256"] == "replacement-generation"
+
+
+@pytest.mark.parametrize("backend", ["chroma", "qdrant"])
+def test_indexer_revalidates_marker_after_embedding_before_each_upsert(
+        monkeypatch, tmp_path, backend):
+    if backend == "chroma":
+        fixture = _prepare_chroma_changed_existing_incremental(
+            monkeypatch, tmp_path)
+        run_index = rag.index_chunks
+    else:
+        fixture = _prepare_qdrant_changed_existing_incremental(
+            monkeypatch, tmp_path)
+        run_index = rag.index_chunks_qdrant
+    original_manifest = fixture.manifest_path.read_bytes()
+    replacement_token = "replacement-before-upsert"
+    successful_embed = rag._embed_texts
+
+    def replace_marker_during_embedding(texts, model, **kwargs):
+        result = successful_embed(texts, model, **kwargs)
+        if texts != ["RAG index embedding-dimension probe"]:
+            rag._begin_index_update(
+                fixture.db_path,
+                backend=backend,
+                collection_name="book",
+                source_sha256="replacement-generation",
+                source_record_count=1,
+                owner_token=replacement_token,
+                replace_existing=True,
+            )
+        return result
+
+    monkeypatch.setattr(rag, "_embed_texts", replace_marker_during_embedding)
+    failure_metrics = {}
+
+    with pytest.raises(RuntimeError, match="ownership changed"):
+        run_index(
+            fixture.chunks_path,
+            fixture.db_path,
+            collection_name="book",
+            embedding_model="model-a",
+            _operation_observer=failure_metrics.update,
+        )
+
+    assert fixture.state.upserts == []
+    assert fixture.manifest_path.read_bytes() == original_manifest
+    marker = json.loads(fixture.marker_path.read_text(encoding="utf-8"))
+    assert marker["owner_token"] == replacement_token
+    assert marker["target_source_sha256"] == "replacement-generation"
+    assert failure_metrics["committed"] is False
+    assert failure_metrics["attempted_record_delete_calls"] == 1
+    assert failure_metrics["attempted_upsert_calls"] == 0
+    assert failure_metrics["attempted_physical_mutation_calls"] == 1
+    # The batch was admitted before the worker-side ownership guard rejected
+    # its physical upsert, so admitted queue work is exactly one.
+    assert failure_metrics["attempted_queue_put_count"] == 1
 
 
 def test_chroma_marker_write_failure_prevents_first_mutation(
@@ -2782,6 +3004,10 @@ def test_chroma_changed_existing_is_deleted_then_replaced_before_manifest_save(
     assert outcome.removed_records == 0
     assert outcome.upserted_records == 1
     assert outcome.batch_count == 1
+    assert outcome.operations.record_delete_calls == 1
+    assert outcome.operations.upsert_calls == 1
+    assert outcome.operations.queue_put_count == 1
+    assert outcome.operations.physical_mutation_calls == 2
 
 
 def test_chroma_client_close_failure_prevents_manifest_commit(
@@ -2924,16 +3150,29 @@ def test_chroma_parallel_upsert_failure_closes_progress(
         raise upsert_error
 
     monkeypatch.setattr(fixture.collection, "upsert", ambiguous_upsert)
+    failure_metrics = {}
     with pytest.raises(RuntimeError) as raised:
         rag.index_chunks(
             fixture.chunks_path, fixture.db_path,
             collection_name="book",
-            embedding_model=fixture.embedding_model)
+            embedding_model=fixture.embedding_model,
+            _operation_observer=failure_metrics.update)
 
     assert raised.value is upsert_error
     assert fixture.state.upserts == [[fixture.stable_id]]
     assert fixture.marker_path.is_file()
     assert fixture.manifest_path.read_bytes() == original_manifest
+    assert failure_metrics == {
+        "committed": False,
+        "attempted_collection_delete_calls": 0,
+        "attempted_collection_create_calls": 0,
+        "attempted_record_delete_calls": 1,
+        "attempted_upsert_calls": 1,
+        "attempted_physical_mutation_calls": 2,
+        "attempted_queue_put_count": 0,
+        "queue_saturation_events": 0,
+        "queue_wait_ms": 0.0,
+    }
     assert resources.executors[0].shutdown_calls == [(True, False)]
     assert resources.events == ["executor_shutdown", "progress_close"]
     assert resources.bars[0].updates == 0
@@ -3262,6 +3501,9 @@ def test_chroma_removal_only_commits_before_marker_cleanup(
     assert outcome.removed_records == 1
     assert outcome.upserted_records == 0
     assert outcome.batch_count == 0
+    assert outcome.operations.record_delete_calls == 1
+    assert outcome.operations.upsert_calls == 0
+    assert outcome.operations.queue_put_count == 0
 
 
 def test_chroma_unchanged_run_never_starts_update(monkeypatch, tmp_path):
@@ -3294,6 +3536,8 @@ def test_chroma_unchanged_run_never_starts_update(monkeypatch, tmp_path):
     assert outcome.changed_records == 0
     assert outcome.unchanged_records == outcome.total_records
     assert outcome.committed is True
+    assert outcome.operations.physical_mutation_calls == 0
+    assert outcome.operations.queue_put_count == 0
 
 
 def test_chroma_sequential_cleanup_precedes_manifest_commit(
@@ -3423,6 +3667,10 @@ def test_chroma_migrates_legacy_skips_compatible_and_rebuilds_model_change(
     assert first_outcome.disposition == "rebuilt"
     assert first_outcome.changed_records == 1
     assert first_outcome.upserted_records == 1
+    assert first_outcome.operations.collection_delete_calls == 1
+    assert first_outcome.operations.collection_create_calls == 1
+    assert first_outcome.operations.upsert_calls == 1
+    assert first_outcome.operations.queue_put_count == 1
 
     second_outcome = rag.index_chunks(
         chunks_path, db_path, collection_name="book",
@@ -3432,6 +3680,7 @@ def test_chroma_migrates_legacy_skips_compatible_and_rebuilds_model_change(
     assert len(state.upserts) == first_upsert_count
     assert len(embedding_calls) == first_call_count + 1  # dimension probe only
     assert second_outcome.disposition == "unchanged"
+    assert second_outcome.operations.physical_mutation_calls == 0
 
     third_outcome = rag.index_chunks(
         chunks_path, db_path, collection_name="book",
@@ -3545,6 +3794,10 @@ def test_qdrant_manifest_skip_and_model_change_preserve_sibling(
     assert first_outcome.disposition == "created"
     assert first_outcome.changed_records == 1
     assert first_outcome.upserted_records == 1
+    assert first_outcome.operations.collection_delete_calls == 0
+    assert first_outcome.operations.collection_create_calls == 1
+    assert first_outcome.operations.upsert_calls == 1
+    assert first_outcome.operations.queue_put_count == 1
 
     begin_update = rag._begin_qdrant_index_update
     monkeypatch.setattr(
@@ -3561,6 +3814,7 @@ def test_qdrant_manifest_skip_and_model_change_preserve_sibling(
     assert outcome.disposition == "unchanged"
     assert outcome.changed_records == 0
     assert outcome.physical_count == outcome.total_records
+    assert outcome.operations.physical_mutation_calls == 0
 
     rebuilt_outcome = rag.index_chunks_qdrant(
         chunks_path, db_path, collection_name="book",

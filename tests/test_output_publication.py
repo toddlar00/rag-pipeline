@@ -1,12 +1,14 @@
 """Atomic publication and fail-closed resume validation regressions."""
 
 import hashlib
+import json
 from pathlib import Path
 import textwrap
 
 import pytest
 
 import rag
+import release_security
 
 
 def _record(index: int, chapter: int, title: str, text: str) -> dict:
@@ -24,6 +26,91 @@ def _record(index: int, chapter: int, title: str, text: str) -> dict:
 
 def _write_chunks(path: Path, records: list[dict]) -> None:
     rag._atomic_write_jsonl(path, records)
+
+
+def _lineaged_record() -> dict:
+    record = {
+        "text": "A source-backed discussion of professional responsibility.",
+        "metadata": {
+            "chunk_index": 0,
+            "source_file": "book",
+            "source_lineage_schema_version": 1,
+            "source_items": [{
+                "ref": "#/texts/0",
+                "label": "text",
+                "parent_refs": [],
+                "spans": [{"page": 1}],
+            }],
+            "page_start": 1,
+            "page_end": 1,
+            "page_range": "pp.1-1",
+            "chapter_num": 1,
+            "chapter_title": "One",
+            "section_path": "Chapter 1",
+            "content_type": "author_narrative",
+            "content_source": "body",
+            "token_count": 8,
+            "embedding_token_count": 10,
+            "case_names": [],
+            "primary_case": None,
+        },
+    }
+    rag._retrieval_core._attach_retrieval_linkage([record])
+    return record
+
+
+def _write_quality_source(path: Path) -> None:
+    rag._atomic_write_json(path, {
+        "pages": {"1": {}},
+        "texts": [{
+            "self_ref": "#/texts/0",
+            "label": "text",
+            "content_layer": "body",
+            "text": "A source-backed discussion of professional responsibility.",
+            "prov": [{"page_no": 1}],
+        }],
+    })
+
+
+def _chunk_inputs(document: Path) -> dict:
+    raw = document.read_bytes()
+    return {
+        "docling_json": {
+            "name": document.name,
+            "size": len(raw),
+            "sha256": hashlib.sha256(raw).hexdigest(),
+        },
+        "conversion_manifest": None,
+        "table_recovery": None,
+    }
+
+
+def _write_chunk_completion(
+        document: Path, chunks: Path, parameters: dict) -> None:
+    receipt = parameters.get("structure_profile")
+    if receipt is None:
+        profile = rag._document_profiles.get_profile(
+            rag.DEFAULT_STRUCTURE_PROFILE)
+        receipt = rag._document_profiles.profile_provenance(profile)
+        parameters["structure_profile"] = receipt
+    else:
+        rag._document_profiles.profile_from_provenance(receipt)
+    rag._write_artifact_completion(
+        rag._artifact_completion_path(chunks, stage="chunking"),
+        stage="chunking",
+        source_sha256=rag._cached_artifact_sha256(document),
+        source_record_count=None,
+        parameters=parameters,
+        outputs={"chunks_jsonl": chunks},
+        schema_version=rag.CHUNK_COMPLETION_SCHEMA_VERSION,
+        extra_fields={
+            "inputs": _chunk_inputs(document),
+            "structure_profile": receipt,
+            "structure_profile_parameters_sha256": (
+                rag._structure_profile_parameters_binding(
+                    rag._artifact_parameters_sha256(parameters), receipt)),
+        },
+    )
 
 
 def test_atomic_text_failure_preserves_previous_bytes(monkeypatch, tmp_path):
@@ -56,8 +143,24 @@ def test_conversion_completion_requires_both_untampered_outputs(
     rag._write_artifact_completion(
         rag._artifact_completion_path(document, stage="conversion"),
         stage="conversion", source_sha256=rag._cached_artifact_sha256(source),
+        source_name=source.name,
         source_record_count=None, parameters=parameters,
-        outputs={"docling_json": document, "docling_markdown": markdown})
+        outputs={"docling_json": document, "docling_markdown": markdown},
+        schema_version=rag.CONVERSION_COMPLETION_SCHEMA_VERSION,
+        extra_fields={
+            "source": {
+                "name": source.name,
+                "size": source.stat().st_size,
+                "sha256": rag._cached_artifact_sha256(source),
+                "capture_policy": "stream-copy-v1",
+            },
+            "effective_input": {
+                "kind": "original",
+                "name": source.name,
+                "size": source.stat().st_size,
+                "sha256": rag._cached_artifact_sha256(source),
+            },
+        })
 
     assert rag._converted_outputs_complete(
         source, document, markdown, parameters=parameters)
@@ -94,7 +197,7 @@ def test_chunk_completion_binds_source_options_model_lock_and_output(
             "min_words": 10, "dedup_threshold": 0.9,
             "watermark": None, "llm_classify": True,
             "zeroshot_classify": True, "contextualize": True,
-            "ollama_url": "http://localhost:11434",
+            "ollama_url": "http://127.0.0.1:11434",
             "ollama_model": "local-model", "gemini_key": "secret-a",
             "cloud_url": "https://example.test/v1",
             "cloud_model": "cloud-model", "cloud_key": "secret-b",
@@ -107,18 +210,35 @@ def test_chunk_completion_binds_source_options_model_lock_and_output(
 
     initial = parameters()
     assert initial["max_llm_transport_attempts"] == 3
-    manifest = rag._artifact_completion_path(chunks, stage="chunking")
-    rag._write_artifact_completion(
-        manifest, stage="chunking",
-        source_sha256=rag._cached_artifact_sha256(document),
-        source_record_count=None, parameters=initial,
-        outputs={"chunks_jsonl": chunks})
+    _write_chunk_completion(document, chunks, initial)
 
     assert rag._chunks_complete(document, chunks, parameters=initial)
     assert "secret-a" not in str(initial)
     assert "secret-b" not in str(initial)
+    assert "127.0.0.1" not in str(initial)
+    assert "example.test" not in str(initial)
+    assert initial["cloud_url"]["policy_version"] == 1
+    assert initial["cloud_url"]["endpoint_id"].startswith(
+        "v1:custom:sha256:")
+    completion_text = rag._artifact_completion_path(
+        chunks, stage="chunking").read_text(encoding="utf-8")
+    assert "secret" not in completion_text
+
+    version_one = parameters(cloud_url="https://example.test/v1")
+    version_two = parameters(cloud_url="https://example.test/v2")
+    assert version_one["cloud_url"] != version_two["cloud_url"]
+    for unsafe_url in (
+        "https://user:secret@example.test/v1",
+        "https://example.test/v1?token=secret",
+        "cloud-user:secret@example.test/v1",
+    ):
+        with pytest.raises((TypeError, ValueError)):
+            parameters(cloud_url=unsafe_url)
     assert not rag._chunks_complete(
         document, chunks, parameters=parameters(max_tokens=256))
+    assert not rag._chunks_complete(
+        document, chunks,
+        parameters=parameters(structure_profile="roman-parts-book-v1"))
 
     rag._llm_runtime.configure(rag.LLMRuntimeConfig(
         cache_mode="off", cache_dir=tmp_path / "llm-cache",
@@ -134,8 +254,164 @@ def test_chunk_completion_binds_source_options_model_lock_and_output(
     assert not rag._chunks_complete(
         document, chunks, parameters=parameters())
 
+    manifest_path = rag._artifact_completion_path(
+        chunks, stage="chunking")
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload.pop("structure_profile")
+    rag._atomic_write_json(manifest_path, payload)
+    assert not rag._chunks_complete(document, chunks, parameters=initial)
+
+    _write_chunk_completion(document, chunks, initial)
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["structure_profile"]["sha256"] = "f" * 64
+    rag._atomic_write_json(manifest_path, payload)
+    assert not rag._chunks_complete(document, chunks, parameters=initial)
+
     document.write_text('{"name":"changed"}', encoding="utf-8")
     assert not rag._chunks_complete(document, chunks, parameters=initial)
+
+
+def test_quality_report_is_repairable_and_required_for_lineaged_chunks(
+        tmp_path):
+    document = tmp_path / "book.json"
+    chunks = tmp_path / "book_chunks.jsonl"
+    parameters = {"embedding_model": "model-a", "chunking_policy_version": 19}
+    _write_quality_source(document)
+    _write_chunks(chunks, [_lineaged_record()])
+    _write_chunk_completion(document, chunks, parameters)
+
+    report = rag._publish_corpus_quality_report(
+        document, chunks, parameters=parameters, structural_ranges=set())
+    report_path = rag._quality_core.quality_report_path(chunks)
+
+    assert report["status"] == "pass"
+    assert rag._quality_report_complete(
+        document, chunks, parameters=parameters)
+    assert len(rag._load_index_records_strict(chunks)) == 1
+
+    report_path.unlink()
+    assert not rag._quality_report_complete(
+        document, chunks, parameters=parameters)
+    with pytest.raises(OSError):
+        rag._load_index_records_strict(chunks)
+
+    repaired = rag._publish_corpus_quality_report(
+        document, chunks, parameters=parameters, structural_ranges=set())
+    assert repaired == report
+    assert rag._quality_report_complete(
+        document, chunks, parameters=parameters)
+
+
+def test_quality_repair_reconstructs_ranges_with_attested_profile(
+        monkeypatch, tmp_path):
+    document = tmp_path / "book.json"
+    chunks = tmp_path / "book_chunks.jsonl"
+    profile = rag._document_profiles.get_profile("roman-parts-book-v1")
+    parameters = {
+        "embedding_model": "model-a",
+        "chunking_policy_version": 20,
+        "structure_profile": rag._document_profiles.profile_provenance(
+            profile),
+    }
+    _write_quality_source(document)
+    _write_chunks(chunks, [_lineaged_record()])
+    _write_chunk_completion(document, chunks, parameters)
+    observed = {}
+    real_identify = rag._identify_book_sections
+
+    def capture(document_mapping, **kwargs):
+        observed["profile"] = kwargs["structure_profile"]
+        return real_identify(document_mapping, **kwargs)
+
+    monkeypatch.setattr(rag, "_identify_book_sections", capture)
+
+    report = rag._publish_corpus_quality_report(
+        document, chunks, parameters=parameters)
+
+    assert report["status"] == "pass"
+    assert observed["profile"] is profile
+
+
+def test_quality_repair_rejects_profile_override_against_receipt(tmp_path):
+    document = tmp_path / "book.json"
+    chunks = tmp_path / "book_chunks.jsonl"
+    parameters = {"embedding_model": "model-a", "chunking_policy_version": 20}
+    _write_quality_source(document)
+    _write_chunks(chunks, [_lineaged_record()])
+    _write_chunk_completion(document, chunks, parameters)
+
+    with pytest.raises(ValueError, match="does not match the attested"):
+        rag._publish_corpus_quality_report(
+            document,
+            chunks,
+            parameters=parameters,
+            structural_ranges=set(),
+            structure_profile="roman-parts-book-v1",
+        )
+
+
+def test_index_reader_binds_top_level_profile_to_parameter_receipt(tmp_path):
+    document = tmp_path / "book.json"
+    chunks = tmp_path / "book_chunks.jsonl"
+    parameters = {"embedding_model": "model-a", "chunking_policy_version": 20}
+    _write_quality_source(document)
+    _write_chunks(chunks, [_lineaged_record()])
+    _write_chunk_completion(document, chunks, parameters)
+    rag._publish_corpus_quality_report(
+        document, chunks, parameters=parameters, structural_ranges=set())
+
+    manifest_path = rag._artifact_completion_path(chunks, stage="chunking")
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    payload["structure_profile"] = rag._document_profiles.profile_provenance(
+        rag._document_profiles.get_profile("roman-parts-book-v1"))
+    rag._atomic_write_json(manifest_path, payload)
+
+    with pytest.raises(ValueError, match="detached from parameters"):
+        rag._load_index_records_strict(chunks)
+
+
+def test_lineaged_chunks_refuse_stale_or_failed_quality_report(tmp_path):
+    document = tmp_path / "book.json"
+    chunks = tmp_path / "book_chunks.jsonl"
+    parameters = {"embedding_model": "model-a", "chunking_policy_version": 19}
+    _write_quality_source(document)
+    _write_chunks(chunks, [_lineaged_record()])
+    _write_chunk_completion(document, chunks, parameters)
+    rag._publish_corpus_quality_report(
+        document, chunks, parameters=parameters, structural_ranges=set())
+    report_path = rag._quality_core.quality_report_path(chunks)
+
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+    payload["status"] = "fail"
+    rag._atomic_write_json(report_path, payload)
+    with pytest.raises(ValueError, match="did not pass"):
+        rag._load_index_records_strict(chunks)
+
+    rag._publish_corpus_quality_report(
+        document, chunks, parameters=parameters, structural_ranges=set())
+    changed = _lineaged_record()
+    changed["text"] += " Changed after attestation."
+    _write_chunks(chunks, [changed])
+    with pytest.raises(ValueError, match="does not match chunks artifact"):
+        rag._load_index_records_strict(chunks)
+
+
+@pytest.mark.parametrize("consumer_name", [
+    "extract_questions",
+    "generate_exam_questions",
+    "build_citation_graph",
+    "generate_briefs",
+])
+def test_downstream_consumers_require_quality_report(
+        consumer_name, tmp_path):
+    chunks = tmp_path / "book_chunks.jsonl"
+    output = tmp_path / f"{consumer_name}.json"
+    _write_chunks(chunks, [_lineaged_record()])
+
+    with pytest.raises(OSError):
+        getattr(rag, consumer_name)(chunks, output)
+
+    assert not output.exists()
 
 
 def test_unified_export_manifest_binds_output_to_exact_chunks(tmp_path):
@@ -211,7 +487,7 @@ def test_raptor_validator_accepts_source_bound_degraded_tree(tmp_path):
     _, source_sha256, _ = rag._load_index_snapshot_strict(chunks)
     parameters = rag._raptor_parameters(
         embedding_model="model", cloud_url="", cloud_model="",
-        cloud_key="never-persist-this", ollama_url="http://localhost",
+        cloud_key="never-persist-this", ollama_url="http://127.0.0.1",
         ollama_model="local",
         gemini_key="", thinking=False)
     tree = {
@@ -239,6 +515,32 @@ def test_raptor_validator_accepts_source_bound_degraded_tree(tmp_path):
     rag._atomic_write_json(output, tree)
     assert not rag._raptor_output_complete(
         chunks, output, parameters=parameters)
+
+
+def test_raptor_parameters_bind_ambient_gemini_without_persisting_key(
+        monkeypatch):
+    kwargs = {
+        "embedding_model": "model",
+        "cloud_url": "",
+        "cloud_model": "",
+        "cloud_key": "",
+        "ollama_url": "http://127.0.0.1:11434",
+        "ollama_model": "local",
+        "gemini_key": "",
+        "thinking": False,
+        "security_policy": release_security.ReleaseSecurityPolicy(
+            network_policy="allow-cloud"),
+    }
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    without_key = rag._raptor_parameters(**kwargs)
+    monkeypatch.setenv("GEMINI_API_KEY", "GEMINI_SECRET_CANARY")
+    with_key = rag._raptor_parameters(**kwargs)
+
+    assert without_key["gemini_configured"] is False
+    assert with_key["gemini_configured"] is True
+    assert rag._artifact_parameters_sha256(without_key) != (
+        rag._artifact_parameters_sha256(with_key))
+    assert "GEMINI_SECRET_CANARY" not in json.dumps(with_key)
 
 
 def test_killed_export_before_completion_commit_is_not_resumable(tmp_path):

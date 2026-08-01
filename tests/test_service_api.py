@@ -1,9 +1,14 @@
+import builtins
 import json
 import os
 import stat
+import subprocess
+import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import FrozenInstanceError
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -562,6 +567,387 @@ def test_token_files_are_distinct_private_and_never_printed(
         service_api.initialize_token_files(reader_path, admin_path)
     assert service_api.load_token_file(reader_path) == reader
     assert service_api.load_token_file(admin_path) == admin
+
+
+def test_service_credentials_are_frozen_slotted_opaque_and_role_aware():
+    credentials = service_api.ServiceCredentials(READER_TOKEN, ADMIN_TOKEN)
+
+    assert not hasattr(credentials, "__dict__")
+    assert repr(credentials) == "ServiceCredentials()"
+    assert READER_TOKEN not in repr(credentials)
+    assert ADMIN_TOKEN not in repr(credentials)
+    assert credentials.role_for(READER_TOKEN) == "reader"
+    assert credentials.role_for(ADMIN_TOKEN) == "admin"
+    assert credentials.role_for("x" * 48) is None
+    with pytest.raises(FrozenInstanceError):
+        credentials.reader_token = "z" * 48
+    with pytest.raises(service_contracts.ServiceContractError):
+        service_api.ServiceCredentials(READER_TOKEN, READER_TOKEN)
+
+
+def test_main_serve_preserves_construction_order_and_uvicorn_options(
+        monkeypatch, tmp_path):
+    events = []
+    config_path = tmp_path / "corpora.json"
+    reader_path = tmp_path / "reader.token"
+    admin_path = tmp_path / "admin.token"
+    job_root = tmp_path / "jobs"
+    working_directory = tmp_path / "work"
+    output_root = tmp_path / "output"
+    service_state_root = tmp_path / "state"
+    registry = object()
+    security_policy = object()
+    credentials = object()
+    runtime = SimpleNamespace(
+        start=lambda: pytest.fail("main must leave startup to ASGI lifespan"))
+    app = object()
+    runtime_binding = object()
+    job_coordination_binding = object()
+    http_binding = object()
+
+    def load_registry(path):
+        events.append(("registry", path))
+        return registry
+
+    def create_security_policy(**kwargs):
+        events.append(("security_policy", kwargs))
+        return security_policy
+
+    def load_token(path):
+        events.append(("token", path))
+        return {
+            reader_path: READER_TOKEN,
+            admin_path: ADMIN_TOKEN,
+        }[path]
+
+    def create_credentials(reader_token, admin_token):
+        events.append(("credentials", reader_token, admin_token))
+        return credentials
+
+    def create_runtime(runtime_registry, **kwargs):
+        events.append(("runtime", runtime_registry, kwargs))
+        return runtime
+
+    def create_app(runtime_arg, credentials_arg, **kwargs):
+        events.append(("app", runtime_arg, credentials_arg, kwargs))
+        return app
+
+    def run_uvicorn(app_arg, **kwargs):
+        events.append(("uvicorn", app_arg, kwargs))
+
+    monkeypatch.setattr(
+        service_api.service_runtime, "load_corpus_registry", load_registry)
+    monkeypatch.setattr(
+        service_api.release_security,
+        "ReleaseSecurityPolicy",
+        SimpleNamespace(from_values=create_security_policy),
+    )
+    monkeypatch.setattr(service_api, "load_token_file", load_token)
+    monkeypatch.setattr(service_api, "ServiceCredentials", create_credentials)
+    composition = (
+        service_api.application_composition.ServiceApplicationComposition(
+            runtime_factory=create_runtime,
+            http_factory=create_app,
+            runtime_binding=runtime_binding,
+            job_coordination_binding=job_coordination_binding,
+            http_binding=http_binding,
+        ))
+    monkeypatch.setattr(
+        service_api.application_composition,
+        "default_service_application_composition",
+        lambda: composition,
+    )
+    monkeypatch.setitem(
+        sys.modules, "uvicorn", SimpleNamespace(run=run_uvicorn))
+
+    result = service_api.main([
+        "serve",
+        "--config", str(config_path),
+        "--reader-token-file", str(reader_path),
+        "--admin-token-file", str(admin_path),
+        "--host", "::1",
+        "--port", "9443",
+        "--job-root", str(job_root),
+        "--working-directory", str(working_directory),
+        "--output-root", str(output_root),
+        "--service-state-root", str(service_state_root),
+        "--ready-timeout", "17.5",
+        "--reconcile-interval", "23.5",
+        "--max-concurrent-searches", "4",
+        "--security-profile", "development",
+        "--release-security-policy-version", "7",
+        "--network-policy", "allow-cloud",
+        "--model-download-policy", "allow-reviewed-sync",
+        "--llm-cache-namespace", "characterization",
+        "--trust-environment-network",
+    ])
+
+    assert result == 0
+    assert events == [
+        ("registry", config_path),
+        ("security_policy", {
+            "profile": "development",
+            "network_policy": "allow-cloud",
+            "model_download_policy": "allow-reviewed-sync",
+            "cache_namespace": "characterization",
+            "trust_environment_network": True,
+            "schema_version": 7,
+        }),
+        ("token", reader_path),
+        ("token", admin_path),
+        ("credentials", READER_TOKEN, ADMIN_TOKEN),
+        ("runtime", registry, {
+            "job_root": job_root,
+            "working_directory": working_directory,
+            "output_root": output_root,
+            "service_state_root": service_state_root,
+            "ready_timeout_seconds": 17.5,
+            "max_concurrent_searches": 4,
+            "security_policy": security_policy,
+            "runtime_binding": runtime_binding,
+            "job_coordination_binding": job_coordination_binding,
+        }),
+        ("app", runtime, credentials, {
+            "http_binding": http_binding,
+            "host": "::1",
+            "reconcile_interval_seconds": 23.5,
+            "max_http_concurrency": 64,
+            "enforce_peer_loopback": True,
+        }),
+        ("uvicorn", app, {
+            "host": "::1",
+            "port": 9443,
+            "workers": 1,
+            "access_log": False,
+            "proxy_headers": False,
+            "server_header": False,
+            "timeout_keep_alive": 5,
+        }),
+    ]
+
+
+@pytest.mark.parametrize("error_type", [
+    OSError,
+    service_contracts.ServiceContractError,
+    service_runtime.ServiceRuntimeError,
+    storage_policy.StoragePolicyError,
+    service_api.release_security.ReleaseSecurityError,
+])
+def test_main_redacts_caught_configuration_errors_before_app_or_uvicorn(
+        monkeypatch, tmp_path, capsys, error_type):
+    secret = "private-path-and-token-material"
+    if error_type is service_contracts.ServiceContractError:
+        error = error_type()
+    elif error_type is service_runtime.ServiceRuntimeError:
+        error = error_type("internal_error")
+    else:
+        error = error_type(secret)
+    error.args = (secret,)
+    app_calls = []
+    uvicorn_imports = []
+    real_import = builtins.__import__
+
+    def fail_registry(_path):
+        raise error
+
+    def track_import(name, *args, **kwargs):
+        if name == "uvicorn":
+            uvicorn_imports.append(name)
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(
+        service_api.service_runtime, "load_corpus_registry", fail_registry)
+    monkeypatch.setattr(
+        service_api.application_composition,
+        "create_service_application",
+        lambda *_args, **_kwargs: app_calls.append(True),
+    )
+    monkeypatch.setattr(builtins, "__import__", track_import)
+
+    with pytest.raises(SystemExit) as raised:
+        service_api.main([
+            "serve",
+            "--config", str(tmp_path / "corpora.json"),
+            "--reader-token-file", str(tmp_path / "reader.token"),
+            "--admin-token-file", str(tmp_path / "admin.token"),
+        ])
+
+    assert raised.value.code == 2
+    stderr = capsys.readouterr().err
+    assert f"service configuration failed ({error_type.__name__})" in stderr
+    assert secret not in stderr
+    assert app_calls == []
+    assert uvicorn_imports == []
+
+
+def test_uvicorn_is_lazy_and_missing_dependency_error_is_redacted(
+        monkeypatch, tmp_path, capsys):
+    uvicorn_imports = []
+    real_import = builtins.__import__
+
+    def block_uvicorn(name, *args, **kwargs):
+        if name == "uvicorn":
+            uvicorn_imports.append(name)
+            raise ImportError("private uvicorn import detail")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", block_uvicorn)
+    monkeypatch.setattr(
+        service_api, "initialize_token_files", lambda *_args: None)
+    monkeypatch.setattr(
+        service_api.application_composition,
+        "create_service_application",
+        lambda *_args, **_kwargs: pytest.fail(
+            "init-tokens must not resolve service composition"),
+    )
+
+    assert service_api.main([
+        "init-tokens",
+        "--reader-token-file", str(tmp_path / "reader.token"),
+        "--admin-token-file", str(tmp_path / "admin.token"),
+    ]) == 0
+    assert uvicorn_imports == []
+    capsys.readouterr()
+
+    monkeypatch.setattr(
+        service_api.service_runtime, "load_corpus_registry",
+        lambda _path: object(),
+    )
+    monkeypatch.setattr(
+        service_api.release_security,
+        "ReleaseSecurityPolicy",
+        SimpleNamespace(from_values=lambda **_kwargs: object()),
+    )
+    tokens = iter((READER_TOKEN, ADMIN_TOKEN))
+    monkeypatch.setattr(
+        service_api, "load_token_file", lambda _path: next(tokens))
+    monkeypatch.setattr(
+        service_api.application_composition,
+        "create_service_application",
+        lambda *_args, **_kwargs: object(),
+    )
+
+    with pytest.raises(SystemExit) as raised:
+        service_api.main([
+            "serve",
+            "--config", str(tmp_path / "corpora.json"),
+            "--reader-token-file", str(tmp_path / "reader.token"),
+            "--admin-token-file", str(tmp_path / "admin.token"),
+        ])
+
+    assert raised.value.code == 2
+    stderr = capsys.readouterr().err
+    assert "uvicorn is required by the service dependency profile" in stderr
+    assert "private uvicorn import detail" not in stderr
+    assert uvicorn_imports == ["uvicorn"]
+
+
+def test_known_root_failure_is_redacted_before_uvicorn_import(
+        monkeypatch, tmp_path, capsys):
+    secret = "private composed-runtime detail"
+    uvicorn_imports = []
+    real_import = builtins.__import__
+
+    def track_import(name, *args, **kwargs):
+        if name == "uvicorn":
+            uvicorn_imports.append(name)
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(
+        service_api.service_runtime,
+        "load_corpus_registry",
+        lambda _path: object(),
+    )
+    monkeypatch.setattr(
+        service_api.release_security,
+        "ReleaseSecurityPolicy",
+        SimpleNamespace(from_values=lambda **_kwargs: object()),
+    )
+    tokens = iter((READER_TOKEN, ADMIN_TOKEN))
+    monkeypatch.setattr(
+        service_api, "load_token_file", lambda _path: next(tokens))
+    failure = service_runtime.ServiceRuntimeError("service_unavailable")
+    failure.args = (secret,)
+    monkeypatch.setattr(
+        service_api.application_composition,
+        "create_service_application",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(failure),
+    )
+    monkeypatch.setattr(builtins, "__import__", track_import)
+
+    with pytest.raises(SystemExit) as raised:
+        service_api.main([
+            "serve",
+            "--config", str(tmp_path / "corpora.json"),
+            "--reader-token-file", str(tmp_path / "reader.token"),
+            "--admin-token-file", str(tmp_path / "admin.token"),
+        ])
+
+    assert raised.value.code == 2
+    stderr = capsys.readouterr().err
+    assert "service configuration failed (ServiceRuntimeError)" in stderr
+    assert secret not in stderr
+    assert uvicorn_imports == []
+
+
+@pytest.mark.parametrize("failure_type", [RuntimeError, KeyboardInterrupt])
+def test_unexpected_root_failures_propagate_without_uvicorn_import(
+        monkeypatch, tmp_path, failure_type):
+    marker = failure_type("unexpected root marker")
+    uvicorn_imports = []
+    real_import = builtins.__import__
+
+    def track_import(name, *args, **kwargs):
+        if name == "uvicorn":
+            uvicorn_imports.append(name)
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(
+        service_api.service_runtime,
+        "load_corpus_registry",
+        lambda _path: object(),
+    )
+    monkeypatch.setattr(
+        service_api.release_security,
+        "ReleaseSecurityPolicy",
+        SimpleNamespace(from_values=lambda **_kwargs: object()),
+    )
+    tokens = iter((READER_TOKEN, ADMIN_TOKEN))
+    monkeypatch.setattr(
+        service_api, "load_token_file", lambda _path: next(tokens))
+    monkeypatch.setattr(
+        service_api.application_composition,
+        "create_service_application",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(marker),
+    )
+    monkeypatch.setattr(builtins, "__import__", track_import)
+
+    with pytest.raises(failure_type) as raised:
+        service_api.main([
+            "serve",
+            "--config", str(tmp_path / "corpora.json"),
+            "--reader-token-file", str(tmp_path / "reader.token"),
+            "--admin-token-file", str(tmp_path / "admin.token"),
+        ])
+
+    assert raised.value is marker
+    assert uvicorn_imports == []
+
+
+def test_flat_service_facade_help_smoke():
+    completed = subprocess.run(
+        [sys.executable, str(Path(service_api.__file__).resolve()), "--help"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "Authenticated loopback-only RAG service" in completed.stdout
+    assert "{init-tokens,serve}" in completed.stdout
 
 
 def test_malformed_bounded_inputs_never_poison_readiness(tmp_path):

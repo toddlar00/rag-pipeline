@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 def main() -> int:
-    workspace = Path(__file__).resolve().parent
+    workspace = Path(__file__).resolve().parents[1]
     command = [
         sys.executable,
         str(workspace / "rag.py"),

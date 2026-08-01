@@ -1,6 +1,7 @@
 import json
 import os
 import threading
+from types import SimpleNamespace
 
 import pytest
 
@@ -9,6 +10,20 @@ import retention
 
 
 DAY = 86_400.0
+
+
+def _stat_view(result, **changes):
+    values = {
+        "st_mode": result.st_mode,
+        "st_nlink": result.st_nlink,
+        "st_size": result.st_size,
+        "st_dev": result.st_dev,
+        "st_ino": result.st_ino,
+        "st_mtime_ns": result.st_mtime_ns,
+        "st_ctime_ns": result.st_ctime_ns,
+    }
+    values.update(changes)
+    return SimpleNamespace(**values)
 
 
 def _create_owned_run(tmp_path, *, with_sibling=True):
@@ -93,6 +108,121 @@ def _write_quarantine_operation(root, token, *, created_at):
         encoding="utf-8",
     )
     return operation_root
+
+
+def test_owned_marker_read_retries_ctime_only_synced_folder_churn(
+        monkeypatch, tmp_path):
+    marker = tmp_path / "marker.json"
+    marker.write_text('{"value":"stable"}', encoding="utf-8")
+    real_fstat = retention.os.fstat
+    fstat_calls = 0
+    delays = []
+
+    def churn_once(descriptor):
+        nonlocal fstat_calls
+        fstat_calls += 1
+        result = real_fstat(descriptor)
+        if fstat_calls == 2:
+            return _stat_view(
+                result, st_ctime_ns=result.st_ctime_ns + 1)
+        return result
+
+    monkeypatch.setattr(retention.os, "fstat", churn_once)
+    monkeypatch.setattr(retention.time, "sleep", delays.append)
+
+    assert retention._read_json_object(marker) == {"value": "stable"}
+    assert fstat_calls == 4
+    assert delays == [retention._SYNCED_FOLDER_READ_RETRY_DELAYS[0]]
+
+
+def test_owned_marker_read_exhausts_bounded_ctime_retries(
+        monkeypatch, tmp_path):
+    marker = tmp_path / "marker.json"
+    marker.write_text('{"value":"stable"}', encoding="utf-8")
+    real_fstat = retention.os.fstat
+    fstat_calls = 0
+    delays = []
+
+    def always_churning(descriptor):
+        nonlocal fstat_calls
+        fstat_calls += 1
+        result = real_fstat(descriptor)
+        if fstat_calls % 2 == 0:
+            return _stat_view(
+                result, st_ctime_ns=result.st_ctime_ns + fstat_calls)
+        return result
+
+    monkeypatch.setattr(retention.os, "fstat", always_churning)
+    monkeypatch.setattr(retention.time, "sleep", delays.append)
+
+    with pytest.raises(retention.RetentionError, match="changed while reading"):
+        retention._read_json_object(marker)
+
+    assert fstat_calls == 2 * (
+        len(retention._SYNCED_FOLDER_READ_RETRY_DELAYS) + 1)
+    assert delays == list(retention._SYNCED_FOLDER_READ_RETRY_DELAYS)
+
+
+def test_owned_marker_read_rejects_new_bytes_across_retry(
+        monkeypatch, tmp_path):
+    marker = tmp_path / "marker.json"
+    marker.write_text('{"value":"aa"}', encoding="utf-8")
+    baseline = marker.stat()
+    real_fstat = retention.os.fstat
+    fstat_calls = 0
+    delays = []
+
+    def pinned_metadata(descriptor):
+        nonlocal fstat_calls
+        fstat_calls += 1
+        result = real_fstat(descriptor)
+        ctime = baseline.st_ctime_ns + (1 if fstat_calls == 2 else 2)
+        if fstat_calls == 1:
+            ctime = baseline.st_ctime_ns
+        return _stat_view(
+            result,
+            st_dev=baseline.st_dev,
+            st_ino=baseline.st_ino,
+            st_size=baseline.st_size,
+            st_mtime_ns=baseline.st_mtime_ns,
+            st_nlink=baseline.st_nlink,
+            st_ctime_ns=ctime,
+        )
+
+    def replace_bytes(delay):
+        delays.append(delay)
+        marker.write_text('{"value":"bb"}', encoding="utf-8")
+
+    monkeypatch.setattr(retention.os, "fstat", pinned_metadata)
+    monkeypatch.setattr(retention.time, "sleep", replace_bytes)
+
+    with pytest.raises(retention.RetentionError, match="changed while reading"):
+        retention._read_json_object(marker)
+
+    assert fstat_calls == 4
+    assert delays == [retention._SYNCED_FOLDER_READ_RETRY_DELAYS[0]]
+
+
+def test_invalid_owned_marker_is_not_retried(monkeypatch, tmp_path):
+    marker = tmp_path / "marker.json"
+    marker.write_text("not-json", encoding="utf-8")
+    real_fstat = retention.os.fstat
+    fstat_calls = 0
+    delays = []
+
+    def counting_fstat(descriptor):
+        nonlocal fstat_calls
+        fstat_calls += 1
+        return real_fstat(descriptor)
+
+    monkeypatch.setattr(retention.os, "fstat", counting_fstat)
+    monkeypatch.setattr(retention.time, "sleep", delays.append)
+
+    with pytest.raises(retention.RetentionError, match="invalid owned marker"):
+        retention._read_json_object(marker)
+
+    assert fstat_calls == 2
+    assert delays == []
 
 
 def test_pipeline_manifest_create_resume_state_and_conflict(tmp_path):
@@ -604,13 +734,13 @@ def test_cancel_request_cannot_resurrect_a_deleted_job(
     cancellation = threading.Thread(target=cancel_job)
     cancellation.start()
     assert cancellation_read.wait(5)
-    store.transition_job(
-        submitted.job_id, "failed",
-        attempt_token=execution.attempt_token,
-        expected_revision=running.revision)
 
     def delete_job():
         try:
+            store.transition_job(
+                submitted.job_id, "failed",
+                attempt_token=execution.attempt_token,
+                expected_revision=running.revision)
             store.prepare_delete(submitted.job_id)
             deletion_prepared.set()
             plan = retention.plan_background_job_deletion(

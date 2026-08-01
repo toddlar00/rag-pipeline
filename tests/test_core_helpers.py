@@ -107,6 +107,26 @@ def test_markdown_assembly_understands_scaffold_separator():
     assert "### 1. Minimum Contacts" in markdown
 
 
+def test_markdown_assembly_preserves_roman_part_designation():
+    record = {
+        "text": "Institutions shape professional practice.",
+        "metadata": {
+            "chapter_num": 4,
+            "chapter_title": "Part IV: Institutions and Practice",
+            "section_path": (
+                "Part IV: Institutions and Practice > I. Institutions"),
+            "content_type": "author_narrative",
+        },
+    }
+
+    markdown = rag._assemble_markdown([record])
+
+    assert "# Part IV: Institutions and Practice" in markdown
+    assert "Chapter 4" not in markdown
+    assert markdown.count("Institutions and Practice") == 1
+    assert "## I. Institutions" in markdown
+
+
 def test_normalization_preserves_legal_headings_and_roman_numerals():
     text = "PERSONAL JURISDICTION\nIV.\nThis is substantive text."
 
