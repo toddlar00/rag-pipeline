@@ -50,7 +50,7 @@
     "python_major_minor": "3.12"
   },
   "repetitions": 5,
-  "report_sha256": "1b0a69bf19d7996ad42ddde0b62e3df029cd9e36f771394f8bec20e7f0d0b766",
+  "report_sha256": "b3d599e9d55eda8c2e76b59c32eabd05cc0310fdd82aa5339b040c1862a8e0e6",
   "runtime": {
     "implementation": "CPython",
     "pointer_bits": 64,
@@ -85,6 +85,218 @@
       "contract_sha256": "752cf488e541aa6286665b0427df3e1d6da93b3855cdfeab55941917fe1b74b4",
       "diagnostics": {
         "first_party_loaded_count": {
+          "maximum": 37,
+          "median": 37,
+          "minimum": 37,
+          "p95": 37
+        },
+        "first_party_loaded_roots": [
+          "ai_project_export",
+          "artifact_io",
+          "attempt_reporting",
+          "chunking_core",
+          "cli_policy",
+          "document_profiles",
+          "embedding_policy",
+          "endpoint_policy",
+          "heading_lineage",
+          "index_state",
+          "ingestion_core",
+          "job_application",
+          "job_coordination",
+          "job_coordination_contracts",
+          "job_runtime",
+          "llm_adapters",
+          "llm_output_contracts",
+          "llm_runtime",
+          "markdown_validation",
+          "model_artifacts",
+          "operation_contracts",
+          "operational_metrics",
+          "process_supervision",
+          "provider_transport",
+          "publication_core",
+          "quality_core",
+          "rag",
+          "release_security",
+          "resource_lease",
+          "retention",
+          "retrieval_core",
+          "run_telemetry",
+          "runtime_supervision",
+          "source_fidelity_core",
+          "storage_policy",
+          "table_retrieval_core",
+          "vector_lifecycle"
+        ],
+        "first_party_loaded_sha256": "ed5852595cdabbee5d01b315e5d0c9a87dac8fa95bd930e088c25a0cfa08b531",
+        "loaded_module_count": {
+          "maximum": 372,
+          "median": 372,
+          "minimum": 372,
+          "p95": 372
+        },
+        "output": null,
+        "peak_rss_bytes": {
+          "available": true,
+          "maximum": 104480768,
+          "median": 104476672,
+          "minimum": 104308736,
+          "p95": 104480768,
+          "scope": "process_only_excludes_descendants"
+        },
+        "stdlib_loaded_count": {
+          "maximum": 101,
+          "median": 101,
+          "minimum": 101,
+          "p95": 101
+        },
+        "stdlib_loaded_roots": [
+          "abc",
+          "argparse",
+          "array",
+          "ast",
+          "atexit",
+          "base64",
+          "binascii",
+          "bisect",
+          "bz2",
+          "calendar",
+          "codecs",
+          "collections",
+          "contextlib",
+          "copy",
+          "copyreg",
+          "csv",
+          "ctypes",
+          "dataclasses",
+          "datetime",
+          "decimal",
+          "dis",
+          "email",
+          "encodings",
+          "enum",
+          "errno",
+          "fcntl",
+          "fnmatch",
+          "fractions",
+          "functools",
+          "gc",
+          "genericpath",
+          "getpass",
+          "gettext",
+          "hashlib",
+          "heapq",
+          "hmac",
+          "html",
+          "http",
+          "importlib",
+          "inspect",
+          "io",
+          "ipaddress",
+          "itertools",
+          "json",
+          "keyword",
+          "linecache",
+          "locale",
+          "logging",
+          "lzma",
+          "marshal",
+          "math",
+          "mimetypes",
+          "ntpath",
+          "numbers",
+          "opcode",
+          "operator",
+          "os",
+          "pathlib",
+          "pkgutil",
+          "platform",
+          "posix",
+          "posixpath",
+          "queue",
+          "quopri",
+          "random",
+          "re",
+          "reprlib",
+          "runpy",
+          "secrets",
+          "select",
+          "selectors",
+          "shutil",
+          "signal",
+          "site",
+          "socket",
+          "ssl",
+          "stat",
+          "statistics",
+          "string",
+          "stringprep",
+          "struct",
+          "subprocess",
+          "sys",
+          "tempfile",
+          "termios",
+          "textwrap",
+          "threading",
+          "time",
+          "token",
+          "tokenize",
+          "traceback",
+          "types",
+          "typing",
+          "unicodedata",
+          "urllib",
+          "uuid",
+          "warnings",
+          "weakref",
+          "zipfile",
+          "zipimport",
+          "zlib"
+        ],
+        "stdlib_loaded_sha256": "c69b1f66ef67671e57ebb2219cdf019294fccbe00309a0da3796ba1c362e233a",
+        "third_party_loaded_count": {
+          "maximum": 7,
+          "median": 7,
+          "minimum": 7,
+          "p95": 7
+        },
+        "third_party_loaded_roots": [
+          "ada92cb5d92a588d1b93__mypyc",
+          "brotli",
+          "certifi",
+          "charset_normalizer",
+          "idna",
+          "requests",
+          "urllib3"
+        ],
+        "third_party_loaded_sha256": "289227b32cc074c5d02786228f917b9f304464d627aab8116b96bce62d2050cf",
+        "wall_time_ms": {
+          "maximum": 664.488,
+          "median": 555.645,
+          "minimum": 530.6,
+          "p95": 664.488
+        }
+      },
+      "name": "cold_import_rag",
+      "repetitions": 5
+    },
+    {
+      "contract": {
+        "entrypoint": "rag.py",
+        "execution_mode": "supervised_child",
+        "exit_code": 0,
+        "required_markers": {
+          "info": true,
+          "preprocess": true,
+          "usage:": true
+        },
+        "stderr_empty": true,
+        "stdout_present": true
+      },
+      "contract_sha256": "ae2b048174403f75887461e02facfa686447339be35762d2a4c7c6dd9ef13528",
+      "diagnostics": {
+        "first_party_loaded_count": {
           "maximum": 36,
           "median": 36,
           "minimum": 36,
@@ -107,217 +319,7 @@
           "job_coordination_contracts",
           "job_runtime",
           "llm_adapters",
-          "llm_runtime",
-          "markdown_validation",
-          "model_artifacts",
-          "operation_contracts",
-          "operational_metrics",
-          "process_supervision",
-          "provider_transport",
-          "publication_core",
-          "quality_core",
-          "rag",
-          "release_security",
-          "resource_lease",
-          "retention",
-          "retrieval_core",
-          "run_telemetry",
-          "runtime_supervision",
-          "source_fidelity_core",
-          "storage_policy",
-          "table_retrieval_core",
-          "vector_lifecycle"
-        ],
-        "first_party_loaded_sha256": "aa237c5227ba2d5bee0ab994337e1fd98064013c4aba0ae9656b0f3eea3be135",
-        "loaded_module_count": {
-          "maximum": 370,
-          "median": 370,
-          "minimum": 370,
-          "p95": 370
-        },
-        "output": null,
-        "peak_rss_bytes": {
-          "available": true,
-          "maximum": 105160704,
-          "median": 105156608,
-          "minimum": 104996864,
-          "p95": 105160704,
-          "scope": "process_only_excludes_descendants"
-        },
-        "stdlib_loaded_count": {
-          "maximum": 101,
-          "median": 101,
-          "minimum": 101,
-          "p95": 101
-        },
-        "stdlib_loaded_roots": [
-          "abc",
-          "argparse",
-          "array",
-          "ast",
-          "atexit",
-          "base64",
-          "binascii",
-          "bisect",
-          "bz2",
-          "calendar",
-          "codecs",
-          "collections",
-          "contextlib",
-          "copy",
-          "copyreg",
-          "csv",
-          "ctypes",
-          "dataclasses",
-          "datetime",
-          "decimal",
-          "dis",
-          "email",
-          "encodings",
-          "enum",
-          "errno",
-          "fcntl",
-          "fnmatch",
-          "fractions",
-          "functools",
-          "gc",
-          "genericpath",
-          "getpass",
-          "gettext",
-          "hashlib",
-          "heapq",
-          "hmac",
-          "html",
-          "http",
-          "importlib",
-          "inspect",
-          "io",
-          "ipaddress",
-          "itertools",
-          "json",
-          "keyword",
-          "linecache",
-          "locale",
-          "logging",
-          "lzma",
-          "marshal",
-          "math",
-          "mimetypes",
-          "ntpath",
-          "numbers",
-          "opcode",
-          "operator",
-          "os",
-          "pathlib",
-          "pkgutil",
-          "platform",
-          "posix",
-          "posixpath",
-          "queue",
-          "quopri",
-          "random",
-          "re",
-          "reprlib",
-          "runpy",
-          "secrets",
-          "select",
-          "selectors",
-          "shutil",
-          "signal",
-          "site",
-          "socket",
-          "ssl",
-          "stat",
-          "statistics",
-          "string",
-          "stringprep",
-          "struct",
-          "subprocess",
-          "sys",
-          "tempfile",
-          "termios",
-          "textwrap",
-          "threading",
-          "time",
-          "token",
-          "tokenize",
-          "traceback",
-          "types",
-          "typing",
-          "unicodedata",
-          "urllib",
-          "uuid",
-          "warnings",
-          "weakref",
-          "zipfile",
-          "zipimport",
-          "zlib"
-        ],
-        "stdlib_loaded_sha256": "c69b1f66ef67671e57ebb2219cdf019294fccbe00309a0da3796ba1c362e233a",
-        "third_party_loaded_count": {
-          "maximum": 7,
-          "median": 7,
-          "minimum": 7,
-          "p95": 7
-        },
-        "third_party_loaded_roots": [
-          "ada92cb5d92a588d1b93__mypyc",
-          "brotli",
-          "certifi",
-          "charset_normalizer",
-          "idna",
-          "requests",
-          "urllib3"
-        ],
-        "third_party_loaded_sha256": "289227b32cc074c5d02786228f917b9f304464d627aab8116b96bce62d2050cf",
-        "wall_time_ms": {
-          "maximum": 1109.282,
-          "median": 784.929,
-          "minimum": 774.891,
-          "p95": 1109.282
-        }
-      },
-      "name": "cold_import_rag",
-      "repetitions": 5
-    },
-    {
-      "contract": {
-        "entrypoint": "rag.py",
-        "execution_mode": "supervised_child",
-        "exit_code": 0,
-        "required_markers": {
-          "info": true,
-          "preprocess": true,
-          "usage:": true
-        },
-        "stderr_empty": true,
-        "stdout_present": true
-      },
-      "contract_sha256": "ae2b048174403f75887461e02facfa686447339be35762d2a4c7c6dd9ef13528",
-      "diagnostics": {
-        "first_party_loaded_count": {
-          "maximum": 35,
-          "median": 35,
-          "minimum": 35,
-          "p95": 35
-        },
-        "first_party_loaded_roots": [
-          "ai_project_export",
-          "artifact_io",
-          "attempt_reporting",
-          "chunking_core",
-          "cli_policy",
-          "document_profiles",
-          "embedding_policy",
-          "endpoint_policy",
-          "heading_lineage",
-          "index_state",
-          "ingestion_core",
-          "job_application",
-          "job_coordination",
-          "job_coordination_contracts",
-          "job_runtime",
-          "llm_adapters",
+          "llm_output_contracts",
           "llm_runtime",
           "markdown_validation",
           "model_artifacts",
@@ -338,12 +340,12 @@
           "table_retrieval_core",
           "vector_lifecycle"
         ],
-        "first_party_loaded_sha256": "96bda5cefa77aebb939a7c6abcff0e11ba279139b2eeed46fc64a1be76b2dfde",
+        "first_party_loaded_sha256": "19c38ed204b836d871b09e056bd6f8f3f4eeb20b7f7951109beb79698996e0b3",
         "loaded_module_count": {
-          "maximum": 369,
-          "median": 369,
-          "minimum": 369,
-          "p95": 369
+          "maximum": 371,
+          "median": 371,
+          "minimum": 371,
+          "p95": 371
         },
         "output": {
           "stderr": {
@@ -359,10 +361,10 @@
         },
         "peak_rss_bytes": {
           "available": true,
-          "maximum": 105566208,
-          "median": 105558016,
-          "minimum": 105242624,
-          "p95": 105566208,
+          "maximum": 106504192,
+          "median": 106500096,
+          "minimum": 106340352,
+          "p95": 106504192,
           "scope": "process_only_excludes_descendants"
         },
         "stdlib_loaded_count": {
@@ -492,10 +494,10 @@
         ],
         "third_party_loaded_sha256": "289227b32cc074c5d02786228f917b9f304464d627aab8116b96bce62d2050cf",
         "wall_time_ms": {
-          "maximum": 820.279,
-          "median": 800.854,
-          "minimum": 781.047,
-          "p95": 820.279
+          "maximum": 570.59,
+          "median": 555.238,
+          "minimum": 542.006,
+          "p95": 570.59
         }
       },
       "name": "cli_help",
@@ -533,10 +535,10 @@
         ],
         "first_party_loaded_sha256": "aa6d8893484fb43860880f14d6085576430ecc9326720c8793ab59d0d5ab66c7",
         "loaded_module_count": {
-          "maximum": 137,
-          "median": 137,
-          "minimum": 137,
-          "p95": 137
+          "maximum": 138,
+          "median": 138,
+          "minimum": 138,
+          "p95": 138
         },
         "output": {
           "stderr": {
@@ -552,10 +554,10 @@
         },
         "peak_rss_bytes": {
           "available": true,
-          "maximum": 27107328,
-          "median": 26943488,
-          "minimum": 26943488,
-          "p95": 27107328,
+          "maximum": 27688960,
+          "median": 27688960,
+          "minimum": 27688960,
+          "p95": 27688960,
           "scope": "process_only_excludes_descendants"
         },
         "stdlib_loaded_count": {
@@ -649,10 +651,10 @@
         "third_party_loaded_roots": [],
         "third_party_loaded_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "wall_time_ms": {
-          "maximum": 1581.627,
-          "median": 1557.368,
-          "minimum": 1509.201,
-          "p95": 1581.627
+          "maximum": 1215.168,
+          "median": 1137.817,
+          "minimum": 1133.43,
+          "p95": 1215.168
         }
       },
       "name": "cli_info_empty",
@@ -698,18 +700,18 @@
         ],
         "first_party_loaded_sha256": "494db110e315617acbaf574452bb99fe49ba4b43e02b8439056a38925c6e3eed",
         "loaded_module_count": {
-          "maximum": 411,
-          "median": 411,
-          "minimum": 411,
-          "p95": 411
+          "maximum": 412,
+          "median": 412,
+          "minimum": 412,
+          "p95": 412
         },
         "output": null,
         "peak_rss_bytes": {
           "available": true,
-          "maximum": 47611904,
-          "median": 47603712,
-          "minimum": 47411200,
-          "p95": 47611904,
+          "maximum": 49197056,
+          "median": 49176576,
+          "minimum": 49176576,
+          "p95": 49197056,
           "scope": "process_only_excludes_descendants"
         },
         "stdlib_loaded_count": {
@@ -845,10 +847,10 @@
         ],
         "third_party_loaded_sha256": "84b15a1d397d0c6bd9df7a64dfe2cb4e7a1b9d1c6db164da1d963648a7becee6",
         "wall_time_ms": {
-          "maximum": 883.466,
-          "median": 741.081,
-          "minimum": 721.697,
-          "p95": 883.466
+          "maximum": 554.35,
+          "median": 489.927,
+          "minimum": 475.097,
+          "p95": 554.35
         }
       },
       "name": "service_composition",
@@ -864,10 +866,10 @@
       "contract_sha256": "31effc3121b3659fb5af28e2eef482e7a71698479252385322e88cee81666636",
       "diagnostics": {
         "first_party_loaded_count": {
-          "maximum": 41,
-          "median": 41,
-          "minimum": 41,
-          "p95": 41
+          "maximum": 42,
+          "median": 42,
+          "minimum": 42,
+          "p95": 42
         },
         "first_party_loaded_roots": [
           "ai_project_export",
@@ -886,6 +888,7 @@
           "job_coordination_contracts",
           "job_runtime",
           "llm_adapters",
+          "llm_output_contracts",
           "llm_runtime",
           "markdown_validation",
           "model_artifacts",
@@ -912,20 +915,20 @@
           "ui",
           "vector_lifecycle"
         ],
-        "first_party_loaded_sha256": "97d007ee40b9e1ca9e069ca893f3258dfe8dc685a946f715e3fe658ca4bd3755",
+        "first_party_loaded_sha256": "d6160bd5ec3add6a86db9ceb91088e3ae968ce98854237ebd06ed52c96cf288d",
         "loaded_module_count": {
-          "maximum": 375,
-          "median": 375,
-          "minimum": 375,
-          "p95": 375
+          "maximum": 377,
+          "median": 377,
+          "minimum": 377,
+          "p95": 377
         },
         "output": null,
         "peak_rss_bytes": {
           "available": true,
-          "maximum": 105824256,
-          "median": 105820160,
-          "minimum": 105811968,
-          "p95": 105824256,
+          "maximum": 105136128,
+          "median": 105132032,
+          "minimum": 105127936,
+          "p95": 105136128,
           "scope": "process_only_excludes_descendants"
         },
         "stdlib_loaded_count": {
@@ -1055,10 +1058,10 @@
         ],
         "third_party_loaded_sha256": "289227b32cc074c5d02786228f917b9f304464d627aab8116b96bce62d2050cf",
         "wall_time_ms": {
-          "maximum": 848.547,
-          "median": 819.981,
-          "minimum": 807.777,
-          "p95": 848.547
+          "maximum": 551.792,
+          "median": 550.284,
+          "minimum": 534.968,
+          "p95": 551.792
         }
       },
       "name": "worker_imports",
@@ -1104,18 +1107,18 @@
         ],
         "first_party_loaded_sha256": "00297218f1d630efe86e5b68dc594ded00eb27c5a560adc03b4a073838d0caca",
         "loaded_module_count": {
-          "maximum": 142,
-          "median": 142,
-          "minimum": 142,
-          "p95": 142
+          "maximum": 143,
+          "median": 143,
+          "minimum": 143,
+          "p95": 143
         },
         "output": null,
         "peak_rss_bytes": {
           "available": true,
-          "maximum": 27107328,
-          "median": 27107328,
-          "minimum": 27107328,
-          "p95": 27107328,
+          "maximum": 27688960,
+          "median": 27688960,
+          "minimum": 27688960,
+          "p95": 27688960,
           "scope": "process_only_excludes_descendants"
         },
         "stdlib_loaded_count": {
@@ -1213,10 +1216,10 @@
         "third_party_loaded_roots": [],
         "third_party_loaded_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "wall_time_ms": {
-          "maximum": 1650.279,
-          "median": 1596.21,
-          "minimum": 1562.486,
-          "p95": 1650.279
+          "maximum": 1199.4,
+          "median": 1193.823,
+          "minimum": 1174.296,
+          "p95": 1199.4
         }
       },
       "name": "worker_entrypoints",
@@ -1248,18 +1251,18 @@
         ],
         "first_party_loaded_sha256": "aa6d8893484fb43860880f14d6085576430ecc9326720c8793ab59d0d5ab66c7",
         "loaded_module_count": {
-          "maximum": 137,
-          "median": 137,
-          "minimum": 137,
-          "p95": 137
+          "maximum": 138,
+          "median": 138,
+          "minimum": 138,
+          "p95": 138
         },
         "output": null,
         "peak_rss_bytes": {
           "available": true,
-          "maximum": 27107328,
-          "median": 27107328,
-          "minimum": 27107328,
-          "p95": 27107328,
+          "maximum": 27688960,
+          "median": 27688960,
+          "minimum": 27688960,
+          "p95": 27688960,
           "scope": "process_only_excludes_descendants"
         },
         "stdlib_loaded_count": {
@@ -1353,10 +1356,10 @@
         "third_party_loaded_roots": [],
         "third_party_loaded_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
         "wall_time_ms": {
-          "maximum": 437.742,
-          "median": 407.394,
-          "minimum": 396.533,
-          "p95": 437.742
+          "maximum": 219.98,
+          "median": 216.547,
+          "minimum": 215.477,
+          "p95": 219.98
         }
       },
       "name": "isolation_guard",
@@ -1492,10 +1495,10 @@
       "contract_sha256": "bd3452ac7f49c028c6de5237cfc2d1cd001c55602760229fcee470d0352ad835",
       "diagnostics": {
         "first_party_loaded_count": {
-          "maximum": 36,
-          "median": 36,
-          "minimum": 36,
-          "p95": 36
+          "maximum": 37,
+          "median": 37,
+          "minimum": 37,
+          "p95": 37
         },
         "first_party_loaded_roots": [
           "ai_project_export",
@@ -1514,6 +1517,7 @@
           "job_coordination_contracts",
           "job_runtime",
           "llm_adapters",
+          "llm_output_contracts",
           "llm_runtime",
           "markdown_validation",
           "model_artifacts",
@@ -1535,20 +1539,20 @@
           "table_retrieval_core",
           "vector_lifecycle"
         ],
-        "first_party_loaded_sha256": "aa237c5227ba2d5bee0ab994337e1fd98064013c4aba0ae9656b0f3eea3be135",
+        "first_party_loaded_sha256": "ed5852595cdabbee5d01b315e5d0c9a87dac8fa95bd930e088c25a0cfa08b531",
         "loaded_module_count": {
-          "maximum": 370,
-          "median": 370,
-          "minimum": 370,
-          "p95": 370
+          "maximum": 372,
+          "median": 372,
+          "minimum": 372,
+          "p95": 372
         },
         "output": null,
         "peak_rss_bytes": {
           "available": true,
-          "maximum": 105160704,
-          "median": 105152512,
-          "minimum": 104988672,
-          "p95": 105160704,
+          "maximum": 104480768,
+          "median": 104476672,
+          "minimum": 104476672,
+          "p95": 104480768,
           "scope": "process_only_excludes_descendants"
         },
         "stdlib_loaded_count": {
@@ -1678,10 +1682,10 @@
         ],
         "third_party_loaded_sha256": "289227b32cc074c5d02786228f917b9f304464d627aab8116b96bce62d2050cf",
         "wall_time_ms": {
-          "maximum": 2696.307,
-          "median": 2627.029,
-          "minimum": 2597.428,
-          "p95": 2696.307
+          "maximum": 2166.936,
+          "median": 2133.533,
+          "minimum": 2125.221,
+          "p95": 2166.936
         }
       },
       "name": "noop_resume",
@@ -1699,10 +1703,10 @@
       "contract_sha256": "65f5b38813d19adb540d5b1d11eb9a68759981730cfa5359e6724fc9a9ca01a3",
       "diagnostics": {
         "first_party_loaded_count": {
-          "maximum": 36,
-          "median": 36,
-          "minimum": 36,
-          "p95": 36
+          "maximum": 37,
+          "median": 37,
+          "minimum": 37,
+          "p95": 37
         },
         "first_party_loaded_roots": [
           "ai_project_export",
@@ -1721,6 +1725,7 @@
           "job_coordination_contracts",
           "job_runtime",
           "llm_adapters",
+          "llm_output_contracts",
           "llm_runtime",
           "markdown_validation",
           "model_artifacts",
@@ -1742,20 +1747,20 @@
           "table_retrieval_core",
           "vector_lifecycle"
         ],
-        "first_party_loaded_sha256": "aa237c5227ba2d5bee0ab994337e1fd98064013c4aba0ae9656b0f3eea3be135",
+        "first_party_loaded_sha256": "ed5852595cdabbee5d01b315e5d0c9a87dac8fa95bd930e088c25a0cfa08b531",
         "loaded_module_count": {
-          "maximum": 370,
-          "median": 370,
-          "minimum": 370,
-          "p95": 370
+          "maximum": 372,
+          "median": 372,
+          "minimum": 372,
+          "p95": 372
         },
         "output": null,
         "peak_rss_bytes": {
           "available": true,
-          "maximum": 105181184,
-          "median": 105172992,
-          "minimum": 105156608,
-          "p95": 105181184,
+          "maximum": 104476672,
+          "median": 104476672,
+          "minimum": 104476672,
+          "p95": 104476672,
           "scope": "process_only_excludes_descendants"
         },
         "stdlib_loaded_count": {
@@ -1885,10 +1890,10 @@
         ],
         "third_party_loaded_sha256": "289227b32cc074c5d02786228f917b9f304464d627aab8116b96bce62d2050cf",
         "wall_time_ms": {
-          "maximum": 808.94,
-          "median": 791.502,
-          "minimum": 771.575,
-          "p95": 808.94
+          "maximum": 572.601,
+          "median": 535.279,
+          "minimum": 529.757,
+          "p95": 572.601
         }
       },
       "name": "offline_export_retrieval",
@@ -1897,7 +1902,7 @@
   ],
   "schema_version": 3,
   "source": {
-    "commit": "e904fa6ea7419dac6797dc11af7cb1e507fb456c",
+    "commit": "8f95872d003ffe52ddc1da3bf506e65b60da09b3",
     "tracked_diff_sha256": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d",
     "worktree_clean": true
   },

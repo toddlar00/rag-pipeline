@@ -67,8 +67,10 @@ battery accompanies the frozen pre-gate checkpoint. Dependabot #72 closed in
 favor of a policy-compliant `tools/refresh_locks.py` pass (successor #74 is
 to be closed the same way), and a two-lane CI split (draft fast lane; full
 matrix for `main`, manual dispatch, and `*-candidate` heads) is prepared on
-`agent/ci-two-lane`. Fresh paired Phase A0 evidence at the merged checkpoint,
-hosted exact-head validation, and owner review remain pending. The
+`agent/ci-two-lane`. Fresh paired CPython 3.12.13 Phase A0 evidence
+binds merged checkpoint `8f95872` (full local suite 3,376 passed with 7
+skips) and each report passes an independent complete same-platform 9×5
+comparison; hosted exact-head validation and owner review remain pending. The
 remediation decisions are recorded in
 `docs/superpowers/specs/2026-07-31-pr-remediation-design.md`.
 

@@ -8,8 +8,10 @@ fresh-process repetitions.
 ## Provenance
 
 Both current reports were generated from the clean pre-gate source checkpoint
-`e904fa6ea7419dac6797dc11af7cb1e507fb456c` (tree
-`4fe1f457d6a60668319234988fb181bb989ad2fb`). The executing environments were
+`8f95872d003ffe52ddc1da3bf506e65b60da09b3` (tree
+`a96e07849170d3e5a31d0b990fc78c1f913426a3`), the R2 convergence checkpoint
+that merges the publication-readiness and strict output-contract lines over
+the banked R1 head and the two-lane CI split. The executing environments were
 synchronized with repository-pinned uv 0.11.31 against the exact CPU
 application/test lock union plus its retained bootstrapper:
 
@@ -26,8 +28,8 @@ marker-resolved distributions before generation.
 
 | Platform | Runtime | Report | Bytes | File SHA-256 | Embedded report SHA-256 |
 |---|---:|---|---:|---|---|
-| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 50,259 | `2be765e4b78a5487896b865f7737fcdf897394289dfbeca6c94bad26445277d2` | `33159ac283d1df249108c4fc0c407decb9d69c9be5329524e88c1f6d13146933` |
-| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 49,657 | `00bec58cb0750831d0b97c437bfb821165bab10f7bbf15bc400ce6a1a6eb0108` | `1b0a69bf19d7996ad42ddde0b62e3df029cd9e36f771394f8bec20e7f0d0b766` |
+| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 50,428 | `0a62a585007667086d1a5fefb3978d2e432dcb334b3529ac907707c2906f38cb` | `8ceb9ebc5a25fd7afbb8e5cff82abb08f31d4f54182fe6a0e557033c5c41c359` |
+| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 49,815 | `6db38cc1a3433169ddfd3985b24e4057b229eb6dd37d01768f38acdd11bb64de` | `b3d599e9d55eda8c2e76b59c32eabd05cc0310fdd82aa5339b040c1862a8e0e6` |
 
 The reports attest the same source commit, clean-worktree state, tracked-diff
 digest, eight LF and `HEAD`-identical dependency/model-lock inputs, authoritative
@@ -66,15 +68,19 @@ then produced clean source `537f72b` and gate-only refresh `b813aa7`.
 
 Release-defect checkpoint `c1bc042` had itself invalidated the earlier report
 pair and recorded 1,995 functions and 378 compact runtime callables. The
-publication-readiness implementation in `e904fa6` supersedes that checkpoint
-and changes Python source again, so it invalidates every earlier report under
-this policy. Its canonical inventory records 2,563 functions and 607 compact
-runtime callables. The current reports above bind that clean source, and each
-passes an independent complete
-same-platform 9×5 comparison. The following reports-and-documentation-only
-commit freezes the new local candidate. No successful hosted replacement run
-is claimed. A0b remains pending until both exact-head hosted cells pass, retain
-their successful evidence bundles, and receive exact-head review.
+publication-readiness implementation in `e904fa6` and the strict LLM/TOC
+output-contract line each superseded that checkpoint with their own interim
+candidate pairs. The R2 convergence checkpoint `8f95872` merges both lines
+over the banked R1 head and the two-lane CI split and changes Python source
+again, so it invalidates every earlier report under this policy. Its
+canonical inventory records 2,597 functions with 943 static and 951 runtime
+`rag` bindings, and its full local suite passes 3,376 tests with 7
+platform/optional skips. The current reports above bind that clean source,
+and each passes an independent complete same-platform 9×5 comparison. The
+following reports-and-documentation-only commit freezes the new local
+candidate. No successful hosted replacement run is claimed. A0b remains
+pending until both exact-head hosted cells pass, retain their successful
+evidence bundles, and receive exact-head review.
 
 ## Checking
 
@@ -101,10 +107,11 @@ ancestor of the final head. Integrate a passing candidate with a
 history-preserving merge; a squash or history-rewriting rebase invalidates this
 evidence and requires regeneration from the replacement history.
 
-The replacement gate-only delta after `e904fa6` is limited to the two reviewed
+The replacement gate-only delta after `8f95872` is limited to the two reviewed
 reports and their provenance/status documentation. The repaired workflow,
-line-ending policy, and Python gates are already part of the pre-gate source and
-were exercised while generating and comparing the baselines. Each successful
+line-ending policy, Python gates, and the two-lane CI split are already part
+of the pre-gate source and were exercised while generating and comparing the
+baselines. Each successful
 hosted cell strictly revalidates the generated report, requires its clean source
 identity to equal the exact job head, and builds a verified
 two-file evidence directory containing that report and a content-free
