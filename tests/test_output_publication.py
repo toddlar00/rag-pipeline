@@ -368,7 +368,8 @@ def test_chunk_completion_binds_source_options_model_lock_and_output(
 
     initial = parameters()
     assert initial["max_llm_transport_attempts"] == 3
-    assert initial["chunking_policy_version"] == 23
+    assert initial["chunking_policy_version"] == (
+        rag._chunking_core.CHUNKING_POLICY_VERSION)
     assert initial["classification_prompt_version"] == 2
     assert initial["classification_output_contract"] == {
         "policy_version": 1,
