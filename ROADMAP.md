@@ -78,7 +78,8 @@ with the owner merge decision as its review gate. PRs #66-#71 and #73 closed
 as integrated or superseded. Dependency updates then began under the
 one-domain protocol: the PDF/Docling domain PR raises docling to 2.117.0 and
 docling-core to 2.89.0 with byte-stable regenerated locks and fresh paired
-Phase A0 evidence. The remaining movement is deferred as an ordered backlog
+Phase A0 evidence binding checkpoint `c73a155`, each report passing an
+independent complete same-platform 9×5 comparison. The remaining movement is deferred as an ordered backlog
 of one-domain PRs: Vector stores (onnxruntime 1.28.0), ML/runtime
 (sentence-transformers 5.6.1, tqdm 4.70.0), Service/UI (fastapi 0.141.1,
 gradio 6.22.0, uvicorn 0.52.0), and Test/audit tooling (pip 26.2); the

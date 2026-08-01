@@ -74,11 +74,10 @@ that `Path.home()` remains denied.
 ## A0b publication gate
 
 The replacement gate uses clean pre-gate source
-`8f95872d003ffe52ddc1da3bf506e65b60da09b3` (tree
-`a96e07849170d3e5a31d0b990fc78c1f913426a3`) — the R2 convergence checkpoint
-merging the publication-readiness and strict output-contract lines over the
-banked R1 head and the two-lane CI split — and separate Windows and Linux
-CPython 3.12.13 x86-64 reports. Both were generated under the
+`c73a155cf242aa3eb162a72a1dd9bae25467f2e0` — the one-domain PDF/Docling
+dependency checkpoint over the merged R2 head `471381c`, which itself passed
+both hosted Phase A0 cells at its exact candidate head before merging via
+#76 — and separate Windows and Linux CPython 3.12.13 x86-64 reports. Both were generated under the
 exact `requirements-full.lock`, `requirements-test.lock`, and retained
 `requirements-lock-tools.lock` union after strict hash-locked synchronization
 and dependency-consistency checks: 189 marker-resolved distributions on
@@ -86,7 +85,7 @@ Windows and 187 on Linux. They bind one clean source, the same eight LF and
 `HEAD`-identical dependency/model inputs, and the complete 9×5 scenario
 contract. Each passes an independent complete same-platform comparison. The
 repaired CI matrix, LF policy, source gates, Python 3.10-3.14 compatibility
-normalization, and the two-lane CI split precede `8f95872` and were exercised
+normalization, and the two-lane CI split precede `c73a155` and were exercised
 by generation and comparison. The following gate-only delta is limited to the
 two reports and their provenance/status documentation.
 
@@ -171,19 +170,22 @@ preparation later produced clean source `537f72b` and gate-only refresh
 
 Release-defect source `c1bc042` changed Python and invalidated those reports;
 publication-readiness source `e904fa6` and the strict output-contract line
-each superseded that paired refresh with their own interim candidates, and
-the R2 convergence checkpoint `8f95872` supersedes both in turn. The current
-inventory records 2,597 functions with 943 static and 951 runtime `rag`
-bindings. After strict synchronization and dependency checks for 189 Windows
-and 187 Linux distributions, the Windows replacement report is 50,428 bytes
+each superseded that paired refresh with their own interim candidates; the R2
+convergence checkpoint `8f95872` superseded both, passed its hosted Phase A0
+cells at the exact #76 candidate head, and merged on 2026-08-01. The
+one-domain PDF/Docling dependency checkpoint `c73a155` changes the two
+mapped locks and supersedes that pair in turn. The current inventory records
+2,597 functions with 943 static and 951 runtime `rag` bindings. After strict
+synchronization and dependency checks for 189 Windows
+and 187 Linux distributions, the Windows replacement report is 50,423 bytes
 under CPython 3.12.13 (file SHA-256
-`0a62a585007667086d1a5fefb3978d2e432dcb334b3529ac907707c2906f38cb`;
+`23159eef75a2f06d8333f280db906c041f8dc1d1bee86dad95f2778fae992eba`;
 embedded report SHA-256
-`8ceb9ebc5a25fd7afbb8e5cff82abb08f31d4f54182fe6a0e557033c5c41c359`).
-The Linux report is 49,815 bytes under CPython 3.12.13 (file SHA-256
-`6db38cc1a3433169ddfd3985b24e4057b229eb6dd37d01768f38acdd11bb64de`;
+`95947212797975dbde08d472a033f925bdef028b7282ff780b00961b6b354a20`).
+The Linux report is 49,824 bytes under CPython 3.12.13 (file SHA-256
+`365f68879e242a42a747fd70e842fc9b94ad0715392142b5bf40e6c523812c47`;
 embedded report SHA-256
-`b3d599e9d55eda8c2e76b59c32eabd05cc0310fdd82aa5339b040c1862a8e0e6`).
+`029363934783100050852c5a10a0dba2c7491d5480408082b7d10b5414948d51`).
 Each current candidate passes an independent complete same-platform 9×5
 comparison. The following reports-and-documentation-only commit freezes the
 new local candidate; publishing its exact commit/tree plus hosted execution,
