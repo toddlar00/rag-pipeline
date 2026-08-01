@@ -3,11 +3,11 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 > **Branch-status note (2026-08-01):** The R1 cumulative candidate (#44)
-> merged to `main` on 2026-08-01. This checkout is the R2 convergence
-> candidate combining the publication-readiness and strict output-contract
-> lines; it is not yet merged. Treat “Integration candidate (draft)” and
-> “Integrated” as different states, and verify the current branch and PR
-> base before assuming a feature is present on `main`.
+> and the R2 convergence candidate (#76) both merged to `main` on
+> 2026-08-01. Dependency updates proceed as ordered one-domain PRs under
+> the dependency-compatibility-domains policy. Treat “Integration candidate
+> (draft)” and “Integrated” as different states, and verify the current
+> branch and PR base before assuming a feature is present on `main`.
 
 ## What this is
 

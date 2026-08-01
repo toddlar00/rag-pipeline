@@ -8,10 +8,10 @@ fresh-process repetitions.
 ## Provenance
 
 Both current reports were generated from the clean pre-gate source checkpoint
-`8f95872d003ffe52ddc1da3bf506e65b60da09b3` (tree
-`a96e07849170d3e5a31d0b990fc78c1f913426a3`), the R2 convergence checkpoint
-that merges the publication-readiness and strict output-contract lines over
-the banked R1 head and the two-lane CI split. The executing environments were
+`c73a155cf242aa3eb162a72a1dd9bae25467f2e0`, the PDF/Docling one-domain
+dependency checkpoint over the merged R2 head: it raises the tested floors to
+docling 2.117.0 and docling-core 2.89.0 and regenerates the two mapped
+universal locks byte-stably. The executing environments were
 synchronized with repository-pinned uv 0.11.31 against the exact CPU
 application/test lock union plus its retained bootstrapper:
 
@@ -28,8 +28,8 @@ marker-resolved distributions before generation.
 
 | Platform | Runtime | Report | Bytes | File SHA-256 | Embedded report SHA-256 |
 |---|---:|---|---:|---|---|
-| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 50,428 | `0a62a585007667086d1a5fefb3978d2e432dcb334b3529ac907707c2906f38cb` | `8ceb9ebc5a25fd7afbb8e5cff82abb08f31d4f54182fe6a0e557033c5c41c359` |
-| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 49,815 | `6db38cc1a3433169ddfd3985b24e4057b229eb6dd37d01768f38acdd11bb64de` | `b3d599e9d55eda8c2e76b59c32eabd05cc0310fdd82aa5339b040c1862a8e0e6` |
+| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 50,423 | `23159eef75a2f06d8333f280db906c041f8dc1d1bee86dad95f2778fae992eba` | `95947212797975dbde08d472a033f925bdef028b7282ff780b00961b6b354a20` |
+| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 49,824 | `365f68879e242a42a747fd70e842fc9b94ad0715392142b5bf40e6c523812c47` | `029363934783100050852c5a10a0dba2c7491d5480408082b7d10b5414948d51` |
 
 The reports attest the same source commit, clean-worktree state, tracked-diff
 digest, eight LF and `HEAD`-identical dependency/model-lock inputs, authoritative
@@ -75,12 +75,17 @@ over the banked R1 head and the two-lane CI split and changes Python source
 again, so it invalidates every earlier report under this policy. Its
 canonical inventory records 2,597 functions with 943 static and 951 runtime
 `rag` bindings, and its full local suite passes 3,376 tests with 7
-platform/optional skips. The current reports above bind that clean source,
-and each passes an independent complete same-platform 9×5 comparison. The
-following reports-and-documentation-only commit freezes the new local
-candidate. No successful hosted replacement run is claimed. A0b remains
-pending until both exact-head hosted cells pass, retain their successful
-evidence bundles, and receive exact-head review.
+platform/optional skips. That convergence candidate passed all 27 hosted
+checks — including both hosted Phase A0 cells with retained evidence
+bundles — at its exact head and merged to `main` on 2026-08-01 through
+history-preserving [#76](https://github.com/toddlar00/rag-pipeline/pull/76).
+The one-domain PDF/Docling dependency checkpoint `c73a155` then changed the
+two mapped locks, invalidating that pair under this policy. The current
+reports above bind clean source `c73a155`, whose full local suite also
+passes 3,376 tests with 7 skips, and each passes an independent complete
+same-platform 9×5 comparison. The following reports-and-documentation-only
+commit freezes the new local candidate. No hosted result is claimed for this
+head yet; its hosted cells run on the candidate pull request.
 
 ## Checking
 
@@ -107,7 +112,7 @@ ancestor of the final head. Integrate a passing candidate with a
 history-preserving merge; a squash or history-rewriting rebase invalidates this
 evidence and requires regeneration from the replacement history.
 
-The replacement gate-only delta after `8f95872` is limited to the two reviewed
+The replacement gate-only delta after `c73a155` is limited to the two reviewed
 reports and their provenance/status documentation. The repaired workflow,
 line-ending policy, Python gates, and the two-lane CI split are already part
 of the pre-gate source and were exercised while generating and comparing the
