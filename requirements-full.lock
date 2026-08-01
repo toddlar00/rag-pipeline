@@ -710,13 +710,13 @@ doclang==0.7.3 \
     --hash=sha256:9440c4ca9f7e061a7b8d33bdf15b1029be69a4c13cd8952dd6ce541884e4c685 \
     --hash=sha256:ca50615357e46ebf9597bb9065b9112367103ec24bd539f8ae12649224cf50b0
     # via docling-core
-docling==2.114.0 \
-    --hash=sha256:0e4a3e28730abd7c3c87772b0930c3b7ca691e2cb10c8b2d9c35702810f8b59b \
-    --hash=sha256:b5aa9159b5710ba7bd391c9ded0c7d520f4dfc27d38116e7bcfa382d90f5449a
+docling==2.117.0 \
+    --hash=sha256:48853b979450770a8e2e0c3a0bb6a2a8a22cede593b92083ca672584757ce31d \
+    --hash=sha256:524ed03a8036c8a192ff5d2f2dfa950d33be08f4bec5693d08365eb74ecfbcfa
     # via -r requirements.txt
-docling-core==2.87.1 \
-    --hash=sha256:1cd1748470523322b6314b72c79e8d1c638489fa903b8a1901cae023b14a4f84 \
-    --hash=sha256:a2c19e63519e49f993d93103481934b772db701c80c683900476f898dfac841a
+docling-core==2.89.0 \
+    --hash=sha256:1aafa2fc55a70f1d14565e4371bef1c521aafea48e6cd660147ea64a1cc20bdb \
+    --hash=sha256:b3ecc82070186ad56b21ffd038977c365bd1ea581d054680595b63e633b4284d
     # via
     #   -r requirements.txt
     #   docling-ibm-models
@@ -754,9 +754,9 @@ docling-parse==7.8.1 \
     --hash=sha256:f88e22847d381d4ee045cc2ba8165a9012e52172470845f2062d0c7b54b6cfb8 \
     --hash=sha256:fb1e0136ad7e4812cecf5ed0894d147e7ab9db40d58495cbbce3277f51da88fe
     # via docling-slim
-docling-slim==2.114.0 \
-    --hash=sha256:8cdc84fc98fe86b6a9d548102a468e93284609c27fe5c185c1b13d68b2e6f81d \
-    --hash=sha256:e8c936e627dce030d20d3d09949c1e145dd937d5d8a3614e94e5fe84639a4a02
+docling-slim==2.117.0 \
+    --hash=sha256:7c2b8ce1700b7dcc235b9839d85e83e21d89cbb43b593a3e2fdb4e880e56c483 \
+    --hash=sha256:837877ad2046cd68b6b1bcc42042a77ae4df7620663e0b32fb408bf41a953125
     # via docling
 durationpy==0.10 \
     --hash=sha256:1fa6893409a6e739c9c72334fc65cca1f355dbdd93405d30f726deb5bde42fba \
