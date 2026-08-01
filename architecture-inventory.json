@@ -1037,7 +1037,7 @@
             "target": "_llm_runtime.write_report"
           },
           {
-            "locations_sha256": "0624b8e7d1f5afebeb305d3e2f0d823ece573191307e14c6a3d995bbef4c474c",
+            "locations_sha256": "d4aee9c4cbff68fb4ebe4a4ef5feda4f5aed45ec6f83bd240d1ccf9f5486529d",
             "occurrence_count": 1,
             "operations": [
               "setattr"
@@ -1827,7 +1827,7 @@
             "target": "_atomic_write_json"
           },
           {
-            "locations_sha256": "20e3dbe8c2b55648e1b34603048633ba69e2cf073e3aafb88db3e475d37f7533",
+            "locations_sha256": "b63f8005b8cc7302f0a3f7ee575eb6a1ce9e72e9f997bbac5d0dfc880a0c2ed6",
             "occurrence_count": 2,
             "operations": [
               "setattr"
@@ -2435,7 +2435,7 @@
             "target": "_get_throttle"
           },
           {
-            "locations_sha256": "0041c4bdd74f6681643621292290265f5c49ff42066ad3bfc1c6527082cbc3c5",
+            "locations_sha256": "cdcb547da57426f40f09e3c6fba9ea199d15431d763e6fae36bc51ec372dcbba",
             "occurrence_count": 1,
             "operations": [
               "setattr"
@@ -2795,7 +2795,7 @@
             "target": "_menu_yesno"
           },
           {
-            "locations_sha256": "469b31fccf518cf5727cb27e243968fadb1444128864580a6d497d2ab7300d48",
+            "locations_sha256": "fc6733ddfd07cd02ec0f23cb5822a306d3ea6cc539161864e7b6c73e4bf7a64d",
             "occurrence_count": 4,
             "operations": [
               "setattr"
@@ -4107,7 +4107,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "6f2044e689940466f740e82ea2959e8366def441b2f82658cfc841717e275deb",
+          "locations_sha256": "d4f890a60c99d7fc97014d2794c87031bbd52f1bfa317906b023e3e176c488d2",
           "name": "_CONTENT_LABELS",
           "occurrence_count": 1,
           "paths": [
@@ -4635,7 +4635,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "93971d5c47c4794f947599862794f983150ba747a3c5979c84e569a12b41b37e",
+          "locations_sha256": "a5602ca83590f8fd9835a41c702c24c75fbcc802851b70fcdc682ed4e64c30d5",
           "name": "_TOC_VERIFICATION_UNICODE_DATA_VERSION",
           "occurrence_count": 3,
           "paths": [
@@ -4975,7 +4975,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "331bda819189fb710889409a24480966cf82d1d04d83df422d84ee375dbf3cc5",
+          "locations_sha256": "e988dbfbd6f034573fafe8ac6fa818ca7e2e7480d85e6b9b29bb06a509b0606e",
           "name": "_artifact_completion_path",
           "occurrence_count": 20,
           "paths": [
@@ -5007,7 +5007,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "a7e8133746f0da8a8b1e055d0a55c9fc56e0c3d1eec32a5ceb437401b5bb82bd",
+          "locations_sha256": "66c2d42d5b7a67096244178dee5b54d6a64b89c37be7f1c18ec69c4e6331714c",
           "name": "_artifact_parameters_sha256",
           "occurrence_count": 9,
           "paths": [
@@ -5075,7 +5075,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "362c9932456b0631de6a1a3922bc44725fbc41020c3ccca05b1b22458a691247",
+          "locations_sha256": "fdb80834b1a68be4ee179bdee7ed4fc3bd9892add1ea21b9123e7230ad0d0c1b",
           "name": "_assemble_markdown",
           "occurrence_count": 33,
           "paths": [
@@ -5143,7 +5143,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "82af96e8bcb15ee709c7e164fa1a3cabcf10b5c6aca372ad1c3e8fffcaa3b17f",
+          "locations_sha256": "a242dbc165862372177d5eb2970ba43a115bca70dc1d4c8fa1187c8b8a9f0775",
           "name": "_atomic_write_json",
           "occurrence_count": 29,
           "paths": [
@@ -5219,7 +5219,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "712e4ba3c6aed298d65cc589a18de9b231e06e02f5d618a846860156cdcdb7b7",
+          "locations_sha256": "718396869513820ea3670f6a291b75f9aca22d0a203698e6d3867cd9ec1c1af4",
           "name": "_atomic_write_text",
           "occurrence_count": 9,
           "paths": [
@@ -6079,15 +6079,20 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "0ce09cab64157de9c96542fd7ba6fa0389a2fe2adab11550f58a35aa8200d41d",
+          "locations_sha256": "5a7f758f85b6bffa40b7ae9b0d2e4ba0c80ab8965eb0aa4cc9ff21c934b44e27",
           "name": "_chunking_core",
-          "occurrence_count": 9,
+          "occurrence_count": 10,
           "paths": [
+            "_chunking_core.CHUNKING_POLICY_VERSION",
             "_chunking_core._accepted_spaced_url_transactions",
             "_chunking_core.clean_heading_text",
             "_chunking_core.has_malformed_url_spacing"
           ],
           "source_counts": [
+            {
+              "count": 1,
+              "path": "tests/test_output_publication.py"
+            },
             {
               "count": 9,
               "path": "tests/test_scaffold_structure.py"
@@ -6101,7 +6106,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "72ae1db5b50adafda6df044ea5fe7cf38df9b345e3f9004959be3099b60de000",
+          "locations_sha256": "ca214eeaeda0e2de2fb5185dd924415c24b35b7ebab60da03bbd54032bb59006",
           "name": "_chunks_complete",
           "occurrence_count": 21,
           "paths": [
@@ -6505,7 +6510,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "ab2799ccba8d63689e1a4c652d7047c4c1b72ea24dd0c93a4a8a01ea68c21f5d",
+          "locations_sha256": "58170a01360d0c7694367de30cab3632aa9ad7a15cbcf86b3f1721d9268e7541",
           "name": "_document_profiles",
           "occurrence_count": 13,
           "paths": [
@@ -7028,7 +7033,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "53311f9acc9ef28f936d04c31ec78f99fbd05315910823bc93fd82ee7936d5c0",
+          "locations_sha256": "fa6edefbf4a46a2743d245739b07cdb42a71ea98b69a3a6c630fbe55024ba76f",
           "name": "_identify_book_sections",
           "occurrence_count": 14,
           "paths": [
@@ -7509,7 +7514,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "a994442cd3ec260ac4330db8cde3d8d273a7d39957d641cfcad83f06f12dbddc",
+          "locations_sha256": "7c427bbc5650a23af550024fae53c1c9a8d12af54cdb796bd455adff9989126a",
           "name": "_llm_output_contracts",
           "occurrence_count": 10,
           "paths": [
@@ -7578,7 +7583,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "27481027edb43dec8537ef1f77e4dae938b81ab2500aca1b07491f005f2e4d7b",
+          "locations_sha256": "55b72d44259a7878073fff8a9c4f47d11140bd92041e940ed1f0720817ade10a",
           "name": "_llm_runtime",
           "occurrence_count": 8,
           "paths": [
@@ -7697,7 +7702,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "2af3ff5777e2e1e6c64ec2d221c1e09a52b326f2c40f306fa3965a83fc747ed5",
+          "locations_sha256": "4907daa0de103bab5197dae28ef23be4d510e2e700708b2239b0f18cfac419e4",
           "name": "_load_index_records_strict",
           "occurrence_count": 9,
           "paths": [
@@ -7721,7 +7726,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "8f4bf5db9f89f43152057b6496cb195ba4b2bcb4e38c6c08a6755628b9e2bc97",
+          "locations_sha256": "e894c429f86c48ebb12518b398ab71323bbc66a7d100635405a799d779e816ef",
           "name": "_load_index_snapshot_strict",
           "occurrence_count": 2,
           "paths": [
@@ -7885,7 +7890,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "b51ee3b6aef93c362b0ffe9a96635e2d48794d22bce9f0cc724080ffbaad7fda",
+          "locations_sha256": "aa98591f1fed3546a15907d57f5e47e77b9518b3585137ead2540d73c00db8de",
           "name": "_markdown_export_parameters",
           "occurrence_count": 6,
           "paths": [
@@ -7909,7 +7914,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "56bcb0b0beba38dd14dcee7ccfbbf2898ffb41b343c9896fa33eded0ef41af7b",
+          "locations_sha256": "1b8df8281febedd4938e5484d8b1d4ee610815f8223d1c08bc5437462f62fdc3",
           "name": "_markdown_validation",
           "occurrence_count": 4,
           "paths": [
@@ -8394,7 +8399,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "ad3f0bbb23fe5a91da6aff2ef140b54915e9eb7cdf559024dc3aa0221242ed5a",
+          "locations_sha256": "8ffbd806cefed314bc35e1b609fac3f626525ac70615936cbb8d14568406e11a",
           "name": "_owned_chapter_filename",
           "occurrence_count": 1,
           "paths": [
@@ -8882,7 +8887,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "dea3fe49351bb439fb1349c7de3751ae3f3b841d6fe098e78a4113e4be1ee81b",
+          "locations_sha256": "87d4c690561afb59f7131c53981a8bddfe14ba9c1c45f956a250c137696a2f9b",
           "name": "_publish_corpus_quality_report",
           "occurrence_count": 14,
           "paths": [
@@ -9066,7 +9071,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "5e29fc74ce2a20d228d20b92b60b444c49134e4128760dbe43284088a951bb5d",
+          "locations_sha256": "4a5b74c3b76f8f4a7d866bccfe22db8475d1aabc9da1376ae67365fe2a87d784",
           "name": "_quality_core",
           "occurrence_count": 20,
           "paths": [
@@ -9119,7 +9124,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "d314dd1ce549a027061fdc972c25a9bbfc6d6f374256a21756b00c2efd5420ed",
+          "locations_sha256": "9026550ab0d578111ce18b70774d3693a032df5c0cacc2877620479ba8a74a04",
           "name": "_quality_report_complete",
           "occurrence_count": 6,
           "paths": [
@@ -9227,7 +9232,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "b23d6a7deb0665995bd17d90d36848ed838cead87a15d5122c91dfd0425351ef",
+          "locations_sha256": "10d39a340004c142b30b575e2954be4a9421db2d5e6938b05f43bababeb8a51d",
           "name": "_raptor_output_complete",
           "occurrence_count": 2,
           "paths": [
@@ -9247,7 +9252,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "4df12d955c9a696f2821fbb0b91825a8bff959e5bd2ec2266d60cc9ad5465078",
+          "locations_sha256": "c4a59c6b4405540c01517191f0ef8c646e299900dcc3ce6bf8ea417a6868b64d",
           "name": "_raptor_parameters",
           "occurrence_count": 3,
           "paths": [
@@ -10212,7 +10217,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "3b61f6e8a910bf34932ccff0a2695ffc51434c0a35a0cac513f4a79605af895f",
+          "locations_sha256": "7b8bb951a07d744e8cf378c33ec6be6d9b55e73d148993021f422665a5148840",
           "name": "_run_cli_with_deadline",
           "occurrence_count": 19,
           "paths": [
@@ -10621,7 +10626,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "24ccabcff4ddb0de646c0fa5acfa927adca00cf3f2d599c05fe319a0fee9c655",
+          "locations_sha256": "0ca6b2c88274e6b52151982acce180fdd3a0e7285857cd123935aa1498a0ed77",
           "name": "_source_oracle_registry_path",
           "occurrence_count": 6,
           "paths": [
@@ -10689,7 +10694,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "da7f963af6fb7f0c92a87534f8b5a9bf58475cd719ef4fcda8ddb404cba4fa2a",
+          "locations_sha256": "ade879194d6eff25732ec8373c0cff11f2e1e6cccd4d6772943df88d20014306",
           "name": "_split_export_complete",
           "occurrence_count": 3,
           "paths": [
@@ -11003,7 +11008,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "222d98d6255897d7e922a23713a60791f82f55104c106b3b3243b1f3f80ca5bb",
+          "locations_sha256": "63f1a7ba8e9d004bc2f8ab63022b9eeaa716c99778004a4aaffdc967ac859fbe",
           "name": "_unified_export_complete",
           "occurrence_count": 6,
           "paths": [
