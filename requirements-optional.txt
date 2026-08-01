@@ -9,7 +9,7 @@
 qdrant-client>=1.17,<2
 
 # LLM classification + contextual retrieval
-google-genai>=1.68,<2      # Gemini fallback; per-request timeout/retry controls
+google-genai>=2.14.0,<3      # Gemini fallback; per-request timeout/retry controls
 
 # Web UI
 gradio>=6.0,<7
