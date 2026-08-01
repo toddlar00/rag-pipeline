@@ -1,7 +1,10 @@
 # Evaluation input-contract dependency boundary
 
-- **Status:** Implementation included in cumulative draft PR #44; not merged or
-  human-reviewed, with exact replacement-head review and integration pending
+- **Status:** Implementation merged to `main` on 2026-08-01 through the
+  history-preserving integration of cumulative
+  [PR #44](https://github.com/toddlar00/rag-pipeline/pull/44); the all-green
+  hosted run at exact head `ed2995e` and the owner merge decision satisfied
+  replacement-head validation and review
 - **Decision date:** 2026-07-24
 - **Milestones:** R7 import-DAG gate and R8a/R8b evaluation inversion
 
@@ -175,6 +178,6 @@ still invokes it. R8c-5 then separates the structural HTTP adapter from its
 stable service facade and supplies a lazy one-generation outer root for the
 production service role. Coverage ratchets, typing, pipeline-facade extraction,
 and CLI/UI root convergence remain planned; the broader architecture inventory
-now exists as the minimum R7 characterization gate. This implementation is
-included in cumulative draft PR #44 but has not been human-reviewed, merged,
-tagged, or released.
+now exists as the minimum R7 characterization gate. This implementation
+merged to `main` on 2026-08-01 through the history-preserving integration of
+cumulative PR #44; it has not been tagged or released.

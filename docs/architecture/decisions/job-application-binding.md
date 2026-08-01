@@ -1,10 +1,12 @@
 # Job-application binding and manager-shell isolation
 
-- **Status:** Accepted; implementation included in cumulative draft PR #44
+- **Status:** Accepted; implementation merged to `main` via cumulative
+  [PR #44](https://github.com/toddlar00/rag-pipeline/pull/44)
 - **Decision date:** 2026-07-24
 - **Milestone:** R8c-4 application-shell dependency inversion
-- **Integration state:** Not merged or human-reviewed; exact replacement-head
-  review and integration remain pending. Consult
+- **Integration state:** Merged to `main` on 2026-08-01 through the
+  history-preserving integration of PR #44, after its all-green hosted run at
+  exact head `ed2995e` and the owner merge decision. Consult
   [ROADMAP.md](../../../ROADMAP.md) for current validation and merge state
 
 ## Context

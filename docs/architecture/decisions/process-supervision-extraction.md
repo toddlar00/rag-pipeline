@@ -1,10 +1,12 @@
 # Process-supervision extraction
 
-- **Status:** Accepted; implemented in draft PR
+- **Status:** Accepted; merged to `main` on 2026-08-01 through the
+  history-preserving integration of
+  [#44](https://github.com/toddlar00/rag-pipeline/pull/44)
 - **Decision date:** 2026-07-22
 - **Implementation:** [PR #33](https://github.com/toddlar00/rag-pipeline/pull/33)
-- **Integration state:** Included in the cumulative draft stack; consult
-  [ROADMAP.md](../../../ROADMAP.md) for current merge status
+- **Integration state:** Integrated; consult
+  [ROADMAP.md](../../../ROADMAP.md) for current status
 
 ## Context
 

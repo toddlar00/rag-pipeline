@@ -2,9 +2,11 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> **Branch-status note (2026-07-24):** This checkout includes the unmerged
-> draft milestone stack described in `ROADMAP.md`. Treat “Implemented (draft)”
-> and “Integrated” as different states, and verify the current branch and PR
+> **Branch-status note (2026-08-01):** The R1 cumulative candidate (#44)
+> merged to `main` on 2026-08-01. This checkout is the R2 convergence
+> candidate combining the publication-readiness and strict output-contract
+> lines; it is not yet merged. Treat “Integration candidate (draft)” and
+> “Integrated” as different states, and verify the current branch and PR
 > base before assuming a feature is present on `main`.
 
 ## What this is

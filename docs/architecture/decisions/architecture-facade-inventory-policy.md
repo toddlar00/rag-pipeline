@@ -1,8 +1,11 @@
 # Architecture and Facade Inventory Policy
 
-- **Status:** Implementation included in cumulative draft PR #44; replacement
-  compatibility refresh local and independently red-team-audited; not merged
-  or human-reviewed, with exact replacement-head review pending
+- **Status:** Implementation merged to `main` on 2026-08-01 through the
+  history-preserving integration of cumulative
+  [PR #44](https://github.com/toddlar00/rag-pipeline/pull/44); the replacement
+  compatibility refresh was independently red-team-audited, and the all-green
+  hosted run at exact head `ed2995e` plus the owner merge decision satisfied
+  replacement-head validation and review
 - **Milestones:** Minimum R7 inventory prerequisite for R8 ownership changes
 - **Schema:** `tracked-python-ast-v3`
 
