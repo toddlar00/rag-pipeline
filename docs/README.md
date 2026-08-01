@@ -55,6 +55,19 @@ material. When documents disagree, use the authority order below.
 - [Dependency compatibility domains](architecture/decisions/dependency-compatibility-domains.md)
   — exact non-overlapping upgrade groups, manifest coverage, lock refresh and
   domain-specific qualification before dependency changes.
+- [LLM output contracts](architecture/decisions/llm-output-contracts.md)
+  — hostile generated-text validation, classification prompt framing,
+  cache/single-flight enforcement, the owner-pending semantic-rejection
+  fallback rule, and content-free receipts.
+- [TOC hierarchy output contract](architecture/decisions/toc-hierarchy-output-contract.md)
+  — proposed exact hierarchy-array validation, untrusted TOC prompt framing,
+  atomic multi-batch fallback, and opt-in chunk provenance.
+- [TOC layout output contract](architecture/decisions/toc-layout-output-contract.md)
+  — proposed exact layout-hint validation, bounded source framing,
+  content-free fallback, and conditional completion identity.
+- [TOC page-verification output contract](architecture/decisions/toc-verification-output-contract.md)
+  — proposed exact Boolean verification authority, bounded page-evidence
+  framing, explicit inconclusive accounting, and content-free diagnostics.
 - [Architecture and facade inventory policy](architecture/decisions/architecture-facade-inventory-policy.md)
   — schema-v3 static graph, facade/mutation characterization, normalized
   runtime contract, and reviewed baseline refreshes.
@@ -104,16 +117,16 @@ drive-relative path `C:escape.py`; it did not pass A0b. Replacement source
 3.10-3.14 runtime-contract differences without weakening the probe's home/tilde
 denial. Gate-only `ed2995e` froze those candidates; R2 source `537f72b` and
 gate-only refresh `b813aa7` followed. Source-changing defect corrections in
-`c1bc042` invalidated both earlier report pairs, and the later publication-
-readiness implementation superseded that refresh in turn. Fresh CPython 3.12
-x86-64 Windows/Linux candidates now bind clean source `e904fa6`, the same eight
-LF/`HEAD`-identical inputs, and the complete 9×5 contract. Both matching local
-comparisons independently pass. The following reports-and-documentation-only
-commit freezes the current local candidate; A0b still requires publishing its
-exact commit/tree, passing hosted comparisons on both operating systems,
-retaining successful evidence artifacts, and exact-head review. None of those
-hosted or review gates is implied by A0a, the failed first attempt, or a
-local-only result.
+`c1bc042` invalidated both earlier report pairs. The publication-readiness
+implementation (`e904fa6`) and the strict LLM/TOC output-contract line each
+froze their own later candidate pairs, and merging both lines into the R2
+convergence candidate invalidates those pairs in turn. Fresh paired CPython
+3.12 x86-64 Windows/Linux reports must bind the merged clean pre-gate
+checkpoint and are recorded in the following reports-and-documentation-only
+commit. A0b still requires publishing its exact commit/tree, passing hosted
+comparisons on both operating systems, retaining successful evidence
+artifacts, and exact-head review. None of those hosted or review gates is
+implied by A0a, the failed first attempt, or a local-only result.
 
 Ignored `output/` paths are not durable evidence in a fresh clone. A roadmap or
 PR claim that depends on private output must be backed by a tracked content-free

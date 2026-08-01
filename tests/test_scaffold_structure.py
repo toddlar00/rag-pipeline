@@ -901,6 +901,83 @@ def test_llm_scaffold_cannot_invent_profile_source_evidence(
             ollama_url="http://127.0.0.1:11434")
 
 
+def test_rejected_llm_hierarchy_uses_deterministic_scaffold(monkeypatch):
+    profile = "roman-parts-book-v1"
+    doc = json.loads((_PROFILE_FIXTURES / "publisher_beta_roman_parts.json")
+                     .read_text(encoding="utf-8"))
+    sections = rag._identify_book_sections(doc, structure_profile=profile)
+
+    class ImmediateTeam:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def run(self, *, expert_fn, **_kwargs):
+            return {"result": expert_fn(), "flagged": []}
+
+    monkeypatch.setattr(rag, "_AgentTeam", ImmediateTeam)
+    monkeypatch.setattr(rag, "_calculate_page_delta", lambda _doc: 0)
+    monkeypatch.setattr(rag, "_analyze_toc_layout", lambda *_a, **_k: {})
+    monkeypatch.setattr(rag, "_llm_parse_scaffold", lambda *_a, **_k: [])
+
+    scaffold = rag._build_scaffold(
+        doc, sections, structure_profile=profile, use_llm=True,
+        ollama_url="http://127.0.0.1:11434")
+
+    assert [(entry["level"], entry["title"], entry["page"])
+            for entry in scaffold] == [
+        (1, "Part IV — Institutions and Practice", 10),
+        (2, "I. Institutions", 11),
+    ]
+
+
+def test_valid_layout_analysis_is_only_forwarded_as_hierarchy_hints(
+        monkeypatch):
+    profile = "roman-parts-book-v1"
+    doc = json.loads((_PROFILE_FIXTURES / "publisher_beta_roman_parts.json")
+                     .read_text(encoding="utf-8"))
+    sections = rag._identify_book_sections(doc, structure_profile=profile)
+    layout = {
+        "page_number_format": "trailing Arabic number",
+        "division_pattern": "Part followed by Roman numeral",
+        "division_examples": ["Part IV"],
+        "section_markers": ["I."],
+        "subsection_markers": [],
+        "named_item_format": "",
+        "hierarchy_order": ["Part", "Section"],
+        "hierarchy_levels": {
+            "1": "Part", "2": "Section", "3": "", "4": "", "5": "",
+        },
+    }
+    observed = {}
+
+    class ImmediateTeam:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def run(self, *, expert_fn, **_kwargs):
+            return {"result": expert_fn(), "flagged": []}
+
+    def parse_scaffold(*_args, **kwargs):
+        observed["layout_schema"] = kwargs["layout_schema"]
+        return []
+
+    monkeypatch.setattr(rag, "_AgentTeam", ImmediateTeam)
+    monkeypatch.setattr(rag, "_calculate_page_delta", lambda _doc: 0)
+    monkeypatch.setattr(
+        rag, "_analyze_toc_layout", lambda *_args, **_kwargs: layout)
+    monkeypatch.setattr(rag, "_llm_parse_scaffold", parse_scaffold)
+
+    scaffold = rag._build_scaffold(
+        doc, sections, structure_profile=profile, use_llm=True,
+        ollama_url="http://127.0.0.1:11434")
+
+    assert observed["layout_schema"] is layout
+    assert [(entry["level"], entry["title"]) for entry in scaffold] == [
+        (1, "Part IV — Institutions and Practice"),
+        (2, "I. Institutions"),
+    ]
+
+
 def test_llm_scaffold_keeps_every_deterministic_primary_title(monkeypatch):
     doc = {
         "texts": [],

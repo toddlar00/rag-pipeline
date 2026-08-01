@@ -7,6 +7,7 @@ import pytest
 
 import job_runtime
 import retention
+from llm_runtime import LLMRequest, LLMRuntime, LLMRuntimeConfig, ProviderSpec
 
 
 DAY = 86_400.0
@@ -411,6 +412,26 @@ def test_cache_prune_applies_ttl_only_to_valid_owned_records(tmp_path):
     assert unrelated.is_file()
 
 
+def test_cache_prune_accepts_current_runtime_cache_schema(tmp_path):
+    cache_root = tmp_path / "cache"
+    runtime = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="readwrite", cache_dir=cache_root))
+    runtime.execute(
+        LLMRequest(prompt="private prompt", operation="test.retention"),
+        [ProviderSpec(
+            name="test", model="model", endpoint_id="test-endpoint",
+            invoke=lambda _request: "private response")],
+    )
+    record = next(cache_root.rglob("*.json"))
+    now = 2_000_000_000.0
+    os.utime(record, (now - 10 * DAY, now - 10 * DAY))
+
+    plan = retention.plan_llm_cache_prune(
+        cache_root, older_than_days=5, now=now)
+
+    assert [candidate.path for candidate in plan.candidates] == [record]
+
+
 def test_cache_prune_rejects_an_invalid_matching_ownership_record(tmp_path):
     cache_root = tmp_path / "cache"
     now = 2_000_000_000.0
@@ -427,6 +448,22 @@ def test_cache_prune_rejects_an_invalid_matching_ownership_record(tmp_path):
             cache_root, older_than_days=5, now=now)
 
     assert record.is_file()
+
+
+def test_cache_prune_rejects_boolean_schema_version(tmp_path):
+    cache_root = tmp_path / "cache"
+    now = 2_000_000_000.0
+    key = "af" + "4" * 62
+    record = _write_cache_record(
+        cache_root, key, timestamp=now - 10 * DAY)
+    payload = json.loads(record.read_text(encoding="utf-8"))
+    payload["schema_version"] = True
+    record.write_text(json.dumps(payload), encoding="utf-8")
+    os.utime(record, (now - 10 * DAY, now - 10 * DAY))
+
+    with pytest.raises(retention.RetentionError, match="ownership"):
+        retention.plan_llm_cache_prune(
+            cache_root, older_than_days=5, now=now)
 
 
 def test_cache_change_after_planning_fails_closed(tmp_path):

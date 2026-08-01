@@ -177,6 +177,23 @@ responses into the typed, provider-neutral contracts in `llm_runtime.py`.
 Gemini remains lazily imported, while `rag.py` retains provider selection,
 runtime composition, mutable caches/throttles, and the compatibility facades.
 
+`llm_output_contracts.py` is the dependency-light authority boundary for model
+text after a provider envelope has been accepted. The classification contract
+accepts only one bounded ASCII chunk-classification label. The current review
+candidate adds the exact `toc-hierarchy-v1` array shared by `toc.scaffold` and
+`toc.parse`, plus the exact `toc-layout-v1` object used only as untrusted hints
+for scaffold parsing, and the exact Boolean-only `toc-verification-v1` object
+used for page spot-checks. Contracted live, shared, and cached results are
+validated before publication, and only content-free status and diagnostic
+receipts describe rejections. See the
+[LLM output-contract ADR](docs/architecture/decisions/llm-output-contracts.md),
+the proposed
+[TOC hierarchy output-contract ADR](docs/architecture/decisions/toc-hierarchy-output-contract.md),
+and the proposed
+[TOC layout output-contract ADR](docs/architecture/decisions/toc-layout-output-contract.md),
+and the proposed
+[TOC page-verification output-contract ADR](docs/architecture/decisions/toc-verification-output-contract.md).
+
 `endpoint_policy.py` is the standard-library-only trust boundary for custom
 LLM URLs. It canonicalizes approved targets before credential lookup, cache
 lookup, job persistence, artifact binding, or transport; classifies official
@@ -736,8 +753,9 @@ batch, physically verified record counts, exact physical mutation calls, and
 bounded-queue pressure. A failed index stage instead records separately named
 content-free attempted delete/create/upsert/queue counts with
 `committed=false`; it does not mislabel partial physical work as a committed
-outcome. LLM observations aggregate calls, attempts, retries, latency, and
-exact/estimated tokens.
+outcome. LLM observations aggregate calls, attempts, retries, latency,
+exact/estimated tokens, and output-contract acceptance, rejection,
+not-evaluated, and deterministic-fallback counts.
 
 Each invocation replaces the supplied run-event/report files with its current
 run. Run and LLM event/report outputs must resolve to pairwise distinct files;
@@ -1063,9 +1081,19 @@ parsing/review (`--llm-scaffold`).
 
 **Provider chain**: configured OpenAI-compatible cloud API -> Ollama (local) ->
 Gemini (API) -> deterministic fallback where the feature supports one. A cloud
-provider is skipped when it has no key; a failed or empty response falls through
-to the next provider. Features without a deterministic fallback return no LLM
-result after all configured providers fail.
+provider is skipped when it has no key; transport failures and empty responses
+retain the ordered provider fallback. Features without a deterministic fallback
+return no LLM result after all configured providers fail. Under the current
+output-contract proposal, a non-empty classification, TOC-layout,
+TOC-hierarchy, or TOC-verification response that violates its exact contract
+does not delegate authority to a later provider. In best-effort mode,
+classification preserves the deterministic content type, `toc.layout` omits
+generated layout hints while hierarchy generation may continue, a rejected
+hierarchy preserves the deterministic TOC path, and rejected `toc.verify`
+output withholds verification credit and is counted as inconclusive. Strict
+mode raises a structured execution error.
+Stopping the provider chain on semantic rejection is still pending owner
+approval before merge.
 
 ### Reproducible LLM execution
 
@@ -1106,16 +1134,26 @@ an explicit `cache_mode`; changing only the security profile does not rewrite
 an already configured runtime. A cache key covers the exact prompt digest,
 operation and prompt
 versions, generation settings, timeout, fallback policy, ordered
-provider/model/endpoint identities, and opaque trust/tenant namespace.
+provider/model/endpoint identities, opaque trust/tenant namespace, and any
+versioned output-contract and deterministic-fallback identities.
 Prompts, API keys, raw endpoints, and raw namespace labels are not stored in the
 key or record: reviewed official targets use a versioned canonical identity,
 while custom/rejected targets and namespaces use opaque SHA-256 identities.
-Enabled endpoints are validated before cache lookup. Only non-empty successful
-responses are cached, and entries use unkeyed integrity hashes plus atomic
-replacement so truncated, malformed, hash-inconsistent, or ambiguous legacy
+Enabled endpoints are validated before cache lookup. Only successful non-empty
+text is cached; contracted text must additionally be accepted and canonical.
+Contracted cache hits and
+same-key in-flight results are revalidated before use. Entries use unkeyed
+integrity hashes plus atomic replacement so truncated, malformed,
+hash-inconsistent, noncanonical, contract-incompatible, or ambiguous legacy
 records fail closed and are repaired only by a later explicitly cache-enabled
 successful call. This detects damage; it is not cryptographic protection from
 a trusted local writer.
+
+LLM events and reports never retain rejected response text or validator
+exceptions. They use bounded contract/fallback IDs, the status `accepted`,
+`rejected`, or `not_evaluated`, stable diagnostic codes, and aggregate fallback
+counts. A budget-exhausted request is not labeled as a deterministic fallback
+because budget exhaustion is always raised to the caller.
 
 The cache itself contains successful response text in plaintext. Treat its
 directory as sensitive when textbook excerpts, client facts, or other private
@@ -1615,7 +1653,7 @@ deterministic and make no LLM calls unless an LLM feature flag is supplied.
 
 | Feature | Flag / Command | What it does |
 |---------|---------------|--------------|
-| Content classification | `--llm-classify` | Replaces regex type detection with LLM inference per chunk |
+| Content classification | `--llm-classify` | Accepts one exact bounded label per chunk; invalid model text preserves the deterministic type in best-effort mode |
 | Contextual retrieval | `--contextualize` | Generates 1-2 sentence context prefix per chunk (Anthropic pattern) |
 | Neighbor assembly | `query --context-window N` | Adds manifest-bound adjacent evidence after ranking while preserving independent citations |
 | Heading reconstruction | `--reconstruct-headings` | Infers full section paths for bare headings ("B", "III") |
@@ -1625,7 +1663,7 @@ deterministic and make no LLM calls unless an LLM feature flag is supplied.
 | Exam questions | `generate-questions` command | Issue-spotters, doctrinal, and policy questions |
 | Flashcard export | `export --format flashcards` | Anki-compatible Q&A pairs |
 | RAPTOR summaries | `raptor` command | 3-level recursive summary tree |
-| TOC scaffold review | `--llm-scaffold` | Adds LLM layout analysis, hierarchy parsing, and validation to deterministic TOC parsing |
+| TOC scaffold review | `--llm-scaffold` | Adds exact layout-hint, hierarchy-array, and Boolean page-verification contracts; rejected layout omits hints, any failed hierarchy batch discards the full LLM hierarchy, and unavailable/rejected model replies remain explicitly inconclusive |
 
 ### Vector Database (`--db-backend`)
 
@@ -1862,9 +1900,24 @@ The pipeline supports two TOC extraction methods:
 
 1. **Column-position parsing**: Scans first 25 pages for TOC tables, maps column
    positions to heading depth (col 0 = chapter, col 1 = section, col 2 = sub).
-2. **LLM-assisted parsing** (opt-in with `--llm-scaffold`): Sends TOC text to the
-   configured provider in ~100-line batches for structured extraction and
-   validation of levels, titles, and page numbers.
+2. **LLM-assisted parsing** (opt-in with `--llm-scaffold`): Layout analysis
+   receives at most 120 bounded, JSON-framed lines. The proposed
+   `toc-layout-v1` contract accepts one exact eight-field hint object; a missing
+   or invalid response omits every generated layout hint. The hierarchy step
+   sends bounded lines in 80-line scaffold batches (the shared parser supports
+   100-line batches). The proposed `toc-hierarchy-v1` contract accepts only
+   1-100 exact `{level, title, page}` objects per response. If any hierarchy
+   batch is missing or invalid, the whole LLM hierarchy is discarded and
+   deterministic parsing retains authority. Page spot-checks frame the expected
+   entry and first 1,200 captured page characters as one bounded untrusted JSON
+   value. The proposed `toc-verification-v1` response accepts only
+   `{"verified": true|false}`; missing or rejected best-effort replies withhold
+   credit and are counted as inconclusive, while failures and logs contain only
+   fixed codes and aggregate counts. Exact shape validation cannot detect
+   schema-valid but semantically wrong layout, hierarchy, or verification
+   values; inspect enriched structure before relying on it. Agent-team prompts
+   remain permissive. Changes to those remaining operations require a full
+   enriched-artifact rebuild and reindex.
 
 This produces section paths like `Chapter 3 > B. Federalism > 2. Specific Jurisdiction`
 instead of flat `B` or `III`. In testing, TOC detection raised multi-level
@@ -2770,6 +2823,14 @@ rebuild with `--full-reindex` if needed.
   decoded-byte-bounded before JSON parsing. Fixed diagnostics never include the
   body. The Google Gemini SDK boundary is separately tracked and is not claimed
   to inherit the Requests reader's guarantees.
+- Operation-specific output contracts treat accepted provider text, cache hits,
+  and shared in-flight results as hostile until validation. The proposed TOC
+  layout, hierarchy, and page-verification contracts reject wrappers, coercive
+  or extra fields, unsafe generated strings, and partial authority without
+  recording rejected text or logging generated values. Verification accepts
+  only an exact Boolean field and labels unavailable/rejected model replies
+  inconclusive. Exact shape does not establish semantic correctness;
+  `agent_team.*` outputs remain outside these contracts.
 - API keys can come from environment variables or the interactive menu's hidden
   prompt; menu-entered keys are redacted from the displayed command, removed
   from child process arguments, scoped to the child environment, and not
@@ -2802,6 +2863,7 @@ quality_core.py         # Stdlib-only corpus quality reports and bindings
 index_state.py          # Stdlib-only index manifests and compatibility policy
 vector_lifecycle.py     # Stdlib-only guarded vector mutation and commit policy
 llm_adapters.py         # Typed LLM provider transport adapters
+llm_output_contracts.py # Bounded exact contracts for generated model text
 llm_runtime.py          # Reproducible caching, fallback, budgets, and reports
 provider_transport.py   # Bounded streaming provider-response reader
 endpoint_policy.py      # Canonical cloud/loopback endpoint trust boundary

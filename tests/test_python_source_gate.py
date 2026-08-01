@@ -96,6 +96,7 @@ def test_repository_gate_includes_modules_omitted_by_the_old_ci_list():
         "evaluation_queries.py",
         "evaluation_release.py",
         "evaluation_review.py",
+        "llm_output_contracts.py",
         "operational_drills.py",
         "operational_metrics.py",
         "quality_core.py",

@@ -368,9 +368,185 @@ def test_chunk_completion_binds_source_options_model_lock_and_output(
 
     initial = parameters()
     assert initial["max_llm_transport_attempts"] == 3
+    assert initial["chunking_policy_version"] == 23
+    assert initial["classification_prompt_version"] == 2
+    assert initial["classification_output_contract"] == {
+        "policy_version": 1,
+        "contract_id": "chunk-classification-v2",
+        "fallback_id": "preserve-deterministic-content-type",
+        "max_bytes": 128,
+        "allowed_values": list(rag._CONTENT_LABELS),
+    }
+    assert initial["toc_scaffold_generation"] == {
+        "prompt_version": "2",
+        "input_policy_version": 1,
+        "max_output_tokens": 4096,
+        "timeout_seconds": 30,
+        "max_lines_per_batch": 80,
+        "max_line_characters": 512,
+        "max_line_json_bytes": 2048,
+        "max_batch_json_bytes": 262144,
+        "preserved_tail_characters": 128,
+        "max_layout_hints": 32,
+        "max_layout_hint_characters": 512,
+        "max_layout_hint_json_bytes": 2048,
+        "max_layout_json_bytes": 131072,
+        "output_contract": {
+            "policy_version": 1,
+            "contract_id": "toc-hierarchy-v1",
+            "fallback_id": "use-deterministic-toc-scaffold",
+            "max_bytes": 131072,
+            "max_depth": 2,
+            "max_integer_digits": 7,
+            "min_items": 1,
+            "max_items": 100,
+            "max_title_chars": 512,
+            "max_title_bytes": 512,
+            "max_page": 1000000,
+            "min_level": 1,
+            "max_level": 5,
+            "unicode_data_major": int(
+                rag._llm_output_contracts.TOC_HIERARCHY_UNICODE_DATA_VERSION
+                .split(".")[0]),
+            "unicode_data_minor": int(
+                rag._llm_output_contracts.TOC_HIERARCHY_UNICODE_DATA_VERSION
+                .split(".")[1]),
+            "unicode_data_patch": int(
+                rag._llm_output_contracts.TOC_HIERARCHY_UNICODE_DATA_VERSION
+                .split(".")[2]),
+        },
+        "layout_analysis": {
+            "prompt_version": "2",
+            "input_policy_version": 1,
+            "max_output_tokens": 1200,
+            "timeout_seconds": 30,
+            "max_source_lines": 120,
+            "max_line_characters": 512,
+            "max_line_json_bytes": 2048,
+            "max_source_json_bytes": 262144,
+            "preserved_tail_characters": 128,
+            "output_contract": {
+                "policy_version": 1,
+                "contract_id": "toc-layout-v1",
+                "fallback_id": "use-no-generated-toc-layout-hints",
+                "max_bytes": 65536,
+                "max_depth": 2,
+                "max_integer_digits": 7,
+                "root_field_count": 8,
+                "max_string_chars": 512,
+                "max_string_bytes": 512,
+                "max_array_items": 16,
+                "max_hierarchy_order_items": 5,
+                "hierarchy_level_count": 5,
+                "unicode_data_major": int(
+                    rag._llm_output_contracts.TOC_LAYOUT_UNICODE_DATA_VERSION
+                    .split(".")[0]),
+                "unicode_data_minor": int(
+                    rag._llm_output_contracts.TOC_LAYOUT_UNICODE_DATA_VERSION
+                    .split(".")[1]),
+                "unicode_data_patch": int(
+                    rag._llm_output_contracts.TOC_LAYOUT_UNICODE_DATA_VERSION
+                    .split(".")[2]),
+            },
+        },
+        "page_verification": {
+            "prompt_version": "2",
+            "input_policy_version": 1,
+            "selection_policy_version": 1,
+            "quick_match_policy_version": 1,
+            "max_output_tokens": 300,
+            "timeout_seconds": 30,
+            "qc_max_checks": 15,
+            "director_max_checks": 5,
+            "per_call_max_checks": 20,
+            "page_capture_characters": 1500,
+            "text_item_scan_characters": 4096,
+            "page_prompt_characters": 1200,
+            "title_max_characters": 512,
+            "title_json_max_bytes": 8192,
+            "path_max_characters": 2048,
+            "path_json_max_bytes": 32768,
+            "path_preserved_tail_characters": 256,
+            "page_json_max_bytes": 16384,
+            "source_json_max_bytes": 65536,
+            "quick_match_max_words": 4,
+            "quick_match_min_word_characters": 4,
+            "low_confidence_threshold": 0.5,
+            "low_confidence_min_checks": 3,
+            "max_page": 1000000,
+            "unicode_data_major": int(
+                rag._TOC_VERIFICATION_UNICODE_DATA_VERSION.split(".")[0]),
+            "unicode_data_minor": int(
+                rag._TOC_VERIFICATION_UNICODE_DATA_VERSION.split(".")[1]),
+            "unicode_data_patch": int(
+                rag._TOC_VERIFICATION_UNICODE_DATA_VERSION.split(".")[2]),
+            "output_contract": {
+                "policy_version": 1,
+                "contract_id": "toc-verification-v1",
+                "fallback_id": "treat-toc-verification-as-inconclusive",
+                "max_bytes": 64,
+                "max_depth": 1,
+                "max_integer_digits": 1,
+                "root_field_count": 1,
+            },
+        },
+    }
+    disabled = parameters(llm_classify=False)
+    assert disabled["classification_prompt_version"] == 1
+    assert "classification_output_contract" not in disabled
+    scaffold_disabled = parameters(llm_scaffold=False)
+    assert "toc_scaffold_generation" not in scaffold_disabled
     _write_chunk_completion(document, chunks, initial)
 
     assert rag._chunks_complete(document, chunks, parameters=initial)
+    changed_toc_prompt = json.loads(json.dumps(initial))
+    changed_toc_prompt["toc_scaffold_generation"]["prompt_version"] = "3"
+    assert not rag._chunks_complete(
+        document, chunks, parameters=changed_toc_prompt)
+    changed_toc_input_policy = json.loads(json.dumps(initial))
+    changed_toc_input_policy["toc_scaffold_generation"][
+        "input_policy_version"] = 2
+    assert not rag._chunks_complete(
+        document, chunks, parameters=changed_toc_input_policy)
+    changed_toc_contract = json.loads(json.dumps(initial))
+    changed_toc_contract["toc_scaffold_generation"]["output_contract"][
+        "max_depth"] = 3
+    assert not rag._chunks_complete(
+        document, chunks, parameters=changed_toc_contract)
+    changed_layout_prompt = json.loads(json.dumps(initial))
+    changed_layout_prompt["toc_scaffold_generation"]["layout_analysis"][
+        "prompt_version"] = "3"
+    assert not rag._chunks_complete(
+        document, chunks, parameters=changed_layout_prompt)
+    changed_layout_input = json.loads(json.dumps(initial))
+    changed_layout_input["toc_scaffold_generation"]["layout_analysis"][
+        "max_source_lines"] = 121
+    assert not rag._chunks_complete(
+        document, chunks, parameters=changed_layout_input)
+    changed_layout_contract = json.loads(json.dumps(initial))
+    changed_layout_contract["toc_scaffold_generation"]["layout_analysis"][
+        "output_contract"]["unicode_data_patch"] += 1
+    assert not rag._chunks_complete(
+        document, chunks, parameters=changed_layout_contract)
+    changed_verification_prompt = json.loads(json.dumps(initial))
+    changed_verification_prompt["toc_scaffold_generation"][
+        "page_verification"]["prompt_version"] = "3"
+    assert not rag._chunks_complete(
+        document, chunks, parameters=changed_verification_prompt)
+    changed_verification_input = json.loads(json.dumps(initial))
+    changed_verification_input["toc_scaffold_generation"][
+        "page_verification"]["page_prompt_characters"] = 1201
+    assert not rag._chunks_complete(
+        document, chunks, parameters=changed_verification_input)
+    changed_verification_contract = json.loads(json.dumps(initial))
+    changed_verification_contract["toc_scaffold_generation"][
+        "page_verification"]["output_contract"]["root_field_count"] = 2
+    assert not rag._chunks_complete(
+        document, chunks, parameters=changed_verification_contract)
+    changed_contract = json.loads(json.dumps(initial))
+    changed_contract["classification_output_contract"]["max_bytes"] = 64
+    assert not rag._chunks_complete(
+        document, chunks, parameters=changed_contract)
     assert "secret-a" not in str(initial)
     assert "secret-b" not in str(initial)
     assert "127.0.0.1" not in str(initial)

@@ -1,3 +1,4 @@
+import hashlib
 import json
 import sys
 import threading
@@ -8,6 +9,7 @@ import pytest
 
 import rag
 import release_security
+import llm_output_contracts as output_contracts
 from llm_runtime import (
     LLMBudgetExceeded,
     LLMExecutionError,
@@ -37,6 +39,83 @@ def _provider(invoke, *, name="primary", model="model-a",
               endpoint="https://provider.test/v1"):
     return ProviderSpec(
         name=name, model=model, endpoint_id=endpoint, invoke=invoke)
+
+
+def _contract_request(*, operation="test.output_contract",
+                      failure_policy=None, contract_id="test-enum-v1",
+                      fallback_id="deterministic-fallback-v1",
+                      validator=None):
+    validator = validator or output_contracts.ExactEnumContract(
+        contract_id=contract_id,
+        allowed_values=("case_opinion", "footnote"),
+        max_bytes=64,
+    )
+    return LLMRequest(
+        prompt="classify this text",
+        operation=operation,
+        failure_policy=failure_policy,
+        output_contract_id=contract_id,
+        output_fallback_id=fallback_id,
+        output_validator=validator,
+    )
+
+
+def _toc_contract_request(*, failure_policy=None):
+    return LLMRequest(
+        prompt=(
+            "parse bounded TOC source\n"
+            + rag._TOC_HIERARCHY_CONTRACT_PROMPT_JSON),
+        operation="toc.scaffold",
+        prompt_version="2",
+        failure_policy=failure_policy,
+        output_contract_id=output_contracts.TOC_HIERARCHY_CONTRACT_ID,
+        output_fallback_id=output_contracts.TOC_SCAFFOLD_FALLBACK_ID,
+        output_validator=output_contracts.TOC_HIERARCHY_CONTRACT,
+    )
+
+
+def _layout_contract_value():
+    return {
+        "page_number_format": "trailing Arabic number",
+        "division_pattern": "Part followed by Roman numeral",
+        "division_examples": ["Part I"],
+        "section_markers": ["A."],
+        "subsection_markers": ["1."],
+        "named_item_format": "indented title",
+        "hierarchy_order": ["Primary division", "Section", "Named item"],
+        "hierarchy_levels": {
+            "1": "Primary division", "2": "Section", "3": "Named item",
+            "4": "", "5": "",
+        },
+    }
+
+
+def _layout_contract_request(*, failure_policy=None):
+    return LLMRequest(
+        prompt=(
+            "analyze bounded TOC layout\n"
+            + rag._TOC_LAYOUT_CONTRACT_PROMPT_JSON),
+        operation="toc.layout",
+        prompt_version="2",
+        failure_policy=failure_policy,
+        output_contract_id=output_contracts.TOC_LAYOUT_CONTRACT_ID,
+        output_fallback_id=output_contracts.TOC_LAYOUT_FALLBACK_ID,
+        output_validator=output_contracts.TOC_LAYOUT_CONTRACT,
+    )
+
+
+def _verification_contract_request(*, failure_policy=None):
+    return LLMRequest(
+        prompt=(
+            "verify bounded TOC entry\n"
+            + rag._TOC_VERIFICATION_CONTRACT_PROMPT_JSON),
+        operation="toc.verify",
+        prompt_version="2",
+        failure_policy=failure_policy,
+        output_contract_id=output_contracts.TOC_VERIFICATION_CONTRACT_ID,
+        output_fallback_id=output_contracts.TOC_VERIFICATION_FALLBACK_ID,
+        output_validator=output_contracts.TOC_VERIFICATION_CONTRACT,
+    )
 
 
 def test_success_is_cached_and_warm_read_skips_provider(tmp_path):
@@ -744,6 +823,730 @@ def test_cache_hit_consumes_no_additional_provider_budget(tmp_path):
     assert calls == 1
 
 
+def test_output_contract_canonicalizes_and_caches_only_accepted_text(tmp_path):
+    calls = 0
+
+    def invoke(_request):
+        nonlocal calls
+        calls += 1
+        return " \tCASE_OPINION\r\n"
+
+    runtime = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="readwrite", cache_dir=tmp_path / "cache"))
+    request = _contract_request()
+    provider = _provider(invoke)
+
+    first = runtime.execute(request, [provider])
+    second = runtime.execute(request, [provider])
+
+    assert first.text == second.text == "case_opinion"
+    assert first.output_contract_status == "accepted"
+    assert second.output_contract_status == "accepted"
+    assert first.output_diagnostic_code is None
+    assert first.output_fallback_id == "deterministic-fallback-v1"
+    assert second.cache_status == "hit"
+    assert calls == 1
+    cache_text = next((tmp_path / "cache").rglob("*.json")).read_text(
+        encoding="utf-8")
+    assert "CASE_OPINION" not in cache_text
+    assert "case_opinion" in cache_text
+    report = runtime.report_payload()
+    assert report["counts"]["output_contract_accepted"] == 2
+    assert report["output_contracts"] == [{
+        "operation": "test.output_contract",
+        "contract_id": "test-enum-v1",
+        "accepted": 2,
+        "rejected": 0,
+        "not_evaluated": 0,
+        "fallbacks": 0,
+        "diagnostic_codes": {},
+        "fallback_ids": ["deterministic-fallback-v1"],
+    }]
+
+
+def test_toc_contract_canonicalizes_live_output_and_revalidates_cache(
+        tmp_path):
+    calls = 0
+
+    def invoke(_request):
+        nonlocal calls
+        calls += 1
+        return ' [ { "title":"Chapter One", "page":7, "level":1 } ] '
+
+    runtime = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="readwrite", cache_dir=tmp_path / "cache"))
+    request = _toc_contract_request()
+    provider = _provider(invoke)
+
+    live = runtime.execute(request, [provider])
+    cached = runtime.execute(request, [provider])
+
+    canonical = '[{"level":1,"page":7,"title":"Chapter One"}]'
+    assert live.text == cached.text == canonical
+    assert live.output_contract_status == "accepted"
+    assert cached.output_contract_status == "accepted"
+    assert cached.cache_status == "hit"
+    assert calls == 1
+    cache_text = next((tmp_path / "cache").rglob("*.json")).read_text(
+        encoding="utf-8")
+    assert canonical.replace('"', '\\"') in cache_text
+
+
+def test_toc_contract_rejection_is_content_free_in_best_effort_and_strict(
+        tmp_path):
+    response = (
+        'MODEL_RESPONSE_CANARY '
+        '[{"level":1,"title":"Chapter One","page":7}]')
+    provider = _provider(lambda _request: response)
+
+    best_effort = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="readwrite", cache_dir=tmp_path / "best-cache"))
+    result = best_effort.execute(_toc_contract_request(), [provider])
+
+    assert result.text == ""
+    assert result.error_category == "invalid_response"
+    assert result.output_contract_status == "rejected"
+    assert result.output_diagnostic_code == output_contracts.JSON_SYNTAX
+    assert result.output_fallback_id == (
+        output_contracts.TOC_SCAFFOLD_FALLBACK_ID)
+    assert not list((tmp_path / "best-cache").rglob("*.json"))
+    assert "MODEL_RESPONSE_CANARY" not in json.dumps(
+        best_effort.report_payload())
+
+    strict = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="off", cache_dir=tmp_path / "strict-cache",
+        failure_policy="strict"))
+    with pytest.raises(LLMExecutionError) as caught:
+        strict.execute(_toc_contract_request(), [provider])
+    assert caught.value.result.output_diagnostic_code == (
+        output_contracts.JSON_SYNTAX)
+    assert "MODEL_RESPONSE_CANARY" not in str(caught.value)
+
+
+def test_toc_layout_contract_canonicalizes_live_output_and_revalidates_cache(
+        tmp_path):
+    calls = 0
+    value = _layout_contract_value()
+    value["page_number_format"] = "  trailing Arabic number  "
+
+    def invoke(_request):
+        nonlocal calls
+        calls += 1
+        return " \n" + json.dumps(value, ensure_ascii=False) + "\t"
+
+    runtime = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="readwrite", cache_dir=tmp_path / "cache"))
+    request = _layout_contract_request()
+    provider = _provider(invoke)
+
+    live = runtime.execute(request, [provider])
+    cached = runtime.execute(request, [provider])
+    canonical = output_contracts.TOC_LAYOUT_CONTRACT(
+        json.dumps(value, ensure_ascii=False))
+
+    assert live.text == cached.text == canonical
+    assert live.output_contract_status == "accepted"
+    assert cached.output_contract_status == "accepted"
+    assert cached.cache_status == "hit"
+    assert calls == 1
+    assert output_contracts.TOC_LAYOUT_CONTRACT.parse(cached.text)[
+        "page_number_format"] == "trailing Arabic number"
+
+
+def test_toc_layout_rejection_is_content_free_in_best_effort_and_strict(
+        tmp_path):
+    response = "MODEL_RESPONSE_CANARY " + json.dumps(
+        _layout_contract_value())
+    provider = _provider(lambda _request: response)
+
+    best_effort = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="readwrite", cache_dir=tmp_path / "best-cache"))
+    result = best_effort.execute(_layout_contract_request(), [provider])
+
+    assert result.text == ""
+    assert result.error_category == "invalid_response"
+    assert result.output_contract_status == "rejected"
+    assert result.output_diagnostic_code == output_contracts.JSON_SYNTAX
+    assert result.output_fallback_id == output_contracts.TOC_LAYOUT_FALLBACK_ID
+    assert not list((tmp_path / "best-cache").rglob("*.json"))
+    assert "MODEL_RESPONSE_CANARY" not in json.dumps(
+        best_effort.report_payload())
+
+    strict = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="off", cache_dir=tmp_path / "strict-cache",
+        failure_policy="strict"))
+    with pytest.raises(LLMExecutionError) as caught:
+        strict.execute(_layout_contract_request(), [provider])
+    assert caught.value.result.output_diagnostic_code == (
+        output_contracts.JSON_SYNTAX)
+    assert "MODEL_RESPONSE_CANARY" not in str(caught.value)
+
+
+def test_toc_layout_semantic_rejection_does_not_delegate_provider_authority(
+        tmp_path):
+    secondary_calls = 0
+
+    def secondary(_request):
+        nonlocal secondary_calls
+        secondary_calls += 1
+        return json.dumps(_layout_contract_value())
+
+    runtime = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="off", cache_dir=tmp_path / "cache"))
+    result = runtime.execute(
+        _layout_contract_request(),
+        [
+            _provider(lambda _request: "{}"),
+            _provider(secondary, name="secondary", model="model-b"),
+        ],
+    )
+
+    assert result.error_category == "invalid_response"
+    assert result.output_diagnostic_code == output_contracts.JSON_SHAPE_MISMATCH
+    assert result.fallback_path == ("primary",)
+    assert secondary_calls == 0
+
+
+def test_toc_verification_contract_canonicalizes_live_and_cached_output(
+        tmp_path):
+    calls = 0
+
+    def invoke(_request):
+        nonlocal calls
+        calls += 1
+        return ' \n{ "verified" : true }\t'
+
+    runtime = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="readwrite", cache_dir=tmp_path / "cache"))
+    request = _verification_contract_request()
+    provider = _provider(invoke)
+
+    live = runtime.execute(request, [provider])
+    cached = runtime.execute(request, [provider])
+
+    assert live.text == cached.text == '{"verified":true}'
+    assert live.output_contract_status == "accepted"
+    assert cached.output_contract_status == "accepted"
+    assert cached.cache_status == "hit"
+    assert calls == 1
+    assert output_contracts.TOC_VERIFICATION_CONTRACT.parse(cached.text) == {
+        "verified": True,
+    }
+    cache_text = next((tmp_path / "cache").rglob("*.json")).read_text(
+        encoding="utf-8")
+    assert '{ \\"verified\\" : true }' not in cache_text
+
+
+def test_toc_verification_rejection_is_content_free_best_effort_and_strict(
+        tmp_path):
+    response = 'MODEL_RESPONSE_CANARY {"verified":true}'
+    provider = _provider(lambda _request: response)
+
+    best_effort = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="readwrite", cache_dir=tmp_path / "best-cache"))
+    result = best_effort.execute(
+        _verification_contract_request(), [provider])
+
+    assert result.text == ""
+    assert result.error_category == "invalid_response"
+    assert result.output_contract_status == "rejected"
+    assert result.output_diagnostic_code == output_contracts.JSON_SYNTAX
+    assert result.output_fallback_id == (
+        output_contracts.TOC_VERIFICATION_FALLBACK_ID)
+    assert not list((tmp_path / "best-cache").rglob("*.json"))
+    assert "MODEL_RESPONSE_CANARY" not in json.dumps(
+        best_effort.report_payload())
+
+    strict = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="off", cache_dir=tmp_path / "strict-cache",
+        failure_policy="strict"))
+    with pytest.raises(LLMExecutionError) as caught:
+        strict.execute(_verification_contract_request(), [provider])
+    assert caught.value.result.output_diagnostic_code == (
+        output_contracts.JSON_SYNTAX)
+    assert "MODEL_RESPONSE_CANARY" not in str(caught.value)
+
+
+def test_toc_verification_semantic_rejection_does_not_delegate_authority(
+        tmp_path):
+    secondary_calls = 0
+
+    def secondary(_request):
+        nonlocal secondary_calls
+        secondary_calls += 1
+        return '{"verified":true}'
+
+    runtime = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="off", cache_dir=tmp_path / "cache"))
+    result = runtime.execute(
+        _verification_contract_request(),
+        [
+            _provider(lambda _request: '{"verified":"true"}'),
+            _provider(secondary, name="secondary", model="model-b"),
+        ],
+    )
+
+    assert result.error_category == "invalid_response"
+    assert result.output_diagnostic_code == output_contracts.JSON_SHAPE_MISMATCH
+    assert result.fallback_path == ("primary",)
+    assert secondary_calls == 0
+
+
+def test_toc_verification_false_is_accepted_and_not_missing(tmp_path):
+    secondary_calls = 0
+
+    def secondary(_request):
+        nonlocal secondary_calls
+        secondary_calls += 1
+        return '{"verified":true}'
+
+    runtime = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="off", cache_dir=tmp_path / "cache"))
+    result = runtime.execute(
+        _verification_contract_request(),
+        [
+            _provider(lambda _request: '{"verified":false}'),
+            _provider(secondary, name="secondary", model="model-b"),
+        ],
+    )
+
+    assert result.succeeded is True
+    assert result.text == '{"verified":false}'
+    assert result.output_contract_status == "accepted"
+    assert result.fallback_path == ("primary",)
+    assert secondary_calls == 0
+
+
+def test_toc_verification_empty_response_can_use_ordered_provider_fallback(
+        tmp_path):
+    secondary_calls = 0
+
+    def secondary(_request):
+        nonlocal secondary_calls
+        secondary_calls += 1
+        return '{"verified":true}'
+
+    runtime = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="off", cache_dir=tmp_path / "cache"))
+    result = runtime.execute(
+        _verification_contract_request(),
+        [
+            _provider(lambda _request: ""),
+            _provider(secondary, name="secondary", model="model-b"),
+        ],
+    )
+
+    assert result.succeeded is True
+    assert result.text == '{"verified":true}'
+    assert result.output_contract_status == "accepted"
+    assert result.fallback_path == ("primary", "secondary")
+    assert secondary_calls == 1
+
+
+def test_toc_semantic_rejection_does_not_delegate_provider_authority(
+        tmp_path):
+    secondary_calls = 0
+
+    def secondary(_request):
+        nonlocal secondary_calls
+        secondary_calls += 1
+        return '[{"level":1,"title":"Chapter One","page":1}]'
+
+    runtime = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="off", cache_dir=tmp_path / "cache"))
+    result = runtime.execute(
+        _toc_contract_request(),
+        [
+            _provider(lambda _request: "[]"),
+            _provider(secondary, name="secondary", model="model-b"),
+        ],
+    )
+
+    assert result.error_category == "invalid_response"
+    assert result.output_diagnostic_code == output_contracts.JSON_ITEM_LIMIT
+    assert result.fallback_path == ("primary",)
+    assert secondary_calls == 0
+
+
+def test_rejected_output_is_never_cached_and_best_effort_receipts_fallback(
+        tmp_path):
+    calls = 0
+
+    def invoke(_request):
+        nonlocal calls
+        calls += 1
+        return "MODEL_RESPONSE_CANARY says case_opinion"
+
+    runtime = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="readwrite", cache_dir=tmp_path / "cache"))
+    request = _contract_request()
+    provider = _provider(invoke)
+
+    first = runtime.execute(request, [provider])
+    second = runtime.execute(request, [provider])
+
+    assert first.succeeded is second.succeeded is False
+    assert first.text == second.text == ""
+    assert first.error_category == "invalid_response"
+    assert first.output_contract_status == "rejected"
+    assert first.output_diagnostic_code == output_contracts.LABEL_MISMATCH
+    assert calls == 2
+    assert not list((tmp_path / "cache").rglob("*.json"))
+    report = runtime.report_payload()
+    assert report["counts"]["output_contract_rejected"] == 2
+    assert report["counts"]["output_contract_fallbacks"] == 2
+    assert report["output_contracts"][0]["fallbacks"] == 2
+    assert report["output_contracts"][0]["diagnostic_codes"] == {
+        output_contracts.LABEL_MISMATCH: 2,
+    }
+    assert "MODEL_RESPONSE_CANARY" not in json.dumps(report)
+
+
+def test_output_contract_revalidates_and_repairs_noncanonical_cache(tmp_path):
+    calls = 0
+
+    def invoke(_request):
+        nonlocal calls
+        calls += 1
+        return "case_opinion" if calls == 1 else "footnote"
+
+    cache_dir = tmp_path / "cache"
+    runtime = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="readwrite", cache_dir=cache_dir))
+    request = _contract_request()
+    provider = _provider(invoke)
+    assert runtime.execute(request, [provider]).text == "case_opinion"
+
+    cache_path = next(cache_dir.rglob("*.json"))
+    payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    payload["result"]["text"] = " case_opinion "
+    encoded_result = json.dumps(
+        payload["result"], ensure_ascii=False, sort_keys=True,
+        separators=(",", ":")).encode("utf-8")
+    payload["result_sha256"] = hashlib.sha256(encoded_result).hexdigest()
+    payload["response_sha256"] = hashlib.sha256(
+        b" case_opinion ").hexdigest()
+    cache_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    repaired = runtime.execute(request, [provider])
+
+    assert repaired.text == "footnote"
+    assert repaired.cache_status == "miss"
+    assert calls == 2
+    assert runtime.report_payload()["counts"]["cache_corrupt"] == 1
+
+
+def test_semantic_rejection_never_delegates_authority_to_second_provider(
+        tmp_path):
+    secondary_calls = 0
+
+    def secondary(_request):
+        nonlocal secondary_calls
+        secondary_calls += 1
+        return "case_opinion"
+
+    runtime = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="off", cache_dir=tmp_path / "cache"))
+    result = runtime.execute(
+        _contract_request(),
+        [
+            _provider(lambda _request: "not case_opinion"),
+            _provider(secondary, name="secondary", model="model-b"),
+        ],
+    )
+
+    assert result.error_category == "invalid_response"
+    assert result.attempts == 1
+    assert result.fallback_path == ("primary",)
+    assert result.output_contract_status == "rejected"
+    assert secondary_calls == 0
+
+
+@pytest.mark.parametrize("empty_response", [None, "", " \t\r\n"])
+def test_empty_provider_response_keeps_ordered_fallback_semantics(
+        tmp_path, empty_response):
+    secondary_calls = 0
+
+    def secondary(_request):
+        nonlocal secondary_calls
+        secondary_calls += 1
+        return "case_opinion"
+
+    runtime = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="off", cache_dir=tmp_path / "cache"))
+    result = runtime.execute(
+        _contract_request(),
+        [
+            _provider(lambda _request: empty_response),
+            _provider(secondary, name="secondary", model="model-b"),
+        ],
+    )
+
+    assert result.text == "case_opinion"
+    assert result.output_contract_status == "accepted"
+    assert result.fallback_path == ("primary", "secondary")
+    assert secondary_calls == 1
+
+
+def test_contract_receipt_marks_no_provider_response_as_not_evaluated(
+        tmp_path):
+    runtime = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="off", cache_dir=tmp_path / "cache"))
+
+    result = runtime.execute(_contract_request(), [])
+
+    assert result.error_category == "no_provider"
+    assert result.output_contract_id == "test-enum-v1"
+    assert result.output_contract_status == "not_evaluated"
+    assert result.output_diagnostic_code is None
+    assert result.output_fallback_id == "deterministic-fallback-v1"
+    report = runtime.report_payload()
+    assert report["counts"]["output_contract_not_evaluated"] == 1
+    assert report["counts"]["output_contract_fallbacks"] == 1
+    assert report["output_contracts"][0]["not_evaluated"] == 1
+
+
+def test_budget_exhaustion_is_not_counted_as_a_deterministic_fallback(
+        tmp_path):
+    runtime = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="off", cache_dir=tmp_path / "cache",
+        max_provider_calls=1))
+    request = _contract_request(operation="test.contract_budget")
+    provider = _provider(lambda _request: "case_opinion")
+    assert runtime.execute(request, [provider]).succeeded
+
+    with pytest.raises(LLMBudgetExceeded) as caught:
+        runtime.execute(request, [provider])
+
+    assert caught.value.args
+    report = runtime.report_payload()
+    assert report["counts"]["output_contract_not_evaluated"] == 1
+    assert report["counts"]["output_contract_fallbacks"] == 0
+
+
+def test_strict_output_contract_rejection_raises_structured_error(tmp_path):
+    runtime = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="off", cache_dir=tmp_path / "cache",
+        failure_policy="strict"))
+
+    with pytest.raises(LLMExecutionError) as caught:
+        runtime.execute(
+            _contract_request(),
+            [_provider(lambda _request: "case_opinion and footnote")],
+        )
+
+    result = caught.value.result
+    assert result.error_category == "invalid_response"
+    assert result.output_contract_status == "rejected"
+    assert result.output_diagnostic_code == output_contracts.LABEL_MISMATCH
+    assert result.output_fallback_id == "deterministic-fallback-v1"
+    assert runtime.report_payload()["counts"][
+        "output_contract_fallbacks"] == 0
+
+
+def test_unexpected_validator_failure_has_fixed_content_free_receipts(tmp_path):
+    events_path = tmp_path / "events.jsonl"
+    response_canary = "MODEL_RESPONSE_CANARY"
+    validator_canary = "VALIDATOR_EXCEPTION_CANARY"
+
+    def broken_validator(_text):
+        raise RuntimeError(validator_canary)
+
+    broken_validator.contract_id = "test-enum-v1"
+
+    runtime = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="off", cache_dir=tmp_path / "cache",
+        events_path=events_path, failure_policy="strict"))
+    request = _contract_request(validator=broken_validator)
+
+    with pytest.raises(LLMExecutionError) as caught:
+        runtime.execute(request, [_provider(lambda _request: response_canary)])
+
+    result = caught.value.result
+    assert result.output_diagnostic_code == (
+        output_contracts.INTERNAL_CONTRACT_ERROR)
+    assert result.text == ""
+    event_text = events_path.read_text(encoding="utf-8")
+    report_text = json.dumps(runtime.report_payload())
+    combined = event_text + report_text + str(caught.value)
+    assert response_canary not in combined
+    assert validator_canary not in combined
+    event = json.loads(event_text)
+    assert event["output_contract_id"] == "test-enum-v1"
+    assert event["output_contract_status"] == "rejected"
+    assert event["output_diagnostic_code"] == (
+        output_contracts.INTERNAL_CONTRACT_ERROR)
+
+
+def test_output_contract_and_fallback_ids_bind_request_identity(tmp_path):
+    runtime = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="off", cache_dir=tmp_path / "cache"))
+    provider = _provider(lambda _request: "case_opinion")
+
+    base_id = runtime.execute(_contract_request(), [provider]).request_id
+    contract_id = runtime.execute(
+        _contract_request(contract_id="test-enum-v2"), [provider]).request_id
+    fallback_id = runtime.execute(
+        _contract_request(fallback_id="other-fallback-v1"),
+        [provider],
+    ).request_id
+
+    assert len({base_id, contract_id, fallback_id}) == 3
+
+
+def test_validator_declared_contract_id_must_match_request(tmp_path):
+    runtime = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="off", cache_dir=tmp_path / "cache"))
+    validator = output_contracts.ExactEnumContract(
+        contract_id="declared-v1", allowed_values=("case_opinion",),
+        max_bytes=64)
+    request = LLMRequest(
+        prompt="prompt", output_contract_id="requested-v1",
+        output_fallback_id="fallback-v1", output_validator=validator)
+
+    with pytest.raises(ValueError, match="must match"):
+        runtime.execute(request, [])
+
+
+def test_shared_waiter_revalidates_output_with_its_contract(
+        monkeypatch, tmp_path):
+    runtime = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="off", cache_dir=tmp_path / "cache"))
+    owner_validator = output_contracts.ExactEnumContract(
+        contract_id="shared-v1",
+        allowed_values=("case_opinion", "footnote"), max_bytes=64)
+    waiter_validator = output_contracts.ExactEnumContract(
+        contract_id="shared-v1", allowed_values=("footnote",), max_bytes=64)
+    owner_request = _contract_request(
+        contract_id="shared-v1", validator=owner_validator)
+    waiter_request = _contract_request(
+        contract_id="shared-v1", validator=waiter_validator)
+    provider_started = threading.Event()
+    waiter_joined = threading.Event()
+    join_lock = threading.Lock()
+    joins = 0
+    original_join = runtime._join_flight
+
+    def observed_join(key):
+        nonlocal joins
+        value = original_join(key)
+        with join_lock:
+            joins += 1
+            if joins == 2:
+                waiter_joined.set()
+        return value
+
+    def invoke(_request):
+        provider_started.set()
+        assert waiter_joined.wait(timeout=5)
+        return "case_opinion"
+
+    monkeypatch.setattr(runtime, "_join_flight", observed_join)
+    provider = _provider(invoke)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        owner_future = pool.submit(runtime.execute, owner_request, [provider])
+        assert provider_started.wait(timeout=5)
+        waiter_future = pool.submit(runtime.execute, waiter_request, [provider])
+        owner = owner_future.result(timeout=5)
+        waiter = waiter_future.result(timeout=5)
+
+    assert owner.text == "case_opinion"
+    assert owner.output_contract_status == "accepted"
+    assert waiter.text == ""
+    assert waiter.cache_status == "shared"
+    assert waiter.output_contract_status == "rejected"
+    assert waiter.output_diagnostic_code == output_contracts.LABEL_MISMATCH
+
+
+@pytest.mark.parametrize("candidate", [
+    LLMRequest(
+        prompt="prompt", output_fallback_id="fallback-v1"),
+    LLMRequest(
+        prompt="prompt", output_contract_id="contract-v1",
+        output_fallback_id="fallback-v1"),
+    LLMRequest(
+        prompt="prompt", output_contract_id="../contract",
+        output_fallback_id="fallback-v1", output_validator=lambda text: text),
+    LLMRequest(
+        prompt="prompt", output_contract_id="a" * 129,
+        output_fallback_id="fallback-v1", output_validator=lambda text: text),
+])
+def test_incomplete_or_unsafe_output_contract_requests_fail_closed(
+        tmp_path, candidate):
+    runtime = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="off", cache_dir=tmp_path / "cache"))
+
+    with pytest.raises((TypeError, ValueError)):
+        runtime.execute(candidate, [])
+
+
+def test_rejected_single_flight_results_preserve_content_free_contract_receipts(
+        monkeypatch, tmp_path):
+    runtime = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="off", cache_dir=tmp_path / "cache"))
+    request = _contract_request(operation="test.contract_single_flight")
+    task_barrier = threading.Barrier(4)
+    all_joined = threading.Event()
+    join_lock = threading.Lock()
+    joins = 0
+    calls = 0
+    original_join = runtime._join_flight
+
+    def observed_join(key):
+        nonlocal joins
+        value = original_join(key)
+        with join_lock:
+            joins += 1
+            if joins == 4:
+                all_joined.set()
+        return value
+
+    def invoke(_request):
+        nonlocal calls
+        calls += 1
+        assert all_joined.wait(timeout=5)
+        return "invalid explanation containing case_opinion"
+
+    monkeypatch.setattr(runtime, "_join_flight", observed_join)
+    provider = _provider(invoke)
+
+    def run_one():
+        task_barrier.wait(timeout=5)
+        return runtime.execute(request, [provider])
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(lambda _index: run_one(), range(4)))
+
+    assert calls == 1
+    assert {result.output_contract_status for result in results} == {
+        "rejected"}
+    assert {result.output_diagnostic_code for result in results} == {
+        output_contracts.LABEL_MISMATCH}
+    assert {result.text for result in results} == {""}
+    assert sum(result.cache_status == "shared" for result in results) == 3
+    counts = runtime.report_payload()["counts"]
+    assert counts["output_contract_rejected"] == 4
+    assert counts["output_contract_fallbacks"] == 4
+
+
+def test_reconfigure_resets_output_contract_aggregates(tmp_path):
+    runtime = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="off", cache_dir=tmp_path / "cache"))
+    runtime.execute(
+        _contract_request(), [_provider(lambda _request: "case_opinion")])
+    assert runtime.report_payload()["output_contracts"]
+
+    runtime.configure(LLMRuntimeConfig(
+        cache_mode="off", cache_dir=tmp_path / "other-cache"))
+
+    report = runtime.report_payload()
+    assert report["counts"]["output_contract_accepted"] == 0
+    assert report["counts"]["output_contract_rejected"] == 0
+    assert report["counts"]["output_contract_not_evaluated"] == 0
+    assert report["counts"]["output_contract_fallbacks"] == 0
+    assert report["output_contracts"] == []
+
+
 def test_events_and_report_are_aggregate_and_secret_safe(tmp_path):
     events_path = tmp_path / "events.jsonl"
     report_path = tmp_path / "report.json"
@@ -976,25 +1779,42 @@ def test_toc_parser_uses_one_runtime_dispatch(monkeypatch):
 
     def fake_call(prompt, **kwargs):
         observed.append((prompt, kwargs))
-        return '[{"level": 1, "title": "Chapter One", "page": 1}]'
+        return ' [ {"page":1,"title":"Chapter One","level":1} ] '
 
     monkeypatch.setattr(rag, "_call_llm", fake_call)
     entries = rag._llm_parse_toc("Chapter One 1", cloud_key="key")
 
-    assert len(entries) == 1
+    assert entries == [{
+        "level": 1,
+        "title": "Chapter One",
+        "page": 1,
+        "marker": "",
+    }]
     assert len(observed) == 1
     assert observed[0][1]["operation"] == "toc.parse"
+    assert observed[0][1]["prompt_version"] == "2"
     assert observed[0][1]["timeout"] == 60
+    assert observed[0][1]["max_tokens"] == 4000
+    assert observed[0][1]["output_contract_id"] == "toc-hierarchy-v1"
+    assert observed[0][1]["output_fallback_id"] == (
+        "use-deterministic-toc-parser")
+    assert observed[0][1]["output_validator"] is (
+        rag._TOC_HIERARCHY_OUTPUT_CONTRACT)
 
 
-def test_scaffold_parser_does_not_swallow_budget_exhaustion(monkeypatch):
+@pytest.mark.parametrize("parser_name", [
+    "_llm_parse_scaffold",
+    "_llm_parse_toc",
+])
+def test_toc_parser_does_not_swallow_budget_exhaustion(
+        monkeypatch, parser_name):
     monkeypatch.setattr(
         rag, "_call_llm",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             LLMBudgetExceeded("limit")))
 
     with pytest.raises(LLMBudgetExceeded):
-        rag._llm_parse_scaffold("Chapter One 1")
+        getattr(rag, parser_name)("Chapter One 1")
 
 
 def test_cli_runtime_flags_configure_run_and_write_report(

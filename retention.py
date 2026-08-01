@@ -515,9 +515,14 @@ def plan_background_job_deletion(
     )
 
 
+_LLM_CACHE_RECORD_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4})
+
+
 def _validate_cache_payload(path: Path, key: str) -> str:
     payload = _read_json_object(path, max_bytes=_CACHE_RECORD_MAX_BYTES)
-    if (payload.get("schema_version") not in {1, 2}
+    schema_version = payload.get("schema_version")
+    if (type(schema_version) is not int
+            or schema_version not in _LLM_CACHE_RECORD_SCHEMA_VERSIONS
             or payload.get("cache_key") != key
             or not isinstance(payload.get("result"), dict)):
         raise RetentionError("LLM cache record failed ownership validation")
