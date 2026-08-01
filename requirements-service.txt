@@ -1,6 +1,6 @@
 # Exact direct pins keep the loopback service profile reproducible and narrow.
-fastapi==0.139.2
+fastapi==0.141.0
 qdrant-client==1.18.0
 requests==2.34.2
 tqdm==4.69.0
-uvicorn==0.51.0
+uvicorn==0.52.0

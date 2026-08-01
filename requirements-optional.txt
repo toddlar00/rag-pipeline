@@ -12,4 +12,4 @@ qdrant-client>=1.17,<2
 google-genai>=1.68,<2      # Gemini fallback; per-request timeout/retry controls
 
 # Web UI
-gradio>=6.0,<7
+gradio>=6.20.0,<7
