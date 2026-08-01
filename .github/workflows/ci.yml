@@ -18,6 +18,38 @@ env:
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
 
 jobs:
+  lane:
+    name: Select lane
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      heavy: ${{ steps.pick.outputs.heavy }}
+      pythons: ${{ steps.pick.outputs.pythons }}
+    steps:
+      - name: Pick lane from event and head ref
+        id: pick
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          heavy=false
+          if [ "$EVENT_NAME" = "push" ] || [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            heavy=true
+          elif [ "$EVENT_NAME" = "pull_request" ]; then
+            case "$HEAD_REF" in
+              *-candidate) heavy=true ;;
+            esac
+          fi
+          if [ "$heavy" = "true" ]; then
+            pythons='["3.10", "3.11", "3.12", "3.13", "3.14"]'
+          else
+            pythons='["3.12"]'
+          fi
+          {
+            echo "heavy=$heavy"
+            echo "pythons=$pythons"
+          } >> "$GITHUB_OUTPUT"
+
   quality:
     name: Quality gates
     runs-on: ubuntu-24.04
@@ -144,10 +176,11 @@ jobs:
     name: Unit tests / Python ${{ matrix.python-version }} / Linux
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    needs: lane
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        python-version: ${{ fromJSON(needs.lane.outputs.pythons) }}
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -168,6 +201,8 @@ jobs:
     name: Unit tests / Python 3.12 / Windows
     runs-on: windows-latest
     timeout-minutes: 20
+    needs: lane
+    if: needs.lane.outputs.heavy == 'true'
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -188,6 +223,8 @@ jobs:
     name: Local service API / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    needs: lane
+    if: needs.lane.outputs.heavy == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -228,6 +265,8 @@ jobs:
     name: Phase A0 baseline / ${{ matrix.platform }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
+    needs: lane
+    if: needs.lane.outputs.heavy == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -450,6 +489,8 @@ jobs:
     name: Real vector stores / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    needs: lane
+    if: needs.lane.outputs.heavy == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -479,6 +520,8 @@ jobs:
     name: Full CPU environment / Python 3.12 / Linux
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    needs: lane
+    if: needs.lane.outputs.heavy == 'true'
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
