@@ -67,10 +67,13 @@ conflict (`rag.py`) plus conflicts only in regenerable artifacts
   tree and no new hosted run is required.
 - This merge is the owner's review sign-off under the repository's
   independent-review requirement.
-- After merge, close the superseded individual drafts (#31, #33–#42) after
-  verifying by ancestry/content that each is contained in the merged history.
-- PR #43 (Ethics retrieval calibration) stays open: it requires actual owner
-  threshold decisions and is explicitly out of scope.
+- The heads of #31 and #33–#43 are verified ancestors of #44's head, so
+  GitHub auto-marks those PRs merged when #44 lands; #32
+  (process-supervision-design) is not an ancestor and is closed manually
+  after confirming its design content was superseded by the merged ADR.
+- PR #43's code therefore merges with #44. The Ethics calibration OWNER
+  DECISION (thresholds) remains open as a ROADMAP "Owner review pending"
+  item, not as an open PR, and is explicitly out of scope here.
 
 ### Phase 2 — Slim the CI matrix
 
@@ -121,6 +124,9 @@ conflict (`rag.py`) plus conflicts only in regenerable artifacts
 - Run `tools/refresh_locks.py --upgrade`; review the diff domain-by-domain
   under the #66 dependency compatibility domains; open one policy-compliant
   dependency PR; validate on the candidate lane; merge.
+- Lock changes invalidate both Phase A0 baselines (`benchmarks/README.md`),
+  so this PR also regenerates paired Windows/Linux Phase A0 evidence at its
+  own clean pre-gate checkpoint.
 
 ## End state / success criteria
 
