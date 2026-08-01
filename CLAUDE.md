@@ -2,9 +2,11 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> **Branch-status note (2026-07-24):** This checkout includes the unmerged
-> draft milestone stack described in `ROADMAP.md`. Treat “Implemented (draft)”
-> and “Integrated” as different states, and verify the current branch and PR
+> **Branch-status note (2026-08-01):** The R1 cumulative candidate (#44)
+> merged to `main` on 2026-08-01. This checkout is the R2 convergence
+> candidate combining the publication-readiness and strict output-contract
+> lines; it is not yet merged. Treat “Integration candidate (draft)” and
+> “Integrated” as different states, and verify the current branch and PR
 > base before assuming a feature is present on `main`.
 
 ## What this is
@@ -80,6 +82,10 @@ Current policy/runtime modules include:
 - `chunking_core`, `document_profiles`, and `quality_core` — deterministic
   chunk policy, immutable attested document layouts, and corpus-quality
   evidence.
+- `source_fidelity_core`, `heading_lineage`, `markdown_validation`,
+  `publication_core`, and `ai_project_export` — exact source-token ownership
+  and physical order, occurrence-bound semantic hierarchy, validated Markdown,
+  atomic five-gate READY receipts, and receipt-bound AI project derivatives.
 - `artifact_io`, `index_state`, `vector_lifecycle`, and `resource_lease` —
   strict artifact I/O, manifest decisions, guarded vector reconciliation,
   verification/commit ordering, and canonical reentrant cross-process path

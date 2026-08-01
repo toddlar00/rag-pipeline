@@ -1083,6 +1083,7 @@ def _resume_probe_args(rag) -> SimpleNamespace:
         llm_workers=1,
         thinking=False,
         split_chapters=False,
+        markdown_validation="internal",
         raptor=False,
         db_lock_timeout=1.0,
     )
@@ -1098,7 +1099,14 @@ def _write_resume_conversion_fixture(
             "label": "text",
             "content_layer": "body",
             "text": "A generated discussion of synthetic procedure.",
-            "prov": [{"page_no": 1}],
+            "prov": [{
+                "page_no": 1,
+                "charspan": [0, 46],
+                "bbox": {
+                    "l": 10, "t": 10, "r": 200, "b": 20,
+                    "coord_origin": "TOPLEFT",
+                },
+            }],
         }],
     }
     rag._atomic_write_json(paths["doc"], document)
@@ -1143,33 +1151,63 @@ def _write_resume_conversion_fixture(
     return parameters
 
 
-def _resume_record(rag) -> dict:
+def _resume_record(
+        rag, stable_source: Mapping[str, object], source_item: dict,
+) -> dict:
+    text = "A generated discussion of synthetic procedure."
+    descriptor, issues = rag._source_fidelity_core.source_descriptor(
+        source_item)
+    if issues:
+        raise PhaseA0BenchmarkError(
+            "generated source fidelity descriptor did not verify")
+    tokens = rag._source_fidelity_core.lexical_tokens(text)
     record = {
-        "text": "A generated discussion of synthetic procedure.",
+        "text": text,
         "metadata": {
             "chunk_index": 0,
             "source_file": "phase-a0.json",
-            "source_lineage_schema_version": 1,
+            "source_lineage_schema_version": (
+                rag._quality_core.SOURCE_LINEAGE_SCHEMA_VERSION),
             "source_items": [{
                 "ref": "#/texts/0",
                 "label": "text",
                 "parent_refs": [],
-                "spans": [{"page": 1}],
+                "spans": descriptor["spans"],
+                "source_text_sha256": descriptor["source_text_sha256"],
+                "source_lexical_sha256": descriptor[
+                    "source_lexical_sha256"],
+                "source_lexical_count": descriptor[
+                    "source_lexical_count"],
+                "transform": "plain",
+                "oracle_text_sha256": (
+                    rag._source_fidelity_core.text_sha256(text)),
+                "oracle_lexical_sha256": (
+                    rag._source_fidelity_core.lexical_sha256(tokens)),
+                "oracle_lexical_count": len(tokens),
+                "recovery_sha256": None,
+                "scope": {"provenance_indexes": [0]},
             }],
             "page_start": 1,
             "page_end": 1,
             "page_range": "pp.1-1",
             "chapter_num": 1,
             "chapter_title": "Generated",
-            "section_path": "Chapter 1",
+            "section_path": "",
             "content_type": "author_narrative",
             "content_source": "body",
             "token_count": 7,
             "embedding_token_count": 7,
             "case_names": [],
             "primary_case": None,
+            rag._heading_lineage.HEADING_SCHEMA_FIELD: (
+                rag._heading_lineage.HEADING_LINEAGE_SCHEMA_VERSION),
+            rag._heading_lineage.HEADING_PATH_FIELD: [],
+            rag._heading_lineage.DIRECT_HEADING_FIELD: [],
+            rag._heading_lineage.HEADING_COMPONENTS_FIELD: [],
+            rag._retrieval_core.STABLE_ID_SOURCE_FIELD: dict(stable_source),
         },
     }
+    rag._source_fidelity_core.attach_record_attestations([record])
     rag._retrieval_core._attach_retrieval_linkage([record])
     return record
 
@@ -1198,7 +1236,6 @@ def _write_resume_chunk_fixture(
         structure_profile=profile,
         **llm_kwargs,
     )
-    rag._atomic_write_jsonl(paths["chunks"], [_resume_record(rag)])
     document_raw = paths["doc"].read_bytes()
     document_sha256 = _sha256_bytes(document_raw)
     conversion = rag._load_conversion_source_binding(
@@ -1215,7 +1252,13 @@ def _write_resume_chunk_fixture(
         "schema_version": conversion.schema_version,
     }
     source_sha256 = rag._cached_artifact_sha256(pdf)
-    inputs = {
+    document = json.loads(document_raw)
+    rag._atomic_write_jsonl(paths["chunks"], [_resume_record(rag, {
+        "name": conversion.source_name,
+        "size": conversion.source_size,
+        "sha256": conversion.source_sha256,
+    }, document["texts"][0])])
+    upstream_inputs = {
         "docling_json": {
             "name": paths["doc"].name,
             "size": len(document_raw),
@@ -1233,6 +1276,17 @@ def _write_resume_chunk_fixture(
             "discovery": "explicit",
         },
     }
+    oracle_path = rag._source_oracle_registry_path(paths["chunks"])
+    rag._atomic_write_json(
+        oracle_path,
+        rag._source_fidelity_core.build_source_oracle_registry(
+            oracles={}, input_bindings=upstream_inputs),
+    )
+    inputs = {
+        **upstream_inputs,
+        "source_fidelity_oracles": rag._source_oracle_registry_binding(
+            oracle_path),
+    }
     receipt = parameters["structure_profile"]
     rag._write_artifact_completion(
         rag._artifact_completion_path(paths["chunks"], stage="chunking"),
@@ -1240,7 +1294,10 @@ def _write_resume_chunk_fixture(
         source_sha256=document_sha256,
         source_record_count=None,
         parameters=parameters,
-        outputs={"chunks_jsonl": paths["chunks"]},
+        outputs={
+            "chunks_jsonl": paths["chunks"],
+            "source_fidelity_oracles": oracle_path,
+        },
         schema_version=rag.CHUNK_COMPLETION_SCHEMA_VERSION,
         extra_fields={
             "inputs": inputs,
@@ -1259,6 +1316,7 @@ def _write_resume_chunk_fixture(
     rag.export_markdown(
         paths["chunks"],
         paths["export"],
+        validation_policy=args.markdown_validation,
         security_policy=llm_kwargs["security_policy"],
     )
     return parameters
@@ -1270,6 +1328,7 @@ def _resume_artifact_identity(rag, paths: Mapping[str, Path]) -> str:
         paths["converted_markdown"],
         rag._artifact_completion_path(paths["doc"], stage="conversion"),
         paths["chunks"],
+        rag._source_oracle_registry_path(paths["chunks"]),
         rag._artifact_completion_path(paths["chunks"], stage="chunking"),
         rag._quality_core.quality_report_path(paths["chunks"]),
         paths["export"],
@@ -1363,9 +1422,9 @@ def _probe_noop_resume() -> tuple[dict[str, object], dict[str, object]]:
 
     Production completion validators, collection locking, skip decisions, and
     the mandatory index-revalidation call are exercised.  Physical vector
-    indexing is deliberately replaced by a dependency-free ``IndexOutcome``;
-    PDF conversion, chunk generation, partial repair, and model loading are not
-    part of this no-op fixture.
+    indexing and final publication persistence are replaced by dependency-free
+    outcomes; PDF conversion, chunk generation, partial repair, and model
+    loading are not part of this no-op fixture.
     """
     rag = importlib.import_module("rag")
     operation_contracts = importlib.import_module("operation_contracts")
@@ -1389,6 +1448,7 @@ def _probe_noop_resume() -> tuple[dict[str, object], dict[str, object]]:
             exclude_types=None,
             chapters=None,
             split_chapters=False,
+            validation_policy=args.markdown_validation,
         )
         if not (
             rag._converted_outputs_complete(
@@ -1436,6 +1496,8 @@ def _probe_noop_resume() -> tuple[dict[str, object], dict[str, object]]:
             "_unified_export_complete": rag._unified_export_complete,
             "_vector_store_lock": rag._vector_store_lock,
             "_index_chunks_for_backend": rag._index_chunks_for_backend,
+            "_publish_pipeline_publication": (
+                rag._publish_pipeline_publication),
         }
         expected_policy = rag._effective_security_policy(None)
 
@@ -1753,6 +1815,65 @@ def _probe_noop_resume() -> tuple[dict[str, object], dict[str, object]]:
             })
             return expected_outcome
 
+        publication_observations = []
+
+        def validate_publication(pdf_path, published_paths, **kwargs):
+            expected_keys = {
+                "db_dir", "db_backend", "collection_name",
+                "embedding_model", "conversion_parameters",
+                "chunk_parameters", "unified_parameters",
+                "split_parameters", "index_outcome", "raptor_out",
+                "raptor_parameters", "lock_timeout"}
+            if (pdf_path != pdf or published_paths is not paths
+                    or set(kwargs) != expected_keys
+                    or kwargs["db_dir"] != paths["chroma"]
+                    or kwargs["db_backend"] != "chroma"
+                    or kwargs["collection_name"] != paths["collection"]
+                    or kwargs["embedding_model"] != args.embedding_model
+                    or kwargs["conversion_parameters"]
+                    != conversion_parameters
+                    or kwargs["chunk_parameters"] != chunk_parameters
+                    or kwargs["unified_parameters"] != export_parameters
+                    or kwargs["split_parameters"] is not None
+                    or kwargs["index_outcome"] is not expected_outcome
+                    or kwargs["raptor_out"] is not None
+                    or kwargs["raptor_parameters"] is not None
+                    or kwargs["lock_timeout"] != 1.0
+                    or lock_observation["active"] is not False
+                    or len(index_observations) != 1
+                    or publication_observations):
+                raise PhaseA0BenchmarkError(
+                    "resume publication wiring changed")
+            identity = {
+                "pdf": relative(pdf_path),
+                "run_root": relative(published_paths["doc"].parent),
+                "db_dir": relative(kwargs["db_dir"]),
+                "db_backend": kwargs["db_backend"],
+                "collection_name": kwargs["collection_name"],
+                "embedding_model": kwargs["embedding_model"],
+                "conversion_parameters_sha256": identity_sha256(
+                    kwargs["conversion_parameters"]),
+                "chunk_parameters_sha256": identity_sha256(
+                    kwargs["chunk_parameters"]),
+                "unified_parameters_sha256": identity_sha256(
+                    kwargs["unified_parameters"]),
+                "split_requested": kwargs["split_parameters"] is not None,
+                "index_outcome_committed": kwargs["index_outcome"].committed,
+                "lock_timeout": kwargs["lock_timeout"],
+            }
+            publication_observations.append({
+                "arguments_sha256": identity_sha256(identity),
+                "after_index": True,
+                "gate_count": len(
+                    rag._publication_core.PUBLICATION_GATE_NAMES),
+            })
+            return {
+                "gates": [
+                    {"name": name, "status": "pass"}
+                    for name in rag._publication_core.PUBLICATION_GATE_NAMES
+                ],
+            }
+
         def forbidden_stage(stage: str):
             def fail(*_args, **_kwargs):
                 physical_calls[stage] += 1
@@ -1770,6 +1891,7 @@ def _probe_noop_resume() -> tuple[dict[str, object], dict[str, object]]:
         rag._unified_export_complete = observe_export
         rag._vector_store_lock = observe_lock
         rag._index_chunks_for_backend = validate_index
+        rag._publish_pipeline_publication = validate_publication
         result = rag._run_pipeline_stages(
             pdf, paths, args, resume=True, watermark=None)
         expected_counts = {
@@ -1788,14 +1910,17 @@ def _probe_noop_resume() -> tuple[dict[str, object], dict[str, object]]:
                 or not isinstance(lock_observation["held_control"], dict)
                 or lock_observation["held_control"].get("result") != "busy"
                 or len(index_observations) != 1
+                or len(publication_observations) != 1
                 or set(result) != {
                     "paths", "collection", "db_dir", "db_backend",
-                    "index_outcome"}
+                    "index_outcome", "publication_receipt"}
                 or result["paths"] is not paths
                 or result["collection"] != paths["collection"]
                 or result["db_dir"] != paths["chroma"]
                 or result["db_backend"] != "chroma"
-                or result["index_outcome"] is not expected_outcome):
+                or result["index_outcome"] is not expected_outcome
+                or result["publication_receipt"]
+                != paths["publication_receipt"]):
             raise PhaseA0BenchmarkError(
                 "resume pipeline observations were incomplete")
         lock_observation["released_control"] = _run_vector_lock_control(
@@ -1833,12 +1958,19 @@ def _probe_noop_resume() -> tuple[dict[str, object], dict[str, object]]:
                 **index_observations[0],
                 "outcome": outcome_fields,
             },
+            "publication_commit": {
+                "calls": len(publication_observations),
+                **publication_observations[0],
+            },
             "returned_result": {
                 "paths_match": result["paths"] is paths,
                 "collection_match": result["collection"] == paths["collection"],
                 "db_dir_match": result["db_dir"] == paths["chroma"],
                 "db_backend_match": result["db_backend"] == "chroma",
                 "outcome_match": result["index_outcome"] is expected_outcome,
+                "publication_receipt_match": (
+                    result["publication_receipt"]
+                    == paths["publication_receipt"]),
             },
             "skipped_physical_calls": {
                 name: physical_calls[name]
@@ -2122,6 +2254,7 @@ def _validate_contract(name: str, value: object) -> None:
     elif name == "noop_resume":
         validators = value.get("completion_validators")
         vector_lock = value.get("vector_lock")
+        publication_commit = value.get("publication_commit")
         expected_negative_kinds = {
             "conversion": "parameter_mismatch",
             "chunks": "source_mismatch",
@@ -2183,7 +2316,8 @@ def _validate_contract(name: str, value: object) -> None:
         valid = (
             set(value) == {
                 "record_count", "completion_validators", "vector_lock",
-                "index_revalidation", "returned_result",
+                "index_revalidation", "publication_commit",
+                "returned_result",
                 "skipped_physical_calls",
                 "artifact_set_sha256", "physical_indexing_exercised",
                 "partial_repair_exercised"}
@@ -2217,10 +2351,19 @@ def _validate_contract(name: str, value: object) -> None:
                 "unchanged_records": 1, "removed_records": 0,
                 "upserted_records": 0, "batch_count": 0,
                 "physical_count": 1, "committed": True}
+            and isinstance(publication_commit, dict)
+            and set(publication_commit) == {
+                "calls", "arguments_sha256", "after_index", "gate_count"}
+            and publication_commit["calls"] == 1
+            and _SHA256_RE.fullmatch(str(
+                publication_commit["arguments_sha256"])) is not None
+            and publication_commit["after_index"] is True
+            and publication_commit["gate_count"] == 5
             and value["returned_result"] == {
                 "paths_match": True, "collection_match": True,
                 "db_dir_match": True, "db_backend_match": True,
-                "outcome_match": True}
+                "outcome_match": True,
+                "publication_receipt_match": True}
             and value["skipped_physical_calls"] == {
                 "convert": 0, "chunk": 0, "quality": 0, "export": 0}
             and _SHA256_RE.fullmatch(

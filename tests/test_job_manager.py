@@ -1029,6 +1029,35 @@ def test_failed_recovery_action_is_not_frozen_before_terminal_state(
     assert outcome.cleanup_confirmed
 
 
+def test_corrupt_final_cancel_marker_still_publishes_the_terminal_report(
+        monkeypatch, tmp_path):
+    """The terminal transition has committed; evidence damage cannot undo it."""
+    script = tmp_path / "bound-rag.py"
+    binding = _runtime_binding(
+        script, lambda script_path, argv, **kwargs: 1)
+    monkeypatch.setattr(
+        job_manager, "_default_runtime_binding", lambda: binding)
+    store = job_runtime.JobStore(tmp_path / "jobs")
+    submitted = store.submit_job("index", ["--full-reindex"])
+
+    def corrupt(_job_id, _attempt_token):
+        raise job_runtime.JobCorruptError("cancel marker is unreadable")
+
+    monkeypatch.setattr(store, "cancel_requested_at", corrupt)
+
+    result = job_manager.run_job(store, submitted.job_id)
+
+    _paths, outcome = _attempt_outcome(store, submitted.job_id)
+    assert result.status == "failed"
+    assert outcome.status == "failed"
+    assert outcome.finished_at is not None
+    assert outcome.terminal_reason == result.reason
+    # A non-recovery report cannot carry recovery/repair state; the damaged
+    # marker is left for the next reconciliation to classify.
+    assert not outcome.report_repaired
+    assert store.get_job(submitted.job_id).status == "failed"
+
+
 def test_cancel_marker_arriving_during_recovery_is_reported_unobserved(
         tmp_path, monkeypatch):
     store = job_runtime.JobStore(tmp_path / "jobs")

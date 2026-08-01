@@ -32,6 +32,12 @@ _NETWORK_OVERRIDE_VARIABLES = (
     "CURL_CA_BUNDLE",
     "SSL_CERT_FILE",
     "SSL_CERT_DIR",
+    # TLS key logging exports the session secrets protecting private corpus
+    # text and provider credentials. urllib3 and httpx read it straight from
+    # the process environment when they build an SSL context, so unlike the
+    # proxy and CA variables above it is not neutralized by a session-level
+    # ``trust_env = False``. It must therefore fail closed on policy alone.
+    "SSLKEYLOGFILE",
     # SDK/model-hub endpoint overrides are trust decisions too. Runtime
     # provider adapters pin their official origins; the owned model-sync
     # transport accepts a reviewed HF endpoint only under explicit trust.

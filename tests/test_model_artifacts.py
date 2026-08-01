@@ -1275,8 +1275,9 @@ def test_zero_shot_and_reranker_use_verified_local_paths(monkeypatch):
     }
 
 
+@pytest.mark.parametrize("force_full_page_ocr", [False, True])
 def test_docling_configuration_is_local_accurate_and_explicit_english_ocr(
-        monkeypatch, tmp_path):
+        monkeypatch, tmp_path, force_full_page_ocr):
     root = tmp_path / "docling"
     monkeypatch.setattr(
         rag._model_artifacts, "verified_docling_artifact_directory",
@@ -1306,11 +1307,15 @@ def test_docling_configuration_is_local_accurate_and_explicit_english_ocr(
     options = SimpleNamespace()
 
     assert rag._configure_docling_model_artifacts(
-        options, include_ocr=True) == root
+        options,
+        include_ocr=True,
+        force_full_page_ocr=force_full_page_ocr,
+    ) == root
     assert options.artifacts_path == root
     assert options.table_structure_options.mode == "accurate"
     assert options.ocr_options.backend == "onnxruntime"
     assert options.ocr_options.lang == ["english"]
+    assert options.ocr_options.force_full_page_ocr is force_full_page_ocr
     assert options.ocr_options.det_model_path.endswith("PP-OCRv6_det_small.onnx")
     assert options.ocr_options.cls_model_path.endswith(
         "ch_ppocr_mobile_v2.0_cls_mobile.onnx")

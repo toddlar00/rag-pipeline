@@ -1,6 +1,8 @@
 # Context-aware retrieval assembly
 
-- **Status:** Accepted in draft implementation
+- **Status:** Accepted; merged to `main` on 2026-08-01 through the
+  history-preserving integration of
+  [#44](https://github.com/toddlar00/rag-pipeline/pull/44)
 - **Implementation:** PR #36 (`agent/context-aware-retrieval`)
 - **Historical input:** `docs/superpowers/plans/2026-07-23-codex-improvements-structure-profiles.md`
 

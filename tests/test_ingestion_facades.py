@@ -224,6 +224,49 @@ def test_rag_analyze_only_rejects_incomplete_cached_analysis(
     assert "removable background scans" not in caplog.text
 
 
+@pytest.mark.parametrize("alias", ["same", "case", "lexical"])
+def test_rag_preprocess_refuses_to_publish_over_its_own_source(
+        monkeypatch, tmp_path, alias):
+    """Publication replaces the output path; it must never be the source PDF."""
+    source = tmp_path / "book.pdf"
+    source.write_bytes(b"source")
+    output = {
+        "same": source,
+        "case": tmp_path / "BOOK.PDF",
+        "lexical": tmp_path / "sub" / ".." / "book.pdf",
+    }[alias]
+    if alias == "case" and not (tmp_path / "BOOK.PDF").exists():
+        pytest.skip("case-insensitive alias requires a case-folding filesystem")
+    (tmp_path / "sub").mkdir(exist_ok=True)
+    safe = FakePage(0, "Reliable text " * 10, [1])
+    document = FakeDocument([safe])
+    _install_pymupdf(monkeypatch, document)
+
+    with pytest.raises(ValueError, match="distinct files"):
+        rag.preprocess_pdf(
+            source,
+            output,
+            _analysis_cache=_analysis_stats(usable=1, usable_large=1),
+        )
+
+    assert document.saved == []
+    assert source.read_bytes() == b"source"
+
+
+def test_rag_preprocess_analysis_still_reports_for_an_aliased_output(
+        monkeypatch, tmp_path):
+    source = tmp_path / "book.pdf"
+    source.write_bytes(b"source")
+    monkeypatch.setitem(sys.modules, "pymupdf", SimpleNamespace())
+
+    result = rag.preprocess_pdf(
+        source, source, analyze_only=True,
+        _analysis_cache=_analysis_stats(usable=1, usable_large=1))
+
+    assert result is None
+    assert source.read_bytes() == b"source"
+
+
 def test_rag_incomplete_plan_cancels_all_deletion_and_save(
         monkeypatch, tmp_path):
     source = tmp_path / "book.pdf"

@@ -74,19 +74,21 @@ that `Path.home()` remains denied.
 ## A0b publication gate
 
 The replacement gate uses clean pre-gate source
-`fdb08d26e3fc9fd2b80b983eeab7b1f353b96707` (tree
-`d7e758c6002144acff0c8d58e54c9980a6ffd7c7`) and separate Windows and Linux
-CPython 3.12 x86-64 reports. Both were generated under the
+`8f95872d003ffe52ddc1da3bf506e65b60da09b3` (tree
+`a96e07849170d3e5a31d0b990fc78c1f913426a3`) — the R2 convergence checkpoint
+merging the publication-readiness and strict output-contract lines over the
+banked R1 head and the two-lane CI split — and separate Windows and Linux
+CPython 3.12.13 x86-64 reports. Both were generated under the
 exact `requirements-full.lock`, `requirements-test.lock`, and retained
 `requirements-lock-tools.lock` union after strict hash-locked synchronization
 and dependency-consistency checks: 189 marker-resolved distributions on
 Windows and 187 on Linux. They bind one clean source, the same eight LF and
 `HEAD`-identical dependency/model inputs, and the complete 9×5 scenario
 contract. Each passes an independent complete same-platform comparison. The
-repaired CI matrix, LF policy, source gates, and Python 3.10-3.14 compatibility
-normalization are already in `fdb08d2` and were exercised by generation and
-comparison. The following gate-only delta is
-limited to the two reports and their provenance/status documentation.
+repaired CI matrix, LF policy, source gates, Python 3.10-3.14 compatibility
+normalization, and the two-lane CI split precede `8f95872` and were exercised
+by generation and comparison. The following gate-only delta is limited to the
+two reports and their provenance/status documentation.
 
 A0b nevertheless remains pending. No local smoke report, subset, noncanonical
 interpreter, baseline copied between operating systems, or local-only
@@ -155,24 +157,34 @@ checkout. Cross-version qualification then exposed CPython 3.10's missing
 `ast.TryStar`, different `typing.Any` and default-`None` behavior, and nested
 PEP 585 forward-reference handling; CPython 3.13/3.14 lazy `sysconfig`
 initialization; and CPython 3.13's inherited `Path.home` descriptor and private
-implementation identity for public `pathlib.Path`. Final pre-gate source
-`fdb08d2` closes those cases, including inherited cross-module type hints,
-without permitting operator-home or tilde access.
+implementation identity for public `pathlib.Path`. The earlier normalization
+checkpoint `fdb08d2` closed those cases, including inherited cross-module type
+hints, without permitting operator-home or tilde access.
 
-At the final pre-gate source checkpoint, all 56 A0 tests pass in each locked
-full suite. Fresh complete suites pass 2,233 tests with 7 skips on Windows and
-2,236 tests with 4 skips on native Linux. The sole warning is the R2-owned
-Starlette/httpx dependency deprecation. The canonical architecture inventory
-reports 1,981 functions and its runtime contract is identical across Windows
-and Linux CPython 3.10-3.14. The Windows replacement report is 49,077
-bytes under CPython 3.12.13 (file SHA-256
-`0363e499ab69570be978d7c714e3c3cf38adf955ad00720927d81b283f1d6ee5`;
+At `fdb08d2`, all 56 A0 tests passed in each locked full suite. Fresh complete
+suites passed 2,233 tests with 7 skips on Windows and 2,236 tests with 4 skips
+on native Linux. The canonical architecture inventory reported 1,981 functions
+and its runtime contract reproduced across Windows and Linux CPython
+3.10-3.14. Gate-only commit `ed2995e` froze those local candidates. R2
+preparation later produced clean source `537f72b` and gate-only refresh
+`b813aa7`.
+
+Release-defect source `c1bc042` changed Python and invalidated those reports;
+publication-readiness source `e904fa6` and the strict output-contract line
+each superseded that paired refresh with their own interim candidates, and
+the R2 convergence checkpoint `8f95872` supersedes both in turn. The current
+inventory records 2,597 functions with 943 static and 951 runtime `rag`
+bindings. After strict synchronization and dependency checks for 189 Windows
+and 187 Linux distributions, the Windows replacement report is 50,428 bytes
+under CPython 3.12.13 (file SHA-256
+`0a62a585007667086d1a5fefb3978d2e432dcb334b3529ac907707c2906f38cb`;
 embedded report SHA-256
-`3f76c476d2877537fe2da6dd334c40902146b2264d3f61ea5b3c8e7b57239db1`).
-The Linux report is 48,488 bytes under CPython 3.12.3 (file SHA-256
-`3617fb7a90edabc6e45a6ef6ac694f093171188ea70fb3b6f456253d5119c799`;
+`8ceb9ebc5a25fd7afbb8e5cff82abb08f31d4f54182fe6a0e557033c5c41c359`).
+The Linux report is 49,815 bytes under CPython 3.12.13 (file SHA-256
+`6db38cc1a3433169ddfd3985b24e4057b229eb6dd37d01768f38acdd11bb64de`;
 embedded report SHA-256
-`d24c4e3444f0c5afb11c76bac65d8148258d842b569dcdf4128b61ea2cb57147`).
-These are local replacement baseline candidates. The gate-only commit that
-contains them freezes the final local candidate; publishing its exact
-commit/tree plus hosted execution and review at that head remain outstanding.
+`b3d599e9d55eda8c2e76b59c32eabd05cc0310fdd82aa5339b040c1862a8e0e6`).
+Each current candidate passes an independent complete same-platform 9×5
+comparison. The following reports-and-documentation-only commit freezes the
+new local candidate; publishing its exact commit/tree plus hosted execution,
+retained evidence, and review at that head remain outstanding.

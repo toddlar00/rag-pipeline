@@ -1158,7 +1158,9 @@ def test_repository_baseline_is_current_and_canonical():
     baseline = PROJECT_ROOT / inventory.DEFAULT_BASELINE
 
     assert baseline.read_bytes() == inventory.inventory_bytes(value)
-    assert baseline.stat().st_size <= 1_250_000
+    # Preserve roughly the review-growth headroom established when schema v3
+    # first compacted the canonical inventory to about one megabyte.
+    assert baseline.stat().st_size <= 1_600_000
     assert value["source_architecture"]["import_graph"]["cyclic_components"] == []
     assert [
         item["module"] for item in value["consumers"]["production"]

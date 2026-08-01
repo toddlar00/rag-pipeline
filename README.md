@@ -72,6 +72,60 @@ Enriched Chunks + Bound Quality Report
  +---> [citations] -----> Citation graph (cases, statutes, cross-refs)
 ```
 
+### Five-gate logical publication commit
+
+A full pipeline run is **READY** only after one final, atomically written
+`.rag-publication.json` receipt binds five passing gates to the exact run
+artifacts: source completeness, physical order, semantic hierarchy, Markdown
+validity, and vector-store parity. Individual conversion, chunk, index, and
+export artifacts written before that receipt are staging artifacts; their
+presence alone does not make a run ready for use.
+
+For migration and recovery, a missing, malformed, or stale
+`.rag-publication.json` means **not READY**, including for runs created before
+this receipt existed. `--resume` first validates the existing stage receipts
+and repairs any incomplete stage, then regenerates the final publication
+receipt without repeating stages whose exact outputs remain valid.
+
+Publication rechecks the current gate-policy schemas, completion relationships,
+artifact hashes, split-chapter inventory, and index/model bindings. Under the
+vector-store lease it also performs a fresh backend scan for the exact stable
+IDs and stored `chunk_index` positions; the `info` command uses the same live
+check before displaying `[READY]`. This is deliberately stronger (and a little
+slower) than treating an index sidecar as proof of current physical parity.
+
+The source-fidelity gate binds every eligible source item to its exact Docling
+reference, text hashes, provenance index, page, bounding box, coordinate
+origin, and character span. It requires one exact, nonoverlapping partition of
+the published lexical tokens: every eligible source token must be represented,
+every published token must be source-owned, and declared list markers are
+mandatory source tokens rather than optional Markdown decoration. Numeric page
+furniture is removed only through its exact source-bound classification, and
+footnotes retain their source page and order before endnote serialization.
+
+Same-page reading order is checked from each item's first and last published
+token positions. Typed `container_alias` ownership permits a table or picture
+to carry only its source-proved alternate OCR segmentation. A PDF-bound native
+recovery group may share one indivisible output interval only when the registry
+cryptographically binds the shared oracle and the exact source-ordered member
+references; all edges from that group to surrounding source items remain
+strict.
+
+Opaque table, figure, and native-text repairs are authorized by a separate
+`*_chunks.source-oracles.json` registry created from the captured source before
+chunk records are formed. The chunk completion, quality report, publication
+receipt, and READY inventory all bind that exact registry; a missing, replayed,
+overlapping, or changed oracle fails closed.
+
+The semantic-hierarchy gate independently recomputes occurrence-bound heading
+lineage. Every attachable source heading is owned exactly once by its first
+applicable chunk and retained by exact source-reference identity throughout
+its scope. Repeated display text is never treated as identity; running page
+furniture and embedded outline rows are closed, source-proven exception types.
+Sparse OCR fragments that only resemble headings are retained in a separate,
+typed `sparse_ocr_heading_artifact` bucket and are hash-bound by the quality and
+publication evidence instead of being silently discarded or promoted.
+
 `rag.py` remains the stable command and Python compatibility facade.
 `retrieval_core.py` is its standard-library-only retrieval domain: structured
 search/grounding results, stable chunk identity, legal lexical analysis,
@@ -122,6 +176,23 @@ Chroma/Qdrant adapters.
 responses into the typed, provider-neutral contracts in `llm_runtime.py`.
 Gemini remains lazily imported, while `rag.py` retains provider selection,
 runtime composition, mutable caches/throttles, and the compatibility facades.
+
+`llm_output_contracts.py` is the dependency-light authority boundary for model
+text after a provider envelope has been accepted. The classification contract
+accepts only one bounded ASCII chunk-classification label. The current review
+candidate adds the exact `toc-hierarchy-v1` array shared by `toc.scaffold` and
+`toc.parse`, plus the exact `toc-layout-v1` object used only as untrusted hints
+for scaffold parsing, and the exact Boolean-only `toc-verification-v1` object
+used for page spot-checks. Contracted live, shared, and cached results are
+validated before publication, and only content-free status and diagnostic
+receipts describe rejections. See the
+[LLM output-contract ADR](docs/architecture/decisions/llm-output-contracts.md),
+the proposed
+[TOC hierarchy output-contract ADR](docs/architecture/decisions/toc-hierarchy-output-contract.md),
+and the proposed
+[TOC layout output-contract ADR](docs/architecture/decisions/toc-layout-output-contract.md),
+and the proposed
+[TOC page-verification output-contract ADR](docs/architecture/decisions/toc-verification-output-contract.md).
 
 `endpoint_policy.py` is the standard-library-only trust boundary for custom
 LLM URLs. It canonicalizes approved targets before credential lookup, cache
@@ -294,6 +365,7 @@ output/
 |   |-- Civil_procedure.json             # DoclingDocument
 |   |-- Civil_procedure_docling.md        # Raw Docling conversion markdown
 |   |-- Civil_procedure_chunks.jsonl      # Enriched chunks
+|   |-- Civil_procedure_chunks.source-oracles.json # Opaque source-oracle registry
 |   |-- Civil_procedure_chunks.quality.json # Exact quality attestation
 |   |-- Civil_procedure.md                # Final, filtered unified export
 |   |-- Civil_procedure_chroma/           # Chroma index (default backend)
@@ -681,8 +753,9 @@ batch, physically verified record counts, exact physical mutation calls, and
 bounded-queue pressure. A failed index stage instead records separately named
 content-free attempted delete/create/upsert/queue counts with
 `committed=false`; it does not mislabel partial physical work as a committed
-outcome. LLM observations aggregate calls, attempts, retries, latency, and
-exact/estimated tokens.
+outcome. LLM observations aggregate calls, attempts, retries, latency,
+exact/estimated tokens, and output-contract acceptance, rejection,
+not-evaluated, and deterministic-fallback counts.
 
 Each invocation replaces the supplied run-event/report files with its current
 run. Run and LLM event/report outputs must resolve to pairwise distinct files;
@@ -1008,9 +1081,19 @@ parsing/review (`--llm-scaffold`).
 
 **Provider chain**: configured OpenAI-compatible cloud API -> Ollama (local) ->
 Gemini (API) -> deterministic fallback where the feature supports one. A cloud
-provider is skipped when it has no key; a failed or empty response falls through
-to the next provider. Features without a deterministic fallback return no LLM
-result after all configured providers fail.
+provider is skipped when it has no key; transport failures and empty responses
+retain the ordered provider fallback. Features without a deterministic fallback
+return no LLM result after all configured providers fail. Under the current
+output-contract proposal, a non-empty classification, TOC-layout,
+TOC-hierarchy, or TOC-verification response that violates its exact contract
+does not delegate authority to a later provider. In best-effort mode,
+classification preserves the deterministic content type, `toc.layout` omits
+generated layout hints while hierarchy generation may continue, a rejected
+hierarchy preserves the deterministic TOC path, and rejected `toc.verify`
+output withholds verification credit and is counted as inconclusive. Strict
+mode raises a structured execution error.
+Stopping the provider chain on semantic rejection is still pending owner
+approval before merge.
 
 ### Reproducible LLM execution
 
@@ -1051,16 +1134,26 @@ an explicit `cache_mode`; changing only the security profile does not rewrite
 an already configured runtime. A cache key covers the exact prompt digest,
 operation and prompt
 versions, generation settings, timeout, fallback policy, ordered
-provider/model/endpoint identities, and opaque trust/tenant namespace.
+provider/model/endpoint identities, opaque trust/tenant namespace, and any
+versioned output-contract and deterministic-fallback identities.
 Prompts, API keys, raw endpoints, and raw namespace labels are not stored in the
 key or record: reviewed official targets use a versioned canonical identity,
 while custom/rejected targets and namespaces use opaque SHA-256 identities.
-Enabled endpoints are validated before cache lookup. Only non-empty successful
-responses are cached, and entries use unkeyed integrity hashes plus atomic
-replacement so truncated, malformed, hash-inconsistent, or ambiguous legacy
+Enabled endpoints are validated before cache lookup. Only successful non-empty
+text is cached; contracted text must additionally be accepted and canonical.
+Contracted cache hits and
+same-key in-flight results are revalidated before use. Entries use unkeyed
+integrity hashes plus atomic replacement so truncated, malformed,
+hash-inconsistent, noncanonical, contract-incompatible, or ambiguous legacy
 records fail closed and are repaired only by a later explicitly cache-enabled
 successful call. This detects damage; it is not cryptographic protection from
 a trusted local writer.
+
+LLM events and reports never retain rejected response text or validator
+exceptions. They use bounded contract/fallback IDs, the status `accepted`,
+`rejected`, or `not_evaluated`, stable diagnostic codes, and aggregate fallback
+counts. A budget-exhausted request is not labeled as a deterministic fallback
+because budget exhaustion is always raised to the caller.
 
 The cache itself contains successful response text in plaintext. Treat its
 directory as sensitive when textbook excerpts, client facts, or other private
@@ -1077,7 +1170,7 @@ default location is the platform user-cache directory
 | `--network-policy local-only|allow-cloud` | Consent before private text can reach a cloud provider |
 | `--model-download-policy cache-only|allow-reviewed-sync` | Keep runtime offline by default or explicitly permit reviewed model sync |
 | `--llm-cache-namespace LABEL` | Nonsecret custom-gateway trust/tenant label; only its digest persists |
-| `--trust-environment-network` | Accept reviewed proxy/custom-CA routing and an explicit `HF_ENDPOINT` for model sync |
+| `--trust-environment-network` | Accept reviewed proxy/custom-CA/TLS-key-logging settings and an explicit `HF_ENDPOINT` for model sync |
 | `--llm-cache-mode readwrite|readonly|refresh|off` | Read/write policy; `refresh` bypasses a hit and replaces it after live success |
 | `--llm-cache-dir PATH` | Override the machine-local response-cache directory |
 | `--llm-events PATH` | Append one prompt-free JSONL event per logical request |
@@ -1317,7 +1410,7 @@ python rag.py export \
   --chunks output/Civil_procedure/Civil_procedure_chunks.jsonl \
   -o output/Civil_procedure/Civil_procedure.md --format markdown
 
-# Split into one file per chapter (ideal for Claude Projects / NotebookLM)
+# Publish the canonical chapter Markdown used by target-specific derivatives
 python rag.py export \
   --chunks output/Civil_procedure/Civil_procedure_chunks.jsonl \
   -o output/Civil_procedure/Civil_procedure.md \
@@ -1351,25 +1444,73 @@ python rag.py export \
   --chapters 3 --include-types case_opinion --split-chapters
 ```
 
-### Using with Claude Projects / NotebookLM
+### Markdown validation
 
-Upload the exported markdown for clean, structured content. Split chapters give
-best retrieval:
+Markdown publication always runs deterministic structural checks before any
+output file is replaced. The default `--markdown-validation auto` mode also
+runs the pinned Pandoc 3.10.1 semantic parser and the exact Zettlr 4.7 remark
+profile when those local tools are available. Semantic mismatches stop the
+export; Zettlr style diagnostics are warnings in `auto` mode.
+
+Use `strict` to require both pinned validators and make style diagnostics
+blocking. Use `internal` only for a hermetic export that deliberately skips
+both external validators.
 
 ```bash
-python rag.py export \
-  --chunks output/Civil_procedure/Civil_procedure_chunks.jsonl \
-  -o output/Civil_procedure/Civil_procedure.md --split-chapters
+python rag.py export --chunks output/chunks.jsonl -o output/book.md \
+  --markdown-validation strict
 ```
 
-Output:
+The Zettlr-compatible validator never installs packages at runtime. Prepare its
+locked local dependencies once after cloning or updating the repository:
+
+```bash
+cd tools/zettlr-markdown-validator
+npm ci --ignore-scripts --no-audit --no-fund
 ```
-output/Civil_procedure/Chapters/
-  ch02_Subject_Matter_Jurisdiction.md
-  ch03_Personal_Jurisdiction.md
-  ch13_Special_Multiparty_Litigation.md
-  front_matter.md
+
+### AI project upload packages
+
+Create a target-specific upload directory from an existing **READY** full run.
+The run must have been published with canonical chapter Markdown, so use
+`full --split-chapters` (or resume that run with the same option) first. A
+standalone split export is not a substitute for the five-gate publication
+receipt.
+
+```bash
+# Markdown documents, grouped to NotebookLM's default source-count budget
+python rag.py export \
+  --chunks output/Civil_procedure/Civil_procedure_chunks.jsonl \
+  --target notebooklm --markdown-validation strict
+
+# Markdown documents, with an explicit project-file budget
+python rag.py export \
+  --chunks output/Civil_procedure/Civil_procedure_chunks.jsonl \
+  --target chatgpt --max-files 20 --markdown-validation strict
+
+# Normalized text documents for a Claude Project
+python rag.py export \
+  --chunks output/Civil_procedure/Civil_procedure_chunks.jsonl \
+  --target claude --markdown-validation strict
 ```
+
+Each command creates exactly one sibling directory: `NotebookLM/`, `ChatGPT/`,
+or `Claude/`. NotebookLM and ChatGPT packages contain `.md`; Claude packages
+contain `.txt` with the same visible headings and endnotes. Upload only the
+files inside that directory. The strict ownership/provenance receipt is a
+hidden sibling of the directory and is deliberately kept out of the upload
+inventory. Target derivatives are validated again after comment
+materialization, link removal, footnote relabeling, and chapter grouping;
+`--markdown-validation strict` requires the pinned Pandoc and Zettlr profiles
+to pass before any upload file is published.
+
+When a file budget is lower than the canonical chapter count, chapters are
+grouped in source order and balanced by size. Footnotes are relabeled within
+each grouped file, generated comments become visible labels, cross-chapter and
+figure links that would break outside `Chapters/` become visible text, and
+physical locators such as `[PDF page 42]` remain in the content. The target
+package is an optional derivative: creating or deleting it does not change the
+run's five-gate READY state.
 
 ## AI Model Integration
 
@@ -1512,7 +1653,7 @@ deterministic and make no LLM calls unless an LLM feature flag is supplied.
 
 | Feature | Flag / Command | What it does |
 |---------|---------------|--------------|
-| Content classification | `--llm-classify` | Replaces regex type detection with LLM inference per chunk |
+| Content classification | `--llm-classify` | Accepts one exact bounded label per chunk; invalid model text preserves the deterministic type in best-effort mode |
 | Contextual retrieval | `--contextualize` | Generates 1-2 sentence context prefix per chunk (Anthropic pattern) |
 | Neighbor assembly | `query --context-window N` | Adds manifest-bound adjacent evidence after ranking while preserving independent citations |
 | Heading reconstruction | `--reconstruct-headings` | Infers full section paths for bare headings ("B", "III") |
@@ -1522,7 +1663,7 @@ deterministic and make no LLM calls unless an LLM feature flag is supplied.
 | Exam questions | `generate-questions` command | Issue-spotters, doctrinal, and policy questions |
 | Flashcard export | `export --format flashcards` | Anki-compatible Q&A pairs |
 | RAPTOR summaries | `raptor` command | 3-level recursive summary tree |
-| TOC scaffold review | `--llm-scaffold` | Adds LLM layout analysis, hierarchy parsing, and validation to deterministic TOC parsing |
+| TOC scaffold review | `--llm-scaffold` | Adds exact layout-hint, hierarchy-array, and Boolean page-verification contracts; rejected layout omits hints, any failed hierarchy batch discards the full LLM hierarchy, and unavailable/rejected model replies remain explicitly inconclusive |
 
 ### Vector Database (`--db-backend`)
 
@@ -1605,8 +1746,8 @@ before work begins, publish the JSONL via atomic replacement, and retain the
 vector lease until the matching index commits. A crash therefore exposes
 neither partial JSONL nor an apparently clean old index paired with a new
 corpus. Before any vector-client mutation, indexing validates the adjacent
-quality report against one exact chunks snapshot; schema-v8 manifests bind the
-validated schema-v4 report SHA-256 and attest the row-child count used to select
+quality report against one exact chunks snapshot; schema-v9 manifests bind the
+validated schema-v12 report SHA-256 and attest the row-child count used to select
 a safe candidate depth. Chroma hybrid search and opt-in neighbor
 assembly compare both the chunks and quality-report SHA-256 values with the
 manifest, parse and hash one exact file-handle snapshot, and refuse
@@ -1676,7 +1817,7 @@ an existing manifest.
 
 The real-vector-client release rehearsal recreates the exact schema-5 manifest
 field set emitted by the last integrated release, upgrades only the selected
-collection to schema 8, and verifies exact IDs and hashes, sibling collection
+collection to schema 9, and verifies exact IDs and hashes, sibling collection
 and manifest preservation, a subsequent no-op, successful queries against both
 collections, clean recovery-marker state, and immediate database-directory
 removal on Windows and Linux for both Chroma and Qdrant.
@@ -1759,9 +1900,24 @@ The pipeline supports two TOC extraction methods:
 
 1. **Column-position parsing**: Scans first 25 pages for TOC tables, maps column
    positions to heading depth (col 0 = chapter, col 1 = section, col 2 = sub).
-2. **LLM-assisted parsing** (opt-in with `--llm-scaffold`): Sends TOC text to the
-   configured provider in ~100-line batches for structured extraction and
-   validation of levels, titles, and page numbers.
+2. **LLM-assisted parsing** (opt-in with `--llm-scaffold`): Layout analysis
+   receives at most 120 bounded, JSON-framed lines. The proposed
+   `toc-layout-v1` contract accepts one exact eight-field hint object; a missing
+   or invalid response omits every generated layout hint. The hierarchy step
+   sends bounded lines in 80-line scaffold batches (the shared parser supports
+   100-line batches). The proposed `toc-hierarchy-v1` contract accepts only
+   1-100 exact `{level, title, page}` objects per response. If any hierarchy
+   batch is missing or invalid, the whole LLM hierarchy is discarded and
+   deterministic parsing retains authority. Page spot-checks frame the expected
+   entry and first 1,200 captured page characters as one bounded untrusted JSON
+   value. The proposed `toc-verification-v1` response accepts only
+   `{"verified": true|false}`; missing or rejected best-effort replies withhold
+   credit and are counted as inconclusive, while failures and logs contain only
+   fixed codes and aggregate counts. Exact shape validation cannot detect
+   schema-valid but semantically wrong layout, hierarchy, or verification
+   values; inspect enriched structure before relying on it. Agent-team prompts
+   remain permissive. Changes to those remaining operations require a full
+   enriched-artifact rebuild and reindex.
 
 This produces section paths like `Chapter 3 > B. Federalism > 2. Specific Jurisdiction`
 instead of flat `B` or `III`. In testing, TOC detection raised multi-level
@@ -1814,9 +1970,9 @@ validating their artifacts as follows:
 | Stage | Checks for |
 |-------|-----------|
 | Convert | Schema-v2 immutable original/effective PDF binding, config/model lock, and exact JSON/Markdown/derived-PDF output hashes |
-| Chunk | Schema-v3 exact Docling/conversion/recovery inputs, immutable structure-profile receipt, output hash, and strict JSONL schema |
-| Quality | Schema-v4 chunk-input provenance plus exact Docling/chunks/parameters/retrieval-linkage/table-family binding and every required PASS check |
-| Index | Clean schema-v8 manifest plus schema-v4 report binding, physical IDs/count, row-child count, and chunk hashes |
+| Chunk | Schema-v7 exact Docling/conversion/recovery inputs, immutable structure-profile receipt, output hash, and strict JSONL schema |
+| Quality | Schema-v12 chunk-input provenance plus exact Docling/chunks/parameters/retrieval-linkage/table-family binding and every required PASS check |
+| Index | Clean schema-v9 manifest plus schema-v12 report binding, physical IDs/count, row-child count, and chunk hashes |
 | Export | Source/config completion and output hash |
 | Chapter export | Exact manifested chapter-file set and hashes |
 | RAPTOR | Source/config-bound tree schema and statistics |
@@ -1834,17 +1990,14 @@ python rag.py batch *.pdf --resume
 
 On failure, the pipeline prints a ready-to-paste resume command.
 
-Conversion schema-v1 and chunk schema-v1/v2 completion files remain readable as
-migration inputs but are never accepted as verified resume evidence. Schema-v1
-or schema-v2 quality reports and pre-v6 index bindings are not accepted. A
-schema-v3 quality report remains read-compatible only after deterministic
-in-memory validation proves that its corpus contains no row children. A corpus
-carrying quality evidence, source lineage, or any table-family metadata requires
-a current schema-v4 report for indexing. Query-only compatibility accepts a
-schema-v6/schema-v2 index with neighbor context off and a schema-v7/schema-v3
-index with context on or off. Current indexing writes schema-v8/schema-v4
-evidence. Migrate the whole artifact chain in order, using the same processing
-flags, embedding model, and explicit structure profile as the original run:
+Legacy completion and quality files can be retained as migration inputs, but
+they are not verified resume evidence unless every current validator accepts
+their exact artifact generation. A corpus carrying quality evidence, source
+lineage, opaque source oracles, or table-family metadata requires the current
+schema-v12 quality report for indexing. Current indexing writes a schema-v9
+manifest bound to that schema-v12 report. Migrate the whole artifact chain in
+order, using the same processing flags, embedding model, and explicit structure
+profile as the original run:
 
 ```bash
 # Rebuild conversion, chunks, and quality evidence when needed, then reconcile
@@ -1858,9 +2011,9 @@ python rag.py full --pdf Book.pdf --resume --full-reindex \
 ```
 
 Do not query or export the old collection until this command finishes. Resume
-keeps valid schema-v2 conversion evidence, rebuilds invalid or pre-v3 chunk
-evidence under schema v3 and chunking policy v23, regenerates the schema-v4
-quality report from the exact chunk-completion inputs, and then reconciles or
+keeps valid schema-v2 conversion evidence, rebuilds stale chunk evidence under
+schema v7 and chunking policy v79, regenerates the schema-v12 quality report
+from the exact chunk-completion inputs, and then reconciles or
 rebuilds an index whose
 prior quality binding is incompatible. The chunk receipt records the selected
 profile name, revision, schema, and canonical policy SHA-256 plus a
@@ -2658,15 +2811,26 @@ rebuild with `--full-reindex` if needed.
   retries are disabled. Custom release gateways also require a nonsecret cache
   namespace whose opaque digest binds cache, single-flight, report, and resume
   identity.
-- Cloud transports ignore ambient proxy, custom-CA, and SDK endpoint settings
-  by default. Release mode reads values only to identify non-empty override
-  variable names, never persisting, echoing, or reporting those values, and
-  requires `--trust-environment-network` after review.
+- Cloud transports ignore ambient proxy, custom-CA, TLS key-logging, and SDK
+  endpoint settings by default. Release mode reads values only to identify
+  non-empty override variable names, never persisting, echoing, or reporting
+  those values, and requires `--trust-environment-network` after review.
+  `SSLKEYLOGFILE` is refused on policy alone because the HTTP stacks read it
+  when they build an SSL context, so a per-session `trust_env = False` does not
+  disable it.
   This does not replace OS DNS, firewall, or egress controls.
 - Requests-based provider responses are MIME-, framing-, deadline-, depth-, and
   decoded-byte-bounded before JSON parsing. Fixed diagnostics never include the
   body. The Google Gemini SDK boundary is separately tracked and is not claimed
   to inherit the Requests reader's guarantees.
+- Operation-specific output contracts treat accepted provider text, cache hits,
+  and shared in-flight results as hostile until validation. The proposed TOC
+  layout, hierarchy, and page-verification contracts reject wrappers, coercive
+  or extra fields, unsafe generated strings, and partial authority without
+  recording rejected text or logging generated values. Verification accepts
+  only an exact Boolean field and labels unavailable/rejected model replies
+  inconclusive. Exact shape does not establish semantic correctness;
+  `agent_team.*` outputs remain outside these contracts.
 - API keys can come from environment variables or the interactive menu's hidden
   prompt; menu-entered keys are redacted from the displayed command, removed
   from child process arguments, scoped to the child environment, and not
@@ -2699,6 +2863,7 @@ quality_core.py         # Stdlib-only corpus quality reports and bindings
 index_state.py          # Stdlib-only index manifests and compatibility policy
 vector_lifecycle.py     # Stdlib-only guarded vector mutation and commit policy
 llm_adapters.py         # Typed LLM provider transport adapters
+llm_output_contracts.py # Bounded exact contracts for generated model text
 llm_runtime.py          # Reproducible caching, fallback, budgets, and reports
 provider_transport.py   # Bounded streaming provider-response reader
 endpoint_policy.py      # Canonical cloud/loopback endpoint trust boundary
@@ -2759,6 +2924,7 @@ requirements-lock-tools.txt # Exact lockfile-generator pin
 requirements-*.lock     # Universal exact CPU locks with SHA-256 hashes
 dependency-license-policy.json # Denied licenses and reviewed exceptions
 dependency-vulnerability-policy.json # Expiring advisory exceptions and audit skips
+dependency-compatibility-domains.json # Exact non-overlapping upgrade groups
 scripts/                # Repository-local convenience launchers
 docs/                   # Maintained ADRs, governance proposals, and archived plans
 tools/                  # Source/policy checks, lock refresh, and operational drills
@@ -2839,6 +3005,10 @@ Regenerate locks without changing compatible versions with
 for an intentional dependency refresh, then review and test the lockfile diff.
 Dependabot can propose direct-input changes but cannot regenerate these custom
 universal locks; refresh and commit the locks on each Dependabot dependency PR.
+Its pip proposals are split into six exact compatibility domains defined in
+`dependency-compatibility-domains.json`; the dependency-policy checker rejects
+wildcards, overlap, omissions, unknown packages, and drift from Dependabot's
+configuration. Qualify and merge one domain at a time.
 
 GitHub Actions runs that dependency-light suite across Python 3.10-3.14 and on
 Windows, exercises real local Chroma and Qdrant clients on Linux and Windows,

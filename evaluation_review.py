@@ -125,7 +125,8 @@ def _parse_queries(raw: bytes, path: Path) -> list[dict]:
     except UnicodeError as exc:
         raise ValueError(f"evaluation queries are not UTF-8: {path}") from exc
     queries = []
-    for line_number, line in enumerate(text.splitlines(), 1):
+    for line_number, line in enumerate(
+            storage_policy.jsonl_lines(text), 1):
         if not line.strip():
             continue
         query = _strict_json_bytes(

@@ -663,7 +663,7 @@ def _atomic_write_private_posix(
 
         os.fchmod(descriptor, PRIVATE_FILE_MODE)
         mode = "w" if text else "wb"
-        options = {"encoding": "utf-8"} if text else {}
+        options = {"encoding": "utf-8", "newline": ""} if text else {}
         with os.fdopen(descriptor, mode, **options) as handle:
             descriptor = -1
             writer(handle)
@@ -719,7 +719,7 @@ def _atomic_write_private_by_path(
     parent_identity = _parent_identity(path.parent)
     temporary: Path | None = None
     mode = "w" if text else "wb"
-    options = {"encoding": "utf-8"} if text else {}
+    options = {"encoding": "utf-8", "newline": ""} if text else {}
     try:
         with tempfile.NamedTemporaryFile(
                 mode=mode, dir=path.parent, prefix=f".{path.name}.",
@@ -852,6 +852,18 @@ def atomic_write_private_json(
     atomic_write_private(
         path, write, text=True, replace_fn=replace_fn,
         cleanup_error_fn=cleanup_error_fn)
+
+
+def jsonl_lines(contents: str) -> list[str]:
+    """Split one decoded JSONL artifact into its physical records.
+
+    ``str.splitlines`` also breaks on U+0085, U+2028, and U+2029, which JSON
+    treats as ordinary string characters and which ``json.dumps`` leaves
+    literal under ``ensure_ascii=False``.  Splitting there would tear a record
+    that this module itself wrote, so the reader recognizes only the ``\\r\\n``
+    and ``\\n`` terminators that :func:`atomic_write_private` can emit.
+    """
+    return contents.replace("\r\n", "\n").split("\n")
 
 
 def atomic_write_private_jsonl(

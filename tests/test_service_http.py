@@ -4,6 +4,7 @@ import hashlib
 import json
 import pickle
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import FrozenInstanceError
 
 import pytest
@@ -145,6 +146,33 @@ def test_http_binding_rejects_non_positive_or_non_integer_limits(
 def test_http_binding_rejects_default_above_maximum():
     with pytest.raises(ValueError, match="cannot exceed"):
         service_http.ServiceHttpBinding(AdapterRuntimeError, 3, 2)
+
+
+def test_ready_probe_runs_its_blocking_walk_off_the_event_loop():
+    """readiness() touches the filesystem; it must not stall other requests."""
+    runtime = StructuralRuntime()
+    entered = threading.Event()
+    release = threading.Event()
+
+    def blocking_readiness():
+        entered.set()
+        assert release.wait(timeout=10)
+        return True
+
+    runtime.readiness = blocking_readiness
+    app = _app(runtime)
+
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            pending = pool.submit(client.get, "/health/ready")
+            try:
+                assert entered.wait(timeout=10)
+                live = client.get("/health/live")
+                assert live.status_code == 200
+                assert live.json() == {"status": "live"}
+            finally:
+                release.set()
+            assert pending.result(timeout=10).status_code == 200
 
 
 def test_structural_runtime_uses_captured_page_and_error_policy():

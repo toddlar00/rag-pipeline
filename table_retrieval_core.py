@@ -113,6 +113,61 @@ def _is_separator_row(line: str) -> bool:
     return bool(cells and all(_SEPARATOR_CELL_RE.fullmatch(cell) for cell in cells))
 
 
+def source_table_has_single_headerless_row(
+        row_count: object, column_header_flags: Sequence[object]) -> bool:
+    """Return whether Docling identified one data row and no header row.
+
+    Docling's Markdown exporter must put some row before the delimiter, so it
+    serializes a headerless one-row source table as a header-only Markdown
+    table.  Requiring a nonempty, explicitly false flag for every source cell
+    keeps the exception source-attested and fail-closed when table semantics
+    are missing or ambiguous.
+    """
+    return (
+        isinstance(row_count, int)
+        and not isinstance(row_count, bool)
+        and row_count == 1
+        and bool(column_header_flags)
+        and all(flag is False for flag in column_header_flags)
+    )
+
+
+def normalize_source_table_markdown(
+        markdown: str, *, row_count: object,
+        column_header_flags: Sequence[object]) -> str:
+    """Preserve a source-attested headerless row as Markdown table data.
+
+    Only an otherwise exact header-plus-delimiter serialization is changed.
+    A blank synthetic header is inserted and the source row is moved below
+    the delimiter.  Existing data rows, ragged tables, non-table prose, and
+    ambiguous source metadata are returned byte-for-byte unchanged.
+    """
+    if (not isinstance(markdown, str)
+            or not source_table_has_single_headerless_row(
+                row_count, column_header_flags)):
+        return markdown
+    lines = markdown.strip().splitlines()
+    candidates: list[tuple[int, tuple[str, ...]]] = []
+    for index in range(len(lines) - 1):
+        header_cells = _split_markdown_row(lines[index])
+        separator_cells = _split_markdown_row(lines[index + 1])
+        if (header_cells is not None and separator_cells is not None
+                and _is_separator_row(lines[index + 1])
+                and len(header_cells) == len(separator_cells)):
+            candidates.append((index, header_cells))
+    if len(candidates) != 1:
+        return markdown
+    table_start, header_cells = candidates[0]
+    if any(line.strip() for line in lines[table_start + 2:]):
+        return markdown
+    source_row = lines[table_start].rstrip()
+    separator = lines[table_start + 1].rstrip()
+    blank_header = "| " + " | ".join("" for _ in header_cells) + " |"
+    return "\n".join((
+        *lines[:table_start], blank_header, separator, source_row,
+    ))
+
+
 def _parse_markdown_table(markdown: str) -> MarkdownTable | None:
     """Parse one strict Markdown table, retaining its non-table preamble.
 
@@ -156,6 +211,21 @@ def _parse_markdown_table(markdown: str) -> MarkdownTable | None:
         rows=data_rows,
         column_count=len(header_cells),
     )
+
+
+def markdown_table_dimensions(markdown: str) -> tuple[int, int] | None:
+    """Return ``(data rows, columns)`` for one strict Markdown table.
+
+    The Markdown header and separator are structural and therefore never
+    contribute to the row count. PDF-recovered tables use the same strict
+    representation as native tables, including the one-column source-layout
+    fallback, so callers do not need recovery-specific dimension heuristics.
+    Malformed or ambiguous input fails closed with ``None``.
+    """
+    table = _parse_markdown_table(markdown)
+    if table is None:
+        return None
+    return len(table.rows), table.column_count
 
 
 def _is_nonnegative_int(value: object) -> bool:

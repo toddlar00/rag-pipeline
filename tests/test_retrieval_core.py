@@ -59,6 +59,95 @@ def test_search_hit_source_id_uses_current_rag_chunk_id(monkeypatch):
     }
 
 
+def _source_bound_record(
+        *, source_file="sample_run_4", source_name="sample-source.pdf",
+        source_size=12_345, source_sha256="a" * 64):
+    return {
+        "text": "A calibrated device records each verified measurement.",
+        "metadata": {
+            "source_file": source_file,
+            "page_start": 3,
+            "page_end": 3,
+            "page_range": "3",
+            "source_items": [{"ref": "#/texts/7"}],
+            retrieval_core.STABLE_ID_SOURCE_FIELD: {
+                "name": source_name,
+                "size": source_size,
+                "sha256": source_sha256,
+            },
+        },
+    }
+
+
+def test_source_bound_chunk_id_ignores_run_display_name():
+    first = _source_bound_record(source_file="sample_run_3")
+    second = _source_bound_record(source_file="sample_run_4")
+
+    assert retrieval_core._chunk_id(first) == retrieval_core._chunk_id(second)
+    assert retrieval_core._legacy_chunk_id(first) != (
+        retrieval_core._legacy_chunk_id(second))
+
+
+def test_chunk_id_scheme_reports_source_bound_v2_and_rejects_mixing():
+    source_bound = _source_bound_record()
+    legacy = _linked_record("legacy", 0)
+
+    assert retrieval_core._chunk_id_scheme([source_bound]) == (
+        retrieval_core.SOURCE_BOUND_CHUNK_ID_SCHEME)
+    assert retrieval_core._chunk_id_scheme([legacy]) == (
+        retrieval_core.LEGACY_CHUNK_ID_SCHEME)
+    with pytest.raises(ValueError, match="mixes legacy and source-bound"):
+        retrieval_core._chunk_id_scheme([source_bound, legacy])
+
+
+@pytest.mark.parametrize(
+    "changed_source",
+    [
+        {"source_name": "sample-source-revised.pdf"},
+        {"source_size": 12_346},
+        {"source_sha256": "b" * 64},
+    ],
+)
+def test_source_bound_chunk_id_changes_with_original_source_identity(
+        changed_source):
+    original = _source_bound_record()
+    changed = _source_bound_record(**changed_source)
+
+    assert retrieval_core._chunk_id(original) != retrieval_core._chunk_id(
+        changed)
+
+
+def test_chunk_id_preserves_explicit_legacy_contract_without_source_binding():
+    first = _linked_record("legacy text", 0, source="sample_run_3")
+    second = _linked_record("legacy text", 0, source="sample_run_4")
+
+    assert retrieval_core._chunk_id(first) == (
+        retrieval_core._legacy_chunk_id(first))
+    assert retrieval_core._chunk_id(second) == (
+        retrieval_core._legacy_chunk_id(second))
+    assert retrieval_core._chunk_id(first) != retrieval_core._chunk_id(second)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        {"name": "sample-source.pdf", "size": 12_345},
+        {"name": "folder/sample-source.pdf", "size": 12_345,
+         "sha256": "a" * 64},
+        {"name": "sample-source.pdf", "size": 0, "sha256": "a" * 64},
+        {"name": "sample-source.pdf", "size": True, "sha256": "a" * 64},
+        {"name": "sample-source.pdf", "size": 12_345,
+         "sha256": "A" * 64},
+    ],
+)
+def test_source_bound_chunk_id_rejects_malformed_source_binding(source):
+    record = _source_bound_record()
+    record["metadata"][retrieval_core.STABLE_ID_SOURCE_FIELD] = source
+
+    with pytest.raises(ValueError, match="stable_id_source"):
+        retrieval_core._chunk_id(record)
+
+
 def test_grounded_sources_uses_current_rag_source_id_resolver(monkeypatch):
     hit = rag.SearchHit(
         text="A retrieved passage.",

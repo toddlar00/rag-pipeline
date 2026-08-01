@@ -16,9 +16,11 @@ from pathlib import Path
 
 from retrieval_core import (
     _chunk_id,
+    _chunk_id_scheme,
     _legal_search_tokens,
     _lexical_document_text,
 )
+import storage_policy
 import table_retrieval_core
 
 
@@ -47,6 +49,7 @@ class OfflineIndexSnapshot:
     source_record_count: int
     table_child_count: int
     stable_ids: tuple[str, ...]
+    id_scheme: str
 
     def as_report_dict(self) -> dict:
         return {
@@ -54,7 +57,7 @@ class OfflineIndexSnapshot:
             "source_record_count": self.source_record_count,
             "record_count": self.source_record_count,
             "table_child_count": self.table_child_count,
-            "id_scheme": "retrieval_core._chunk_id",
+            "id_scheme": self.id_scheme,
             "retriever_implementation": (
                 f"offline_retrieval.OfflineBM25Index/v{OFFLINE_RETRIEVER_VERSION}"),
             "scoring": "BM25 Okapi with non-negative Robertson IDF",
@@ -78,6 +81,7 @@ class OfflineBM25Index:
             source_record_count=len(records),
             table_child_count=table_retrieval_core.table_child_count(records),
             stable_ids=self.stable_ids,
+            id_scheme=_chunk_id_scheme(records),
         )
         self._tokens = tuple(
             _content_tokens(_lexical_document_text(
@@ -104,7 +108,7 @@ class OfflineBM25Index:
         source_sha256 = hashlib.sha256(raw).hexdigest()
         records = []
         for line_number, line in enumerate(
-                raw.decode("utf-8-sig").splitlines(), 1):
+                storage_policy.jsonl_lines(raw.decode("utf-8-sig")), 1):
             if not line.strip():
                 continue
             try:

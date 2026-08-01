@@ -1,5 +1,6 @@
+from contextlib import ExitStack
 import sys
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -119,6 +120,28 @@ def test_embedding_validation_rejects_actual_prefixed_nomic_count(
         "search_document: retrieval context\n\nbody",
         {"add_special_tokens": True, "truncation": False},
     )]
+
+
+def test_embedding_prefix_is_token_bounded_without_changing_source_metadata(
+        monkeypatch):
+    monkeypatch.setitem(rag.EMBEDDING_MAX_TOKENS, "test/model", 30)
+    monkeypatch.setattr(
+        rag,
+        "_count_embedding_text_tokens",
+        lambda texts, _model: ([len(text) for text in texts], True),
+    )
+    section_path = "Chapter One → A very detailed local section heading"
+    record = {
+        "text": "x" * 20,
+        "metadata": {"section_path": section_path},
+    }
+
+    assert rag._bound_embedding_prefixes_to_model_limit(
+        [record], "test/model") == 1
+    assert record["text"] == "x" * 20
+    assert record["metadata"]["section_path"] == section_path
+    assert record["metadata"]["embedding_prefix_truncated"] is True
+    assert len(rag._embedding_text(record)) <= 30
 
 
 def test_api_embedding_batches_respect_aggregate_token_budget(monkeypatch):
@@ -308,6 +331,108 @@ def test_forced_ocr_keeps_page_images(monkeypatch, tmp_path):
 
     with pytest.raises(StopAfterPreprocessing):
         rag.convert_pdf(source, output, backend="auto", ocr=True)
+
+
+@pytest.mark.parametrize(
+    ("ocr", "usable_text", "expected_enabled", "expected_force"),
+    [
+        (True, True, True, True),
+        (None, False, True, False),
+        (None, True, False, False),
+        (False, True, False, False),
+    ],
+)
+def test_explicit_ocr_alone_forces_full_page_rapidocr(
+        monkeypatch, tmp_path, ocr, usable_text, expected_enabled,
+        expected_force):
+    source = tmp_path / "book.pdf"
+    source.write_bytes(b"pdf")
+    output = tmp_path / "book.json"
+    stats = {
+        "total_pages": 1,
+        "pages_with_large_images": 0,
+        "pages_with_usable_text": int(usable_text),
+        "large_image_pages_with_usable_text": 0,
+        "text_chars": 100 if usable_text else 0,
+        "replacement_chars": 0,
+        "unique_dims": set(),
+        "image_xrefs": set(),
+    }
+    monkeypatch.setattr(rag, "_analyze_pdf_images", lambda _path: stats)
+    monkeypatch.setattr(rag, "_page_count", lambda _path: 1)
+
+    class AcceleratorDevice:
+        CPU = "cpu"
+        CUDA = "cuda"
+
+    class PipelineOptions:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    document_converter = ModuleType("docling.document_converter")
+    document_converter.DocumentConverter = object
+    document_converter.PdfFormatOption = object
+    pipeline_options = ModuleType("docling.datamodel.pipeline_options")
+    pipeline_options.PdfPipelineOptions = PipelineOptions
+    pipeline_options.ThreadedPdfPipelineOptions = PipelineOptions
+    accelerator_options = ModuleType(
+        "docling.datamodel.accelerator_options")
+    accelerator_options.AcceleratorDevice = AcceleratorDevice
+    accelerator_options.AcceleratorOptions = object
+    base_models = ModuleType("docling.datamodel.base_models")
+    base_models.InputFormat = SimpleNamespace(PDF="pdf")
+    monkeypatch.setitem(
+        sys.modules, "docling.document_converter", document_converter)
+    monkeypatch.setitem(
+        sys.modules, "docling.datamodel.pipeline_options", pipeline_options)
+    monkeypatch.setitem(
+        sys.modules, "docling.datamodel.accelerator_options",
+        accelerator_options)
+    monkeypatch.setitem(
+        sys.modules, "docling.datamodel.base_models", base_models)
+    monkeypatch.setattr(
+        rag, "_detect_gpu", lambda: (AcceleratorDevice.CPU, 1, "CPU"))
+    monkeypatch.setattr(
+        rag, "_pin_docling_layout_revision", lambda _options: None)
+
+    observed = {}
+
+    class OptionsCaptured(Exception):
+        pass
+
+    def capture_options(options, *, include_ocr, force_full_page_ocr,
+                        security_policy):
+        observed.update(
+            do_ocr=options.do_ocr,
+            include_ocr=include_ocr,
+            force_full_page_ocr=force_full_page_ocr,
+        )
+        raise OptionsCaptured
+
+    monkeypatch.setattr(
+        rag, "_configure_docling_model_artifacts", capture_options)
+    original = rag.ConversionInputBinding(
+        kind="original",
+        name=source.name,
+        sha256="0" * 64,
+        size=source.stat().st_size,
+    )
+
+    with ExitStack() as snapshots, pytest.raises(OptionsCaptured):
+        rag._convert_pdf_generation(
+            source,
+            output,
+            snapshot_stack=snapshots,
+            original_input=original,
+            auto_preprocess=True,
+            ocr=ocr,
+        )
+
+    assert observed == {
+        "do_ocr": expected_enabled,
+        "include_ocr": expected_enabled,
+        "force_full_page_ocr": expected_force,
+    }
 
 
 @pytest.mark.parametrize(

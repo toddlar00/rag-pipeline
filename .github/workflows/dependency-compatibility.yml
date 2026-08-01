@@ -5,6 +5,8 @@ on:
     paths:
       - "requirements*.txt"
       - "requirements*.lock"
+      - ".github/dependabot.yml"
+      - "dependency-compatibility-domains.json"
       - "dependency-license-policy.json"
       - "tools/check_dependency_policy.py"
       - "tools/refresh_locks.py"
@@ -14,6 +16,8 @@ on:
     paths:
       - "requirements*.txt"
       - "requirements*.lock"
+      - ".github/dependabot.yml"
+      - "dependency-compatibility-domains.json"
       - "dependency-license-policy.json"
       - "tools/check_dependency_policy.py"
       - "tools/refresh_locks.py"
@@ -42,6 +46,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
           persist-credentials: false
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -51,6 +56,15 @@ jobs:
           cache-dependency-path: requirements-lock-tools.lock
       - name: Install pinned lockfile generator
         run: python -m pip install --require-hashes -r requirements-lock-tools.lock
+      - name: Check dependency and compatibility-domain policy
+        run: python tools/check_dependency_policy.py
+      - name: Enforce one dependency domain per pull request
+        if: github.event_name == 'pull_request'
+        env:
+          DEPENDENCY_POLICY_BASE: ${{ github.event.pull_request.base.sha }}
+        run: >-
+          python tools/check_dependency_policy.py
+          --base-ref "$DEPENDENCY_POLICY_BASE"
       - name: Regenerate CPU lockfiles without upgrading compatible pins
         run: python tools/refresh_locks.py
       - name: Reject stale lockfiles

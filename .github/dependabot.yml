@@ -9,8 +9,18 @@ updates:
       timezone: America/Denver
     open-pull-requests-limit: 10
     groups:
-      python-dependencies:
-        patterns: ["*"]
+      pdf-docling:
+        patterns: ["docling", "docling-core", "pymupdf", "pypdfium2"]
+      vector-stores:
+        patterns: ["chromadb", "onnxruntime", "qdrant-client"]
+      ml-runtime:
+        patterns: ["einops", "flagembedding", "numpy", "rank-bm25", "sentence-transformers", "torch", "torchvision", "tqdm"]
+      service-ui:
+        patterns: ["fastapi", "gradio", "uvicorn"]
+      provider-transport:
+        patterns: ["google-genai", "requests"]
+      test-audit-tooling:
+        patterns: ["pip", "pip-audit", "pip-licenses", "pytest", "ruff", "uv"]
     commit-message:
       prefix: deps
 

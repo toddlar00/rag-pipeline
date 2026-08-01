@@ -16,7 +16,8 @@ from pathlib import Path
 from typing import Callable, Iterable
 
 
-LLM_RUNTIME_REPORT_SCHEMA_VERSION = 2
+LLM_RUNTIME_REPORT_SCHEMA_VERSION = 5
+LLM_RUNTIME_REPORT_SCHEMA_VERSIONS = frozenset({2, 3, 4, 5})
 
 def estimate_text_tokens(text: str) -> int:
     """Return the runtime's documented characters/4 token estimate."""
@@ -253,10 +254,10 @@ def parse_llm_usage_report(path: Path) -> dict:
     payload = json.loads(raw.decode("utf-8-sig"))
     if not isinstance(payload, dict) or not isinstance(payload.get("counts"), dict):
         raise ValueError(f"LLM report has no counts object: {path}")
-    if payload.get("schema_version") != LLM_RUNTIME_REPORT_SCHEMA_VERSION:
+    if payload.get("schema_version") not in LLM_RUNTIME_REPORT_SCHEMA_VERSIONS:
         raise ValueError(
-            f"LLM report schema version must be "
-            f"{LLM_RUNTIME_REPORT_SCHEMA_VERSION}: {path}")
+            "LLM report schema version must be one of "
+            f"{sorted(LLM_RUNTIME_REPORT_SCHEMA_VERSIONS)}: {path}")
     counts = payload["counts"]
     names = (
         "exact_prompt_tokens", "exact_completion_tokens",

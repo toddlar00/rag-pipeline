@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "domains": {
+    "pdf-docling": [
+      "docling",
+      "docling-core",
+      "pymupdf",
+      "pypdfium2"
+    ],
+    "vector-stores": [
+      "chromadb",
+      "onnxruntime",
+      "qdrant-client"
+    ],
+    "ml-runtime": [
+      "einops",
+      "flagembedding",
+      "numpy",
+      "rank-bm25",
+      "sentence-transformers",
+      "torch",
+      "torchvision",
+      "tqdm"
+    ],
+    "service-ui": [
+      "fastapi",
+      "gradio",
+      "uvicorn"
+    ],
+    "provider-transport": [
+      "google-genai",
+      "requests"
+    ],
+    "test-audit-tooling": [
+      "pip",
+      "pip-audit",
+      "pip-licenses",
+      "pytest",
+      "ruff",
+      "uv"
+    ]
+  }
+}

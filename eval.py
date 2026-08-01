@@ -38,6 +38,7 @@ import evaluation_queries
 import model_artifacts
 import release_security
 import retrieval_core
+import storage_policy
 import table_retrieval_core
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -143,7 +144,8 @@ def load_queries(path: Path) -> list[dict]:
     raw = Path(path).read_bytes()
     contents = raw.decode("utf-8-sig")
     queries = []
-    for line_number, line in enumerate(contents.splitlines(), 1):
+    for line_number, line in enumerate(
+            storage_policy.jsonl_lines(contents), 1):
         if not line.strip():
             continue
         try:
@@ -172,7 +174,8 @@ def _validate_declared_corpus(queries: list[dict], chunks_path: Path) -> None:
         contents = raw.decode("utf-8-sig")
     except UnicodeDecodeError:
         contents = raw.decode("latin-1")
-    actual_count = sum(1 for line in contents.splitlines() if line.strip())
+    actual_count = sum(
+        1 for line in storage_policy.jsonl_lines(contents) if line.strip())
     _validate_declared_corpus_snapshot(
         queries, actual_hash=actual_hash, actual_count=actual_count)
 
@@ -418,7 +421,8 @@ def _chunk_identity_lookup(chunks_path: Path, rag_module) -> dict:
     except UnicodeDecodeError:
         contents = raw.decode("latin-1")
     records = [
-        json.loads(line) for line in contents.splitlines() if line.strip()
+        json.loads(line)
+        for line in storage_policy.jsonl_lines(contents) if line.strip()
     ]
     lookup = _chunk_identity_lookup_from_records(records, rag_module)
 
@@ -1973,7 +1977,8 @@ def _main_with_args(args, parser: argparse.ArgumentParser) -> int:
                 actual_count=offline_index.snapshot.source_record_count)
             table_family_attestation = _validate_judged_ids(
                 queries, list(offline_index.records), _chunk_id,
-                corpus_sha256=offline_index.snapshot.source_sha256)
+                corpus_sha256=offline_index.snapshot.source_sha256,
+                id_scheme=offline_index.snapshot.id_scheme)
             _validate_grounding_evidence_ids(
                 queries, list(offline_index.records), _chunk_id)
             index_snapshot = offline_index.snapshot.as_report_dict()

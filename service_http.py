@@ -941,7 +941,7 @@ def create_app(
 
     @app.get("/health/ready")
     async def ready():
-        if not runtime.readiness():
+        if not await asyncio.to_thread(runtime.readiness):
             return JSONResponse({"status": "not_ready"}, status_code=503)
         return {"status": "ready"}
 

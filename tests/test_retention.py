@@ -7,6 +7,7 @@ import pytest
 
 import job_runtime
 import retention
+from llm_runtime import LLMRequest, LLMRuntime, LLMRuntimeConfig, ProviderSpec
 
 
 DAY = 86_400.0
@@ -265,6 +266,25 @@ def test_pipeline_manifest_create_resume_state_and_conflict(tmp_path):
         retention.mark_pipeline_run_state(manifest, "active")
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows path case semantics")
+def test_pipeline_manifest_resume_allows_job_scope_case_only_change(tmp_path):
+    output_root, run_root, sibling, manifest, vector_stores = (
+        _create_owned_run(tmp_path))
+    retention.mark_pipeline_run_state(manifest, "complete")
+
+    resumed = retention.ensure_pipeline_run_manifest(
+        output_root,
+        run_root,
+        job_scope="Book-Job",
+        owned_siblings=[sibling],
+        vector_stores=vector_stores,
+    )
+
+    payload = json.loads(resumed.read_text(encoding="utf-8"))
+    assert payload["job_scope"] == "book-job"
+    assert payload["state"] == "active"
+
+
 def test_new_manifest_refuses_to_claim_a_preexisting_sibling(tmp_path):
     output_root = tmp_path / "output"
     output_root.mkdir()
@@ -392,6 +412,26 @@ def test_cache_prune_applies_ttl_only_to_valid_owned_records(tmp_path):
     assert unrelated.is_file()
 
 
+def test_cache_prune_accepts_current_runtime_cache_schema(tmp_path):
+    cache_root = tmp_path / "cache"
+    runtime = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="readwrite", cache_dir=cache_root))
+    runtime.execute(
+        LLMRequest(prompt="private prompt", operation="test.retention"),
+        [ProviderSpec(
+            name="test", model="model", endpoint_id="test-endpoint",
+            invoke=lambda _request: "private response")],
+    )
+    record = next(cache_root.rglob("*.json"))
+    now = 2_000_000_000.0
+    os.utime(record, (now - 10 * DAY, now - 10 * DAY))
+
+    plan = retention.plan_llm_cache_prune(
+        cache_root, older_than_days=5, now=now)
+
+    assert [candidate.path for candidate in plan.candidates] == [record]
+
+
 def test_cache_prune_rejects_an_invalid_matching_ownership_record(tmp_path):
     cache_root = tmp_path / "cache"
     now = 2_000_000_000.0
@@ -408,6 +448,22 @@ def test_cache_prune_rejects_an_invalid_matching_ownership_record(tmp_path):
             cache_root, older_than_days=5, now=now)
 
     assert record.is_file()
+
+
+def test_cache_prune_rejects_boolean_schema_version(tmp_path):
+    cache_root = tmp_path / "cache"
+    now = 2_000_000_000.0
+    key = "af" + "4" * 62
+    record = _write_cache_record(
+        cache_root, key, timestamp=now - 10 * DAY)
+    payload = json.loads(record.read_text(encoding="utf-8"))
+    payload["schema_version"] = True
+    record.write_text(json.dumps(payload), encoding="utf-8")
+    os.utime(record, (now - 10 * DAY, now - 10 * DAY))
+
+    with pytest.raises(retention.RetentionError, match="ownership"):
+        retention.plan_llm_cache_prune(
+            cache_root, older_than_days=5, now=now)
 
 
 def test_cache_change_after_planning_fails_closed(tmp_path):

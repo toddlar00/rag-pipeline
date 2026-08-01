@@ -267,6 +267,8 @@ def test_manifest_is_scoped_versioned_and_atomic(tmp_path):
         "collection": "../../Civil Procedure",
         "embedding_model": "model-a",
         "embedding_dimension": 3,
+        "embedding_input_policy_version": (
+            rag.EMBEDDING_INPUT_POLICY_VERSION),
         "model_artifact_lock_sha256": rag._model_artifact_lock_sha256(),
         "chunk_hashes": hashes,
         "source_sha256": None,
@@ -1236,6 +1238,34 @@ def test_qdrant_identity_verifier_accepts_exact_reordered_points():
     assert point_ids == {"chunk_b": [2], "chunk_a": [1]}
 
 
+def test_qdrant_chunk_index_verifier_checks_identity_and_position_together():
+    class FakeClient:
+        def count(self, *, collection_name, exact):
+            assert exact is True
+            return SimpleNamespace(count=2)
+
+        def scroll(self, collection_name, *, limit, offset,
+                   with_payload, with_vectors):
+            assert with_payload == ["stable_id", "chunk_index"]
+            return ([
+                SimpleNamespace(
+                    id=2,
+                    payload={"stable_id": "chunk_b", "chunk_index": 4},
+                ),
+                SimpleNamespace(
+                    id=1,
+                    payload={"stable_id": "chunk_a", "chunk_index": 0},
+                ),
+            ], None)
+
+    point_ids, mismatches = rag._inspect_qdrant_chunk_indexes(
+        FakeClient(), "book", {"chunk_a", "chunk_b"},
+        {"chunk_a": 0, "chunk_b": 1})
+
+    assert point_ids == {"chunk_b": [2], "chunk_a": [1]}
+    assert mismatches == {"chunk_b"}
+
+
 @pytest.mark.parametrize(
     ("points", "expected", "message"),
     [
@@ -1627,9 +1657,13 @@ def _prepare_qdrant_removed_only_incremental(
         db_path, collection_name="book")
 
     keep_point = SimpleNamespace(
-        id=101, payload={"stable_id": keep_stable_id})
+        id=101,
+        payload={"stable_id": keep_stable_id, "chunk_index": 0},
+    )
     removed_point = SimpleNamespace(
-        id=202, payload={"stable_id": removed_stable_id})
+        id=202,
+        payload={"stable_id": removed_stable_id, "chunk_index": 1},
+    )
     state = SimpleNamespace(
         points={101: keep_point}, scroll_offsets=[], deletes=[],
         client_close_calls=0)
@@ -1766,7 +1800,8 @@ def test_qdrant_missing_manifest_removal_fails_without_saving_manifest(
 def _prepare_qdrant_changed_existing_incremental(
         monkeypatch, tmp_path, *, delete_mutates=True, upsert_mutates=True,
         count_values=None, delete_status="completed",
-        upsert_status="completed", client_close_error=None):
+        upsert_status="completed", payload_update_status="completed",
+        client_close_error=None):
     chunks_path = tmp_path / "chunks.jsonl"
     db_path = tmp_path / "qdrant"
     old_record = {
@@ -1803,16 +1838,22 @@ def _prepare_qdrant_changed_existing_incremental(
     point_id = rag._qdrant_point_id(stable_id)
     old_point = SimpleNamespace(
         id=point_id,
-        payload={"stable_id": stable_id, "context": "Old classification"},
+        payload={
+            "stable_id": stable_id,
+            "chunk_index": 0,
+            "context": "Old classification",
+        },
     )
     state = SimpleNamespace(
-        points={point_id: old_point}, deletes=[], upserts=[], scrolls=0,
+        points={point_id: old_point}, deletes=[], upserts=[],
+        payload_updates=[], scrolls=0,
         collection_exists=True, collection_rebuilds=0,
         delete_mutates=delete_mutates, upsert_mutates=upsert_mutates,
         client_close_calls=0, lifecycle_events=[],
         count_values=(list(count_values)
                       if count_values is not None else None),
-        delete_status=delete_status, upsert_status=upsert_status)
+        delete_status=delete_status, upsert_status=upsert_status,
+        payload_update_status=payload_update_status)
 
     class Model:
         def __init__(self, **kwargs):
@@ -1874,6 +1915,15 @@ def _prepare_qdrant_changed_existing_incremental(
                     state.points[point.id] = point
             return SimpleNamespace(status=state.upsert_status)
 
+        def set_payload(self, *, collection_name, payload, points, wait):
+            assert wait is True
+            assert marker_path.is_file()
+            state.payload_updates.append((list(points), dict(payload)))
+            for existing_id in points:
+                point = state.points[existing_id]
+                point.payload = {**point.payload, **payload}
+            return SimpleNamespace(status=state.payload_update_status)
+
         def close(self):
             state.client_close_calls += 1
             state.lifecycle_events.append("client_close")
@@ -1905,6 +1955,46 @@ def _prepare_qdrant_changed_existing_incremental(
         new_record=new_record,
         state=state,
     )
+
+
+def test_qdrant_unchanged_hash_repairs_stale_chunk_index_without_reembedding(
+        monkeypatch, tmp_path):
+    fixture = _prepare_qdrant_changed_existing_incremental(
+        monkeypatch, tmp_path)
+    fixture.state.points[fixture.point_id].payload["chunk_index"] = 1
+    source_sha256 = hashlib.sha256(
+        fixture.chunks_path.read_bytes()).hexdigest()
+    rag._save_index_manifest(
+        fixture.db_path, backend="qdrant", collection_name="book",
+        embedding_model="model-a", embedding_dimension=2,
+        chunk_hashes={fixture.stable_id: fixture.new_hash},
+        source_sha256=source_sha256, source_record_count=1)
+    embedding_calls = []
+
+    def dimension_probe_only(texts, _model, **_kwargs):
+        embedding_calls.append(list(texts))
+        return [[0.0, 1.0] for _text in texts]
+
+    monkeypatch.setattr(rag, "_embed_texts", dimension_probe_only)
+    outcome = rag.index_chunks_qdrant(
+        fixture.chunks_path, fixture.db_path,
+        collection_name="book", embedding_model="model-a")
+
+    assert embedding_calls == [["RAG index embedding-dimension probe"]]
+    assert fixture.state.deletes == []
+    assert fixture.state.upserts == []
+    assert fixture.state.payload_updates == [
+        ([fixture.point_id], {"chunk_index": 0})]
+    assert fixture.state.points[fixture.point_id].payload["chunk_index"] == 0
+    assert outcome.disposition == "updated"
+    assert outcome.changed_records == 0
+    assert outcome.unchanged_records == 1
+    assert outcome.removed_records == 0
+    assert outcome.upserted_records == 0
+    assert outcome.batch_count == 0
+    assert outcome.operations.metadata_update_calls == 1
+    assert outcome.operations.physical_mutation_calls == 1
+    assert not fixture.marker_path.exists()
 
 
 def test_qdrant_append_only_update_commits_without_a_point_delete(
@@ -2419,7 +2509,8 @@ def _prepare_chroma_changed_existing_incremental(
         db_path, collection_name="book")
     state = SimpleNamespace(
         upserts=[], deletes=[], collection_deletes=[], collection_creates=[],
-        collections={}, gets=[], delete_mutates=delete_mutates,
+        collections={}, gets=[], metadata_updates=[],
+        delete_mutates=delete_mutates,
         upsert_mutates=upsert_mutates,
         client_close_calls=0, lifecycle_events=[],
         count_values=(list(count_values)
@@ -2447,6 +2538,12 @@ def _prepare_chroma_changed_existing_incremental(
             if state.delete_mutates:
                 for item_id in ids:
                     self.rows.pop(item_id, None)
+
+        def update(self, *, ids, metadatas):
+            assert marker_path.is_file()
+            state.metadata_updates.append(list(ids))
+            for index, item_id in enumerate(ids):
+                self.rows[item_id]["metadata"] = metadatas[index]
 
         def count(self):
             if state.count_values is not None:
@@ -2538,6 +2635,57 @@ def _prepare_chroma_changed_existing_incremental(
         successful_embed=successful_embed,
         state=state,
     )
+
+
+def test_chroma_unchanged_hash_repairs_stale_chunk_index_without_reembedding(
+        monkeypatch, tmp_path):
+    fixture = _prepare_chroma_changed_existing_incremental(
+        monkeypatch, tmp_path)
+    stable_id = fixture.stable_id
+    reordered_record = {
+        **fixture.new_record,
+        "metadata": {**fixture.new_record["metadata"], "chunk_index": 1},
+    }
+    assert rag._chunk_hash(reordered_record) == fixture.new_hash
+    expected_metadata = rag._prepare_chroma_batch(
+        [fixture.new_record])[3][0]
+    fixture.collection.rows[stable_id]["metadata"] = {
+        **expected_metadata,
+        "chunk_index": 1,
+    }
+    source_sha256 = hashlib.sha256(
+        fixture.chunks_path.read_bytes()).hexdigest()
+    rag._save_index_manifest(
+        fixture.db_path, backend="chroma", collection_name="book",
+        embedding_model="model-a", embedding_dimension=2,
+        chunk_hashes={stable_id: fixture.new_hash},
+        source_sha256=source_sha256, source_record_count=1)
+
+    embedding_calls = []
+
+    def dimension_probe_only(texts, _model, **_kwargs):
+        embedding_calls.append(list(texts))
+        return [[0.0, 1.0] for _text in texts]
+
+    monkeypatch.setattr(rag, "_embed_texts", dimension_probe_only)
+    outcome = rag.index_chunks(
+        fixture.chunks_path, fixture.db_path,
+        collection_name="book", embedding_model="model-a")
+
+    assert embedding_calls == [["RAG index embedding-dimension probe"]]
+    assert fixture.state.upserts == []
+    assert fixture.state.deletes == []
+    assert fixture.state.metadata_updates == [[stable_id]]
+    assert fixture.collection.rows[stable_id]["metadata"] == expected_metadata
+    assert outcome.disposition == "updated"
+    assert outcome.changed_records == 0
+    assert outcome.unchanged_records == 1
+    assert outcome.removed_records == 0
+    assert outcome.upserted_records == 0
+    assert outcome.batch_count == 0
+    assert outcome.operations.metadata_update_calls == 1
+    assert outcome.operations.physical_mutation_calls == 1
+    assert not fixture.marker_path.exists()
 
 
 @pytest.mark.parametrize("backend", ["chroma", "qdrant"])

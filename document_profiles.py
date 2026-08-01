@@ -55,6 +55,7 @@ class SectionRule:
     exclude_from_corpus: bool
     toc_seed: bool = False
     minimum_page_fraction: float | None = None
+    canonical_title: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,6 +211,7 @@ def _profile_payload(profile: StructureProfile) -> dict:
                 "exclude_from_corpus": rule.exclude_from_corpus,
                 "toc_seed": rule.toc_seed,
                 "minimum_page_fraction": rule.minimum_page_fraction,
+                "canonical_title": rule.canonical_title,
             }
             for rule in profile.section_rules
         ],
@@ -296,6 +298,9 @@ def _validate_profile(profile: StructureProfile) -> None:
         fraction = rule.minimum_page_fraction
         if fraction is not None and not 0.0 <= fraction <= 1.0:
             raise ValueError("section page fraction must be between zero and one")
+        if (rule.canonical_title is not None
+                and not rule.canonical_title.strip()):
+            raise ValueError("section canonical title must not be empty")
     for pattern in (
             profile.toc_skip_patterns + profile.toc_entry_hint_patterns):
         re.compile(pattern, re.IGNORECASE)
@@ -322,7 +327,7 @@ def _division_rule(
 _LEGAL_PROFILE = StructureProfile(
     schema_version=PROFILE_SCHEMA_VERSION,
     name=DEFAULT_STRUCTURE_PROFILE,
-    revision=1,
+    revision=6,
     document_description=(
         "United States law-school casebooks with Arabic chapters and "
         "publisher front/back matter"),
@@ -330,8 +335,17 @@ _LEGAL_PROFILE = StructureProfile(
         _division_rule(
             ("section_boundary", "running_header"),
             r"^Chapter\s+(?P<number>\d{1,2})\s*"
-            r"[:\-\xb7\u00b7\u2022\u2013\u2014]?\s+(?P<title>.+)$",
+            r"[.:\-\xb7\u00b7\u2022\u2013\u2014]?\s+(?P<title>.+)$",
             "Chapter"),
+        _division_rule(
+            ("running_header",),
+            r"^(?:\d{1,4}\s+)?(?P<title>.+?)\s+CH\.\s*"
+            r"(?P<number>\d{1,2})$",
+            "Chapter"),
+        _division_rule(
+            ("section_boundary", "running_header"),
+            r"^(?P<kind>Chapter)\s+(?P<number>\d{1,2})$",
+            "Chapter", title_group=None),
         _division_rule(
             ("section_boundary", "running_header"),
             r"^(?P<number>\d{1,2})\s*"
@@ -379,11 +393,22 @@ _LEGAL_PROFILE = StructureProfile(
         SectionRule("problems", (r"table of problems",), True),
         SectionRule("acknowledgments", (r"acknowledgments?",), True),
         SectionRule("about_authors", (r"about the authors?",), True),
+        SectionRule("self_assessment", (
+            r"self(?:-|\s+)assessment\s+questions",
+            r"s\s*e\s*l\s*f\s*-\s*a\s*s\s*s\s*e\s*s\s*s\s*m\s*e\s*n\s*t"
+            r"\s+q\s*u\s*e\s*s\s*t\s*i\s*o\s*n\s*s",
+        ), False, minimum_page_fraction=0.5,
+                    canonical_title="Self-Assessment Questions"),
+        SectionRule("appendix", (r"appendix",), False,
+                    minimum_page_fraction=0.5,
+                    canonical_title="Appendix"),
         SectionRule("table_of_cases", (r"table of cases",), True),
         SectionRule("table_of_rules", (
-            r"table of (?:rules|authorities|restatements|statutes|"
-            r"bar opinions|standards)(?:,.*)?",), True),
-        SectionRule("index", (r"index", r"subject index"), True,
+            r"table of (?:rules|authorities|restatements|statutes|laws|"
+            r"secondary sources|bar opinions|standards)(?:,.*)?",), True),
+        SectionRule("index", (
+            r"index", r"subject index", r"i\s*n\s*d\s*e\s*x",
+        ), True,
                     minimum_page_fraction=0.5),
         SectionRule("editorial", (
             r"editorial advisors?", r"(?:series |editorial )?advisory board"),

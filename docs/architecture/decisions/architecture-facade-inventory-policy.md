@@ -1,8 +1,11 @@
 # Architecture and Facade Inventory Policy
 
-- **Status:** Implementation included in cumulative draft PR #44; replacement
-  compatibility refresh local and independently red-team-audited; not merged
-  or human-reviewed, with exact replacement-head review pending
+- **Status:** Implementation merged to `main` on 2026-08-01 through the
+  history-preserving integration of cumulative
+  [PR #44](https://github.com/toddlar00/rag-pipeline/pull/44); the replacement
+  compatibility refresh was independently red-team-audited, and the all-green
+  hosted run at exact head `ed2995e` plus the owner merge decision satisfied
+  replacement-head validation and review
 - **Milestones:** Minimum R7 inventory prerequisite for R8 ownership changes
 - **Schema:** `tracked-python-ast-v3`
 
@@ -74,20 +77,23 @@ does not prove runtime reachability.
 - First-party dependency invariants:
   [`tests/test_architecture.py`](../../../tests/test_architecture.py)
 
-Schema v3 was first accepted at `62cb574`. The replacement baseline prepared
-for the next frozen R1 pre-gate source checkpoint is 1,005,966 bytes with full
+Schema v3 was first accepted at `62cb574`. The replacement baseline bound to
+pre-gate source `e904fa6` is 1,360,825 bytes with full
 inventory SHA-256
-`2b0e2b6d24f494f305c99a28e76e8146cf1f56987d8f859469db0506a8cf6b4d`.
-It records 150 tracked Python sources, 69 non-test modules, 1,981 functions,
-565 static and 573 runtime `rag` bindings, and 377 compact runtime callable
-records. The complete 43-test inventory suite passes on Windows and Linux
-CPython 3.12. The canonical baseline reproduces on Windows CPython
-3.10-3.14 and Linux CPython 3.10-3.14.
+`03b1a7b9a1fda04270d9e155abacefafcc6a25acb32e8b7e21737b48e63b2130`.
+It records 162 tracked Python sources, 74 non-test modules, 2,563 functions,
+877 static and 885 runtime `rag` bindings, and 607 compact runtime callable
+records. The complete 43-test inventory suite passes on Windows CPython 3.12.
+The earlier `fdb08d2` baseline reproduced on Windows and Linux CPython
+3.10-3.14; this expanded source checkpoint has not repeated that ten-cell
+matrix.
 
 Independent review previously found and verified closure of an origin/context
 pair-correlation collision. The replacement review additionally caught and
 rejected an over-broad tilde redirect before the baseline refresh, then exposed
 and closed CPython 3.13's private `Path` module identity without hiding spoofed
 or project-owned identities. These are bounded compatibility and isolation
-repairs, not an unreviewed relaxation of the architecture contract. The exact
-source commit/tree and hosted replacement evidence remain to be frozen.
+repairs, not an unreviewed relaxation of the architecture contract. The local
+source checkpoint is `e904fa6ea7419dac6797dc11af7cb1e507fb456c` (tree
+`4fe1f457d6a60668319234988fb181bb989ad2fb`); hosted replacement evidence
+remains pending.

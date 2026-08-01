@@ -153,6 +153,36 @@ def test_release_cloud_rejects_ambient_proxy_or_custom_ca_by_name_only():
     assert "CERT_PATH_CANARY" not in message
 
 
+def test_release_refuses_ambient_tls_key_logging_on_every_network_consent():
+    policy = release_security.ReleaseSecurityPolicy(
+        network_policy="allow-cloud",
+        model_download_policy="allow-reviewed-sync")
+    environment = {"SSLKEYLOGFILE": "KEYLOG_PATH_CANARY"}
+
+    assert "SSLKEYLOGFILE" in release_security._NETWORK_OVERRIDE_VARIABLES
+    assert release_security.environment_network_overrides(environment) == (
+        "SSLKEYLOGFILE",)
+
+    for require in (
+            release_security.require_cloud_egress,
+            release_security.require_model_download,
+    ):
+        with pytest.raises(release_security.ReleaseSecurityError) as error:
+            require(policy, feature="embedding", environment=environment)
+        message = str(error.value)
+        assert "SSLKEYLOGFILE" in message
+        assert "KEYLOG_PATH_CANARY" not in message
+
+    reviewed = release_security.ReleaseSecurityPolicy(
+        network_policy="allow-cloud",
+        model_download_policy="allow-reviewed-sync",
+        trust_environment_network=True)
+    release_security.require_cloud_egress(
+        reviewed, feature="embedding", environment=environment)
+    release_security.require_model_download(
+        reviewed, feature="model synchronization", environment=environment)
+
+
 def test_development_still_needs_explicit_cloud_consent():
     policy = release_security.ReleaseSecurityPolicy(profile="development")
 

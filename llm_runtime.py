@@ -19,6 +19,10 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Literal
 
+from llm_output_contracts import (
+    INTERNAL_CONTRACT_ERROR,
+    OutputContractRejected,
+)
 from run_telemetry import validate_distinct_output_paths
 from storage_policy import (
     append_private_jsonl,
@@ -27,14 +31,21 @@ from storage_policy import (
 )
 
 
-CACHE_KEY_SCHEMA_VERSION = 2
-CACHE_RECORD_SCHEMA_VERSION = 3
-EVENT_SCHEMA_VERSION = 3
-REPORT_SCHEMA_VERSION = 4
+CACHE_KEY_SCHEMA_VERSION = 3
+CACHE_RECORD_SCHEMA_VERSION = 4
+EVENT_SCHEMA_VERSION = 4
+REPORT_SCHEMA_VERSION = 5
 CACHE_MAX_BYTES = 32 * 1024 * 1024
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 _CACHE_NAMESPACE_ID = re.compile(r"v[1-9][0-9]*:(?:default|sha256:[0-9a-f]{64})")
+_OUTPUT_CONTRACT_ID = re.compile(
+    r"[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*")
 DEFAULT_CACHE_NAMESPACE_ID = "v1:default"
+
+
+def _is_output_contract_id(value: object) -> bool:
+    return (isinstance(value, str) and len(value) <= 128
+            and _OUTPUT_CONTRACT_ID.fullmatch(value) is not None)
 
 PROVIDER_ERROR_CATEGORIES = frozenset({
     "missing_credentials",
@@ -55,6 +66,7 @@ USAGE_SOURCES = frozenset({"exact", "estimated", "unavailable"})
 CacheMode = Literal["readwrite", "readonly", "refresh", "off"]
 FallbackPolicy = Literal["ordered", "none"]
 FailurePolicy = Literal["best-effort", "strict"]
+OutputContractStatus = Literal["accepted", "rejected", "not_evaluated"]
 
 
 def default_cache_dir() -> Path:
@@ -86,6 +98,10 @@ class LLMRequest:
     failure_policy: FailurePolicy | None = None
     cache_mode: CacheMode | None = None
     cache_dir: Path | None = None
+    output_contract_id: str | None = None
+    output_fallback_id: str | None = None
+    output_validator: Callable[[str], str] | None = field(
+        default=None, repr=False, compare=False)
     _transport_retry_admission: Callable[[], None] | None = field(
         default=None, repr=False, compare=False)
 
@@ -178,6 +194,10 @@ class LLMResult:
     provider_attempts: tuple[LLMAttempt, ...] = ()
     usage_source: str = "unavailable"
     cache_namespace_id: str | None = None
+    output_contract_id: str | None = None
+    output_contract_status: OutputContractStatus | None = None
+    output_diagnostic_code: str | None = None
+    output_fallback_id: str | None = None
 
     @property
     def transport_attempts(self) -> int:
@@ -313,8 +333,15 @@ class LLMRuntime:
                 "fallback_requests": 0,
                 "budget_rejections": 0,
                 "reserved_tokens": 0,
+                "output_contract_accepted": 0,
+                "output_contract_rejected": 0,
+                "output_contract_not_evaluated": 0,
+                "output_contract_fallbacks": 0,
             }
             self._providers: dict[str, dict[str, Any]] = {}
+            self._output_contracts: dict[
+                tuple[str, str], dict[str, Any]
+            ] = {}
             self._terminal_error_categories: dict[str, int] = {}
             self._request_latencies: list[float] = []
 
@@ -383,6 +410,26 @@ class LLMRuntime:
         if request.cache_dir is not None and not isinstance(
                 request.cache_dir, Path):
             raise TypeError("LLM cache_dir must be a pathlib.Path")
+        contract_fields = (
+            request.output_contract_id,
+            request.output_fallback_id,
+            request.output_validator,
+        )
+        if request.output_contract_id is None:
+            if any(value is not None for value in contract_fields[1:]):
+                raise ValueError(
+                    "output contract fields require output_contract_id")
+        else:
+            if not _is_output_contract_id(request.output_contract_id):
+                raise ValueError("output_contract_id is invalid")
+            if not _is_output_contract_id(request.output_fallback_id):
+                raise ValueError("output_fallback_id is invalid")
+            if not callable(request.output_validator):
+                raise TypeError("output_validator must be callable")
+            if (getattr(request.output_validator, "contract_id", None)
+                    != request.output_contract_id):
+                raise ValueError(
+                    "output_validator contract_id must match the request")
         if (request._transport_retry_admission is not None
                 and not callable(request._transport_retry_admission)):
             raise TypeError("transport retry admission must be callable")
@@ -455,6 +502,8 @@ class LLMRuntime:
             "temperature": request.temperature,
             "timeout": request.timeout,
             "fallback_policy": request.fallback_policy,
+            "output_contract_id": request.output_contract_id,
+            "output_fallback_id": request.output_fallback_id,
             "providers": [
                 {
                     "name": provider.name,
@@ -484,8 +533,8 @@ class LLMRuntime:
         }, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
-    def _read_cache(self, path: Path, key: str,
-                    request_id: str) -> LLMResult | None:
+    def _read_cache(self, path: Path, key: str, request_id: str,
+                    request: LLMRequest) -> LLMResult | None:
         if not path.is_file():
             return None
         try:
@@ -522,6 +571,18 @@ class LLMRuntime:
             cache_namespace_id = (
                 result.get("cache_namespace_id")
                 if isinstance(result, dict) else None)
+            output_contract_id = (
+                result.get("output_contract_id")
+                if isinstance(result, dict) else None)
+            output_contract_status = (
+                result.get("output_contract_status")
+                if isinstance(result, dict) else None)
+            output_diagnostic_code = (
+                result.get("output_diagnostic_code")
+                if isinstance(result, dict) else None)
+            output_fallback_id = (
+                result.get("output_fallback_id")
+                if isinstance(result, dict) else None)
             if usage_source is None and isinstance(usage_exact, bool):
                 usage_source = "exact" if usage_exact else "estimated"
             if (record_version != CACHE_RECORD_SCHEMA_VERSION
@@ -556,10 +617,29 @@ class LLMRuntime:
                     or usage_exact != (usage_source == "exact")
                     or not isinstance(cache_namespace_id, str)
                     or _CACHE_NAMESPACE_ID.fullmatch(
-                        cache_namespace_id) is None):
+                        cache_namespace_id) is None
+                    or output_contract_id != request.output_contract_id
+                    or output_fallback_id != request.output_fallback_id
+                    or output_diagnostic_code is not None
+                    or output_contract_status != (
+                        "accepted"
+                        if request.output_contract_id is not None else None)):
                 raise ValueError("cache record failed validation")
+            normalized = text.strip()
+            if request.output_validator is not None:
+                if text != normalized:
+                    raise ValueError(
+                        "cached output is not canonical")
+                try:
+                    validated = request.output_validator(normalized)
+                except Exception:
+                    raise ValueError(
+                        "cached output failed its contract") from None
+                if not isinstance(validated, str) or validated != normalized:
+                    raise ValueError(
+                        "cached output is not canonical")
             return LLMResult(
-                text=text.strip(), request_id=request_id,
+                text=normalized, request_id=request_id,
                 provider=result["provider"], model=result["model"],
                 latency_ms=0.0, attempts=0,
                 fallback_path=tuple(fallback_path),
@@ -571,13 +651,17 @@ class LLMRuntime:
                 reasoning_tokens=reasoning_tokens,
                 usage_source=usage_source,
                 cache_namespace_id=cache_namespace_id,
+                output_contract_id=output_contract_id,
+                output_contract_status=output_contract_status,
+                output_diagnostic_code=output_diagnostic_code,
+                output_fallback_id=output_fallback_id,
             )
         except OSError:
             with self._lock:
                 self._counts["cache_read_errors"] += 1
             return None
         except (UnicodeError, json.JSONDecodeError, KeyError,
-                TypeError, ValueError):
+                TypeError, ValueError, RecursionError):
             with self._lock:
                 self._counts["cache_corrupt"] += 1
             return None
@@ -596,6 +680,10 @@ class LLMRuntime:
             "usage_exact": result.usage_exact,
             "usage_source": result.usage_source,
             "cache_namespace_id": result.cache_namespace_id,
+            "output_contract_id": result.output_contract_id,
+            "output_contract_status": result.output_contract_status,
+            "output_diagnostic_code": result.output_diagnostic_code,
+            "output_fallback_id": result.output_fallback_id,
         }
         payload = {
             "schema_version": CACHE_RECORD_SCHEMA_VERSION,
@@ -738,6 +826,59 @@ class LLMRuntime:
             return "rate_limited"
         return "provider_error"
 
+    @staticmethod
+    def _apply_output_contract(
+            request: LLMRequest, text: str,
+    ) -> tuple[str, str | None, str | None]:
+        """Canonicalize generated text without retaining rejected content."""
+        if request.output_validator is None:
+            return text, None, None
+        try:
+            canonical = request.output_validator(text)
+        except OutputContractRejected as exc:
+            return "", "rejected", exc.diagnostic_code
+        except Exception:
+            return "", "rejected", INTERNAL_CONTRACT_ERROR
+        if (not isinstance(canonical, str) or not canonical
+                or canonical != canonical.strip()):
+            return "", "rejected", INTERNAL_CONTRACT_ERROR
+        return canonical, "accepted", None
+
+    @staticmethod
+    def _bind_output_contract(
+            result: LLMResult, request: LLMRequest) -> LLMResult:
+        """Stamp a validated request contract onto every terminal outcome."""
+        if request.output_contract_id is None:
+            return result
+        return replace(
+            result,
+            output_contract_id=request.output_contract_id,
+            output_contract_status=(
+                result.output_contract_status or "not_evaluated"),
+            output_fallback_id=request.output_fallback_id,
+        )
+
+    @classmethod
+    def _revalidate_shared_output(
+            cls, result: LLMResult, request: LLMRequest) -> LLMResult:
+        """Prevent a same-key waiter from trusting another validator blindly."""
+        if not result.succeeded or request.output_validator is None:
+            return result
+        canonical, status, diagnostic_code = cls._apply_output_contract(
+            request, result.text)
+        if status == "accepted" and canonical == result.text:
+            return result
+        return replace(
+            result,
+            text="",
+            provider=None,
+            model=None,
+            error_category="invalid_response",
+            output_contract_status="rejected",
+            output_diagnostic_code=(
+                diagnostic_code or INTERNAL_CONTRACT_ERROR),
+        )
+
     def _execute_uncached(
             self, request: LLMRequest, providers: list[ProviderSpec], *,
             request_id: str, cache_status: str) -> LLMResult:
@@ -802,7 +943,7 @@ class LLMRuntime:
                         reported=raw_response.transport_attempts,
                         admitted=admitted_transport_attempts)
                     self._validate_provider_response(raw_response)
-                    normalized = raw_response.text.strip()
+                    generated_text = raw_response.text
                     transport_attempts = max(
                         raw_response.transport_attempts,
                         admitted_transport_attempts)
@@ -813,7 +954,7 @@ class LLMRuntime:
                     completion_tokens = (
                         raw_response.completion_tokens
                         if raw_response.completion_tokens is not None
-                        else _estimate_tokens(normalized))
+                        else _estimate_tokens(generated_text))
                     cached_prompt_tokens = (
                         raw_response.cached_prompt_tokens or 0)
                     reasoning_tokens = raw_response.reasoning_tokens or 0
@@ -823,16 +964,16 @@ class LLMRuntime:
                     transient_errors = (
                         raw_response.transient_error_categories)
                 elif isinstance(raw_response, str):
-                    normalized = raw_response.strip()
+                    generated_text = raw_response
                     transport_attempts = admitted_transport_attempts
                     prompt_tokens = estimated_prompt_tokens
-                    completion_tokens = _estimate_tokens(normalized)
+                    completion_tokens = _estimate_tokens(generated_text)
                     cached_prompt_tokens = 0
                     reasoning_tokens = 0
                     usage_source = "estimated"
                     transient_errors = ()
                 elif raw_response is None:
-                    normalized = ""
+                    generated_text = ""
                     transport_attempts = admitted_transport_attempts
                     prompt_tokens = 0
                     completion_tokens = 0
@@ -884,6 +1025,61 @@ class LLMRuntime:
                 last_error = category
                 continue
 
+            normalized = generated_text.strip()
+            if request.output_validator is None or not normalized:
+                output_contract_status = None
+                output_diagnostic_code = None
+            else:
+                (
+                    normalized,
+                    output_contract_status,
+                    output_diagnostic_code,
+                ) = self._apply_output_contract(request, generated_text)
+                if output_contract_status == "rejected":
+                    latency = (time.perf_counter() - attempt_started) * 1000
+                    self._record_provider_outcome(
+                        provider.name, succeeded=False, latency_ms=latency,
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=completion_tokens,
+                        cached_prompt_tokens=cached_prompt_tokens,
+                        reasoning_tokens=reasoning_tokens,
+                        transport_attempts=transport_attempts,
+                        usage_source=usage_source,
+                        error_category="invalid_response",
+                        transient_error_categories=transient_errors)
+                    attempt_records.append(LLMAttempt(
+                        provider=provider.name, model=provider.model,
+                        succeeded=False, latency_ms=latency,
+                        error_category="invalid_response",
+                        transport_attempts=transport_attempts,
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=completion_tokens,
+                        cached_prompt_tokens=cached_prompt_tokens,
+                        reasoning_tokens=reasoning_tokens,
+                        usage_exact=usage_source == "exact",
+                        usage_source=usage_source,
+                        transient_error_categories=transient_errors))
+                    return LLMResult(
+                        text="", request_id=request_id,
+                        provider=None, model=None,
+                        latency_ms=(time.perf_counter() - started) * 1000,
+                        attempts=len(attempt_records),
+                        fallback_path=tuple(fallback_path),
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=completion_tokens,
+                        usage_exact=usage_source == "exact",
+                        cache_status=cache_status,
+                        error_category="invalid_response",
+                        cached_prompt_tokens=cached_prompt_tokens,
+                        reasoning_tokens=reasoning_tokens,
+                        provider_attempts=tuple(attempt_records),
+                        usage_source=usage_source,
+                        output_contract_id=request.output_contract_id,
+                        output_contract_status="rejected",
+                        output_diagnostic_code=output_diagnostic_code,
+                        output_fallback_id=request.output_fallback_id,
+                    )
+
             latency = (time.perf_counter() - attempt_started) * 1000
             if normalized:
                 self._record_provider_outcome(
@@ -923,6 +1119,10 @@ class LLMRuntime:
                     provider_attempts=tuple(attempt_records),
                     usage_source=usage_source,
                     cache_namespace_id=provider.cache_namespace_id,
+                    output_contract_id=request.output_contract_id,
+                    output_contract_status=output_contract_status,
+                    output_diagnostic_code=output_diagnostic_code,
+                    output_fallback_id=request.output_fallback_id,
                 )
             self._record_provider_outcome(
                 provider.name, succeeded=False, latency_ms=latency,
@@ -1010,6 +1210,10 @@ class LLMRuntime:
             "cache_namespace_id": result.cache_namespace_id,
             "error_category": result.error_category,
             "succeeded": result.succeeded,
+            "output_contract_id": result.output_contract_id,
+            "output_contract_status": result.output_contract_status,
+            "output_diagnostic_code": result.output_diagnostic_code,
+            "output_fallback_id": result.output_fallback_id,
         }
         with self._lock:
             self._counts["requests"] += 1
@@ -1026,6 +1230,37 @@ class LLMRuntime:
                 category = result.error_category
                 self._terminal_error_categories[category] = (
                     self._terminal_error_categories.get(category, 0) + 1)
+            if result.output_contract_status in {
+                    "accepted", "rejected", "not_evaluated"}:
+                status = result.output_contract_status
+                self._counts[f"output_contract_{status}"] += 1
+                fallback_used = (
+                    not result.succeeded
+                    and result.error_category != "budget_exceeded"
+                    and request.failure_policy == "best-effort"
+                    and result.output_fallback_id is not None)
+                if fallback_used:
+                    self._counts["output_contract_fallbacks"] += 1
+                key = (request.operation, result.output_contract_id or "")
+                contract = self._output_contracts.setdefault(key, {
+                    "accepted": 0,
+                    "rejected": 0,
+                    "not_evaluated": 0,
+                    "fallbacks": 0,
+                    "diagnostic_codes": {},
+                    "fallback_ids": set(),
+                })
+                contract[status] += 1
+                if fallback_used:
+                    contract["fallbacks"] += 1
+                if result.output_fallback_id is not None:
+                    contract["fallback_ids"].add(
+                        result.output_fallback_id)
+                if result.output_diagnostic_code is not None:
+                    diagnostic_codes = contract["diagnostic_codes"]
+                    diagnostic_codes[result.output_diagnostic_code] = (
+                        diagnostic_codes.get(
+                            result.output_diagnostic_code, 0) + 1)
             self._request_latencies.append(result.latency_ms)
             events_path = self._config.events_path
             run_id = self._config.run_id
@@ -1083,7 +1318,8 @@ class LLMRuntime:
         cache_path = self._cache_path(cache_dir, key)
 
         if mode in {"readwrite", "readonly"}:
-            cached = self._read_cache(cache_path, key, request_id)
+            cached = self._read_cache(
+                cache_path, key, request_id, request)
             if cached is not None:
                 self._record_result(cached, request)
                 return self._finish(cached, request)
@@ -1104,6 +1340,8 @@ class LLMRuntime:
                 result = replace(
                     flight.result, latency_ms=wait_latency, attempts=0,
                     cache_status="shared", provider_attempts=())
+            result = self._revalidate_shared_output(result, request)
+            result = self._bind_output_contract(result, request)
             self._record_result(result, request)
             return self._finish(result, request)
 
@@ -1113,6 +1351,7 @@ class LLMRuntime:
             result = self._execute_uncached(
                 request, providers, request_id=request_id,
                 cache_status=status)
+            result = self._bind_output_contract(result, request)
             if result.succeeded and mode in {"readwrite", "refresh"}:
                 try:
                     self._write_cache(cache_path, key, result)
@@ -1129,6 +1368,7 @@ class LLMRuntime:
                 prompt_tokens=_estimate_tokens(request.prompt),
                 completion_tokens=0, usage_exact=False,
                 cache_status=status, error_category=self._error_category(exc))
+            result = self._bind_output_contract(result, request)
             flight.result = result
         finally:
             with self._lock:
@@ -1153,6 +1393,21 @@ class LLMRuntime:
                 }
                 for name, metrics in self._providers.items()
             }
+            output_contracts = [
+                {
+                    "operation": operation,
+                    "contract_id": contract_id,
+                    "accepted": metrics["accepted"],
+                    "rejected": metrics["rejected"],
+                    "not_evaluated": metrics["not_evaluated"],
+                    "fallbacks": metrics["fallbacks"],
+                    "diagnostic_codes": dict(sorted(
+                        metrics["diagnostic_codes"].items())),
+                    "fallback_ids": sorted(metrics["fallback_ids"]),
+                }
+                for (operation, contract_id), metrics
+                in sorted(self._output_contracts.items())
+            ]
             payload = {
                 "schema_version": REPORT_SCHEMA_VERSION,
                 "started_at": self._started_at,
@@ -1176,6 +1431,10 @@ class LLMRuntime:
                         "underlying adapter requests, including retries"),
                     "token_usage": (
                         "provider-reported when exact; otherwise characters/4"),
+                    "output_contracts": (
+                        "content-free accepted, rejected, not-evaluated, and "
+                        "deterministic-fallback receipts grouped by operation "
+                        "and contract"),
                 },
                 "counts": dict(self._counts),
                 "terminal_error_categories": dict(sorted(
@@ -1185,6 +1444,7 @@ class LLMRuntime:
                     "p95": _percentile(self._request_latencies, 0.95),
                 },
                 "providers": providers,
+                "output_contracts": output_contracts,
             }
             if config.run_id is not None:
                 payload["run_id"] = config.run_id

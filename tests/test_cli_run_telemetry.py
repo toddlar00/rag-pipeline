@@ -51,6 +51,37 @@ def test_cli_uses_supervisor_run_id_for_llm_correlation(
         "supervisor-run-7")
 
 
+def test_cli_run_report_includes_output_contract_counts(monkeypatch, tmp_path):
+    run_report = tmp_path / "run.json"
+
+    def generate_with_rejection(*_args, **_kwargs):
+        rag._llm_runtime.execute(
+            rag.LLMRequest(
+                prompt="classify",
+                operation="chunk.classify",
+                output_contract_id=(
+                    rag._CLASSIFICATION_OUTPUT_CONTRACT.contract_id),
+                output_fallback_id=(
+                    "preserve-deterministic-content-type"),
+                output_validator=rag._CLASSIFICATION_OUTPUT_CONTRACT,
+            ),
+            [rag.ProviderSpec(
+                name="test", model="model", endpoint_id="test-endpoint",
+                invoke=lambda _request: "case_opinion because it is a case")],
+        )
+
+    monkeypatch.setattr(rag, "generate_briefs", generate_with_rejection)
+
+    rag.main(["brief", "--run-report", str(run_report)])
+
+    report = json.loads(run_report.read_text(encoding="utf-8"))
+    metrics = report["stages"]["llm"]["metrics"]
+    assert metrics["output_contract_accepted"]["total"] == 0
+    assert metrics["output_contract_rejected"]["total"] == 1
+    assert metrics["output_contract_not_evaluated"]["total"] == 0
+    assert metrics["output_contract_fallbacks"]["total"] == 1
+
+
 def test_cli_finalizes_telemetry_when_setup_validation_fails(
         monkeypatch, tmp_path):
     report_path = tmp_path / "run.json"

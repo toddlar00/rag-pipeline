@@ -411,6 +411,7 @@ def test_resume_serializer_preserves_quoting_secrets_and_raw_extra_flags():
         Path("My Book.pdf"),
         SimpleNamespace(
             collection="My Collection",
+            markdown_validation="strict",
             cloud_key="must-not-serialize",
             gemini_key="also-secret",
         ),
@@ -422,6 +423,7 @@ def test_resume_serializer_preserves_quoting_secrets_and_raw_extra_flags():
         'python-test rag.py full --pdf "My Book.pdf" --resume')
     assert "--structure-profile us-law-casebook-v1" in command
     assert "--collection My Collection" in command
+    assert "--markdown-validation strict" in command
     assert command.endswith("--force --custom-value raw")
     assert "must-not-serialize" not in command
     assert "also-secret" not in command

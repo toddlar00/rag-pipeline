@@ -2,12 +2,14 @@ import hashlib
 import os
 import subprocess
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 import artifact_io
 import rag
+import storage_policy
 
 
 def _stat_view(result, **changes):
@@ -57,6 +59,46 @@ def test_strict_parser_uses_current_rag_chunk_identity(monkeypatch, tmp_path):
     records = rag._parse_index_records_strict(raw, tmp_path / "chunks.jsonl")
 
     assert records == observed
+
+
+@pytest.mark.parametrize(
+    "separator", [chr(0x85), chr(0x2028), chr(0x2029)])
+def test_written_chunks_round_trip_through_unicode_line_separators(
+        tmp_path, separator):
+    """A record the writer emits must always be readable back as one record.
+
+    ``json.dumps(..., ensure_ascii=False)`` leaves U+0085, U+2028, and U+2029
+    literal, but JSON does not treat them as line terminators.  Splitting on
+    them tore a valid corpus record into unparsable fragments.
+    """
+    chunks = tmp_path / "chunks.jsonl"
+    text = f"Rule 1.5(c){separator}contingent fee disclosure"
+    written = [
+        {"text": text, "metadata": {"page_start": 542, "note": text}},
+        {"text": "second passage", "metadata": {"page_start": 543}},
+    ]
+    storage_policy.atomic_write_private_jsonl(chunks, written)
+
+    raw = chunks.read_bytes()
+    assert separator.encode("utf-8") in raw
+
+    records = rag._parse_index_records_strict(raw, chunks)
+
+    assert [record["text"] for record in records] == [
+        text, "second passage"]
+    assert records[0]["metadata"]["note"] == text
+    assert len(records) == len(written)
+
+
+def test_jsonl_reader_still_accepts_both_written_line_terminators():
+    payload = '{"text":"a","metadata":{}}'
+    other = '{"text":"b","metadata":{}}'
+
+    for terminator in ("\n", "\r\n"):
+        contents = f"{payload}{terminator}{other}{terminator}"
+        records = rag._parse_index_records_strict(
+            contents.encode("utf-8"), Path("chunks.jsonl"))
+        assert [record["text"] for record in records] == ["a", "b"]
 
 
 def test_snapshot_loader_uses_current_rag_parser(monkeypatch, tmp_path):

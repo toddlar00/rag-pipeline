@@ -79,6 +79,43 @@ def test_classifier_uses_current_rag_structural_helper(monkeypatch):
     assert observed["args"] == ("ordinary prose", ["A heading"])
 
 
+def test_nearby_dedup_never_drops_markdown_table_structure():
+    """Repeated table rows and adjacent table headers are real content."""
+    repeated_row = "\n".join([
+        "| Year | Men | Women |",
+        "| --- | --- | --- |",
+        "| 2019 | 50 | 50 |",
+        "| 2020 | 51 | 49 |",
+        "| 2019 | 50 | 50 |",
+        "| 2021 | 52 | 48 |",
+    ])
+    assert chunking_core._dedup_nearby_lines(repeated_row) == repeated_row
+
+    adjacent_tables = "\n".join([
+        "| A | B |", "| --- | --- |", "| 1 | 2 |",
+        "",
+        "| A | B |", "| --- | --- |", "| 3 | 4 |",
+    ])
+    assert chunking_core._dedup_nearby_lines(
+        adjacent_tables) == adjacent_tables
+    assert rag._normalize_text(repeated_row) == repeated_row
+
+
+def test_nearby_dedup_still_removes_repeated_prose_furniture():
+    text = "\n".join([
+        "CHAPTER 4 — PROFESSIONAL RESPONSIBILITY",
+        "Substantive first paragraph.",
+        "CHAPTER 4 — PROFESSIONAL RESPONSIBILITY",
+        "Substantive second paragraph.",
+    ])
+
+    assert chunking_core._dedup_nearby_lines(text) == "\n".join([
+        "CHAPTER 4 — PROFESSIONAL RESPONSIBILITY",
+        "Substantive first paragraph.",
+        "Substantive second paragraph.",
+    ])
+
+
 def test_dedup_uses_current_rag_helpers_and_logger(monkeypatch):
     fingerprint_calls = []
     trigram_calls = []
@@ -154,6 +191,11 @@ def test_dedup_preserves_similar_distinct_holdings_from_same_source():
             "notes_and_questions",
         ),
         (
+            "Questions about the doctrine appear below.",
+            ["Notes & Questions"],
+            "notes_and_questions",
+        ),
+        (
             "This chapter introduces the governing doctrine.",
             ["Chapter 2 · Introduction"],
             "chapter_introduction",
@@ -185,6 +227,125 @@ def test_content_classification_categories(text, headings, expected):
     assert chunking_core.classify_content_type(text, headings) == expected
 
 
+@pytest.mark.parametrize(
+    ("headings", "expected"),
+    [
+        (
+            ["Chapter 1 · Sample Systems", "§1.01 Introduction"],
+            "chapter_introduction",
+        ),
+        (
+            [
+                "§1.01 Introduction",
+                "Chapter 1 · Sample Systems",
+                "§1.01 Introduction",
+            ],
+            "chapter_introduction",
+        ),
+        (
+            [
+                "Chapter 1 · Sample Systems",
+                "§1.02 Routine Measurements",
+            ],
+            "author_narrative",
+        ),
+        (
+            [
+                "Chapter 6 · Results",
+                "§6.05 Fairness in Sample Results",
+                "A. Introduction",
+            ],
+            "author_narrative",
+        ),
+        (
+            [
+                "Chapter 8 · Recorded Events",
+                "Sample v. Example County",
+                "Introduction",
+            ],
+            "author_narrative",
+        ),
+        (
+            ["Chapter 2 · Sample Operations", "§1.01 Introduction"],
+            "author_narrative",
+        ),
+    ],
+)
+def test_chapter_introduction_classification_is_leaf_scoped(
+        headings, expected):
+    text = "The authors provide substantive explanatory prose for readers."
+    assert chunking_core.classify_content_type(text, headings) == expected
+
+
+def test_inferred_chapter_introduction_requires_deterministic_scope():
+    record = {
+        "text": "The report recounts the events preceding the final review.",
+        "metadata": {
+            "headings": ["Sample v. Example District", "Introduction"],
+            "section_path": (
+                "Chapter 8 · Recorded Events > §8.05 Review Sequence"
+                " > Sample v. Example District > Introduction"
+            ),
+        },
+    }
+
+    assert not rag._inferred_content_type_allowed(
+        record, "chapter_introduction",
+        structure_profile="us-law-casebook-v1",
+    )
+    assert rag._inferred_content_type_allowed(
+        record, "case_opinion",
+        structure_profile="us-law-casebook-v1",
+    )
+
+    record["metadata"].update({
+        "headings": ["§8.01 Introduction"],
+        "section_path": (
+            "Chapter 8 · Recorded Events > §8.01 Introduction"
+        ),
+    })
+    assert rag._inferred_content_type_allowed(
+        record, "chapter_introduction",
+        structure_profile="us-law-casebook-v1",
+    )
+
+
+def test_nested_notes_heading_prevents_case_opinion_false_positive():
+    text = (
+        "Reviewer Rowan affirmed the result discussed in these study questions."
+    )
+    headings = [
+        "Chapter 6 · Sample Results",
+        "Notes & Questions",
+        "Example v. Sample City",
+        "I. Introduction",
+    ]
+
+    assert chunking_core.classify_content_type(
+        text, headings) == "author_narrative"
+
+
+@pytest.mark.parametrize(
+    ("text", "headings"),
+    [
+        (
+            "Consistency and fairness matter. Reviewer Rowan explained why "
+            "each result must receive a complete review.",
+            ["Chapter 1 · Introduction to Sample Systems", "E. Fairness"],
+        ),
+        (
+            "A reviewer may write a concurring opinion, while another "
+            "reviewer may write a dissenting opinion.",
+            ["Chapter 1 · Introduction to Sample Systems", "E. Review"],
+        ),
+    ],
+)
+def test_case_vocabulary_in_author_explanation_is_not_case_opinion(
+        text, headings):
+    assert chunking_core.classify_content_type(
+        text, headings) == "author_narrative"
+
+
 def test_normalize_text_repairs_only_high_confidence_pdf_artifacts():
     disclaimer = (
         "This and other authors' explanations draw from the comments to the "
@@ -192,7 +353,7 @@ def test_normalize_text_repairs_only_high_confidence_pdf_artifacts():
         "highlight some important interpretive points."
     )
     source = (
-        "A client- lawyer relationship. Standard - punctuation.\n"
+        "A data- steward relationship. Standard - punctuation.\n"
         "https:// perma . cc / ABCD - EFGH\n"
         "https://example.org/some / split / path "
         "(last visited Jan. 1, 2020)\n"
@@ -203,7 +364,7 @@ def test_normalize_text_repairs_only_high_confidence_pdf_artifacts():
 
     normalized = chunking_core._normalize_text(source)
 
-    assert "client-lawyer" in normalized
+    assert "data-steward" in normalized
     assert "Standard - punctuation" in normalized
     assert "https://perma.cc/ABCD-EFGH" in normalized
     assert "https://example.org/some/split/path (last visited" in normalized
@@ -217,6 +378,8 @@ def test_normalize_text_does_not_insert_sentence_space_inside_url_token():
     url = "https://example.comOpenAI"
 
     assert chunking_core._normalize_text(url) == url
+    assert chunking_core._normalize_text("www . Example . org") == (
+        "www.Example.org")
 
 
 def test_visited_url_repair_does_not_consume_prose_between_two_urls():
@@ -234,6 +397,527 @@ def test_visited_url_repair_does_not_consume_prose_between_two_urls():
     assert "http://www.example.com/split-path" in normalized
 
 
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        (
+            "https://www .example.com/2018/11/16/archive/story.html",
+            "https://www.example.com/2018/11/16/archive/story.html",
+        ),
+        (
+            "https:// docs.example.org/resources/research-notes -archive",
+            "https://docs.example.org/resources/research-notes-archive",
+        ),
+        (
+            "https://example.com/reports /incident-summary",
+            "https://example.com/reports/incident-summary",
+        ),
+        (
+            "https://news .example.com/US/story ?id=12345",
+            "https://news.example.com/US/story?id=12345",
+        ),
+        (
+            "www.example.com/2018 /11/13/archive/events.html",
+            "www.example.com/2018/11/13/archive/events.html",
+        ),
+        (
+            "https://\u200bwww .example.org/athlete/sample-profile",
+            "https://www.example.org/athlete/sample-profile",
+        ),
+        (
+            "https:// www . example . com / 2018 / 11 / story . html",
+            "https://www.example.com/2018/11/story.html",
+        ),
+        (
+            "http:// www . example . org / history / timeline . htm",
+            "http://www.example.org/history/timeline.htm",
+        ),
+    ],
+)
+def test_normalize_text_repairs_only_url_bound_spacing(source, expected):
+    assert chunking_core._normalize_text(source) == expected
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        (
+            "See https:// archive . example . com / sample - assets / "
+            "uploads / 2025 / 01 / DEVICE - REVIEW - NOTE .pdf.",
+            "See https://archive.example.com/sample-assets/uploads/2025/01/"
+            "DEVICE-REVIEW-NOTE.pdf.",
+        ),
+        (
+            "See https://www . example . com / 2025 / 01 / 02 / reports / "
+            "sample - archive - device - results .html.",
+            "See https://www.example.com/2025/01/02/reports/"
+            "sample-archive-device-results.html.",
+        ),
+        (
+            "See ht tps:// www . example . org / sample -maps "
+            "(visited Jan. 3, 2025).",
+            "See https://www.example.org/sample-maps "
+            "(visited Jan. 3, 2025).",
+        ),
+        (
+            "See http://www . example . com / 2025 / 01 / 04 / reports / "
+            "sample . html ? pagewanted =all. How should the archive be read?",
+            "See http://www.example.com/2025/01/04/reports/sample.html"
+            "?pagewanted=all. How should the archive be read?",
+        ),
+        (
+            "See https://www . example . org / sites / authors / 2025 / "
+            "synthetic - analysis - results /#sample123.",
+            "See https://www.example.org/sites/authors/2025/"
+            "synthetic-analysis-results/#sample123.",
+        ),
+        (
+            "See https://beta . example . com / reports / sample - "
+            "manufacturer / 2025 / sample1234 - test _ story .html.",
+            "See https://beta.example.com/reports/sample-manufacturer/"
+            "2025/sample1234-test_story.html.",
+        ),
+    ],
+)
+def test_transactional_url_repair_handles_source_pdf_spacing(source, expected):
+    assert chunking_core._normalize_text(source) == expected
+
+
+def test_generic_url_parser_still_fails_closed_on_mixed_native_spacing():
+    source = (
+        "See https:// beta . example . com / reports / "
+        "sample-device-results-require-additional-independent-review / "
+        "2025 / 01 / 05 / aaaaaaaa - bbbb - cccc - dddd - "
+        "eeeeeeeeeeee _ story .html."
+    )
+
+    assert chunking_core._repair_spaced_url_candidates(source) == source
+    assert chunking_core.has_malformed_url_spacing(source)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "See https://example.com . Next sentence remains separate.",
+        "See www.example.com . Next sentence remains separate.",
+        "See https://example.com / commentary follows.",
+        "See https://example.com/path - commentary follows.",
+        "See https://example.com/path\n- commentary on the next line.",
+    ],
+)
+def test_transactional_url_repair_rejects_prose_boundaries(source):
+    assert chunking_core._normalize_text(source) == source
+
+
+def test_transactional_url_repair_stops_after_closed_spaced_host():
+    source = "See https://example . com . Next sentence remains separate."
+    assert chunking_core._normalize_text(source) == (
+        "See https://example.com . Next sentence remains separate.")
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "See ht tps:// www . example . org / source . html.",
+        "See https://beta . example . com / story . html.",
+        "See www . example . com for the source.",
+    ],
+)
+def test_malformed_url_gate_detects_transactional_repair_candidates(source):
+    assert chunking_core.has_malformed_url_spacing(source)
+    assert not chunking_core.has_malformed_url_spacing(
+        chunking_core._normalize_text(source))
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "See https://example.com . Next sentence remains separate.",
+        "See https://example.com / commentary follows.",
+        "See https://example.com/path - commentary follows.",
+    ],
+)
+def test_malformed_url_gate_does_not_flag_prose_boundaries(source):
+    assert not chunking_core.has_malformed_url_spacing(source)
+
+
+def test_spaced_url_scheme_repair_does_not_consume_following_prose():
+    source = (
+        "Watch https:// media.example.com/watch?v=abc123. "
+        "The next sentence must retain its spaces."
+    )
+
+    assert chunking_core._normalize_text(source) == (
+        "Watch https://media.example.com/watch?v=abc123. "
+        "The next sentence must retain its spaces."
+    )
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "See https://example.com for the source.",
+        "See https://example.com/path - commentary follows.",
+        "See www.example.com/path and compare the printed source.",
+    ],
+)
+def test_url_repair_preserves_ordinary_prose_boundaries(source):
+    assert chunking_core._normalize_text(source) == source
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        (
+            "ht tp:// www . example . com / source . html",
+            "http://www.example.com/source.html",
+        ),
+        (
+            "https://library . example . org / source . html",
+            "https://library.example.org/source.html",
+        ),
+        (
+            "https://data . news . example . com / source . html",
+            "https://data.news.example.com/source.html",
+        ),
+        (
+            "https://museum . example . test / source . html",
+            "https://museum.example.test/source.html",
+        ),
+        (
+            "https://Example . Com / source . html",
+            "https://Example.Com/source.html",
+        ),
+        (
+            "https://sample . example . invalid / source . html",
+            "https://sample.example.invalid/source.html",
+        ),
+        (
+            "https://example . com / search ? q = alpha - commentary follows",
+            "https://example.com/search?q=alpha - commentary follows",
+        ),
+        (
+            "https://example . com / search ?q=alpha & compare authorities",
+            "https://example.com/search?q=alpha & compare authorities",
+        ),
+    ],
+)
+def test_transactional_url_repair_adversarial_valid_endpoints(source, expected):
+    assert chunking_core._normalize_text(source) == expected
+    assert chunking_core.has_malformed_url_spacing(source)
+    assert not chunking_core.has_malformed_url_spacing(expected)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "https://example.com . in this discussion",
+        "https://example.com . to compare authorities",
+    ],
+)
+def test_transactional_url_repair_does_not_treat_prose_as_country_tld(source):
+    assert chunking_core._normalize_text(source) == source
+    assert not chunking_core.has_malformed_url_spacing(source)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "https://example . com : 8080 / source . html",
+        "https://example . com / unresolved tail",
+    ],
+)
+def test_transactional_url_repair_fails_closed_on_unproven_endpoints(source):
+    assert chunking_core._normalize_text(source) == source
+    assert chunking_core.has_malformed_url_spacing(source)
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        (
+            "https://foo . com . example . invalid / source . html",
+            "https://foo.com.example.invalid/source.html",
+        ),
+        (
+            "https://foo . law . example . invalid / source . html",
+            "https://foo.law.example.invalid/source.html",
+        ),
+        (
+            "https://sample . example.INVALID",
+            "https://sample.example.INVALID",
+        ),
+        (
+            "https://sample . example . invalid",
+            "https://sample.example.invalid",
+        ),
+        (
+            "https://192.0.2.1 / source . html",
+            "https://192.0.2.1/source.html",
+        ),
+        (
+            "https://xn--sample-9db . example / source . html",
+            "https://xn--sample-9db.example/source.html",
+        ),
+        (
+            "https://catalog.example.com /sites/sample7e/.",
+            "https://catalog.example.com/sites/sample7e/.",
+        ),
+        (
+            "https://catalog.example.com/sites/ sample7e/ .",
+            "https://catalog.example.com/sites/sample7e/.",
+        ),
+        (
+            "https://catalog.example.com/sites /sample7e/ .",
+            "https://catalog.example.com/sites/sample7e/.",
+        ),
+        (
+            "https://www \u00b7example.org/story.html",
+            "https://www.example.org/story.html",
+        ),
+        (
+            "www.example. com/games.' The rules apply.",
+            "www.example.com/games.' The rules apply.",
+        ),
+    ],
+)
+def test_transactional_url_repair_closes_whole_proven_candidate(source, expected):
+    normalized = chunking_core._normalize_text(source)
+    assert normalized == expected
+    assert chunking_core.has_malformed_url_spacing(source)
+    assert not chunking_core.has_malformed_url_spacing(normalized)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "https://example . com @ attacker . example/login",
+        "https://example . com@attacker.example/login",
+        "https://example . com..attacker/login",
+        "https://example . com_attacker/login",
+        "https://example . com\\attacker/login",
+        "https://example . com;@attacker.example/login",
+        "https://example . com!@attacker.example/login",
+        "https://example . com$@attacker.example/login",
+        "https://example . com&@attacker.example/login",
+        "https://example . com'@attacker.example/login",
+        "https://example . com(@attacker.example/login",
+        "https://example . com)@attacker.example/login",
+        "https://example . com*@attacker.example/login",
+        "https://example . com+@attacker.example/login",
+        "https://example . com,@attacker.example/login",
+        "https://example . com=@attacker.example/login",
+        "https://example . com;attacker.example/login",
+        "https://example . com!attacker.example/login",
+        "https://example . com$attacker.example/login",
+        "https://example . com&attacker.example/login",
+        "https://example . com'attacker.example/login",
+        "https://example . com(attacker.example/login",
+        "https://example . com)attacker.example/login",
+        "https://example . com*attacker.example/login",
+        "https://example . com+attacker.example/login",
+        "https://example . com,attacker.example/login",
+        "https://example . com=attacker.example/login",
+        "https://example . com/search ? email = user @ example . com",
+        "https://example . com/search ? q = % ZZ",
+        "https://example.com : 8080 / source . html",
+        "https://example.com: 8080 / source . html",
+        "https://example.com:8080 / source . html",
+        "https://[2001:db8::1] / source . html",
+        "https://[2001 : db8 :: 1] / source . html",
+        "https://[2001 : db8 :: 1]/source.html",
+        "https://[2001 : db8 :: 1]",
+        "https://[2001 : db8 :: 1]?q=x",
+        "https://user:pass@example.com / source . html",
+        "https://user : pass @ example . com / source . html",
+        "https://user : pass @ example . com/source.html",
+        "https://user : pass @ example . com",
+        "https://user : pass @ example . com?q=x",
+        "https://b\u00fccher . example / source . html",
+    ],
+)
+def test_transactional_url_repair_rejects_authority_or_escape_ambiguity(source):
+    assert chunking_core._normalize_text(source) == source
+    assert chunking_core.has_malformed_url_spacing(source)
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        (
+            "https://example . com/search ? q = alpha - commentary = follows.",
+            "https://example.com/search?q=alpha - commentary = follows.",
+        ),
+        (
+            "https://example . com/search ? q = alpha & compare = authorities.",
+            "https://example.com/search?q=alpha & compare = authorities.",
+        ),
+        (
+            "https://example . com/search ? q = alpha - commentary # note.",
+            "https://example.com/search?q=alpha - commentary # note.",
+        ),
+        (
+            "https://example . com/search ? q = alpha = commentary = follows.",
+            "https://example.com/search?q=alpha = commentary = follows.",
+        ),
+        (
+            "https://example . com/search ? q = alpha + commentary = follows.",
+            "https://example.com/search?q=alpha + commentary = follows.",
+        ),
+        (
+            "https://example . com/search ? q = alpha / commentary = follows.",
+            "https://example.com/search?q=alpha / commentary = follows.",
+        ),
+        (
+            "https://example . com/search ? q = alpha & page = 2.",
+            "https://example.com/search?q=alpha&page=2.",
+        ),
+    ],
+)
+def test_transactional_url_repair_cannot_promote_past_query_prose(source, expected):
+    normalized = chunking_core._normalize_text(source)
+    assert normalized == expected
+    assert "commentary=" not in normalized
+    assert "compare=" not in normalized
+    assert "commentary#" not in normalized
+
+
+def test_transactional_url_repair_does_not_merge_adjacent_domains():
+    source = "https://example . com. www.example.org/path.html"
+    normalized = chunking_core._normalize_text(source)
+    assert normalized == "https://example.com. www.example.org/path.html"
+    assert "example.com.www" not in normalized
+    assert not chunking_core.has_malformed_url_spacing(normalized)
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        (
+            "https://example . com . www.example.org/path.html",
+            "https://example.com . www.example.org/path.html",
+        ),
+        (
+            "https://example . com . Federal . sample reviews",
+            "https://example.com . Federal . sample reviews",
+        ),
+    ],
+)
+def test_transactional_url_repair_stops_at_spaced_sentence_domain(source, expected):
+    normalized = chunking_core._normalize_text(source)
+    assert normalized == expected
+    assert "example.com.www" not in normalized
+    assert "example.com.Federal" not in normalized
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        (
+            "https:// shop . example . com / Sample - Device / dp / ITEM123 . "
+            "It is much longer.",
+            "https://shop.example.com/Sample-Device/dp/ITEM123. "
+            "It is much longer.",
+        ),
+        (
+            "https:// www . example . org / blog / sample - metric - gap / "
+            "(2023).",
+            "https://www.example.org/blog/sample-metric-gap/ (2023).",
+        ),
+        (
+            "https:// research . example . org / short - reads / "
+            "sample - issues / (noting the survey).",
+            "https://research.example.org/short-reads/sample-issues/ "
+            "(noting the survey).",
+        ),
+        (
+            "https:// policy . example . org / technology / sample - rule - "
+            "index; see, e.g., the collected entries.",
+            "https://policy.example.org/technology/sample-rule-index; "
+            "see, e.g., the collected entries.",
+        ),
+        (
+            "https:// registry . example . net / en / news - archive / details / "
+            "? varevent = 42 .",
+            "https://registry.example.net/en/news-archive/details/"
+            "?varevent=42 .",
+        ),
+        (
+            "(https:// safety . example . org); next source.",
+            "(https://safety.example.org); next source.",
+        ),
+        (
+            "https:// media . example . com / watch ? v = sample123&t =26s. "
+            "The video follows.",
+            "https://media.example.com/watch?v=sample123&t=26s. "
+            "The video follows.",
+        ),
+    ],
+)
+def test_transactional_url_repair_handles_representative_boundaries(
+        source, expected):
+    normalized = chunking_core._normalize_text(source)
+    assert normalized == expected
+    assert not chunking_core.has_malformed_url_spacing(normalized)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "htt ps:// www . example . com / source . html",
+        "h ttps:// www . example . com / source . html",
+        "https :// www . example . com / source . html",
+        "https:/ / www . example . com / source . html",
+        "h t tp:// www . example . com / source . html",
+        "h t t ps:// www . example . com / source . html",
+    ],
+)
+def test_transactional_url_repair_fails_closed_on_malformed_scheme(source):
+    assert chunking_core._normalize_text(source) == source
+    assert chunking_core.has_malformed_url_spacing(source)
+
+
+def test_literal_http_syntax_is_not_a_malformed_url_candidate():
+    source = "The literal token https:// is discussed here."
+    assert chunking_core._normalize_text(source) == source
+    assert not chunking_core.has_malformed_url_spacing(source)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "[click](java\u200bscript:alert(1))",
+        "data\u200b:text/html,<h1>x</h1>",
+        "[click](vb\u2060script:alert(1))",
+        "[click](fi\ufeffle:///tmp/source)",
+        "[click](java\u200bscript&#58;alert(1))",
+        "[click](java\u200bscript&#x3a;alert(1))",
+        "[click](java\u200bscript&colon;alert(1))",
+        "[click](java\u200bscript\\:alert(1))",
+        "<a href=\"java\u200bscript&#58;alert(1)\">click</a>",
+    ],
+)
+def test_zero_width_cleanup_does_not_activate_unsafe_scheme(source):
+    assert chunking_core._normalize_text(source) == source
+
+
+def test_zero_width_cleanup_is_safe_per_obfuscated_scheme_occurrence():
+    source = (
+        "javascript:void(0) and [click](java\u200bscript:alert(1)) "
+        "plus https://\u200bwww . example . org / source . html"
+    )
+    normalized = chunking_core._normalize_text(source)
+    assert "[click](java\u200bscript:alert(1))" in normalized
+    assert "https://www.example.org/source.html" in normalized
+    assert normalized.count("javascript:") == 1
+
+
+def test_zero_width_cleanup_still_repairs_safe_extraction_artifacts():
+    assert chunking_core._normalize_text(
+        "https://\u200bwww . example . org / source . html",
+    ) == "https://www.example.org/source.html"
+
+
 def test_normalize_text_repairs_known_fused_legal_extraction_terms():
     source = (
         "The clientlawyer relationship used lawyerclient communications in "
@@ -247,6 +931,44 @@ def test_normalize_text_repairs_known_fused_legal_extraction_terms():
     assert "Sarbanes-Oxley" in normalized
     assert "three-judge panel" in normalized
     assert "New York" in normalized
+
+
+def test_normalize_text_removes_decorative_section_marker_lines():
+    source = (
+        "Continuation from the preceding page.\n"
+        "C\n"
+        "The new major section begins with substantive prose."
+    )
+
+    normalized = chunking_core._normalize_text(source)
+
+    assert "\nC\n" not in normalized
+    assert "Continuation from the preceding page." in normalized
+    assert "The new major section begins" in normalized
+
+
+def test_normalize_text_removes_decorative_square_lines():
+    source = "CHAPTER 1\n\u25a0   \u25a0   \u25a0\nINTRODUCTION"
+
+    normalized = chunking_core._normalize_text(source)
+
+    assert "\u25a0" not in normalized
+    assert normalized == "CHAPTER 1\nINTRODUCTION"
+
+
+@pytest.mark.parametrize("marker", ["A", "C\n", "  J  "])
+def test_normalize_text_removes_marker_only_chunks(marker):
+    assert chunking_core._normalize_text(marker) == ""
+
+
+def test_clean_heading_repairs_high_confidence_fused_typography():
+    heading = (
+        "A CommonLawApproachtoSample Terms underUCC2-207"
+    )
+
+    assert chunking_core.clean_heading_text(heading) == (
+        "A Common Law Approach to Sample Terms under UCC 2-207"
+    )
 
 
 @pytest.mark.parametrize(
@@ -352,6 +1074,17 @@ def test_extract_case_names_stops_at_narrative_and_handles_in_re_names():
     ]
 
 
+def test_extract_case_names_normalizes_wrapped_case_captions():
+    text = (
+        "In Sample Supply Co. v.\n"
+        "Example Market Group, 321 Ex. 456, the panel ruled."
+    )
+
+    assert chunking_core.extract_case_names(text) == [
+        "Sample Supply Co. v. Example Market Group",
+    ]
+
+
 def test_extract_case_names_bounds_long_capitalized_parties():
     text = (
         "Alpha Bravo Charlie Delta Echo Foxtrot Golf Hotel India Juliet Kilo "
@@ -401,3 +1134,83 @@ def test_build_section_path_cleans_headings_and_skips_table_rows():
     ])
 
     assert path == "Chapter 1 — Introduction → A. Duties"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Id. at 41.",
+        "Ibid. at 83",
+        "13 Tria1 at 22-23",
+        (
+            "2) a defendant should receive the ordinary protection that "
+            "the governing rule provides in every comparable case."
+        ),
+    ],
+)
+def test_probable_misclassified_heading_accepts_text_proof(text):
+    assert chunking_core.is_probable_misclassified_section_header(text)
+
+
+def test_probable_misclassified_heading_requires_geometry_for_packaging_copy():
+    text = (
+        "PORTABLE SAMPLE MODULE REMAINS READY FOR CONTROLLED LABORATORY USE "
+        "WITH SEALED COMPONENTS CLEAR STATUS LIGHTS REUSABLE PACKAGING SIMPLE "
+        "STARTUP INSTRUCTIONS AND CONSISTENT PERFORMANCE ACROSS ROUTINE "
+        "DEMONSTRATIONS"
+    )
+
+    assert not chunking_core.is_probable_misclassified_section_header(text)
+    assert not chunking_core.is_probable_misclassified_section_header(
+        text, bbox_height=89.9)
+    assert chunking_core.is_probable_misclassified_section_header(
+        text, bbox_height=103.4)
+
+
+@pytest.mark.parametrize(
+    ("text", "bbox_height"),
+    [
+        (
+            "THE RESPONSE MUST FOLLOW EACH CLEAR INSTRUCTION IN THE SAMPLE "
+            "REQUEST AND USE THE SPECIFIED FORMAT FOR DELIVERY",
+            62.4,
+        ),
+        (
+            "THE SAMPLE SYSTEM'S APPROACH TO CONFLICTING CONFIGURATION VALUES "
+            "IN RELATED REQUESTS: RESOLVING DUPLICATE SETTINGS",
+            62.4,
+        ),
+        (
+            "CONFIGURATION DETAILS REVEALED AFTER A DEVICE IS STARTED: "
+            "PACKAGED SETTINGS, ROLLING UPDATES, AND UNILATERAL SAMPLE "
+            "OVERRIDES",
+            78.4,
+        ),
+        (
+            "CHAPTER 6. CONFLICTING CONFIGURATION VALUES, OVERRIDE ORDER, AND "
+            "LATE DISCOVERY OF SHARED SETTINGS",
+            146.4,
+        ),
+        (
+            "I. DOES THE SAMPLE RECOVERY PROCESS HANDLE AN UNPLANNED DEVICE "
+            "RESTART WITHOUT LOSING VERIFIED STATE?",
+            134.3,
+        ),
+        (
+            "SIMULATED EVIDENCE AND SYSTEM DESIGN: ARE OPERATORS AND "
+            "MAINTAINERS FOLLOWING A CONSISTENT REVIEW PROCESS ACROSS "
+            "ENVIRONMENTS?",
+            34.7,
+        ),
+        (
+            "§ 6.01 A VERY LONG WRAPPED SECTION HEADING THAT REMAINS A "
+            "STRUCTURAL DIVISION EVEN WHEN ITS DISPLAY BOX IS TALL AND ITS "
+            "WORDS ARE ALL CAPITALIZED ACROSS SEVERAL AUTHORED LINES",
+            100.0,
+        ),
+    ],
+)
+def test_probable_misclassified_heading_preserves_representative_headings(
+        text, bbox_height):
+    assert not chunking_core.is_probable_misclassified_section_header(
+        text, bbox_height=bbox_height)

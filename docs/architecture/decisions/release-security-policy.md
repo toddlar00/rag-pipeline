@@ -1,8 +1,10 @@
 # Release Security Policy
 
-- **Status:** Implementation included in cumulative draft PR #44; not merged or
-  human-reviewed, with the security-owner decision, exact replacement-head
-  review, and integration pending
+- **Status:** Implementation merged to `main` on 2026-08-01 through the
+  history-preserving integration of cumulative
+  [PR #44](https://github.com/toddlar00/rag-pipeline/pull/44); the all-green
+  hosted run at exact head `ed2995e` and the owner merge decision satisfied
+  the security-owner integration decision and replacement-head review
 - **Milestone:** R0B
 - **Policy schema:** `release-security/v1`
 - **Decision owner:** Repository owner for release and private-source policy
@@ -143,9 +145,13 @@ private reasoning field. M2.x cannot honor disabled thinking and is rejected in
 that configuration; explicitly enabled M2.x calls receive a completion floor
 before runtime budget admission.
 
-Known proxy, CA, model-hub endpoint, and provider SDK endpoint/mode environment
-variables are checked for non-empty values without persisting, echoing, or
-reporting those values.
+Known proxy, CA, TLS key-logging, model-hub endpoint, and provider SDK
+endpoint/mode environment variables are checked for non-empty values without
+persisting, echoing, or reporting those values. `SSLKEYLOGFILE` is included
+because urllib3 and httpx read it directly from the process environment when
+constructing an SSL context: a per-session `trust_env = False` suppresses the
+proxy, CA, and `.netrc` variables but not TLS session-key export, so policy is
+its only control point.
 Release cloud/model synchronization refuses them unless the operator passes
 `--trust-environment-network`. When the flag is absent, direct cloud sessions
 also set `trust_env=False`; loopback always bypasses ambient proxy and netrc
@@ -171,7 +177,9 @@ therefore requires an operator-declared, nonsecret tenant/trust label even when
 the response cache is off. The raw label is validated, hashed, and discarded;
 its opaque identity participates in LLM cache keys, single-flight identity,
 events, reports, and resume/job provenance. Different identities cannot share
-results. Cache schema v3 and key schema v2 reject ambiguous legacy records.
+results. Cache-record schema v4 and cache-key schema v3 reject ambiguous legacy
+records. Versioned contract and deterministic-fallback IDs participate in the
+key, and a contracted cache hit is accepted only after revalidation.
 
 The current LLM cache is a private-permission plaintext store, not encrypted
 storage. Release CLI calls default it to `off`, and development CLI calls
@@ -270,6 +278,10 @@ with old defaults.
   hidden interactive prompt.
 - Legacy ambiguous LLM cache records fail closed. No automatic tenant guess is
   attempted.
+- Generated classification text is treated as hostile until it satisfies the
+  reviewed exact-label contract. Events and reports retain only the bounded
+  contract/fallback IDs, status, and stable diagnostic code; rejected text and
+  validator exceptions are not retained.
 - Durable jobs and worker messages carry an exact versioned receipt; an older
   worker cannot silently accept a newer policy.
 - Historical evaluation reports without this optional comparison key remain

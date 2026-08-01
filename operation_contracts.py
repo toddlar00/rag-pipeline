@@ -23,12 +23,13 @@ class IndexOperationMetrics:
     queue_put_count: int
     queue_saturation_events: int
     queue_wait_ms: float
+    metadata_update_calls: int = 0
 
     def __post_init__(self) -> None:
         for name in (
                 "collection_delete_calls", "collection_create_calls",
                 "record_delete_calls", "upsert_calls", "queue_put_count",
-                "queue_saturation_events"):
+                "queue_saturation_events", "metadata_update_calls"):
             value = getattr(self, name)
             if (isinstance(value, bool) or not isinstance(value, int)
                     or value < 0):
@@ -50,6 +51,7 @@ class IndexOperationMetrics:
             + self.collection_create_calls
             + self.record_delete_calls
             + self.upsert_calls
+            + self.metadata_update_calls
         )
 
     def telemetry_metrics(self) -> dict[str, int | float]:
@@ -58,6 +60,7 @@ class IndexOperationMetrics:
             "collection_create_calls": self.collection_create_calls,
             "record_delete_calls": self.record_delete_calls,
             "upsert_calls": self.upsert_calls,
+            "metadata_update_calls": self.metadata_update_calls,
             "physical_mutation_calls": self.physical_mutation_calls,
             "queue_put_count": self.queue_put_count,
             "queue_saturation_events": self.queue_saturation_events,
@@ -118,7 +121,8 @@ class IndexOutcome:
             raise ValueError(
                 "created or rebuilt outcomes cannot reuse or remove records")
         if self.disposition == "updated" and not (
-                self.changed_records or self.removed_records):
+                self.changed_records or self.removed_records
+                or getattr(self.operations, "metadata_update_calls", 0)):
             raise ValueError("an updated outcome must contain a mutation")
         if self.operations is not None:
             operations = self.operations
@@ -143,13 +147,15 @@ class IndexOutcome:
             if self.disposition == "created" and (
                     operations.collection_create_calls != 1
                     or operations.collection_delete_calls
-                    or operations.record_delete_calls):
+                    or operations.record_delete_calls
+                    or operations.metadata_update_calls):
                 raise ValueError(
                     "a created outcome requires only one collection create")
             if self.disposition == "rebuilt" and (
                     operations.collection_create_calls != 1
                     or operations.collection_delete_calls != 1
-                    or operations.record_delete_calls):
+                    or operations.record_delete_calls
+                    or operations.metadata_update_calls):
                 raise ValueError(
                     "a rebuilt outcome requires one collection delete and create")
             if self.disposition == "updated" and (
