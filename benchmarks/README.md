@@ -8,10 +8,10 @@ fresh-process repetitions.
 ## Provenance
 
 Both current reports were generated from the clean pre-gate source checkpoint
-`c73a155cf242aa3eb162a72a1dd9bae25467f2e0`, the PDF/Docling one-domain
-dependency checkpoint over the merged R2 head: it raises the tested floors to
-docling 2.117.0 and docling-core 2.89.0 and regenerates the two mapped
-universal locks byte-stably. The executing environments were
+`4975793950c2b9d34de34c18bf67ce5ac2c00edf`, the merge of the read-only
+first-pass PDF triage command (`rag.py scan` and its `ingestion_core`
+assessment policy) over the PDF/Docling one-domain dependency head
+`c73a155`. The executing environments were
 synchronized with repository-pinned uv 0.11.31 against the exact CPU
 application/test lock union plus its retained bootstrapper:
 
@@ -28,8 +28,8 @@ marker-resolved distributions before generation.
 
 | Platform | Runtime | Report | Bytes | File SHA-256 | Embedded report SHA-256 |
 |---|---:|---|---:|---|---|
-| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 50,423 | `23159eef75a2f06d8333f280db906c041f8dc1d1bee86dad95f2778fae992eba` | `95947212797975dbde08d472a033f925bdef028b7282ff780b00961b6b354a20` |
-| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 49,824 | `365f68879e242a42a747fd70e842fc9b94ad0715392142b5bf40e6c523812c47` | `029363934783100050852c5a10a0dba2c7491d5480408082b7d10b5414948d51` |
+| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 50,427 | `c7ef9440cadb7d0d83f13fdd0e7346787a9b77f28c3e2e6d919f263340590778` | `2fcb871263322ae0787347bd3b8b5f545b413d4d53f664123a8f287cf20951c3` |
+| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 49,826 | `c7d50ca73f0027be4f965f1e3858a81bf23510f871500655edabc6271cfd5437` | `e59c032921a93c95efaaf1dfea2b1b1b9d4fb9e2cafee0ef53457968537dfd17` |
 
 The reports attest the same source commit, clean-worktree state, tracked-diff
 digest, eight LF and `HEAD`-identical dependency/model-lock inputs, authoritative
@@ -80,12 +80,17 @@ checks — including both hosted Phase A0 cells with retained evidence
 bundles — at its exact head and merged to `main` on 2026-08-01 through
 history-preserving [#76](https://github.com/toddlar00/rag-pipeline/pull/76).
 The one-domain PDF/Docling dependency checkpoint `c73a155` then changed the
-two mapped locks, invalidating that pair under this policy. The current
-reports above bind clean source `c73a155`, whose full local suite also
-passes 3,376 tests with 7 skips, and each passes an independent complete
-same-platform 9×5 comparison. The following reports-and-documentation-only
-commit freezes the new local candidate. No hosted result is claimed for this
-head yet; its hosted cells run on the candidate pull request.
+two mapped locks, invalidating the prior pair; its own pair passed all 27
+hosted checks at the exact #83 head and merged on 2026-08-01. The read-only
+PDF triage scan merge `4975793` changes Python source again and supersedes
+that pair in turn. Its canonical inventory records 2,603 functions across
+165 tracked sources with 946 static and 954 runtime `rag` bindings, and its
+full local suite passes 3,393 tests with 7 platform/optional skips. The
+current reports above bind clean source `4975793`, and each passes an
+independent complete same-platform 9×5 comparison. The following
+reports-and-documentation-only commit freezes the new local pair; no hosted
+result is claimed for this head yet — its hosted cells run on the
+post-merge `main` workflow.
 
 ## Checking
 
@@ -112,7 +117,7 @@ ancestor of the final head. Integrate a passing candidate with a
 history-preserving merge; a squash or history-rewriting rebase invalidates this
 evidence and requires regeneration from the replacement history.
 
-The replacement gate-only delta after `c73a155` is limited to the two reviewed
+The replacement gate-only delta after `4975793` is limited to the two reviewed
 reports and their provenance/status documentation. The repaired workflow,
 line-ending policy, Python gates, and the two-lane CI split are already part
 of the pre-gate source and were exercised while generating and comparing the
