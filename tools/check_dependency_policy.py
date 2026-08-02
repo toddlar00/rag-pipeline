@@ -732,12 +732,53 @@ def _domain_assignments_from_text(
     return assignments, []
 
 
-def validate_dependency_domain_diff(
-    base_ref: str, root: Path = PROJECT_ROOT,
-) -> list[str]:
-    """Reject direct-input changes spanning domains or omitting lock changes."""
+def _subprocess_detail(exc: Exception) -> str:
+    """Return the diagnostic text for a failed git or filesystem call."""
+    if isinstance(exc, subprocess.CalledProcessError) and isinstance(
+            exc.output, str):
+        return exc.output.strip()
+    return str(exc)
+
+
+def _committed_text(root: Path, revision: str, filename: str) -> str:
+    """Return one committed file's text, or empty text when absent."""
+    try:
+        return subprocess.check_output(
+            ["git", "-C", str(root), "show", f"{revision}:{filename}"],
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+        )
+    except subprocess.CalledProcessError as exc:
+        if "does not exist" in exc.output or "exists on disk" in exc.output:
+            return ""
+        raise
+
+
+def _committed_object_id(
+    root: Path, revision: str, filename: str,
+) -> str | None:
+    """Return the committed object ID for one exact repository path."""
+    output = subprocess.check_output(
+        ["git", "-C", str(root), "ls-tree", revision, "--", filename],
+        stderr=subprocess.STDOUT,
+        text=True,
+    ).strip()
+    if not output:
+        return None
+    metadata = output.split("\t", 1)[0].split()
+    if len(metadata) != 3:
+        raise ValueError(f"unexpected git ls-tree output for {filename}")
+    return metadata[2]
+
+
+def _domain_diff_base(
+    root: Path, base_ref: str,
+) -> tuple[str | None, set[str], list[str]]:
+    """Resolve the exact base commit and the base..HEAD changed paths."""
     if re.fullmatch(r"[0-9a-f]{40}", base_ref) is None:
-        return ["--base-ref must be one exact lowercase 40-character commit SHA"]
+        return None, set(), [
+            "--base-ref must be one exact lowercase 40-character commit SHA"]
     try:
         base_sha = subprocess.check_output(
             [
@@ -758,128 +799,79 @@ def validate_dependency_domain_diff(
             ).splitlines()
         )
     except (OSError, subprocess.CalledProcessError) as exc:
-        detail = exc.output.strip() if isinstance(
-            exc, subprocess.CalledProcessError
-        ) and isinstance(exc.output, str) else str(exc)
-        return [f"cannot inspect dependency-domain base {base_ref}: {detail}"]
+        return None, set(), [
+            f"cannot inspect dependency-domain base {base_ref}: "
+            f"{_subprocess_detail(exc)}"]
+    return base_sha, changed_paths, []
 
-    def committed_text(revision: str, filename: str) -> str:
-        try:
-            return subprocess.check_output(
-                ["git", "-C", str(root), "show", f"{revision}:{filename}"],
-                stderr=subprocess.STDOUT,
-                text=True,
-                encoding="utf-8",
-            )
-        except subprocess.CalledProcessError as exc:
-            if "does not exist" in exc.output or "exists on disk" in exc.output:
-                return ""
-            raise
 
-    def committed_object_id(revision: str, filename: str) -> str | None:
-        """Return the committed object ID for one exact repository path."""
-        output = subprocess.check_output(
-            ["git", "-C", str(root), "ls-tree", revision, "--", filename],
-            stderr=subprocess.STDOUT,
-            text=True,
-        ).strip()
-        if not output:
-            return None
-        metadata = output.split("\t", 1)[0].split()
-        if len(metadata) != 3:
-            raise ValueError(f"unexpected git ls-tree output for {filename}")
-        return metadata[2]
-
-    errors: list[str] = []
+def _changed_direct_records(
+    root: Path, base_sha: str,
+) -> tuple[set[str], dict[str, set[str]], str]:
+    """Diff the direct requirement manifests and read the base policy."""
     changed_packages: set[str] = set()
     direct_package_locks: dict[str, set[str]] = {}
-    try:
-        for filename in DIRECT_DEPENDENCY_FILES:
-            before = _direct_requirement_records(
-                committed_text(base_sha, filename), filename,
-            )
-            current_path = root / filename
-            after = _direct_requirement_records(
-                current_path.read_text(encoding="utf-8")
-                if current_path.is_file() else "",
-                filename,
-            )
-            for package in set(before).union(after):
-                if before.get(package) != after.get(package):
-                    changed_packages.add(package)
-                    direct_package_locks.setdefault(package, set()).update(DIRECT_INPUT_LOCKS[filename])
-        base_policy = committed_text(base_sha, DEPENDENCY_DOMAIN_POLICY)
-    except (OSError, subprocess.CalledProcessError) as exc:
-        detail = exc.output.strip() if isinstance(
-            exc, subprocess.CalledProcessError
-        ) and isinstance(exc.output, str) else str(exc)
-        return [f"cannot compare dependency-domain inputs: {detail}"]
-
-    current_domains, current_errors = _load_dependency_domains(root)
-    errors.extend(current_errors)
-    current_assignments = {
-        package: domain
-        for domain, packages in current_domains.items()
-        for package in packages
-    }
-    changed_lock_paths = changed_paths.intersection(LOCK_FILES)
-    try:
-        content_changed_locks = {
-            filename
-            for filename in changed_lock_paths
-            if committed_object_id(base_sha, filename)
-            != committed_object_id("HEAD", filename)
-        }
-    except (OSError, subprocess.CalledProcessError, ValueError) as exc:
-        detail = exc.output.strip() if isinstance(
-            exc, subprocess.CalledProcessError
-        ) and isinstance(exc.output, str) else str(exc)
-        return errors + [f"cannot compare dependency lock objects: {detail}"]
-    if not base_policy.strip():
-        # The policy-introduction PR intentionally changes no dependency or
-        # lock input. Ordinary later PRs take the committed map as their base.
-        if changed_packages or changed_lock_paths:
-            errors.append("the domain-policy introduction may not change "
-                          "direct dependencies or lockfiles")
-        return errors
-    base_assignments, base_errors = _domain_assignments_from_text(
-        base_policy, f"{base_sha}:{DEPENDENCY_DOMAIN_POLICY}",
-    )
-    errors.extend(base_errors)
-
-    relevant_packages = set(base_assignments).union(current_assignments)
-    lock_changed_packages_by_file: dict[str, set[str]] = {}
-    try:
-        for filename in LOCK_FILES:
-            file_changes = lock_changed_packages_by_file.setdefault(filename, set())
-            before = _lock_requirement_records(
-                committed_text(base_sha, filename), filename,
-            )
-            current_path = root / filename
-            after = _lock_requirement_records(
-                current_path.read_text(encoding="utf-8")
-                if current_path.is_file() else "",
-                filename,
-            )
-            for package in relevant_packages:
-                if before.get(package) != after.get(package):
-                    file_changes.add(package)
-    except (OSError, subprocess.CalledProcessError) as exc:
-        detail = exc.output.strip() if isinstance(
-            exc, subprocess.CalledProcessError
-        ) and isinstance(exc.output, str) else str(exc)
-        return errors + [f"cannot compare dependency lock records: {detail}"]
-
-    changed_packages.update(*lock_changed_packages_by_file.values())
-    unchanged_direct_packages = sorted(
-        package
-        for package, mapped_locks in direct_package_locks.items()
-        if not any(package in lock_changed_packages_by_file.get(lock, set()) for lock in mapped_locks)
-    )
-    if unchanged_direct_packages:
-        errors.append(
-            "direct dependency changes leave selected records unchanged in every mapped lock: " + ", ".join(unchanged_direct_packages)
+    for filename in DIRECT_DEPENDENCY_FILES:
+        before = _direct_requirement_records(
+            _committed_text(root, base_sha, filename), filename,
         )
+        current_path = root / filename
+        after = _direct_requirement_records(
+            current_path.read_text(encoding="utf-8")
+            if current_path.is_file() else "",
+            filename,
+        )
+        for package in set(before).union(after):
+            if before.get(package) != after.get(package):
+                changed_packages.add(package)
+                direct_package_locks.setdefault(package, set()).update(
+                    DIRECT_INPUT_LOCKS[filename])
+    base_policy = _committed_text(root, base_sha, DEPENDENCY_DOMAIN_POLICY)
+    return changed_packages, direct_package_locks, base_policy
+
+
+def _content_changed_lock_paths(
+    root: Path, base_sha: str, changed_lock_paths: set[str],
+) -> set[str]:
+    """Return the lock paths whose committed blob identity changed."""
+    return {
+        filename
+        for filename in changed_lock_paths
+        if _committed_object_id(root, base_sha, filename)
+        != _committed_object_id(root, "HEAD", filename)
+    }
+
+
+def _lock_changed_packages(
+    root: Path, base_sha: str, relevant_packages: set[str],
+) -> dict[str, set[str]]:
+    """Return each lock's governed packages whose selected record changed."""
+    lock_changed_packages_by_file: dict[str, set[str]] = {}
+    for filename in LOCK_FILES:
+        file_changes = lock_changed_packages_by_file.setdefault(
+            filename, set())
+        before = _lock_requirement_records(
+            _committed_text(root, base_sha, filename), filename,
+        )
+        current_path = root / filename
+        after = _lock_requirement_records(
+            current_path.read_text(encoding="utf-8")
+            if current_path.is_file() else "",
+            filename,
+        )
+        for package in relevant_packages:
+            if before.get(package) != after.get(package):
+                file_changes.add(package)
+    return lock_changed_packages_by_file
+
+
+def _domain_attribution_errors(
+    changed_packages: set[str],
+    base_assignments: dict[str, str],
+    current_assignments: dict[str, str],
+) -> list[str]:
+    """Reject changes without a domain or spanning more than one domain."""
+    errors: list[str] = []
     changed_domains: set[str] = set()
     unassigned: list[str] = []
     for package in sorted(changed_packages):
@@ -897,7 +889,75 @@ def validate_dependency_domain_diff(
                       "domain: " + ", ".join(unassigned))
     if len(changed_domains) > 1:
         errors.append("direct dependency changes span more than one "
-                      "compatibility domain: " + ", ".join(sorted(changed_domains)))
+                      "compatibility domain: "
+                      + ", ".join(sorted(changed_domains)))
+    return errors
+
+
+def validate_dependency_domain_diff(
+    base_ref: str, root: Path = PROJECT_ROOT,
+) -> list[str]:
+    """Reject direct-input changes spanning domains or omitting lock changes."""
+    base_sha, changed_paths, base_errors = _domain_diff_base(root, base_ref)
+    if base_sha is None:
+        return base_errors
+
+    errors: list[str] = []
+    try:
+        changed_packages, direct_package_locks, base_policy = (
+            _changed_direct_records(root, base_sha))
+    except (OSError, subprocess.CalledProcessError) as exc:
+        return [f"cannot compare dependency-domain inputs: "
+                f"{_subprocess_detail(exc)}"]
+
+    current_domains, current_errors = _load_dependency_domains(root)
+    errors.extend(current_errors)
+    current_assignments = {
+        package: domain
+        for domain, packages in current_domains.items()
+        for package in packages
+    }
+    changed_lock_paths = changed_paths.intersection(LOCK_FILES)
+    try:
+        content_changed_locks = _content_changed_lock_paths(
+            root, base_sha, changed_lock_paths)
+    except (OSError, subprocess.CalledProcessError, ValueError) as exc:
+        return errors + [f"cannot compare dependency lock objects: "
+                         f"{_subprocess_detail(exc)}"]
+    if not base_policy.strip():
+        # The policy-introduction PR intentionally changes no dependency or
+        # lock input. Ordinary later PRs take the committed map as their base.
+        if changed_packages or changed_lock_paths:
+            errors.append("the domain-policy introduction may not change "
+                          "direct dependencies or lockfiles")
+        return errors
+    base_assignments, base_assignment_errors = _domain_assignments_from_text(
+        base_policy, f"{base_sha}:{DEPENDENCY_DOMAIN_POLICY}",
+    )
+    errors.extend(base_assignment_errors)
+
+    relevant_packages = set(base_assignments).union(current_assignments)
+    try:
+        lock_changed_packages_by_file = _lock_changed_packages(
+            root, base_sha, relevant_packages)
+    except (OSError, subprocess.CalledProcessError) as exc:
+        return errors + [f"cannot compare dependency lock records: "
+                         f"{_subprocess_detail(exc)}"]
+
+    changed_packages.update(*lock_changed_packages_by_file.values())
+    unchanged_direct_packages = sorted(
+        package
+        for package, mapped_locks in direct_package_locks.items()
+        if not any(package in lock_changed_packages_by_file.get(lock, set())
+                   for lock in mapped_locks)
+    )
+    if unchanged_direct_packages:
+        errors.append(
+            "direct dependency changes leave selected records unchanged in "
+            "every mapped lock: " + ", ".join(unchanged_direct_packages)
+        )
+    errors.extend(_domain_attribution_errors(
+        changed_packages, base_assignments, current_assignments))
     if (changed_lock_paths and not any(lock_changed_packages_by_file.values())
             and not direct_package_locks):
         errors.append(
