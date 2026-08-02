@@ -30878,6 +30878,12 @@ def main(argv: list[str] | None = None):
     add_markdown_validation_flag(p_exp)
     add_llm_provider_flags(p_exp)
 
+    # scan
+    p_scan = sub.add_parser(
+        "scan", help="Read-only first-pass triage report for a PDF")
+    p_scan.add_argument("--pdf", type=Path, required=True)
+    add_watermark_flag(p_scan)
+
     # info
     p_info = sub.add_parser("info", help="Inspect output artifacts")
     p_info.add_argument("--db", type=Path, default=None)
@@ -31332,6 +31338,9 @@ def main(argv: list[str] | None = None):
                                 format=args.format,
                                 validation_policy=args.markdown_validation,
                                 **llm_kwargs)
+
+        elif args.command == "scan":
+            scan_pdf(args.pdf, watermark=args.watermark)
 
         elif args.command == "info":
             show_info(

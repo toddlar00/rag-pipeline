@@ -164,3 +164,23 @@ def test_scan_pdf_bad_page_counts_as_sampled(
     assert "2 sampled pages" in out
     assert "unreadable sampled pages: 1" in out
     assert "preprocess forecast: no-preprocess" in out
+
+
+def test_scan_cli_dispatch_forwards_arguments(monkeypatch, tmp_path):
+    captured = {}
+
+    def fake_scan(pdf_path, **kwargs):
+        captured["pdf"] = pdf_path
+        captured.update(kwargs)
+
+    monkeypatch.setattr(rag, "scan_pdf", fake_scan)
+    rag.main(["scan", "--pdf", str(tmp_path / "b.pdf"),
+              "--watermark", "custom"])
+    assert captured["pdf"] == tmp_path / "b.pdf"
+    assert captured["watermark"] == "custom"
+
+
+def test_scan_cli_requires_pdf_argument(capsys):
+    with pytest.raises(SystemExit) as excinfo:
+        rag.main(["scan"])
+    assert excinfo.value.code == 2
