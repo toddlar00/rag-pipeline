@@ -65,8 +65,9 @@ or read at all (missing, empty, encrypted-and-unreadable).
    to "contents", "table of contents", or "summary of contents",
    case-insensitive). Both signals print independently.
 7. **Verdict** — one suggested next command line: `python rag.py full
-   --pdf <path>` with `--ocr` appended exactly when the preprocess
-   forecast is the keep-images-for-OCR branch.
+   --pdf <path>` with `--ocr` appended exactly when `ocr_recommended`
+   is true (the pipeline's own OCR gate), plus a caution line when the
+   forecast is `"inspection-incomplete"`.
 
 Sampling bound: watermark and contents-page scans read at most the first
 30 pages plus 10 evenly spaced later pages, keeping the whole card
@@ -77,10 +78,19 @@ seconds-fast on 900-page books. The card states the sampled page count.
 - `@dataclass(frozen=True) PDFTriage` — fields: `page_count: int`,
   `large_image_pages: int`, `text_layer_usable: bool`,
   `usable_pages: int`, `unusable_pages: int`, `preprocess_forecast: str`
-  (one of `"strip-backgrounds"`, `"keep-for-ocr"`, `"no-preprocess"`),
-  `scanner_fingerprint: str | None`, `watermark_page_matches: int`,
-  `sampled_pages: int`, `has_outline: bool`, `contents_page_found: bool`,
+  (one of `"strip-backgrounds"`, `"keep-for-ocr"`, `"no-preprocess"`,
+  `"inspection-incomplete"`), `scanner_fingerprint: str | None`,
+  `watermark_page_matches: int`, `sampled_pages: int`,
+  `has_outline: bool`, `contents_page_found: bool`,
   `ocr_recommended: bool`.
+  The forecast mirrors `preprocess_pdf`'s actual branch order:
+  incomplete inspection first, then the low large-image ratio skip, then
+  the unusable-scan-text keep-for-OCR branch, else strip.
+  `ocr_recommended` binds separately to the pipeline's real OCR gate
+  (`pdf_text_layer_is_usable` over the full stats, as
+  `_prepare_conversion_input` uses it), because `preprocess_pdf` itself
+  never consults the layer-wide predicate; the two verdicts may disagree
+  on edge cases and the card prints each from its own seam.
 - `assess_pdf_triage(stats: dict, *, producer: str, creator: str,
   watermark_page_matches: int, sampled_pages: int, has_outline: bool,
   contents_page_found: bool, thresholds: PDFIngestionThresholds)
