@@ -6767,6 +6767,10 @@ def _render_pdf_triage(triage, pdf_path: Path, *, file_size: int,
     lines.append(
         f"  watermark matches: {triage.watermark_page_matches} of "
         f"{triage.sampled_pages} sampled pages")
+    if not triage.watermark_page_matches:
+        lines.append(
+            "  hint: no watermark matched; pass --watermark if this book "
+            "carries one")
     outline = "yes" if triage.has_outline else "no"
     contents = "yes" if triage.contents_page_found else "no"
     lines.append(f"  outline bookmarks: {outline}")
@@ -6818,8 +6822,8 @@ def scan_pdf(pdf_path: Path, *, watermark: str = DEFAULT_WATERMARK,
         contents_found = False
         sample_read_errors = 0
         for index in sampled_indices:
-            page = doc[index]
             try:
+                page = doc[index]
                 text = page.get_text("text") or ""
             except Exception:
                 sample_read_errors += 1

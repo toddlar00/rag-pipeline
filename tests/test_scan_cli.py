@@ -42,6 +42,21 @@ def test_render_card_contains_all_sections_and_verdict():
     assert "--ocr" not in card
 
 
+def test_render_card_watermark_hint_shown_only_when_no_matches():
+    card_with_hint = rag._render_pdf_triage(
+        _triage(watermark_page_matches=0), Path("book.pdf"),
+        file_size=12_345_678, producer="Adobe Paper Capture",
+        creator="Scanner")
+    assert (
+        "hint: no watermark matched; pass --watermark if this book "
+        "carries one") in card_with_hint
+
+    card_without_hint = rag._render_pdf_triage(
+        _triage(), Path("book.pdf"), file_size=12_345_678,
+        producer="Adobe Paper Capture", creator="Scanner")
+    assert "hint: no watermark matched" not in card_without_hint
+
+
 def test_render_card_ocr_verdict_and_incomplete_caution():
     card = rag._render_pdf_triage(
         _triage(text_layer_usable=False, ocr_recommended=True,
@@ -166,6 +181,44 @@ def test_scan_pdf_bad_page_counts_as_sampled(
     assert "preprocess forecast: no-preprocess" in out
 
 
+def test_scan_pdf_unreadable_page_load_counts_as_sampled(
+        monkeypatch, tmp_path, capsys):
+    pdf = tmp_path / "book.pdf"
+    pdf.write_bytes(b"%PDF-fake")
+
+    class _RaisingIndexDoc(_FakeDoc):
+        def __getitem__(self, index):
+            if index == 1:
+                raise RuntimeError("mupdf page load error")
+            return super().__getitem__(index)
+
+    doc = _RaisingIndexDoc(["fine", "also fine"])
+    _install_fake_pymupdf(monkeypatch, doc)
+    monkeypatch.setattr(
+        rag, "_analyze_pdf_images", lambda path, min_dim: _stats(
+            2, 0, 2, 0))
+    rag.scan_pdf(pdf)
+    out = capsys.readouterr().out
+    assert "PDF triage: book.pdf" in out
+    assert "2 sampled pages" in out
+    assert "unreadable sampled pages: 1" in out
+
+
+def test_triage_sample_indices_covers_all_branches():
+    result = rag._triage_sample_indices(100)
+    assert result == sorted(dict.fromkeys(result))
+    assert len(result) == 40
+    assert result[:30] == list(range(30))
+    assert all(index in range(30, 100) for index in result[30:])
+    assert result == [
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,
+        18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29,
+        30, 37, 44, 51, 58, 65, 72, 79, 86, 93,
+    ]
+    assert rag._triage_sample_indices(30) == list(range(30))
+    assert rag._triage_sample_indices(0) == []
+
+
 def test_scan_cli_dispatch_forwards_arguments(monkeypatch, tmp_path):
     captured = {}
 
@@ -184,3 +237,34 @@ def test_scan_cli_requires_pdf_argument(capsys):
     with pytest.raises(SystemExit) as excinfo:
         rag.main(["scan"])
     assert excinfo.value.code == 2
+
+
+def test_preprocess_pdf_strip_ratio_matches_forecast_threshold(tmp_path):
+    """preprocess_pdf's skip gate must track ingestion_core's threshold.
+
+    Proves agreement purely through preprocess_pdf's observable return
+    value (None vs. the existing output path) at the ratio boundary, so
+    this fails if either side's threshold moves independently.
+    """
+    inp = tmp_path / "input.pdf"
+    inp.write_bytes(b"%PDF-fake-input")
+    out = tmp_path / "output.pdf"
+    out.write_bytes(b"%PDF-fake-output")
+
+    def stats(large_image_pages):
+        return {
+            "inspection_complete": True, "total_pages": 100,
+            "pages_with_usable_text": 100,
+            "pages_with_large_images": large_image_pages,
+            "large_image_pages_with_usable_text": large_image_pages,
+            "text_chars": 1000, "replacement_chars": 0,
+            "unique_dims": set(), "image_xrefs": set(),
+        }
+
+    below_threshold = int(100 * ingestion_core.PREPROCESS_STRIP_RATIO) - 1
+    at_threshold = int(100 * ingestion_core.PREPROCESS_STRIP_RATIO)
+
+    assert rag.preprocess_pdf(
+        inp, out, _analysis_cache=stats(below_threshold)) is None
+    assert rag.preprocess_pdf(
+        inp, out, _analysis_cache=stats(at_threshold)) == out
