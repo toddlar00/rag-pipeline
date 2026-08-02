@@ -87,7 +87,14 @@ TOC detectability — spec and plan under `docs/superpowers/`) merged to
 `main` at `4975793` after five reviewed subagent tasks, a whole-branch
 review, and a re-reviewed fix wave; its full local suite passes 3,393
 tests with 7 skips, and fresh paired Phase A0 evidence binds that merged
-checkpoint with both independent 9×5 comparisons passing. The remaining movement is deferred as an ordered backlog
+checkpoint with both independent 9×5 comparisons passing; its hosted cells
+passed on the post-merge `main` workflow at evidence head `782c986`. The
+same day, the behavior-preserving dependency domain-gate decomposition
+(`tools/check_dependency_policy.py`: the one-domain diff gate split into an
+orchestrator over six focused helpers, independently reviewed against the
+raw blobs with byte-identical error strings) merged at `71b4a23` with fresh
+paired Phase A0 evidence binding that checkpoint, both independent 9×5
+comparisons passing. The remaining movement is deferred as an ordered backlog
 of one-domain PRs: Vector stores (onnxruntime 1.28.0), ML/runtime
 (sentence-transformers 5.6.1, tqdm 4.70.0), Service/UI (fastapi 0.141.1,
 gradio 6.22.0, uvicorn 0.52.0), and Test/audit tooling (pip 26.2); the

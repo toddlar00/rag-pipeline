@@ -8,10 +8,10 @@ fresh-process repetitions.
 ## Provenance
 
 Both current reports were generated from the clean pre-gate source checkpoint
-`4975793950c2b9d34de34c18bf67ce5ac2c00edf`, the merge of the read-only
-first-pass PDF triage command (`rag.py scan` and its `ingestion_core`
-assessment policy) over the PDF/Docling one-domain dependency head
-`c73a155`. The executing environments were
+`71b4a232f0906a6e3bf34bd8b9ffba2a3a221e51`, the merge of the
+behavior-preserving dependency domain-gate decomposition
+(`tools/check_dependency_policy.py`) over the PDF triage scan head
+`4975793`. The executing environments were
 synchronized with repository-pinned uv 0.11.31 against the exact CPU
 application/test lock union plus its retained bootstrapper:
 
@@ -28,8 +28,8 @@ marker-resolved distributions before generation.
 
 | Platform | Runtime | Report | Bytes | File SHA-256 | Embedded report SHA-256 |
 |---|---:|---|---:|---|---|
-| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 50,427 | `c7ef9440cadb7d0d83f13fdd0e7346787a9b77f28c3e2e6d919f263340590778` | `2fcb871263322ae0787347bd3b8b5f545b413d4d53f664123a8f287cf20951c3` |
-| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 49,826 | `c7d50ca73f0027be4f965f1e3858a81bf23510f871500655edabc6271cfd5437` | `e59c032921a93c95efaaf1dfea2b1b1b9d4fb9e2cafee0ef53457968537dfd17` |
+| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 50,426 | `0d14de2c058819bddda16ae6913115cecb6706c9e589f3b62915de3621ce3643` | `de43c7c98bdf2fd6f4af7870b811a9a0f57d1b5c0c232a745ae0c68301ce447c` |
+| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 49,826 | `bc3874c174b69e927441816d1bd5e9f0758cd37731609444e480de7e7cb8890d` | `a47c3b4ce91c85e3b28ed0ae23ef1b38299aac4a1516bd0dbc9e2cf226cf7f30` |
 
 The reports attest the same source commit, clean-worktree state, tracked-diff
 digest, eight LF and `HEAD`-identical dependency/model-lock inputs, authoritative
@@ -82,15 +82,17 @@ history-preserving [#76](https://github.com/toddlar00/rag-pipeline/pull/76).
 The one-domain PDF/Docling dependency checkpoint `c73a155` then changed the
 two mapped locks, invalidating the prior pair; its own pair passed all 27
 hosted checks at the exact #83 head and merged on 2026-08-01. The read-only
-PDF triage scan merge `4975793` changes Python source again and supersedes
-that pair in turn. Its canonical inventory records 2,603 functions across
-165 tracked sources with 946 static and 954 runtime `rag` bindings, and its
-full local suite passes 3,393 tests with 7 platform/optional skips. The
-current reports above bind clean source `4975793`, and each passes an
-independent complete same-platform 9×5 comparison. The following
-reports-and-documentation-only commit freezes the new local pair; no hosted
-result is claimed for this head yet — its hosted cells run on the
-post-merge `main` workflow.
+PDF triage scan merge `4975793` repeated that cycle, passing its hosted
+cells on the post-merge `main` workflow at evidence head `782c986`. The
+dependency domain-gate decomposition merge `71b4a23` changes Python source
+again and supersedes that pair in turn. Its canonical inventory records
+2,609 functions across 165 tracked sources with 946 static and 954 runtime
+`rag` bindings, and its full local suite passes 3,393 tests with 7
+platform/optional skips. The current reports above bind clean source
+`71b4a23`, and each passes an independent complete same-platform 9×5
+comparison. The following reports-and-documentation-only commit freezes the
+new local pair; no hosted result is claimed for this head yet — its hosted
+cells run on the post-merge `main` workflow.
 
 ## Checking
 
@@ -117,7 +119,7 @@ ancestor of the final head. Integrate a passing candidate with a
 history-preserving merge; a squash or history-rewriting rebase invalidates this
 evidence and requires regeneration from the replacement history.
 
-The replacement gate-only delta after `4975793` is limited to the two reviewed
+The replacement gate-only delta after `71b4a23` is limited to the two reviewed
 reports and their provenance/status documentation. The repaired workflow,
 line-ending policy, Python gates, and the two-lane CI split are already part
 of the pre-gate source and were exercised while generating and comparing the
