@@ -6723,6 +6723,136 @@ def _analyze_pdf_images(pdf_path: Path, min_dim: int = 1000) -> dict:
     return analysis.stats
 
 
+def _render_pdf_triage(triage, pdf_path: Path, *, file_size: int,
+                       producer: str, creator: str,
+                       open_error: str | None = None) -> str:
+    """Render the console report card for one scanned PDF."""
+    lines = [f"PDF triage: {pdf_path.name}", ""]
+    lines.append("Document")
+    size_mb = file_size / (1024 * 1024)
+    if triage is not None:
+        lines.append(f"  {triage.page_count} pages · {size_mb:.1f} MB")
+    else:
+        lines.append(f"  {size_mb:.1f} MB")
+    if producer:
+        lines.append(f"  producer: {producer}")
+    if creator:
+        lines.append(f"  creator: {creator}")
+    if open_error is not None:
+        lines.append(f"  ERROR: {open_error}")
+        return "\n".join(lines) + "\n"
+    if triage.scanner_fingerprint is not None:
+        lines.append(
+            f"  scanner fingerprint: {triage.scanner_fingerprint}")
+    lines.append("")
+    lines.append("Page composition")
+    lines.append(
+        f"  {triage.large_image_pages} of {triage.page_count} pages "
+        "carry large background images")
+    lines.append("")
+    lines.append("Text layer")
+    usable_text = "yes" if triage.text_layer_usable else "no"
+    lines.append(
+        f"  usable text layer: {usable_text} "
+        f"({triage.usable_pages} of {triage.page_count} pages)")
+    if triage.sample_read_errors:
+        lines.append(
+            f"  unreadable sampled pages: {triage.sample_read_errors}")
+    lines.append("")
+    lines.append(f"  preprocess forecast: {triage.preprocess_forecast}")
+    if triage.preprocess_forecast == "inspection-incomplete":
+        lines.append(
+            "  caution: PDF inspection was incomplete; verify the file "
+            "before a full run")
+    lines.append(
+        f"  watermark matches: {triage.watermark_page_matches} of "
+        f"{triage.sampled_pages} sampled pages")
+    if not triage.watermark_page_matches:
+        lines.append(
+            "  hint: no watermark matched; pass --watermark if this book "
+            "carries one")
+    outline = "yes" if triage.has_outline else "no"
+    contents = "yes" if triage.contents_page_found else "no"
+    lines.append(f"  outline bookmarks: {outline}")
+    lines.append(f"  contents page found: {contents}")
+    lines.append("")
+    suggestion = f"python rag.py full --pdf {pdf_path}"
+    if triage.ocr_recommended:
+        suggestion += " --ocr"
+    lines.append(f"Suggested next step: {suggestion}")
+    return "\n".join(lines) + "\n"
+
+
+def _triage_sample_indices(page_count: int) -> list[int]:
+    """First 30 pages plus up to 10 evenly spaced later pages."""
+    indices = list(range(min(page_count, 30)))
+    if page_count > 30:
+        step = max((page_count - 30) // 10, 1)
+        indices.extend(range(30, page_count, step)[:10])
+    return sorted(dict.fromkeys(indices))
+
+
+def scan_pdf(pdf_path: Path, *, watermark: str = DEFAULT_WATERMARK,
+            min_dim: int = 1000) -> None:
+    """Print a read-only triage card for one PDF without writing anything."""
+    import pymupdf
+
+    _require_file(pdf_path, "PDF file")
+    try:
+        doc = pymupdf.open(str(pdf_path))
+    except Exception as exc:
+        print(_render_pdf_triage(
+            None, pdf_path, file_size=pdf_path.stat().st_size,
+            producer="", creator="", open_error=str(exc)), end="")
+        raise SystemExit(1)
+    try:
+        if doc.needs_pass:
+            print(_render_pdf_triage(
+                None, pdf_path, file_size=pdf_path.stat().st_size,
+                producer="", creator="", open_error="encrypted PDF"),
+                end="")
+            raise SystemExit(1)
+        metadata = doc.metadata or {}
+        producer = metadata.get("producer", "")
+        creator = metadata.get("creator", "")
+        has_outline = bool(doc.get_toc())
+        wm_pattern = _compile_watermark(watermark)
+        sampled_indices = _triage_sample_indices(len(doc))
+        watermark_matches = 0
+        contents_found = False
+        sample_read_errors = 0
+        for index in sampled_indices:
+            try:
+                page = doc[index]
+                text = page.get_text("text") or ""
+            except Exception:
+                sample_read_errors += 1
+                continue
+            if wm_pattern is not None and wm_pattern.search(text):
+                watermark_matches += 1
+            for line in text.splitlines():
+                collapsed = re.sub(r"\s+", " ", line).strip().casefold()
+                if collapsed in (
+                        "contents", "table of contents",
+                        "summary of contents"):
+                    contents_found = True
+                    break
+    finally:
+        doc.close()
+
+    stats = _analyze_pdf_images(pdf_path, min_dim)
+    triage = _ingestion_core.assess_pdf_triage(
+        stats, producer=producer, creator=creator,
+        watermark_page_matches=watermark_matches,
+        sampled_pages=len(sampled_indices), has_outline=has_outline,
+        contents_page_found=contents_found,
+        sample_read_errors=sample_read_errors,
+        thresholds=_pdf_ingestion_thresholds())
+    print(_render_pdf_triage(
+        triage, pdf_path, file_size=pdf_path.stat().st_size,
+        producer=producer, creator=creator), end="")
+
+
 def preprocess_pdf(input_path: Path, output_path: Path, *,
                    min_dim: int = 1000,
                    force: bool = False,
@@ -30752,6 +30882,12 @@ def main(argv: list[str] | None = None):
     add_markdown_validation_flag(p_exp)
     add_llm_provider_flags(p_exp)
 
+    # scan
+    p_scan = sub.add_parser(
+        "scan", help="Read-only first-pass triage report for a PDF")
+    p_scan.add_argument("--pdf", type=Path, required=True)
+    add_watermark_flag(p_scan)
+
     # info
     p_info = sub.add_parser("info", help="Inspect output artifacts")
     p_info.add_argument("--db", type=Path, default=None)
@@ -31206,6 +31342,9 @@ def main(argv: list[str] | None = None):
                                 format=args.format,
                                 validation_policy=args.markdown_validation,
                                 **llm_kwargs)
+
+        elif args.command == "scan":
+            scan_pdf(args.pdf, watermark=args.watermark)
 
         elif args.command == "info":
             show_info(

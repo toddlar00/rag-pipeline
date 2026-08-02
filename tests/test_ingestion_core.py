@@ -314,3 +314,91 @@ def test_deletion_errors_preserve_partial_success_and_continue():
     assert outcome.deletion_issues[0].stage == "delete"
     assert outcome.deletion_issues[0].xref == 1
     assert page.deleted == [2]
+
+
+def _triage_stats(*, total=10, large=8, usable=8, usable_large=8,
+                  text_chars=10_000, replacement_chars=0,
+                  inspection_complete=True):
+    return {
+        "total_pages": total,
+        "pages_with_large_images": large,
+        "pages_with_usable_text": usable,
+        "large_image_pages_with_usable_text": usable_large,
+        "text_chars": text_chars,
+        "replacement_chars": replacement_chars,
+        "inspection_complete": inspection_complete,
+        "unique_dims": set(),
+        "image_xrefs": set(),
+    }
+
+
+def _assess(stats, **overrides):
+    values = {
+        "producer": "", "creator": "", "watermark_page_matches": 0,
+        "sampled_pages": 0, "has_outline": False,
+        "contents_page_found": False,
+    }
+    values.update(overrides)
+    return ingestion_core.assess_pdf_triage(stats, **values)
+
+
+def test_triage_forecast_mirrors_preprocess_branch_order():
+    assert _assess(_triage_stats(
+        inspection_complete=False)).preprocess_forecast == (
+            "inspection-incomplete")
+    assert _assess(_triage_stats(
+        large=0, usable_large=0)).preprocess_forecast == "no-preprocess"
+    assert _assess(_triage_stats(
+        usable=0, usable_large=0)).preprocess_forecast == "keep-for-ocr"
+    assert _assess(_triage_stats()).preprocess_forecast == (
+        "strip-backgrounds")
+
+
+def test_triage_forecast_ratio_boundary_matches_preprocess_literal():
+    # ratio < 0.1 skips; exactly 0.1 does not (preprocess uses "<").
+    below = _triage_stats(total=100, large=9, usable=100, usable_large=9)
+    at = _triage_stats(total=100, large=10, usable=100, usable_large=10)
+    assert _assess(below).preprocess_forecast == "no-preprocess"
+    assert _assess(at).preprocess_forecast == "strip-backgrounds"
+
+
+def test_triage_ocr_recommendation_binds_to_text_layer_gate():
+    usable = _triage_stats()
+    unusable = _triage_stats(usable=2, usable_large=2)
+    assert _assess(usable).ocr_recommended is False
+    assert _assess(usable).text_layer_usable is True
+    assert _assess(unusable).ocr_recommended is True
+    assert _assess(unusable).text_layer_usable is False
+    # The two verdicts come from different seams and may disagree: a
+    # low-raster book with a globally unusable text layer still forecasts
+    # no-preprocess while recommending OCR.
+    edge = _triage_stats(total=100, large=5, usable=10, usable_large=5)
+    triage = _assess(edge)
+    assert triage.preprocess_forecast == "no-preprocess"
+    assert triage.ocr_recommended is True
+
+
+def test_triage_counts_and_scanner_fingerprint():
+    triage = _assess(
+        _triage_stats(total=12, large=7, usable=9),
+        producer="Adobe Acrobat 9.0 Paper Capture Plug-in",
+        watermark_page_matches=3, sampled_pages=40, has_outline=True,
+        contents_page_found=True)
+    assert triage.page_count == 12
+    assert triage.large_image_pages == 7
+    assert triage.usable_pages == 9
+    assert triage.unusable_pages == 3
+    assert triage.scanner_fingerprint == "paper capture"
+    assert triage.watermark_page_matches == 3
+    assert triage.sampled_pages == 40
+    assert triage.has_outline is True
+    assert triage.contents_page_found is True
+
+
+def test_triage_fingerprint_from_creator_and_absent():
+    assert _assess(_triage_stats(),
+                   creator="ABBYY FineReader 15").scanner_fingerprint == (
+        "abbyy")
+    assert _assess(_triage_stats(),
+                   producer="LaTeX with hyperref").scanner_fingerprint is (
+        None)
