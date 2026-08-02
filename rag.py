@@ -6723,6 +6723,62 @@ def _analyze_pdf_images(pdf_path: Path, min_dim: int = 1000) -> dict:
     return analysis.stats
 
 
+def _render_pdf_triage(triage, pdf_path: Path, *, file_size: int,
+                       producer: str, creator: str,
+                       open_error: str | None = None) -> str:
+    """Render the console report card for one scanned PDF."""
+    lines = [f"PDF triage: {pdf_path.name}", ""]
+    lines.append("Document")
+    size_mb = file_size / (1024 * 1024)
+    if triage is not None:
+        lines.append(f"  {triage.page_count} pages · {size_mb:.1f} MB")
+    else:
+        lines.append(f"  {size_mb:.1f} MB")
+    if producer:
+        lines.append(f"  producer: {producer}")
+    if creator:
+        lines.append(f"  creator: {creator}")
+    if open_error is not None:
+        lines.append(f"  ERROR: {open_error}")
+        return "\n".join(lines) + "\n"
+    if triage.scanner_fingerprint is not None:
+        lines.append(
+            f"  scanner fingerprint: {triage.scanner_fingerprint}")
+    lines.append("")
+    lines.append("Page composition")
+    lines.append(
+        f"  {triage.large_image_pages} of {triage.page_count} pages "
+        "carry large background images")
+    lines.append("")
+    lines.append("Text layer")
+    usable_text = "yes" if triage.text_layer_usable else "no"
+    lines.append(
+        f"  usable text layer: {usable_text} "
+        f"({triage.usable_pages} of {triage.page_count} pages)")
+    if triage.sample_read_errors:
+        lines.append(
+            f"  unreadable sampled pages: {triage.sample_read_errors}")
+    lines.append("")
+    lines.append(f"  preprocess forecast: {triage.preprocess_forecast}")
+    if triage.preprocess_forecast == "inspection-incomplete":
+        lines.append(
+            "  caution: PDF inspection was incomplete; verify the file "
+            "before a full run")
+    lines.append(
+        f"  watermark matches: {triage.watermark_page_matches} of "
+        f"{triage.sampled_pages} sampled pages")
+    outline = "yes" if triage.has_outline else "no"
+    contents = "yes" if triage.contents_page_found else "no"
+    lines.append(f"  outline bookmarks: {outline}")
+    lines.append(f"  contents page found: {contents}")
+    lines.append("")
+    suggestion = f"python rag.py full --pdf {pdf_path}"
+    if triage.ocr_recommended:
+        suggestion += " --ocr"
+    lines.append(f"Suggested next step: {suggestion}")
+    return "\n".join(lines) + "\n"
+
+
 def preprocess_pdf(input_path: Path, output_path: Path, *,
                    min_dim: int = 1000,
                    force: bool = False,
