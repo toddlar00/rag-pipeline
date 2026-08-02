@@ -6779,6 +6779,76 @@ def _render_pdf_triage(triage, pdf_path: Path, *, file_size: int,
     return "\n".join(lines) + "\n"
 
 
+def _triage_sample_indices(page_count: int) -> list[int]:
+    """First 30 pages plus up to 10 evenly spaced later pages."""
+    indices = list(range(min(page_count, 30)))
+    if page_count > 30:
+        step = max((page_count - 30) // 10, 1)
+        indices.extend(range(30, page_count, step)[:10])
+    return sorted(dict.fromkeys(indices))
+
+
+def scan_pdf(pdf_path: Path, *, watermark: str = DEFAULT_WATERMARK,
+            min_dim: int = 1000) -> None:
+    """Print a read-only triage card for one PDF without writing anything."""
+    import pymupdf
+
+    _require_file(pdf_path, "PDF file")
+    try:
+        doc = pymupdf.open(str(pdf_path))
+    except Exception as exc:
+        print(_render_pdf_triage(
+            None, pdf_path, file_size=pdf_path.stat().st_size,
+            producer="", creator="", open_error=str(exc)), end="")
+        raise SystemExit(1)
+    try:
+        if doc.needs_pass:
+            print(_render_pdf_triage(
+                None, pdf_path, file_size=pdf_path.stat().st_size,
+                producer="", creator="", open_error="encrypted PDF"),
+                end="")
+            raise SystemExit(1)
+        metadata = doc.metadata or {}
+        producer = metadata.get("producer", "")
+        creator = metadata.get("creator", "")
+        has_outline = bool(doc.get_toc())
+        wm_pattern = _compile_watermark(watermark)
+        sampled_indices = _triage_sample_indices(len(doc))
+        watermark_matches = 0
+        contents_found = False
+        sample_read_errors = 0
+        for index in sampled_indices:
+            page = doc[index]
+            try:
+                text = page.get_text("text") or ""
+            except Exception:
+                sample_read_errors += 1
+                continue
+            if wm_pattern is not None and wm_pattern.search(text):
+                watermark_matches += 1
+            for line in text.splitlines():
+                collapsed = re.sub(r"\s+", " ", line).strip().casefold()
+                if collapsed in (
+                        "contents", "table of contents",
+                        "summary of contents"):
+                    contents_found = True
+                    break
+    finally:
+        doc.close()
+
+    stats = _analyze_pdf_images(pdf_path, min_dim)
+    triage = _ingestion_core.assess_pdf_triage(
+        stats, producer=producer, creator=creator,
+        watermark_page_matches=watermark_matches,
+        sampled_pages=len(sampled_indices), has_outline=has_outline,
+        contents_page_found=contents_found,
+        sample_read_errors=sample_read_errors,
+        thresholds=_pdf_ingestion_thresholds())
+    print(_render_pdf_triage(
+        triage, pdf_path, file_size=pdf_path.stat().st_size,
+        producer=producer, creator=creator), end="")
+
+
 def preprocess_pdf(input_path: Path, output_path: Path, *,
                    min_dim: int = 1000,
                    force: bool = False,
