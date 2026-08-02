@@ -221,6 +221,85 @@ def pdf_text_layer_is_usable(
     )
 
 
+SCANNER_FINGERPRINTS = ("paper capture", "abbyy")
+PREPROCESS_STRIP_RATIO = 0.1
+
+
+@dataclass(frozen=True)
+class PDFTriage:
+    """Deterministic first-pass report-card verdicts for one PDF."""
+
+    page_count: int
+    large_image_pages: int
+    text_layer_usable: bool
+    usable_pages: int
+    unusable_pages: int
+    preprocess_forecast: str
+    scanner_fingerprint: str | None
+    watermark_page_matches: int
+    sampled_pages: int
+    has_outline: bool
+    contents_page_found: bool
+    ocr_recommended: bool
+    sample_read_errors: int
+
+
+def _scanner_fingerprint(producer: str, creator: str) -> str | None:
+    haystack = f"{producer} {creator}".lower()
+    for fingerprint in SCANNER_FINGERPRINTS:
+        if fingerprint in haystack:
+            return fingerprint
+    return None
+
+
+def _preprocess_forecast(stats: Mapping[str, object], *,
+                         strip_ratio: float) -> str:
+    """Mirror preprocess_pdf's branch order without side effects."""
+    if stats.get("inspection_complete") is False:
+        return "inspection-incomplete"
+    total = int(stats.get("total_pages", 0) or 0)
+    large = int(stats.get("pages_with_large_images", 0) or 0)
+    ratio = large / max(total, 1)
+    if ratio < strip_ratio:
+        return "no-preprocess"
+    if ("large_image_pages_with_usable_text" in stats
+            and stats["large_image_pages_with_usable_text"] == 0):
+        return "keep-for-ocr"
+    return "strip-backgrounds"
+
+
+def assess_pdf_triage(
+        stats: Mapping[str, object], *, producer: str, creator: str,
+        watermark_page_matches: int, sampled_pages: int,
+        has_outline: bool, contents_page_found: bool,
+        sample_read_errors: int = 0,
+        thresholds: PDFIngestionThresholds = (
+            DEFAULT_PDF_INGESTION_THRESHOLDS),
+        strip_ratio: float = PREPROCESS_STRIP_RATIO) -> PDFTriage:
+    """Assess one analyzed PDF into the first-pass report-card verdicts."""
+    page_count = int(stats.get("total_pages", 0) or 0)
+    usable_pages = int(stats.get("pages_with_usable_text", 0) or 0)
+    text_layer_usable = pdf_text_layer_is_usable(
+        stats, thresholds=thresholds)
+    return PDFTriage(
+        page_count=page_count,
+        large_image_pages=int(
+            stats.get("pages_with_large_images", 0) or 0),
+        text_layer_usable=text_layer_usable,
+        usable_pages=usable_pages,
+        unusable_pages=max(page_count - usable_pages, 0),
+        preprocess_forecast=_preprocess_forecast(
+            stats, strip_ratio=strip_ratio),
+        scanner_fingerprint=_scanner_fingerprint(producer, creator),
+        watermark_page_matches=watermark_page_matches,
+        sampled_pages=sampled_pages,
+        has_outline=has_outline,
+        contents_page_found=contents_page_found,
+        ocr_recommended=not text_layer_usable,
+        sample_read_errors=sample_read_errors,
+    )
+
+
 def inspect_page_background_images(
         document: PDFDocumentLike, page: PDFPageLike, min_dimension: int, *,
         thresholds: PDFIngestionThresholds = (
