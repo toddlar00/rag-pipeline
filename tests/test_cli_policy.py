@@ -84,6 +84,8 @@ def test_namespace_llm_detection_is_operation_and_feature_specific():
         SimpleNamespace(command="chunk", contextualize=True))
     assert cli_policy._namespace_uses_llm(
         SimpleNamespace(command="export", format="flashcards"))
+    assert cli_policy._namespace_uses_llm(
+        SimpleNamespace(command="packets"))
     assert cli_policy._pipeline_features_use_llm(
         SimpleNamespace(raptor=True))
     assert not cli_policy._pipeline_features_use_llm(SimpleNamespace())

@@ -401,7 +401,7 @@ def _has_ambiguous_sensitive_option(args: list[str]) -> bool:
 def _namespace_uses_llm(args: object) -> bool:
     """Return whether a parsed command can actually invoke an LLM."""
     command = getattr(args, "command", None)
-    if command in {"generate-questions", "raptor", "brief"}:
+    if command in {"generate-questions", "raptor", "brief", "packets"}:
         return True
     if command == "query":
         return bool(getattr(args, "answer", False))

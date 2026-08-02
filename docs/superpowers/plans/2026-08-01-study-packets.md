@@ -1,6 +1,9 @@
 # Syllabus-Driven Study Packets Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** Execute this plan task-by-task on
+> `agent/study-packets-implementation`. Use the repository's agentic-plan
+> skill when available; otherwise use an equivalent test-first, reviewed
+> subagent workflow. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build `study_packets.py` (deterministic packet policy) plus a
 `rag.py packets` subcommand that turns a `study-syllabus-v1` JSON file and an
@@ -12,18 +15,95 @@ plus a course index, per
 LLM output contracts, rendering) lives in a new dependency-light typed module
 `study_packets.py` with injected callables for retrieval and LLM calls.
 `rag.py` gains a thin handler `build_study_packets(...)` wiring existing
-collaborators: `_load_index_snapshot_strict`, `search_index`, `_call_llm`,
+collaborators through a new lease-held strict packet-snapshot facade,
+`search_index`, `_call_llm`,
 `markdown_validation.validate_markdown_candidate`,
-`_artifact_io._atomic_write_text`, and `index_state._load_index_manifest`.
+the repository output-lease/atomic-write primitives, and
+`index_state._load_index_manifest`.
 No behavior of existing commands changes.
 
 **Tech Stack:** Python 3.10–3.14 standard library only in `study_packets.py`
 (plus first-party `llm_output_contracts`); pytest; the repository's existing
 retrieval/LLM/validation modules via injection.
 
-## Global Constraints (verbatim from the spec and repo policy)
+## Audit-hardening contract (binding)
 
-- Codex works on a feature branch off current `main`; never commits to `main`.
+The completed gate/interface/safety audit found requirements that the
+original illustrative snippets did not fully encode. This section is binding
+and supersedes any older line reference or snippet below. When a snippet is
+retained as a coding sketch, extend or reshape it to satisfy every item here;
+never copy a conflicting shortcut.
+
+1. **Bounded syllabus boundary.** Read at most the declared syllabus byte
+   limit, then parse JSON with duplicate-key and non-finite-number rejection.
+   Enforce explicit bounds for entries, selector/query counts, and scalar
+   lengths. Reject unknown fields, control characters, embedded newlines,
+   leading/trailing or non-canonical whitespace, duplicate selectors, unsafe
+   slugs, Windows device names, and the reserved `index` ID. The registered
+   casebook profile used by fixtures is `us-law-casebook-v1`.
+2. **Exact heading identity.** A `chapters` selector is an exact
+   occurrence-bound ID found in `metadata["heading_path_ids"]`. It is not a
+   display title, chapter number, normalized heading, or `section_path`
+   prefix.
+3. **One coherent input generation.** Add a packet-specific strict loader
+   that, under the same `_chunk_output_lease`, loads the strict canonical
+   snapshot and requires/validates the adjacent chunk-completion artifact.
+   Return records, `source_sha256`, snapshot fingerprint, and the validated
+   `structure_profile` provenance together; do not reopen the completion
+   sidecar after releasing the lease. Compare its complete provenance to the
+   syllabus profile.
+4. **Exact index binding.** Require the manifest and validate its backend,
+   collection, embedding model, and `source_sha256` against the request and
+   leased snapshot. `_load_index_manifest`'s warning callback accepts printf
+   arguments, so use `lambda *_args, **_kwargs: None` or a validated facade.
+5. **Trusted retrieval mapping.** Treat vector hits as ranked stable IDs only.
+   Remap every ID to the immutable canonical strict-snapshot record and never
+   trust hit text/metadata. Unknown/missing IDs and retrieval/effective-mode
+   warnings are explicit header notices. Canonicalize table families for
+   chapter selection, query selection, rules, case groups, and outline input.
+6. **Prompt-visible grounding.** Apply source/count/character budgets before
+   constructing a contract. Its allowed citation IDs are exactly the IDs
+   present in the bounded one-line evidence JSON. Record every source,
+   character, group, and query truncation plus every degradation in the packet
+   header. Required locators must be exact and non-empty.
+7. **Case binding and defensive contracts.** Bind each digest to the current
+   case identity. Facts, holding, and significance each carry non-empty
+   citations (or one equivalently strict digest-level set) restricted to that
+   case's prompt-visible IDs. Revalidate returned canonical payloads, reject
+   controls/non-ASCII/Markdown injection, and catch documented LLM budget,
+   security, timeout, transport, and contract failures for safe degradation.
+   A digest fallback may quote only an exact prompt-visible excerpt with its
+   real locator; never render `unknown source`. The outline fallback is an
+   explicit omission.
+8. **Safe Markdown.** Escape every scalar for its Markdown context. Validate
+   each packet and `index.md` with the required Pandoc/Zettlr policy; missing
+   external validation is an error, not a silent downgrade.
+9. **Atomic logical publication without a new sidecar.** Under a packet-output
+   lease, build and validate the complete candidate set in staging. Promote
+   only verified owned files, safely clean stale owned packets, and write the
+   validated `packets/index.md` last as the logical commit. The index records
+   generation/index binding and each packet's SHA-256. Test crash recovery,
+   index failure, concurrency, and Dropbox-like filesystem errors. Do not add
+   a receipt/manifest sidecar.
+10. **Failure taxonomy.** Invalid syllabus; snapshot/completion/profile or
+    manifest incoherence; lease/staging/promotion/index-commit failure; and
+    validator unavailability are run-fatal. Bad selectors, empty trusted
+    selection, missing locators, unsafe text, and packet validation failures
+    are entry-local. Known LLM/runtime/contract failures are section-local
+    fallbacks. Unexpected invariant/programmer errors are never swallowed.
+11. **CLI and gates.** Add `packets` to `cli_policy._namespace_uses_llm`, use
+    `--db` default `None` for backend-aware resolution, forward provider and
+    release-security kwargs, and add `p_pkt` to the shared run-telemetry parser
+    tuple. Add `tests/test_cli_policy.py` coverage. Refresh
+    `architecture-inventory.json` only after all new Python sources are
+    tracked/staged, and only with the refresh tool. Do not blindly add
+    `build_study_packets` to the existing `(chunks, output)` publication
+    parametrization; add packet-specific strict-loader/publication tests.
+
+## Global Constraints (from the spec and repo policy)
+
+- Codex works on `agent/study-packets-implementation`; never commits to
+  `main`.
 - NEVER hand-edit `*.lock`, `benchmarks/phase-a0-*.json`, or
   `architecture-inventory.json`. The inventory is refreshed ONLY via
   `python tools/check_architecture_inventory.py --refresh` (Task 8).
@@ -35,8 +115,8 @@ retrieval/LLM/validation modules via injection.
   `llm_output_contracts`. No third-party imports, no `rag` import.
 - Corpus-derived content never leaves private outputs; tests use only
   synthetic fixture text (no real casebook text in any committed file).
-- Fail-closed at every boundary: invalid syllabus → no run; per-entry errors
-  are recorded and skip the entry; the run exits non-zero if any entry failed.
+- Apply the explicit failure taxonomy above; the run exits non-zero if any
+  entry failed.
 - Keep files under 500 lines where feasible; `study_packets.py` may reach
   ~600 given contracts + rendering — do not split it preemptively.
 - Line length and style: match `ruff` config (target py310, E4/E7/E9/F);
@@ -54,7 +134,8 @@ retrieval/LLM/validation modules via injection.
 - Chunk records are `{"text": str, "metadata": dict}` (rag.py:7738-7741).
   Metadata keys used here: `content_type` (one of the labels at
   rag.py:333-337, incl. `case_opinion`, `statutory_excerpt`, `table`),
-  `headings` (list[str]), `section_path` (str), `chapter_num`,
+  `heading_path_ids` (occurrence-bound identity list), `headings` (display
+  list), `section_path` (display string), `chapter_num`,
   `chapter_title`, `page_range`, `source_file`, `primary_case`,
   `case_names`, `stable_id` (added by retrieval linkage,
   retrieval_core.py:564-597), and for tables `retrieval_role` /
@@ -78,6 +159,10 @@ retrieval/LLM/validation modules via injection.
   (markdown_validation.py:825).
 - Atomic writes: `artifact_io._atomic_write_text(path, content)`
   (artifact_io.py:1342).
+- Snapshot seam: `_load_index_snapshot_strict` returns
+  `(records, source_sha256, fingerprint)`; it does not return a receipt. The
+  packet facade must pair this with the existing completion validation while
+  holding `_chunk_output_lease` once.
 - Index manifest: `index_state._load_index_manifest(db_dir, *, backend,
   collection_name, manifest_path_fn, warning_fn) -> dict | None`
   (index_state.py:166) with
@@ -94,7 +179,10 @@ retrieval/LLM/validation modules via injection.
   (rag.py:30408), `add_db_backend_flag(p)` (rag.py:30415),
   `add_embedding_flags(p)` (rag.py:30400). LLM kwargs come from
   `_llm_kwargs_from_args(args, include_workers=True)` and the
-  `security_policy` defaulting set at rag.py:31058-31068.
+  `security_policy` defaulting set at rag.py:31058-31068. LLM classification
+  itself lives in `cli_policy._namespace_uses_llm`; `packets` must be an
+  always-LLM command there. Shared telemetry flags are installed through the
+  parser tuple near rag.py:30957-30961.
 - Test idioms: monkeypatch `rag._call_llm` (see
   tests/test_llm_gating.py:1115-1174); build synthetic hits like
   tests/test_grounded_answers.py:8-48; drive the CLI with
@@ -107,8 +195,11 @@ retrieval/LLM/validation modules via injection.
   builders, contracts, rendering. Pure functions; injected callables.
 - Create: `tests/test_study_packets.py` — all unit tests for the module.
 - Modify: `rag.py` — `build_study_packets(...)` handler + `packets`
-  subparser + dispatch + membership in the `security_policy` defaulting set.
+  strict packet-snapshot facade + output lease/staging + subparser/dispatch +
+  membership in the `security_policy` defaulting and telemetry sets.
+- Modify: `cli_policy.py` — classify `packets` as always using the LLM path.
 - Create: `tests/test_study_packets_cli.py` — handler/CLI wiring tests.
+- Modify: `tests/test_cli_policy.py` — provider/security forwarding policy.
 
 ---
 
@@ -130,6 +221,15 @@ retrieval/LLM/validation modules via injection.
   - `parse_syllabus(payload: object) -> Syllabus`
   - `load_syllabus_text(text: str) -> Syllabus`
 
+Export or centralize explicit limits for encoded syllabus bytes, entry count,
+selectors/queries per entry, and each scalar type. `load_syllabus_text` uses
+`json.loads` with `object_pairs_hook` duplicate detection and a
+`parse_constant` rejection hook. Text validation accepts only already
+canonical non-empty values: no stripping as normalization, no controls or
+newlines, and no over-limit values. IDs also reject `index` and all
+case-insensitive Windows device stems. Chapter selector validation preserves
+exact occurrence IDs; it does not accept display names as an alternate form.
+
 - [ ] **Step 1: Write the failing tests**
 
 ```python
@@ -146,12 +246,12 @@ def _syllabus_payload(**overrides):
     payload = {
         "schema": "study-syllabus-v1",
         "course": "Legal Ethics",
-        "structure_profile": "legal-casebook-v1",
+        "structure_profile": "us-law-casebook-v1",
         "entries": [
             {
                 "id": "week-03-conflicts",
                 "title": "Conflicts of Interest",
-                "chapters": ["Chapter 3"],
+                "chapters": ["#/texts/42"],
                 "queries": ["conflicts of interest current clients"],
             },
         ],
@@ -163,18 +263,18 @@ def _syllabus_payload(**overrides):
 def test_parse_syllabus_accepts_minimal_valid_payload():
     syllabus = study_packets.parse_syllabus(_syllabus_payload())
     assert syllabus.course == "Legal Ethics"
-    assert syllabus.structure_profile == "legal-casebook-v1"
+    assert syllabus.structure_profile == "us-law-casebook-v1"
     assert len(syllabus.entries) == 1
     entry = syllabus.entries[0]
     assert entry.entry_id == "week-03-conflicts"
     assert entry.title == "Conflicts of Interest"
-    assert entry.chapters == ("Chapter 3",)
+    assert entry.chapters == ("#/texts/42",)
     assert entry.queries == ("conflicts of interest current clients",)
 
 
 def test_parse_syllabus_accepts_chapters_only_and_queries_only():
     chapters_only = _syllabus_payload(entries=[
-        {"id": "a", "title": "A", "chapters": ["Chapter 1"]}])
+        {"id": "a", "title": "A", "chapters": ["#/texts/1"]}])
     queries_only = _syllabus_payload(entries=[
         {"id": "b", "title": "B", "queries": ["duty of candor"]}])
     assert study_packets.parse_syllabus(chapters_only).entries[0].queries == ()
@@ -198,10 +298,11 @@ def test_parse_syllabus_rejects_invalid_top_level(mutation, match):
 @pytest.mark.parametrize("entry, match", [
     ({"id": "x", "title": "X"}, "chapters or queries"),
     ({"id": "x", "title": "X", "chapters": []}, "chapters or queries"),
-    ({"id": "Bad Slug!", "title": "X", "chapters": ["c"]}, "id"),
-    ({"id": "x", "title": "", "chapters": ["c"]}, "title"),
+    ({"id": "Bad Slug!", "title": "X", "chapters": ["#/texts/1"]}, "id"),
+    ({"id": "x", "title": "", "chapters": ["#/texts/1"]}, "title"),
     ({"id": "x", "title": "X", "chapters": [""]}, "chapters"),
-    ({"id": "x", "title": "X", "chapters": ["c"], "bogus": 1}, "unexpected"),
+    ({"id": "x", "title": "X", "chapters": ["#/texts/1"],
+      "bogus": 1}, "unexpected"),
 ])
 def test_parse_syllabus_rejects_invalid_entries(entry, match):
     with pytest.raises(study_packets.SyllabusError, match=match):
@@ -210,8 +311,8 @@ def test_parse_syllabus_rejects_invalid_entries(entry, match):
 
 def test_parse_syllabus_rejects_duplicate_entry_ids():
     entries = [
-        {"id": "same", "title": "A", "chapters": ["c"]},
-        {"id": "same", "title": "B", "chapters": ["d"]},
+        {"id": "same", "title": "A", "chapters": ["#/texts/1"]},
+        {"id": "same", "title": "B", "chapters": ["#/texts/2"]},
     ]
     with pytest.raises(study_packets.SyllabusError, match="duplicate"):
         study_packets.parse_syllabus(_syllabus_payload(entries=entries))
@@ -224,128 +325,27 @@ def test_load_syllabus_text_rejects_non_json_and_non_object():
         study_packets.load_syllabus_text(json.dumps([1, 2]))
 ```
 
+Extend that matrix with: oversized UTF-8 input, duplicate JSON keys,
+`NaN`/`Infinity`, too many entries/selectors/queries, overlong scalars,
+leading/trailing whitespace, controls/newlines, duplicate selectors, `index`,
+and every Windows device-name family. Include boundary-value acceptance tests
+and prove a title-like chapter value such as `"Chapter 3"` remains mere text
+until selection rejects it as an unresolved occurrence ID.
+
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `python -m pytest tests/test_study_packets.py -q`
 Expected: FAIL/ERROR with `ModuleNotFoundError: No module named
 'study_packets'`.
 
-- [ ] **Step 3: Implement the module skeleton and syllabus parsing**
+- [ ] **Step 3: Implement the module skeleton and hardened syllabus parser**
 
-```python
-"""Deterministic policy for syllabus-driven topic study packets.
-
-Standard-library-only. ``rag.py`` injects retrieval and LLM callables; this
-module owns the syllabus schema, selection policy, section assembly, LLM
-output contracts, and Markdown rendering. See
-docs/superpowers/specs/2026-08-01-study-packets-design.md.
-"""
-
-from __future__ import annotations
-
-from dataclasses import dataclass, field
-import hashlib
-import json
-import re
-from typing import Any, Callable, Collection, Optional
-
-import llm_output_contracts as _contracts
-
-SYLLABUS_SCHEMA = "study-syllabus-v1"
-_ENTRY_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
-_SYLLABUS_KEYS = frozenset({"schema", "course", "structure_profile",
-                            "entries"})
-_ENTRY_KEYS = frozenset({"id", "title", "chapters", "queries"})
-
-
-class SyllabusError(ValueError):
-    """Invalid ``study-syllabus-v1`` document; the run must not start."""
-
-
-@dataclass(frozen=True)
-class SyllabusEntry:
-    entry_id: str
-    title: str
-    chapters: tuple[str, ...]
-    queries: tuple[str, ...]
-
-
-@dataclass(frozen=True)
-class Syllabus:
-    course: str
-    structure_profile: str
-    entries: tuple[SyllabusEntry, ...]
-
-
-def _required_text(payload: dict, key: str) -> str:
-    value = payload.get(key)
-    if not isinstance(value, str) or not value.strip():
-        raise SyllabusError(f"{key} must be non-empty text")
-    return value
-
-
-def _selector_tuple(entry: dict, key: str, entry_id: str) -> tuple[str, ...]:
-    value = entry.get(key, [])
-    if not isinstance(value, list) or any(
-            not isinstance(item, str) or not item.strip() for item in value):
-        raise SyllabusError(
-            f"entry {entry_id!r}: {key} must be a list of non-empty text")
-    return tuple(value)
-
-
-def parse_syllabus(payload: object) -> Syllabus:
-    """Validate one ``study-syllabus-v1`` object fail-closed."""
-    if not isinstance(payload, dict):
-        raise SyllabusError("syllabus must be a JSON object")
-    unexpected = sorted(set(payload) - _SYLLABUS_KEYS)
-    if unexpected:
-        raise SyllabusError(f"unexpected fields: {', '.join(unexpected)}")
-    if payload.get("schema") != SYLLABUS_SCHEMA:
-        raise SyllabusError(f"schema must be {SYLLABUS_SCHEMA!r}")
-    course = _required_text(payload, "course")
-    profile = _required_text(payload, "structure_profile")
-    raw_entries = payload.get("entries")
-    if not isinstance(raw_entries, list) or not raw_entries:
-        raise SyllabusError("entries must be a non-empty list")
-    entries: list[SyllabusEntry] = []
-    seen_ids: set[str] = set()
-    for raw in raw_entries:
-        if not isinstance(raw, dict):
-            raise SyllabusError("entries must contain objects")
-        unexpected = sorted(set(raw) - _ENTRY_KEYS)
-        if unexpected:
-            raise SyllabusError(
-                f"entry has unexpected fields: {', '.join(unexpected)}")
-        entry_id = raw.get("id")
-        if not isinstance(entry_id, str) or not _ENTRY_ID_RE.fullmatch(
-                entry_id):
-            raise SyllabusError(
-                "entry id must be a lowercase filesystem-safe slug")
-        if entry_id in seen_ids:
-            raise SyllabusError(f"duplicate entry id {entry_id!r}")
-        seen_ids.add(entry_id)
-        title = raw.get("title")
-        if not isinstance(title, str) or not title.strip():
-            raise SyllabusError(f"entry {entry_id!r}: title must be text")
-        chapters = _selector_tuple(raw, "chapters", entry_id)
-        queries = _selector_tuple(raw, "queries", entry_id)
-        if not chapters and not queries:
-            raise SyllabusError(
-                f"entry {entry_id!r} needs chapters or queries")
-        entries.append(SyllabusEntry(entry_id, title, chapters, queries))
-    return Syllabus(course, profile, tuple(entries))
-
-
-def load_syllabus_text(text: str) -> Syllabus:
-    """Parse syllabus JSON text fail-closed."""
-    try:
-        payload = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise SyllabusError(f"syllabus is not valid JSON: {exc}") from None
-    if not isinstance(payload, dict):
-        raise SyllabusError("syllabus must be a JSON object")
-    return parse_syllabus(payload)
-```
+Create the typed dataclasses and helpers listed above. Keep the parser
+dependency-light, but implement every bounded/strict rule in the binding
+audit contract. The file-reading facade in Task 7 must check file size before
+allocating/decoding; `load_syllabus_text` must independently enforce the
+encoded-byte limit so direct callers cannot bypass it. Use immutable tuples in
+the accepted model and never retain caller-owned mutable objects.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -383,16 +383,23 @@ git commit -m "Add strict study-syllabus-v1 parsing"
   - `selection_digest(selection: EntrySelection) -> str` (sha256 hex of the
     ordered stable-ID list)
 
-`records` are published-order chunk records `{"text": ..., "metadata": ...}`
-whose metadata carries `stable_id`. A chapter selector matches a record when
-it equals `metadata["chapter_title"]`, equals `str(metadata["chapter_num"])`,
-or is a prefix of `metadata["section_path"]`. A selector matching zero
-records raises `EntrySelectionError`. Query hits (already `SelectionItem`s
-from the injected `search_fn`) append in rank order, capped at
-`max_query_hits` per query with a recorded notice when truncated, and are
-deduplicated against already-selected stable IDs. Records without a
-`stable_id` raise `EntrySelectionError` (the index snapshot must be
-linkage-bearing).
+`records` are canonical, published-order strict-snapshot records
+`{"text": ..., "metadata": ...}` whose metadata carries `stable_id` and an
+occurrence identity list at `heading_path_ids`. A chapter selector matches a
+record only when it exactly equals one element of that list. A selector
+matching zero records raises `EntrySelectionError`. Query results passed by
+the injected `search_fn` have already been remapped from hit IDs to those same
+trusted canonical records and carry retrieval/degradation notices. They append
+in rank order, are capped at `max_query_hits` per query with a recorded notice,
+and deduplicate by canonical stable ID. Records without a valid stable ID or
+heading identity fail closed. An entry whose final trusted/canonical selection
+is empty raises `EntrySelectionError`.
+
+Before this function is called, Task 7 uses the existing table-retrieval
+policy to build a canonical snapshot plus a family alias map. Chapter-selected
+records and query IDs both resolve through that map, so a child-row hit selects
+the trusted canonical table parent/family once. The same canonical items feed
+all later sections.
 
 - [ ] **Step 1: Write the failing tests** (append to
   `tests/test_study_packets.py`)
@@ -404,6 +411,7 @@ def _record(stable_id, text, **metadata):
     metadata.setdefault("section_path", "Chapter 3 > Conflicts")
     metadata.setdefault("chapter_num", 3)
     metadata.setdefault("chapter_title", "Chapter 3")
+    metadata.setdefault("heading_path_ids", ["#/texts/42"])
     metadata.setdefault("content_type", "author_narrative")
     metadata["stable_id"] = stable_id
     return {"text": text, "metadata": metadata}
@@ -411,7 +419,7 @@ def _record(stable_id, text, **metadata):
 
 def _entry(**overrides):
     values = {"entry_id": "week-03", "title": "Conflicts",
-              "chapters": ("Chapter 3",), "queries": ()}
+              "chapters": ("#/texts/42",), "queries": ()}
     values.update(overrides)
     return study_packets.SyllabusEntry(**values)
 
@@ -423,20 +431,22 @@ def _item(stable_id, text="hit", **metadata):
         metadata=record["metadata"])
 
 
-def test_select_entry_matches_chapter_by_title_number_and_path_prefix():
+def test_select_entry_matches_only_exact_occurrence_heading_id():
     records = [
-        _record("chunk_a", "one", chapter_title="Chapter 3"),
-        _record("chunk_b", "two", chapter_title="Other",
-                chapter_num=99, section_path="Chapter 3 > Deep > Leaf"),
-        _record("chunk_c", "three", chapter_title="Chapter 9",
-                chapter_num=9, section_path="Chapter 9 > Elsewhere"),
+        _record("chunk_a", "one", heading_path_ids=["#/texts/42"]),
+        _record("chunk_b", "two", heading_path_ids=["#/texts/42",
+                                                      "#/texts/43"]),
+        _record("chunk_c", "three", chapter_title="#/texts/42",
+                chapter_num=42, section_path="#/texts/42 > display only",
+                heading_path_ids=["#/texts/99"]),
     ]
-    by_title = study_packets.select_entry(
+    exact = study_packets.select_entry(
         _entry(), records, search_fn=lambda q: [])
-    assert [i.stable_id for i in by_title.items] == ["chunk_a", "chunk_b"]
-    by_number = study_packets.select_entry(
-        _entry(chapters=("9",)), records, search_fn=lambda q: [])
-    assert [i.stable_id for i in by_number.items] == ["chunk_c"]
+    assert [i.stable_id for i in exact.items] == ["chunk_a", "chunk_b"]
+    with pytest.raises(study_packets.EntrySelectionError):
+        study_packets.select_entry(
+            _entry(chapters=("Chapter 3",)), records,
+            search_fn=lambda q: [])
 
 
 def test_select_entry_preserves_published_order_and_dedups_queries():
@@ -461,10 +471,10 @@ def test_select_entry_caps_query_hits_and_records_notice():
 def test_select_entry_unresolvable_selector_and_missing_stable_id():
     with pytest.raises(study_packets.EntrySelectionError, match="selector"):
         study_packets.select_entry(
-            _entry(chapters=("Nowhere",),), [_record("chunk_a", "x")],
+            _entry(chapters=("#/texts/999",),), [_record("chunk_a", "x")],
             search_fn=lambda q: [])
-    bare = {"text": "x", "metadata": {"chapter_title": "Chapter 3",
-                                      "section_path": "", "chapter_num": 3}}
+    bare = {"text": "x", "metadata": {
+        "heading_path_ids": ["#/texts/42"]}}
     with pytest.raises(study_packets.EntrySelectionError, match="stable_id"):
         study_packets.select_entry(_entry(), [bare], search_fn=lambda q: [])
 
@@ -509,12 +519,12 @@ class EntrySelection:
 
 
 def _chapter_selector_matches(selector: str, metadata: dict) -> bool:
-    if selector == str(metadata.get("chapter_title", "")):
-        return True
-    if selector == str(metadata.get("chapter_num", "")):
-        return True
-    section_path = metadata.get("section_path")
-    return isinstance(section_path, str) and section_path.startswith(selector)
+    heading_ids = metadata.get("heading_path_ids")
+    return (
+        isinstance(heading_ids, (list, tuple))
+        and all(isinstance(value, str) for value in heading_ids)
+        and selector in heading_ids
+    )
 
 
 def _selection_item(record: dict) -> SelectionItem:
@@ -567,6 +577,9 @@ def select_entry(entry: SyllabusEntry, records: list[dict], *,
             if item.stable_id not in seen:
                 seen.add(item.stable_id)
                 chosen.append(item)
+    if not chosen:
+        raise EntrySelectionError(
+            f"entry {entry.entry_id!r}: selection is empty")
     return EntrySelection(items=tuple(chosen), notices=tuple(notices))
 
 
@@ -607,13 +620,20 @@ git commit -m "Add deterministic packet selection policy"
   - `build_rules_section(selection: EntrySelection) ->
     tuple[str, int, tuple[str, ...]]` returning (markdown, table_count,
     notices). Markdown is `## Rules and definitions` with one blockquote per
-    included chunk; `table` chunks are included verbatim (their text is
-    already pipe-table Markdown) and counted in `table_count`. Table-child
-    rows (`metadata["retrieval_role"] == "table_child"`) are skipped in
-    favor of their parent text appearing once. Truncation past
+    included chunk. `table` chunks are parsed as one strict captioned pipe
+    table, retain their literal cell text through context-safe Markdown
+    escaping, receive the repository's canonical `<!-- TABLE -->` marker and
+    block spacing, and are counted in `table_count`; embedded or trailing
+    non-table blocks are rejected.
+    Input has already been canonicalized by table family; assert that a raw
+    table child never reaches rendering instead of relying only on a skip.
+    Truncation past
     `MAX_RULES_CHUNKS` adds a notice. Zero eligible chunks yields the
     section header plus the line `_No statutory or table material in this
-    selection._` and no notice.
+    selection._` and no notice. Every rendered item requires a non-empty
+    source/page locator; a missing locator is an entry error, never the text
+    `unknown source`. Corpus text and locator scalars use context-aware safe
+    Markdown rendering and reject controls.
 
 - [ ] **Step 1: Write the failing tests** (append)
 
@@ -623,7 +643,8 @@ def test_locator_line_composes_available_fields():
         "source_file": "book.pdf", "page_range": "12-13",
         "section_path": "Chapter 3 > Conflicts"})
     assert line == "book.pdf · pp. 12-13 · Chapter 3 > Conflicts"
-    assert study_packets.locator_line({}) == "unknown source"
+    with pytest.raises(study_packets.EntrySelectionError, match="locator"):
+        study_packets.locator_line({})
 
 
 def test_build_rules_section_extracts_statutes_and_tables_verbatim():
@@ -681,17 +702,16 @@ MAX_RULES_CHUNKS = 40
 
 def locator_line(metadata: dict) -> str:
     """Human-readable source locator for one chunk."""
-    parts: list[str] = []
     source = metadata.get("source_file")
-    if isinstance(source, str) and source:
-        parts.append(source)
     pages = metadata.get("page_range")
-    if isinstance(pages, (str, int)) and str(pages):
-        parts.append(f"pp. {pages}")
+    if (not isinstance(source, str) or not source
+            or not isinstance(pages, (str, int)) or not str(pages)):
+        raise EntrySelectionError("record has no exact source/page locator")
+    parts = [source, f"pp. {pages}"]
     section = metadata.get("section_path")
     if isinstance(section, str) and section:
         parts.append(section)
-    return " · ".join(parts) if parts else "unknown source"
+    return " · ".join(parts)
 
 
 def _blockquote(text: str) -> str:
@@ -708,6 +728,10 @@ def build_rules_section(selection: EntrySelection,
         if item.metadata.get("content_type") in {"statutory_excerpt", "table"}
         and item.metadata.get("retrieval_role") != "table_child"
     ]
+    if any(item.metadata.get("retrieval_role") == "table_child"
+           for item in selection.items):
+        raise EntrySelectionError(
+            "non-canonical table child reached rules rendering")
     if len(eligible) > MAX_RULES_CHUNKS:
         notices.append(
             f"rules section truncated to {MAX_RULES_CHUNKS} of "
@@ -760,25 +784,33 @@ git commit -m "Add extractive rules-and-definitions section"
   - `OUTLINE_FALLBACK_ID = "omit-outline-section"`
   - `CASE_DIGEST_MAX_FIELD_CHARACTERS = 700`
   - `OUTLINE_MAX_LINES = 80`, `OUTLINE_MAX_LINE_CHARACTERS = 300`
-  - `case_digest_contract() -> _contracts.ExactJSONContract` — canonical
-    value is a dict with exactly the string keys `case_name`, `facts`,
-    `holding`, `significance`, each non-empty and at most
-    `CASE_DIGEST_MAX_FIELD_CHARACTERS` characters.
+  - `case_digest_contract(expected_case_name: str,
+    allowed_ids: Collection[str]) -> _contracts.ExactJSONContract` — canonical
+    value has exactly `case_name`, `facts`, `holding`, and `significance`.
+    `case_name` must exactly equal `expected_case_name`; each other value is
+    exactly `{"text": str, "citations": [str, ...]}`, with bounded safe text,
+    a non-empty citation list, and every ID in the prompt-visible
+    `allowed_ids` for this case only.
   - `outline_contract(allowed_ids: Collection[str]) ->
     _contracts.ExactJSONContract` — canonical value is
     `{"outline": [{"text": str, "citations": [str, ...]}, ...]}` with 1..
     `OUTLINE_MAX_LINES` lines, each text non-empty and bounded, each line
     carrying at least one citation, and every citation a member of
-    `allowed_ids`.
+    `allowed_ids`. Both validators reject controls, line breaks, non-ASCII
+    output, duplicate citations, and Markdown-structural injection; rendering
+    still escapes accepted scalar text defensively.
 
 - [ ] **Step 1: Write the failing tests** (append)
 
 ```python
 def test_case_digest_contract_accepts_exact_payload():
-    contract = study_packets.case_digest_contract()
+    contract = study_packets.case_digest_contract(
+        "In re Example", {"chunk_a", "chunk_b"})
     payload = json.dumps({
-        "case_name": "In re Example", "facts": "F", "holding": "H",
-        "significance": "S"})
+        "case_name": "In re Example",
+        "facts": {"text": "F", "citations": ["chunk_a"]},
+        "holding": {"text": "H", "citations": ["chunk_b"]},
+        "significance": {"text": "S", "citations": ["chunk_a"]}})
     canonical = contract(payload)
     parsed = json.loads(canonical)
     assert parsed["case_name"] == "In re Example"
@@ -788,16 +820,19 @@ def test_case_digest_contract_accepts_exact_payload():
 
 
 @pytest.mark.parametrize("payload", [
-    {"case_name": "C", "facts": "F", "holding": "H"},
-    {"case_name": "C", "facts": "F", "holding": "H", "significance": "S",
-     "extra": "x"},
-    {"case_name": "", "facts": "F", "holding": "H", "significance": "S"},
-    {"case_name": "C", "facts": 7, "holding": "H", "significance": "S"},
-    {"case_name": "C", "facts": "x" * 701, "holding": "H",
-     "significance": "S"},
+    {"case_name": "C", "facts": {"text": "F", "citations": ["a"]}},
+    {"case_name": "Wrong", "facts": {"text": "F", "citations": ["a"]},
+     "holding": {"text": "H", "citations": ["a"]},
+     "significance": {"text": "S", "citations": ["a"]}},
+    {"case_name": "C", "facts": {"text": "F", "citations": ["alien"]},
+     "holding": {"text": "H", "citations": ["a"]},
+     "significance": {"text": "S", "citations": ["a"]}},
+    {"case_name": "C", "facts": {"text": "# injected", "citations": ["a"]},
+     "holding": {"text": "H", "citations": ["a"]},
+     "significance": {"text": "S", "citations": ["a"]}},
 ])
 def test_case_digest_contract_rejects_bad_payloads(payload):
-    contract = study_packets.case_digest_contract()
+    contract = study_packets.case_digest_contract("C", {"a"})
     import llm_output_contracts
     with pytest.raises(llm_output_contracts.OutputContractRejected):
         contract(json.dumps(payload))
@@ -847,24 +882,53 @@ _CASE_DIGEST_MAX_BYTES = 8 * 1024
 _OUTLINE_MAX_BYTES = 64 * 1024
 
 
-def _validated_case_digest(value: Any) -> dict:
-    if not isinstance(value, dict) or set(value) != set(_CASE_DIGEST_KEYS):
-        raise ValueError("case digest must have exactly the four fields")
-    for key in _CASE_DIGEST_KEYS:
-        text = value[key]
-        if not isinstance(text, str) or not text.strip():
-            raise ValueError(f"case digest field {key} must be text")
-        if len(text) > CASE_DIGEST_MAX_FIELD_CHARACTERS:
-            raise ValueError(f"case digest field {key} is too long")
-    return {key: value[key] for key in _CASE_DIGEST_KEYS}
+def _validated_contract_text(value: Any, *, field: str,
+                             max_characters: int) -> str:
+    """Require canonical printable ASCII with no Markdown control syntax."""
+    # Implement the shared audit-hardening rules here: non-empty, already
+    # stripped, length-bounded, characters U+0020..U+007E only, and rejection
+    # of raw Markdown/HTML structural injection. Rendering escapes the
+    # remaining inline punctuation as a second layer.
+    ...
 
 
-def case_digest_contract() -> _contracts.ExactJSONContract:
+def _validated_citations(value: Any, universe: frozenset[str]) -> list[str]:
+    """Require a bounded, non-empty, unique subset of the visible universe."""
+    ...
+
+
+def case_digest_contract(expected_case_name: str,
+                         allowed_ids: Collection[str],
+                         ) -> _contracts.ExactJSONContract:
     """Contract for one distilled case digest."""
+    universe = frozenset(allowed_ids)
+    if not universe:
+        raise ValueError("case digest citation universe cannot be empty")
+
+    def _validated_case_digest(value: Any) -> dict:
+        if not isinstance(value, dict) or set(value) != set(_CASE_DIGEST_KEYS):
+            raise ValueError("case digest must have exactly the four fields")
+        if value["case_name"] != expected_case_name:
+            raise ValueError("case digest identity does not match its group")
+        canonical: dict[str, Any] = {"case_name": expected_case_name}
+        for key in ("facts", "holding", "significance"):
+            field = value[key]
+            if not isinstance(field, dict) or set(field) != {
+                    "text", "citations"}:
+                raise ValueError(f"{key} needs exactly text/citations")
+            canonical[key] = {
+                "text": _validated_contract_text(
+                    field["text"], field=key,
+                    max_characters=CASE_DIGEST_MAX_FIELD_CHARACTERS),
+                "citations": _validated_citations(
+                    field["citations"], universe),
+            }
+        return canonical
+
     return _contracts.ExactJSONContract(
         contract_id=CASE_DIGEST_CONTRACT_ID,
         max_bytes=_CASE_DIGEST_MAX_BYTES,
-        max_depth=4,
+        max_depth=6,
         schema_validator=_validated_case_digest,
     )
 
@@ -887,18 +951,11 @@ def outline_contract(allowed_ids: Collection[str],
             if not isinstance(line, dict) or set(line) != {
                     "text", "citations"}:
                 raise ValueError("outline lines need exactly text/citations")
-            text = line["text"]
-            if (not isinstance(text, str) or not text.strip()
-                    or len(text) > OUTLINE_MAX_LINE_CHARACTERS):
-                raise ValueError("outline line text is empty or too long")
-            citations = line["citations"]
-            if (not isinstance(citations, list) or not citations
-                    or any(not isinstance(c, str) for c in citations)):
-                raise ValueError("every outline line needs citations")
-            unknown = [c for c in citations if c not in universe]
-            if unknown:
-                raise ValueError("outline cites unknown chunk ids")
-            canonical.append({"text": text, "citations": list(citations)})
+            text = _validated_contract_text(
+                line["text"], field="outline text",
+                max_characters=OUTLINE_MAX_LINE_CHARACTERS)
+            citations = _validated_citations(line["citations"], universe)
+            canonical.append({"text": text, "citations": citations})
         return {"outline": canonical}
 
     return _contracts.ExactJSONContract(
@@ -909,10 +966,9 @@ def outline_contract(allowed_ids: Collection[str],
     )
 ```
 
-If the `ExactJSONContract` constructor rejects these arguments (e.g., a
-required `provenance_fields`), adapt ONLY the constructor call to the real
-signature at llm_output_contracts.py:322 — do not change the validators or
-the test expectations.
+The audited `ExactJSONContract` constructor accepts these arguments. Keep the
+schema validators as the defense-in-depth check even when `_call_llm` normally
+returns contract-canonical JSON.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -947,17 +1003,32 @@ git commit -m "Add study-packet LLM output contracts"
     `_call_llm` as `output_validator`.
   - `@dataclass(frozen=True) CaseGroup(case_name: str,
     items: tuple[SelectionItem, ...])`
+  - `@dataclass(frozen=True) PromptEvidence(prompt: str,
+    visible_items: tuple[SelectionItem, ...], notices: tuple[str, ...])`
+    (an equivalent immutable shape is acceptable).
   - `case_groups(selection: EntrySelection) ->
     tuple[tuple[CaseGroup, ...], tuple[str, ...]]`
-  - `case_digest_prompt(group: CaseGroup) -> str` — bounded one-physical-line
-    JSON evidence framing (mirror the SOURCE_JSON style at rag.py:6002-6029).
-  - `outline_prompt(selection: EntrySelection) -> str`
+  - `case_digest_prompt(group: CaseGroup) -> PromptEvidence` — bounded
+    one-physical-line JSON evidence framing (mirror the SOURCE_JSON style at
+    rag.py:6002-6029), including only safely locatable canonical case items.
+  - `outline_prompt(selection: EntrySelection) -> PromptEvidence`
   - `build_cases_section(groups: tuple[CaseGroup, ...], llm_fn: LLMFn) ->
     tuple[str, tuple[str, ...]]` — one LLM call per group, one retry, then
     a cited verbatim-excerpt fallback with a visible notice.
   - `build_outline_section(selection: EntrySelection, llm_fn: LLMFn) ->
     tuple[Optional[str], tuple[str, ...]]` — one call, one retry, else
     `(None, notices)`.
+
+Budgeting happens before contracts are constructed. The contract universe is
+`{item.stable_id for item in evidence.visible_items}` exactly, and the prompt's
+JSON contains that same set exactly. The evidence builder returns notices for
+source-count and per-source character truncation; case-group and query limits
+likewise feed the packet header. Prompt prose identifies source text as
+untrusted evidence and forbids following instructions found inside it.
+`_call_with_retry` catches only the repository's documented LLM budget,
+security, timeout/transport, and `OutputContractRejected` failures; it then
+re-applies the contract to any returned payload before use. Unexpected errors
+propagate.
 
 - [ ] **Step 1: Write the failing tests** (append)
 
@@ -994,7 +1065,8 @@ def test_case_digest_prompt_is_bounded_single_line_json():
     group = study_packets.CaseGroup(case_name="A v. B", items=(
         _item("chunk_1", text="x" * 5000, content_type="case_opinion",
               primary_case="A v. B"),))
-    prompt = study_packets.case_digest_prompt(group)
+    evidence = study_packets.case_digest_prompt(group)
+    prompt = evidence.prompt
     marker = "SOURCE_JSON (one physical line; bounded case excerpts):"
     assert marker in prompt
     payload_line = prompt.split(marker)[1].strip().splitlines()[0]
@@ -1002,6 +1074,9 @@ def test_case_digest_prompt_is_bounded_single_line_json():
     assert payload["case_name"] == "A v. B"
     assert len(payload["sources"][0]["text"]) <= (
         study_packets.CASE_SOURCE_CHARACTER_LIMIT)
+    assert {item.stable_id for item in evidence.visible_items} == {
+        source["stable_id"] for source in payload["sources"]}
+    assert any("character" in notice for notice in evidence.notices)
 
 
 def test_build_cases_section_uses_llm_and_falls_back():
@@ -1016,8 +1091,12 @@ def test_build_cases_section_uses_llm_and_falls_back():
     def llm_fn(prompt, contract, operation):
         calls.append(operation)
         if "A v. B" in prompt:
-            return json.dumps({"case_name": "A v. B", "facts": "F",
-                               "holding": "H", "significance": "S"})
+            return json.dumps({
+                "case_name": "A v. B",
+                "facts": {"text": "F", "citations": ["chunk_1"]},
+                "holding": {"text": "H", "citations": ["chunk_1"]},
+                "significance": {
+                    "text": "S", "citations": ["chunk_1"]}})
         return None
 
     markdown, notices = study_packets.build_cases_section(
@@ -1070,175 +1149,33 @@ def test_build_outline_section_grounded_and_omission():
 Run: `python -m pytest tests/test_study_packets.py -q -k "case_group or prompt or cases_section or outline_section"`
 Expected: FAIL with `AttributeError`.
 
-- [ ] **Step 3: Implement** (append)
+- [ ] **Step 3: Implement the bounded builders** (append)
 
-```python
-MAX_CASE_GROUPS = 12
-CASE_SOURCE_CHARACTER_LIMIT = 2000
-OUTLINE_SOURCE_CHARACTER_LIMIT = 1200
-OUTLINE_MAX_SOURCES = 60
-LLMFn = Callable[[str, object, str], Optional[str]]
-
-_CASE_DIGEST_PROMPT = """You distill judicial opinions from a law-school \
-casebook into exam-ready digests.
-
-Reply with exactly one JSON object and no other text:
-{{"case_name": "...", "facts": "...", "holding": "...", \
-"significance": "..."}}
-Every field is plain ASCII text of at most {max_field} characters grounded \
-ONLY in the sources below. Do not invent parties, procedural posture, or \
-outcomes.
-
-SOURCE_JSON (one physical line; bounded case excerpts):
-{source_json}"""
-
-_OUTLINE_PROMPT = """You build a grounded exam-issue outline for one topic \
-from a law-school casebook.
-
-Reply with exactly one JSON object and no other text:
-{{"outline": [{{"text": "...", "citations": ["chunk id", "..."]}}, ...]}}
-Between 1 and {max_lines} lines, each at most {max_chars} characters, in a \
-sensible exam-analysis order. Every line MUST cite at least one chunk id \
-from the sources below, and only those ids. Do not invent law that the \
-sources do not contain.
-
-SOURCE_JSON (one physical line; bounded topic sources):
-{source_json}"""
-
-
-def case_groups(selection: EntrySelection,
-                ) -> tuple[tuple["CaseGroup", ...], tuple[str, ...]]:
-    """Group the selection's case_opinion chunks by case identity."""
-    notices: list[str] = []
-    grouped: dict[str, list[SelectionItem]] = {}
-    order: list[str] = []
-    for item in selection.items:
-        if item.metadata.get("content_type") != "case_opinion":
-            continue
-        name = item.metadata.get("primary_case")
-        if not isinstance(name, str) or not name:
-            case_names = item.metadata.get("case_names")
-            if isinstance(case_names, (list, tuple)) and case_names:
-                name = str(case_names[0])
-            else:
-                name = str(item.metadata.get("section_path", "Unnamed case"))
-        if name not in grouped:
-            grouped[name] = []
-            order.append(name)
-        grouped[name].append(item)
-    if len(order) > MAX_CASE_GROUPS:
-        notices.append(
-            f"cases section truncated to {MAX_CASE_GROUPS} of "
-            f"{len(order)} case groups")
-        order = order[:MAX_CASE_GROUPS]
-    groups = tuple(CaseGroup(case_name=name, items=tuple(grouped[name]))
-                   for name in order)
-    return groups, tuple(notices)
-
-
-@dataclass(frozen=True)
-class CaseGroup:
-    case_name: str
-    items: tuple[SelectionItem, ...]
-
-
-def _bounded_sources(items: tuple[SelectionItem, ...], *, limit: int,
-                     max_sources: int) -> list[dict]:
-    return [
-        {"stable_id": item.stable_id, "locator": locator_line(item.metadata),
-         "text": item.text[:limit]}
-        for item in items[:max_sources]
-    ]
-
-
-def case_digest_prompt(group: CaseGroup) -> str:
-    """One-physical-line bounded JSON evidence prompt for one case."""
-    source_json = json.dumps(
-        {"case_name": group.case_name,
-         "sources": _bounded_sources(
-             group.items, limit=CASE_SOURCE_CHARACTER_LIMIT,
-             max_sources=8)},
-        ensure_ascii=True, sort_keys=True, separators=(",", ":"))
-    return _CASE_DIGEST_PROMPT.format(
-        max_field=CASE_DIGEST_MAX_FIELD_CHARACTERS, source_json=source_json)
-
-
-def outline_prompt(selection: EntrySelection) -> str:
-    """One-physical-line bounded JSON evidence prompt for the outline."""
-    source_json = json.dumps(
-        {"sources": _bounded_sources(
-            selection.items, limit=OUTLINE_SOURCE_CHARACTER_LIMIT,
-            max_sources=OUTLINE_MAX_SOURCES)},
-        ensure_ascii=True, sort_keys=True, separators=(",", ":"))
-    return _OUTLINE_PROMPT.format(
-        max_lines=OUTLINE_MAX_LINES, max_chars=OUTLINE_MAX_LINE_CHARACTERS,
-        source_json=source_json)
-
-
-def _call_with_retry(llm_fn: LLMFn, prompt: str, contract: object,
-                     operation: str) -> Optional[str]:
-    for _attempt in range(2):
-        raw = llm_fn(prompt, contract, operation)
-        if raw is not None:
-            return raw
-    return None
-
-
-def build_cases_section(groups: tuple[CaseGroup, ...], llm_fn: LLMFn,
-                        ) -> tuple[str, tuple[str, ...]]:
-    """Render the key-cases digest with fail-closed fallbacks."""
-    notices: list[str] = []
-    lines = ["## Key cases", ""]
-    if not groups:
-        lines.append("_No case opinions in this selection._")
-        lines.append("")
-    contract = case_digest_contract()
-    for group in groups:
-        lines.append(f"### {group.case_name}")
-        lines.append("")
-        raw = _call_with_retry(
-            llm_fn, case_digest_prompt(group), contract,
-            "study_packet_case_digest")
-        if raw is not None:
-            digest = json.loads(raw)
-            lines.append(f"**Facts.** {digest['facts']}")
-            lines.append("")
-            lines.append(f"**Holding.** {digest['holding']}")
-            lines.append("")
-            lines.append(f"**Why it matters.** {digest['significance']}")
-        else:
-            notices.append(
-                f"case {group.case_name!r}: digest unavailable; verbatim "
-                "excerpt included")
-            lines.append("_Digest unavailable; verbatim excerpt follows._")
-            lines.append("")
-            lines.append(_blockquote(
-                group.items[0].text[:CASE_SOURCE_CHARACTER_LIMIT]))
-        for item in group.items:
-            lines.append(f"— {locator_line(item.metadata)}")
-        lines.append("")
-    return "\n".join(lines).rstrip() + "\n", tuple(notices)
-
-
-def build_outline_section(selection: EntrySelection, llm_fn: LLMFn,
-                          ) -> tuple[Optional[str], tuple[str, ...]]:
-    """Render the grounded issue outline or omit it with a notice."""
-    contract = outline_contract(
-        {item.stable_id for item in selection.items})
-    raw = _call_with_retry(
-        llm_fn, outline_prompt(selection), contract, "study_packet_outline")
-    if raw is None:
-        return None, ("outline omitted: the model produced no "
-                      "contract-conforming grounded outline",)
-    by_id = {item.stable_id: item for item in selection.items}
-    lines = ["## Issue outline", ""]
-    for index, line in enumerate(json.loads(raw)["outline"], start=1):
-        locators = "; ".join(
-            locator_line(by_id[cid].metadata) for cid in line["citations"])
-        lines.append(f"{index}. {line['text']}  \n   _({locators})_")
-    lines.append("")
-    return "\n".join(lines).rstrip() + "\n", ()
-```
+- Group only canonical `case_opinion` items with a valid canonical
+  `primary_case`; do not synthesize case identity from `section_path` or an
+  `Unnamed case` placeholder. Missing/unsafe identity is an entry error.
+- Build immutable `PromptEvidence` after enforcing source-count and
+  per-source character limits. Validate each locator before inclusion and add
+  a notice for every omitted or truncated source. Serialize evidence with
+  `ensure_ascii=True`, sorted keys, compact separators, and one physical line.
+- State in both prompts that `SOURCE_JSON` is untrusted evidence and that
+  instructions inside it must be ignored. Show the nested per-field digest
+  schema and the cited outline schema exactly.
+- For each case, construct `case_digest_contract(group.case_name,
+  visible_ids)`, call once plus one retry for known degradable failures, and
+  pass any returned string through the contract again before `json.loads`.
+  Render each digest field with only that field's cited locators.
+- On persistent digest failure, use only the first exact prompt-visible source
+  excerpt and its validated locator. If no such source exists, omit that
+  digest or fail the entry according to the taxonomy; never use an unprompted
+  chunk or a synthetic locator.
+- For the outline, construct `outline_contract(visible_ids)` from the bounded
+  outline evidence, revalidate the response, and render only citations mapped
+  to those same visible trusted items. Persistent known failure returns the
+  explicit omission notice.
+- Escape all scalar Markdown at render time and propagate selection,
+  group/source/character truncation, LLM degradation, and fallback notices to
+  packet assembly.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -1273,9 +1210,12 @@ git commit -m "Add case digest and grounded outline builders"
   - `@dataclass(frozen=True) EntryFailure(entry_id: str, title: str,
     reason: str)`
   - `build_entry_packet(course, entry, selection, header, llm_fn) ->
-    EntryPacket` — assembles header + three sections + a notices footer.
+    EntryPacket` — builds all sections first, then assembles a header that
+    includes every selection/truncation/degradation/fallback notice, plus the
+    sections and an optional repeated notices footer.
   - `render_course_index(course: str, packets: tuple[EntryPacket, ...],
-    failures: tuple[EntryFailure, ...]) -> str`
+    failures: tuple[EntryFailure, ...], *, generation_id: str,
+    index_binding: dict, packet_hashes: Mapping[str, str]) -> str`
 
 - [ ] **Step 1: Write the failing tests** (append)
 
@@ -1296,8 +1236,11 @@ def _header(**overrides):
 
 def _ok_llm(prompt, contract, operation):
     if operation == "study_packet_case_digest":
-        return json.dumps({"case_name": "A v. B", "facts": "F",
-                           "holding": "H", "significance": "S"})
+        return json.dumps({
+            "case_name": "A v. B",
+            "facts": {"text": "F", "citations": ["chunk_c"]},
+            "holding": {"text": "H", "citations": ["chunk_c"]},
+            "significance": {"text": "S", "citations": ["chunk_c"]}})
     return json.dumps({"outline": [
         {"text": "Issue one", "citations": ["chunk_s"]}]})
 
@@ -1318,7 +1261,7 @@ def test_build_entry_packet_composes_all_sections_and_header():
     assert packet.table_count == 0
 
 
-def test_build_entry_packet_records_section_notices_in_footer():
+def test_build_entry_packet_records_all_notices_in_header():
     selection = study_packets.EntrySelection(items=(
         _item("chunk_c", text="opinion", content_type="case_opinion",
               primary_case="C v. D"),
@@ -1329,6 +1272,9 @@ def test_build_entry_packet_records_section_notices_in_footer():
     assert "digest unavailable" in packet.markdown
     assert "outline omitted" in packet.markdown
     assert any("outline omitted" in n for n in packet.notices)
+    header_text = packet.markdown.split("## Rules and definitions", 1)[0]
+    assert "digest unavailable" in header_text
+    assert "outline omitted" in header_text
 
 
 def test_render_course_index_lists_packets_and_failures():
@@ -1338,105 +1284,35 @@ def test_render_course_index_lists_packets_and_failures():
     failure = study_packets.EntryFailure(
         entry_id="week-04", title="Candor", reason="selector matched nothing")
     index = study_packets.render_course_index(
-        "Legal Ethics", (packet,), (failure,))
+        "Legal Ethics", (packet,), (failure,), generation_id="generation-1",
+        index_binding={"source_sha256": "abc"},
+        packet_hashes={"week-03.md": "f" * 64})
     assert "# Legal Ethics — study packets" in index
     assert "[Conflicts](week-03.md)" in index
     assert "week-04" in index and "selector matched nothing" in index
+    assert "generation-1" in index and "f" * 64 in index
 ```
+
+Add hostile-scalar tests for course/title/case/locator/notice/failure values,
+packet-hash inventory mismatch tests, and Markdown-validation tests for both a
+packet and the course index. Required external-validator unavailability must
+fail rather than silently accepting a fallback parser.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `python -m pytest tests/test_study_packets.py -q -k "packet or index"`
 Expected: FAIL with `AttributeError`.
 
-- [ ] **Step 3: Implement** (append)
+- [ ] **Step 3: Implement safe packet and index rendering** (append)
 
-```python
-@dataclass(frozen=True)
-class PacketHeader:
-    course: str
-    entry_id: str
-    title: str
-    index_binding: dict
-    selection_digest: str
-    generated_at: str
-
-
-@dataclass(frozen=True)
-class EntryPacket:
-    entry_id: str
-    title: str
-    markdown: str
-    table_count: int
-    notices: tuple[str, ...]
-
-
-@dataclass(frozen=True)
-class EntryFailure:
-    entry_id: str
-    title: str
-    reason: str
-
-
-def _header_block(header: PacketHeader) -> str:
-    binding = json.dumps(header.index_binding, ensure_ascii=True,
-                         sort_keys=True, separators=(",", ":"))
-    return "\n".join([
-        f"# {header.title}",
-        "",
-        f"- Course: {header.course}",
-        f"- Entry: {header.entry_id}",
-        f"- Generated: {header.generated_at}",
-        f"- Selection digest: {header.selection_digest}",
-        f"- Index binding: `{binding}`",
-        "",
-    ])
-
-
-def build_entry_packet(course: str, entry: SyllabusEntry,
-                       selection: EntrySelection, header: PacketHeader,
-                       llm_fn: LLMFn) -> EntryPacket:
-    """Assemble one packet's Markdown from the three sections."""
-    notices: list[str] = list(selection.notices)
-    rules_markdown, table_count, rules_notices = build_rules_section(
-        selection)
-    notices.extend(rules_notices)
-    groups, group_notices = case_groups(selection)
-    notices.extend(group_notices)
-    cases_markdown, case_notices = build_cases_section(groups, llm_fn)
-    notices.extend(case_notices)
-    outline_markdown, outline_notices = build_outline_section(
-        selection, llm_fn)
-    notices.extend(outline_notices)
-    parts = [_header_block(header), rules_markdown, cases_markdown]
-    if outline_markdown is not None:
-        parts.append(outline_markdown)
-    else:
-        parts.append("## Issue outline\n\n_Outline omitted; see notices._\n")
-    if notices:
-        parts.append("## Notices\n\n" + "\n".join(
-            f"- {notice}" for notice in notices) + "\n")
-    return EntryPacket(entry_id=entry.entry_id, title=entry.title,
-                       markdown="\n".join(parts), table_count=table_count,
-                       notices=tuple(notices))
-
-
-def render_course_index(course: str, packets: tuple[EntryPacket, ...],
-                        failures: tuple[EntryFailure, ...]) -> str:
-    """Render the course index page linking every packet."""
-    lines = [f"# {course} — study packets", ""]
-    for packet in packets:
-        lines.append(f"- [{packet.title}]({packet.entry_id}.md)")
-    if failures:
-        lines.append("")
-        lines.append("## Failed entries")
-        lines.append("")
-        for failure in failures:
-            lines.append(f"- {failure.entry_id} ({failure.title}): "
-                         f"{failure.reason}")
-    lines.append("")
-    return "\n".join(lines)
-```
+Keep the immutable shapes above, but render only after all section builders
+have returned so the header can enumerate every notice. Use a single
+context-aware scalar escaping helper throughout; never interpolate raw source
+metadata, model output, or exception text into headings, links, list items, or
+code spans. Keep the index deterministic: record the generation identifier,
+full validated index binding, each successful packet filename and SHA-256, and
+escaped failed-entry summaries. Validate the packet-hash mapping is an exact
+match for the successful packet set before rendering.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -1456,16 +1332,19 @@ git commit -m "Assemble packet and course-index rendering"
 ### Task 7: `rag.py` handler and `packets` CLI command
 
 **Files:**
-- Modify: `rag.py` (three places: import block near rag.py:50-62, a new
-  `build_study_packets` function next to `generate_briefs` at rag.py:26898,
-  the CLI parser + dispatch inside `main`)
+- Modify: `rag.py` (imports including `datetime`, a lease-held strict packet
+  snapshot helper, `build_study_packets`, packet output lease/staging helpers,
+  and parser/dispatch/telemetry wiring)
+- Modify: `cli_policy.py`
 - Test: `tests/test_study_packets_cli.py`
+- Test: `tests/test_cli_policy.py`
 
 **Interfaces:**
 - Consumes: everything `study_packets` exports; `rag` collaborators listed
   in Repository orientation.
 - Produces: `rag.build_study_packets(syllabus_path: Path, *,
-  chunks_path: Path, db_dir: Path, db_backend: str = DEFAULT_DB_BACKEND,
+  chunks_path: Path, db_dir: Path | None = None,
+  db_backend: str = DEFAULT_DB_BACKEND,
   collection_name: str = DEFAULT_COLLECTION,
   embedding_model: str = DEFAULT_EMBEDDING_MODEL,
   cloud_url: str = DEFAULT_CLOUD_URL, cloud_model: str = DEFAULT_CLOUD_MODEL,
@@ -1473,93 +1352,67 @@ git commit -m "Assemble packet and course-index rendering"
   ollama_model: str = DEFAULT_OLLAMA_MODEL, gemini_key: str = "",
   llm_workers: int = DEFAULT_LLM_WORKERS, thinking: bool = False,
   security_policy: _release_security.ReleaseSecurityPolicy | None = None,
-  ) -> None` — raises `SystemExit(1)` if any entry failed or run-level
-  validation failed; `SystemExit(2)` for an invalid syllabus.
+  ) -> None` — raises `SystemExit(1)` for any run-fatal or entry failure and
+  `SystemExit(2)` for an invalid/unreadable syllabus.
 
-Behavioral requirements (each is asserted by a test below):
+Audited behavioral requirements (each needs a direct test):
 
-1. Read the syllabus with `study_packets.load_syllabus_text`; on
-   `SyllabusError` print the reason and `raise SystemExit(2)`.
-2. Load records via the same strict snapshot loader `generate_briefs` uses
-   (`_load_index_snapshot_strict(chunks_path)` — read rag.py:26898-26930
-   first and reuse its loading/receipt pattern exactly, including the
-   quality-report requirement).
-3. Profile check: locate the chunk-stage receipt the snapshot loader
-   validates (the assertion block near rag.py:1517-1539 names the field
-   `structure_profile`); compare
-   `_document_profiles.profile_sha256(_document_profiles.profile_from_provenance(receipt["structure_profile"]))`
-   against
-   `_document_profiles.profile_sha256(_document_profiles.get_profile(syllabus.structure_profile))`;
-   mismatch → print and `raise SystemExit(1)` before building anything.
-4. Index binding: `manifest = _index_state._load_index_manifest(db_dir,
-   backend=db_backend, collection_name=collection_name,
-   manifest_path_fn=_index_state._index_manifest_path,
-   warning_fn=lambda message: None)`; `None` → print and
-   `raise SystemExit(1)`. The header's `index_binding` dict is exactly
-   `{"backend": ..., "collection": ..., "source_sha256":
-   manifest.get("source_sha256"), "embedding_model":
-   manifest.get("embedding_model")}`.
-5. `search_fn` for one query: call `search_index(query, db_dir,
-   db_backend=db_backend, n_results=study_packets.MAX_QUERY_HITS_PER_QUERY,
-   collection_name=collection_name, embedding_model=embedding_model,
-   chunks_path=chunks_path, security_policy=security_policy)` and map each
-   hit to `study_packets.SelectionItem(stable_id=hit.metadata["stable_id"],
-   text=hit.text, metadata=hit.metadata)`; hits without a `stable_id` are
-   skipped with a collected warning.
-6. `llm_fn`: forward to `_call_llm(prompt, ollama_url=..., ollama_model=...,
-   gemini_key=..., cloud_url=..., cloud_model=..., cloud_key=...,
-   llm_workers=..., thinking=..., max_tokens=4096, operation=operation,
-   prompt_version="1", timeout=60,
-   output_contract_id=contract.contract_id,
-   output_fallback_id=(study_packets.CASE_DIGEST_FALLBACK_ID if operation
-   == "study_packet_case_digest" else study_packets.OUTLINE_FALLBACK_ID),
-   output_validator=contract, security_policy=security_policy)`.
-7. Per entry: `select_entry` → `selection_digest` → `PacketHeader`
-   (`generated_at` from
-   `datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")`)
-   → `build_entry_packet` → validate with
-   `_markdown_validation.validate_markdown_candidate(packet.markdown,
-   expected_table_count=packet.table_count,
-   source_name=f"packets/{entry.entry_id}.md", policy="auto",
-   require_table_markers=False)` → on success
-   `_artifact_io._atomic_write_text(packets_dir / f"{entry.entry_id}.md",
-   packet.markdown)`. `EntrySelectionError` and
-   `_markdown_validation.MarkdownValidationError` become
-   `study_packets.EntryFailure` records; the loop continues.
-8. Packets directory: `chunks_path.parent / "packets"`, created with
-   `mkdir(parents=True, exist_ok=True)`.
-9. After the loop: write `packets/index.md` via `render_course_index` +
-   `_atomic_write_text`; print a one-line summary per entry (built or
-   failed+reason); `raise SystemExit(1)` if any failures.
-10. CLI: copy the `brief` block pattern (rag.py:30648-30652) —
-
-```python
-    # packets
-    p_pkt = sub.add_parser(
-        "packets", help="Build syllabus-driven study packets")
-    p_pkt.add_argument("--syllabus", type=Path, required=True)
-    p_pkt.add_argument("--chunks", type=Path, default=DEFAULT_CHUNKS_PATH)
-    p_pkt.add_argument("--db", type=Path, default=DEFAULT_CHROMA_DIR)
-    add_db_backend_flag(p_pkt)
-    add_collection_flag(p_pkt)
-    add_embedding_flags(p_pkt)
-    add_llm_provider_flags(p_pkt)
-    add_release_security_flags(p_pkt)
-```
-
-    Dispatch next to the `brief` dispatch (rag.py:31153-31154):
-
-```python
-    elif args.command == "packets":
-        build_study_packets(
-            args.syllabus, chunks_path=args.chunks, db_dir=args.db,
-            db_backend=args.db_backend, collection_name=args.collection,
-            embedding_model=args.embedding_model, **llm_kwargs)
-```
-
-    and add `"packets"` to the `security_policy` defaulting set at
-    rag.py:31060 (`if args.command in {"chunk", "query"}:` becomes
-    `{"chunk", "query", "packets"}`).
+1. Check syllabus file size before reading/decoding, then call the bounded
+   strict parser. `OSError` or `SyllabusError` prints a safe reason and exits
+   2 without creating/staging output.
+2. Add a dedicated packet snapshot helper. Inside one `_chunk_output_lease`,
+   perform the same strict canonical snapshot and quality validation used by
+   `generate_briefs`, require/validate the adjacent chunk-completion inputs,
+   and return `(records, source_sha256, fingerprint,
+   structure_profile_provenance)`. The existing
+   `_load_index_snapshot_strict` returns only three values; do not pretend it
+   returns a receipt, and do not read the completion artifact after releasing
+   the lease.
+3. Resolve syllabus profile `us-law-casebook-v1` with `get_profile`, validate
+   the complete receipt provenance with `profile_from_provenance`, and compare
+   canonical profile SHA-256 values. Any malformed/missing/mismatched receipt
+   exits 1 before output staging.
+4. Resolve `db_dir` with the existing backend-aware default when it is `None`.
+   Require `_load_index_manifest(...)` using
+   `warning_fn=lambda *_args, **_kwargs: None`; validate exact backend,
+   collection, embedding model, and `manifest["source_sha256"] ==
+   source_sha256`. Build the header binding only from these validated values
+   plus the snapshot fingerprint.
+5. Canonicalize strict-snapshot table families with the existing
+   `_table_retrieval_core` policy and build a trusted alias resolver from every
+   snapshot stable ID to its canonical family record. Reject duplicate or
+   malformed trusted IDs as run-level snapshot incoherence.
+6. For each query call `search_index(...)` with resolved database/backend,
+   requested collection/model, chunks path, security policy, and enough hits
+   to detect truncation. Consume `SearchResponse.hits`, warnings, and effective
+   mode. Treat each hit as an ID only: remap it through the trusted resolver;
+   never use `hit.text` or other hit metadata. Drop unknown/missing IDs with a
+   header notice and preserve retrieval warnings/degradation.
+7. The injected LLM closure forwards every provider/security option,
+   `llm_workers`, thinking mode, operation/version/budget/timeout, contract and
+   fallback IDs, and `output_validator`. Convert only the repository's known
+   LLM runtime/budget/security/transport/strict-output failures into `None` for
+   the policy fallbacks; propagate invariant/programming failures.
+8. Per entry, select trusted canonical items, build all sections/notices,
+   render, and require exact Markdown validation. Selection/locator/unsafe-text
+   and packet-validation failures become escaped `EntryFailure` records;
+   unexpected exceptions do not. Keep successful bytes only in a unique
+   staging directory and compute their SHA-256 values.
+9. Render the course index with generation ID, validated binding, exact packet
+   inventory/hashes, and entry failures; validate it too. Under a dedicated
+   packet-output lease, promote verified staged packet files, remove only
+   previously owned stale packet files, and atomically write `index.md` last.
+   Its successful write is the logical commit. Always clean abandoned staging
+   safely. No new receipt/manifest sidecar is allowed.
+10. Print one safe summary line per entry and exit 1 if any entry failed. A
+    lease/staging/promotion/stale-cleanup/index validation or index-commit
+    failure is run-fatal and must not be recast as an entry failure.
+11. CLI parser: `--db` has `default=None`; add database/backend, collection,
+    embedding, provider, and release-security flags. Dispatch with
+    `_llm_kwargs_from_args(..., include_workers=True)` and the resolved
+    `security_policy`. Add `p_pkt` to the shared run-telemetry parser tuple.
+    Add `"packets"` to the security-policy defaulting set and to
+    `cli_policy._namespace_uses_llm` as an always-LLM command.
 
 - [ ] **Step 1: Write the failing tests** (`tests/test_study_packets_cli.py`)
 
@@ -1579,10 +1432,10 @@ def _write_syllabus(tmp_path, entries=None):
     payload = {
         "schema": "study-syllabus-v1",
         "course": "Legal Ethics",
-        "structure_profile": "legal-casebook-v1",
+        "structure_profile": "us-law-casebook-v1",
         "entries": entries or [
             {"id": "week-03", "title": "Conflicts",
-             "chapters": ["Chapter 3"]}],
+             "chapters": ["#/texts/42"]}],
     }
     path = tmp_path / "syllabus.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
@@ -1625,20 +1478,22 @@ def test_packets_writes_validated_packets_and_index(monkeypatch, tmp_path):
     records = [
         {"text": "Rule 1.7(a) text", "metadata": {
             "stable_id": "chunk_s", "content_type": "statutory_excerpt",
+            "heading_path_ids": ["#/texts/42"],
             "chapter_title": "Chapter 3", "chapter_num": 3,
             "section_path": "Chapter 3 > Rules", "page_range": "12",
             "source_file": "book.pdf"}},
         {"text": "Opinion text", "metadata": {
             "stable_id": "chunk_c", "content_type": "case_opinion",
+            "heading_path_ids": ["#/texts/42"],
             "primary_case": "A v. B", "chapter_title": "Chapter 3",
             "chapter_num": 3, "section_path": "Chapter 3 > Cases",
             "page_range": "14", "source_file": "book.pdf"}},
     ]
     monkeypatch.setattr(
-        rag, "_load_index_snapshot_strict",
-        lambda path: (records, {"structure_profile": {
-            "schema_version": 1, "name": "legal-casebook-v1",
-            "revision": 1, "sha256": "x"}}))
+        rag, "_load_packet_snapshot_strict",
+        lambda path: (records, "abc", "snapshot-fingerprint", {
+            "schema_version": 1, "name": "us-law-casebook-v1",
+            "revision": 1, "sha256": "x"}))
     monkeypatch.setattr(
         rag._document_profiles, "profile_from_provenance",
         lambda receipt: "profile-object")
@@ -1656,8 +1511,11 @@ def test_packets_writes_validated_packets_and_index(monkeypatch, tmp_path):
         contract = kwargs["output_validator"]
         if kwargs["operation"] == "study_packet_case_digest":
             return contract(json.dumps({
-                "case_name": "A v. B", "facts": "F", "holding": "H",
-                "significance": "S"}))
+                "case_name": "A v. B",
+                "facts": {"text": "F", "citations": ["chunk_c"]},
+                "holding": {"text": "H", "citations": ["chunk_c"]},
+                "significance": {
+                    "text": "S", "citations": ["chunk_c"]}}))
         return contract(json.dumps({"outline": [
             {"text": "Issue", "citations": ["chunk_s"]}]}))
 
@@ -1668,7 +1526,8 @@ def test_packets_writes_validated_packets_and_index(monkeypatch, tmp_path):
 
     rag.build_study_packets(
         _write_syllabus(tmp_path), chunks_path=chunks_path,
-        db_dir=tmp_path / "db", collection_name="ethics")
+        db_dir=tmp_path / "db", collection_name="ethics",
+        embedding_model="model-a")
 
     packet_path = chunks_path.parent / "packets" / "week-03.md"
     index_path = chunks_path.parent / "packets" / "index.md"
@@ -1685,12 +1544,15 @@ def test_packets_entry_failure_isolated_and_exit_1(monkeypatch, tmp_path):
     chunks_path.parent.mkdir(parents=True)
     records = [{"text": "Rule", "metadata": {
         "stable_id": "chunk_s", "content_type": "statutory_excerpt",
+        "heading_path_ids": ["#/texts/42"],
         "chapter_title": "Chapter 3", "chapter_num": 3,
         "section_path": "Chapter 3 > Rules", "page_range": "12",
         "source_file": "book.pdf"}}]
     monkeypatch.setattr(
-        rag, "_load_index_snapshot_strict",
-        lambda path: (records, {"structure_profile": {}}))
+        rag, "_load_packet_snapshot_strict",
+        lambda path: (records, "abc", "snapshot-fingerprint", {
+            "schema_version": 1, "name": "us-law-casebook-v1",
+            "revision": 1, "sha256": "x"}))
     monkeypatch.setattr(
         rag._document_profiles, "profile_from_provenance",
         lambda receipt: "p")
@@ -1710,12 +1572,13 @@ def test_packets_entry_failure_isolated_and_exit_1(monkeypatch, tmp_path):
         lambda markdown, **kwargs: {"publishable": True})
 
     syllabus = _write_syllabus(tmp_path, entries=[
-        {"id": "good", "title": "Good", "chapters": ["Chapter 3"]},
-        {"id": "bad", "title": "Bad", "chapters": ["Nowhere"]},
+        {"id": "good", "title": "Good", "chapters": ["#/texts/42"]},
+        {"id": "bad", "title": "Bad", "chapters": ["#/texts/999"]},
     ])
     with pytest.raises(SystemExit) as excinfo:
         rag.build_study_packets(
-            syllabus, chunks_path=chunks_path, db_dir=tmp_path / "db")
+            syllabus, chunks_path=chunks_path, db_dir=tmp_path / "db",
+            collection_name="ethics", embedding_model="m")
     assert excinfo.value.code == 1
     packets_dir = chunks_path.parent / "packets"
     assert (packets_dir / "good.md").is_file()
@@ -1724,39 +1587,28 @@ def test_packets_entry_failure_isolated_and_exit_1(monkeypatch, tmp_path):
     assert "bad" in index_text and "selector" in index_text
 ```
 
-Also add this atomic-write failure-injection test (spec requirement) to
-`tests/test_study_packets_cli.py`, reusing the monkeypatch stack from
-`test_packets_writes_validated_packets_and_index` verbatim except for the
-write seam:
+Extend `tests/test_study_packets_cli.py` beyond the happy-path sketches above:
 
-```python
-def test_packets_atomic_write_failure_is_entry_isolated(
-        monkeypatch, tmp_path):
-    # ... same monkeypatch stack as
-    # test_packets_writes_validated_packets_and_index, then:
-    real_write = rag._artifact_io._atomic_write_text
-    def failing_write(path, content, **kwargs):
-        if path.name == "week-03.md":
-            raise OSError("disk full")
-        return real_write(path, content, **kwargs)
-    monkeypatch.setattr(
-        rag._artifact_io, "_atomic_write_text", failing_write)
-    with pytest.raises(SystemExit) as excinfo:
-        rag.build_study_packets(
-            _write_syllabus(tmp_path), chunks_path=chunks_path,
-            db_dir=tmp_path / "db", collection_name="ethics")
-    assert excinfo.value.code == 1
-    index_text = (chunks_path.parent / "packets" / "index.md").read_text(
-        encoding="utf-8")
-    assert "disk full" in index_text
-```
-
-NOTE: the exact return shape of `_load_index_snapshot_strict` must be
-checked against rag.py:26914 before writing the handler — if it returns
-records only (no receipt tuple), obtain the receipt through the loader's
-own receipt helper and adjust the two monkeypatched fakes to match the real
-seam. The tests above then patch whatever pair of seams the handler
-actually calls; keep the behavioral assertions identical.
+- Assert the strict helper holds one chunk-output lease while reading both
+  snapshot and required completion inputs, returns the real four-part shape,
+  and fails on a missing/changed sidecar.
+- Parameterize manifest source/backend/collection/model mismatch and verify no
+  output staging begins. Verify the warning callback tolerates printf args.
+- Return poisoned text/metadata from vector hits and prove only the trusted
+  strict-snapshot record renders. Cover unknown/missing IDs, retrieval
+  warnings/effective-mode notices, and table-child-to-family remapping.
+- Assert full provider, security-policy, and telemetry forwarding, backend-
+  aware `db_dir` resolution when `--db` is omitted, and safe translation of
+  run-level `OSError`/`ValueError` to exit 1.
+- Seed a previously committed generation, then inject failure during staging,
+  promotion, stale cleanup, index validation, and final index write. Also
+  contend the output lease and simulate Dropbox-style rename/share errors.
+  In every case the old `index.md` must not falsely commit a mixed generation;
+  staging is recoverably cleaned. On success, `index.md` is observed last and
+  every listed hash matches its packet.
+- Add packet-specific strict-loader/publication failure tests rather than
+  placing `build_study_packets` in the existing generic handler
+  parametrization whose call shape is `(chunks, output)`.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -1767,93 +1619,31 @@ Expected: FAIL with `AttributeError: ... build_study_packets`.
 
 Add `import study_packets as _study_packets` to the first-party import
 block (alphabetical position, near `import source_fidelity_core` /
-`import table_retrieval_core`). Implement `build_study_packets` directly
-below `generate_briefs` (rag.py:26898), following behavioral requirements
-1-9 above. Skeleton:
+`import table_retrieval_core`). Add `import datetime` with the standard-library
+imports. Implement the helper, handler, staging/promotion functions, parser,
+dispatch, security default, and telemetry tuple exactly according to the 11
+audited requirements above. Keep generation time caller-independent from the
+policy module via
+`datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")`.
 
-```python
-def build_study_packets(syllabus_path: Path, *, chunks_path: Path,
-                        db_dir: Path,
-                        db_backend: str = DEFAULT_DB_BACKEND,
-                        collection_name: str = DEFAULT_COLLECTION,
-                        embedding_model: str = DEFAULT_EMBEDDING_MODEL,
-                        cloud_url: str = DEFAULT_CLOUD_URL,
-                        cloud_model: str = DEFAULT_CLOUD_MODEL,
-                        cloud_key: str = "",
-                        ollama_url: str = DEFAULT_OLLAMA_URL,
-                        ollama_model: str = DEFAULT_OLLAMA_MODEL,
-                        gemini_key: str = "",
-                        llm_workers: int = DEFAULT_LLM_WORKERS,
-                        thinking: bool = False,
-                        security_policy: (
-                            _release_security.ReleaseSecurityPolicy | None
-                        ) = None) -> None:
-    """Build one validated Markdown study packet per syllabus entry."""
-    try:
-        syllabus = _study_packets.load_syllabus_text(
-            syllabus_path.read_text(encoding="utf-8"))
-    except (OSError, _study_packets.SyllabusError) as exc:
-        print(f"Invalid syllabus: {exc}")
-        raise SystemExit(2)
-    # requirements 2-4: strict snapshot + receipt, profile check, manifest
-    # requirement 5-6: search_fn and llm_fn closures
-    # requirement 7-9: entry loop, validation, atomic writes, index, summary
-```
-
-The entry loop shape:
-
-```python
-    packets: list[_study_packets.EntryPacket] = []
-    failures: list[_study_packets.EntryFailure] = []
-    packets_dir = chunks_path.parent / "packets"
-    packets_dir.mkdir(parents=True, exist_ok=True)
-    for entry in syllabus.entries:
-        try:
-            selection = _study_packets.select_entry(
-                entry, records, search_fn=search_fn)
-            header = _study_packets.PacketHeader(
-                course=syllabus.course, entry_id=entry.entry_id,
-                title=entry.title, index_binding=index_binding,
-                selection_digest=_study_packets.selection_digest(selection),
-                generated_at=generated_at)
-            packet = _study_packets.build_entry_packet(
-                syllabus.course, entry, selection, header, llm_fn)
-            _markdown_validation.validate_markdown_candidate(
-                packet.markdown, expected_table_count=packet.table_count,
-                source_name=f"packets/{entry.entry_id}.md", policy="auto",
-                require_table_markers=False)
-            _artifact_io._atomic_write_text(
-                packets_dir / f"{entry.entry_id}.md", packet.markdown)
-            packets.append(packet)
-            print(f"built {entry.entry_id}")
-        except (_study_packets.EntrySelectionError,
-                _markdown_validation.MarkdownValidationError,
-                OSError) as exc:
-            failures.append(_study_packets.EntryFailure(
-                entry_id=entry.entry_id, title=entry.title,
-                reason=str(exc)))
-            print(f"failed {entry.entry_id}: {exc}")
-    _artifact_io._atomic_write_text(
-        packets_dir / "index.md",
-        _study_packets.render_course_index(
-            syllabus.course, tuple(packets), tuple(failures)))
-    if failures:
-        raise SystemExit(1)
-```
-
-Then add the parser block, dispatch, and the `security_policy` set
-membership exactly as shown in the Interfaces block above.
+In `cli_policy.py`, include `packets` in the unconditional LLM-command branch;
+do not depend on provider flags being present to infer it. The CLI parser must
+set `--db` to `None`, allowing the same backend-aware resolver used by query.
+Tests must verify that `_llm_kwargs_from_args` retains provider settings and
+that release-security and telemetry flags reach the handler. Do not directly
+write live packet paths inside the entry loop: the only live commit sequence
+is the output-lease promotion with validated `index.md` written last.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `python -m pytest tests/test_study_packets_cli.py tests/test_study_packets.py -q`
+Run: `python -m pytest tests/test_study_packets_cli.py tests/test_study_packets.py tests/test_cli_policy.py -q`
 Expected: all PASS.
 
 - [ ] **Step 5: Lint and commit**
 
 ```bash
-python -m ruff check rag.py tests/test_study_packets_cli.py
-git add rag.py tests/test_study_packets_cli.py
+python -m ruff check rag.py cli_policy.py tests/test_study_packets_cli.py tests/test_cli_policy.py
+git add rag.py cli_policy.py tests/test_study_packets_cli.py tests/test_cli_policy.py
 git commit -m "Wire the packets CLI command to the packet policy"
 ```
 
@@ -1863,9 +1653,10 @@ git commit -m "Wire the packets CLI command to the packet policy"
 
 **Files:**
 - Modify: `architecture-inventory.json` (tool-generated ONLY)
-- Possibly modify: `tests/test_output_publication.py` and
-  `tests/test_scaffold_structure.py` (only if their gates flag the new
-  module/command — see below)
+- Possibly modify: `tests/test_scaffold_structure.py` (only if its gate flags
+  the new module/command). Packet-specific publication tests belong in
+  `tests/test_study_packets_cli.py`, not in an incompatible generic
+  parametrization.
 
 - [ ] **Step 1: Run the full suite**
 
@@ -1874,10 +1665,11 @@ Expected: some failures are ANTICIPATED and legitimate:
 - `tests/test_architecture_inventory.py::test_repository_baseline_is_current_and_canonical`
   — the inventory hashes every tracked Python source; fix with
   `python tools/check_architecture_inventory.py --refresh` (never by hand).
-- `tests/test_output_publication.py` has a parametrized list of downstream
-  consumers requiring a quality report (entry `"generate_briefs"` at
-  :793). If the suite demands new entry points appear there, add
-  `"build_study_packets"` following the existing parametrization exactly.
+- Do not add `build_study_packets` blindly to
+  `tests/test_output_publication.py`'s existing `(chunks, output)` handler
+  parametrization: the packet handler intentionally has a different call
+  shape. Preserve its integrity coverage through the packet-specific strict
+  loader, staging, and logical-commit tests from Task 7.
 - Structure/architecture tests may pin module counts or import graphs; fix
   by following each failure message's own instruction (these gates print
   what they expect). Do NOT weaken a gate to pass it; extend its expected
@@ -1888,7 +1680,12 @@ existing test.
 
 - [ ] **Step 2: Refresh the inventory and re-run gates**
 
+First ensure every new Python source and test is known to Git (committed by the
+earlier task steps or explicitly staged). An untracked source is invisible to
+the inventory tool and makes a refresh invalid.
+
 ```bash
+git add study_packets.py rag.py cli_policy.py tests/test_study_packets.py tests/test_study_packets_cli.py tests/test_cli_policy.py
 python tools/check_architecture_inventory.py --refresh
 python tools/check_architecture_inventory.py
 python -m pytest -q
@@ -1925,11 +1722,11 @@ evaluation suites unchanged."
 
 - [ ] **Step 5: Hand off**
 
-Push the branch and report: branch name, final commit SHA, observed test
+Push `agent/study-packets-implementation` and report: branch name, final commit
+SHA, observed test
 counts, and any gate whose expected list was extended (with the exact
-diff). Do NOT open a candidate PR, regenerate benchmarks, or edit
-ROADMAP.md — the owner's machine performs the evidence and candidate
-ritual.
+diff). Do NOT open a candidate PR, regenerate Phase A0 or benchmarks, or edit
+`ROADMAP.md` — the owner's machine performs the evidence and candidate ritual.
 
 ---
 
@@ -1938,10 +1735,9 @@ ritual.
 - If a documented interface differs from the line references above (the
   file drifts), trust the code, keep the behavioral requirement, and note
   the difference in the final report.
-- If `_load_index_snapshot_strict`'s return shape or receipt access does
-  not match Task 7's assumption, adapt the handler and the two test fakes
-  to the real seam — the behavioral assertions must not weaken.
-- If `ExactJSONContract` cannot express a validator (unexpected constructor
-  contract), stop and report rather than hand-rolling JSON parsing outside
-  `llm_output_contracts`.
+- The audited `_load_index_snapshot_strict` shape is
+  `(records, source_sha256, fingerprint)` and `ExactJSONContract` accepts the
+  planned constructor arguments. If repository drift changes either, inspect
+  the new implementation and preserve the coherence/contract requirements;
+  never weaken the tests or read a receipt outside the chunk-output lease.
 - Never commit with a failing gate "to be fixed later".

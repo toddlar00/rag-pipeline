@@ -18,6 +18,7 @@ import argparse
 from collections import Counter, defaultdict
 from contextlib import ExitStack, contextmanager
 import copy
+import datetime
 import gc
 from getpass import getpass
 import hashlib
@@ -70,6 +71,7 @@ import run_telemetry as _run_telemetry
 import runtime_supervision as _runtime_supervision
 import source_fidelity_core as _source_fidelity_core
 import storage_policy as _storage_policy
+import study_packets as _study_packets
 import table_retrieval_core as _table_retrieval_core
 import vector_lifecycle as _vector_lifecycle
 
@@ -1490,9 +1492,18 @@ def _load_source_oracle_registry(
     return payload
 
 
-def _load_index_chunk_completion_inputs(
+@dataclass(frozen=True)
+class _IndexChunkCompletionBinding:
+    """Validated inputs and profile provenance for one chunk generation."""
+
+    inputs: dict
+    parameters_sha256: str
+    structure_profile: dict
+
+
+def _load_index_chunk_completion_binding(
         chunks_path: Path, *, chunks_sha256: str, chunks_size: int,
-        records: list[dict]) -> tuple[dict, str]:
+        records: list[dict]) -> _IndexChunkCompletionBinding:
     """Validate the adjacent chunk-v7 completion used by index readers.
 
     Indexing does not need the live Docling/PDF inputs, but it must not accept
@@ -1570,7 +1581,24 @@ def _load_index_chunk_completion_inputs(
             and inputs.get("table_recovery") is None):
         raise ValueError(
             "recovered tables lack a bound source-PDF input")
-    return inputs, payload["parameters_sha256"]
+    return _IndexChunkCompletionBinding(
+        inputs=inputs,
+        parameters_sha256=payload["parameters_sha256"],
+        structure_profile=dict(receipt),
+    )
+
+
+def _load_index_chunk_completion_inputs(
+        chunks_path: Path, *, chunks_sha256: str, chunks_size: int,
+        records: list[dict]) -> tuple[dict, str]:
+    """Return the legacy input tuple from one validated chunk completion."""
+    binding = _load_index_chunk_completion_binding(
+        chunks_path,
+        chunks_sha256=chunks_sha256,
+        chunks_size=chunks_size,
+        records=records,
+    )
+    return binding.inputs, binding.parameters_sha256
 
 
 def _validated_quality_report_binding(
@@ -1667,6 +1695,192 @@ def _load_index_snapshot_strict(
     records, source_sha256, fingerprint, _ = (
         _load_index_snapshot_with_quality(path))
     return records, source_sha256, fingerprint
+
+
+@dataclass(frozen=True)
+class _StudyPacketSnapshot:
+    """Trusted canonical evidence and retrieval aliases for one generation."""
+
+    records: tuple[dict, ...]
+    records_by_retrieval_id: dict[str, dict]
+    source_sha256: str
+    source_record_count: int
+    fingerprint: tuple[int, int, int, int, int]
+    structure_profile: dict
+
+
+def _study_packet_stable_id(record: dict) -> str:
+    metadata = record.get("metadata")
+    stable_id = metadata.get("stable_id") if isinstance(metadata, dict) else None
+    if (not isinstance(stable_id, str)
+            or re.fullmatch(r"chunk_[0-9a-f]{16}", stable_id) is None):
+        raise ValueError(
+            "study packets require linkage-bearing chunks with canonical "
+            "stable IDs")
+    try:
+        expected_stable_id = _chunk_id(record)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError(
+            "study-packet chunk stable-ID material is invalid") from exc
+    if stable_id != expected_stable_id:
+        raise ValueError(
+            "study-packet stored stable ID does not match canonical chunk "
+            "identity")
+    return stable_id
+
+
+def _study_packet_canonical_snapshot(
+        records: list[dict], *, source_sha256: str,
+        fingerprint: tuple[int, int, int, int, int],
+        structure_profile: dict) -> _StudyPacketSnapshot:
+    """Collapse retrieval-only rows onto their attested canonical parents."""
+    stable_ids = [_study_packet_stable_id(record) for record in records]
+    if len(set(stable_ids)) != len(stable_ids):
+        raise ValueError("study-packet chunks contain duplicate stable IDs")
+    families = _table_retrieval_core.validated_table_family_members(
+        records, stable_id_fn=_study_packet_stable_id)
+    canonical = _table_retrieval_core.canonical_records(records)
+    canonical_by_id = {
+        _study_packet_stable_id(record): record for record in canonical
+    }
+    if len(canonical_by_id) != len(canonical):
+        raise ValueError(
+            "study-packet canonical chunks contain duplicate stable IDs")
+
+    by_retrieval_id: dict[str, dict] = {}
+    for record, stable_id in zip(records, stable_ids):
+        metadata = record["metadata"]
+        if metadata.get("retrieval_role") == (
+                _table_retrieval_core.TABLE_CHILD_ROLE):
+            parent_id = metadata.get("table_parent_stable_id")
+            family = families.get(parent_id)
+            parent = canonical_by_id.get(parent_id)
+            if (not isinstance(parent_id, str) or family is None
+                    or stable_id not in family or parent is None):
+                raise ValueError(
+                    "study-packet table child lacks an attested parent")
+            by_retrieval_id[stable_id] = parent
+        else:
+            canonical_record = canonical_by_id.get(stable_id)
+            if canonical_record is None:
+                raise ValueError(
+                    "study-packet retrieval record is not canonical")
+            by_retrieval_id[stable_id] = canonical_record
+    return _StudyPacketSnapshot(
+        records=tuple(canonical),
+        records_by_retrieval_id=by_retrieval_id,
+        source_sha256=source_sha256,
+        source_record_count=len(records),
+        fingerprint=fingerprint,
+        structure_profile=dict(structure_profile),
+    )
+
+
+def _load_packet_snapshot_strict(
+        path: Path,
+) -> tuple[list[dict], str, tuple[int, int, int, int, int], dict]:
+    """Load one receipt-bound packet snapshot under the chunk lease.
+
+    The adjacent chunk completion is required even for corpora whose quality
+    policy does not otherwise require a report. Reading and validating the
+    JSONL, completion, and optional quality report under the same lease keeps
+    their profile and source-generation bindings free of TOCTOU gaps.
+    """
+    path = Path(path)
+    with _chunk_output_lease(path):
+        raw, source_sha256, fingerprint = _read_index_artifact_snapshot(path)
+        records = _parse_index_records_strict(raw, path)
+        completion = _load_index_chunk_completion_binding(
+            path,
+            chunks_sha256=source_sha256,
+            chunks_size=len(raw),
+            records=records,
+        )
+        _, _, quality_payload = _validated_quality_report_binding(
+            path,
+            records,
+            source_sha256,
+            len(raw),
+            parameters_sha256=completion.parameters_sha256,
+            input_bindings=completion.inputs,
+            allow_legacy_quality=False,
+        )
+        if (quality_payload is not None
+                and (quality_payload.get("inputs") != completion.inputs
+                     or quality_payload.get("parameters_sha256")
+                     != completion.parameters_sha256)):
+            raise ValueError(
+                "study-packet quality report is detached from chunk receipt")
+        return (
+            records,
+            source_sha256,
+            fingerprint,
+            dict(completion.structure_profile),
+        )
+
+
+def _study_packet_snapshot_fingerprint_sha256(
+        fingerprint: object) -> str:
+    """Bind the exact five-field artifact identity without exposing it."""
+    if (not isinstance(fingerprint, (tuple, list))
+            or len(fingerprint) != 5
+            or any(isinstance(value, bool) or not isinstance(value, int)
+                   or value < 0 for value in fingerprint)):
+        raise ValueError("study-packet snapshot fingerprint is invalid")
+    canonical = json.dumps(
+        list(fingerprint), ensure_ascii=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("ascii")).hexdigest()
+
+
+def _load_study_packet_index_binding(
+        db_dir: Path, *, db_backend: str, collection_name: str,
+        embedding_model: str, snapshot: _StudyPacketSnapshot) -> dict:
+    """Validate and describe the vector generation bound to *snapshot*.
+
+    The caller holds the vector-store lease. This helper deliberately rejects
+    legacy manifests because packets promise exact, reproducible citations.
+    """
+    marker_path = _index_update_marker_path(
+        db_dir, backend=db_backend, collection_name=collection_name)
+    if marker_path.exists():
+        raise ValueError(
+            "study-packet index has an incomplete update marker")
+    manifest = _index_state._load_index_manifest(
+        db_dir,
+        backend=db_backend,
+        collection_name=collection_name,
+        manifest_path_fn=_index_state._index_manifest_path,
+        warning_fn=lambda *_args, **_kwargs: None,
+    )
+    if manifest is None:
+        raise ValueError(
+            "study packets require a current collection index manifest")
+    fingerprint_sha256 = _study_packet_snapshot_fingerprint_sha256(
+        snapshot.fingerprint)
+    expected = {
+        "backend": db_backend,
+        "collection": collection_name,
+        "embedding_model": embedding_model,
+        "source_sha256": snapshot.source_sha256,
+    }
+    for field_name, expected_value in expected.items():
+        if manifest.get(field_name) != expected_value:
+            raise ValueError(
+                "study-packet index manifest does not match the chunks "
+                f"generation ({field_name})")
+    source_record_count = manifest.get("source_record_count")
+    if (type(source_record_count) is not int
+            or source_record_count != snapshot.source_record_count):
+        raise ValueError(
+            "study-packet index manifest does not match the chunks "
+            "generation (source_record_count)")
+    if manifest.get("schema_version") != INDEX_MANIFEST_SCHEMA_VERSION:
+        raise ValueError(
+            "study-packet index manifest has an unsupported schema")
+    return {
+        **expected,
+        "snapshot_fingerprint_sha256": fingerprint_sha256,
+    }
 
 
 def _load_index_records_strict(path: Path) -> list[dict]:
@@ -26995,6 +27209,1218 @@ def generate_briefs(chunks_path: Path, output_path: Path, *,
 
 
 # ---------------------------------------------------------------------------
+# Syllabus-driven study packets
+# ---------------------------------------------------------------------------
+
+_STUDY_PACKET_PACKET_MARKER = "study-packet-file-v1:"
+_STUDY_PACKET_INDEX_MARKER = "study-packet-generation-v1:"
+_STUDY_PACKET_TRANSACTION_RE = re.compile(r"[0-9a-f]{32}")
+_STUDY_PACKET_FILENAME_RE = re.compile(
+    r"(?P<entry_id>[a-z0-9][a-z0-9-]{0,63})[.]md")
+_MAX_STUDY_PACKET_INDEX_BYTES = 4 * 1024 * 1024
+_STUDY_PACKET_QUERY_OVERFETCH = 4
+
+
+@dataclass(frozen=True)
+class _StudyPacketGeneration:
+    """One fully verified index-committed packet directory."""
+
+    index_text: str
+    index_body: str
+    generation_id: str
+    index_binding: dict
+    records: dict[str, _study_packets.PacketOutputRecord]
+
+
+def _study_packet_atomic_temp_target(
+        name: str, *, allowed_targets: set[str]) -> str | None:
+    """Recognize storage_policy's exact current atomic-temp basename."""
+    if not isinstance(name, str) or not isinstance(allowed_targets, set):
+        return None
+    nonce_pattern = (
+        r"[a-z0-9_]{8}" if os.name == "nt" else r"[0-9a-f]{24}")
+    for target in allowed_targets:
+        prefix = f".{target}."
+        if (name.startswith(prefix) and name.endswith(".tmp")
+                and re.fullmatch(
+                    nonce_pattern,
+                    name[len(prefix):-len(".tmp")]) is not None):
+            return target
+    return None
+
+
+def _study_packet_atomic_temp_is_owned(
+        path: Path, *, allowed_targets: set[str]) -> bool:
+    """Return whether *path* is one unlinked writer temp for this stage."""
+    try:
+        return (
+            not _storage_policy.path_is_link_like(path)
+            and path.is_file()
+            and path.stat().st_nlink == 1
+            and _study_packet_atomic_temp_target(
+                path.name, allowed_targets=allowed_targets) is not None
+        )
+    except OSError:
+        return False
+
+
+@contextmanager
+def _study_packet_output_lease(
+        output_dir: Path, *, timeout: float = DEFAULT_DB_LOCK_TIMEOUT):
+    """Serialize every writer and recovery pass for one packet directory."""
+    output_dir = Path(output_dir)
+    with _VectorStoreLease(
+            output_dir,
+            backend="study-packets",
+            collection_name=output_dir.name,
+            operation="study-packet publication",
+            timeout=timeout,
+            resource_description=f"study-packet target '{output_dir}'",
+            timeout_option="study-packet output lock timeout"):
+        yield
+
+
+def _study_packet_stage_path(
+        output_dir: Path, transaction_id: str) -> Path:
+    return output_dir.parent / (
+        f".{output_dir.name}.study-packet-stage-{transaction_id}")
+
+
+def _study_packet_backup_path(
+        output_dir: Path, transaction_id: str) -> Path:
+    return output_dir.parent / (
+        f".{output_dir.name}.study-packet-backup-{transaction_id}")
+
+
+def _study_packet_binding_sha256(index_binding: dict) -> str:
+    canonical = json.dumps(
+        index_binding, ensure_ascii=True, sort_keys=True,
+        separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("ascii")).hexdigest()
+
+
+def _study_packet_marker_line(prefix: str, payload: dict) -> str:
+    canonical = json.dumps(
+        payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    # Hex keeps corpus/course strings from ever producing ``--`` or ``-->``
+    # inside the HTML comment that carries this internal recovery binding.
+    encoded = canonical.encode("ascii").hex()
+    return f"<!-- {prefix}{encoded} -->\n"
+
+
+def _split_study_packet_marker(
+        text: str, *, prefix: str, description: str) -> tuple[str, dict]:
+    if not isinstance(text, str) or not text.endswith("\n"):
+        raise ValueError(f"{description} is not newline-terminated UTF-8 text")
+    try:
+        before, marker, trailing = text.rsplit("\n", 2)
+    except ValueError as exc:
+        raise ValueError(f"{description} has no ownership marker") from exc
+    if trailing or not marker.startswith(f"<!-- {prefix}") \
+            or not marker.endswith(" -->"):
+        raise ValueError(f"{description} has no canonical ownership marker")
+    payload_hex = marker[len(f"<!-- {prefix}"):-len(" -->")]
+    if (not payload_hex or len(payload_hex) % 2
+            or re.fullmatch(r"[0-9a-f]+", payload_hex) is None
+            or len(payload_hex) > 2 * _MAX_STUDY_PACKET_INDEX_BYTES):
+        raise ValueError(f"{description} ownership marker is not canonical")
+    payload_raw = bytes.fromhex(payload_hex)
+    payload = _strict_json_object(
+        payload_raw, description=f"{description} ownership marker")
+    if payload_raw != json.dumps(
+            payload, ensure_ascii=True, sort_keys=True,
+            separators=(",", ":")).encode("ascii"):
+        raise ValueError(f"{description} ownership marker is not canonical")
+    return before + "\n", payload
+
+
+def _study_packet_markdown_with_binding(
+        packet: _study_packets.EntryPacket, *, index_binding: dict) -> str:
+    """Append a path/source/body binding used only for crash recovery."""
+    body = packet.markdown.rstrip("\n") + "\n"
+    encoded = body.encode("utf-8", errors="strict")
+    payload = {
+        "body_sha256": hashlib.sha256(encoded).hexdigest(),
+        "body_size": len(encoded),
+        "entry_id": packet.entry_id,
+        "filename": f"{packet.entry_id}.md",
+        "index_binding_sha256": _study_packet_binding_sha256(index_binding),
+        "schema_version": 1,
+        "source_sha256": index_binding["source_sha256"],
+    }
+    return body + _study_packet_marker_line(
+        _STUDY_PACKET_PACKET_MARKER, payload)
+
+
+def _study_packet_record_payload(
+        record: _study_packets.PacketOutputRecord) -> dict:
+    return {
+        "entry_id": record.entry_id,
+        "filename": record.filename,
+        "sha256": record.sha256,
+        "size": record.size,
+        "title": record.title,
+    }
+
+
+def _study_packet_index_with_binding(
+        body: str, *, generation_id: str, generated_at: str,
+        index_binding: dict,
+        output_records: tuple[_study_packets.PacketOutputRecord, ...]) -> str:
+    """Bind the human index body to the exact packet-generation inventory."""
+    body = body.rstrip("\n") + "\n"
+    encoded = body.encode("utf-8", errors="strict")
+    payload = {
+        "body_sha256": hashlib.sha256(encoded).hexdigest(),
+        "body_size": len(encoded),
+        "generated_at": generated_at,
+        "generation_id": generation_id,
+        "index_binding": index_binding,
+        "outputs": [
+            _study_packet_record_payload(record) for record in output_records
+        ],
+        "schema_version": 1,
+    }
+    return body + _study_packet_marker_line(
+        _STUDY_PACKET_INDEX_MARKER, payload)
+
+
+def _read_study_packet_text(path: Path, *, max_bytes: int) -> str:
+    path = Path(path)
+    if _storage_policy.path_is_link_like(path) or not path.is_file():
+        raise ValueError(f"study-packet output is not a regular file: {path}")
+    with path.open("rb") as handle:
+        raw = handle.read(max_bytes + 1)
+    if len(raw) > max_bytes:
+        raise ValueError(f"study-packet output exceeds its byte limit: {path}")
+    try:
+        return raw.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise ValueError(
+            f"study-packet output is not UTF-8: {path}") from exc
+
+
+def _parse_study_packet_file_ownership(
+        text: str, *, expected_name: str) -> tuple[str, str, str]:
+    """Validate one packet's self-binding without an index-side inventory."""
+    body, payload = _split_study_packet_marker(
+        text, prefix=_STUDY_PACKET_PACKET_MARKER,
+        description=expected_name)
+    if set(payload) != {
+            "schema_version", "entry_id", "filename", "source_sha256",
+            "index_binding_sha256", "body_sha256", "body_size"}:
+        raise ValueError("study-packet file marker has an invalid field set")
+    match = _STUDY_PACKET_FILENAME_RE.fullmatch(expected_name)
+    encoded = body.encode("utf-8", errors="strict")
+    source_sha256 = payload.get("source_sha256")
+    index_binding_sha256 = payload.get("index_binding_sha256")
+    if (match is None
+            or match.group("entry_id") in _study_packets._RESERVED_ENTRY_IDS
+            or type(payload.get("schema_version")) is not int
+            or payload.get("schema_version") != 1
+            or payload.get("entry_id") != match.group("entry_id")
+            or payload.get("filename") != expected_name
+            or not isinstance(source_sha256, str)
+            or re.fullmatch(r"[0-9a-f]{64}", source_sha256) is None
+            or not isinstance(index_binding_sha256, str)
+            or re.fullmatch(
+                r"[0-9a-f]{64}", index_binding_sha256) is None
+            or type(payload.get("body_size")) is not int
+            or payload.get("body_size") != len(encoded)
+            or not isinstance(payload.get("body_sha256"), str)
+            or re.fullmatch(
+                r"[0-9a-f]{64}", payload["body_sha256"]) is None
+            or payload["body_sha256"]
+            != hashlib.sha256(encoded).hexdigest()):
+        raise ValueError("study-packet file marker does not bind its bytes")
+    _study_packets.validate_packet_markdown(body)
+    return body, source_sha256, index_binding_sha256
+
+
+def _parse_study_packet_file(
+        text: str, *, expected_name: str,
+        expected_index_binding: dict) -> str:
+    body, source_sha256, index_binding_sha256 = (
+        _parse_study_packet_file_ownership(
+            text, expected_name=expected_name))
+    if (source_sha256 != expected_index_binding.get("source_sha256")
+            or index_binding_sha256
+            != _study_packet_binding_sha256(expected_index_binding)):
+        raise ValueError("study-packet file marker is detached from its index")
+    return body
+
+
+def _parse_study_packet_index(text: str) -> _StudyPacketGeneration:
+    body, payload = _split_study_packet_marker(
+        text, prefix=_STUDY_PACKET_INDEX_MARKER,
+        description="study-packet index")
+    if set(payload) != {
+            "schema_version", "generation_id", "generated_at",
+            "index_binding", "outputs", "body_sha256", "body_size"}:
+        raise ValueError("study-packet index marker has an invalid field set")
+    encoded = body.encode("utf-8", errors="strict")
+    generation_id = payload.get("generation_id")
+    index_binding = payload.get("index_binding")
+    outputs = payload.get("outputs")
+    if (payload.get("schema_version") != 1
+            or not isinstance(generation_id, str)
+            or re.fullmatch(r"[0-9a-f]{64}", generation_id) is None
+            or not isinstance(index_binding, dict)
+            or set(index_binding) != {
+                "backend", "collection", "source_sha256", "embedding_model",
+                "snapshot_fingerprint_sha256"}
+            or not isinstance(outputs, list)
+            or payload.get("body_size") != len(encoded)
+            or payload.get("body_sha256")
+            != hashlib.sha256(encoded).hexdigest()):
+        raise ValueError("study-packet index marker does not bind its body")
+    try:
+        index_binding = dict(
+            _study_packets._validated_index_binding(index_binding))
+    except _study_packets.PacketBuildError as exc:
+        raise ValueError("study-packet index binding is invalid") from exc
+    records: dict[str, _study_packets.PacketOutputRecord] = {}
+    for value in outputs:
+        if not isinstance(value, dict) or set(value) != {
+                "entry_id", "title", "filename", "sha256", "size"}:
+            raise ValueError("study-packet index output record is invalid")
+        record = _study_packets.PacketOutputRecord(**value)
+        if record.filename in records:
+            raise ValueError("study-packet index contains duplicate outputs")
+        records[record.filename] = record
+    ordered = tuple(records.values())
+    _study_packets.validate_course_index_markdown(
+        body, output_records=ordered, generation_id=generation_id)
+    return _StudyPacketGeneration(
+        index_text=text,
+        index_body=body,
+        generation_id=generation_id,
+        index_binding=index_binding,
+        records=records,
+    )
+
+
+def _study_packet_record_matches(
+        path: Path, record: _study_packets.PacketOutputRecord) -> bool:
+    try:
+        return (
+            not _storage_policy.path_is_link_like(path)
+            and path.is_file()
+            and path.stat().st_size == record.size
+            and _cached_artifact_sha256(path) == record.sha256
+        )
+    except (OSError, ValueError):
+        return False
+
+
+def _load_study_packet_generation(
+        directory: Path, *, require_exact_inventory: bool = True,
+) -> _StudyPacketGeneration:
+    """Load and verify one complete, index-committed packet generation."""
+    directory = Path(directory)
+    if (_storage_policy.path_is_link_like(directory)
+            or not directory.is_dir()):
+        raise ValueError("study-packet generation is not a real directory")
+    index_text = _read_study_packet_text(
+        directory / "index.md", max_bytes=_MAX_STUDY_PACKET_INDEX_BYTES)
+    generation = _parse_study_packet_index(index_text)
+    expected_names = set(generation.records) | {"index.md"}
+    entries = list(directory.iterdir())
+    if (require_exact_inventory
+            and {entry.name for entry in entries} != expected_names):
+        raise ValueError("study-packet generation inventory is not exact")
+    for name, record in generation.records.items():
+        path = directory / name
+        if not _study_packet_record_matches(path, record):
+            raise ValueError(
+                f"study-packet output does not match its index: {name}")
+        text = _read_study_packet_text(path, max_bytes=8 * 1024 * 1024)
+        _parse_study_packet_file(
+            text, expected_name=name,
+            expected_index_binding=generation.index_binding)
+    return generation
+
+
+def _load_partial_study_packet_candidate(
+        stage_dir: Path) -> _StudyPacketGeneration:
+    """Validate every remaining file from one interrupted staged candidate."""
+    stage_dir = Path(stage_dir)
+    if (_storage_policy.path_is_link_like(stage_dir)
+            or not stage_dir.is_dir()):
+        raise ValueError("study-packet staging path is not a real directory")
+    index_text = _read_study_packet_text(
+        stage_dir / "index.md", max_bytes=_MAX_STUDY_PACKET_INDEX_BYTES)
+    generation = _parse_study_packet_index(index_text)
+    allowed = set(generation.records) | {"index.md"}
+    for entry in stage_dir.iterdir():
+        if entry.name not in allowed:
+            if _study_packet_atomic_temp_is_owned(
+                    entry, allowed_targets=allowed):
+                continue
+            raise ValueError(
+                "study-packet staging directory contains an unknown entry")
+        if _storage_policy.path_is_link_like(entry) or not entry.is_file():
+            raise ValueError(
+                "study-packet staging directory contains an unknown entry")
+        if entry.name == "index.md":
+            continue
+        record = generation.records[entry.name]
+        if not _study_packet_record_matches(entry, record):
+            raise ValueError("study-packet staged bytes changed")
+        _parse_study_packet_file(
+            _read_study_packet_text(entry, max_bytes=8 * 1024 * 1024),
+            expected_name=entry.name,
+            expected_index_binding=generation.index_binding,
+        )
+    return generation
+
+
+def _study_packet_transaction_id(
+        path: Path, *, output_dir: Path, kind: str) -> str | None:
+    prefix = f".{output_dir.name}.study-packet-{kind}-"
+    if not path.name.startswith(prefix):
+        return None
+    transaction_id = path.name[len(prefix):]
+    if _STUDY_PACKET_TRANSACTION_RE.fullmatch(transaction_id) is None:
+        return None
+    return transaction_id
+
+
+def _remove_study_packet_transaction_directory(
+        path: Path, *, output_dir: Path, kind: str) -> None:
+    """Remove one previously validated, exact sibling transaction directory."""
+    path = Path(path)
+    parent = output_dir.parent.resolve(strict=True)
+    resolved = path.resolve(strict=False)
+    if (resolved.parent != parent
+            or _study_packet_transaction_id(
+                resolved, output_dir=output_dir, kind=kind) is None
+            or _storage_policy.path_is_link_like(path)):
+        raise RuntimeError("study-packet transaction path lost its identity")
+    if path.exists():
+        if not path.is_dir():
+            raise RuntimeError(
+                "study-packet transaction path is not a directory")
+        shutil.rmtree(path)
+
+
+def _study_packet_directory_is_empty(path: Path) -> bool:
+    return path.is_dir() and not any(path.iterdir())
+
+
+def _study_packet_stage_is_index_temp_only(path: Path) -> bool:
+    """Recognize a kill during the first, index-staging atomic write."""
+    try:
+        entries = list(path.iterdir())
+    except OSError:
+        return False
+    return (
+        len(entries) == 1
+        and _study_packet_atomic_temp_is_owned(
+            entries[0], allowed_targets={"index.md"})
+    )
+
+
+def _copy_study_packet_generation(
+        generation: _StudyPacketGeneration, *, source_dir: Path,
+        target_dir: Path) -> None:
+    """Copy one verified generation to a private rollback directory."""
+    _storage_policy.ensure_private_directory(target_dir)
+    if any(target_dir.iterdir()):
+        raise ValueError("study-packet backup directory is not empty")
+    for name in sorted(generation.records):
+        text = _read_study_packet_text(
+            source_dir / name, max_bytes=8 * 1024 * 1024)
+        _atomic_write_exact_utf8(target_dir / name, text)
+    _atomic_write_exact_utf8(target_dir / "index.md", generation.index_text)
+    copied = _load_study_packet_generation(target_dir)
+    if copied.generation_id != generation.generation_id:
+        raise RuntimeError("study-packet rollback copy changed generation")
+
+
+def _partial_output_matches_transaction(
+        output_dir: Path, *, prior: _StudyPacketGeneration | None,
+        candidate: _StudyPacketGeneration) -> None:
+    """Require every live byte to belong to the prior/candidate union."""
+    if not output_dir.exists():
+        return
+    if (_storage_policy.path_is_link_like(output_dir)
+            or not output_dir.is_dir()):
+        raise ValueError("study-packet output is not a real directory")
+    allowed = set(candidate.records)
+    if prior is not None:
+        allowed.update(prior.records)
+    allowed.add("index.md")
+    for entry in output_dir.iterdir():
+        if (_storage_policy.path_is_link_like(entry) or not entry.is_file()
+                or entry.name not in allowed):
+            raise ValueError(
+                "study-packet output contains unknown transaction bytes")
+        if entry.name == "index.md":
+            text = _read_study_packet_text(
+                entry, max_bytes=_MAX_STUDY_PACKET_INDEX_BYTES)
+            if prior is not None and text == prior.index_text:
+                continue
+            if text == candidate.index_text:
+                raise ValueError(
+                    "study-packet commit marker exists without an exact "
+                    "candidate generation")
+            raise ValueError("study-packet index changed during publication")
+        candidates = [candidate.records.get(entry.name)]
+        if prior is not None:
+            candidates.append(prior.records.get(entry.name))
+        if not any(
+                record is not None
+                and _study_packet_record_matches(entry, record)
+                for record in candidates):
+            raise ValueError(
+                "study-packet output bytes are outside the transaction union")
+
+
+def _restore_study_packet_transaction(
+        output_dir: Path, *, stage_dir: Path,
+        backup_dir: Path) -> None:
+    """Recover one interrupted promotion to its verified prior generation."""
+    stage_exists = stage_dir.exists()
+    backup_exists = backup_dir.exists()
+    candidate = (
+        _load_partial_study_packet_candidate(stage_dir)
+        if stage_exists and (stage_dir / "index.md").is_file()
+        else None
+    )
+    prior: _StudyPacketGeneration | None = None
+    if backup_exists:
+        if (_storage_policy.path_is_link_like(backup_dir)
+                or not backup_dir.is_dir()):
+            raise ValueError("study-packet backup is not a real directory")
+        if not _study_packet_directory_is_empty(backup_dir):
+            prior = _load_study_packet_generation(backup_dir)
+
+    if stage_exists and not backup_exists:
+        # Publication cannot mutate the target until its rollback directory
+        # exists and is verified. Staging writes its self-describing index
+        # first, so a nonempty orphan must be a valid (possibly partial)
+        # candidate. An empty directory cannot contain user output.
+        if (not _study_packet_directory_is_empty(stage_dir)
+                and candidate is None
+                and not _study_packet_stage_is_index_temp_only(stage_dir)):
+            raise ValueError(
+                "study-packet orphan staging lacks its candidate index")
+        _remove_study_packet_transaction_directory(
+            stage_dir, output_dir=output_dir, kind="stage")
+        return
+
+    live: _StudyPacketGeneration | None = None
+    if output_dir.is_dir() and (output_dir / "index.md").is_file():
+        try:
+            live = _load_study_packet_generation(output_dir)
+        except (OSError, UnicodeError, ValueError):
+            live = None
+    if live is not None:
+        allowed_ids = {
+            generation.generation_id
+            for generation in (candidate, prior)
+            if generation is not None
+        }
+        if (candidate is None and backup_exists
+                and (not stage_exists
+                     or _study_packet_directory_is_empty(stage_dir))):
+            # index.md is promoted last. A complete live generation plus the
+            # still-present rollback directory proves that commit finished.
+            allowed_ids.add(live.generation_id)
+        if live.generation_id not in allowed_ids:
+            raise ValueError(
+                "study-packet recovery artifacts do not own the live "
+                "generation")
+        if stage_exists:
+            if candidate is None and any(stage_dir.iterdir()):
+                raise ValueError(
+                    "study-packet committed transaction left unknown staging")
+            _remove_study_packet_transaction_directory(
+                stage_dir, output_dir=output_dir, kind="stage")
+        if backup_exists:
+            _remove_study_packet_transaction_directory(
+                backup_dir, output_dir=output_dir, kind="backup")
+        return
+
+    if candidate is None:
+        if stage_exists and backup_exists and not any(stage_dir.iterdir()):
+            pass
+        elif stage_exists and not backup_exists:
+            # A complete candidate can be abandoned before promotion starts;
+            # without its index, any remaining content is not self-describing.
+            if any(stage_dir.iterdir()):
+                raise ValueError(
+                    "study-packet orphan staging lacks its candidate index")
+        else:
+            raise ValueError(
+                "study-packet transaction cannot be recovered safely")
+        if prior is not None:
+            raise ValueError(
+                "study-packet rollback lacks the staged candidate binding")
+    else:
+        _partial_output_matches_transaction(
+            output_dir, prior=prior, candidate=candidate)
+
+    if prior is None:
+        if output_dir.exists():
+            if candidate is None:
+                if any(output_dir.iterdir()):
+                    raise ValueError(
+                        "study-packet empty rollback found live output")
+            else:
+                for entry in list(output_dir.iterdir()):
+                    if entry.name == "index.md":
+                        raise ValueError(
+                            "study-packet uncommitted index cannot be removed")
+                    record = candidate.records.get(entry.name)
+                    if (record is None
+                            or not _study_packet_record_matches(entry, record)):
+                        raise ValueError(
+                            "study-packet rollback refuses unknown output")
+                    entry.unlink()
+            if not any(output_dir.iterdir()):
+                output_dir.rmdir()
+    else:
+        _storage_policy.ensure_private_directory(output_dir)
+        if candidate is not None:
+            for entry in list(output_dir.iterdir()):
+                if entry.name == "index.md" or entry.name in prior.records:
+                    continue
+                record = candidate.records.get(entry.name)
+                if (record is None
+                        or not _study_packet_record_matches(entry, record)):
+                    raise ValueError(
+                        "study-packet rollback refuses an unknown stale file")
+                entry.unlink()
+        for name in sorted(prior.records):
+            text = _read_study_packet_text(
+                backup_dir / name, max_bytes=8 * 1024 * 1024)
+            _atomic_write_exact_utf8(output_dir / name, text)
+        _atomic_write_exact_utf8(output_dir / "index.md", prior.index_text)
+        restored = _load_study_packet_generation(output_dir)
+        if restored.generation_id != prior.generation_id:
+            raise RuntimeError("study-packet rollback did not restore prior bytes")
+
+    if stage_exists:
+        if candidate is not None:
+            _load_partial_study_packet_candidate(stage_dir)
+        elif any(stage_dir.iterdir()):
+            raise ValueError("study-packet staging cleanup found unknown files")
+        _remove_study_packet_transaction_directory(
+            stage_dir, output_dir=output_dir, kind="stage")
+    if backup_exists:
+        if prior is not None:
+            _load_study_packet_generation(backup_dir)
+        elif not _study_packet_directory_is_empty(backup_dir):
+            raise ValueError("study-packet empty backup contains files")
+        _remove_study_packet_transaction_directory(
+            backup_dir, output_dir=output_dir, kind="backup")
+
+
+def _recover_study_packet_transactions(
+        output_dir: Path, *, exclude_transaction_id: str | None = None) -> None:
+    """Recover at most one exact orphan transaction under the output lease."""
+    parent = output_dir.parent
+    if not parent.is_dir():
+        return
+    grouped: dict[str, dict[str, Path]] = {}
+    for entry in parent.iterdir():
+        for kind in ("stage", "backup"):
+            transaction_id = _study_packet_transaction_id(
+                entry, output_dir=output_dir, kind=kind)
+            if (transaction_id is None
+                    or transaction_id == exclude_transaction_id):
+                continue
+            group = grouped.setdefault(transaction_id, {})
+            if kind in group:
+                raise ValueError("duplicate study-packet transaction artifact")
+            group[kind] = entry
+    if len(grouped) > 1:
+        raise ValueError(
+            "multiple orphan study-packet transactions require manual review")
+    for transaction_id, paths in grouped.items():
+        _restore_study_packet_transaction(
+            output_dir,
+            stage_dir=paths.get(
+                "stage", _study_packet_stage_path(
+                    output_dir, transaction_id)),
+            backup_dir=paths.get(
+                "backup", _study_packet_backup_path(
+                    output_dir, transaction_id)),
+        )
+
+
+def _promote_study_packet_staging(
+        stage_dir: Path, output_dir: Path, *, transaction_id: str,
+        expected_generation_id: str,
+        mutation_started_fn: Callable[[], None] | None = None) -> None:
+    """Promote one staged generation with index.md as the logical commit."""
+    candidate = _load_study_packet_generation(stage_dir)
+    if candidate.generation_id != expected_generation_id:
+        raise ValueError("study-packet staged generation ID changed")
+    _recover_study_packet_transactions(
+        output_dir, exclude_transaction_id=transaction_id)
+
+    prior: _StudyPacketGeneration | None = None
+    if output_dir.exists():
+        if (_storage_policy.path_is_link_like(output_dir)
+                or not output_dir.is_dir()):
+            raise ValueError("study-packet output is not a real directory")
+        if any(output_dir.iterdir()):
+            prior = _load_study_packet_generation(output_dir)
+    backup_dir = _study_packet_backup_path(output_dir, transaction_id)
+    if backup_dir.exists() or _storage_policy.path_is_link_like(backup_dir):
+        raise ValueError("study-packet backup path already exists")
+    _storage_policy.ensure_private_directory(backup_dir)
+    if prior is not None:
+        try:
+            _copy_study_packet_generation(
+                prior, source_dir=output_dir, target_dir=backup_dir)
+        except BaseException:
+            if backup_dir.is_dir():
+                for entry in backup_dir.iterdir():
+                    if entry.name == "index.md":
+                        if _read_study_packet_text(
+                                entry,
+                                max_bytes=_MAX_STUDY_PACKET_INDEX_BYTES
+                        ) != prior.index_text:
+                            raise
+                    else:
+                        record = prior.records.get(entry.name)
+                        if (record is None
+                                or not _study_packet_record_matches(
+                                    entry, record)):
+                            raise
+                _remove_study_packet_transaction_directory(
+                    backup_dir, output_dir=output_dir, kind="backup")
+            raise
+
+    try:
+        if mutation_started_fn is not None:
+            mutation_started_fn()
+        _storage_policy.ensure_private_directory(output_dir)
+        for name, record in candidate.records.items():
+            staged = stage_dir / name
+            target = output_dir / name
+            if not _study_packet_record_matches(staged, record):
+                raise RuntimeError("study-packet staged output changed")
+            if target.exists() or _storage_policy.path_is_link_like(target):
+                candidates = [record]
+                if prior is not None and name in prior.records:
+                    candidates.append(prior.records[name])
+                if not any(
+                        _study_packet_record_matches(target, value)
+                        for value in candidates):
+                    raise ValueError(
+                        "study-packet target changed after ownership check")
+                if _study_packet_record_matches(target, record):
+                    staged.unlink()
+                    continue
+            os.replace(staged, target)
+
+        for entry in list(output_dir.iterdir()):
+            if entry.name == "index.md" or entry.name in candidate.records:
+                continue
+            record = prior.records.get(entry.name) if prior is not None else None
+            if record is None or not _study_packet_record_matches(entry, record):
+                raise ValueError(
+                    "refusing to remove an unverified stale packet output")
+            entry.unlink()
+
+        live_names = {
+            entry.name for entry in output_dir.iterdir()
+            if entry.name != "index.md"
+        }
+        if live_names != set(candidate.records):
+            raise RuntimeError(
+                "study-packet target inventory is not exact before commit")
+        if any(
+                not _study_packet_record_matches(
+                    output_dir / name, record)
+                for name, record in candidate.records.items()):
+            raise RuntimeError(
+                "study-packet target bytes are not exact before commit")
+        index_target = output_dir / "index.md"
+        if index_target.exists() or _storage_policy.path_is_link_like(
+                index_target):
+            if (prior is None
+                    or _read_study_packet_text(
+                        index_target,
+                        max_bytes=_MAX_STUDY_PACKET_INDEX_BYTES)
+                    != prior.index_text):
+                raise ValueError(
+                    "study-packet index changed after ownership check")
+        os.replace(stage_dir / "index.md", index_target)
+        committed = _load_study_packet_generation(output_dir)
+        if committed.generation_id != candidate.generation_id:
+            raise RuntimeError("study-packet logical commit changed generation")
+    except BaseException as primary_error:
+        try:
+            _restore_study_packet_transaction(
+                output_dir, stage_dir=stage_dir, backup_dir=backup_dir)
+        except BaseException as recovery_error:
+            _log_cleanup_error(
+                "Study-packet rollback failed after publication error",
+                error=recovery_error)
+        raise primary_error
+
+    if any(stage_dir.iterdir()):
+        raise RuntimeError("study-packet staging is not empty after commit")
+    _remove_study_packet_transaction_directory(
+        stage_dir, output_dir=output_dir, kind="stage")
+    if prior is not None:
+        _load_study_packet_generation(backup_dir)
+    elif not _study_packet_directory_is_empty(backup_dir):
+        raise RuntimeError("study-packet empty rollback directory changed")
+    _remove_study_packet_transaction_directory(
+        backup_dir, output_dir=output_dir, kind="backup")
+
+
+def _discard_study_packet_staging(
+        stage_dir: Path, *, output_dir: Path,
+        records: dict[str, _study_packets.PacketOutputRecord],
+        index_text: str | None) -> None:
+    """Discard only this invocation's verified, unpublished stage bytes."""
+    if not stage_dir.exists():
+        return
+    if (_storage_policy.path_is_link_like(stage_dir)
+            or not stage_dir.is_dir()):
+        raise RuntimeError("study-packet staging path changed during cleanup")
+    for entry in stage_dir.iterdir():
+        if _storage_policy.path_is_link_like(entry) or not entry.is_file():
+            raise RuntimeError("study-packet staging contains a foreign entry")
+        if entry.name == "index.md":
+            if (index_text is None
+                    or _read_study_packet_text(
+                        entry, max_bytes=_MAX_STUDY_PACKET_INDEX_BYTES)
+                    != index_text):
+                raise RuntimeError("study-packet staged index changed")
+            continue
+        record = records.get(entry.name)
+        if record is None or not _study_packet_record_matches(entry, record):
+            raise RuntimeError("study-packet staged packet changed")
+    _remove_study_packet_transaction_directory(
+        stage_dir, output_dir=output_dir, kind="stage")
+
+
+def _study_packet_validator_unavailable(
+        error: _markdown_validation.MarkdownValidationError) -> bool:
+    message = str(error)
+    return (
+        message.startswith("strict Markdown validation requires pinned ")
+        or message in {
+            "strict Pandoc validation could not complete",
+            "strict Zettlr-compatible validation could not complete",
+        }
+    )
+
+
+def _safe_study_packet_summary(value: object, *, limit: int = 500) -> str:
+    text = str(value).replace("\r", " ").replace("\n", " ")
+    return "".join(
+        character if ord(character) >= 0x20 else "?" for character in text
+    )[:limit]
+
+
+class _StudyPacketRunError(RuntimeError):
+    """A reviewed run-level packet failure translated to CLI exit 1."""
+
+
+def build_study_packets(
+        syllabus_path: Path, *, chunks_path: Path,
+        db_dir: Path | None = None,
+        db_backend: str = DEFAULT_DB_BACKEND,
+        collection_name: str = DEFAULT_COLLECTION,
+        embedding_model: str = DEFAULT_EMBEDDING_MODEL,
+        cloud_url: str = DEFAULT_CLOUD_URL,
+        cloud_model: str = DEFAULT_CLOUD_MODEL,
+        cloud_key: str = "",
+        ollama_url: str = DEFAULT_OLLAMA_URL,
+        ollama_model: str = DEFAULT_OLLAMA_MODEL,
+        gemini_key: str = "",
+        llm_workers: int = DEFAULT_LLM_WORKERS,
+        thinking: bool = False,
+        security_policy: (
+            _release_security.ReleaseSecurityPolicy | None
+        ) = None,
+        lock_timeout: float = DEFAULT_DB_LOCK_TIMEOUT,
+) -> None:
+    """Build and atomically commit syllabus-driven Markdown study packets."""
+    try:
+        syllabus = _study_packets.load_syllabus_path(syllabus_path)
+    except _study_packets.SyllabusError as exc:
+        print(f"Invalid syllabus: {_safe_study_packet_summary(exc)}")
+        raise SystemExit(2) from None
+
+    chunks_path = Path(chunks_path)
+    backend = str(db_backend).lower()
+    if backend not in {"chroma", "qdrant"}:
+        print("Study packet build failed: unsupported database backend")
+        raise SystemExit(1)
+    resolved_db = Path(db_dir) if db_dir is not None else (
+        DEFAULT_QDRANT_DIR if backend == "qdrant" else DEFAULT_CHROMA_DIR)
+    try:
+        raw_records, source_sha256, fingerprint, profile_receipt = (
+            _load_packet_snapshot_strict(chunks_path))
+        snapshot = _study_packet_canonical_snapshot(
+            raw_records,
+            source_sha256=source_sha256,
+            fingerprint=fingerprint,
+            structure_profile=profile_receipt,
+        )
+        indexed_profile = _document_profiles.profile_from_provenance(
+            profile_receipt)
+        requested_profile = _document_profiles.get_profile(
+            syllabus.structure_profile)
+        if requested_profile.name != "us-law-casebook-v1":
+            raise ValueError(
+                "study packets require the registered us-law-casebook-v1 "
+                "structure profile")
+        if (_document_profiles.profile_sha256(indexed_profile)
+                != _document_profiles.profile_sha256(requested_profile)):
+            raise ValueError(
+                "syllabus structure_profile does not match chunk provenance")
+        if not resolved_db.is_dir():
+            raise FileNotFoundError(
+                f"{backend.title()} directory not found: {resolved_db}")
+    except (OSError, UnicodeError, ValueError, RuntimeError) as exc:
+        print(
+            "Study packet build failed: "
+            + _safe_study_packet_summary(exc))
+        raise SystemExit(1) from None
+
+    def search_fn(query: str) -> _study_packets.SearchResult:
+        response = search_index(
+            query,
+            resolved_db,
+            db_backend=backend,
+            n_results=(
+                _study_packets.MAX_QUERY_HITS_PER_QUERY
+                * _STUDY_PACKET_QUERY_OVERFETCH),
+            collection_name=collection_name,
+            embedding_model=embedding_model,
+            chunks_path=chunks_path,
+            lock_timeout=lock_timeout,
+            security_policy=security_policy,
+        )
+        notices = [
+            _safe_study_packet_summary(warning)
+            for warning in response.warnings
+        ]
+        requested_mode = _safe_study_packet_summary(
+            response.requested_mode, limit=64)
+        effective_mode = _safe_study_packet_summary(
+            response.effective_mode, limit=64)
+        if requested_mode != effective_mode:
+            notices.append(
+                "retrieval mode degraded from "
+                f"{requested_mode!r} to {effective_mode!r}")
+        items: list[_study_packets.SelectionItem] = []
+        seen: set[str] = set()
+        for hit in response.hits:
+            source_id = getattr(hit, "source_id", "")
+            if (not isinstance(source_id, str)
+                    or not source_id.strip()):
+                notices.append("omitted a retrieval result with no stable ID")
+                continue
+            trusted = snapshot.records_by_retrieval_id.get(source_id)
+            if trusted is None:
+                notices.append(
+                    "omitted unknown retrieval result ID "
+                    f"{_safe_study_packet_summary(source_id, limit=128)!r}")
+                continue
+            trusted_id = _study_packet_stable_id(trusted)
+            if source_id != trusted_id:
+                notices.append(
+                    "mapped retrieval-only table row to canonical family "
+                    f"{trusted_id!r}")
+            if trusted_id in seen:
+                continue
+            seen.add(trusted_id)
+            items.append(_study_packets.SelectionItem(
+                stable_id=trusted_id,
+                text=trusted["text"],
+                metadata=trusted["metadata"],
+            ))
+        return _study_packets.SearchResult(tuple(items), tuple(notices))
+
+    selections: dict[str, _study_packets.EntrySelection] = {}
+    failures: list[_study_packets.EntryFailure] = []
+    try:
+        with _vector_store_lock(
+                resolved_db,
+                backend=backend,
+                collection_name=collection_name,
+                operation="study-packet coherent selection",
+                timeout=lock_timeout):
+            index_binding = _load_study_packet_index_binding(
+                resolved_db,
+                db_backend=backend,
+                collection_name=collection_name,
+                embedding_model=embedding_model,
+                snapshot=snapshot,
+            )
+            for entry in syllabus.entries:
+                try:
+                    selections[entry.entry_id] = _study_packets.select_entry(
+                        entry,
+                        snapshot.records,
+                        search_fn=search_fn,
+                    )
+                except _study_packets.EntrySelectionError as exc:
+                    failures.append(_study_packets.EntryFailure(
+                        entry.entry_id,
+                        entry.title,
+                        _safe_study_packet_summary(exc),
+                    ))
+    except (OSError, UnicodeError, ValueError, RuntimeError) as exc:
+        print(
+            "Study packet build failed: "
+            + _safe_study_packet_summary(exc))
+        raise SystemExit(1) from None
+
+    def llm_fn(prompt: str, contract: object,
+               operation: str) -> Optional[str]:
+        if operation == "study_packet_case_digest":
+            fallback_id = _study_packets.CASE_DIGEST_FALLBACK_ID
+        elif operation == "study_packet_outline":
+            fallback_id = _study_packets.OUTLINE_FALLBACK_ID
+        else:
+            raise ValueError("unknown study-packet LLM operation")
+        try:
+            return _call_llm(
+                prompt,
+                ollama_url=ollama_url,
+                ollama_model=ollama_model,
+                gemini_key=gemini_key,
+                cloud_url=cloud_url,
+                cloud_model=cloud_model,
+                cloud_key=cloud_key,
+                llm_workers=llm_workers,
+                thinking=thinking,
+                max_tokens=4096,
+                operation=operation,
+                prompt_version="1",
+                timeout=60,
+                output_contract_id=contract.contract_id,
+                output_fallback_id=fallback_id,
+                output_validator=contract,
+                security_policy=security_policy,
+            )
+        except (
+                LLMBudgetExceeded,
+                LLMExecutionError,
+                ProviderCallError,
+                _release_security.ReleaseSecurityError,
+                _llm_output_contracts.OutputContractRejected,
+                _provider_transport.ProviderResponseRejected,
+                _provider_transport.ProviderResponseDeadlineExceeded,
+                _provider_transport.ProviderResponseReadError,
+                _provider_transport.ProviderResponseReadTimeout,
+        ):
+            return None
+
+    output_dir = chunks_path.parent / "packets"
+    transaction_id = uuid4().hex
+    stage_dir = _study_packet_stage_path(output_dir, transaction_id)
+    generated_at = datetime.datetime.now(
+        datetime.timezone.utc).isoformat(timespec="seconds")
+    packets: list[_study_packets.EntryPacket] = []
+    output_records: list[_study_packets.PacketOutputRecord] = []
+    staged_records: dict[str, _study_packets.PacketOutputRecord] = {}
+    staged_index_text: str | None = None
+    promotion_started = False
+
+    def mark_promotion_started() -> None:
+        nonlocal promotion_started
+        promotion_started = True
+
+    try:
+        _storage_policy.ensure_private_directory(output_dir.parent)
+        if stage_dir.exists() or _storage_policy.path_is_link_like(stage_dir):
+            raise _StudyPacketRunError(
+                "study-packet staging path already exists")
+        _storage_policy.ensure_private_directory(stage_dir)
+        validation_session = _markdown_validation.MarkdownValidationSession(
+            "strict")
+
+        for entry in syllabus.entries:
+            selection = selections.get(entry.entry_id)
+            if selection is None:
+                continue
+            try:
+                header = _study_packets.PacketHeader(
+                    course=syllabus.course,
+                    entry_id=entry.entry_id,
+                    title=entry.title,
+                    index_binding=index_binding,
+                    selection_digest=_study_packets.selection_digest(
+                        selection),
+                    generated_at=generated_at,
+                )
+                packet = _study_packets.build_entry_packet(
+                    syllabus.course,
+                    entry,
+                    selection,
+                    header,
+                    llm_fn,
+                )
+                markdown = _study_packet_markdown_with_binding(
+                    packet, index_binding=index_binding)
+                _markdown_validation.validate_markdown_candidate(
+                    markdown,
+                    expected_table_count=packet.table_count,
+                    source_name=f"packets/{entry.entry_id}.md",
+                    policy="strict",
+                    session=validation_session,
+                    require_table_markers=True,
+                )
+            except _markdown_validation.MarkdownValidationError as exc:
+                if _study_packet_validator_unavailable(exc):
+                    raise _StudyPacketRunError(str(exc)) from exc
+                failures.append(_study_packets.EntryFailure(
+                    entry.entry_id,
+                    entry.title,
+                    _safe_study_packet_summary(exc),
+                ))
+                continue
+            except _study_packets.PacketBuildError as exc:
+                failures.append(_study_packets.EntryFailure(
+                    entry.entry_id,
+                    entry.title,
+                    _safe_study_packet_summary(exc),
+                ))
+                continue
+
+            published_packet = _study_packets.EntryPacket(
+                entry_id=packet.entry_id,
+                title=packet.title,
+                markdown=markdown,
+                table_count=packet.table_count,
+                notices=packet.notices,
+            )
+            record = _study_packets.packet_output_record(published_packet)
+            packets.append(published_packet)
+            output_records.append(record)
+
+        packet_tuple = tuple(packets)
+        failure_tuple = tuple(failures)
+        record_tuple = tuple(output_records)
+        generation_id = _study_packets.course_generation_id(
+            syllabus.course,
+            index_binding,
+            record_tuple,
+            failure_tuple,
+        )
+        index_body = _study_packets.render_course_index(
+            syllabus.course,
+            packet_tuple,
+            failure_tuple,
+            index_binding=index_binding,
+            generated_at=generated_at,
+            output_records=record_tuple,
+            generation_id=generation_id,
+        )
+        staged_index_text = _study_packet_index_with_binding(
+            index_body,
+            generation_id=generation_id,
+            generated_at=generated_at,
+            index_binding=index_binding,
+            output_records=record_tuple,
+        )
+        _markdown_validation.validate_markdown_candidate(
+            staged_index_text,
+            expected_table_count=0,
+            source_name="packets/index.md",
+            policy="strict",
+            session=validation_session,
+            require_table_markers=False,
+        )
+        # Stage the complete logical inventory first. A process kill during
+        # subsequent packet writes therefore leaves a bounded, self-describing
+        # partial candidate that the next run can validate and discard.
+        _atomic_write_text(stage_dir / "index.md", staged_index_text)
+        for packet, record in zip(packet_tuple, record_tuple):
+            target = stage_dir / record.filename
+            staged_records[record.filename] = record
+            _atomic_write_text(target, packet.markdown)
+            if not _study_packet_record_matches(target, record):
+                raise _StudyPacketRunError(
+                    "staged packet bytes changed during publication")
+            try:
+                _parse_study_packet_file(
+                    _read_study_packet_text(
+                        target, max_bytes=8 * 1024 * 1024),
+                    expected_name=record.filename,
+                    expected_index_binding=index_binding,
+                )
+            except (OSError, UnicodeError, ValueError) as exc:
+                raise _StudyPacketRunError(str(exc)) from exc
+        try:
+            staged_generation = _load_study_packet_generation(stage_dir)
+        except (OSError, UnicodeError, ValueError, RuntimeError) as exc:
+            raise _StudyPacketRunError(str(exc)) from exc
+        if staged_generation.generation_id != generation_id:
+            raise _StudyPacketRunError(
+                "staged packet index changed before publication")
+
+        try:
+            with _study_packet_output_lease(
+                    output_dir, timeout=lock_timeout):
+                _promote_study_packet_staging(
+                    stage_dir,
+                    output_dir,
+                    transaction_id=transaction_id,
+                    expected_generation_id=generation_id,
+                    mutation_started_fn=mark_promotion_started,
+                )
+        except (OSError, UnicodeError, ValueError, RuntimeError) as exc:
+            raise _StudyPacketRunError(str(exc)) from exc
+    except _markdown_validation.MarkdownValidationError as exc:
+        raise _StudyPacketRunError(str(exc)) from exc
+    except OSError as exc:
+        raise _StudyPacketRunError(str(exc)) from exc
+    except _study_packets.PacketBuildError as exc:
+        raise _StudyPacketRunError(str(exc)) from exc
+    except _StudyPacketRunError as exc:
+        print(
+            "Study packet build failed: "
+            + _safe_study_packet_summary(exc))
+        raise SystemExit(1) from None
+    finally:
+        if not promotion_started and stage_dir.exists():
+            primary_error = sys.exc_info()[1]
+            try:
+                _discard_study_packet_staging(
+                    stage_dir,
+                    output_dir=output_dir,
+                    records=staged_records,
+                    index_text=staged_index_text,
+                )
+            except BaseException as cleanup_error:
+                if primary_error is None:
+                    raise
+                _log_cleanup_error(
+                    "Study-packet staging cleanup failed",
+                    error=cleanup_error)
+
+    for entry in syllabus.entries:
+        failure = next(
+            (item for item in failures if item.entry_id == entry.entry_id),
+            None,
+        )
+        if failure is None:
+            print(f"built {entry.entry_id}")
+        else:
+            print(
+                f"failed {entry.entry_id}: "
+                + _safe_study_packet_summary(failure.reason))
+    if failures:
+        raise SystemExit(1)
+
+
+# ---------------------------------------------------------------------------
 # Step 7c: Chunk Quality Scoring
 # ---------------------------------------------------------------------------
 
@@ -30651,6 +32077,20 @@ def main(argv: list[str] | None = None):
     p_brief.add_argument("-o", "--out", type=Path, default=Path("output/briefs.jsonl"))
     add_llm_provider_flags(p_brief)
 
+    # packets
+    p_pkt = sub.add_parser(
+        "packets", help="Build syllabus-driven topic study packets")
+    p_pkt.add_argument("--syllabus", type=Path, required=True)
+    p_pkt.add_argument("--chunks", type=Path, default=DEFAULT_CHUNKS_PATH)
+    p_pkt.add_argument(
+        "--db", type=Path, default=None,
+        help="DB directory (auto-set per backend)")
+    add_collection_flag(p_pkt)
+    add_embedding_flags(p_pkt)
+    add_db_backend_flag(p_pkt)
+    add_db_lock_flag(p_pkt)
+    add_llm_provider_flags(p_pkt)
+
     # query
     p_q = sub.add_parser("query", help="Query the index")
     p_q.add_argument("query_text", type=str, help="Search query")
@@ -30956,7 +32396,7 @@ def main(argv: list[str] | None = None):
 
     for command_parser in (
             p_pre, p_conv, p_chunk, p_idx, p_eq, p_genq, p_cg, p_rap,
-            p_brief, p_q, p_exp, p_info, p_storage, p_full, p_batch):
+            p_brief, p_pkt, p_q, p_exp, p_info, p_storage, p_full, p_batch):
         add_release_security_flags(command_parser)
         add_run_telemetry_flags(command_parser)
 
@@ -31059,7 +32499,7 @@ def main(argv: list[str] | None = None):
             _llm_kwargs_from_args(args, include_workers=True)
             if _namespace_uses_llm(args) else {}
         )
-        if args.command in {"chunk", "query"}:
+        if args.command in {"chunk", "query", "packets"}:
             # These operations can use embeddings/rerankers even when no LLM
             # generation feature is selected.  Carry the same immutable
             # policy to those boundaries and to chunk provenance.
@@ -31152,6 +32592,18 @@ def main(argv: list[str] | None = None):
 
         elif args.command == "brief":
             generate_briefs(args.chunks, args.out, **llm_kwargs)
+
+        elif args.command == "packets":
+            build_study_packets(
+                args.syllabus,
+                chunks_path=args.chunks,
+                db_dir=args.db,
+                db_backend=args.db_backend,
+                collection_name=args.collection,
+                embedding_model=args.embedding_model,
+                lock_timeout=args.db_lock_timeout,
+                **llm_kwargs,
+            )
 
         elif args.command == "query":
             _query_index_for_backend(args.query_text, args.db,
