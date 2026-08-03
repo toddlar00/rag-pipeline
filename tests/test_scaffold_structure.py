@@ -9224,7 +9224,7 @@ def test_run_bookmark_cross_check_warns_and_records_telemetry_on_mismatch(
     assert "missing from bookmarks" in caplog.text
     assert "Chapter 2 Contracts" in caplog.text
     assert telemetry.observations == [
-        ("chunk", {"bookmark_entries": 1, "bookmark_warnings": 2})]
+        ("chunk_bookmarks", {"bookmark_entries": 1, "bookmark_warnings": 2})]
 
 
 def test_run_bookmark_cross_check_is_a_noop_when_outline_unavailable(

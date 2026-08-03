@@ -7107,6 +7107,10 @@ def _conversion_parameters(*, batch_size_override: int | None,
                            ocr: bool | None,
                            ocr_full_page: bool = False,
                            watermark: re.Pattern | None) -> dict:
+    # Full-page OCR is meaningless once OCR itself is disabled; normalize it
+    # away so a disabled-OCR receipt hashes identically regardless of the
+    # (ignored) --ocr-full-page flag's value.
+    ocr_full_page = ocr_full_page and ocr is not False
     return {
         "batch_size_override": batch_size_override,
         "backend": backend,
@@ -7422,6 +7426,10 @@ def _convert_pdf_locked(pdf_path: Path, doc_output: Path, *,
 
 def _confidence_summary(confidence) -> tuple[dict, list[int]]:
     """Numeric conversion-confidence metrics plus low-grade page numbers."""
+    def _finite_score(value):
+        return value if (
+            isinstance(value, float) and math.isfinite(value)) else None
+
     try:
         mean_score = confidence.mean_score
         low_score = confidence.low_score
@@ -7433,12 +7441,10 @@ def _confidence_summary(confidence) -> tuple[dict, list[int]]:
         metrics = {
             "confidence_pages": len(pages),
             "confidence_poor_pages": len(poor_pages),
-            "confidence_mean_score": (
-                None if math.isnan(mean_score) else mean_score),
-            "confidence_low_score": (
-                None if math.isnan(low_score) else low_score),
+            "confidence_mean_score": _finite_score(mean_score),
+            "confidence_low_score": _finite_score(low_score),
         }
-    except AttributeError:
+    except (AttributeError, TypeError):
         log.info("Docling confidence not available")
         return {}, []
     return metrics, poor_pages
@@ -7671,27 +7677,32 @@ def _convert_pdf_generation(
         log.info(f"Peak GPU memory: {peak_mb:.0f} MB / {total_mb:.0f} MB")
 
     # --- Advisory Docling confidence surfacing (best-effort, never fatal) ---
-    confidence = getattr(result, "confidence", None)
-    metrics, poor_pages = _confidence_summary(confidence)
-    if metrics:
-        mean_grade = getattr(
-            getattr(confidence, "mean_grade", None), "name", "UNKNOWN")
-        low_grade = getattr(
-            getattr(confidence, "low_grade", None), "name", "UNKNOWN")
-        mean_score = metrics["confidence_mean_score"]
-        low_score = metrics["confidence_low_score"]
-        log.info(
-            "Docling confidence: mean=%s (%s) low=%s (%s) pages=%d poor=%d",
-            mean_grade,
-            "n/a" if mean_score is None else f"{mean_score:.3f}",
-            low_grade,
-            "n/a" if low_score is None else f"{low_score:.3f}",
-            metrics["confidence_pages"], metrics["confidence_poor_pages"],
-        )
-        if poor_pages:
-            log.warning("Docling low-confidence pages: %s", poor_pages[:20])
-        if telemetry is not None:
-            telemetry.stage_observation("convert", metrics=metrics)
+    try:
+        confidence = getattr(result, "confidence", None)
+        metrics, poor_pages = _confidence_summary(confidence)
+        if metrics:
+            mean_grade = getattr(
+                getattr(confidence, "mean_grade", None), "name", "UNKNOWN")
+            low_grade = getattr(
+                getattr(confidence, "low_grade", None), "name", "UNKNOWN")
+            mean_score = metrics["confidence_mean_score"]
+            low_score = metrics["confidence_low_score"]
+            log.info(
+                "Docling confidence: mean=%s (%s) low=%s (%s) pages=%d poor=%d",
+                mean_grade,
+                "n/a" if mean_score is None else f"{mean_score:.3f}",
+                low_grade,
+                "n/a" if low_score is None else f"{low_score:.3f}",
+                metrics["confidence_pages"], metrics["confidence_poor_pages"],
+            )
+            if poor_pages:
+                log.warning(
+                    "Docling low-confidence pages: %s", poor_pages[:20])
+            if telemetry is not None:
+                telemetry.stage_observation(
+                    "convert_confidence", metrics=metrics)
+    except Exception as exc:
+        log.warning("Confidence surfacing skipped: %s", exc)
 
     dl_doc = result.document
 
@@ -9935,7 +9946,7 @@ class ConversionInputBinding:
 
 @dataclass(frozen=True, slots=True)
 class ConversionSourceBinding:
-    """Strict capture proof loaded from a conversion-v2 completion."""
+    """Strict capture proof loaded from a capture-verified conversion manifest."""
 
     manifest_path: Path
     manifest_sha256: str
@@ -10372,8 +10383,8 @@ def _open_docling_source_pdf_snapshot(
     if binding is None:
         if explicit_source_pdf is not None:
             raise ValueError(
-                "--source-pdf requires a capture-verified conversion-v2 "
-                "completion manifest")
+                "--source-pdf requires a capture-verified conversion "
+                "manifest")
         yield None
         return
 
@@ -14811,7 +14822,7 @@ def _run_bookmark_cross_check(
         log.warning("%s", warning)
     if telemetry is not None:
         telemetry.stage_observation(
-            "chunk", metrics={
+            "chunk_bookmarks", metrics={
                 "bookmark_entries": len(outline),
                 "bookmark_warnings": len(warnings),
             })
@@ -30887,7 +30898,7 @@ def main(argv: list[str] | None = None):
     p_chunk.add_argument(
         "--source-pdf", type=Path, default=None,
         help=("Exact original PDF for hash-verified table recovery; requires "
-              "a conversion-v2 completion manifest"))
+              "a capture-verified conversion manifest"))
     p_chunk.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS,
                          help=f"Max tokens per chunk (default: {DEFAULT_MAX_TOKENS})")
     p_chunk.add_argument("--min-words", type=int, default=MIN_CHUNK_WORDS,

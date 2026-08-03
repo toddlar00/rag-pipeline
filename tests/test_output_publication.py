@@ -336,6 +336,19 @@ def test_conversion_parameters_invalidate_legacy_explicit_ocr_receipts():
         rag._artifact_parameters_sha256(legacy_forced))
 
 
+def test_conversion_parameters_ignore_full_page_ocr_when_ocr_is_disabled():
+    disabled_with_full_page = rag._conversion_parameters(
+        batch_size_override=None, backend="auto", auto_preprocess=True,
+        ocr=False, ocr_full_page=True, watermark=None)
+    disabled_without_full_page = rag._conversion_parameters(
+        batch_size_override=None, backend="auto", auto_preprocess=True,
+        ocr=False, ocr_full_page=False, watermark=None)
+
+    assert disabled_with_full_page == disabled_without_full_page
+    assert disabled_with_full_page["ocr_full_page"] is False
+    assert disabled_with_full_page["ocr_mode"] == "off"
+
+
 def test_conversion_parameters_invalidate_pre_ocr_mode_receipts():
     with_mode = rag._conversion_parameters(
         batch_size_override=None, backend="auto", auto_preprocess=True,

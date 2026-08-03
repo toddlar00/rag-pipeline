@@ -41,6 +41,23 @@ def test_confidence_summary_nan_guards_scores():
     assert poor == []
 
 
+def test_confidence_summary_inf_guards_scores():
+    metrics, poor = rag._confidence_summary(
+        _confidence(mean_score=math.inf, low_score=-math.inf, pages={}))
+    assert metrics["confidence_mean_score"] is None
+    assert metrics["confidence_low_score"] is None
+    assert metrics["confidence_pages"] == 0
+    assert poor == []
+
+
+def test_confidence_summary_non_float_score_is_empty():
+    metrics, poor = rag._confidence_summary(
+        _confidence(mean_score="bad", low_score="bad", pages={}))
+    assert metrics["confidence_mean_score"] is None
+    assert metrics["confidence_low_score"] is None
+    assert poor == []
+
+
 def test_confidence_summary_absent_is_empty():
     assert rag._confidence_summary(None) == ({}, [])
     assert rag._confidence_summary(object()) == ({}, [])
@@ -54,13 +71,15 @@ class _RecordingTelemetry:
         self.calls.append((stage, metrics))
 
 
-def test_convert_pdf_generation_surfaces_confidence(monkeypatch, tmp_path, caplog):
-    source = tmp_path / "book.pdf"
-    source.write_bytes(b"pdf")
-    output = tmp_path / "book.json"
+class _PoisonedTelemetry:
+    """A telemetry collaborator whose observation call always fails."""
 
-    monkeypatch.setattr(rag, "_page_count", lambda _path: 2)
+    def stage_observation(self, stage, *, metrics=None):
+        raise RuntimeError("telemetry exploded")
 
+
+def _install_fake_docling(monkeypatch, *, fake_confidence):
+    """Wire a fake Docling converter module set into ``rag`` for one run."""
     class AcceleratorDevice:
         CPU = "cpu"
         CUDA = "cuda"
@@ -72,9 +91,6 @@ def test_convert_pdf_generation_surfaces_confidence(monkeypatch, tmp_path, caplo
     class FakePdfFormatOption:
         def __init__(self, **kwargs):
             self.kwargs = kwargs
-
-    fake_confidence = _confidence(
-        pages={0: _page("POOR"), 1: _page("GOOD")})
 
     class FakeDoclingDocument:
         def model_dump_json(self, indent=2):
@@ -131,6 +147,18 @@ def test_convert_pdf_generation_surfaces_confidence(monkeypatch, tmp_path, caplo
     _clock = itertools.count(1000.0, 0.1)
     monkeypatch.setattr(rag.time, "time", lambda: next(_clock))
 
+
+def test_convert_pdf_generation_surfaces_confidence(monkeypatch, tmp_path, caplog):
+    source = tmp_path / "book.pdf"
+    source.write_bytes(b"pdf")
+    output = tmp_path / "book.json"
+
+    monkeypatch.setattr(rag, "_page_count", lambda _path: 2)
+
+    fake_confidence = _confidence(
+        pages={0: _page("POOR"), 1: _page("GOOD")})
+    _install_fake_docling(monkeypatch, fake_confidence=fake_confidence)
+
     original = rag.ConversionInputBinding(
         kind="original", name=source.name, sha256="0" * 64,
         size=source.stat().st_size,
@@ -152,9 +180,45 @@ def test_convert_pdf_generation_surfaces_confidence(monkeypatch, tmp_path, caplo
     assert "GOOD" in caplog.text
     assert "FAIR" in caplog.text
     assert "Docling low-confidence pages" in caplog.text
-    assert telemetry.calls == [("convert", {
+    assert telemetry.calls == [("convert_confidence", {
         "confidence_pages": 2,
         "confidence_poor_pages": 1,
         "confidence_mean_score": 0.8,
         "confidence_low_score": 0.4,
     })]
+
+
+def test_convert_pdf_generation_confidence_failure_does_not_abort(
+        monkeypatch, tmp_path, caplog):
+    """A poisoned telemetry collaborator must not discard the conversion."""
+    source = tmp_path / "book.pdf"
+    source.write_bytes(b"pdf")
+    output = tmp_path / "book.json"
+
+    monkeypatch.setattr(rag, "_page_count", lambda _path: 2)
+
+    fake_confidence = _confidence(
+        pages={0: _page("POOR"), 1: _page("GOOD")})
+    _install_fake_docling(monkeypatch, fake_confidence=fake_confidence)
+
+    original = rag.ConversionInputBinding(
+        kind="original", name=source.name, sha256="0" * 64,
+        size=source.stat().st_size,
+    )
+    telemetry = _PoisonedTelemetry()
+
+    with ExitStack() as snapshots, caplog.at_level(
+            logging.WARNING, logger="rag"):
+        effective_input = rag._convert_pdf_generation(
+            source, output,
+            snapshot_stack=snapshots,
+            original_input=original,
+            backend="auto",
+            auto_preprocess=False,
+            ocr=False,
+            telemetry=telemetry,
+        )
+
+    assert effective_input is original
+    assert output.exists()
+    assert "Confidence surfacing skipped" in caplog.text

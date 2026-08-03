@@ -1768,3 +1768,9 @@ def test_quality_report_rejects_nonstring_case_name_summary():
     with pytest.raises(ValueError, match="case-name summary"):
         quality_core.validate_quality_report(
             report, **_validation_kwargs(), records=[invalid_record])
+
+
+def test_conversion_completion_schema_version_matches_rag():
+    import rag
+    assert (quality_core.CONVERSION_COMPLETION_SCHEMA_VERSION
+            == rag.CONVERSION_COMPLETION_SCHEMA_VERSION)
