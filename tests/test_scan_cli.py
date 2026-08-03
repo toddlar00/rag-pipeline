@@ -115,6 +115,7 @@ def _stats(total, large, usable, usable_large):
         "pages_with_usable_text": usable,
         "large_image_pages_with_usable_text": usable_large,
         "text_chars": 1000, "replacement_chars": 0,
+        "cid_garbled_pages": 0,
         "inspection_complete": True, "unique_dims": set(),
         "image_xrefs": set(),
     }

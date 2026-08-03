@@ -197,6 +197,7 @@ def test_document_analysis_returns_canonical_stats_and_completeness():
         "large_image_pages_with_usable_text": 1,
         "text_chars": len(safe.text),
         "replacement_chars": 0,
+        "cid_garbled_pages": 0,
         "unique_dims": {"2000x3000"},
         "image_xrefs": {1, 2},
         "inspection_complete": True,
@@ -402,3 +403,31 @@ def test_triage_fingerprint_from_creator_and_absent():
     assert _assess(_triage_stats(),
                    producer="LaTeX with hyperref").scanner_fingerprint is (
         None)
+
+
+def test_cid_suspect_ratio_counts_replacement_and_pua():
+    assert ingestion_core.cid_suspect_ratio("") == 0.0
+    assert ingestion_core.cid_suspect_ratio("clean text") == 0.0
+    assert ingestion_core.cid_suspect_ratio("ab��") == 0.5
+    pua = ""
+    assert ingestion_core.cid_suspect_ratio(pua) == 1.0
+
+
+def test_page_text_usability_rejects_dense_mojibake():
+    dense_garbled = "" * 200
+    dense_clean = "a" * 200
+    assert not ingestion_core.pdf_page_text_is_usable(dense_garbled)
+    assert ingestion_core.pdf_page_text_is_usable(dense_clean)
+    lenient = ingestion_core.PDFIngestionThresholds(max_cid_char_ratio=1.0)
+    assert ingestion_core.pdf_page_text_is_usable(
+        dense_garbled, thresholds=lenient)
+
+
+def test_analyze_pdf_document_counts_cid_garbled_pages():
+    document = FakeDocument([
+        FakePage(0, "clean readable text " * 5, []),
+        FakePage(1, "" * 100, []),
+    ])
+    analysis = ingestion_core.analyze_pdf_document(document)
+    assert analysis.stats["cid_garbled_pages"] == 1
+    assert analysis.stats["pages_with_usable_text"] == 1
