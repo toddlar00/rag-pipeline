@@ -7281,6 +7281,7 @@ def convert_pdf(pdf_path: Path, doc_output: Path, *,
                 markdown_output: Path | None = None,
                 security_policy: (
                     _release_security.ReleaseSecurityPolicy | None) = None,
+                telemetry: _run_telemetry.RunTelemetry | None = None,
                 ) -> None:
     """Convert under path-wide leases for the complete artifact set."""
     doc_output = Path(doc_output)
@@ -7307,7 +7308,8 @@ def convert_pdf(pdf_path: Path, doc_output: Path, *,
             ocr_full_page=ocr_full_page,
             preprocessed_output=preprocessed_output,
             markdown_output=markdown_output,
-            security_policy=security_policy)
+            security_policy=security_policy,
+            telemetry=telemetry)
 
 
 def _convert_pdf_locked(pdf_path: Path, doc_output: Path, *,
@@ -7322,6 +7324,7 @@ def _convert_pdf_locked(pdf_path: Path, doc_output: Path, *,
                 markdown_output: Path | None = None,
                 security_policy: (
                     _release_security.ReleaseSecurityPolicy | None) = None,
+                telemetry: _run_telemetry.RunTelemetry | None = None,
                 ) -> None:
     """Convert one immutable PDF generation and bind its exact source."""
     source_pdf_path = Path(pdf_path)
@@ -7359,7 +7362,8 @@ def _convert_pdf_locked(pdf_path: Path, doc_output: Path, *,
             ocr_full_page=ocr_full_page,
             preprocessed_output=preprocessed_path,
             markdown_output=markdown_output,
-            security_policy=security_policy)
+            security_policy=security_policy,
+            telemetry=telemetry)
         if _cached_artifact_sha256(source_pdf_path) != source_snapshot.sha256:
             raise RuntimeError(
                 f"PDF source changed while converting: {source_pdf_path}")
@@ -7416,6 +7420,30 @@ def _convert_pdf_locked(pdf_path: Path, doc_output: Path, *,
             f"{source_pdf_path}")
 
 
+def _confidence_summary(confidence) -> tuple[dict, list[int]]:
+    """Numeric conversion-confidence metrics plus low-grade page numbers."""
+    try:
+        mean_score = confidence.mean_score
+        low_score = confidence.low_score
+        pages = confidence.pages
+        poor_pages = [
+            page_no for page_no, page in pages.items()
+            if page.low_grade.name == "POOR"
+        ]
+        metrics = {
+            "confidence_pages": len(pages),
+            "confidence_poor_pages": len(poor_pages),
+            "confidence_mean_score": (
+                None if math.isnan(mean_score) else mean_score),
+            "confidence_low_score": (
+                None if math.isnan(low_score) else low_score),
+        }
+    except AttributeError:
+        log.info("Docling confidence not available")
+        return {}, []
+    return metrics, poor_pages
+
+
 def _convert_pdf_generation(
                 pdf_path: Path, doc_output: Path, *,
                 snapshot_stack: ExitStack,
@@ -7431,6 +7459,7 @@ def _convert_pdf_generation(
                 markdown_output: Path | None = None,
                 security_policy: (
                     _release_security.ReleaseSecurityPolicy | None) = None,
+                telemetry: _run_telemetry.RunTelemetry | None = None,
                 ) -> "ConversionInputBinding":
     """Convert an already-pinned PDF pathname generation."""
     import os
@@ -7640,6 +7669,29 @@ def _convert_pdf_generation(
         peak_mb = torch.cuda.max_memory_allocated(0) / 1024**2
         total_mb = torch.cuda.get_device_properties(0).total_memory / 1024**2
         log.info(f"Peak GPU memory: {peak_mb:.0f} MB / {total_mb:.0f} MB")
+
+    # --- Advisory Docling confidence surfacing (best-effort, never fatal) ---
+    confidence = getattr(result, "confidence", None)
+    metrics, poor_pages = _confidence_summary(confidence)
+    if metrics:
+        mean_grade = getattr(
+            getattr(confidence, "mean_grade", None), "name", "UNKNOWN")
+        low_grade = getattr(
+            getattr(confidence, "low_grade", None), "name", "UNKNOWN")
+        mean_score = metrics["confidence_mean_score"]
+        low_score = metrics["confidence_low_score"]
+        log.info(
+            "Docling confidence: mean=%s (%s) low=%s (%s) pages=%d poor=%d",
+            mean_grade,
+            "n/a" if mean_score is None else f"{mean_score:.3f}",
+            low_grade,
+            "n/a" if low_score is None else f"{low_score:.3f}",
+            metrics["confidence_pages"], metrics["confidence_poor_pages"],
+        )
+        if poor_pages:
+            log.warning("Docling low-confidence pages: %s", poor_pages[:20])
+        if telemetry is not None:
+            telemetry.stage_observation("convert", metrics=metrics)
 
     dl_doc = result.document
 
@@ -29626,6 +29678,7 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
                 preprocessed_output=paths["preprocessed"],
                 markdown_output=paths["converted_markdown"],
                 security_policy=llm_kwargs["security_policy"],
+                telemetry=telemetry,
             )
             if not _converted_outputs_complete(
                     pdf_path, paths["doc"], paths["converted_markdown"],
@@ -31365,7 +31418,8 @@ def main(argv: list[str] | None = None):
                         auto_preprocess=not args.no_preprocess,
                         ocr=getattr(args, "ocr", None),
                         ocr_full_page=getattr(args, "ocr_full_page", False),
-                        security_policy=security_policy)
+                        security_policy=security_policy,
+                        telemetry=run_telemetry)
 
         elif args.command == "chunk":
             chunk_document(args.doc, args.out,
