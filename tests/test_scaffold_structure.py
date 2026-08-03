@@ -1,6 +1,5 @@
 import json
 import logging
-import sys
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -9202,25 +9201,6 @@ def test_bookmark_scaffold_warnings_flags_scaffold_only_chapters():
                for w in warnings)
 
 
-class _FakeTocDoc:
-    def __init__(self, toc):
-        self._toc = toc
-        self.closed = False
-
-    def get_toc(self):
-        return self._toc
-
-    def close(self):
-        self.closed = True
-
-
-def _install_fake_pymupdf_toc(monkeypatch, toc):
-    doc = _FakeTocDoc(toc)
-    monkeypatch.setitem(
-        sys.modules, "pymupdf", SimpleNamespace(open=lambda _path: doc))
-    return doc
-
-
 class _FakeTelemetry:
     def __init__(self):
         self.observations = []
@@ -9229,36 +9209,67 @@ class _FakeTelemetry:
         self.observations.append((stage, metrics))
 
 
-def test_bookmark_cross_check_warns_and_records_telemetry_on_mismatch(
-        monkeypatch, tmp_path, caplog):
+def test_run_bookmark_cross_check_warns_and_records_telemetry_on_mismatch(
+        caplog):
     scaffold = [{"level": 1, "title": "Chapter 2 Contracts", "page": 30,
                  "chapter_num": 2, "path": "Chapter 2 Contracts"}]
-    doc = _install_fake_pymupdf_toc(
-        monkeypatch, [[1, "Chapter 1 Torts", 1]])
-
-    @contextmanager
-    def fake_snapshot(*_args, **_kwargs):
-        yield SimpleNamespace(
-            pdf=SimpleNamespace(path=tmp_path / "book.pdf"))
-
-    monkeypatch.setattr(
-        rag, "_open_docling_source_pdf_snapshot", fake_snapshot)
-
+    outline = [(1, "Chapter 1 Torts", 1)]
     telemetry = _FakeTelemetry()
+
     with caplog.at_level(logging.WARNING):
-        rag._run_bookmark_cross_check(
-            tmp_path / "book.json", None, scaffold, telemetry=telemetry)
+        rag._run_bookmark_cross_check(outline, scaffold, telemetry=telemetry)
 
     assert "missing from scaffold" in caplog.text
     assert "Chapter 1 Torts" in caplog.text
     assert "missing from bookmarks" in caplog.text
     assert "Chapter 2 Contracts" in caplog.text
-    assert doc.closed
     assert telemetry.observations == [
         ("chunk", {"bookmark_entries": 1, "bookmark_warnings": 2})]
 
 
-def test_bookmark_cross_check_skips_without_source_pdf(
+def test_run_bookmark_cross_check_is_a_noop_when_outline_unavailable(
+        caplog):
+    telemetry = _FakeTelemetry()
+
+    with caplog.at_level(logging.WARNING):
+        rag._run_bookmark_cross_check(None, [{"level": 1, "title": "x"}],
+                                       telemetry=telemetry)
+
+    assert caplog.text == ""
+    assert telemetry.observations == []
+
+
+def test_recover_bound_toc_cell_repairs_reads_outline_from_one_snapshot(
+        monkeypatch, tmp_path):
+    """The bookmark outline must come from the same snapshot used for TOC
+    cell repairs — not a second physical copy+hash of the source PDF."""
+    snapshot_opens = []
+
+    @contextmanager
+    def counting_snapshot(*args, **kwargs):
+        snapshot_opens.append((args, kwargs))
+        yield SimpleNamespace(
+            pdf=SimpleNamespace(path=tmp_path / "book.pdf"))
+
+    monkeypatch.setattr(
+        rag, "_open_docling_source_pdf_snapshot", counting_snapshot)
+    monkeypatch.setattr(
+        rag, "_recover_native_toc_cell_repairs",
+        lambda *_a, **_k: {(0, 0): "Repaired"})
+    monkeypatch.setattr(
+        rag, "_read_source_pdf_outline",
+        lambda _path: [(1, "Chapter 9 Remedies", 1)])
+
+    repairs, outline = rag._recover_bound_toc_cell_repairs(
+        {}, tmp_path / "book.json", None,
+        source_pdf_path=None, book_sections={})
+
+    assert len(snapshot_opens) == 1
+    assert repairs == {(0, 0): "Repaired"}
+    assert outline == [(1, "Chapter 9 Remedies", 1)]
+
+
+def test_recover_bound_toc_cell_repairs_returns_none_outline_without_source(
         monkeypatch, tmp_path, caplog):
     @contextmanager
     def fake_snapshot(*_args, **_kwargs):
@@ -9266,27 +9277,43 @@ def test_bookmark_cross_check_skips_without_source_pdf(
 
     monkeypatch.setattr(
         rag, "_open_docling_source_pdf_snapshot", fake_snapshot)
-    telemetry = _FakeTelemetry()
 
     with caplog.at_level(logging.WARNING):
-        rag._run_bookmark_cross_check(
-            tmp_path / "book.json", None, [], telemetry=telemetry)
+        repairs, outline = rag._recover_bound_toc_cell_repairs(
+            {}, tmp_path / "book.json", None,
+            source_pdf_path=None, book_sections={})
 
+    assert repairs == {}
+    assert outline is None
     assert "Bookmark cross-check skipped" in caplog.text
-    assert telemetry.observations == []
 
 
-def test_bookmark_cross_check_swallows_snapshot_failure(
+def test_recover_bound_toc_cell_repairs_keeps_repairs_when_outline_fails(
         monkeypatch, tmp_path, caplog):
+    """A bookmark-outline read failure must not discard TOC cell repairs
+    already recovered from the same snapshot (isolated warn-and-continue)."""
     @contextmanager
-    def failing_snapshot(*_args, **_kwargs):
-        raise RuntimeError("boom")
-        yield None  # pragma: no cover - unreachable, keeps this a generator
+    def fake_snapshot(*_args, **_kwargs):
+        yield SimpleNamespace(
+            pdf=SimpleNamespace(path=tmp_path / "book.pdf"))
 
     monkeypatch.setattr(
-        rag, "_open_docling_source_pdf_snapshot", failing_snapshot)
+        rag, "_open_docling_source_pdf_snapshot", fake_snapshot)
+    monkeypatch.setattr(
+        rag, "_recover_native_toc_cell_repairs",
+        lambda *_a, **_k: {(0, 0): "Repaired"})
+
+    def failing_outline(_path):
+        raise RuntimeError("corrupt bookmark tree")
+
+    monkeypatch.setattr(rag, "_read_source_pdf_outline", failing_outline)
 
     with caplog.at_level(logging.WARNING):
-        rag._run_bookmark_cross_check(tmp_path / "book.json", None, [])
+        repairs, outline = rag._recover_bound_toc_cell_repairs(
+            {}, tmp_path / "book.json", None,
+            source_pdf_path=None, book_sections={})
 
-    assert "Bookmark cross-check skipped: boom" in caplog.text
+    assert repairs == {(0, 0): "Repaired"}
+    assert outline is None
+    assert "Bookmark cross-check skipped: corrupt bookmark tree" in (
+        caplog.text)

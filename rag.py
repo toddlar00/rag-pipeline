@@ -14693,55 +14693,66 @@ def _recover_native_toc_cell_repairs(
     return repairs
 
 
+def _read_source_pdf_outline(pdf_path: Path) -> list[tuple[int, str, int]]:
+    """Return the PDF bookmark outline as (level, title, page) tuples."""
+    import pymupdf
+
+    with pymupdf.open(str(pdf_path)) as pdf:
+        return [tuple(entry) for entry in pdf.get_toc()]
+
+
 def _recover_bound_toc_cell_repairs(
         document: dict, doc_path: Path,
         binding: ConversionSourceBinding | None, *,
         source_pdf_path: Path | None,
-        book_sections: dict) -> dict[tuple[int, int], str]:
-    """Recover TOC cell spelling only from capture-verified source bytes."""
+        book_sections: dict) -> tuple[
+            dict[tuple[int, int], str], list[tuple[int, str, int]] | None]:
+    """Recover TOC cell spelling and the bookmark outline from one snapshot.
+
+    Both recoveries share the single capture-verified source-PDF snapshot
+    opened here; a failure reading the bookmark outline is isolated and
+    never discards already-recovered TOC cell text. The outline is ``None``
+    when no verified source PDF is available or its read failed — the
+    caller treats that as "advisory check skipped", not an error.
+    """
     try:
         with _open_docling_source_pdf_snapshot(
                 doc_path, binding,
                 explicit_source_pdf=source_pdf_path) as recovery_source:
             if recovery_source is None:
-                return {}
+                log.warning(
+                    "Bookmark cross-check skipped: %s",
+                    "no verified source PDF available")
+                return {}, None
             repairs = _recover_native_toc_cell_repairs(
                 document, recovery_source.pdf.path, book_sections)
-        return repairs
+            try:
+                outline = _read_source_pdf_outline(recovery_source.pdf.path)
+            except Exception as exc:
+                log.warning("Bookmark cross-check skipped: %s", exc)
+                outline = None
+        return repairs, outline
     except Exception as exc:
         if source_pdf_path is not None:
             raise RuntimeError(
                 f"Explicit source PDF could not be verified: "
                 f"{source_pdf_path}") from exc
         log.warning("Could not repair source-bound TOC cells: %s", exc)
-        return {}
+        return {}, None
 
 
 def _run_bookmark_cross_check(
-        doc_path: Path,
-        conversion_binding: ConversionSourceBinding | None,
+        outline: list[tuple[int, str, int]] | None,
         scaffold: list[dict],
         telemetry: _run_telemetry.RunTelemetry | None = None) -> None:
     """Advisory cross-check of the accepted scaffold against PDF bookmarks.
 
-    Warn-and-continue only: this must never fail a chunk run.
+    Pure comparison, logging, and telemetry only — no I/O. ``outline`` must
+    already be read from the source-PDF snapshot by the caller (see
+    ``_recover_bound_toc_cell_repairs``); ``None`` means it was unavailable
+    and the check is a no-op (no warnings, no telemetry).
     """
-    try:
-        with _open_docling_source_pdf_snapshot(
-                doc_path, conversion_binding) as recovery_source:
-            if recovery_source is None:
-                log.warning(
-                    "Bookmark cross-check skipped: %s",
-                    "no verified source PDF available")
-                return
-            import pymupdf
-            source_pdf = pymupdf.open(str(recovery_source.pdf.path))
-            try:
-                outline = [tuple(entry) for entry in source_pdf.get_toc()]
-            finally:
-                source_pdf.close()
-    except Exception as exc:
-        log.warning("Bookmark cross-check skipped: %s", exc)
+    if outline is None:
         return
     warnings = _bookmark_scaffold_warnings(outline, scaffold)
     for warning in warnings:
@@ -19759,7 +19770,7 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
         document_sha256=source_sha256,
         document_size=source_size,
     )
-    toc_cell_repairs = _recover_bound_toc_cell_repairs(
+    toc_cell_repairs, bookmark_outline = _recover_bound_toc_cell_repairs(
         doc_dict, doc_path, conversion_binding,
         source_pdf_path=source_pdf_path,
         book_sections=book_sections,
@@ -19791,8 +19802,7 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
             "Repaired %s decorative scaffold section marker(s)",
             repaired_markers,
         )
-    _run_bookmark_cross_check(
-        doc_path, conversion_binding, scaffold, telemetry=telemetry)
+    _run_bookmark_cross_check(bookmark_outline, scaffold, telemetry=telemetry)
 
     # The chunker tokenizer is for token counting only — it doesn't need to
     # match the embedding model exactly. API models (voyage-*, text-embedding-*,
