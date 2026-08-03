@@ -19,6 +19,7 @@ def _triage(**overrides):
         "watermark_page_matches": 4, "sampled_pages": 40,
         "has_outline": True, "contents_page_found": True,
         "ocr_recommended": False, "sample_read_errors": 0,
+        "cid_garbled_pages": 0,
     }
     values.update(overrides)
     return ingestion_core.PDFTriage(**values)
@@ -269,3 +270,13 @@ def test_preprocess_pdf_strip_ratio_matches_forecast_threshold(tmp_path):
         inp, out, _analysis_cache=stats(below_threshold)) is None
     assert rag.preprocess_pdf(
         inp, out, _analysis_cache=stats(at_threshold)) == out
+
+
+def test_render_card_shows_cid_garbled_line_only_when_present():
+    with_garbled = rag._render_pdf_triage(
+        _triage(cid_garbled_pages=3), Path("book.pdf"), file_size=1,
+        producer="", creator="")
+    without = rag._render_pdf_triage(
+        _triage(), Path("book.pdf"), file_size=1, producer="", creator="")
+    assert "garbled (CID) pages: 3" in with_garbled
+    assert "garbled (CID)" not in without

@@ -256,6 +256,7 @@ class PDFTriage:
     contents_page_found: bool
     ocr_recommended: bool
     sample_read_errors: int
+    cid_garbled_pages: int = 0
 
 
 def _scanner_fingerprint(producer: str, creator: str) -> str | None:
@@ -311,6 +312,7 @@ def assess_pdf_triage(
         contents_page_found=contents_page_found,
         ocr_recommended=not text_layer_usable,
         sample_read_errors=sample_read_errors,
+        cid_garbled_pages=int(stats.get("cid_garbled_pages", 0) or 0),
     )
 
 

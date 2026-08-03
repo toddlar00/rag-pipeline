@@ -6760,6 +6760,9 @@ def _render_pdf_triage(triage, pdf_path: Path, *, file_size: int,
     if triage.sample_read_errors:
         lines.append(
             f"  unreadable sampled pages: {triage.sample_read_errors}")
+    if triage.cid_garbled_pages:
+        lines.append(
+            f"  garbled (CID) pages: {triage.cid_garbled_pages}")
     lines.append("")
     lines.append(f"  preprocess forecast: {triage.preprocess_forecast}")
     if triage.preprocess_forecast == "inspection-incomplete":

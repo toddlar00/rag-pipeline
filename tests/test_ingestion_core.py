@@ -431,3 +431,10 @@ def test_analyze_pdf_document_counts_cid_garbled_pages():
     analysis = ingestion_core.analyze_pdf_document(document)
     assert analysis.stats["cid_garbled_pages"] == 1
     assert analysis.stats["pages_with_usable_text"] == 1
+
+
+def test_triage_carries_cid_garbled_pages():
+    stats = _triage_stats()
+    stats["cid_garbled_pages"] = 4
+    assert _assess(stats).cid_garbled_pages == 4
+    assert _assess(_triage_stats()).cid_garbled_pages == 0
