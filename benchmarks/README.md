@@ -8,10 +8,11 @@ fresh-process repetitions.
 ## Provenance
 
 Both current reports were generated from the clean pre-gate source checkpoint
-`71b4a232f0906a6e3bf34bd8b9ffba2a3a221e51`, the merge of the
-behavior-preserving dependency domain-gate decomposition
-(`tools/check_dependency_policy.py`) over the PDF triage scan head
-`4975793`. The executing environments were
+`3b2188c138633380a755e45ab0c549f4327d0958`, the merge of the ingestion
+quick wins (CID mojibake detection, layout-aware per-region OCR default
+with conversion schema v3, advisory bookmark cross-check, and Docling
+confidence surfacing) over the domain-gate refactor head `71b4a23`. The
+executing environments were
 synchronized with repository-pinned uv 0.11.31 against the exact CPU
 application/test lock union plus its retained bootstrapper:
 
@@ -28,8 +29,8 @@ marker-resolved distributions before generation.
 
 | Platform | Runtime | Report | Bytes | File SHA-256 | Embedded report SHA-256 |
 |---|---:|---|---:|---|---|
-| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 50,426 | `0d14de2c058819bddda16ae6913115cecb6706c9e589f3b62915de3621ce3643` | `de43c7c98bdf2fd6f4af7870b811a9a0f57d1b5c0c232a745ae0c68301ce447c` |
-| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 49,826 | `bc3874c174b69e927441816d1bd5e9f0758cd37731609444e480de7e7cb8890d` | `a47c3b4ce91c85e3b28ed0ae23ef1b38299aac4a1516bd0dbc9e2cf226cf7f30` |
+| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 50,424 | `e1724f6d7ffae9391fdcf9c6619805b20995e180a8c1c7954474e6eb9137ae9c` | `311b2cf347da1f1ee8d066929ad7b2891525cc7c6a6654fe17e5401b6d6296be` |
+| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 49,821 | `53ca22195943ef3e1a8dec69946bbaa3e537c2c16832799a77de9900ccd81eac` | `ab83e97cfbfd1b2ee3d5789ea47b16d9fd5892887f25a115c9c908ad8a9ec201` |
 
 The reports attest the same source commit, clean-worktree state, tracked-diff
 digest, eight LF and `HEAD`-identical dependency/model-lock inputs, authoritative
@@ -84,13 +85,14 @@ two mapped locks, invalidating the prior pair; its own pair passed all 27
 hosted checks at the exact #83 head and merged on 2026-08-01. The read-only
 PDF triage scan merge `4975793` repeated that cycle, passing its hosted
 cells on the post-merge `main` workflow at evidence head `782c986`. The
-dependency domain-gate decomposition merge `71b4a23` changes Python source
-again and supersedes that pair in turn. Its canonical inventory records
-2,609 functions across 165 tracked sources with 946 static and 954 runtime
-`rag` bindings, and its full local suite passes 3,393 tests with 7
-platform/optional skips. The current reports above bind clean source
-`71b4a23`, and each passes an independent complete same-platform 9×5
-comparison. The following reports-and-documentation-only commit freezes the
+dependency domain-gate decomposition merge `71b4a23` repeated the cycle,
+passing its hosted cells at evidence head `6efe0bc`. The ingestion
+quick-wins merge `3b2188c` changes Python source again and supersedes that
+pair in turn. Its canonical inventory records 2,616 functions across 166
+tracked sources with 951 static and 959 runtime `rag` bindings, and its
+full local suite passes 3,419 tests with 7 platform/optional skips. The
+current reports above bind clean source `3b2188c`, and each passes an
+independent complete same-platform 9×5 comparison. The following reports-and-documentation-only commit freezes the
 new local pair; no hosted result is claimed for this head yet — its hosted
 cells run on the post-merge `main` workflow.
 
@@ -119,7 +121,7 @@ ancestor of the final head. Integrate a passing candidate with a
 history-preserving merge; a squash or history-rewriting rebase invalidates this
 evidence and requires regeneration from the replacement history.
 
-The replacement gate-only delta after `71b4a23` is limited to the two reviewed
+The replacement gate-only delta after `3b2188c` is limited to the two reviewed
 reports and their provenance/status documentation. The repaired workflow,
 line-ending policy, Python gates, and the two-lane CI split are already part
 of the pre-gate source and were exercised while generating and comparing the

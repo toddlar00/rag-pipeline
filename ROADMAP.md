@@ -94,7 +94,26 @@ same day, the behavior-preserving dependency domain-gate decomposition
 orchestrator over six focused helpers, independently reviewed against the
 raw blobs with byte-identical error strings) merged at `71b4a23` with fresh
 paired Phase A0 evidence binding that checkpoint, both independent 9×5
-comparisons passing. The remaining movement is deferred as an ordered backlog
+comparisons passing; its hosted cells passed at evidence head `6efe0bc`.
+On 2026-08-03, a cross-project research survey (Docling releases, MinerU,
+marker/surya, unstructured, olmOCR, GROBID, PyMuPDF4LLM, plus retrieval
+and evaluation tracks recorded in
+`docs/superpowers/specs/2026-08-03-ingestion-quickwins-design.md`)
+produced the ingestion quick wins, merged at `3b2188c` after six reviewed
+subagent tasks, two task-level fix rounds, a whole-branch review, and a
+re-reviewed five-finding fix wave: CID mojibake detection in the usability
+thresholds and scan card, layout-aware per-region OCR as the new `--ocr`
+default (`--ocr-full-page` escape hatch; conversion completion schema v3
+fails all prior conversion receipts closed), an advisory PDF-bookmark
+cross-check for the accepted TOC scaffold, and advisory Docling conversion
+confidence surfacing. Its full local suite passes 3,419 tests with 7
+skips, and fresh paired Phase A0 evidence binds the merged checkpoint with
+both independent 9×5 comparisons passing. Open follow-up: the CID
+detector's true-positive recall is unvalidated — no known-garbled fixture
+exists; a synthetic broken-cmap fixture plus a rawdict/`.notdef` detection
+pass remain to be built before the detector may be described as fully
+implementing the spec's decode-correctness term (false-positive direction
+is validated: zero hits across 3,838 real pages at the 0.02 threshold). The remaining movement is deferred as an ordered backlog
 of one-domain PRs: Vector stores (onnxruntime 1.28.0), ML/runtime
 (sentence-transformers 5.6.1, tqdm 4.70.0), Service/UI (fastapi 0.141.1,
 gradio 6.22.0, uvicorn 0.52.0), and Test/audit tooling (pip 26.2); the
@@ -128,6 +147,7 @@ Status terms:
 | Deterministic architecture and `rag` facade inventory | Integrated via #44; replacement refresh in the R2 candidate | Schema-v3 was introduced at `62cb574`; the published `ba9c66d` inventory records the tracked-source graph, definition and signature hashes, paired contextual import provenance, production/test facade consumers, private reads, mutation seams, and an isolated runtime contract. Historical source `fdb08d2` records 1,981 functions and reproduced across Windows/Linux CPython 3.10-3.14; current clean source `e904fa6` records 2,563 functions and 607 compact runtime callables. Broader R7 coverage, typing, lint, and static security work remain open |
 | Phase A0 architecture benchmark | A0a implemented; A0b hosted cells passed at the merged #76 head | Commit `64843d1` introduced nine contained fresh-process scenarios run five times; portability closure `77a0f70` redirects Linux's standard-library user base into the run-local temporary root without setting `HOME` or `CODEX_HOME`. The first hosted frozen head `ba9c66d` exposed checkout-EOL lock and inventory drift plus POSIX acceptance of the adversarial drive-relative path `C:escape.py`; it did not pass A0b. Repairs `7594f8b` and `fdb08d2` close the hosted and CPython 3.10-3.14 normalization defects. After interim R2 refresh `b813aa7`, source-changing work required clean checkpoint `e904fa6`, whose paired baselines each passed an independent matching local comparison. Merging the strict output-contract line into the R2 convergence candidate changes Python source again and invalidates both that pair and the contract line's own interim pair; fresh paired CPython 3.12 x86-64 baselines must bind the merged clean pre-gate checkpoint and are frozen by its following reports/docs-only commit. Successful hosted evidence remains strict and retained for 30 days. A0b still requires both hosted jobs to pass at that exact published commit/tree before it can gate R8 |
 | Five-gate logical publication and AI project exports | Integrated via #76 | Schema-v7 chunk receipts and schema-v12 quality evidence bind source-oracle registries, exact lexical ownership and physical order, occurrence-bound heading lineage, strict Pandoc/Zettlr-valid Markdown, and schema-v9 physical vector parity into one atomic READY receipt. Receipt-bound NotebookLM, ChatGPT, and Claude packages preserve page locators and endnotes while removing hidden comments and package-local links. The implementation passes 3,081 tests with 7 skips, every local static gate, all three offline retrieval suites, real Zettlr validation, real Chroma/Qdrant smoke, a content-free local rehearsal, and paired local Phase A0 comparisons. Combined with the strict output-contract line in the R2 convergence candidate; exact-head CI and owner review remain required |
+| Ingestion quick wins | Integrated | Merge `3b2188c` (2026-08-03): CID-garbled text-layer detection (additive threshold, stats, scan-card line; recall follow-up open), layout-aware per-region OCR as the `--ocr` default with `--ocr-full-page` and conversion schema v3, advisory bookmark cross-check for the TOC scaffold (single-snapshot, counts-only telemetry), and advisory Docling confidence surfacing (finite-guarded, failure-isolated) |
 | First-pass PDF triage scan | Integrated | Merge `4975793` (2026-08-02): read-only, LLM-free `rag.py scan` report card — document fingerprinting, page composition, text-layer verdict from the exact preprocess seams, preprocess forecast, OCR recommendation bound to the pipeline's real gate, bounded watermark/TOC sampling — with pure policy in `ingestion_core.assess_pdf_triage` and failure-injected tests |
 | Dependency compatibility domains | Integrated via #76 | [PR #66](https://github.com/toddlar00/rag-pipeline/pull/66): a reviewed `dependency-compatibility-domains.json` map assigns every governed direct dependency to one compatibility domain; the dependency-policy gate enforces one domain per pull request, lockfile currency against the base, and a change-free policy introduction, with a dedicated hosted dependency-compatibility workflow. Combined into R2 convergence candidate [#76](https://github.com/toddlar00/rag-pipeline/pull/76) |
 | Strict LLM and TOC output contracts | Integrated via #76 | [PRs #68-#71](https://github.com/toddlar00/rag-pipeline/pull/71): exact classification, TOC hierarchy, TOC layout, and Boolean TOC page-verification output contracts with bounded JSON prompt-evidence framing and contract provenance in chunk parameters. Combined into R2 convergence candidate [#76](https://github.com/toddlar00/rag-pipeline/pull/76) |

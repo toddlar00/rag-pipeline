@@ -74,11 +74,11 @@ that `Path.home()` remains denied.
 ## A0b publication gate
 
 The replacement gate uses clean pre-gate source
-`71b4a232f0906a6e3bf34bd8b9ffba2a3a221e51` — the merge of the dependency
-domain-gate decomposition over the PDF triage scan head `4975793`, whose
-own pair passed both hosted Phase A0 cells on the post-merge `main`
-workflow at evidence head `782c986` — and separate Windows and Linux
-CPython 3.12.13 x86-64 reports. Both were generated under the
+`3b2188c138633380a755e45ab0c549f4327d0958` — the merge of the ingestion
+quick wins over the domain-gate refactor head `71b4a23`, whose own pair
+passed both hosted Phase A0 cells on the post-merge `main` workflow at
+evidence head `6efe0bc` — and separate Windows and Linux CPython 3.12.13
+x86-64 reports. Both were generated under the
 exact `requirements-full.lock`, `requirements-test.lock`, and retained
 `requirements-lock-tools.lock` union after strict hash-locked synchronization
 and dependency-consistency checks: 189 marker-resolved distributions on
@@ -86,7 +86,7 @@ Windows and 187 on Linux. They bind one clean source, the same eight LF and
 `HEAD`-identical dependency/model inputs, and the complete 9×5 scenario
 contract. Each passes an independent complete same-platform comparison. The
 repaired CI matrix, LF policy, source gates, Python 3.10-3.14 compatibility
-normalization, and the two-lane CI split precede `71b4a23` and were
+normalization, and the two-lane CI split precede `3b2188c` and were
 exercised by generation and comparison. The following gate-only delta is
 limited to the two reports and their provenance/status documentation.
 
@@ -176,21 +176,22 @@ convergence checkpoint `8f95872` superseded both, passed its hosted Phase A0
 cells at the exact #76 candidate head, and merged on 2026-08-01. The
 one-domain PDF/Docling dependency checkpoint `c73a155` repeated that cycle
 via #83, the read-only PDF triage scan merge `4975793` passed its hosted
-cells at evidence head `782c986`, and the dependency domain-gate
-decomposition merge `71b4a23` changes Python source again and supersedes
-its pair in turn. The current inventory records
-2,609 functions across 165 tracked sources with 946 static and 954 runtime
+cells at evidence head `782c986`, the dependency domain-gate decomposition
+merge `71b4a23` passed its cells at evidence head `6efe0bc`, and the
+ingestion quick-wins merge `3b2188c` changes Python source again and
+supersedes its pair in turn. The current inventory records
+2,616 functions across 166 tracked sources with 951 static and 959 runtime
 `rag` bindings. After strict synchronization and dependency checks for 189
 Windows
-and 187 Linux distributions, the Windows replacement report is 50,426 bytes
+and 187 Linux distributions, the Windows replacement report is 50,424 bytes
 under CPython 3.12.13 (file SHA-256
-`0d14de2c058819bddda16ae6913115cecb6706c9e589f3b62915de3621ce3643`;
+`e1724f6d7ffae9391fdcf9c6619805b20995e180a8c1c7954474e6eb9137ae9c`;
 embedded report SHA-256
-`de43c7c98bdf2fd6f4af7870b811a9a0f57d1b5c0c232a745ae0c68301ce447c`).
-The Linux report is 49,826 bytes under CPython 3.12.13 (file SHA-256
-`bc3874c174b69e927441816d1bd5e9f0758cd37731609444e480de7e7cb8890d`;
+`311b2cf347da1f1ee8d066929ad7b2891525cc7c6a6654fe17e5401b6d6296be`).
+The Linux report is 49,821 bytes under CPython 3.12.13 (file SHA-256
+`53ca22195943ef3e1a8dec69946bbaa3e537c2c16832799a77de9900ccd81eac`;
 embedded report SHA-256
-`a47c3b4ce91c85e3b28ed0ae23ef1b38299aac4a1516bd0dbc9e2cf226cf7f30`).
+`ab83e97cfbfd1b2ee3d5789ea47b16d9fd5892887f25a115c9c908ad8a9ec201`).
 Each current candidate passes an independent complete same-platform 9×5
 comparison. The following reports-and-documentation-only commit freezes the
 new local candidate; publishing its exact commit/tree plus hosted execution,
