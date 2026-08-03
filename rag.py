@@ -4561,6 +4561,42 @@ def _normalize_scaffold_metadata(
     return normalized
 
 
+def _bookmark_scaffold_warnings(
+        outline: list[tuple[int, str, int]],
+        scaffold: list[dict]) -> list[str]:
+    """Advisory comparison of PDF bookmarks against the accepted scaffold."""
+    def _normalize(title):
+        return re.sub(r"\s+", " ", str(title)).strip().casefold()
+
+    warnings: list[str] = []
+    if not outline:
+        return warnings
+    scaffold_levels = {}
+    for entry in scaffold:
+        scaffold_levels.setdefault(
+            _normalize(entry.get("title", "")), int(entry.get("level", 0)))
+    outline_titles = set()
+    for level, title, _page in outline:
+        key = _normalize(title)
+        outline_titles.add(key)
+        if key in scaffold_levels:
+            if scaffold_levels[key] != int(level):
+                warnings.append(
+                    f"bookmark level mismatch: {title!r} bookmark level "
+                    f"{int(level)} vs scaffold level {scaffold_levels[key]}")
+        elif int(level) == 1:
+            warnings.append(
+                f"bookmark chapter missing from scaffold: {title!r}")
+    for entry in scaffold:
+        if int(entry.get("level", 0)) != 1:
+            continue
+        if _normalize(entry.get("title", "")) not in outline_titles:
+            warnings.append(
+                "scaffold chapter missing from bookmarks: "
+                f"{entry.get('title')!r}")
+    return warnings
+
+
 def _repair_bare_scaffold_section_markers(
         scaffold: list[dict], document: dict, *,
         structure_profile: (
@@ -14681,6 +14717,43 @@ def _recover_bound_toc_cell_repairs(
         return {}
 
 
+def _run_bookmark_cross_check(
+        doc_path: Path,
+        conversion_binding: ConversionSourceBinding | None,
+        scaffold: list[dict],
+        telemetry: _run_telemetry.RunTelemetry | None = None) -> None:
+    """Advisory cross-check of the accepted scaffold against PDF bookmarks.
+
+    Warn-and-continue only: this must never fail a chunk run.
+    """
+    try:
+        with _open_docling_source_pdf_snapshot(
+                doc_path, conversion_binding) as recovery_source:
+            if recovery_source is None:
+                log.warning(
+                    "Bookmark cross-check skipped: %s",
+                    "no verified source PDF available")
+                return
+            import pymupdf
+            source_pdf = pymupdf.open(str(recovery_source.pdf.path))
+            try:
+                outline = [tuple(entry) for entry in source_pdf.get_toc()]
+            finally:
+                source_pdf.close()
+    except Exception as exc:
+        log.warning("Bookmark cross-check skipped: %s", exc)
+        return
+    warnings = _bookmark_scaffold_warnings(outline, scaffold)
+    for warning in warnings:
+        log.warning("%s", warning)
+    if telemetry is not None:
+        telemetry.stage_observation(
+            "chunk", metrics={
+                "bookmark_entries": len(outline),
+                "bookmark_warnings": len(warnings),
+            })
+
+
 def _source_pdf_page_labels(pdf_path: Path) -> dict[int, str]:
     """Return the PDF page-label tree as a one-based physical-page map."""
     import pymupdf
@@ -19520,7 +19593,9 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
                    ) = DEFAULT_STRUCTURE_PROFILE,
                    security_policy: (
                        _release_security.ReleaseSecurityPolicy | None
-                   ) = None) -> None:
+                   ) = None,
+                   telemetry: _run_telemetry.RunTelemetry | None = None
+                   ) -> None:
     """Build one complete chunk artifact set under a path-wide lease."""
     profile = _document_profiles.get_profile(structure_profile)
     chunks_output = Path(chunks_output)
@@ -19563,6 +19638,7 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
             table_children=table_children,
             structure_profile=profile,
             security_policy=security_policy,
+            telemetry=telemetry,
         )
 
 
@@ -19593,7 +19669,9 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
                    ) = DEFAULT_STRUCTURE_PROFILE,
                    security_policy: (
                        _release_security.ReleaseSecurityPolicy | None
-                   ) = None) -> None:
+                   ) = None,
+                   telemetry: _run_telemetry.RunTelemetry | None = None
+                   ) -> None:
     """Load a DoclingDocument, chunk with HybridChunker, and enrich."""
     from docling_core.types import DoclingDocument
     from docling_core.transforms.chunker import HybridChunker
@@ -19713,6 +19791,8 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
             "Repaired %s decorative scaffold section marker(s)",
             repaired_markers,
         )
+    _run_bookmark_cross_check(
+        doc_path, conversion_binding, scaffold, telemetry=telemetry)
 
     # The chunker tokenizer is for token counting only — it doesn't need to
     # match the embedding model exactly. API models (voyage-*, text-embedding-*,
@@ -29616,6 +29696,7 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
                     llm_scaffold=getattr(args, "llm_scaffold", False),
                     table_children=getattr(args, "table_children", False),
                     structure_profile=structure_profile,
+                    telemetry=telemetry,
                     **llm_kwargs,
                 )
                 if not _chunks_complete(
@@ -31292,6 +31373,7 @@ def main(argv: list[str] | None = None):
                            llm_scaffold=args.llm_scaffold,
                            table_children=args.table_children,
                            structure_profile=args.structure_profile,
+                           telemetry=run_telemetry,
                            **llm_kwargs)
 
         elif args.command == "index":

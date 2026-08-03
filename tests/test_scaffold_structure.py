@@ -1,4 +1,7 @@
 import json
+import logging
+import sys
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -9166,3 +9169,124 @@ def test_coalescing_never_merges_figure_sidecar_into_body_flow():
         [body, figure], lambda text: len(text.split()), 100)
 
     assert repaired == [body, figure]
+
+
+def test_bookmark_scaffold_warnings_matrix():
+    scaffold = [
+        {"level": 1, "title": "Chapter 1  The Courts", "page": 1,
+         "chapter_num": 1, "path": "Chapter 1 The Courts"},
+        {"level": 2, "title": "A. Jurisdiction", "page": 3,
+         "chapter_num": 1, "path": "Chapter 1 > A. Jurisdiction"},
+    ]
+    outline = [
+        (1, "Chapter 1 The Courts", 1),
+        (1, "A. Jurisdiction", 3),
+        (1, "Chapter 9 Remedies", 200),
+    ]
+    warnings = rag._bookmark_scaffold_warnings(outline, scaffold)
+    assert any("level mismatch" in w and "A. Jurisdiction" in w
+               for w in warnings)
+    assert any("missing from scaffold" in w and "Chapter 9 Remedies" in w
+               for w in warnings)
+    assert rag._bookmark_scaffold_warnings([], scaffold) == []
+
+
+def test_bookmark_scaffold_warnings_flags_scaffold_only_chapters():
+    scaffold = [{"level": 1, "title": "Chapter 2 Contracts", "page": 30,
+                 "chapter_num": 2, "path": "Chapter 2 Contracts"}]
+    outline = [(1, "Chapter 1 Torts", 1)]
+    warnings = rag._bookmark_scaffold_warnings(outline, scaffold)
+    assert any("missing from bookmarks" in w and "Chapter 2 Contracts" in w
+               for w in warnings)
+    assert any("missing from scaffold" in w and "Chapter 1 Torts" in w
+               for w in warnings)
+
+
+class _FakeTocDoc:
+    def __init__(self, toc):
+        self._toc = toc
+        self.closed = False
+
+    def get_toc(self):
+        return self._toc
+
+    def close(self):
+        self.closed = True
+
+
+def _install_fake_pymupdf_toc(monkeypatch, toc):
+    doc = _FakeTocDoc(toc)
+    monkeypatch.setitem(
+        sys.modules, "pymupdf", SimpleNamespace(open=lambda _path: doc))
+    return doc
+
+
+class _FakeTelemetry:
+    def __init__(self):
+        self.observations = []
+
+    def stage_observation(self, stage, *, metrics=None):
+        self.observations.append((stage, metrics))
+
+
+def test_bookmark_cross_check_warns_and_records_telemetry_on_mismatch(
+        monkeypatch, tmp_path, caplog):
+    scaffold = [{"level": 1, "title": "Chapter 2 Contracts", "page": 30,
+                 "chapter_num": 2, "path": "Chapter 2 Contracts"}]
+    doc = _install_fake_pymupdf_toc(
+        monkeypatch, [[1, "Chapter 1 Torts", 1]])
+
+    @contextmanager
+    def fake_snapshot(*_args, **_kwargs):
+        yield SimpleNamespace(
+            pdf=SimpleNamespace(path=tmp_path / "book.pdf"))
+
+    monkeypatch.setattr(
+        rag, "_open_docling_source_pdf_snapshot", fake_snapshot)
+
+    telemetry = _FakeTelemetry()
+    with caplog.at_level(logging.WARNING):
+        rag._run_bookmark_cross_check(
+            tmp_path / "book.json", None, scaffold, telemetry=telemetry)
+
+    assert "missing from scaffold" in caplog.text
+    assert "Chapter 1 Torts" in caplog.text
+    assert "missing from bookmarks" in caplog.text
+    assert "Chapter 2 Contracts" in caplog.text
+    assert doc.closed
+    assert telemetry.observations == [
+        ("chunk", {"bookmark_entries": 1, "bookmark_warnings": 2})]
+
+
+def test_bookmark_cross_check_skips_without_source_pdf(
+        monkeypatch, tmp_path, caplog):
+    @contextmanager
+    def fake_snapshot(*_args, **_kwargs):
+        yield None
+
+    monkeypatch.setattr(
+        rag, "_open_docling_source_pdf_snapshot", fake_snapshot)
+    telemetry = _FakeTelemetry()
+
+    with caplog.at_level(logging.WARNING):
+        rag._run_bookmark_cross_check(
+            tmp_path / "book.json", None, [], telemetry=telemetry)
+
+    assert "Bookmark cross-check skipped" in caplog.text
+    assert telemetry.observations == []
+
+
+def test_bookmark_cross_check_swallows_snapshot_failure(
+        monkeypatch, tmp_path, caplog):
+    @contextmanager
+    def failing_snapshot(*_args, **_kwargs):
+        raise RuntimeError("boom")
+        yield None  # pragma: no cover - unreachable, keeps this a generator
+
+    monkeypatch.setattr(
+        rag, "_open_docling_source_pdf_snapshot", failing_snapshot)
+
+    with caplog.at_level(logging.WARNING):
+        rag._run_bookmark_cross_check(tmp_path / "book.json", None, [])
+
+    assert "Bookmark cross-check skipped: boom" in caplog.text
