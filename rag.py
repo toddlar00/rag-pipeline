@@ -114,7 +114,7 @@ DEFAULT_DB_LOCK_TIMEOUT = 30.0
 DEFAULT_OPERATION_TIMEOUTS = dict(
     _runtime_supervision.DEFAULT_OPERATION_TIMEOUTS)
 ARTIFACT_COMPLETION_SCHEMA_VERSION = 1
-CONVERSION_COMPLETION_SCHEMA_VERSION = 2
+CONVERSION_COMPLETION_SCHEMA_VERSION = 3
 CHUNK_COMPLETION_SCHEMA_VERSION = 7
 _CONVERSION_CAPTURE_POLICY = "stream-copy-v1"
 _MAX_CONVERSION_MANIFEST_BYTES = 1024 * 1024
@@ -7069,13 +7069,17 @@ def _detect_gpu() -> tuple:
 def _conversion_parameters(*, batch_size_override: int | None,
                            backend: str, auto_preprocess: bool,
                            ocr: bool | None,
+                           ocr_full_page: bool = False,
                            watermark: re.Pattern | None) -> dict:
     return {
         "batch_size_override": batch_size_override,
         "backend": backend,
         "auto_preprocess": auto_preprocess,
         "ocr": ocr,
-        "force_full_page_ocr": ocr is True,
+        "ocr_full_page": ocr_full_page,
+        "ocr_mode": ("off" if ocr is False
+                     else ("full-page" if ocr_full_page
+                           else "pdf-aware-layout-regions")),
         "watermark_pattern": watermark.pattern if watermark else None,
         "watermark_flags": watermark.flags if watermark else None,
         "model_artifact_lock_sha256": _model_artifact_lock_sha256(),
@@ -7098,12 +7102,13 @@ def _pin_docling_layout_revision(pipeline_options) -> str | None:
 
 def _configure_docling_model_artifacts(
         pipeline_options, *, include_ocr: bool,
-        force_full_page_ocr: bool = False,
+        ocr_full_page: bool = False,
         security_policy: (
             _release_security.ReleaseSecurityPolicy | None) = None,
 ) -> Path:
     """Force Docling onto verified local models and deterministic modes."""
     from docling.datamodel.pipeline_options import (
+        OcrMode,
         RapidOcrOptions,
         TableFormerMode,
         TableStructureOptions,
@@ -7127,10 +7132,13 @@ def _configure_docling_model_artifacts(
         mode=TableFormerMode.ACCURATE,
     )
     if include_ocr:
+        mode = (OcrMode.FULL_PAGE if ocr_full_page
+                else OcrMode.PDF_AWARE_LAYOUT_REGIONS)
         pipeline_options.ocr_options = RapidOcrOptions(
             backend="onnxruntime",
             lang=["english"],
-            force_full_page_ocr=force_full_page_ocr,
+            mode=mode,
+            force_full_page_ocr=ocr_full_page,
             det_model_path=str(
                 root / "RapidOcr/onnx/PP-OCRv6/det/PP-OCRv6_det_small.onnx"),
             cls_model_path=str(
@@ -7232,6 +7240,7 @@ def convert_pdf(pdf_path: Path, doc_output: Path, *,
                 watermark: Optional[re.Pattern] = None,
                 auto_preprocess: bool = True,
                 ocr: bool | None = None,
+                ocr_full_page: bool = False,
                 preprocessed_output: Path | None = None,
                 markdown_output: Path | None = None,
                 security_policy: (
@@ -7259,6 +7268,7 @@ def convert_pdf(pdf_path: Path, doc_output: Path, *,
             batch_size_override=batch_size_override,
             backend=backend, force=force, watermark=watermark,
             auto_preprocess=auto_preprocess, ocr=ocr,
+            ocr_full_page=ocr_full_page,
             preprocessed_output=preprocessed_output,
             markdown_output=markdown_output,
             security_policy=security_policy)
@@ -7271,6 +7281,7 @@ def _convert_pdf_locked(pdf_path: Path, doc_output: Path, *,
                 watermark: Optional[re.Pattern] = None,
                 auto_preprocess: bool = True,
                 ocr: bool | None = None,
+                ocr_full_page: bool = False,
                 preprocessed_output: Path | None = None,
                 markdown_output: Path | None = None,
                 security_policy: (
@@ -7285,7 +7296,8 @@ def _convert_pdf_locked(pdf_path: Path, doc_output: Path, *,
         f"{doc_output.stem}_preprocessed.pdf")
     completion_parameters = _conversion_parameters(
         batch_size_override=batch_size_override, backend=backend,
-        auto_preprocess=auto_preprocess, ocr=ocr, watermark=watermark)
+        auto_preprocess=auto_preprocess, ocr=ocr,
+        ocr_full_page=ocr_full_page, watermark=watermark)
 
     if (not force and _converted_outputs_complete_locked(
             source_pdf_path, doc_output, md_path,
@@ -7308,6 +7320,7 @@ def _convert_pdf_locked(pdf_path: Path, doc_output: Path, *,
             batch_size_override=batch_size_override, backend=backend,
             force=force, watermark=watermark,
             auto_preprocess=auto_preprocess, ocr=ocr,
+            ocr_full_page=ocr_full_page,
             preprocessed_output=preprocessed_path,
             markdown_output=markdown_output,
             security_policy=security_policy)
@@ -7377,6 +7390,7 @@ def _convert_pdf_generation(
                 watermark: Optional[re.Pattern] = None,
                 auto_preprocess: bool = True,
                 ocr: bool | None = None,
+                ocr_full_page: bool = False,
                 preprocessed_output: Path | None = None,
                 markdown_output: Path | None = None,
                 security_policy: (
@@ -7401,7 +7415,7 @@ def _convert_pdf_generation(
             )
 
     effective_ocr = bool(ocr)
-    force_full_page_ocr = ocr is True
+    force_full_page_ocr = ocr_full_page
     if ocr is None and stats is not None:
         effective_ocr = not _pdf_text_layer_is_usable(stats)
         if effective_ocr:
@@ -7528,7 +7542,7 @@ def _convert_pdf_generation(
         log.info(f"Docling layout revision: {revision}")
     artifacts_root = _configure_docling_model_artifacts(
         pipeline_opts, include_ocr=effective_ocr,
-        force_full_page_ocr=force_full_page_ocr,
+        ocr_full_page=force_full_page_ocr,
         security_policy=security_policy)
     log.info(f"Docling verified model artifacts: {artifacts_root}")
 
@@ -29499,7 +29513,9 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
         conversion_parameters = _conversion_parameters(
             batch_size_override=args.batch_size, backend=args.backend,
             auto_preprocess=not args.no_preprocess,
-            ocr=getattr(args, "ocr", None), watermark=watermark)
+            ocr=getattr(args, "ocr", None),
+            ocr_full_page=getattr(args, "ocr_full_page", False),
+            watermark=watermark)
         if resume and _converted_outputs_complete(
                 pdf_path, paths["doc"], paths["converted_markdown"],
                 parameters=conversion_parameters,
@@ -29516,6 +29532,7 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
                 watermark=watermark,
                 auto_preprocess=not args.no_preprocess,
                 ocr=getattr(args, "ocr", None),
+                ocr_full_page=getattr(args, "ocr_full_page", False),
                 preprocessed_output=paths["preprocessed"],
                 markdown_output=paths["converted_markdown"],
                 security_policy=llm_kwargs["security_policy"],
@@ -30598,6 +30615,14 @@ def main(argv: list[str] | None = None):
             help="Enable/disable OCR (default: detect from PDF text quality)",
         )
 
+    def add_ocr_full_page_flag(p):
+        p.add_argument(
+            "--ocr-full-page",
+            action="store_true",
+            help="Force legacy whole-page OCR instead of layout-aware "
+                 "region OCR (implies --ocr)",
+        )
+
     def add_chunk_llm_flags(p):
         p.add_argument("--llm-classify", action="store_true",
                         help="Use LLM for content classification")
@@ -30709,6 +30734,7 @@ def main(argv: list[str] | None = None):
                         help="Skip auto-detection of background scan images")
     add_watermark_flag(p_conv)
     add_ocr_flag(p_conv)
+    add_ocr_full_page_flag(p_conv)
 
     # chunk
     p_chunk = sub.add_parser("chunk", help="DoclingDocument to enriched chunks")
@@ -31030,6 +31056,7 @@ def main(argv: list[str] | None = None):
     add_structure_profile_flag(p_full)
     add_watermark_flag(p_full)
     add_ocr_flag(p_full)
+    add_ocr_full_page_flag(p_full)
     add_chunk_llm_flags(p_full)
     add_table_retrieval_flag(p_full)
     add_markdown_validation_flag(p_full)
@@ -31074,6 +31101,7 @@ def main(argv: list[str] | None = None):
     add_structure_profile_flag(p_batch)
     add_watermark_flag(p_batch)
     add_ocr_flag(p_batch)
+    add_ocr_full_page_flag(p_batch)
     add_chunk_llm_flags(p_batch)
     add_table_retrieval_flag(p_batch)
     add_markdown_validation_flag(p_batch)
@@ -31171,6 +31199,12 @@ def main(argv: list[str] | None = None):
     worker_job_context = None
 
     try:
+        # --- --ocr-full-page alone implies --ocr ---
+        if hasattr(args, "ocr"):
+            args.ocr = (
+                True if getattr(args, "ocr_full_page", False)
+                and args.ocr is None else args.ocr)
+
         # --- Compile watermark once ---
         if hasattr(args, "watermark"):
             wm = _compile_watermark(args.watermark)
@@ -31239,6 +31273,7 @@ def main(argv: list[str] | None = None):
                         watermark=wm,
                         auto_preprocess=not args.no_preprocess,
                         ocr=getattr(args, "ocr", None),
+                        ocr_full_page=getattr(args, "ocr_full_page", False),
                         security_policy=security_policy)
 
         elif args.command == "chunk":

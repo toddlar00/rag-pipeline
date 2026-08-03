@@ -318,22 +318,34 @@ def test_conversion_completion_accepts_source_path_case_only_change(tmp_path):
 def test_conversion_parameters_invalidate_legacy_explicit_ocr_receipts():
     forced = rag._conversion_parameters(
         batch_size_override=None, backend="auto", auto_preprocess=True,
-        ocr=True, watermark=None)
+        ocr=True, ocr_full_page=True, watermark=None)
     automatic = rag._conversion_parameters(
         batch_size_override=None, backend="auto", auto_preprocess=True,
-        ocr=None, watermark=None)
+        ocr=True, watermark=None)
     disabled = rag._conversion_parameters(
         batch_size_override=None, backend="auto", auto_preprocess=True,
         ocr=False, watermark=None)
 
-    assert forced["force_full_page_ocr"] is True
-    assert automatic["force_full_page_ocr"] is False
-    assert disabled["force_full_page_ocr"] is False
+    assert forced["ocr_full_page"] is True
+    assert automatic["ocr_full_page"] is False
+    assert disabled["ocr_full_page"] is False
 
     legacy_forced = dict(forced)
-    legacy_forced.pop("force_full_page_ocr")
+    legacy_forced.pop("ocr_full_page")
     assert rag._artifact_parameters_sha256(forced) != (
         rag._artifact_parameters_sha256(legacy_forced))
+
+
+def test_conversion_parameters_invalidate_pre_ocr_mode_receipts():
+    with_mode = rag._conversion_parameters(
+        batch_size_override=None, backend="auto", auto_preprocess=True,
+        ocr=None, watermark=None)
+
+    pre_ocr_mode = dict(with_mode)
+    pre_ocr_mode.pop("ocr_mode")
+
+    assert rag._artifact_parameters_sha256(with_mode) != (
+        rag._artifact_parameters_sha256(pre_ocr_mode))
 
 
 def test_chunk_completion_binds_source_options_model_lock_and_output(

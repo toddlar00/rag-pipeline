@@ -347,7 +347,8 @@ def test_convert_wrapper_uses_snapshot_and_binds_original_source(
     assert observed["generation_kwargs"]["snapshot_stack"] is not None
     assert completion["source_name"] == "book.pdf"
     assert completion["source_sha256"] == digest
-    assert completion["schema_version"] == 2
+    assert (completion["schema_version"]
+            == rag.CONVERSION_COMPLETION_SCHEMA_VERSION)
     assert set(completion["outputs"]) == {
         "docling_json", "docling_markdown"}
     assert not preprocessed.exists()

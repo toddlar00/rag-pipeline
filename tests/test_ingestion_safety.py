@@ -334,17 +334,18 @@ def test_forced_ocr_keeps_page_images(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize(
-    ("ocr", "usable_text", "expected_enabled", "expected_force"),
+    ("ocr", "ocr_full_page", "usable_text", "expected_enabled",
+     "expected_full_page"),
     [
-        (True, True, True, True),
-        (None, False, True, False),
-        (None, True, False, False),
-        (False, True, False, False),
+        (True, False, True, True, False),    # --ocr → region mode
+        (True, True, True, True, True),      # --ocr --ocr-full-page → legacy
+        (None, False, False, True, False),   # auto-enable → region mode
+        (False, False, False, False, False), # --no-ocr
     ],
 )
 def test_explicit_ocr_alone_forces_full_page_rapidocr(
-        monkeypatch, tmp_path, ocr, usable_text, expected_enabled,
-        expected_force):
+        monkeypatch, tmp_path, ocr, ocr_full_page, usable_text,
+        expected_enabled, expected_full_page):
     source = tmp_path / "book.pdf"
     source.write_bytes(b"pdf")
     output = tmp_path / "book.json"
@@ -400,12 +401,12 @@ def test_explicit_ocr_alone_forces_full_page_rapidocr(
     class OptionsCaptured(Exception):
         pass
 
-    def capture_options(options, *, include_ocr, force_full_page_ocr,
+    def capture_options(options, *, include_ocr, ocr_full_page,
                         security_policy):
         observed.update(
             do_ocr=options.do_ocr,
             include_ocr=include_ocr,
-            force_full_page_ocr=force_full_page_ocr,
+            ocr_full_page=ocr_full_page,
         )
         raise OptionsCaptured
 
@@ -426,20 +427,28 @@ def test_explicit_ocr_alone_forces_full_page_rapidocr(
             original_input=original,
             auto_preprocess=True,
             ocr=ocr,
+            ocr_full_page=ocr_full_page,
         )
 
     assert observed == {
         "do_ocr": expected_enabled,
         "include_ocr": expected_enabled,
-        "force_full_page_ocr": expected_force,
+        "ocr_full_page": expected_full_page,
     }
 
 
 @pytest.mark.parametrize(
-    ("ocr_args", "expected"),
-    [(["--ocr"], True), (["--no-ocr"], False), ([], None)],
+    ("ocr_args", "expected", "expected_full_page"),
+    [
+        (["--ocr"], True, False),
+        (["--no-ocr"], False, False),
+        ([], None, False),
+        (["--ocr-full-page"], True, True),
+        (["--ocr", "--ocr-full-page"], True, True),
+    ],
 )
-def test_convert_cli_forwards_ocr_override(monkeypatch, ocr_args, expected):
+def test_convert_cli_forwards_ocr_override(
+        monkeypatch, ocr_args, expected, expected_full_page):
     observed = {}
 
     def fake_convert(*args, **kwargs):
@@ -455,14 +464,21 @@ def test_convert_cli_forwards_ocr_override(monkeypatch, ocr_args, expected):
     rag.main()
 
     assert observed["ocr"] is expected
+    assert observed["ocr_full_page"] is expected_full_page
 
 
 @pytest.mark.parametrize(
-    ("ocr", "expected_flag"),
-    [(True, "--ocr"), (False, "--no-ocr")],
+    ("ocr", "ocr_full_page", "expected_flag"),
+    [
+        (True, False, "--ocr"),
+        (False, False, "--no-ocr"),
+        (True, True, "--ocr-full-page"),
+    ],
 )
-def test_resume_command_preserves_explicit_ocr_choice(ocr, expected_flag):
+def test_resume_command_preserves_explicit_ocr_choice(
+        ocr, ocr_full_page, expected_flag):
     command = rag._build_resume_cmd(
-        rag.Path("Book.pdf"), SimpleNamespace(ocr=ocr))
+        rag.Path("Book.pdf"),
+        SimpleNamespace(ocr=ocr, ocr_full_page=ocr_full_page))
 
     assert expected_flag in command

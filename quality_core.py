@@ -24,6 +24,9 @@ import table_retrieval_core
 QUALITY_REPORT_SCHEMA_VERSION = 12
 SOURCE_LINEAGE_SCHEMA_VERSION = 5
 SOURCE_ANALYSIS_SCHEMA_VERSION = 4
+# Mirrors rag.CONVERSION_COMPLETION_SCHEMA_VERSION; this leaf cannot import
+# rag.py without creating an import cycle, so the two must be bumped together.
+CONVERSION_COMPLETION_SCHEMA_VERSION = 3
 PAGE_ORDER_REASON_FIELD = "page_order_reason"
 FOOTNOTE_AFTER_CONTINUATION_REASON = (
     "footnote_after_cross_page_continuation")
@@ -326,7 +329,8 @@ def _valid_input_bindings(value: object) -> bool:
             or not conversion["name"]
             or Path(conversion["name"]).name != conversion["name"]
             or not _valid_sha256(conversion.get("sha256"))
-            or conversion.get("schema_version") != 2):
+            or conversion.get("schema_version")
+            != CONVERSION_COMPLETION_SCHEMA_VERSION):
         return False
     recovery = value.get("table_recovery")
     if recovery is None:

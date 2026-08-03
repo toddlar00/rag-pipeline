@@ -1458,7 +1458,7 @@ def test_validate_quality_report_binds_recovery_to_actual_record_refs():
     conversion = {
         "name": ".book.json.conversion.complete.json",
         "sha256": "d" * 64,
-        "schema_version": 2,
+        "schema_version": quality_core.CONVERSION_COMPLETION_SCHEMA_VERSION,
     }
     bindings = {
         "docling_json": {
