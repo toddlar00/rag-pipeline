@@ -114,7 +114,7 @@ DEFAULT_DB_LOCK_TIMEOUT = 30.0
 DEFAULT_OPERATION_TIMEOUTS = dict(
     _runtime_supervision.DEFAULT_OPERATION_TIMEOUTS)
 ARTIFACT_COMPLETION_SCHEMA_VERSION = 1
-CONVERSION_COMPLETION_SCHEMA_VERSION = 2
+CONVERSION_COMPLETION_SCHEMA_VERSION = 3
 CHUNK_COMPLETION_SCHEMA_VERSION = 7
 _CONVERSION_CAPTURE_POLICY = "stream-copy-v1"
 _MAX_CONVERSION_MANIFEST_BYTES = 1024 * 1024
@@ -315,6 +315,7 @@ _MIN_USABLE_PAGE_CHARS = 40
 _MIN_USABLE_TEXT_PAGE_RATIO = 0.60
 _MIN_USABLE_SCAN_TEXT_RATIO = 1.00
 _MAX_REPLACEMENT_CHAR_RATIO = 0.02
+_MAX_CID_CHAR_RATIO = 0.02
 _MIN_BACKGROUND_IMAGE_PAGE_COVERAGE = 0.70
 _CONTEXT_TOKEN_RESERVE = 192
 _HEADING_TOKEN_RESERVE = 64
@@ -713,6 +714,7 @@ def _pdf_ingestion_thresholds() -> _ingestion_core.PDFIngestionThresholds:
         min_usable_text_page_ratio=_MIN_USABLE_TEXT_PAGE_RATIO,
         min_usable_scan_text_ratio=_MIN_USABLE_SCAN_TEXT_RATIO,
         max_replacement_char_ratio=_MAX_REPLACEMENT_CHAR_RATIO,
+        max_cid_char_ratio=_MAX_CID_CHAR_RATIO,
         min_background_image_page_coverage=(
             _MIN_BACKGROUND_IMAGE_PAGE_COVERAGE),
     )
@@ -4559,6 +4561,42 @@ def _normalize_scaffold_metadata(
     return normalized
 
 
+def _bookmark_scaffold_warnings(
+        outline: list[tuple[int, str, int]],
+        scaffold: list[dict]) -> list[str]:
+    """Advisory comparison of PDF bookmarks against the accepted scaffold."""
+    def _normalize(title):
+        return re.sub(r"\s+", " ", str(title)).strip().casefold()
+
+    warnings: list[str] = []
+    if not outline:
+        return warnings
+    scaffold_levels = {}
+    for entry in scaffold:
+        scaffold_levels.setdefault(
+            _normalize(entry.get("title", "")), int(entry.get("level", 0)))
+    outline_titles = set()
+    for level, title, _page in outline:
+        key = _normalize(title)
+        outline_titles.add(key)
+        if key in scaffold_levels:
+            if scaffold_levels[key] != int(level):
+                warnings.append(
+                    f"bookmark level mismatch: {title!r} bookmark level "
+                    f"{int(level)} vs scaffold level {scaffold_levels[key]}")
+        elif int(level) == 1:
+            warnings.append(
+                f"bookmark chapter missing from scaffold: {title!r}")
+    for entry in scaffold:
+        if int(entry.get("level", 0)) != 1:
+            continue
+        if _normalize(entry.get("title", "")) not in outline_titles:
+            warnings.append(
+                "scaffold chapter missing from bookmarks: "
+                f"{entry.get('title')!r}")
+    return warnings
+
+
 def _repair_bare_scaffold_section_markers(
         scaffold: list[dict], document: dict, *,
         structure_profile: (
@@ -6758,6 +6796,9 @@ def _render_pdf_triage(triage, pdf_path: Path, *, file_size: int,
     if triage.sample_read_errors:
         lines.append(
             f"  unreadable sampled pages: {triage.sample_read_errors}")
+    if triage.cid_garbled_pages:
+        lines.append(
+            f"  garbled (CID) pages: {triage.cid_garbled_pages}")
     lines.append("")
     lines.append(f"  preprocess forecast: {triage.preprocess_forecast}")
     if triage.preprocess_forecast == "inspection-incomplete":
@@ -7064,13 +7105,21 @@ def _detect_gpu() -> tuple:
 def _conversion_parameters(*, batch_size_override: int | None,
                            backend: str, auto_preprocess: bool,
                            ocr: bool | None,
+                           ocr_full_page: bool = False,
                            watermark: re.Pattern | None) -> dict:
+    # Full-page OCR is meaningless once OCR itself is disabled; normalize it
+    # away so a disabled-OCR receipt hashes identically regardless of the
+    # (ignored) --ocr-full-page flag's value.
+    ocr_full_page = ocr_full_page and ocr is not False
     return {
         "batch_size_override": batch_size_override,
         "backend": backend,
         "auto_preprocess": auto_preprocess,
         "ocr": ocr,
-        "force_full_page_ocr": ocr is True,
+        "ocr_full_page": ocr_full_page,
+        "ocr_mode": ("off" if ocr is False
+                     else ("full-page" if ocr_full_page
+                           else "pdf-aware-layout-regions")),
         "watermark_pattern": watermark.pattern if watermark else None,
         "watermark_flags": watermark.flags if watermark else None,
         "model_artifact_lock_sha256": _model_artifact_lock_sha256(),
@@ -7093,12 +7142,13 @@ def _pin_docling_layout_revision(pipeline_options) -> str | None:
 
 def _configure_docling_model_artifacts(
         pipeline_options, *, include_ocr: bool,
-        force_full_page_ocr: bool = False,
+        ocr_full_page: bool = False,
         security_policy: (
             _release_security.ReleaseSecurityPolicy | None) = None,
 ) -> Path:
     """Force Docling onto verified local models and deterministic modes."""
     from docling.datamodel.pipeline_options import (
+        OcrMode,
         RapidOcrOptions,
         TableFormerMode,
         TableStructureOptions,
@@ -7122,10 +7172,13 @@ def _configure_docling_model_artifacts(
         mode=TableFormerMode.ACCURATE,
     )
     if include_ocr:
+        mode = (OcrMode.FULL_PAGE if ocr_full_page
+                else OcrMode.PDF_AWARE_LAYOUT_REGIONS)
         pipeline_options.ocr_options = RapidOcrOptions(
             backend="onnxruntime",
             lang=["english"],
-            force_full_page_ocr=force_full_page_ocr,
+            mode=mode,
+            force_full_page_ocr=ocr_full_page,
             det_model_path=str(
                 root / "RapidOcr/onnx/PP-OCRv6/det/PP-OCRv6_det_small.onnx"),
             cls_model_path=str(
@@ -7227,10 +7280,12 @@ def convert_pdf(pdf_path: Path, doc_output: Path, *,
                 watermark: Optional[re.Pattern] = None,
                 auto_preprocess: bool = True,
                 ocr: bool | None = None,
+                ocr_full_page: bool = False,
                 preprocessed_output: Path | None = None,
                 markdown_output: Path | None = None,
                 security_policy: (
                     _release_security.ReleaseSecurityPolicy | None) = None,
+                telemetry: _run_telemetry.RunTelemetry | None = None,
                 ) -> None:
     """Convert under path-wide leases for the complete artifact set."""
     doc_output = Path(doc_output)
@@ -7254,9 +7309,11 @@ def convert_pdf(pdf_path: Path, doc_output: Path, *,
             batch_size_override=batch_size_override,
             backend=backend, force=force, watermark=watermark,
             auto_preprocess=auto_preprocess, ocr=ocr,
+            ocr_full_page=ocr_full_page,
             preprocessed_output=preprocessed_output,
             markdown_output=markdown_output,
-            security_policy=security_policy)
+            security_policy=security_policy,
+            telemetry=telemetry)
 
 
 def _convert_pdf_locked(pdf_path: Path, doc_output: Path, *,
@@ -7266,10 +7323,12 @@ def _convert_pdf_locked(pdf_path: Path, doc_output: Path, *,
                 watermark: Optional[re.Pattern] = None,
                 auto_preprocess: bool = True,
                 ocr: bool | None = None,
+                ocr_full_page: bool = False,
                 preprocessed_output: Path | None = None,
                 markdown_output: Path | None = None,
                 security_policy: (
                     _release_security.ReleaseSecurityPolicy | None) = None,
+                telemetry: _run_telemetry.RunTelemetry | None = None,
                 ) -> None:
     """Convert one immutable PDF generation and bind its exact source."""
     source_pdf_path = Path(pdf_path)
@@ -7280,7 +7339,8 @@ def _convert_pdf_locked(pdf_path: Path, doc_output: Path, *,
         f"{doc_output.stem}_preprocessed.pdf")
     completion_parameters = _conversion_parameters(
         batch_size_override=batch_size_override, backend=backend,
-        auto_preprocess=auto_preprocess, ocr=ocr, watermark=watermark)
+        auto_preprocess=auto_preprocess, ocr=ocr,
+        ocr_full_page=ocr_full_page, watermark=watermark)
 
     if (not force and _converted_outputs_complete_locked(
             source_pdf_path, doc_output, md_path,
@@ -7303,9 +7363,11 @@ def _convert_pdf_locked(pdf_path: Path, doc_output: Path, *,
             batch_size_override=batch_size_override, backend=backend,
             force=force, watermark=watermark,
             auto_preprocess=auto_preprocess, ocr=ocr,
+            ocr_full_page=ocr_full_page,
             preprocessed_output=preprocessed_path,
             markdown_output=markdown_output,
-            security_policy=security_policy)
+            security_policy=security_policy,
+            telemetry=telemetry)
         if _cached_artifact_sha256(source_pdf_path) != source_snapshot.sha256:
             raise RuntimeError(
                 f"PDF source changed while converting: {source_pdf_path}")
@@ -7362,6 +7424,32 @@ def _convert_pdf_locked(pdf_path: Path, doc_output: Path, *,
             f"{source_pdf_path}")
 
 
+def _confidence_summary(confidence) -> tuple[dict, list[int]]:
+    """Numeric conversion-confidence metrics plus low-grade page numbers."""
+    def _finite_score(value):
+        return value if (
+            isinstance(value, float) and math.isfinite(value)) else None
+
+    try:
+        mean_score = confidence.mean_score
+        low_score = confidence.low_score
+        pages = confidence.pages
+        poor_pages = [
+            page_no for page_no, page in pages.items()
+            if page.low_grade.name == "POOR"
+        ]
+        metrics = {
+            "confidence_pages": len(pages),
+            "confidence_poor_pages": len(poor_pages),
+            "confidence_mean_score": _finite_score(mean_score),
+            "confidence_low_score": _finite_score(low_score),
+        }
+    except (AttributeError, TypeError):
+        log.info("Docling confidence not available")
+        return {}, []
+    return metrics, poor_pages
+
+
 def _convert_pdf_generation(
                 pdf_path: Path, doc_output: Path, *,
                 snapshot_stack: ExitStack,
@@ -7372,10 +7460,12 @@ def _convert_pdf_generation(
                 watermark: Optional[re.Pattern] = None,
                 auto_preprocess: bool = True,
                 ocr: bool | None = None,
+                ocr_full_page: bool = False,
                 preprocessed_output: Path | None = None,
                 markdown_output: Path | None = None,
                 security_policy: (
                     _release_security.ReleaseSecurityPolicy | None) = None,
+                telemetry: _run_telemetry.RunTelemetry | None = None,
                 ) -> "ConversionInputBinding":
     """Convert an already-pinned PDF pathname generation."""
     import os
@@ -7396,7 +7486,7 @@ def _convert_pdf_generation(
             )
 
     effective_ocr = bool(ocr)
-    force_full_page_ocr = ocr is True
+    force_full_page_ocr = ocr_full_page
     if ocr is None and stats is not None:
         effective_ocr = not _pdf_text_layer_is_usable(stats)
         if effective_ocr:
@@ -7523,7 +7613,7 @@ def _convert_pdf_generation(
         log.info(f"Docling layout revision: {revision}")
     artifacts_root = _configure_docling_model_artifacts(
         pipeline_opts, include_ocr=effective_ocr,
-        force_full_page_ocr=force_full_page_ocr,
+        ocr_full_page=force_full_page_ocr,
         security_policy=security_policy)
     log.info(f"Docling verified model artifacts: {artifacts_root}")
 
@@ -7585,6 +7675,34 @@ def _convert_pdf_generation(
         peak_mb = torch.cuda.max_memory_allocated(0) / 1024**2
         total_mb = torch.cuda.get_device_properties(0).total_memory / 1024**2
         log.info(f"Peak GPU memory: {peak_mb:.0f} MB / {total_mb:.0f} MB")
+
+    # --- Advisory Docling confidence surfacing (best-effort, never fatal) ---
+    try:
+        confidence = getattr(result, "confidence", None)
+        metrics, poor_pages = _confidence_summary(confidence)
+        if metrics:
+            mean_grade = getattr(
+                getattr(confidence, "mean_grade", None), "name", "UNKNOWN")
+            low_grade = getattr(
+                getattr(confidence, "low_grade", None), "name", "UNKNOWN")
+            mean_score = metrics["confidence_mean_score"]
+            low_score = metrics["confidence_low_score"]
+            log.info(
+                "Docling confidence: mean=%s (%s) low=%s (%s) pages=%d poor=%d",
+                mean_grade,
+                "n/a" if mean_score is None else f"{mean_score:.3f}",
+                low_grade,
+                "n/a" if low_score is None else f"{low_score:.3f}",
+                metrics["confidence_pages"], metrics["confidence_poor_pages"],
+            )
+            if poor_pages:
+                log.warning(
+                    "Docling low-confidence pages: %s", poor_pages[:20])
+            if telemetry is not None:
+                telemetry.stage_observation(
+                    "convert_confidence", metrics=metrics)
+    except Exception as exc:
+        log.warning("Confidence surfacing skipped: %s", exc)
 
     dl_doc = result.document
 
@@ -9828,7 +9946,7 @@ class ConversionInputBinding:
 
 @dataclass(frozen=True, slots=True)
 class ConversionSourceBinding:
-    """Strict capture proof loaded from a conversion-v2 completion."""
+    """Strict capture proof loaded from a capture-verified conversion manifest."""
 
     manifest_path: Path
     manifest_sha256: str
@@ -10265,8 +10383,8 @@ def _open_docling_source_pdf_snapshot(
     if binding is None:
         if explicit_source_pdf is not None:
             raise ValueError(
-                "--source-pdf requires a capture-verified conversion-v2 "
-                "completion manifest")
+                "--source-pdf requires a capture-verified conversion "
+                "manifest")
         yield None
         return
 
@@ -14638,28 +14756,76 @@ def _recover_native_toc_cell_repairs(
     return repairs
 
 
+def _read_source_pdf_outline(pdf_path: Path) -> list[tuple[int, str, int]]:
+    """Return the PDF bookmark outline as (level, title, page) tuples."""
+    import pymupdf
+
+    with pymupdf.open(str(pdf_path)) as pdf:
+        return [tuple(entry) for entry in pdf.get_toc()]
+
+
 def _recover_bound_toc_cell_repairs(
         document: dict, doc_path: Path,
         binding: ConversionSourceBinding | None, *,
         source_pdf_path: Path | None,
-        book_sections: dict) -> dict[tuple[int, int], str]:
-    """Recover TOC cell spelling only from capture-verified source bytes."""
+        book_sections: dict) -> tuple[
+            dict[tuple[int, int], str], list[tuple[int, str, int]] | None]:
+    """Recover TOC cell spelling and the bookmark outline from one snapshot.
+
+    Both recoveries share the single capture-verified source-PDF snapshot
+    opened here; a failure reading the bookmark outline is isolated and
+    never discards already-recovered TOC cell text. The outline is ``None``
+    when no verified source PDF is available or its read failed — the
+    caller treats that as "advisory check skipped", not an error.
+    """
     try:
         with _open_docling_source_pdf_snapshot(
                 doc_path, binding,
                 explicit_source_pdf=source_pdf_path) as recovery_source:
             if recovery_source is None:
-                return {}
+                log.warning(
+                    "Bookmark cross-check skipped: %s",
+                    "no verified source PDF available")
+                return {}, None
             repairs = _recover_native_toc_cell_repairs(
                 document, recovery_source.pdf.path, book_sections)
-        return repairs
+            try:
+                outline = _read_source_pdf_outline(recovery_source.pdf.path)
+            except Exception as exc:
+                log.warning("Bookmark cross-check skipped: %s", exc)
+                outline = None
+        return repairs, outline
     except Exception as exc:
         if source_pdf_path is not None:
             raise RuntimeError(
                 f"Explicit source PDF could not be verified: "
                 f"{source_pdf_path}") from exc
         log.warning("Could not repair source-bound TOC cells: %s", exc)
-        return {}
+        return {}, None
+
+
+def _run_bookmark_cross_check(
+        outline: list[tuple[int, str, int]] | None,
+        scaffold: list[dict],
+        telemetry: _run_telemetry.RunTelemetry | None = None) -> None:
+    """Advisory cross-check of the accepted scaffold against PDF bookmarks.
+
+    Pure comparison, logging, and telemetry only — no I/O. ``outline`` must
+    already be read from the source-PDF snapshot by the caller (see
+    ``_recover_bound_toc_cell_repairs``); ``None`` means it was unavailable
+    and the check is a no-op (no warnings, no telemetry).
+    """
+    if outline is None:
+        return
+    warnings = _bookmark_scaffold_warnings(outline, scaffold)
+    for warning in warnings:
+        log.warning("%s", warning)
+    if telemetry is not None:
+        telemetry.stage_observation(
+            "chunk_bookmarks", metrics={
+                "bookmark_entries": len(outline),
+                "bookmark_warnings": len(warnings),
+            })
 
 
 def _source_pdf_page_labels(pdf_path: Path) -> dict[int, str]:
@@ -19501,7 +19667,9 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
                    ) = DEFAULT_STRUCTURE_PROFILE,
                    security_policy: (
                        _release_security.ReleaseSecurityPolicy | None
-                   ) = None) -> None:
+                   ) = None,
+                   telemetry: _run_telemetry.RunTelemetry | None = None
+                   ) -> None:
     """Build one complete chunk artifact set under a path-wide lease."""
     profile = _document_profiles.get_profile(structure_profile)
     chunks_output = Path(chunks_output)
@@ -19544,6 +19712,7 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
             table_children=table_children,
             structure_profile=profile,
             security_policy=security_policy,
+            telemetry=telemetry,
         )
 
 
@@ -19574,7 +19743,9 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
                    ) = DEFAULT_STRUCTURE_PROFILE,
                    security_policy: (
                        _release_security.ReleaseSecurityPolicy | None
-                   ) = None) -> None:
+                   ) = None,
+                   telemetry: _run_telemetry.RunTelemetry | None = None
+                   ) -> None:
     """Load a DoclingDocument, chunk with HybridChunker, and enrich."""
     from docling_core.types import DoclingDocument
     from docling_core.transforms.chunker import HybridChunker
@@ -19662,7 +19833,7 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
         document_sha256=source_sha256,
         document_size=source_size,
     )
-    toc_cell_repairs = _recover_bound_toc_cell_repairs(
+    toc_cell_repairs, bookmark_outline = _recover_bound_toc_cell_repairs(
         doc_dict, doc_path, conversion_binding,
         source_pdf_path=source_pdf_path,
         book_sections=book_sections,
@@ -19694,6 +19865,7 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
             "Repaired %s decorative scaffold section marker(s)",
             repaired_markers,
         )
+    _run_bookmark_cross_check(bookmark_outline, scaffold, telemetry=telemetry)
 
     # The chunker tokenizer is for token counting only — it doesn't need to
     # match the embedding model exactly. API models (voyage-*, text-embedding-*,
@@ -29494,7 +29666,9 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
         conversion_parameters = _conversion_parameters(
             batch_size_override=args.batch_size, backend=args.backend,
             auto_preprocess=not args.no_preprocess,
-            ocr=getattr(args, "ocr", None), watermark=watermark)
+            ocr=getattr(args, "ocr", None),
+            ocr_full_page=getattr(args, "ocr_full_page", False),
+            watermark=watermark)
         if resume and _converted_outputs_complete(
                 pdf_path, paths["doc"], paths["converted_markdown"],
                 parameters=conversion_parameters,
@@ -29511,9 +29685,11 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
                 watermark=watermark,
                 auto_preprocess=not args.no_preprocess,
                 ocr=getattr(args, "ocr", None),
+                ocr_full_page=getattr(args, "ocr_full_page", False),
                 preprocessed_output=paths["preprocessed"],
                 markdown_output=paths["converted_markdown"],
                 security_policy=llm_kwargs["security_policy"],
+                telemetry=telemetry,
             )
             if not _converted_outputs_complete(
                     pdf_path, paths["doc"], paths["converted_markdown"],
@@ -29594,6 +29770,7 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
                     llm_scaffold=getattr(args, "llm_scaffold", False),
                     table_children=getattr(args, "table_children", False),
                     structure_profile=structure_profile,
+                    telemetry=telemetry,
                     **llm_kwargs,
                 )
                 if not _chunks_complete(
@@ -30593,6 +30770,14 @@ def main(argv: list[str] | None = None):
             help="Enable/disable OCR (default: detect from PDF text quality)",
         )
 
+    def add_ocr_full_page_flag(p):
+        p.add_argument(
+            "--ocr-full-page",
+            action="store_true",
+            help="Force legacy whole-page OCR instead of layout-aware "
+                 "region OCR (implies --ocr)",
+        )
+
     def add_chunk_llm_flags(p):
         p.add_argument("--llm-classify", action="store_true",
                         help="Use LLM for content classification")
@@ -30704,6 +30889,7 @@ def main(argv: list[str] | None = None):
                         help="Skip auto-detection of background scan images")
     add_watermark_flag(p_conv)
     add_ocr_flag(p_conv)
+    add_ocr_full_page_flag(p_conv)
 
     # chunk
     p_chunk = sub.add_parser("chunk", help="DoclingDocument to enriched chunks")
@@ -30712,7 +30898,7 @@ def main(argv: list[str] | None = None):
     p_chunk.add_argument(
         "--source-pdf", type=Path, default=None,
         help=("Exact original PDF for hash-verified table recovery; requires "
-              "a conversion-v2 completion manifest"))
+              "a capture-verified conversion manifest"))
     p_chunk.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS,
                          help=f"Max tokens per chunk (default: {DEFAULT_MAX_TOKENS})")
     p_chunk.add_argument("--min-words", type=int, default=MIN_CHUNK_WORDS,
@@ -31025,6 +31211,7 @@ def main(argv: list[str] | None = None):
     add_structure_profile_flag(p_full)
     add_watermark_flag(p_full)
     add_ocr_flag(p_full)
+    add_ocr_full_page_flag(p_full)
     add_chunk_llm_flags(p_full)
     add_table_retrieval_flag(p_full)
     add_markdown_validation_flag(p_full)
@@ -31069,6 +31256,7 @@ def main(argv: list[str] | None = None):
     add_structure_profile_flag(p_batch)
     add_watermark_flag(p_batch)
     add_ocr_flag(p_batch)
+    add_ocr_full_page_flag(p_batch)
     add_chunk_llm_flags(p_batch)
     add_table_retrieval_flag(p_batch)
     add_markdown_validation_flag(p_batch)
@@ -31166,6 +31354,12 @@ def main(argv: list[str] | None = None):
     worker_job_context = None
 
     try:
+        # --- --ocr-full-page alone implies --ocr ---
+        if hasattr(args, "ocr"):
+            args.ocr = (
+                True if getattr(args, "ocr_full_page", False)
+                and args.ocr is None else args.ocr)
+
         # --- Compile watermark once ---
         if hasattr(args, "watermark"):
             wm = _compile_watermark(args.watermark)
@@ -31234,7 +31428,9 @@ def main(argv: list[str] | None = None):
                         watermark=wm,
                         auto_preprocess=not args.no_preprocess,
                         ocr=getattr(args, "ocr", None),
-                        security_policy=security_policy)
+                        ocr_full_page=getattr(args, "ocr_full_page", False),
+                        security_policy=security_policy,
+                        telemetry=run_telemetry)
 
         elif args.command == "chunk":
             chunk_document(args.doc, args.out,
@@ -31252,6 +31448,7 @@ def main(argv: list[str] | None = None):
                            llm_scaffold=args.llm_scaffold,
                            table_children=args.table_children,
                            structure_profile=args.structure_profile,
+                           telemetry=run_telemetry,
                            **llm_kwargs)
 
         elif args.command == "index":

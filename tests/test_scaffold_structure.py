@@ -1,4 +1,6 @@
 import json
+import logging
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -9166,3 +9168,152 @@ def test_coalescing_never_merges_figure_sidecar_into_body_flow():
         [body, figure], lambda text: len(text.split()), 100)
 
     assert repaired == [body, figure]
+
+
+def test_bookmark_scaffold_warnings_matrix():
+    scaffold = [
+        {"level": 1, "title": "Chapter 1  The Courts", "page": 1,
+         "chapter_num": 1, "path": "Chapter 1 The Courts"},
+        {"level": 2, "title": "A. Jurisdiction", "page": 3,
+         "chapter_num": 1, "path": "Chapter 1 > A. Jurisdiction"},
+    ]
+    outline = [
+        (1, "Chapter 1 The Courts", 1),
+        (1, "A. Jurisdiction", 3),
+        (1, "Chapter 9 Remedies", 200),
+    ]
+    warnings = rag._bookmark_scaffold_warnings(outline, scaffold)
+    assert any("level mismatch" in w and "A. Jurisdiction" in w
+               for w in warnings)
+    assert any("missing from scaffold" in w and "Chapter 9 Remedies" in w
+               for w in warnings)
+    assert rag._bookmark_scaffold_warnings([], scaffold) == []
+
+
+def test_bookmark_scaffold_warnings_flags_scaffold_only_chapters():
+    scaffold = [{"level": 1, "title": "Chapter 2 Contracts", "page": 30,
+                 "chapter_num": 2, "path": "Chapter 2 Contracts"}]
+    outline = [(1, "Chapter 1 Torts", 1)]
+    warnings = rag._bookmark_scaffold_warnings(outline, scaffold)
+    assert any("missing from bookmarks" in w and "Chapter 2 Contracts" in w
+               for w in warnings)
+    assert any("missing from scaffold" in w and "Chapter 1 Torts" in w
+               for w in warnings)
+
+
+class _FakeTelemetry:
+    def __init__(self):
+        self.observations = []
+
+    def stage_observation(self, stage, *, metrics=None):
+        self.observations.append((stage, metrics))
+
+
+def test_run_bookmark_cross_check_warns_and_records_telemetry_on_mismatch(
+        caplog):
+    scaffold = [{"level": 1, "title": "Chapter 2 Contracts", "page": 30,
+                 "chapter_num": 2, "path": "Chapter 2 Contracts"}]
+    outline = [(1, "Chapter 1 Torts", 1)]
+    telemetry = _FakeTelemetry()
+
+    with caplog.at_level(logging.WARNING):
+        rag._run_bookmark_cross_check(outline, scaffold, telemetry=telemetry)
+
+    assert "missing from scaffold" in caplog.text
+    assert "Chapter 1 Torts" in caplog.text
+    assert "missing from bookmarks" in caplog.text
+    assert "Chapter 2 Contracts" in caplog.text
+    assert telemetry.observations == [
+        ("chunk_bookmarks", {"bookmark_entries": 1, "bookmark_warnings": 2})]
+
+
+def test_run_bookmark_cross_check_is_a_noop_when_outline_unavailable(
+        caplog):
+    telemetry = _FakeTelemetry()
+
+    with caplog.at_level(logging.WARNING):
+        rag._run_bookmark_cross_check(None, [{"level": 1, "title": "x"}],
+                                       telemetry=telemetry)
+
+    assert caplog.text == ""
+    assert telemetry.observations == []
+
+
+def test_recover_bound_toc_cell_repairs_reads_outline_from_one_snapshot(
+        monkeypatch, tmp_path):
+    """The bookmark outline must come from the same snapshot used for TOC
+    cell repairs — not a second physical copy+hash of the source PDF."""
+    snapshot_opens = []
+
+    @contextmanager
+    def counting_snapshot(*args, **kwargs):
+        snapshot_opens.append((args, kwargs))
+        yield SimpleNamespace(
+            pdf=SimpleNamespace(path=tmp_path / "book.pdf"))
+
+    monkeypatch.setattr(
+        rag, "_open_docling_source_pdf_snapshot", counting_snapshot)
+    monkeypatch.setattr(
+        rag, "_recover_native_toc_cell_repairs",
+        lambda *_a, **_k: {(0, 0): "Repaired"})
+    monkeypatch.setattr(
+        rag, "_read_source_pdf_outline",
+        lambda _path: [(1, "Chapter 9 Remedies", 1)])
+
+    repairs, outline = rag._recover_bound_toc_cell_repairs(
+        {}, tmp_path / "book.json", None,
+        source_pdf_path=None, book_sections={})
+
+    assert len(snapshot_opens) == 1
+    assert repairs == {(0, 0): "Repaired"}
+    assert outline == [(1, "Chapter 9 Remedies", 1)]
+
+
+def test_recover_bound_toc_cell_repairs_returns_none_outline_without_source(
+        monkeypatch, tmp_path, caplog):
+    @contextmanager
+    def fake_snapshot(*_args, **_kwargs):
+        yield None
+
+    monkeypatch.setattr(
+        rag, "_open_docling_source_pdf_snapshot", fake_snapshot)
+
+    with caplog.at_level(logging.WARNING):
+        repairs, outline = rag._recover_bound_toc_cell_repairs(
+            {}, tmp_path / "book.json", None,
+            source_pdf_path=None, book_sections={})
+
+    assert repairs == {}
+    assert outline is None
+    assert "Bookmark cross-check skipped" in caplog.text
+
+
+def test_recover_bound_toc_cell_repairs_keeps_repairs_when_outline_fails(
+        monkeypatch, tmp_path, caplog):
+    """A bookmark-outline read failure must not discard TOC cell repairs
+    already recovered from the same snapshot (isolated warn-and-continue)."""
+    @contextmanager
+    def fake_snapshot(*_args, **_kwargs):
+        yield SimpleNamespace(
+            pdf=SimpleNamespace(path=tmp_path / "book.pdf"))
+
+    monkeypatch.setattr(
+        rag, "_open_docling_source_pdf_snapshot", fake_snapshot)
+    monkeypatch.setattr(
+        rag, "_recover_native_toc_cell_repairs",
+        lambda *_a, **_k: {(0, 0): "Repaired"})
+
+    def failing_outline(_path):
+        raise RuntimeError("corrupt bookmark tree")
+
+    monkeypatch.setattr(rag, "_read_source_pdf_outline", failing_outline)
+
+    with caplog.at_level(logging.WARNING):
+        repairs, outline = rag._recover_bound_toc_cell_repairs(
+            {}, tmp_path / "book.json", None,
+            source_pdf_path=None, book_sections={})
+
+    assert repairs == {(0, 0): "Repaired"}
+    assert outline is None
+    assert "Bookmark cross-check skipped: corrupt bookmark tree" in (
+        caplog.text)

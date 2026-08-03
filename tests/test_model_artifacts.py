@@ -1275,9 +1275,9 @@ def test_zero_shot_and_reranker_use_verified_local_paths(monkeypatch):
     }
 
 
-@pytest.mark.parametrize("force_full_page_ocr", [False, True])
+@pytest.mark.parametrize("ocr_full_page", [False, True])
 def test_docling_configuration_is_local_accurate_and_explicit_english_ocr(
-        monkeypatch, tmp_path, force_full_page_ocr):
+        monkeypatch, tmp_path, ocr_full_page):
     root = tmp_path / "docling"
     monkeypatch.setattr(
         rag._model_artifacts, "verified_docling_artifact_directory",
@@ -1294,12 +1294,19 @@ def test_docling_configuration_is_local_accurate_and_explicit_english_ocr(
         def __init__(self, **kwargs):
             self.__dict__.update(kwargs)
 
+    class OcrMode:
+        FULL_PAGE = "full_page"
+        LAYOUT_REGIONS = "layout_regions"
+        PDF_AWARE_LAYOUT_REGIONS = "pdf_aware_layout_regions"
+        DEFAULT = "default"
+
     docling = ModuleType("docling")
     datamodel = ModuleType("docling.datamodel")
     options_module = ModuleType("docling.datamodel.pipeline_options")
     options_module.RapidOcrOptions = RapidOcrOptions
     options_module.TableFormerMode = TableFormerMode
     options_module.TableStructureOptions = TableStructureOptions
+    options_module.OcrMode = OcrMode
     monkeypatch.setitem(sys.modules, "docling", docling)
     monkeypatch.setitem(sys.modules, "docling.datamodel", datamodel)
     monkeypatch.setitem(
@@ -1309,13 +1316,17 @@ def test_docling_configuration_is_local_accurate_and_explicit_english_ocr(
     assert rag._configure_docling_model_artifacts(
         options,
         include_ocr=True,
-        force_full_page_ocr=force_full_page_ocr,
+        ocr_full_page=ocr_full_page,
     ) == root
     assert options.artifacts_path == root
     assert options.table_structure_options.mode == "accurate"
     assert options.ocr_options.backend == "onnxruntime"
     assert options.ocr_options.lang == ["english"]
-    assert options.ocr_options.force_full_page_ocr is force_full_page_ocr
+    assert options.ocr_options.force_full_page_ocr is ocr_full_page
+    expected_mode = (
+        OcrMode.FULL_PAGE if ocr_full_page
+        else OcrMode.PDF_AWARE_LAYOUT_REGIONS)
+    assert options.ocr_options.mode is expected_mode
     assert options.ocr_options.det_model_path.endswith("PP-OCRv6_det_small.onnx")
     assert options.ocr_options.cls_model_path.endswith(
         "ch_ppocr_mobile_v2.0_cls_mobile.onnx")

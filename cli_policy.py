@@ -133,7 +133,10 @@ def _build_resume_cmd(
             parts.append(flag)
 
     ocr = getattr(args, "ocr", None)
-    if ocr is True:
+    ocr_full_page = getattr(args, "ocr_full_page", False)
+    if ocr_full_page and ocr is not False:
+        parts.append("--ocr-full-page")
+    elif ocr is True:
         parts.append("--ocr")
     elif ocr is False:
         parts.append("--no-ocr")

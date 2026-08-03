@@ -46,6 +46,7 @@ class PDFIngestionThresholds:
     min_usable_text_page_ratio: float = 0.60
     min_usable_scan_text_ratio: float = 1.00
     max_replacement_char_ratio: float = 0.02
+    max_cid_char_ratio: float = 0.02
     min_background_image_page_coverage: float = 0.70
 
 
@@ -61,6 +62,7 @@ class PDFImageStats(TypedDict):
     large_image_pages_with_usable_text: int
     text_chars: int
     replacement_chars: int
+    cid_garbled_pages: int
     unique_dims: set[str]
     image_xrefs: set[int]
     inspection_complete: bool
@@ -169,6 +171,17 @@ def _issue(
         xref=xref)
 
 
+def cid_suspect_ratio(text: str) -> float:
+    """Share of characters that decode as unmapped-glyph placeholders."""
+    if not text:
+        return 0.0
+    suspect = sum(
+        1 for character in text
+        if character == "\ufffd" or "\ue000" <= character <= "\uf8ff"
+    )
+    return suspect / len(text)
+
+
 def pdf_page_text_is_usable(
         text: str, *,
         thresholds: PDFIngestionThresholds = (
@@ -180,6 +193,7 @@ def pdf_page_text_is_usable(
     return (
         non_whitespace_chars >= thresholds.min_usable_page_chars
         and replacement_ratio <= thresholds.max_replacement_char_ratio
+        and cid_suspect_ratio(text) <= thresholds.max_cid_char_ratio
     )
 
 
@@ -242,6 +256,7 @@ class PDFTriage:
     contents_page_found: bool
     ocr_recommended: bool
     sample_read_errors: int
+    cid_garbled_pages: int = 0
 
 
 def _scanner_fingerprint(producer: str, creator: str) -> str | None:
@@ -297,6 +312,7 @@ def assess_pdf_triage(
         contents_page_found=contents_page_found,
         ocr_recommended=not text_layer_usable,
         sample_read_errors=sample_read_errors,
+        cid_garbled_pages=int(stats.get("cid_garbled_pages", 0) or 0),
     )
 
 
@@ -429,6 +445,7 @@ def analyze_pdf_document(
         "large_image_pages_with_usable_text": 0,
         "text_chars": 0,
         "replacement_chars": 0,
+        "cid_garbled_pages": 0,
         "unique_dims": set(),
         "image_xrefs": set(),
         "inspection_complete": False,
@@ -448,6 +465,9 @@ def analyze_pdf_document(
                 usable_text = False
             stats["text_chars"] += len(text)
             stats["replacement_chars"] += text.count("\ufffd")
+            if (cid_suspect_ratio(text)
+                    > thresholds.max_cid_char_ratio):
+                stats["cid_garbled_pages"] += 1
             if usable_text:
                 stats["pages_with_usable_text"] += 1
 
