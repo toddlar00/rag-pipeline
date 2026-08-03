@@ -468,17 +468,22 @@ def test_convert_cli_forwards_ocr_override(
 
 
 @pytest.mark.parametrize(
-    ("ocr", "ocr_full_page", "expected_flag"),
+    ("ocr", "ocr_full_page", "expected_flag", "unexpected_flag"),
     [
-        (True, False, "--ocr"),
-        (False, False, "--no-ocr"),
-        (True, True, "--ocr-full-page"),
+        (True, False, "--ocr", None),
+        (False, False, "--no-ocr", None),
+        (True, True, "--ocr-full-page", None),
+        # --no-ocr must win over a stale/contradictory --ocr-full-page: a
+        # resumed run must not silently flip OCR back on.
+        (False, True, "--no-ocr", "--ocr-full-page"),
     ],
 )
 def test_resume_command_preserves_explicit_ocr_choice(
-        ocr, ocr_full_page, expected_flag):
+        ocr, ocr_full_page, expected_flag, unexpected_flag):
     command = rag._build_resume_cmd(
         rag.Path("Book.pdf"),
         SimpleNamespace(ocr=ocr, ocr_full_page=ocr_full_page))
 
     assert expected_flag in command
+    if unexpected_flag is not None:
+        assert unexpected_flag not in command
