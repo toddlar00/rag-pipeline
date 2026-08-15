@@ -48,6 +48,8 @@ def test_compare_significance_shape_and_determinism():
     assert block["baseline"] == "Vector only"
     assert block["seed"] == (
         evaluation_metrics.PAIRED_BOOTSTRAP_DEFAULT_SEED)
+    assert block["comparison_count"] == 1
+    assert block["multiplicity"] == "uncorrected per-metric tests"
     [comparison] = block["comparisons"]
     assert comparison["candidate"] == "Hybrid (BM25+vector)"
     assert comparison["metrics"]["mrr"]["mean_delta"] == 1.0
@@ -83,6 +85,7 @@ def test_print_compare_significance_is_ascii_and_marks(capsys):
     assert "Paired bootstrap vs Vector only" in output
     assert "delta +1.000" in output
     assert " *" in output
+    assert "markers: uncorrected per-metric tests (1 comparisons)" in output
     assert output.isascii()
 
 

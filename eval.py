@@ -1856,7 +1856,7 @@ def _paired_metric_values(
     candidate_by_index = {}
     for detail in candidate_details:
         if isinstance(detail, dict) and "query_index" in detail:
-            candidate_by_index[detail["query_index"]] = detail
+            candidate_by_index.setdefault(detail["query_index"], detail)
     baseline_values: list[float] = []
     candidate_values: list[float] = []
     excluded = 0
@@ -1901,6 +1901,7 @@ def _compare_significance(reports: list, metrics: list) -> dict:
         block["unavailable"] = "baseline configuration failed"
         return block
     baseline_details = baseline.get("query_details") or []
+    comparison_count = 0
     for item in reports:
         if item is baseline or "error" in item:
             continue
@@ -1920,7 +1921,10 @@ def _compare_significance(reports: list, metrics: list) -> dict:
                 baseline_values, candidate_values)
             result["excluded_pairs"] = excluded
             comparison["metrics"][metric] = result
+            comparison_count += 1
         block["comparisons"].append(comparison)
+    block["comparison_count"] = comparison_count
+    block["multiplicity"] = "uncorrected per-metric tests"
     return block
 
 
@@ -1944,6 +1948,9 @@ def _print_compare_significance(block: dict) -> None:
                 f"    {metric:<14s} delta {result['mean_delta']:+.3f} "
                 f"[{result['ci_low']:+.3f}, {result['ci_high']:+.3f}] "
                 f"p={result['p_value']:.3f}{marker}")
+    print(
+        "  markers: uncorrected per-metric tests "
+        f"({block.get('comparison_count', 0)} comparisons)")
 
 
 def _main_with_args(args, parser: argparse.ArgumentParser) -> int:

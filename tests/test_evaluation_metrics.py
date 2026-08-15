@@ -283,7 +283,7 @@ def test_paired_bootstrap_clear_improvement_is_significant():
     result = evaluation_metrics.paired_bootstrap(baseline, candidate)
     assert result["mean_delta"] == 1.0
     assert result["ci_low"] == 1.0 and result["ci_high"] == 1.0
-    assert result["p_value"] < 0.05
+    assert 0.0 < result["p_value"] < 0.05
 
 
 def test_paired_bootstrap_rejects_bad_inputs():

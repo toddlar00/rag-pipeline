@@ -61,8 +61,10 @@ def paired_bootstrap(
 
     Deltas are candidate minus baseline, paired per query.  The p-value is
     the two-sided bootstrap achieved significance level: twice the smaller
-    share of resampled mean deltas at or beyond zero, capped at 1.  The
-    seeded generator makes every field deterministic for a given input.
+    share of resampled mean deltas at or beyond zero, with (b+1)/(B+1)
+    smoothing so the floor is 1/(resamples+1) rather than an unresolvable
+    exact zero, capped at 1.  The seeded generator makes every field
+    deterministic for a given input.
     """
     baseline = [float(value) for value in baseline_values]
     candidate = [float(value) for value in candidate_values]
@@ -93,7 +95,8 @@ def paired_bootstrap(
     alpha = (1.0 - float(confidence)) / 2.0
     lower_tail = sum(1 for mean in means if mean <= 0.0)
     upper_tail = sum(1 for mean in means if mean >= 0.0)
-    p_value = min(1.0, 2.0 * min(lower_tail, upper_tail) / resamples)
+    p_value = min(
+        1.0, 2.0 * (min(lower_tail, upper_tail) + 1) / (resamples + 1))
     return {
         "pairs": count,
         "resamples": resamples,

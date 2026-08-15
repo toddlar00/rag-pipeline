@@ -38,6 +38,7 @@ _HEX64_RE = re.compile(r"[0-9a-f]{64}")
 _CONFLICTING_EVAL_OPTIONS = frozenset({
     "--retriever",
     "--compare",
+    "--bootstrap",
     "--hybrid",
     "--vector-only",
     "--rerank",

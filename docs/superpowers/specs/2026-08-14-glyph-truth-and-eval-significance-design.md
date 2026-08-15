@@ -71,10 +71,14 @@ and closing a recorded gap:
 - Per page the pass folds texttrace spans into four counts: total glyphs,
   unmapped glyphs (unicode U+FFFD), `.notdef` glyphs (glyph id 0), and
   invisible-text glyphs (span `type == 3`).
-- Decode-correctness extension: a page whose
-  `(unmapped + notdef) / total glyphs` exceeds the existing
-  `max_cid_char_ratio` threshold is CID-garbled even when its plain-text
-  extraction looks clean. The page increments the existing
+- Decode-correctness extension: a page whose decode-failed glyph share
+  exceeds the existing `max_cid_char_ratio` threshold is CID-garbled even
+  when its plain-text extraction looks clean. A glyph counts as one
+  decode failure when it is unmapped (U+FFFD or PUA), `.notdef`
+  (glyph id 0), or both — counted once, never summed across channels, so
+  the shared 0.02 threshold keeps the text channel's per-character
+  calibration (review finding I1 corrected the original summed formula
+  here). The page increments the existing
   `cid_garbled_pages` stat exactly once (union with the text-based term) and
   is excluded from `pages_with_usable_text` — the same
   verdict-changing-by-design semantics the 2026-08-03 spec approved for the
@@ -90,10 +94,16 @@ and closing a recorded gap:
   when N > 0. The existing `garbled (CID) pages` line now reflects the
   union detector.
 - Failure isolation: a raising texttrace degrades that page to text-only
-  detection and records a page-level inspection issue; it does not flip
-  `inspection_complete` (the text pass still ran; the glyph pass is an
-  additional term, and a hard incomplete would change preprocess forecasts
-  disproportionately).
+  detection and records a page-level inspection issue (prefixed
+  `glyph trace:` so it is not mistaken for a text-extraction failure); it
+  does not flip `inspection_complete` (the text pass still ran; the glyph
+  pass is an additional term, and a hard incomplete would change
+  preprocess forecasts disproportionately).
+- Scope and cost notes: clip-only text (Tr 7) produces no trace spans and
+  is outside both counts — Tr 3 is the common OCR-overlay mode. The trace
+  pass roughly triples per-page text-inspection time (~2.8x measured on a
+  200-page synthetic PDF), paid by both loops; injecting
+  `page_glyph_stats_fn` is the opt-out for cost-sensitive callers.
 
 ### 2. Broken-cmap recall fixture
 
@@ -124,7 +134,11 @@ and closing a recorded gap:
   seed, and a resample count, returns the observed mean delta, the
   percentile bootstrap confidence interval of the mean delta, and the
   two-sided bootstrap p-value (achieved significance level of the null
-  delta), all deterministic for a given seed.
+  delta, with (b+1)/(B+1) smoothing so the floor is 1/(resamples+1)),
+  all deterministic for a given seed. The significance block records its
+  `comparison_count` and declares the markers as uncorrected per-metric
+  tests, both in the JSON and as a printed footer — readers of a default
+  compare run (3 candidates x 6 metrics) must weigh the multiplicity.
 - `eval.py --compare --bootstrap`: after the existing four-configuration
   run, for each non-baseline configuration versus the `Vector only`
   baseline and each displayed metric, pair per-query values from

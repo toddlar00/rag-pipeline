@@ -154,11 +154,17 @@ ProgressPagesFn: TypeAlias = Callable[
 
 @dataclass(frozen=True)
 class PageGlyphStats:
-    """Glyph-level decode and visibility counts from one page's trace."""
+    """Glyph-level decode and visibility counts from one page's trace.
+
+    ``decode_failed_glyphs`` counts each glyph at most once when it is
+    unmapped, ``.notdef``, or both; the per-channel counts are
+    diagnostics and may overlap.
+    """
 
     total_glyphs: int
     unmapped_glyphs: int
     notdef_glyphs: int
+    decode_failed_glyphs: int
     invisible_glyphs: int
 
 
@@ -440,12 +446,13 @@ def page_glyph_stats(page: PDFPageLike) -> PageGlyphStats | None:
     Pages without a ``get_texttrace`` method report ``None`` so existing
     protocol fakes and degraded objects keep today's behavior exactly.
     Char tuples are ``(unicode, glyph, origin, bbox)``; span type 3 marks
-    invisible text.
+    invisible (Tr 3) text.  Clip-only text (Tr 7) produces no trace spans
+    at all, so it is outside both counts.
     """
     get_texttrace = getattr(page, "get_texttrace", None)
     if get_texttrace is None:
         return None
-    total = unmapped = notdef = invisible = 0
+    total = unmapped = notdef = decode_failed = invisible = 0
     for span in get_texttrace():
         if not isinstance(span, Mapping):
             raise TypeError("texttrace span is not a mapping")
@@ -455,15 +462,21 @@ def page_glyph_stats(page: PDFPageLike) -> PageGlyphStats | None:
             codepoint = int(char[0])
             glyph = int(char[1])
             total += 1
-            if codepoint == 0xFFFD or 0xE000 <= codepoint <= 0xF8FF:
+            is_unmapped = (
+                codepoint == 0xFFFD or 0xE000 <= codepoint <= 0xF8FF)
+            is_notdef = glyph == 0
+            if is_unmapped:
                 unmapped += 1
-            if glyph == 0:
+            if is_notdef:
                 notdef += 1
+            if is_unmapped or is_notdef:
+                decode_failed += 1
             if span_invisible:
                 invisible += 1
     return PageGlyphStats(
         total_glyphs=total, unmapped_glyphs=unmapped,
-        notdef_glyphs=notdef, invisible_glyphs=invisible)
+        notdef_glyphs=notdef, decode_failed_glyphs=decode_failed,
+        invisible_glyphs=invisible)
 
 
 def _glyph_page_verdicts(
@@ -474,14 +487,14 @@ def _glyph_page_verdicts(
     try:
         glyph_stats = glyph_stats_fn(page)
     except Exception as exc:
-        issues.append(_issue(page, "text", exc))
+        issues.append(_issue(page, "text", f"glyph trace: {exc}"))
         return False, False
     if glyph_stats is None or glyph_stats.total_glyphs <= 0:
         return False, False
-    decode_failures = (
-        glyph_stats.unmapped_glyphs + glyph_stats.notdef_glyphs)
+    # The CID boundary is exclusive to mirror pdf_page_text_is_usable's
+    # ``<=`` acceptance; the invisible share is inclusive by design.
     garbled = (
-        decode_failures / glyph_stats.total_glyphs
+        glyph_stats.decode_failed_glyphs / glyph_stats.total_glyphs
         > thresholds.max_cid_char_ratio)
     invisible = (
         glyph_stats.invisible_glyphs / glyph_stats.total_glyphs

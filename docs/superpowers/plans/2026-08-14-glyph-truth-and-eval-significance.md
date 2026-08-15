@@ -851,3 +851,20 @@ then add to the report dict construction:
   `min_invisible_text_share`, `paired_bootstrap`,
   `_compare_significance`, `_paired_metric_values`,
   `_print_compare_significance`, `_BOOTSTRAP_BASELINE_LABEL` — consistent.
+
+## Execution errata (post-review fix wave, 2026-08-15)
+
+- Review finding I1: the planned `(unmapped + notdef) / total` ratio
+  double-counts glyphs that are both unmapped and `.notdef` (the normal
+  broken-cmap shape). Shipped code counts each glyph's decode failure
+  once via `PageGlyphStats.decode_failed_glyphs`; the per-channel counts
+  remain as diagnostics. The corpus false-positive probe was re-run with
+  the corrected arithmetic.
+- Review finding I2: the compare significance block additionally records
+  `comparison_count` and `multiplicity` (uncorrected per-metric tests)
+  and prints a matching footer.
+- The bootstrap p-value uses (b+1)/(B+1) smoothing (floor
+  1/(resamples+1), never exactly 0). Glyph-pass inspection issues are
+  prefixed `glyph trace:`. `--bootstrap` joined
+  `_CONFLICTING_EVAL_OPTIONS` in `evaluation_release.py` so release runs
+  reject it with the accurate ownership message.

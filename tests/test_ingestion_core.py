@@ -465,12 +465,26 @@ def test_page_glyph_stats_counts_channels():
     page = FakeGlyphPage(0, "irrelevant", [], trace=[
         _trace_span([_trace_char(0x41), _trace_char(0xFFFD)]),
         _trace_span([_trace_char(0xE000), _trace_char(0x42, glyph=0)]),
+        _trace_span([_trace_char(0xFFFD, glyph=0)]),
         _trace_span([_trace_char(0x43)], span_type=3),
     ])
     stats = ingestion_core.page_glyph_stats(page)
     assert stats == ingestion_core.PageGlyphStats(
-        total_glyphs=5, unmapped_glyphs=2, notdef_glyphs=1,
-        invisible_glyphs=1)
+        total_glyphs=6, unmapped_glyphs=3, notdef_glyphs=2,
+        decode_failed_glyphs=4, invisible_glyphs=1)
+
+
+def test_decode_failed_counts_each_glyph_once():
+    # A glyph that is both unmapped and .notdef (the normal broken-cmap
+    # shape) must contribute one decode failure, so the shared 0.02
+    # threshold keeps the text channel's per-character calibration.
+    page = FakeGlyphPage(0, "irrelevant", [], trace=[
+        _trace_span([_trace_char(0xFFFD, glyph=0)] * 10
+                    + [_trace_char(0x41)] * 10),
+    ])
+    stats = ingestion_core.page_glyph_stats(page)
+    assert stats.decode_failed_glyphs == 10
+    assert stats.decode_failed_glyphs <= stats.total_glyphs
 
 
 def test_page_glyph_stats_without_texttrace_is_none():
@@ -535,7 +549,8 @@ def test_texttrace_failure_degrades_with_issue():
     assert analysis.stats["pages_with_usable_text"] == 1
     assert analysis.stats["inspection_complete"] is True
     assert any(
-        issue.stage == "text" and "trace failed" in issue.detail
+        issue.stage == "text"
+        and issue.detail == "glyph trace: trace failed"
         for issue in analysis.issues)
 
 
