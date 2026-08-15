@@ -47,6 +47,7 @@ class PDFIngestionThresholds:
     min_usable_scan_text_ratio: float = 1.00
     max_replacement_char_ratio: float = 0.02
     max_cid_char_ratio: float = 0.02
+    min_invisible_text_share: float = 0.50
     min_background_image_page_coverage: float = 0.70
 
 
@@ -63,6 +64,7 @@ class PDFImageStats(TypedDict):
     text_chars: int
     replacement_chars: int
     cid_garbled_pages: int
+    invisible_text_pages: int
     unique_dims: set[str]
     image_xrefs: set[int]
     inspection_complete: bool
@@ -147,6 +149,27 @@ PageBackgroundInspectionFn: TypeAlias = Callable[
 DeleteImageFn: TypeAlias = Callable[[PDFPageLike, int], None]
 ProgressPagesFn: TypeAlias = Callable[
     [Iterable[PageStripAssessment]], Iterable[PageStripAssessment]
+]
+
+
+@dataclass(frozen=True)
+class PageGlyphStats:
+    """Glyph-level decode and visibility counts from one page's trace.
+
+    ``decode_failed_glyphs`` counts each glyph at most once when it is
+    unmapped, ``.notdef``, or both; the per-channel counts are
+    diagnostics and may overlap.
+    """
+
+    total_glyphs: int
+    unmapped_glyphs: int
+    notdef_glyphs: int
+    decode_failed_glyphs: int
+    invisible_glyphs: int
+
+
+PageGlyphStatsFn: TypeAlias = Callable[
+    [PDFPageLike], "PageGlyphStats | None"
 ]
 
 
@@ -257,6 +280,7 @@ class PDFTriage:
     ocr_recommended: bool
     sample_read_errors: int
     cid_garbled_pages: int = 0
+    invisible_text_pages: int = 0
 
 
 def _scanner_fingerprint(producer: str, creator: str) -> str | None:
@@ -313,6 +337,8 @@ def assess_pdf_triage(
         ocr_recommended=not text_layer_usable,
         sample_read_errors=sample_read_errors,
         cid_garbled_pages=int(stats.get("cid_garbled_pages", 0) or 0),
+        invisible_text_pages=int(
+            stats.get("invisible_text_pages", 0) or 0),
     )
 
 
@@ -414,6 +440,70 @@ def _default_background_inspection(
         document, page, min_dimension, thresholds=thresholds)
 
 
+def page_glyph_stats(page: PDFPageLike) -> PageGlyphStats | None:
+    """Fold one page's text trace into glyph decode/visibility counts.
+
+    Pages without a ``get_texttrace`` method report ``None`` so existing
+    protocol fakes and degraded objects keep today's behavior exactly.
+    Char tuples are ``(unicode, glyph, origin, bbox)``; span type 3 marks
+    invisible (Tr 3) text.  Clip-only text (Tr 7) produces no trace spans
+    at all, so it is outside both counts.
+    """
+    get_texttrace = getattr(page, "get_texttrace", None)
+    if get_texttrace is None:
+        return None
+    total = unmapped = notdef = decode_failed = invisible = 0
+    for span in get_texttrace():
+        if not isinstance(span, Mapping):
+            raise TypeError("texttrace span is not a mapping")
+        chars = span.get("chars") or ()
+        span_invisible = span.get("type") == 3
+        for char in chars:
+            codepoint = int(char[0])
+            glyph = int(char[1])
+            total += 1
+            is_unmapped = (
+                codepoint == 0xFFFD or 0xE000 <= codepoint <= 0xF8FF)
+            is_notdef = glyph == 0
+            if is_unmapped:
+                unmapped += 1
+            if is_notdef:
+                notdef += 1
+            if is_unmapped or is_notdef:
+                decode_failed += 1
+            if span_invisible:
+                invisible += 1
+    return PageGlyphStats(
+        total_glyphs=total, unmapped_glyphs=unmapped,
+        notdef_glyphs=notdef, decode_failed_glyphs=decode_failed,
+        invisible_glyphs=invisible)
+
+
+def _glyph_page_verdicts(
+        page: PDFPageLike, glyph_stats_fn: PageGlyphStatsFn,
+        thresholds: PDFIngestionThresholds,
+        issues: list[PDFInspectionIssue]) -> tuple[bool, bool]:
+    """Return (glyph_garbled, invisible_overlay); failures degrade."""
+    try:
+        glyph_stats = glyph_stats_fn(page)
+    except Exception as exc:
+        issues.append(_issue(
+            page, "text",
+            f"glyph trace: {str(exc) or exc.__class__.__name__}"))
+        return False, False
+    if glyph_stats is None or glyph_stats.total_glyphs <= 0:
+        return False, False
+    # The CID boundary is exclusive to mirror pdf_page_text_is_usable's
+    # ``<=`` acceptance; the invisible share is inclusive by design.
+    garbled = (
+        glyph_stats.decode_failed_glyphs / glyph_stats.total_glyphs
+        > thresholds.max_cid_char_ratio)
+    invisible = (
+        glyph_stats.invisible_glyphs / glyph_stats.total_glyphs
+        >= thresholds.min_invisible_text_share)
+    return garbled, invisible
+
+
 def analyze_pdf_document(
         document: PDFDocumentLike, min_dimension: int = 1000, *,
         thresholds: PDFIngestionThresholds = (
@@ -421,6 +511,7 @@ def analyze_pdf_document(
         page_text_is_usable_fn: PageTextUsableFn | None = None,
         page_background_inspection_fn: (
             PageBackgroundInspectionFn | None) = None,
+        page_glyph_stats_fn: PageGlyphStatsFn | None = None,
 ) -> PDFAnalysis:
     """Analyze page text and background candidates without opening a PDF."""
     text_is_usable = page_text_is_usable_fn or (
@@ -428,6 +519,7 @@ def analyze_pdf_document(
     inspect_backgrounds = page_background_inspection_fn or (
         lambda doc, page, min_dim: _default_background_inspection(
             doc, page, min_dim, thresholds))
+    glyph_stats_fn = page_glyph_stats_fn or page_glyph_stats
     issues: list[PDFInspectionIssue] = []
     inspection_complete = True
     try:
@@ -446,6 +538,7 @@ def analyze_pdf_document(
         "text_chars": 0,
         "replacement_chars": 0,
         "cid_garbled_pages": 0,
+        "invisible_text_pages": 0,
         "unique_dims": set(),
         "image_xrefs": set(),
         "inspection_complete": False,
@@ -465,9 +558,16 @@ def analyze_pdf_document(
                 usable_text = False
             stats["text_chars"] += len(text)
             stats["replacement_chars"] += text.count("\ufffd")
-            if (cid_suspect_ratio(text)
-                    > thresholds.max_cid_char_ratio):
+            glyph_garbled, invisible_overlay = _glyph_page_verdicts(
+                page, glyph_stats_fn, thresholds, issues)
+            text_garbled = (
+                cid_suspect_ratio(text) > thresholds.max_cid_char_ratio)
+            if text_garbled or glyph_garbled:
                 stats["cid_garbled_pages"] += 1
+            if glyph_garbled:
+                usable_text = False
+            if invisible_overlay:
+                stats["invisible_text_pages"] += 1
             if usable_text:
                 stats["pages_with_usable_text"] += 1
 
@@ -513,6 +613,7 @@ def plan_background_image_removals(
         page_text_is_usable_fn: PageTextUsableFn | None = None,
         page_background_inspection_fn: (
             PageBackgroundInspectionFn | None) = None,
+        page_glyph_stats_fn: PageGlyphStatsFn | None = None,
 ) -> BackgroundStripPlan:
     """Inspect every page and return a fail-closed shared-xref strip plan."""
     text_is_usable = page_text_is_usable_fn or (
@@ -520,6 +621,7 @@ def plan_background_image_removals(
     inspect_backgrounds = page_background_inspection_fn or (
         lambda doc, page, min_dim: _default_background_inspection(
             doc, page, min_dim, thresholds))
+    glyph_stats_fn = page_glyph_stats_fn or page_glyph_stats
     pages: list[PageStripAssessment] = []
     issues: list[PDFInspectionIssue] = []
     inspection_complete = True
@@ -538,6 +640,10 @@ def plan_background_image_removals(
             except Exception as exc:
                 issues.append(_issue(page, "text", exc))
                 inspection_complete = False
+                usable_text = False
+            glyph_garbled, _invisible_overlay = _glyph_page_verdicts(
+                page, glyph_stats_fn, thresholds, issues)
+            if glyph_garbled:
                 usable_text = False
             try:
                 inspection = inspect_backgrounds(

@@ -2269,8 +2269,9 @@ python eval.py \
   --context-max-characters 8000 \
   --context-segment-characters 1600
 
-# Compare 4 configs side-by-side
-python eval.py --compare \
+# Compare 4 configs side-by-side; add --bootstrap for deterministic
+# paired-bootstrap significance against the vector-only baseline
+python eval.py --compare --bootstrap \
   --chunks output/Civil_procedure/Civil_procedure_chunks.jsonl \
   --db output/Civil_procedure/Civil_procedure_chroma \
   --collection civil_procedure
@@ -2560,7 +2561,12 @@ python eval.py \
 
 Threshold and regression checks apply to single-configuration runs, not
 `--compare`. `--fail-under` gates quality/safety floors, while `--fail-over`
-gates upper bounds such as `false_answer_rate`. Baseline comparisons bind the
+gates upper bounds such as `false_answer_rate`. `--compare --bootstrap`
+adds a deterministic paired-bootstrap significance block (seeded, 2000
+resamples) comparing each configuration to the vector-only baseline per
+metric; its markers are uncorrected per-metric tests and the block
+records the comparison count, so weigh multiplicity before acting on a
+single star. Without `--bootstrap`, compare output is unchanged. Baseline comparisons bind the
 query digest, portable index snapshot fields, retrieval settings, and model
 lock where applicable; absolute local manifest paths are intentionally excluded
 from compatibility checks.

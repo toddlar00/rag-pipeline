@@ -198,6 +198,7 @@ def test_document_analysis_returns_canonical_stats_and_completeness():
         "text_chars": len(safe.text),
         "replacement_chars": 0,
         "cid_garbled_pages": 0,
+        "invisible_text_pages": 0,
         "unique_dims": {"2000x3000"},
         "image_xrefs": {1, 2},
         "inspection_complete": True,
@@ -438,3 +439,144 @@ def test_triage_carries_cid_garbled_pages():
     stats["cid_garbled_pages"] = 4
     assert _assess(stats).cid_garbled_pages == 4
     assert _assess(_triage_stats()).cid_garbled_pages == 0
+
+
+def _trace_char(codepoint, glyph=1):
+    return (codepoint, glyph, (0.0, 0.0), (0.0, 0.0, 1.0, 1.0))
+
+
+def _trace_span(chars, span_type=0):
+    return {"type": span_type, "chars": tuple(chars)}
+
+
+class FakeGlyphPage(FakePage):
+    def __init__(self, *args, trace=None, trace_error=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._trace = list(trace or [])
+        self._trace_error = trace_error
+
+    def get_texttrace(self):
+        if self._trace_error is not None:
+            raise self._trace_error
+        return self._trace
+
+
+def test_page_glyph_stats_counts_channels():
+    page = FakeGlyphPage(0, "irrelevant", [], trace=[
+        _trace_span([_trace_char(0x41), _trace_char(0xFFFD)]),
+        _trace_span([_trace_char(0xE000), _trace_char(0x42, glyph=0)]),
+        _trace_span([_trace_char(0xFFFD, glyph=0)]),
+        _trace_span([_trace_char(0x43)], span_type=3),
+    ])
+    stats = ingestion_core.page_glyph_stats(page)
+    assert stats == ingestion_core.PageGlyphStats(
+        total_glyphs=6, unmapped_glyphs=3, notdef_glyphs=2,
+        decode_failed_glyphs=4, invisible_glyphs=1)
+
+
+def test_decode_failed_counts_each_glyph_once():
+    # A glyph that is both unmapped and .notdef (the normal broken-cmap
+    # shape) must contribute one decode failure, so the shared 0.02
+    # threshold keeps the text channel's per-character calibration.
+    page = FakeGlyphPage(0, "irrelevant", [], trace=[
+        _trace_span([_trace_char(0xFFFD, glyph=0)] * 10
+                    + [_trace_char(0x41)] * 10),
+    ])
+    stats = ingestion_core.page_glyph_stats(page)
+    assert stats.decode_failed_glyphs == 10
+    assert stats.decode_failed_glyphs <= stats.total_glyphs
+
+
+def test_page_glyph_stats_without_texttrace_is_none():
+    assert ingestion_core.page_glyph_stats(
+        FakePage(0, "text", [])) is None
+
+
+def test_analyze_counts_glyph_garbled_page_once():
+    clean_text = "clean readable text " * 5
+    document = FakeDocument([
+        FakeGlyphPage(0, clean_text, [], trace=[
+            _trace_span([_trace_char(0x41, glyph=0)] * 60
+                        + [_trace_char(0x42)] * 40),
+        ]),
+        FakeGlyphPage(1, "�" * 100, [], trace=[
+            _trace_span([_trace_char(0xFFFD)] * 100),
+        ]),
+        FakeGlyphPage(2, clean_text, [], trace=[
+            _trace_span([_trace_char(0x41)] * 100),
+        ]),
+    ])
+    analysis = ingestion_core.analyze_pdf_document(document)
+    assert analysis.stats["cid_garbled_pages"] == 2
+    assert analysis.stats["pages_with_usable_text"] == 1
+    assert analysis.stats["inspection_complete"] is True
+
+
+def test_glyph_ratio_boundary_is_not_garbled():
+    page = FakeGlyphPage(0, "clean readable text " * 5, [], trace=[
+        _trace_span([_trace_char(0x41, glyph=0)] * 2
+                    + [_trace_char(0x42)] * 98),
+    ])
+    analysis = ingestion_core.analyze_pdf_document(FakeDocument([page]))
+    assert analysis.stats["cid_garbled_pages"] == 0
+    assert analysis.stats["pages_with_usable_text"] == 1
+
+
+def test_invisible_share_counts_at_threshold():
+    trace = [_trace_span([_trace_char(0x41)] * 50, span_type=3),
+             _trace_span([_trace_char(0x42)] * 50)]
+    page = FakeGlyphPage(0, "clean readable text " * 5, [], trace=trace)
+    analysis = ingestion_core.analyze_pdf_document(FakeDocument([page]))
+    assert analysis.stats["invisible_text_pages"] == 1
+    assert analysis.stats["pages_with_usable_text"] == 1
+    assert analysis.stats["cid_garbled_pages"] == 0
+
+
+def test_invisible_share_below_threshold_not_counted():
+    trace = [_trace_span([_trace_char(0x41)] * 49, span_type=3),
+             _trace_span([_trace_char(0x42)] * 51)]
+    page = FakeGlyphPage(0, "clean readable text " * 5, [], trace=trace)
+    analysis = ingestion_core.analyze_pdf_document(FakeDocument([page]))
+    assert analysis.stats["invisible_text_pages"] == 0
+
+
+def test_texttrace_failure_degrades_with_issue():
+    page = FakeGlyphPage(
+        0, "clean readable text " * 5, [],
+        trace_error=RuntimeError("trace failed"))
+    analysis = ingestion_core.analyze_pdf_document(FakeDocument([page]))
+    assert analysis.stats["cid_garbled_pages"] == 0
+    assert analysis.stats["pages_with_usable_text"] == 1
+    assert analysis.stats["inspection_complete"] is True
+    assert any(
+        issue.stage == "text"
+        and issue.detail == "glyph trace: trace failed"
+        for issue in analysis.issues)
+
+
+def test_strip_plan_vetoes_glyph_garbled_page():
+    page = FakeGlyphPage(0, "clean readable text " * 5, [], trace=[
+        _trace_span([_trace_char(0x41, glyph=0)] * 60
+                    + [_trace_char(0x42)] * 40),
+    ])
+    plan = ingestion_core.plan_background_image_removals(
+        FakeDocument([page]))
+    assert plan.pages[0].usable_text is False
+
+
+def test_custom_invisible_share_threshold_is_honored():
+    trace = [_trace_span([_trace_char(0x41)] * 30, span_type=3),
+             _trace_span([_trace_char(0x42)] * 70)]
+    page = FakeGlyphPage(0, "clean readable text " * 5, [], trace=trace)
+    strict = ingestion_core.PDFIngestionThresholds(
+        min_invisible_text_share=0.25)
+    analysis = ingestion_core.analyze_pdf_document(
+        FakeDocument([page]), thresholds=strict)
+    assert analysis.stats["invisible_text_pages"] == 1
+
+
+def test_triage_carries_invisible_text_pages():
+    stats = _triage_stats()
+    stats["invisible_text_pages"] = 3
+    assert _assess(stats).invisible_text_pages == 3
+    assert _assess(_triage_stats()).invisible_text_pages == 0

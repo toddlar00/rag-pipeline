@@ -316,6 +316,7 @@ _MIN_USABLE_TEXT_PAGE_RATIO = 0.60
 _MIN_USABLE_SCAN_TEXT_RATIO = 1.00
 _MAX_REPLACEMENT_CHAR_RATIO = 0.02
 _MAX_CID_CHAR_RATIO = 0.02
+_MIN_INVISIBLE_TEXT_SHARE = 0.50
 _MIN_BACKGROUND_IMAGE_PAGE_COVERAGE = 0.70
 _CONTEXT_TOKEN_RESERVE = 192
 _HEADING_TOKEN_RESERVE = 64
@@ -715,6 +716,7 @@ def _pdf_ingestion_thresholds() -> _ingestion_core.PDFIngestionThresholds:
         min_usable_scan_text_ratio=_MIN_USABLE_SCAN_TEXT_RATIO,
         max_replacement_char_ratio=_MAX_REPLACEMENT_CHAR_RATIO,
         max_cid_char_ratio=_MAX_CID_CHAR_RATIO,
+        min_invisible_text_share=_MIN_INVISIBLE_TEXT_SHARE,
         min_background_image_page_coverage=(
             _MIN_BACKGROUND_IMAGE_PAGE_COVERAGE),
     )
@@ -6799,6 +6801,10 @@ def _render_pdf_triage(triage, pdf_path: Path, *, file_size: int,
     if triage.cid_garbled_pages:
         lines.append(
             f"  garbled (CID) pages: {triage.cid_garbled_pages}")
+    if triage.invisible_text_pages:
+        lines.append(
+            "  invisible (OCR-overlay) text: "
+            f"{triage.invisible_text_pages} pages")
     lines.append("")
     lines.append(f"  preprocess forecast: {triage.preprocess_forecast}")
     if triage.preprocess_forecast == "inspection-incomplete":

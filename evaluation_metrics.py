@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import random
 import time
 import tracemalloc
 from pathlib import Path
@@ -44,6 +45,71 @@ def percentile(values: Iterable[float], quantile: float) -> float:
         return ordered[lower]
     weight = position - lower
     return ordered[lower] * (1 - weight) + ordered[upper] * weight
+
+
+PAIRED_BOOTSTRAP_DEFAULT_RESAMPLES = 2000
+PAIRED_BOOTSTRAP_DEFAULT_SEED = 20260814
+
+
+def paired_bootstrap(
+        baseline_values: Iterable[float],
+        candidate_values: Iterable[float], *,
+        resamples: int = PAIRED_BOOTSTRAP_DEFAULT_RESAMPLES,
+        seed: int = PAIRED_BOOTSTRAP_DEFAULT_SEED,
+        confidence: float = 0.95) -> dict:
+    """Percentile bootstrap of the mean per-query delta.
+
+    Deltas are candidate minus baseline, paired per query.  The p-value is
+    the two-sided bootstrap achieved significance level: twice the smaller
+    share of resampled mean deltas at or beyond zero, with (b+1)/(B+1)
+    smoothing so the floor is 2/(resamples+1) rather than an unresolvable
+    exact zero, capped at 1.  The smoothing shifts p by about one resample
+    count, so near the boundary ``p < alpha`` and "0 outside the (1-alpha)
+    percentile interval" may disagree by roughly 1/resamples — that is the
+    standard smoothed-ASL tradeoff, not a defect.  The seeded generator
+    makes every field deterministic for a given input.
+    """
+    baseline = [float(value) for value in baseline_values]
+    candidate = [float(value) for value in candidate_values]
+    if len(baseline) != len(candidate):
+        raise ValueError(
+            "paired bootstrap requires equal-length value lists")
+    if not baseline:
+        raise ValueError("paired bootstrap requires at least one pair")
+    if not all(math.isfinite(value) for value in baseline + candidate):
+        raise ValueError("paired bootstrap values must be finite")
+    if (isinstance(resamples, bool) or not isinstance(resamples, int)
+            or resamples < 1):
+        raise ValueError("resamples must be a positive integer")
+    if (isinstance(confidence, bool)
+            or not isinstance(confidence, (int, float))
+            or not 0 < float(confidence) < 1):
+        raise ValueError("confidence must be strictly between 0 and 1")
+    deltas = [after - before for before, after in zip(baseline, candidate)]
+    observed = sum(deltas) / len(deltas)
+    rng = random.Random(seed)
+    count = len(deltas)
+    means = []
+    for _ in range(resamples):
+        total = 0.0
+        for _ in range(count):
+            total += deltas[rng.randrange(count)]
+        means.append(total / count)
+    alpha = (1.0 - float(confidence)) / 2.0
+    lower_tail = sum(1 for mean in means if mean <= 0.0)
+    upper_tail = sum(1 for mean in means if mean >= 0.0)
+    p_value = min(
+        1.0, 2.0 * (min(lower_tail, upper_tail) + 1) / (resamples + 1))
+    return {
+        "pairs": count,
+        "resamples": resamples,
+        "seed": seed,
+        "confidence": float(confidence),
+        "mean_delta": round(observed, 6),
+        "ci_low": round(percentile(means, alpha), 6),
+        "ci_high": round(percentile(means, 1.0 - alpha), 6),
+        "p_value": round(p_value, 6),
+    }
 
 
 def measure_path(path: Path, *, max_entries: int = 100_000) -> dict:
