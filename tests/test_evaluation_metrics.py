@@ -251,3 +251,53 @@ def test_measuring_a_symlink_never_counts_its_target(tmp_path):
     assert measured["bytes"] == 0
     assert measured["file_count"] == 0
     assert measured["skipped_symlinks"] == 1
+
+
+def test_paired_bootstrap_is_deterministic():
+    baseline = [0.0, 0.0, 1.0, 0.0, 1.0, 0.0]
+    candidate = [1.0, 1.0, 1.0, 0.0, 1.0, 1.0]
+    first = evaluation_metrics.paired_bootstrap(baseline, candidate)
+    second = evaluation_metrics.paired_bootstrap(baseline, candidate)
+    assert first == second
+    assert first["pairs"] == 6
+    assert first["resamples"] == (
+        evaluation_metrics.PAIRED_BOOTSTRAP_DEFAULT_RESAMPLES)
+    assert first["seed"] == (
+        evaluation_metrics.PAIRED_BOOTSTRAP_DEFAULT_SEED)
+    assert first["mean_delta"] == pytest.approx(3 / 6, abs=1e-6)
+    assert first["ci_low"] <= first["mean_delta"] <= first["ci_high"]
+    assert 0.0 <= first["p_value"] <= 1.0
+
+
+def test_paired_bootstrap_identical_inputs_are_null():
+    result = evaluation_metrics.paired_bootstrap(
+        [0.5, 0.25, 1.0], [0.5, 0.25, 1.0])
+    assert result["mean_delta"] == 0.0
+    assert result["ci_low"] == 0.0 and result["ci_high"] == 0.0
+    assert result["p_value"] == 1.0
+
+
+def test_paired_bootstrap_clear_improvement_is_significant():
+    baseline = [0.0] * 30
+    candidate = [1.0] * 30
+    result = evaluation_metrics.paired_bootstrap(baseline, candidate)
+    assert result["mean_delta"] == 1.0
+    assert result["ci_low"] == 1.0 and result["ci_high"] == 1.0
+    assert result["p_value"] < 0.05
+
+
+def test_paired_bootstrap_rejects_bad_inputs():
+    with pytest.raises(ValueError):
+        evaluation_metrics.paired_bootstrap([1.0], [1.0, 0.0])
+    with pytest.raises(ValueError):
+        evaluation_metrics.paired_bootstrap([], [])
+    with pytest.raises(ValueError):
+        evaluation_metrics.paired_bootstrap([float("nan")], [0.0])
+    with pytest.raises(ValueError):
+        evaluation_metrics.paired_bootstrap([1.0], [0.0], resamples=0)
+    with pytest.raises(ValueError):
+        evaluation_metrics.paired_bootstrap([1.0], [0.0], resamples=True)
+    with pytest.raises(ValueError):
+        evaluation_metrics.paired_bootstrap([1.0], [0.0], confidence=1.0)
+    with pytest.raises(ValueError):
+        evaluation_metrics.paired_bootstrap([1.0], [0.0], confidence=0.0)
