@@ -98,17 +98,20 @@ and closing a recorded gap:
 ### 2. Broken-cmap recall fixture
 
 - A test-local generator builds a minimal single-page PDF whose text is
-  addressed through a font with no usable Unicode mapping (Type0/Identity-H
-  without ToUnicode, or an equivalent probe-confirmed construction), so
-  extraction yields replacement/unmapped characters. The generator is pure
-  bytes (optionally finished through PyMuPDF), deterministic, and committed
-  as test code — no binary fixture, respecting the private-source policy's
-  synthetic-fixture default.
-- Tests assert: `cid_suspect_ratio` flags the extracted text or the glyph
-  pass flags the page (whichever channel the construction exercises — the
-  probe fixes which, and the test asserts the detector *union* fires);
-  `analyze` counts the page in `cid_garbled_pages`; the page fails
-  usability; the scan card renders the garbled line.
+  addressed through a Type0/Identity-H font without ToUnicode, with the
+  CID payload selecting the failure channel (probe-confirmed under the
+  pinned PyMuPDF line): CIDs beyond the substitute font's range extract
+  as wrong-but-valid codepoints while the glyph trace reports
+  `(U+FFFD, glyph 0)` — the case only the new glyph pass catches; PUA
+  CIDs fire the original text channel; low CIDs that map to plausible
+  Latin letters are asserted as the residual known miss. The generator is
+  pure bytes, deterministic, and committed as test code — no binary
+  fixture, respecting the private-source policy's synthetic-fixture
+  default.
+- Tests assert: the unmapped-CID page passes `cid_suspect_ratio` yet is
+  counted in `cid_garbled_pages` and fails usability (glyph channel
+  recall); the PUA page fires the text channel; the plausible-Latin page
+  stays uncounted and is recorded as the open follow-up.
 - Real-corpus false-positive re-probe: rerun the page-level union detector
   across the local private casebook PDFs (the population behind the recorded
   3,838-page zero-hit probe) and record counts-only results in the ROADMAP
