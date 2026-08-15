@@ -37,12 +37,12 @@
           {
             "binding": "rag",
             "kind": "import",
-            "line": 2311
+            "line": 2314
           },
           {
             "binding": "rag",
             "kind": "import",
-            "line": 2338
+            "line": 2341
           }
         ],
         "facade_roots": [
@@ -59,7 +59,7 @@
             "kinds": [
               "attribute"
             ],
-            "locations_sha256": "ba9a94548c5d351809a2fcfb2e5bf49c76a58e8b693bca1412fbd28bf1e94b78",
+            "locations_sha256": "5d01c70eb641821083342045a57ad62b3f09551803f5ec18d8baa850fa78e765",
             "name": "VectorStoreBusyError",
             "occurrence_count": 1,
             "paths": [
@@ -79,7 +79,7 @@
             "kinds": [
               "attribute"
             ],
-            "locations_sha256": "cece2f5d6548f8e2665b21dcd4f926f02228b91f7e18a79b2521aca4537e13f8",
+            "locations_sha256": "c43b243ba6ea46120f92941b182bd7afbcf5e91c6ba7f153be44f5c47235787d",
             "name": "_SUPERVISED_CHILD_ENV",
             "occurrence_count": 1,
             "paths": [
@@ -119,7 +119,7 @@
             "kinds": [
               "attribute"
             ],
-            "locations_sha256": "c05ecefe53fbc312a72ea3b901079a742fddb4f2d703c73245a9712076366397",
+            "locations_sha256": "7fc323854ec2c160ee0d5c8e3d995e8ef5f64068e81c9701dc96e2f5b8884abe",
             "name": "_cli_operation_timeout",
             "occurrence_count": 1,
             "paths": [
@@ -139,7 +139,7 @@
             "kinds": [
               "attribute"
             ],
-            "locations_sha256": "7227b53cda54da29218ba5aff158f3cda00643b9a90daf182cf2d70656575ec4",
+            "locations_sha256": "f49fb2eb6053ff84a72be5a502df06675b0494254e766baa1e1df5af0722c3cc",
             "name": "_normalize_db_lock_timeout",
             "occurrence_count": 1,
             "paths": [
@@ -159,7 +159,7 @@
             "kinds": [
               "attribute"
             ],
-            "locations_sha256": "94f0f8e97ff0bac398a09d39c6c2b582a4af101582e591c5cf9cc21ef90317a3",
+            "locations_sha256": "e11f0699059ba74f61c1f658e6c470d44f73a283a135e8c5d1623a4a766179e5",
             "name": "_normalize_operation_timeout",
             "occurrence_count": 1,
             "paths": [
@@ -199,7 +199,7 @@
             "kinds": [
               "attribute"
             ],
-            "locations_sha256": "46bea53bf9ce8e50b4ff43122f35c2ceeb230a8ae8b67eaa4fca0e760de74891",
+            "locations_sha256": "234f8a7bdb8d85d2fc147ff3a3494df433c9e400bb320fdb52d8b4b64c117e43",
             "name": "_run_cli_with_deadline",
             "occurrence_count": 1,
             "paths": [
@@ -219,7 +219,7 @@
             "kinds": [
               "attribute"
             ],
-            "locations_sha256": "75a44d358abf04ec5ab9bab7eff19784d88c7d44deb7412f214b34f17596ef82",
+            "locations_sha256": "5019fcc82e50ca442b267e793ba36f8cf9874f6e681c0cf67858db82a6a3800a",
             "name": "_vector_store_lock",
             "occurrence_count": 2,
             "paths": [
@@ -25458,7 +25458,7 @@
       {
         "class_count": 0,
         "classes": [],
-        "definition_locations_sha256": "c952b39c3aae14a51a74a5fd571f7b222a80c6ad2e26e6a5776d0126bdd78579",
+        "definition_locations_sha256": "518059d3cf88d261cbb82628900c93e359dbf3c05459e4e8f2caf943a7b45cdc",
         "function_count": 52,
         "functions": [
           {
@@ -25889,9 +25889,9 @@
           }
         ],
         "module": "eval",
-        "non_blank_lines": 2187,
+        "non_blank_lines": 2190,
         "path": "eval.py",
-        "physical_lines": 2349,
+        "physical_lines": 2352,
         "top_level_function_count": 50
       },
       {
@@ -26046,7 +26046,7 @@
             "scope": "nested"
           }
         ],
-        "definition_locations_sha256": "21942b7a2a7e739370be33c2fa5c18727d1bb71582caa6e4e2233d557ead9547",
+        "definition_locations_sha256": "5b46a2d4154f5c2e8a42c28eb9ea5878d8c2180c8f1e02e127ed1ee4f2fc8a44",
         "function_count": 17,
         "functions": [
           {
@@ -26154,9 +26154,9 @@
         ],
         "import_edges": [],
         "module": "evaluation_metrics",
-        "non_blank_lines": 421,
+        "non_blank_lines": 424,
         "path": "evaluation_metrics.py",
-        "physical_lines": 465,
+        "physical_lines": 468,
         "top_level_function_count": 11
       },
       {
@@ -27098,7 +27098,7 @@
             "scope": "top_level"
           }
         ],
-        "definition_locations_sha256": "980f03b792b8c5dd4c722aca136381badacc791f904997ba2a73971a0942f57c",
+        "definition_locations_sha256": "7506efec13820f26b28f8ab6df858d9945dad2bfd047d4e975c2936aa61f5bbd",
         "function_count": 28,
         "functions": [
           {
@@ -27272,9 +27272,9 @@
         ],
         "import_edges": [],
         "module": "ingestion_core",
-        "non_blank_lines": 626,
+        "non_blank_lines": 628,
         "path": "ingestion_core.py",
-        "physical_lines": 731,
+        "physical_lines": 733,
         "top_level_function_count": 18
       },
       {
@@ -43246,7 +43246,7 @@
         "top_level_function_count": 2
       }
     ],
-    "physical_line_count": 87971,
+    "physical_line_count": 87979,
     "source_groups": [
       "production",
       "tools",
