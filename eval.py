@@ -1681,6 +1681,11 @@ def _build_parser() -> argparse.ArgumentParser:
               f"(default: {DEFAULT_OPERATION_TIMEOUT:g})"))
     parser.add_argument("--compare", action="store_true",
                         help="Compare vector, hybrid, and reranked configurations")
+    parser.add_argument(
+        "--bootstrap", action="store_true",
+        help=("With --compare: deterministic paired-bootstrap "
+              "significance of each configuration against the "
+              "vector-only baseline"))
     retrieval_mode = parser.add_mutually_exclusive_group()
     retrieval_mode.add_argument(
         "--hybrid", dest="hybrid", action="store_const", const=True,
@@ -1841,10 +1846,112 @@ def _print_metrics(metrics: dict) -> None:
     print()
 
 
+_BOOTSTRAP_BASELINE_LABEL = "Vector only"
+
+
+def _paired_metric_values(
+        baseline_details: list, candidate_details: list,
+        metric: str) -> tuple[list[float], list[float], int]:
+    """Pair per-query metric values by query identity, not order."""
+    candidate_by_index = {}
+    for detail in candidate_details:
+        if isinstance(detail, dict) and "query_index" in detail:
+            candidate_by_index[detail["query_index"]] = detail
+    baseline_values: list[float] = []
+    candidate_values: list[float] = []
+    excluded = 0
+    for detail in baseline_details:
+        if not isinstance(detail, dict) or "query_index" not in detail:
+            excluded += 1
+            continue
+        partner = candidate_by_index.get(detail["query_index"])
+        if (partner is None or detail.get("query_sha256")
+                != partner.get("query_sha256")):
+            excluded += 1
+            continue
+        base_value = (detail.get("metrics") or {}).get(metric)
+        cand_value = (partner.get("metrics") or {}).get(metric)
+        if any(isinstance(value, bool)
+               or not isinstance(value, (int, float))
+               for value in (base_value, cand_value)):
+            excluded += 1
+            continue
+        baseline_values.append(float(base_value))
+        candidate_values.append(float(cand_value))
+    return baseline_values, candidate_values, excluded
+
+
+def _compare_significance(reports: list, metrics: list) -> dict:
+    """Bootstrap every successful configuration against the baseline."""
+    baseline = next(
+        (item for item in reports
+         if item.get("label") == _BOOTSTRAP_BASELINE_LABEL
+         and "error" not in item),
+        None)
+    block = {
+        "baseline": _BOOTSTRAP_BASELINE_LABEL,
+        "method": (
+            "paired percentile bootstrap of the mean per-query delta"),
+        "resamples": (
+            evaluation_metrics.PAIRED_BOOTSTRAP_DEFAULT_RESAMPLES),
+        "seed": evaluation_metrics.PAIRED_BOOTSTRAP_DEFAULT_SEED,
+        "comparisons": [],
+    }
+    if baseline is None:
+        block["unavailable"] = "baseline configuration failed"
+        return block
+    baseline_details = baseline.get("query_details") or []
+    for item in reports:
+        if item is baseline or "error" in item:
+            continue
+        comparison = {"candidate": item.get("label"), "metrics": {}}
+        for metric in metrics:
+            baseline_values, candidate_values, excluded = (
+                _paired_metric_values(
+                    baseline_details,
+                    item.get("query_details") or [], metric))
+            if not baseline_values:
+                comparison["metrics"][metric] = {
+                    "unavailable": "no shared per-query values",
+                    "excluded_pairs": excluded,
+                }
+                continue
+            result = evaluation_metrics.paired_bootstrap(
+                baseline_values, candidate_values)
+            result["excluded_pairs"] = excluded
+            comparison["metrics"][metric] = result
+        block["comparisons"].append(comparison)
+    return block
+
+
+def _print_compare_significance(block: dict) -> None:
+    print(
+        f"\nPaired bootstrap vs {block['baseline']} "
+        f"({block['resamples']} resamples, seed {block['seed']})")
+    if "unavailable" in block:
+        print(f"  unavailable: {block['unavailable']}")
+        return
+    for comparison in block["comparisons"]:
+        print(f"  {comparison['candidate']}")
+        for metric, result in comparison["metrics"].items():
+            if "unavailable" in result:
+                print(
+                    f"    {metric:<14s} unavailable "
+                    f"({result['unavailable']})")
+                continue
+            marker = " *" if result["p_value"] < 0.05 else ""
+            print(
+                f"    {metric:<14s} delta {result['mean_delta']:+.3f} "
+                f"[{result['ci_low']:+.3f}, {result['ci_high']:+.3f}] "
+                f"p={result['p_value']:.3f}{marker}")
+
+
 def _main_with_args(args, parser: argparse.ArgumentParser) -> int:
     if args.compare and (args.fail_under or args.baseline_report
                          or args.max_regression or args.fail_over):
         parser.error("threshold checks are supported only without --compare")
+    if args.bootstrap and not args.compare:
+        parser.error("--bootstrap requires --compare")
     if args.retriever == "bm25" and args.compare:
         parser.error("--compare is supported only with --retriever index")
     if args.retriever == "index" and (args.db is None or not args.collection):
@@ -2101,6 +2208,10 @@ def _main_with_args(args, parser: argparse.ArgumentParser) -> int:
                     str(exc)[:40] if args.report_detail == "full"
                     else type(exc).__name__)
                 print(f"{label:<30s} {'ERROR':>12s} {display_error}")
+        significance = None
+        if args.bootstrap:
+            significance = _compare_significance(reports, display_metrics)
+            _print_compare_significance(significance)
         report = {
             "schema_version": REPORT_SCHEMA_VERSION,
             "mode": "compare",
@@ -2110,6 +2221,8 @@ def _main_with_args(args, parser: argparse.ArgumentParser) -> int:
                 "external LLM usage input is repeated unchanged"),
             "configurations": reports,
         }
+        if significance is not None:
+            report["significance"] = significance
         if args.json_report:
             _write_report(args.json_report, report)
         return 1 if had_errors else 0
