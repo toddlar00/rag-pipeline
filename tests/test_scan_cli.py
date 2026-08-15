@@ -280,3 +280,13 @@ def test_render_card_shows_cid_garbled_line_only_when_present():
         _triage(), Path("book.pdf"), file_size=1, producer="", creator="")
     assert "garbled (CID) pages: 3" in with_garbled
     assert "garbled (CID)" not in without
+
+
+def test_render_card_shows_invisible_text_line_only_when_present():
+    with_overlay = rag._render_pdf_triage(
+        _triage(invisible_text_pages=3), Path("book.pdf"), file_size=1,
+        producer="", creator="")
+    without = rag._render_pdf_triage(
+        _triage(), Path("book.pdf"), file_size=1, producer="", creator="")
+    assert "invisible (OCR-overlay) text: 3 pages" in with_overlay
+    assert "invisible (OCR-overlay)" not in without
