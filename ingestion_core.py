@@ -487,7 +487,9 @@ def _glyph_page_verdicts(
     try:
         glyph_stats = glyph_stats_fn(page)
     except Exception as exc:
-        issues.append(_issue(page, "text", f"glyph trace: {exc}"))
+        issues.append(_issue(
+            page, "text",
+            f"glyph trace: {str(exc) or exc.__class__.__name__}"))
         return False, False
     if glyph_stats is None or glyph_stats.total_glyphs <= 0:
         return False, False

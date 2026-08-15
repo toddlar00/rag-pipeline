@@ -68,6 +68,23 @@ def test_compare_significance_without_baseline_is_unavailable():
     block = retrieval_eval._compare_significance(reports, ["mrr"])
     assert block["unavailable"] == "baseline configuration failed"
     assert block["comparisons"] == []
+    assert block["comparison_count"] == 0
+    assert block["multiplicity"] == "uncorrected per-metric tests"
+
+
+def test_paired_metric_values_first_win_on_duplicate_index():
+    baseline = [_detail(1, "a", mrr=1.0)]
+    candidate = [_detail(1, "a", mrr=0.25), _detail(1, "a", mrr=0.75)]
+    base_values, cand_values, excluded = (
+        retrieval_eval._paired_metric_values(baseline, candidate, "mrr"))
+    assert base_values == [1.0]
+    assert cand_values == [0.25]
+    assert excluded == 0
+
+
+def test_release_policy_owns_the_bootstrap_flag():
+    import evaluation_release
+    assert "--bootstrap" in evaluation_release._CONFLICTING_EVAL_OPTIONS
 
 
 def test_print_compare_significance_is_ascii_and_marks(capsys):
@@ -85,7 +102,7 @@ def test_print_compare_significance_is_ascii_and_marks(capsys):
     assert "Paired bootstrap vs Vector only" in output
     assert "delta +1.000" in output
     assert " *" in output
-    assert "markers: uncorrected per-metric tests (1 comparisons)" in output
+    assert "markers: uncorrected per-metric tests (1 comparison)" in output
     assert output.isascii()
 
 

@@ -62,9 +62,12 @@ def paired_bootstrap(
     Deltas are candidate minus baseline, paired per query.  The p-value is
     the two-sided bootstrap achieved significance level: twice the smaller
     share of resampled mean deltas at or beyond zero, with (b+1)/(B+1)
-    smoothing so the floor is 1/(resamples+1) rather than an unresolvable
-    exact zero, capped at 1.  The seeded generator makes every field
-    deterministic for a given input.
+    smoothing so the floor is 2/(resamples+1) rather than an unresolvable
+    exact zero, capped at 1.  The smoothing shifts p by about one resample
+    count, so near the boundary ``p < alpha`` and "0 outside the (1-alpha)
+    percentile interval" may disagree by roughly 1/resamples — that is the
+    standard smoothed-ASL tradeoff, not a defect.  The seeded generator
+    makes every field deterministic for a given input.
     """
     baseline = [float(value) for value in baseline_values]
     candidate = [float(value) for value in candidate_values]

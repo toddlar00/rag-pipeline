@@ -863,8 +863,8 @@ then add to the report dict construction:
 - Review finding I2: the compare significance block additionally records
   `comparison_count` and `multiplicity` (uncorrected per-metric tests)
   and prints a matching footer.
-- The bootstrap p-value uses (b+1)/(B+1) smoothing (floor
-  1/(resamples+1), never exactly 0). Glyph-pass inspection issues are
+- The bootstrap p-value uses (b+1)/(B+1) smoothing (two-sided floor
+  2/(resamples+1), never exactly 0). Glyph-pass inspection issues are
   prefixed `glyph trace:`. `--bootstrap` joined
   `_CONFLICTING_EVAL_OPTIONS` in `evaluation_release.py` so release runs
   reject it with the accurate ownership message.

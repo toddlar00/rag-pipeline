@@ -1896,6 +1896,8 @@ def _compare_significance(reports: list, metrics: list) -> dict:
             evaluation_metrics.PAIRED_BOOTSTRAP_DEFAULT_RESAMPLES),
         "seed": evaluation_metrics.PAIRED_BOOTSTRAP_DEFAULT_SEED,
         "comparisons": [],
+        "comparison_count": 0,
+        "multiplicity": "uncorrected per-metric tests",
     }
     if baseline is None:
         block["unavailable"] = "baseline configuration failed"
@@ -1924,7 +1926,6 @@ def _compare_significance(reports: list, metrics: list) -> dict:
             comparison_count += 1
         block["comparisons"].append(comparison)
     block["comparison_count"] = comparison_count
-    block["multiplicity"] = "uncorrected per-metric tests"
     return block
 
 
@@ -1948,9 +1949,11 @@ def _print_compare_significance(block: dict) -> None:
                 f"    {metric:<14s} delta {result['mean_delta']:+.3f} "
                 f"[{result['ci_low']:+.3f}, {result['ci_high']:+.3f}] "
                 f"p={result['p_value']:.3f}{marker}")
+    count = block.get("comparison_count", 0)
+    plural = "" if count == 1 else "s"
     print(
         "  markers: uncorrected per-metric tests "
-        f"({block.get('comparison_count', 0)} comparisons)")
+        f"({count} comparison{plural})")
 
 
 def _main_with_args(args, parser: argparse.ArgumentParser) -> int:

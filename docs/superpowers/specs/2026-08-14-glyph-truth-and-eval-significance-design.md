@@ -134,7 +134,7 @@ and closing a recorded gap:
   seed, and a resample count, returns the observed mean delta, the
   percentile bootstrap confidence interval of the mean delta, and the
   two-sided bootstrap p-value (achieved significance level of the null
-  delta, with (b+1)/(B+1) smoothing so the floor is 1/(resamples+1)),
+  delta, with (b+1)/(B+1) smoothing so the floor is 2/(resamples+1)),
   all deterministic for a given seed. The significance block records its
   `comparison_count` and declares the markers as uncorrected per-metric
   tests, both in the JSON and as a printed footer — readers of a default
