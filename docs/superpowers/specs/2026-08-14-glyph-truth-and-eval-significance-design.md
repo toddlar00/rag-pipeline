@@ -59,9 +59,12 @@ and closing a recorded gap:
 
 ### 1. Glyph-truth pass (`get_texttrace`)
 
-- `ingestion_core.analyze_pdf_images_and_text` already accepts injectable
-  per-page functions; it gains `page_glyph_stats_fn` following the same
-  pattern. The dependency-free default resolves
+- `ingestion_core.analyze_pdf_document` and
+  `plan_background_image_removals` already accept injectable per-page
+  functions; both gain `page_glyph_stats_fn` following the same pattern,
+  so the strip planner applies the same decode-correctness veto to its
+  per-page usable-text verdicts and preprocess cannot strip backgrounds
+  from glyph-garbled pages. The dependency-free default resolves
   `getattr(page, "get_texttrace", None)`; when absent (existing fakes,
   degraded objects) the glyph pass is skipped and behavior is exactly
   today's. The facade passes real PyMuPDF pages, which have it.
@@ -146,8 +149,9 @@ an explicit `unavailable` marker rather than a fabricated number).
 - Item 1: fake-page texttrace matrices in `tests/test_ingestion_core.py`
   (clean page, unmapped-heavy page, notdef-heavy page, invisible-overlay
   page, boundary at both thresholds, absent-`get_texttrace` degrade,
-  raising-texttrace issue path, no-double-count union case); scan-card
-  rendering tests for the new line and `PDFTriage` field.
+  raising-texttrace issue path, no-double-count union case, strip-plan
+  glyph veto); scan-card rendering tests for the new line and `PDFTriage`
+  field.
 - Item 2: fixture-generation probe test with real PyMuPDF (import guarded
   the same way as existing real-PyMuPDF tests), detector-union assertion,
   analysis-loop and card integration.
