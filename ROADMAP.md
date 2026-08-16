@@ -113,13 +113,62 @@ detector's true-positive recall is unvalidated — no known-garbled fixture
 exists; a synthetic broken-cmap fixture plus a rawdict/`.notdef` detection
 pass remain to be built before the detector may be described as fully
 implementing the spec's decode-correctness term (false-positive direction
-is validated: zero hits across 3,838 real pages at the 0.02 threshold). The remaining movement is deferred as an ordered backlog
-of one-domain PRs: Vector stores (onnxruntime 1.28.0), ML/runtime
-(sentence-transformers 5.6.1, tqdm 4.70.0), Service/UI (fastapi 0.141.1,
-gradio 6.22.0, uvicorn 0.52.0), and Test/audit tooling (pip 26.2); the
-Provider-transport domain has no available movement. The remediation
+is validated: zero hits across 3,838 real pages at the 0.02 threshold).
+That follow-up closed on 2026-08-15 via the glyph-truth cycle below. The
+remaining dependency movement is deferred as an ordered backlog of
+one-domain PRs (targets refreshed by the 2026-08-15 scan): Vector stores
+(onnxruntime 1.28.0, qdrant-client 1.19.0), ML/runtime
+(sentence-transformers 5.7.0, tqdm 4.70.0), Service/UI (fastapi 0.141.1,
+gradio 6.22.0, uvicorn 0.52.0), Test/audit tooling (pip 26.2), and a
+second PDF/Docling pass (docling 2.120.1, whose native font-based PDF
+heading-level inference #3984 would give the TOC scaffold a third
+deterministic cross-check source, plus PyMuPDF 1.28.2); the
+Provider-transport domain has no available movement, and rank_bm25
+remains unmaintained (last release 2022), reinforcing in-repo scoring
+ownership for the deferred fusion cycle. The remediation
 decisions are recorded in
 `docs/superpowers/specs/2026-07-31-pr-remediation-design.md`.
+
+On 2026-08-15, a fresh GitHub scan over that survey's recorded backlog
+(design:
+`docs/superpowers/specs/2026-08-14-glyph-truth-and-eval-significance-design.md`)
+produced the glyph-truth and evaluation-significance cycle, merged at
+`db8132b` after inline TDD execution, a whole-branch subagent review, a
+re-verified two-finding fix wave (the review corrected the designed
+decode-failure formula, which double-counted glyphs that are both
+unmapped and `.notdef`), and a residual-notes wave: a texttrace
+glyph-level decode-correctness pass (`page_glyph_stats`; injectable
+`page_glyph_stats_fn` on both per-page loops) that unions with the text
+CID term at the shared 0.02 threshold, vetoes glyph-garbled pages from
+usable-text counts and the strip plan, and counts majority-invisible
+OCR-overlay pages (`invisible_text_pages`, `min_invisible_text_share`
+0.50) on the scan card; deterministic broken-cmap fixtures closing the
+CID recall follow-up — unmapped high CIDs extract as wrong-but-valid
+codepoints and are caught only by the glyph channel, PUA CIDs validate
+the text channel, and substitute-font plausible-Latin mojibake is
+asserted as the remaining characterized miss (a plausibility model stays
+an open follow-up); and flag-gated deterministic paired-bootstrap
+significance for `eval.py --compare`
+(`evaluation_metrics.paired_bootstrap`, seeded percentile bootstrap with
+(b+1)/(B+1) smoothing, recorded comparison count and
+uncorrected-multiplicity declaration; default outputs stay byte-identical
+without `--bootstrap`), sequenced as the decision tool for the deferred
+BM25/fusion scoring cycle. A counts-only probe across the 12 local
+casebook PDFs (12,559 pages) with the shipped arithmetic: the glyph
+channel flags 4 pages, every one already flagged by the text channel —
+no new positives, zero invisible-majority pages, zero trace errors. Full
+local suites at the merged tree pass 3,448 tests with 7 skips (Windows
+CPython 3.14) and 3,446 with 9 skips (locked WSL CPython 3.12.13), plus
+every static/policy gate and all three offline suites. Fresh paired
+Phase A0 evidence binds merged checkpoint `db8132b` with both
+independent 9×5 comparisons passing. Separately, the scheduled
+supply-chain audit on `main` began failing on 2026-08-06 with three new
+advisories against locked transitive dependencies (aiohttp
+PYSEC-2026-3545, cryptography PYSEC-2026-3552, h2 PYSEC-2026-3628;
+chromadb PYSEC-2026-311 remains accepted through 2026-08-31);
+remediation belongs to the deferred one-domain lock refreshes or
+explicit acceptance windows — an owner decision, recorded here by the
+2026-08-15 scan.
 
 Status terms:
 
@@ -147,7 +196,8 @@ Status terms:
 | Deterministic architecture and `rag` facade inventory | Integrated via #44; replacement refresh in the R2 candidate | Schema-v3 was introduced at `62cb574`; the published `ba9c66d` inventory records the tracked-source graph, definition and signature hashes, paired contextual import provenance, production/test facade consumers, private reads, mutation seams, and an isolated runtime contract. Historical source `fdb08d2` records 1,981 functions and reproduced across Windows/Linux CPython 3.10-3.14; current clean source `e904fa6` records 2,563 functions and 607 compact runtime callables. Broader R7 coverage, typing, lint, and static security work remain open |
 | Phase A0 architecture benchmark | A0a implemented; A0b hosted cells passed at the merged #76 head | Commit `64843d1` introduced nine contained fresh-process scenarios run five times; portability closure `77a0f70` redirects Linux's standard-library user base into the run-local temporary root without setting `HOME` or `CODEX_HOME`. The first hosted frozen head `ba9c66d` exposed checkout-EOL lock and inventory drift plus POSIX acceptance of the adversarial drive-relative path `C:escape.py`; it did not pass A0b. Repairs `7594f8b` and `fdb08d2` close the hosted and CPython 3.10-3.14 normalization defects. After interim R2 refresh `b813aa7`, source-changing work required clean checkpoint `e904fa6`, whose paired baselines each passed an independent matching local comparison. Merging the strict output-contract line into the R2 convergence candidate changes Python source again and invalidates both that pair and the contract line's own interim pair; fresh paired CPython 3.12 x86-64 baselines must bind the merged clean pre-gate checkpoint and are frozen by its following reports/docs-only commit. Successful hosted evidence remains strict and retained for 30 days. A0b still requires both hosted jobs to pass at that exact published commit/tree before it can gate R8 |
 | Five-gate logical publication and AI project exports | Integrated via #76 | Schema-v7 chunk receipts and schema-v12 quality evidence bind source-oracle registries, exact lexical ownership and physical order, occurrence-bound heading lineage, strict Pandoc/Zettlr-valid Markdown, and schema-v9 physical vector parity into one atomic READY receipt. Receipt-bound NotebookLM, ChatGPT, and Claude packages preserve page locators and endnotes while removing hidden comments and package-local links. The implementation passes 3,081 tests with 7 skips, every local static gate, all three offline retrieval suites, real Zettlr validation, real Chroma/Qdrant smoke, a content-free local rehearsal, and paired local Phase A0 comparisons. Combined with the strict output-contract line in the R2 convergence candidate; exact-head CI and owner review remain required |
-| Ingestion quick wins | Integrated | Merge `3b2188c` (2026-08-03): CID-garbled text-layer detection (additive threshold, stats, scan-card line; recall follow-up open), layout-aware per-region OCR as the `--ocr` default with `--ocr-full-page` and conversion schema v3, advisory bookmark cross-check for the TOC scaffold (single-snapshot, counts-only telemetry), and advisory Docling confidence surfacing (finite-guarded, failure-isolated) |
+| Ingestion quick wins | Integrated | Merge `3b2188c` (2026-08-03): CID-garbled text-layer detection (additive threshold, stats, scan-card line; recall follow-up closed 2026-08-15), layout-aware per-region OCR as the `--ocr` default with `--ocr-full-page` and conversion schema v3, advisory bookmark cross-check for the TOC scaffold (single-snapshot, counts-only telemetry), and advisory Docling confidence surfacing (finite-guarded, failure-isolated) |
+| Glyph-truth triage and evaluation significance | Integrated | Merge `db8132b` (2026-08-15): texttrace glyph-level decode-correctness union term (counted-once decode failures at the shared 0.02 threshold) with strip-plan veto and failure-isolated degrade, invisible OCR-overlay counter and scan-card line, broken-cmap recall fixtures (glyph-channel-only catch proven; plausible-Latin miss characterized as the open follow-up), and flag-gated deterministic paired-bootstrap significance for eval compare with declared uncorrected multiplicity |
 | First-pass PDF triage scan | Integrated | Merge `4975793` (2026-08-02): read-only, LLM-free `rag.py scan` report card — document fingerprinting, page composition, text-layer verdict from the exact preprocess seams, preprocess forecast, OCR recommendation bound to the pipeline's real gate, bounded watermark/TOC sampling — with pure policy in `ingestion_core.assess_pdf_triage` and failure-injected tests |
 | Dependency compatibility domains | Integrated via #76 | [PR #66](https://github.com/toddlar00/rag-pipeline/pull/66): a reviewed `dependency-compatibility-domains.json` map assigns every governed direct dependency to one compatibility domain; the dependency-policy gate enforces one domain per pull request, lockfile currency against the base, and a change-free policy introduction, with a dedicated hosted dependency-compatibility workflow. Combined into R2 convergence candidate [#76](https://github.com/toddlar00/rag-pipeline/pull/76) |
 | Strict LLM and TOC output contracts | Integrated via #76 | [PRs #68-#71](https://github.com/toddlar00/rag-pipeline/pull/71): exact classification, TOC hierarchy, TOC layout, and Boolean TOC page-verification output contracts with bounded JSON prompt-evidence framing and contract provenance in chunk parameters. Combined into R2 convergence candidate [#76](https://github.com/toddlar00/rag-pipeline/pull/76) |
