@@ -12,10 +12,12 @@ papercuts found while surveying the transport and logging seams.
 
 ## Purpose
 
-1. Close the three live advisories — aiohttp PYSEC-2026-3545 (fixed
-   3.14.3), cryptography PYSEC-2026-3552 (fixed 50.0.0), h2
-   PYSEC-2026-3628 (fixed 4.4.1) — through a targeted, policy-compliant
-   lock regeneration that moves only those transitive records.
+1. Prepare the remediation for the three live advisories — aiohttp
+   PYSEC-2026-3545 (fixed 3.14.3), cryptography PYSEC-2026-3552 (fixed
+   50.0.0), h2 PYSEC-2026-3628 (fixed 4.4.1) — through a targeted lock
+   regeneration that moves only those transitive records, validated
+   end-to-end and parked for the owner-gated integration path (see the
+   review correction below).
 2. Add a fail-safe timeout backstop to the two policy transport helpers
    so an untimed caller can never hang a run indefinitely.
 3. Stop per-page inspection-issue warning floods (thousands of lines on
@@ -35,12 +37,21 @@ papercuts found while surveying the transport and logging seams.
   records in `requirements-full.lock` (3.14.3 / 50.0.0 / 4.4.1) and
   nothing else. The regeneration covers all seven governed locks; locks
   that do not contain the targets are byte-identical.
-- Domain-policy compliance: no direct requirement record changes —
-  transitive packages are explicitly not direct policy inputs
-  (dependency-compatibility-domains ADR), and the Dependabot #72
-  precedent already established the policy-compliant
-  `tools/refresh_locks.py` pass. A second regeneration must be
-  byte-stable before the locks are committed.
+- Review correction (Critical finding, 2026-08-18): this design's
+  original compliance claim misread the domains ADR. The ADR's lock-only
+  rule states "Transitive-only changes fail closed" and the PR-mode gate
+  (`check_dependency_policy.py --base-ref`) rejects the refreshed locks,
+  which was confirmed by running it; the cited #72 precedent actually
+  changed direct records and is not analogous. The ADR names exactly two
+  lawful paths — promote the packages into governed direct inputs, or
+  land a reviewer-bound machine-readable exception mechanism first —
+  and both are owner decisions. The fully validated lock refresh
+  (surgical three-record delta, byte-stable second regeneration,
+  pip-audit clean, both locked environments resynced and full suites
+  green) is therefore parked unmerged on
+  `agent/transitive-advisory-locks` for the owner to integrate under
+  whichever path they choose; the exception mechanism is the
+  recommended fit for recurring transitive CVEs.
 - No vulnerability-policy exception changes: the three advisories become
   clean; the existing chromadb PYSEC-2026-311 acceptance (expires
   2026-08-31) and the two `+cpu` torch audit skips are untouched.
@@ -54,11 +65,14 @@ papercuts found while surveying the transport and logging seams.
 - `rag.py`'s `_post_loopback_without_environment` and
   `_post_cloud_with_policy` currently default `stream=True` but leave
   `timeout` entirely to callers. Every production caller passes an
-  explicit timeout today; the backstop
-  `kwargs.setdefault("timeout", _TRANSPORT_FALLBACK_TIMEOUT_SECONDS)`
-  (new module constant, 300.0 seconds) converts a future untimed call
-  from an indefinite hang into a bounded failure without changing any
-  explicit caller's behavior.
+  explicit timeout today; the backstop assigns
+  `_TRANSPORT_FALLBACK_TIMEOUT` — a `(10.0, 300.0)` connect/read tuple,
+  so an unreachable endpoint fails within ten seconds while the header
+  phase keeps a five-minute budget — whenever the caller omitted
+  `timeout` or passed `None` (requests' wait-forever), converting a
+  future untimed call into a bounded failure without changing any
+  explicit caller's behavior. Body reads remain separately
+  deadline-bounded by the provider transport.
 - The constant is advisory-infrastructure, not a receipt or contract
   input; no schema changes.
 
@@ -73,6 +87,15 @@ papercuts found while surveying the transport and logging seams.
   `... and N more pages with <stage> inspection issues` per stage.
   Both call sites route through it; ordering within a stage is
   preserved; three or fewer issues per stage log exactly as today.
+- The review found a third flood in the same function: the
+  deletion-issue loop, whose worst case is one warning per referencing
+  page when a shared background image cannot be deleted. A sibling
+  `_log_deletion_issues` collapses identical `(xref, detail)` failures
+  to one line, caps distinct failures at the shared limit, and appends
+  the exact-count summary. A pre-existing cosmetic miswording
+  ("document"-stage issues render through the images message) is
+  preserved per the behavior-preservation convention and recorded as a
+  ROADMAP follow-up.
 
 ## Error handling summary
 

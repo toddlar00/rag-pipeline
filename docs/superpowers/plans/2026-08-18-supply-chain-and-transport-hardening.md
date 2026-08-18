@@ -167,3 +167,19 @@ def _log_inspection_issues(issues) -> None:
   network-free. Names used: `lock_commands(..., upgrade_packages=...)`,
   `_TRANSPORT_FALLBACK_TIMEOUT_SECONDS`, `_log_inspection_issues`,
   `_INSPECTION_ISSUE_LOG_LIMIT` — consistent across tasks.
+
+## Execution errata (post-review, 2026-08-18)
+
+- Critical review finding: Task 4's merge step violated the domains
+  ADR's lock-only rule ("Transitive-only changes fail closed"), which
+  the PR-mode gate enforces; the plan's compliance premise and its #72
+  precedent citation were wrong. The validated lock commit was moved to
+  `agent/transitive-advisory-locks` and parked for the owner's choice
+  between the ADR's two integration paths; this branch merges without
+  lock changes.
+- The fix wave additionally aggregated the deletion-issue warning loop
+  (`_log_deletion_issues`, dedup by `(xref, detail)`), replaced the
+  scalar fallback with the `(10.0, 300.0)` tuple constant
+  `_TRANSPORT_FALLBACK_TIMEOUT` that also coerces an explicit
+  `timeout=None`, and made `lock_commands` raise `ValueError` on the
+  flag combination `main` already rejects.
