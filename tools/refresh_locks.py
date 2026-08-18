@@ -26,6 +26,10 @@ def lock_commands(
         uv: str, *, upgrade: bool = False,
         upgrade_packages: tuple[str, ...] = ()) -> list[list[str]]:
     """Build deterministic commands for each committed lockfile."""
+    if upgrade and upgrade_packages:
+        raise ValueError(
+            "--upgrade already refreshes everything; use --upgrade-package "
+            "alone")
     commands: list[list[str]] = []
     for source, output, use_cpu_torch in LOCK_SPECS:
         command = [

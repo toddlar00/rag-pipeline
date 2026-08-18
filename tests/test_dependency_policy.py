@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 import subprocess
 
+import pytest
+
 from tools import (
     check_dependency_policy,
     check_licenses,
@@ -855,6 +857,12 @@ def test_lock_refresh_rejects_upgrade_flag_combination(capsys):
     assert refresh_locks.main(
         ["--upgrade", "--upgrade-package", "aiohttp"]) == 2
     assert "--upgrade-package" in capsys.readouterr().err
+
+
+def test_lock_commands_rejects_upgrade_flag_combination():
+    with pytest.raises(ValueError):
+        refresh_locks.lock_commands(
+            "uv", upgrade=True, upgrade_packages=("aiohttp",))
 
 
 def test_license_policy_rejects_denied_license_and_honors_documented_exception():

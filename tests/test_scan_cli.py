@@ -338,3 +338,40 @@ def test_inspection_issue_logging_handles_empty_and_single(caplog):
             [_issue(9)], text_message="text issue on page %s: %s")
     messages = [record.getMessage() for record in caplog.records]
     assert messages == ["text issue on page 9: boom"]
+
+
+def _deletion_issue(page, xref, detail="cannot delete"):
+    return ingestion_core.PDFInspectionIssue(
+        page_number=page, stage="delete", detail=detail, xref=xref)
+
+
+def test_deletion_issue_logging_collapses_repeated_shared_image(caplog):
+    issues = [_deletion_issue(page, 7) for page in range(1, 101)]
+    with caplog.at_level("WARNING", logger=rag.log.name):
+        rag._log_deletion_issues(issues)
+    messages = [record.getMessage() for record in caplog.records]
+    assert messages == [
+        "Could not remove background image 7 safely: cannot delete",
+        "... and 99 more background image removal failures",
+    ]
+
+
+def test_deletion_issue_logging_passes_small_distinct_counts(caplog):
+    issues = [_deletion_issue(1, 7), _deletion_issue(2, 8)]
+    with caplog.at_level("WARNING", logger=rag.log.name):
+        rag._log_deletion_issues(issues)
+    messages = [record.getMessage() for record in caplog.records]
+    assert len(messages) == 2
+    assert all("Could not remove background image" in m for m in messages)
+
+
+def test_deletion_issue_logging_caps_distinct_floods(caplog):
+    issues = [_deletion_issue(page, xref)
+              for page, xref in enumerate(range(10, 15), start=1)]
+    with caplog.at_level("WARNING", logger=rag.log.name):
+        rag._log_deletion_issues(issues)
+    messages = [record.getMessage() for record in caplog.records]
+    assert len([m for m in messages
+                if "Could not remove background image" in m]) == 3
+    assert (
+        "... and 2 more background image removal failures" in messages)
