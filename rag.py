@@ -5484,11 +5484,17 @@ def _provider_call_error(exc: BaseException, *,
         error_category_fn=_provider_error_category)
 
 
+# Bounded fail-safe for callers that omit an explicit timeout: a hung
+# provider must surface as an error, never as an indefinite stall.
+_TRANSPORT_FALLBACK_TIMEOUT_SECONDS = 300.0
+
+
 def _post_loopback_without_environment(url: str, **kwargs):
     """POST to a literal loopback target without ambient proxy settings."""
     session = requests.Session()
     session.trust_env = False
     kwargs.setdefault("stream", True)
+    kwargs.setdefault("timeout", _TRANSPORT_FALLBACK_TIMEOUT_SECONDS)
     try:
         return _provider_transport.OwnedHttpResponse(
             session.post(url, **kwargs), session)
@@ -5522,6 +5528,7 @@ def _post_cloud_with_policy(
     session = requests.Session()
     session.trust_env = policy.trust_environment_network
     kwargs.setdefault("stream", True)
+    kwargs.setdefault("timeout", _TRANSPORT_FALLBACK_TIMEOUT_SECONDS)
     try:
         return _provider_transport.OwnedHttpResponse(
             session.post(url, **kwargs), session)
