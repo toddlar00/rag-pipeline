@@ -665,3 +665,57 @@ def test_local_only_ignores_ambient_gemini_key(monkeypatch):
 
     assert result is sentinel
     assert observed["names"] == ["ollama"]
+
+
+class _ClosableResponse:
+    def close(self):
+        return None
+
+
+def test_cloud_transport_applies_fallback_timeout(monkeypatch):
+    sessions = _capture_cloud_sessions(monkeypatch, _ClosableResponse())
+
+    rag._post_cloud_with_policy(None, "https://provider.test/v1")
+
+    _url, kwargs = sessions[0].posts[0]
+    assert kwargs["timeout"] == rag._TRANSPORT_FALLBACK_TIMEOUT
+
+
+def test_cloud_transport_preserves_explicit_timeout(monkeypatch):
+    sessions = _capture_cloud_sessions(monkeypatch, _ClosableResponse())
+
+    rag._post_cloud_with_policy(
+        None, "https://provider.test/v1", timeout=7.5)
+
+    _url, kwargs = sessions[0].posts[0]
+    assert kwargs["timeout"] == 7.5
+
+
+def test_cloud_transport_coerces_explicit_none_timeout(monkeypatch):
+    sessions = _capture_cloud_sessions(monkeypatch, _ClosableResponse())
+
+    rag._post_cloud_with_policy(
+        None, "https://provider.test/v1", timeout=None)
+
+    _url, kwargs = sessions[0].posts[0]
+    assert kwargs["timeout"] == rag._TRANSPORT_FALLBACK_TIMEOUT
+
+
+def test_loopback_transport_applies_fallback_timeout(monkeypatch):
+    sessions = _capture_cloud_sessions(monkeypatch, _ClosableResponse())
+
+    rag._post_loopback_without_environment("http://127.0.0.1:11434/api")
+
+    _url, kwargs = sessions[0].posts[0]
+    assert kwargs["timeout"] == rag._TRANSPORT_FALLBACK_TIMEOUT
+    assert sessions[0].trust_env is False
+
+
+def test_loopback_transport_coerces_explicit_none_timeout(monkeypatch):
+    sessions = _capture_cloud_sessions(monkeypatch, _ClosableResponse())
+
+    rag._post_loopback_without_environment(
+        "http://127.0.0.1:11434/api", timeout=None)
+
+    _url, kwargs = sessions[0].posts[0]
+    assert kwargs["timeout"] == rag._TRANSPORT_FALLBACK_TIMEOUT

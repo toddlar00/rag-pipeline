@@ -290,3 +290,88 @@ def test_render_card_shows_invisible_text_line_only_when_present():
         _triage(), Path("book.pdf"), file_size=1, producer="", creator="")
     assert "invisible (OCR-overlay) text: 3 pages" in with_overlay
     assert "invisible (OCR-overlay)" not in without
+
+
+def _issue(page, stage="text", detail="boom"):
+    return ingestion_core.PDFInspectionIssue(
+        page_number=page, stage=stage, detail=detail)
+
+
+def test_inspection_issue_logging_passes_small_counts_through(caplog):
+    issues = [_issue(1), _issue(2), _issue(3)]
+    with caplog.at_level("WARNING", logger=rag.log.name):
+        rag._log_inspection_issues(
+            issues,
+            text_message="Could not inspect the text layer on PDF "
+                         "page %s: %s")
+    messages = [record.getMessage() for record in caplog.records]
+    assert len(messages) == 3
+    assert all("Could not inspect the text layer" in m for m in messages)
+    assert not any("more pages" in m for m in messages)
+
+
+def test_inspection_issue_logging_aggregates_floods(caplog):
+    issues = (
+        [_issue(page) for page in range(1, 6)]
+        + [_issue(page, stage="images") for page in range(6, 10)]
+    )
+    with caplog.at_level("WARNING", logger=rag.log.name):
+        rag._log_inspection_issues(
+            issues,
+            text_message="Could not verify text before stripping PDF "
+                         "page %s: %s")
+    messages = [record.getMessage() for record in caplog.records]
+    verbatim_text = [m for m in messages if "Could not verify text" in m]
+    verbatim_images = [
+        m for m in messages if "Could not inspect images" in m]
+    assert len(verbatim_text) == 3
+    assert len(verbatim_images) == 3
+    assert "... and 2 more pages with text inspection issues" in messages
+    assert "... and 1 more page with images inspection issues" in messages
+
+
+def test_inspection_issue_logging_handles_empty_and_single(caplog):
+    with caplog.at_level("WARNING", logger=rag.log.name):
+        rag._log_inspection_issues(
+            [], text_message="unused %s %s")
+        rag._log_inspection_issues(
+            [_issue(9)], text_message="text issue on page %s: %s")
+    messages = [record.getMessage() for record in caplog.records]
+    assert messages == ["text issue on page 9: boom"]
+
+
+def _deletion_issue(page, xref, detail="cannot delete"):
+    return ingestion_core.PDFInspectionIssue(
+        page_number=page, stage="delete", detail=detail, xref=xref)
+
+
+def test_deletion_issue_logging_collapses_repeated_shared_image(caplog):
+    issues = [_deletion_issue(page, 7) for page in range(1, 101)]
+    with caplog.at_level("WARNING", logger=rag.log.name):
+        rag._log_deletion_issues(issues)
+    messages = [record.getMessage() for record in caplog.records]
+    assert messages == [
+        "Could not remove background image 7 safely: cannot delete",
+        "... and 99 more background image removal failures",
+    ]
+
+
+def test_deletion_issue_logging_passes_small_distinct_counts(caplog):
+    issues = [_deletion_issue(1, 7), _deletion_issue(2, 8)]
+    with caplog.at_level("WARNING", logger=rag.log.name):
+        rag._log_deletion_issues(issues)
+    messages = [record.getMessage() for record in caplog.records]
+    assert len(messages) == 2
+    assert all("Could not remove background image" in m for m in messages)
+
+
+def test_deletion_issue_logging_caps_distinct_floods(caplog):
+    issues = [_deletion_issue(page, xref)
+              for page, xref in enumerate(range(10, 15), start=1)]
+    with caplog.at_level("WARNING", logger=rag.log.name):
+        rag._log_deletion_issues(issues)
+    messages = [record.getMessage() for record in caplog.records]
+    assert len([m for m in messages
+                if "Could not remove background image" in m]) == 3
+    assert (
+        "... and 2 more background image removal failures" in messages)

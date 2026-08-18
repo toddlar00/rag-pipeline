@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 import subprocess
 
+import pytest
+
 from tools import (
     check_dependency_policy,
     check_licenses,
@@ -836,6 +838,31 @@ def test_lock_refresh_commands_cover_every_lock_and_cpu_runtime():
     ):
         assert ("--torch-backend" in command) is cpu
         assert "--generate-hashes" in command
+
+
+def test_lock_refresh_upgrade_package_passthrough():
+    commands = refresh_locks.lock_commands(
+        "uv", upgrade_packages=("aiohttp", "cryptography", "h2"))
+    for command in commands:
+        tail = command[command.index("--output-file") + 2:]
+        assert tail == [
+            "--upgrade-package", "aiohttp",
+            "--upgrade-package", "cryptography",
+            "--upgrade-package", "h2",
+        ]
+        assert "--upgrade" not in command
+
+
+def test_lock_refresh_rejects_upgrade_flag_combination(capsys):
+    assert refresh_locks.main(
+        ["--upgrade", "--upgrade-package", "aiohttp"]) == 2
+    assert "--upgrade-package" in capsys.readouterr().err
+
+
+def test_lock_commands_rejects_upgrade_flag_combination():
+    with pytest.raises(ValueError):
+        refresh_locks.lock_commands(
+            "uv", upgrade=True, upgrade_packages=("aiohttp",))
 
 
 def test_license_policy_rejects_denied_license_and_honors_documented_exception():

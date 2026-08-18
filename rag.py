@@ -5484,11 +5484,21 @@ def _provider_call_error(exc: BaseException, *,
         error_category_fn=_provider_error_category)
 
 
+# Bounded fail-safe for callers that omit an explicit timeout or pass
+# None (requests' wait-forever): connect within 10s, then a 300s budget
+# for the header phase — a hung provider must surface as an error, never
+# as an indefinite stall. Body reads are separately deadline-bounded by
+# the provider transport.
+_TRANSPORT_FALLBACK_TIMEOUT = (10.0, 300.0)
+
+
 def _post_loopback_without_environment(url: str, **kwargs):
     """POST to a literal loopback target without ambient proxy settings."""
     session = requests.Session()
     session.trust_env = False
     kwargs.setdefault("stream", True)
+    if kwargs.get("timeout") is None:
+        kwargs["timeout"] = _TRANSPORT_FALLBACK_TIMEOUT
     try:
         return _provider_transport.OwnedHttpResponse(
             session.post(url, **kwargs), session)
@@ -5522,6 +5532,8 @@ def _post_cloud_with_policy(
     session = requests.Session()
     session.trust_env = policy.trust_environment_network
     kwargs.setdefault("stream", True)
+    if kwargs.get("timeout") is None:
+        kwargs["timeout"] = _TRANSPORT_FALLBACK_TIMEOUT
     try:
         return _provider_transport.OwnedHttpResponse(
             session.post(url, **kwargs), session)
@@ -6737,6 +6749,69 @@ def _page_background_images(doc, page, min_dim: int) -> list[tuple[int, int, int
     return list(inspection.candidates) if inspection.complete else []
 
 
+_INSPECTION_ISSUE_LOG_LIMIT = 3
+
+
+def _log_inspection_issues(issues, *, text_message: str) -> None:
+    """Log inspection issues without per-page warning floods.
+
+    The first few issues of each stage log verbatim through the caller's
+    established message forms; the remainder collapses into one summary
+    line per stage carrying the exact leftover count, so a systematic
+    per-page failure cannot emit thousands of lines.
+    """
+    logged: dict[str, int] = {}
+    totals: dict[str, int] = {}
+    for issue in issues:
+        totals[issue.stage] = totals.get(issue.stage, 0) + 1
+        count = logged.get(issue.stage, 0)
+        if count >= _INSPECTION_ISSUE_LOG_LIMIT:
+            continue
+        logged[issue.stage] = count + 1
+        if issue.stage == "text":
+            log.warning(text_message, issue.page_number, issue.detail)
+        else:
+            log.warning(
+                "Could not inspect images on PDF page %s: %s",
+                issue.page_number, issue.detail,
+            )
+    for stage, total in totals.items():
+        remainder = total - logged.get(stage, 0)
+        if remainder > 0:
+            log.warning(
+                "... and %d more %s with %s inspection issues",
+                remainder, "page" if remainder == 1 else "pages", stage)
+
+
+def _log_deletion_issues(issues) -> None:
+    """Log deletion issues without repeating one failing shared image.
+
+    A shared background image that cannot be deleted is retried on every
+    page that references it, so identical (xref, detail) failures repeat
+    per page; each distinct failure logs once (up to the shared limit)
+    and the remainder collapses into one exact-count summary line.
+    """
+    seen: set[tuple] = set()
+    emitted = 0
+    total = 0
+    for issue in issues:
+        total += 1
+        key = (issue.xref, issue.detail)
+        if key in seen or emitted >= _INSPECTION_ISSUE_LOG_LIMIT:
+            continue
+        seen.add(key)
+        emitted += 1
+        log.warning(
+            "Could not remove background image %s safely: %s",
+            issue.xref, issue.detail,
+        )
+    remainder = total - emitted
+    if remainder > 0:
+        log.warning(
+            "... and %d more background image removal %s",
+            remainder, "failure" if remainder == 1 else "failures")
+
+
 def _analyze_pdf_images(pdf_path: Path, min_dim: int = 1000) -> dict:
     """Scan background images and the safety of the PDF text layer."""
     import pymupdf
@@ -6749,17 +6824,10 @@ def _analyze_pdf_images(pdf_path: Path, min_dim: int = 1000) -> dict:
             page_text_is_usable_fn=_pdf_page_text_is_usable,
             page_background_inspection_fn=_inspect_page_background_images,
         )
-    for issue in analysis.issues:
-        if issue.stage == "text":
-            log.warning(
-                "Could not inspect the text layer on PDF page %s: %s",
-                issue.page_number, issue.detail,
-            )
-        else:
-            log.warning(
-                "Could not inspect images on PDF page %s: %s",
-                issue.page_number, issue.detail,
-            )
+    _log_inspection_issues(
+        analysis.issues,
+        text_message="Could not inspect the text layer on PDF page %s: %s",
+    )
     return analysis.stats
 
 
@@ -7006,17 +7074,11 @@ def preprocess_pdf(input_path: Path, output_path: Path, *,
             page_text_is_usable_fn=_pdf_page_text_is_usable,
             page_background_inspection_fn=_inspect_page_background_images,
         )
-        for issue in plan.issues:
-            if issue.stage == "text":
-                log.warning(
-                    "Could not verify text before stripping PDF page %s: %s",
-                    issue.page_number, issue.detail,
-                )
-            else:
-                log.warning(
-                    "Could not inspect images on PDF page %s: %s",
-                    issue.page_number, issue.detail,
-                )
+        _log_inspection_issues(
+            plan.issues,
+            text_message=(
+                "Could not verify text before stripping PDF page %s: %s"),
+        )
         if not plan.complete:
             log.warning(
                 "Image stripping was cancelled because not every page could "
@@ -7036,11 +7098,7 @@ def preprocess_pdf(input_path: Path, output_path: Path, *,
             progress_pages_fn=lambda pages: tqdm(
                 pages, desc="Stripping images", unit="pg"),
         )
-        for issue in outcome.deletion_issues:
-            log.warning(
-                "Could not remove background image %s safely: %s",
-                issue.xref, issue.detail,
-            )
+        _log_deletion_issues(outcome.deletion_issues)
         removed = outcome.removed_count
 
         if not removed:
