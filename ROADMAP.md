@@ -166,9 +166,57 @@ supply-chain audit on `main` began failing on 2026-08-06 with three new
 advisories against locked transitive dependencies (aiohttp
 PYSEC-2026-3545, cryptography PYSEC-2026-3552, h2 PYSEC-2026-3628;
 chromadb PYSEC-2026-311 remains accepted through 2026-08-31);
-remediation belongs to the deferred one-domain lock refreshes or
-explicit acceptance windows — an owner decision, recorded here by the
-2026-08-15 scan.
+remediation was prepared and validated by the 2026-08-18 hardening
+cycle below but is parked awaiting the owner decision the
+dependency-compatibility-domains ADR requires.
+
+On 2026-08-18, the transport and logging hardening cycle (design:
+`docs/superpowers/specs/2026-08-18-supply-chain-and-transport-hardening-design.md`)
+merged at `d68af4f` after inline TDD execution, a whole-branch subagent
+review whose Critical finding reshaped the cycle, and a verified fix
+wave: `tools/refresh_locks.py` gained a repeatable `--upgrade-package`
+passthrough (flag exclusivity enforced at both the CLI and builder
+layers); the two policy transport helpers gained the
+`_TRANSPORT_FALLBACK_TIMEOUT` backstop — a (10s connect, 300s header)
+tuple applied when a caller omits `timeout` or passes `None` — so an
+untimed call can no longer hang indefinitely while body reads stay
+deadline-bounded by the provider transport; and per-page warning floods
+were aggregated (first three per stage verbatim plus exact-count
+summaries) across the scan and preprocess inspection loops and the
+deletion loop, which first collapses identical failures and whose worst
+case — a shared un-deletable background image — previously warned once
+per referencing page. The review's
+Critical finding: the cycle's targeted lock refresh closing the three
+advisories (aiohttp 3.14.3, cryptography 50.0.0, h2 4.4.1 — a surgical
+three-package delta of seven selected records across four locks,
+byte-stable second regeneration,
+pip-audit clean at the fixed trio, both locked environments resynced
+with full suites green) violates the domains ADR's lock-only rule
+("[t]ransitive-only changes fail closed"; the PR-mode gate rejects it,
+confirmed by running it), and the design's original compliance reading
+plus its #72-precedent citation were wrong. That validated lock work is
+parked unmerged on `agent/transitive-advisory-locks`; integrating it
+requires the owner to choose between the ADR's two named paths —
+promote the three packages into governed direct inputs, or first land
+the reviewer-bound machine-readable exception mechanism the ADR
+anticipates (the better fit for recurring transitive CVEs).
+Alternatively the owner may leave the locks parked and record
+time-boxed acceptances in `dependency-vulnerability-policy.json`, as
+with chromadb PYSEC-2026-311. Whoever integrates the parked branch
+should additionally prove the no-flag `tools/refresh_locks.py` run
+leaves the locks byte-identical, which the dependency-compatibility
+workflow's `Reject stale lockfiles` step enforces. Recorded
+follow-ups: "document"-stage inspection issues render through the
+images-specific message (pre-existing wording, behavior-preserved by
+the aggregation refactor), and `apply_background_image_removals` still
+re-attempts a failed shared xref on every referencing page (the
+aggregation fixed the log volume, not the wasted work). Full locked
+suites at the merged tree pass 3,461 tests with 8 skips (Windows
+CPython 3.12.13) and 3,460 with 9 skips (WSL CPython 3.12.13); every
+static/policy gate is green — including the PR-mode dependency gate
+against the merge base — and all three offline suites pass. Fresh
+paired Phase A0 evidence binds checkpoint `4551c50` (the post-merge
+inventory refresh) with both independent 9×5 comparisons passing.
 
 Status terms:
 
@@ -198,6 +246,7 @@ Status terms:
 | Five-gate logical publication and AI project exports | Integrated via #76 | Schema-v7 chunk receipts and schema-v12 quality evidence bind source-oracle registries, exact lexical ownership and physical order, occurrence-bound heading lineage, strict Pandoc/Zettlr-valid Markdown, and schema-v9 physical vector parity into one atomic READY receipt. Receipt-bound NotebookLM, ChatGPT, and Claude packages preserve page locators and endnotes while removing hidden comments and package-local links. The implementation passes 3,081 tests with 7 skips, every local static gate, all three offline retrieval suites, real Zettlr validation, real Chroma/Qdrant smoke, a content-free local rehearsal, and paired local Phase A0 comparisons. Combined with the strict output-contract line in the R2 convergence candidate; exact-head CI and owner review remain required |
 | Ingestion quick wins | Integrated | Merge `3b2188c` (2026-08-03): CID-garbled text-layer detection (additive threshold, stats, scan-card line; recall follow-up closed 2026-08-15), layout-aware per-region OCR as the `--ocr` default with `--ocr-full-page` and conversion schema v3, advisory bookmark cross-check for the TOC scaffold (single-snapshot, counts-only telemetry), and advisory Docling confidence surfacing (finite-guarded, failure-isolated) |
 | Glyph-truth triage and evaluation significance | Integrated | Merge `db8132b` (2026-08-15): texttrace glyph-level decode-correctness union term (counted-once decode failures at the shared 0.02 threshold) with strip-plan veto and failure-isolated degrade, invisible OCR-overlay counter and scan-card line, broken-cmap recall fixtures (glyph-channel-only catch proven; plausible-Latin miss characterized as the open follow-up), and flag-gated deterministic paired-bootstrap significance for eval compare with declared uncorrected multiplicity |
+| Transport and logging hardening | Integrated | Merge `d68af4f` (2026-08-18): targeted `--upgrade-package` lock-refresher support with dual-layer flag exclusivity, (10s, 300s) transport timeout backstop covering omitted and `None` timeouts, aggregated inspection and deletion warning floods with exact-count summaries, and the validated transitive-advisory lock refresh parked on `agent/transitive-advisory-locks` awaiting the owner's ADR path choice |
 | First-pass PDF triage scan | Integrated | Merge `4975793` (2026-08-02): read-only, LLM-free `rag.py scan` report card — document fingerprinting, page composition, text-layer verdict from the exact preprocess seams, preprocess forecast, OCR recommendation bound to the pipeline's real gate, bounded watermark/TOC sampling — with pure policy in `ingestion_core.assess_pdf_triage` and failure-injected tests |
 | Dependency compatibility domains | Integrated via #76 | [PR #66](https://github.com/toddlar00/rag-pipeline/pull/66): a reviewed `dependency-compatibility-domains.json` map assigns every governed direct dependency to one compatibility domain; the dependency-policy gate enforces one domain per pull request, lockfile currency against the base, and a change-free policy introduction, with a dedicated hosted dependency-compatibility workflow. Combined into R2 convergence candidate [#76](https://github.com/toddlar00/rag-pipeline/pull/76) |
 | Strict LLM and TOC output contracts | Integrated via #76 | [PRs #68-#71](https://github.com/toddlar00/rag-pipeline/pull/71): exact classification, TOC hierarchy, TOC layout, and Boolean TOC page-verification output contracts with bounded JSON prompt-evidence framing and contract provenance in chunk parameters. Combined into R2 convergence candidate [#76](https://github.com/toddlar00/rag-pipeline/pull/76) |

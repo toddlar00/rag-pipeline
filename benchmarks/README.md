@@ -8,12 +8,12 @@ fresh-process repetitions.
 ## Provenance
 
 Both current reports were generated from the clean pre-gate source checkpoint
-`db8132b49f5eb1d80570ad9a1f9da177eb58dec4`, the merge of the glyph-truth
-and evaluation-significance quick wins (texttrace glyph-level
-decode-correctness union term with strip-plan veto, invisible OCR-overlay
-counter, broken-cmap recall fixtures, and flag-gated paired-bootstrap
-significance for eval compare) over the ingestion quick-wins head
-`3b2188c`. The executing environments were
+`4551c50970a07ac120d192802bcc692e39e3ece6`, the post-merge inventory
+refresh over the transport and logging hardening merge `d68af4f`
+(targeted `--upgrade-package` lock-refresher support, the
+`_TRANSPORT_FALLBACK_TIMEOUT` connect/read backstop, and aggregated
+inspection/deletion warning floods) on the glyph-truth head `eb29f86`.
+The executing environments were
 synchronized with repository-pinned uv 0.11.31 against the exact CPU
 application/test lock union plus its retained bootstrapper:
 
@@ -30,8 +30,8 @@ marker-resolved distributions before generation.
 
 | Platform | Runtime | Report | Bytes | File SHA-256 | Embedded report SHA-256 |
 |---|---:|---|---:|---|---|
-| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 50,393 | `8f38fea9a1e6393a5be5f7f1ebef4e4606589b0a39dd908fac465da92750a42a` | `57da092618bddb0538743441222e7a364ac1ac396ad6793f213a689da6a0b134` |
-| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 49,795 | `3ff9560ab77ca85bacd9a21cc3011fadfd1c08bbed5c7eaebd81f665d6c9191f` | `bdbc0baa387e7b870c14c2cb49dc58a3cfd927ab277eb755e5226eb1e45f9d9f` |
+| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 50,390 | `f958ac2d47e46a7a3660a408b5b011ac809586810cc16623e67db128bd7a7816` | `a41545b403ed2d5f9dbea529ce86096550dd1114232c955b910b4f76336e496b` |
+| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 49,801 | `b9f740b44be219f8d2eb5bb903ec0c3a655d265c4fe7fcea6fc5da8deff3b0bb` | `93ef091dd2828b24fcd2d875320a79ddd5435cb71e99ac97ca20b82a8ffb46c2` |
 
 The reports attest the same source commit, clean-worktree state, tracked-diff
 digest, eight LF and `HEAD`-identical dependency/model-lock inputs, authoritative
@@ -89,14 +89,17 @@ cells on the post-merge `main` workflow at evidence head `782c986`. The
 dependency domain-gate decomposition merge `71b4a23` repeated the cycle,
 passing its hosted cells at evidence head `6efe0bc`, and the ingestion
 quick-wins merge `3b2188c` passed its hosted cells on the post-merge
-`main` workflow at evidence head `05eb6df`. The glyph-truth and
-evaluation-significance merge `db8132b` changes Python source again and
-supersedes that pair in turn. Its canonical inventory records 2,623
-functions across 168 tracked sources with 952 static and 960 runtime
-`rag` bindings, and at the merged tree the full local suites pass 3,446
-tests with 9 skips on the locked Linux CPython 3.12.13 environment and
-3,448 with 7 skips on Windows CPython 3.14. The
-current reports above bind clean source `db8132b`, and each passes an
+`main` workflow at evidence head `05eb6df`, and the glyph-truth and
+evaluation-significance merge `db8132b` passed its hosted cells at
+evidence head `eb29f86`. The transport and logging hardening merge
+`d68af4f` (checkpoint `4551c50`, its post-merge inventory refresh)
+changes Python source again and supersedes that pair in turn. Its
+canonical inventory records 2,625
+functions across 168 tracked sources with 956 static and 964 runtime
+`rag` bindings, and at the checkpoint tree the full locked suites pass
+3,460 tests with 9 skips on Linux CPython 3.12.13 and 3,461 with 8
+skips on Windows CPython 3.12.13. The
+current reports above bind clean source `4551c50`, and each passes an
 independent complete same-platform 9×5 comparison. The following reports-and-documentation-only commit freezes the
 new local pair; no hosted result is claimed for this head yet — its hosted
 cells run on the post-merge `main` workflow.

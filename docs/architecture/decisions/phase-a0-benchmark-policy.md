@@ -74,11 +74,11 @@ that `Path.home()` remains denied.
 ## A0b publication gate
 
 The replacement gate uses clean pre-gate source
-`db8132b49f5eb1d80570ad9a1f9da177eb58dec4` — the merge of the glyph-truth
-and evaluation-significance quick wins over the ingestion quick-wins head
-`3b2188c`, whose own pair passed both hosted Phase A0 cells on the
-post-merge `main` workflow at evidence head `05eb6df` — and separate
-Windows and Linux CPython 3.12.13 x86-64 reports. Both were generated under the
+`4551c50970a07ac120d192802bcc692e39e3ece6` — the post-merge inventory
+refresh over the transport and logging hardening merge `d68af4f` on the
+glyph-truth head `eb29f86`, whose own pair passed both hosted Phase A0
+cells on the post-merge `main` workflow at that evidence head — and
+separate Windows and Linux CPython 3.12.13 x86-64 reports. Both were generated under the
 exact `requirements-full.lock`, `requirements-test.lock`, and retained
 `requirements-lock-tools.lock` union after strict hash-locked synchronization
 and dependency-consistency checks: 189 marker-resolved distributions on
@@ -86,7 +86,7 @@ Windows and 187 on Linux. They bind one clean source, the same eight LF and
 `HEAD`-identical dependency/model inputs, and the complete 9×5 scenario
 contract. Each passes an independent complete same-platform comparison. The
 repaired CI matrix, LF policy, source gates, Python 3.10-3.14 compatibility
-normalization, and the two-lane CI split precede `db8132b` and were
+normalization, and the two-lane CI split precede `4551c50` and were
 exercised by generation and comparison. The following gate-only delta is
 limited to the two reports and their provenance/status documentation.
 
@@ -179,21 +179,23 @@ via #83, the read-only PDF triage scan merge `4975793` passed its hosted
 cells at evidence head `782c986`, the dependency domain-gate decomposition
 merge `71b4a23` passed its cells at evidence head `6efe0bc`, the ingestion
 quick-wins merge `3b2188c` passed its cells at evidence head `05eb6df`,
-and the glyph-truth and evaluation-significance merge `db8132b` changes
-Python source again and supersedes its pair in turn. The current
+the glyph-truth and evaluation-significance merge `db8132b` passed its
+cells at evidence head `eb29f86`, and the transport and logging
+hardening merge `d68af4f` (checkpoint `4551c50`) changes Python source
+again and supersedes its pair in turn. The current
 inventory records
-2,623 functions across 168 tracked sources with 952 static and 960 runtime
+2,625 functions across 168 tracked sources with 956 static and 964 runtime
 `rag` bindings. After strict synchronization and dependency checks for 189
 Windows
-and 187 Linux distributions, the Windows replacement report is 50,393 bytes
+and 187 Linux distributions, the Windows replacement report is 50,390 bytes
 under CPython 3.12.13 (file SHA-256
-`8f38fea9a1e6393a5be5f7f1ebef4e4606589b0a39dd908fac465da92750a42a`;
+`f958ac2d47e46a7a3660a408b5b011ac809586810cc16623e67db128bd7a7816`;
 embedded report SHA-256
-`57da092618bddb0538743441222e7a364ac1ac396ad6793f213a689da6a0b134`).
-The Linux report is 49,795 bytes under CPython 3.12.13 (file SHA-256
-`3ff9560ab77ca85bacd9a21cc3011fadfd1c08bbed5c7eaebd81f665d6c9191f`;
+`a41545b403ed2d5f9dbea529ce86096550dd1114232c955b910b4f76336e496b`).
+The Linux report is 49,801 bytes under CPython 3.12.13 (file SHA-256
+`b9f740b44be219f8d2eb5bb903ec0c3a655d265c4fe7fcea6fc5da8deff3b0bb`;
 embedded report SHA-256
-`bdbc0baa387e7b870c14c2cb49dc58a3cfd927ab277eb755e5226eb1e45f9d9f`).
+`93ef091dd2828b24fcd2d875320a79ddd5435cb71e99ac97ca20b82a8ffb46c2`).
 Each current candidate passes an independent complete same-platform 9×5
 comparison. The following reports-and-documentation-only commit freezes the
 new local candidate; publishing its exact commit/tree plus hosted execution,
