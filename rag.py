@@ -6744,6 +6744,40 @@ def _page_background_images(doc, page, min_dim: int) -> list[tuple[int, int, int
     return list(inspection.candidates) if inspection.complete else []
 
 
+_INSPECTION_ISSUE_LOG_LIMIT = 3
+
+
+def _log_inspection_issues(issues, *, text_message: str) -> None:
+    """Log inspection issues without per-page warning floods.
+
+    The first few issues of each stage log verbatim through the caller's
+    established message forms; the remainder collapses into one summary
+    line per stage carrying the exact leftover count, so a systematic
+    per-page failure cannot emit thousands of lines.
+    """
+    logged: dict[str, int] = {}
+    totals: dict[str, int] = {}
+    for issue in issues:
+        totals[issue.stage] = totals.get(issue.stage, 0) + 1
+        count = logged.get(issue.stage, 0)
+        if count >= _INSPECTION_ISSUE_LOG_LIMIT:
+            continue
+        logged[issue.stage] = count + 1
+        if issue.stage == "text":
+            log.warning(text_message, issue.page_number, issue.detail)
+        else:
+            log.warning(
+                "Could not inspect images on PDF page %s: %s",
+                issue.page_number, issue.detail,
+            )
+    for stage, total in totals.items():
+        remainder = total - logged.get(stage, 0)
+        if remainder > 0:
+            log.warning(
+                "... and %d more %s with %s inspection issues",
+                remainder, "page" if remainder == 1 else "pages", stage)
+
+
 def _analyze_pdf_images(pdf_path: Path, min_dim: int = 1000) -> dict:
     """Scan background images and the safety of the PDF text layer."""
     import pymupdf
@@ -6756,17 +6790,10 @@ def _analyze_pdf_images(pdf_path: Path, min_dim: int = 1000) -> dict:
             page_text_is_usable_fn=_pdf_page_text_is_usable,
             page_background_inspection_fn=_inspect_page_background_images,
         )
-    for issue in analysis.issues:
-        if issue.stage == "text":
-            log.warning(
-                "Could not inspect the text layer on PDF page %s: %s",
-                issue.page_number, issue.detail,
-            )
-        else:
-            log.warning(
-                "Could not inspect images on PDF page %s: %s",
-                issue.page_number, issue.detail,
-            )
+    _log_inspection_issues(
+        analysis.issues,
+        text_message="Could not inspect the text layer on PDF page %s: %s",
+    )
     return analysis.stats
 
 
@@ -7013,17 +7040,11 @@ def preprocess_pdf(input_path: Path, output_path: Path, *,
             page_text_is_usable_fn=_pdf_page_text_is_usable,
             page_background_inspection_fn=_inspect_page_background_images,
         )
-        for issue in plan.issues:
-            if issue.stage == "text":
-                log.warning(
-                    "Could not verify text before stripping PDF page %s: %s",
-                    issue.page_number, issue.detail,
-                )
-            else:
-                log.warning(
-                    "Could not inspect images on PDF page %s: %s",
-                    issue.page_number, issue.detail,
-                )
+        _log_inspection_issues(
+            plan.issues,
+            text_message=(
+                "Could not verify text before stripping PDF page %s: %s"),
+        )
         if not plan.complete:
             log.warning(
                 "Image stripping was cancelled because not every page could "
