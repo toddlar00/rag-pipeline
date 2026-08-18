@@ -4756,15 +4756,15 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "27cb37e2f21dd5b27005f72a2fe99138884215ac90c13cea97f5e4040baa2037",
+          "locations_sha256": "1b5cb16d65347fd844e182e1e1ca3c565163c25dfc98d1dfc3ec0314713092f9",
           "name": "_TRANSPORT_FALLBACK_TIMEOUT",
-          "occurrence_count": 3,
+          "occurrence_count": 4,
           "paths": [
             "_TRANSPORT_FALLBACK_TIMEOUT"
           ],
           "source_counts": [
             {
-              "count": 3,
+              "count": 4,
               "path": "tests/test_release_security_boundaries.py"
             }
           ]
@@ -8820,9 +8820,9 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "bcad2a6293f1958366332db105a68b864ea1796f13be74df6795f94a868bac6c",
+          "locations_sha256": "0950519e8143c026bd95d6ddb871c08726c882baa7a1ce4b6927fbd59d468309",
           "name": "_post_loopback_without_environment",
-          "occurrence_count": 3,
+          "occurrence_count": 4,
           "paths": [
             "_post_loopback_without_environment"
           ],
@@ -8836,7 +8836,7 @@
               "path": "tests/test_llm_providers.py"
             },
             {
-              "count": 1,
+              "count": 2,
               "path": "tests/test_release_security_boundaries.py"
             }
           ]
