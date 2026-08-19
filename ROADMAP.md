@@ -55,8 +55,8 @@ That pair remains historical evidence; see its
 [exact-head evidence record](docs/evidence/2026-08-18-main-443dce4.md).
 
 The current Task 0.2 evidence candidate is the direct gate-only child of clean
-source `76291e1a7a2a3cd0b22ecaf3430205c926ba7769` (tree
-`aa2375f1acb9c26eb4e8b0e89f6c1dc0ea8f1bfc`). Its separate Windows and
+source `ca7f54c3192c83e3d0ee99135480a454acdd3af4` (tree
+`0a1aaf8e8fbeb1a06bc6462d98bf982bbd81c517`). Its separate Windows and
 Linux CPython 3.12.13 reports each cover the authoritative 9x5 scenario set,
 share the exact source, lock, and scenario contract, and pass a local
 same-platform comparison. Hosted checks and the external exact-SHA promotion
@@ -151,8 +151,8 @@ Execute it in this order:
 | Deferred | Product simplification and retrieval experiments | Phase 4 and applicable qualification gates | Each product/quality change proves its own privacy, usability, and promotion contract |
 
 Task 0.2 now has exact clean source `S`
-(`76291e1a7a2a3cd0b22ecaf3430205c926ba7769`, tree
-`aa2375f1acb9c26eb4e8b0e89f6c1dc0ea8f1bfc`) and this branch is its direct
+(`ca7f54c3192c83e3d0ee99135480a454acdd3af4`, tree
+`0a1aaf8e8fbeb1a06bc6462d98bf982bbd81c517`) and this branch is its direct
 gate-only evidence child `E`. The live CI workflow remains the reviewed
 force-full bootstrap rendering, the future active workflow remains preserved
 as a security-owned fixture, and the paired local Phase A0 comparisons pass.
