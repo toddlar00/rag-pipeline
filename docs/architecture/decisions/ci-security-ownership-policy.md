@@ -73,6 +73,15 @@ event, `head_sha` names the whole queue candidate rather than an individual
 pull-request head, and the evaluator therefore requires head and candidate to
 be identical.
 
+The temporary force-full evidence bootstrap has one deliberately narrower
+checkout rule: its Phase A0 job checks the literal pull-request head so the
+retained report and attestation can bind exact evidence child `E`. The
+bootstrap has no promotion aggregate, and that raw-head result is not active
+promotion evidence. Its other execution jobs continue to test the synthetic
+candidate. The deterministic renderer makes only this Phase A0 ref rewrite;
+the reviewed active fixture checks out the tested candidate in every execution
+job, including Phase A0, before the promotion gate can accept it.
+
 If GitHub regenerates a pull-request merge candidate after the target base
 moves, an event whose advertised base and candidate parents no longer agree
 fails closed. It must be retriggered against the new base; neither the stale
@@ -152,11 +161,13 @@ remains executable only after it is copied to the workflows directory. At
 evidence/seed head `E`, the checker and tests validate that fixture against the
 exact active digest and topology, validate the live workflow against the exact
 force-full bootstrap digest and topology, and prove that the bootstrap is the
-deterministic rendering of the fixture. The activation checkpoint is therefore
-a workflow-only copy of the fixture to `.github/workflows/ci.yml`; validation
-then requires the live workflow's normalized bytes, digest, and topology to
-match the fixture. The rollout never depends on an external patch, side branch,
-or one-way transformation that leaves only an unreproducible digest.
+deterministic rendering of the fixture, including its sole literal-head Phase
+A0 evidence checkout. The activation checkpoint is therefore a workflow-only
+copy of the fixture to `.github/workflows/ci.yml`; validation then requires the
+live workflow's normalized bytes, digest, topology, and all-candidate checkout
+contract to match the fixture. The rollout never depends on an external patch,
+side branch, or one-way transformation that leaves only an unreproducible
+digest.
 
 If an emergency single-checkpoint bootstrap is unavoidable, a missing base
 evaluator may select only the full lane and the change is not promotable

@@ -86,7 +86,9 @@ _FLOW_MAPPING_RE = re.compile(
     r"^(?:\{|-\s*(?:&\S+\s*)?\{|[^:#]+:\s*(?:&\S+\s*)?\{)"
 )
 _CANDIDATE_REF = "${{ github.sha }}"
-_PHASE_A0_REF = "${{ github.event.pull_request.head.sha || github.sha }}"
+_PHASE_A0_BOOTSTRAP_REF = (
+    "${{ github.event.pull_request.head.sha || github.sha }}"
+)
 _ALLOWED_RISK_GROUPS = frozenset({
     "documentation_only",
     "evaluation",
@@ -201,7 +203,7 @@ _ACTIVE_PROMOTION_SHA256 = (
     "3d944775fbaf16ce791513f824173a55f384bc94c38159ddb411e0d53066d2b2"
 )
 _ACTIVE_WORKFLOW_SHA256 = (
-    "a1b85e7219d422f7538bebc14db23cd785fabce1c077aa8b3ad80af12e91a1cd"
+    "d161677a0eb4bfa80140c88a97081a63e3c25ec4ec4be3c00b247587911ce722"
 )
 _BOOTSTRAP_WORKFLOW_SHA256 = (
     "49f2b074ff288462e4a0fcf9afde47ea2f7b6ec1671d777e60b893750540866b"
@@ -501,11 +503,28 @@ def render_force_full_bootstrap(text: str) -> str:
     lane_start = normalized.index(markers[0])
     quality_start = normalized.index(markers[1], lane_start)
     promotion_start = normalized.index(markers[2], quality_start)
-    return (
+    bootstrap = (
         normalized[:lane_start]
         + _BOOTSTRAP_LANE_TEXT
         + normalized[quality_start:promotion_start]
     )
+    phase_marker = "\n  phase-a0:\n"
+    next_marker = "\n  vector-store-smoke:\n"
+    if bootstrap.count(phase_marker) != 1 or bootstrap.count(next_marker) != 1:
+        raise ValueError(
+            "bootstrap must contain one phase-a0 and vector-store-smoke job"
+        )
+    phase_start = bootstrap.index(phase_marker)
+    phase_end = bootstrap.index(next_marker, phase_start)
+    phase_block = bootstrap[phase_start:phase_end]
+    candidate_ref = f"          ref: {_CANDIDATE_REF}\n"
+    bootstrap_ref = f"          ref: {_PHASE_A0_BOOTSTRAP_REF}\n"
+    if phase_block.count(candidate_ref) != 1 or bootstrap_ref in phase_block:
+        raise ValueError(
+            "active phase-a0 must contain one exact candidate checkout ref"
+        )
+    phase_block = phase_block.replace(candidate_ref, bootstrap_ref, 1)
+    return bootstrap[:phase_start] + phase_block + bootstrap[phase_end:]
 
 
 def _require_markers(
@@ -862,7 +881,11 @@ def _validate_force_full_bootstrap(
     for job, job_range in jobs.items():
         if job == "lane":
             continue
-        expected_ref = _PHASE_A0_REF if job == "phase-a0" else _CANDIDATE_REF
+        expected_ref = (
+            _PHASE_A0_BOOTSTRAP_REF
+            if job == "phase-a0"
+            else _CANDIDATE_REF
+        )
         checkouts = _checkout_step_ranges(lines, job_range)
         if len(checkouts) != 1:
             errors.append(
@@ -1163,7 +1186,7 @@ def validate_ci_topology(text: str) -> list[str]:
     for job, job_range in jobs.items():
         if job in {"lane", "promotion-gate"}:
             continue
-        expected_ref = _PHASE_A0_REF if job == "phase-a0" else _CANDIDATE_REF
+        expected_ref = _CANDIDATE_REF
         checkouts = _checkout_step_ranges(lines, job_range)
         if job in _EXPECTED_EXECUTION_JOBS and len(checkouts) != 1:
             errors.append(
