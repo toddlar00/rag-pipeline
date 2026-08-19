@@ -86,6 +86,7 @@ _FLOW_MAPPING_RE = re.compile(
     r"^(?:\{|-\s*(?:&\S+\s*)?\{|[^:#]+:\s*(?:&\S+\s*)?\{)"
 )
 _CANDIDATE_REF = "${{ github.sha }}"
+_PHASE_A0_REF = "${{ github.event.pull_request.head.sha || github.sha }}"
 _ALLOWED_RISK_GROUPS = frozenset({
     "documentation_only",
     "evaluation",
@@ -200,10 +201,10 @@ _ACTIVE_PROMOTION_SHA256 = (
     "3d944775fbaf16ce791513f824173a55f384bc94c38159ddb411e0d53066d2b2"
 )
 _ACTIVE_WORKFLOW_SHA256 = (
-    "d161677a0eb4bfa80140c88a97081a63e3c25ec4ec4be3c00b247587911ce722"
+    "a1b85e7219d422f7538bebc14db23cd785fabce1c077aa8b3ad80af12e91a1cd"
 )
 _BOOTSTRAP_WORKFLOW_SHA256 = (
-    "1b185568232da220e5dccd22fa455aa981133aa59fc74ee3bd8905d7b7efd37d"
+    "49f2b074ff288462e4a0fcf9afde47ea2f7b6ec1671d777e60b893750540866b"
 )
 
 
@@ -861,6 +862,7 @@ def _validate_force_full_bootstrap(
     for job, job_range in jobs.items():
         if job == "lane":
             continue
+        expected_ref = _PHASE_A0_REF if job == "phase-a0" else _CANDIDATE_REF
         checkouts = _checkout_step_ranges(lines, job_range)
         if len(checkouts) != 1:
             errors.append(
@@ -873,7 +875,7 @@ def _validate_force_full_bootstrap(
             )
             if (
                 checkout_with is None
-                or checkout_with.get("ref") != _CANDIDATE_REF
+                or checkout_with.get("ref") != expected_ref
                 or checkout_with.get("persist-credentials") != "false"
                 or set(checkout_with).difference({
                     "fetch-depth", "persist-credentials", "ref",
@@ -885,8 +887,8 @@ def _validate_force_full_bootstrap(
             ):
                 errors.append(
                     f"{CI_WORKFLOW_PATH}: bootstrap {job} checkout must have "
-                    "one exact candidate ref, disabled credentials, and only "
-                    "the approved fetch-depth option"
+                    "one exact approved execution ref, disabled credentials, "
+                    "and only the approved fetch-depth option"
                 )
 
 
@@ -1161,6 +1163,7 @@ def validate_ci_topology(text: str) -> list[str]:
     for job, job_range in jobs.items():
         if job in {"lane", "promotion-gate"}:
             continue
+        expected_ref = _PHASE_A0_REF if job == "phase-a0" else _CANDIDATE_REF
         checkouts = _checkout_step_ranges(lines, job_range)
         if job in _EXPECTED_EXECUTION_JOBS and len(checkouts) != 1:
             errors.append(
@@ -1172,7 +1175,7 @@ def validate_ci_topology(text: str) -> list[str]:
             )
             if (
                 checkout_with is None
-                or checkout_with.get("ref") != _CANDIDATE_REF
+                or checkout_with.get("ref") != expected_ref
                 or checkout_with.get("persist-credentials") != "false"
                 or set(checkout_with).difference({
                     "fetch-depth", "persist-credentials", "ref",
@@ -1184,8 +1187,8 @@ def validate_ci_topology(text: str) -> list[str]:
             ):
                 errors.append(
                     f"{workflow_path}: {job} checkout must have one exact "
-                    "candidate ref, disabled credentials, and only the "
-                    "approved fetch-depth option"
+                    "approved execution ref, disabled credentials, and only "
+                    "the approved fetch-depth option"
                 )
 
     promotion_range = jobs["promotion-gate"]

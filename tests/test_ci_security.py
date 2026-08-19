@@ -323,6 +323,11 @@ def test_reviewed_active_fixture_preserves_both_rollout_forms():
     active = _active_ci_workflow_text()
     bootstrap = check_ci_security.render_force_full_bootstrap(active)
     actual = check_ci_security._normalized_workflow_text(_ci_workflow_text())
+    merge_ref = "          ref: ${{ github.sha }}\n"
+    phase_a0_ref = (
+        "          ref: "
+        "${{ github.event.pull_request.head.sha || github.sha }}\n"
+    )
 
     assert check_ci_security._workflow_sha256(active) == (
         check_ci_security._ACTIVE_WORKFLOW_SHA256
@@ -335,6 +340,8 @@ def test_reviewed_active_fixture_preserves_both_rollout_forms():
     ) == []
     assert check_ci_security.validate_ci_topology(active) == []
     assert check_ci_security.validate_ci_topology(bootstrap) == []
+    assert active.count(merge_ref) == bootstrap.count(merge_ref) == 7
+    assert active.count(phase_a0_ref) == bootstrap.count(phase_a0_ref) == 1
     assert actual in {
         check_ci_security._normalized_workflow_text(active),
         check_ci_security._normalized_workflow_text(bootstrap),
@@ -768,7 +775,7 @@ def test_ci_topology_requires_matrix_fail_fast_false():
 
 def test_ci_topology_requires_exact_candidate_checkout_ref():
     ref_line = "          ref: ${{ github.sha }}\n"
-    text = _mutated_ci(ref_line, "", count=8)
+    text = _mutated_ci(ref_line, "", count=7)
 
     errors = check_ci_security.validate_ci_topology(text)
 
@@ -783,7 +790,7 @@ def test_ci_topology_rejects_fork_repository_override():
         ref_line
         + "          repository: "
         + "${{ github.event.pull_request.head.repo.full_name }}\n",
-        count=8,
+        count=7,
     )
 
     errors = check_ci_security.validate_ci_topology(text)
@@ -798,12 +805,29 @@ def test_ci_topology_rejects_duplicate_candidate_ref_key():
         ref_line,
         ref_line
         + "          ref: ${{ github.event.pull_request.head.sha }}\n",
-        count=8,
+        count=7,
     )
 
     errors = check_ci_security.validate_ci_topology(text)
 
     assert any("quality checkout must have one exact" in error
+               for error in errors)
+
+
+@pytest.mark.parametrize("bootstrap", (False, True))
+def test_ci_topology_requires_exact_phase_a0_pr_head_checkout_ref(bootstrap):
+    head_ref = (
+        "          ref: "
+        "${{ github.event.pull_request.head.sha || github.sha }}\n"
+    )
+    text = (_bootstrap_ci_workflow_text()
+            if bootstrap else _active_ci_workflow_text())
+    assert text.count(head_ref) == 1
+    text = text.replace(head_ref, "          ref: ${{ github.sha }}\n", 1)
+
+    errors = check_ci_security.validate_ci_topology(text)
+
+    assert any("phase-a0 checkout must have one exact" in error
                for error in errors)
 
 
