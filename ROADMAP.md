@@ -1,7 +1,7 @@
 # Improvement Roadmap
 
 - **Status:** Live scheduling authority
-- **Current as of:** 2026-08-18
+- **Current as of:** 2026-08-19
 - **Baseline:** `main` and `origin/main` at
   `443dce4c312737eebb57a5bba6fc0abb9ace1a26` (tree
   `344a9b224dd5942a50d370bc10dfb62384962440`)
@@ -47,12 +47,21 @@ publish a release.
 
 ### Phase A0
 
-A0a is integrated. The current A0b technical checkpoint binds clean pre-gate
-source `4551c50970a07ac120d192802bcc692e39e3ece6` to evidence head
-`443dce4`. Both hosted Windows and Linux Phase A0 jobs passed at that exact
-head, and retained evidence artifacts were present when audited. Older wording
-that calls the hosted replacement checkpoint pending is stale; see the
+A0a is integrated. The latest completed hosted A0b technical checkpoint binds
+clean pre-gate source `4551c50970a07ac120d192802bcc692e39e3ece6` to
+evidence head `443dce4`. Both hosted Windows and Linux Phase A0 jobs passed at
+that exact head, and retained evidence artifacts were present when audited.
+That pair remains historical evidence; see its
 [exact-head evidence record](docs/evidence/2026-08-18-main-443dce4.md).
+
+The current Task 0.2 evidence candidate is the direct gate-only child of clean
+source `76291e1a7a2a3cd0b22ecaf3430205c926ba7769` (tree
+`aa2375f1acb9c26eb4e8b0e89f6c1dc0ea8f1bfc`). Its separate Windows and
+Linux CPython 3.12.13 reports each cover the authoritative 9x5 scenario set,
+share the exact source, lock, and scenario contract, and pass a local
+same-platform comparison. Hosted checks and the external exact-SHA promotion
+record are pending, so this candidate does not yet replace the earlier pair as
+the completed hosted checkpoint.
 
 No submitted exact-head human review or separate owner authorization for the
 R8c-6 ownership move was found. Technical A0 success is therefore not that
@@ -141,18 +150,20 @@ Execute it in this order:
 | Phase 4 | Safe runtime ownership and decomposition | Phase 3 evidence plus explicit R8/R9 authorization | Characterized facade, bounded ownership slices, privacy-safe service telemetry, per-slice rollback and exact evidence |
 | Deferred | Product simplification and retrieval experiments | Phase 4 and applicable qualification gates | Each product/quality change proves its own privacy, usability, and promotion contract |
 
-Task 0.2 now has a locally validated source candidate: the live CI workflow is
-the reviewed force-full bootstrap rendering, the future active workflow is
-preserved as a security-owned fixture, and the candidate architecture
-inventory and local gates are current. Integration uses two stages but three
-immutable identities. Freeze the final clean source commit `S`; generate both
-platform Phase A0 reports from `S`; then make direct evidence child `E` with
-only the fixed evidence allowlist and promote `E` as the green force-full seed
-head. A later workflow-only commit `A` activates the fixture and receives its
-own external exact-SHA record. `S` is expected to be incompatible with the old
-baseline and is not itself the promoted head. Task 0.3 does not start from the
-dirty local candidate and then stops for the transitive-policy owner choice if
-it has not been recorded by that point.
+Task 0.2 now has exact clean source `S`
+(`76291e1a7a2a3cd0b22ecaf3430205c926ba7769`, tree
+`aa2375f1acb9c26eb4e8b0e89f6c1dc0ea8f1bfc`) and this branch is its direct
+gate-only evidence child `E`. The live CI workflow remains the reviewed
+force-full bootstrap rendering, the future active workflow remains preserved
+as a security-owned fixture, and the paired local Phase A0 comparisons pass.
+The next action is to promote `E` through its hosted force-full checks and
+external exact-SHA record. Only after that evidence head is the trusted base
+may a later workflow-only commit `A` copy the fixture into the live workflow,
+pass its hosted activation cases, and receive its own external exact-SHA
+record. Neither local success nor the as-yet-unrecorded identity of `E` closes
+Task 0.2. Task 0.3 must not start before the activation checkpoint is accepted;
+it then stops for the transitive-policy owner choice if that choice has not
+been recorded.
 
 ## Acceptance gates by phase
 

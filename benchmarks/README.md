@@ -7,13 +7,12 @@ fresh-process repetitions.
 
 ## Provenance
 
-Both current reports were generated from the clean pre-gate source checkpoint
-`4551c50970a07ac120d192802bcc692e39e3ece6`, the post-merge inventory
-refresh over the transport and logging hardening merge `d68af4f`
-(targeted `--upgrade-package` lock-refresher support, the
-`_TRANSPORT_FALLBACK_TIMEOUT` connect/read backstop, and aggregated
-inspection/deletion warning floods) on the glyph-truth head `eb29f86`.
-The executing environments were
+Both current reports were generated from the clean Task 0.2 pre-gate source
+checkpoint `76291e1a7a2a3cd0b22ecaf3430205c926ba7769` (tree
+`aa2375f1acb9c26eb4e8b0e89f6c1dc0ea8f1bfc`). That source contains the
+reviewed deterministic CI classifier, terminal promotion contract, force-full
+bootstrap workflow, and security-owned active-workflow fixture. The executing
+environments were
 synchronized with repository-pinned uv 0.11.31 against the exact CPU
 application/test lock union plus its retained bootstrapper:
 
@@ -30,8 +29,8 @@ marker-resolved distributions before generation.
 
 | Platform | Runtime | Report | Bytes | File SHA-256 | Embedded report SHA-256 |
 |---|---:|---|---:|---|---|
-| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 50,390 | `f958ac2d47e46a7a3660a408b5b011ac809586810cc16623e67db128bd7a7816` | `a41545b403ed2d5f9dbea529ce86096550dd1114232c955b910b4f76336e496b` |
-| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 49,801 | `b9f740b44be219f8d2eb5bb903ec0c3a655d265c4fe7fcea6fc5da8deff3b0bb` | `93ef091dd2828b24fcd2d875320a79ddd5435cb71e99ac97ca20b82a8ffb46c2` |
+| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 50,413 | `0d2a95e88e696073dad75a576160a342da5784ba37ef48a7011f1da1992e37a1` | `1184c074de25c0763d4c6d7a44779f10e6ad4ba34a5c66a8d22c5fd670ac5b73` |
+| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 49,826 | `6e7a6cfe29ded8da83627abbbaa11e64daf29bcdd42d25e9609837da60e69699` | `4220abfcb67bae9fa0bb5910af1170009598bca3f26f8ff1079e0204f9acd242` |
 
 The reports attest the same source commit, clean-worktree state, tracked-diff
 digest, eight LF and `HEAD`-identical dependency/model-lock inputs, authoritative
@@ -93,16 +92,21 @@ quick-wins merge `3b2188c` passed its hosted cells on the post-merge
 evaluation-significance merge `db8132b` passed its hosted cells at
 evidence head `eb29f86`. The transport and logging hardening merge
 `d68af4f` (checkpoint `4551c50`, its post-merge inventory refresh)
-changes Python source again and supersedes that pair in turn. Its
+changed Python source again and superseded that pair in turn. Its
 canonical inventory records 2,625
 functions across 168 tracked sources with 956 static and 964 runtime
 `rag` bindings, and at the checkpoint tree the full locked suites pass
 3,460 tests with 9 skips on Linux CPython 3.12.13 and 3,461 with 8
-skips on Windows CPython 3.12.13. The
-current reports above bind clean source `4551c50`, and each passes an
-independent complete same-platform 9×5 comparison. The following reports-and-documentation-only commit freezes the
-new local pair; no hosted result is claimed for this head yet — its hosted
-cells run on the post-merge `main` workflow.
+skips on Windows CPython 3.12.13. Reports-and-documentation-only head
+`443dce4` froze that historical pair, and both hosted A0 cells passed with
+retained evidence.
+
+Task 0.2 source `76291e1` now supersedes that pair. The current reports above
+bind that exact clean source and each passes an independent complete
+same-platform 9×5 comparison. This direct reports-and-documentation-only child
+is the force-full seed candidate. No hosted result or evidence-child SHA is
+claimed here yet; hosted checks and the external exact-SHA promotion record
+remain pending.
 
 ## Checking
 
@@ -129,10 +133,11 @@ ancestor of the final head. Integrate a passing candidate with a
 history-preserving merge; a squash or history-rewriting rebase invalidates this
 evidence and requires regeneration from the replacement history.
 
-The replacement gate-only delta after `3b2188c` is limited to the two reviewed
-reports and their provenance/status documentation. The repaired workflow,
-line-ending policy, Python gates, and the two-lane CI split are already part
-of the pre-gate source and were exercised while generating and comparing the
+The Task 0.2 gate-only delta after source `76291e1` is limited to the two
+reviewed reports and their provenance/status documentation. The force-full
+bootstrap, active-workflow fixture, deterministic classifier, terminal
+promotion contract, line-ending policy, and Python gates are already part of
+the pre-gate source and were exercised while generating and comparing the
 baselines. Each successful
 hosted cell strictly revalidates the generated report, requires its clean source
 identity to equal the exact job head, and builds a verified

@@ -80,9 +80,9 @@ drift. They cannot override an owner decision or authorize work.
   — schema-v3 static graph, facade/mutation characterization, normalized
   runtime contract, and reviewed baseline refreshes.
 - [Phase A0 benchmark policy](architecture/decisions/phase-a0-benchmark-policy.md)
-  — the cross-platform A0 contract, earlier diagnostic failures, the current
-  passing hosted technical checkpoint, and the still-open review/architecture
-  authorization boundary.
+  — the cross-platform A0 contract, earlier diagnostic failures, the latest
+  completed hosted checkpoint, the current Task 0.2 evidence candidate, and
+  the still-open review/architecture authorization boundary.
 
 With the CI-ownership, architecture-inventory, and Phase A0 decisions now
 maintained here, the roadmap's remaining missing ADR coverage is vector
@@ -123,13 +123,26 @@ status, test counts, workflow identities, and the exact-byte historical roadmap
 snapshot. `ROADMAP.md` contains only live scheduling state; an evidence record
 does not settle an owner decision.
 
-The current Phase A0 pair binds source checkpoint `4551c50` to evidence head
-`443dce4`. Its paired local comparisons and both hosted Windows/Linux jobs pass;
-the exact identities and report digests are recorded in the
-[`443dce4` evidence entry](evidence/2026-08-18-main-443dce4.md). No submitted
-exact-head human review or separate R8c-6 authorization was found, so the
-passing technical checkpoint is not permission for that architecture move.
-Earlier candidate, invalidation, and failure history remains in the
+The latest completed hosted Phase A0 pair binds source checkpoint `4551c50` to
+evidence head `443dce4`. Its paired local comparisons and both hosted
+Windows/Linux jobs pass; the exact identities and report digests are recorded
+in the [`443dce4` evidence entry](evidence/2026-08-18-main-443dce4.md). It
+remains historical evidence rather than the source identity for later changes.
+
+The current Task 0.2 branch is the direct gate-only evidence child of clean
+source `76291e1a7a2a3cd0b22ecaf3430205c926ba7769` (tree
+`aa2375f1acb9c26eb4e8b0e89f6c1dc0ea8f1bfc`). Its clean Windows and Linux
+CPython 3.12.13 reports share the exact source, lock, and authoritative 9x5
+scenario contract, and each passes its local same-platform comparison. Hosted
+force-full checks and an external exact-SHA promotion record are still pending;
+the evidence child's own commit identity is therefore not claimed here. The
+next step is to promote that evidence child, then create and validate the
+separate workflow-only activation commit from its trusted base.
+
+No submitted exact-head human review or separate R8c-6 authorization was found,
+so neither the earlier passing technical checkpoint nor this pending candidate
+is permission for that architecture move. Earlier candidate, invalidation, and
+failure history remains in the
 [moved roadmap snapshot](evidence/roadmap-through-2026-08-18-443dce4.md).
 
 Ignored `output/` paths are not durable evidence in a fresh clone. A roadmap or

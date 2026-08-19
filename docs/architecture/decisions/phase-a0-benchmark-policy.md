@@ -1,8 +1,9 @@
 # Phase A0 Benchmark Policy
 
-- **Status:** A0a integrated; the current A0b technical checkpoint passed at
-  evidence head `443dce4`; exact-head human review and separate R8 owner
-  authorization are not recorded
+- **Status:** A0a integrated; the latest completed hosted A0b technical
+  checkpoint passed at evidence head `443dce4`; the Task 0.2 replacement pair
+  is local-only pending hosted promotion; exact-head human review and separate
+  R8 owner authorization are not recorded
 - **Milestone:** R10 prerequisite for the R8 pipeline-ownership move
 - **Report schema:** `phase-a0` v3
 
@@ -73,7 +74,7 @@ that `Path.home()` remains denied.
 
 ## A0b publication gate
 
-The replacement gate uses clean pre-gate source
+The latest completed hosted replacement gate used clean pre-gate source
 `4551c50970a07ac120d192802bcc692e39e3ece6` — the post-merge inventory
 refresh over the transport and logging hardening merge `d68af4f` on the
 glyph-truth head `eb29f86`, whose own pair passed both hosted Phase A0
@@ -92,12 +93,25 @@ by generation and comparison. Reports-and-documentation-only head
 provenance/status documentation.
 
 Both Tier-1 hosted jobs passed against their matching baselines at that exact
-evidence head and retained their reports. This closes the current A0b
-_technical_ publication checkpoint. A local smoke report, subset,
+evidence head and retained their reports. This closed that A0b _technical_
+publication checkpoint. A local smoke report, subset,
 noncanonical interpreter, baseline copied between operating systems, or
 local-only comparison remains non-authoritative. No submitted exact-head human
 review or separate owner authorization for R8c-6 was found; passing the hosted
 A0b jobs does not supply that authorization or complete the review binding.
+
+The current Task 0.2 replacement pair uses clean source
+`76291e1a7a2a3cd0b22ecaf3430205c926ba7769` (tree
+`aa2375f1acb9c26eb4e8b0e89f6c1dc0ea8f1bfc`). Its Windows and Linux CPython
+3.12.13 reports were generated after the same strict hash-locked synchronization
+and dependency-consistency checks: 189 marker-resolved distributions on
+Windows and 187 on Linux. They bind that one clean source, the same eight LF
+and `HEAD`-identical dependency/model inputs, and the complete 9×5 scenario
+contract. Each passes an independent complete local same-platform comparison.
+The direct gate-only evidence child contains only the reports and permitted
+provenance/status documentation; its hosted checks, retained current-report
+artifacts, external exact-SHA promotion record, and own commit identity are
+still pending.
 
 The pull-request matrix explicitly checks out the exact PR head rather than the
 synthetic merge ref. Before comparison, the harness validates and publishes the
@@ -197,9 +211,21 @@ The Linux report is 49,801 bytes under CPython 3.12.13 (file SHA-256
 `b9f740b44be219f8d2eb5bb903ec0c3a655d265c4fe7fcea6fc5da8deff3b0bb`;
 embedded report SHA-256
 `93ef091dd2828b24fcd2d875320a79ddd5435cb71e99ac97ca20b82a8ffb46c2`).
-Each current report passes an independent complete same-platform 9×5
-comparison. Reports-and-documentation-only evidence head `443dce4` froze the
+Each report passed an independent complete same-platform 9×5 comparison.
+Reports-and-documentation-only evidence head `443dce4` froze that historical
 pair, and both matching hosted jobs passed with retained evidence. The exact
 identities, workflow run, and limitation that no submitted human review was
 found are recorded in the
 [`443dce4` evidence entry](../../evidence/2026-08-18-main-443dce4.md).
+
+Task 0.2 source `76291e1` supersedes that historical pair. Its Windows report
+is 50,413 bytes (file SHA-256
+`0d2a95e88e696073dad75a576160a342da5784ba37ef48a7011f1da1992e37a1`;
+embedded report SHA-256
+`1184c074de25c0763d4c6d7a44779f10e6ad4ba34a5c66a8d22c5fd670ac5b73`).
+Its Linux report is 49,826 bytes (file SHA-256
+`6e7a6cfe29ded8da83627abbbaa11e64daf29bcdd42d25e9609837da60e69699`;
+embedded report SHA-256
+`4220abfcb67bae9fa0bb5910af1170009598bca3f26f8ff1079e0204f9acd242`).
+Both use CPython 3.12.13 and pass their complete local same-platform 9×5
+comparisons. Hosted promotion remains pending.
