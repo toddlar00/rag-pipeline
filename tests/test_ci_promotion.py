@@ -706,16 +706,23 @@ def test_trusted_git_inspection_ignores_repository_replace_refs(tmp_path):
     workflow.parent.mkdir(parents=True)
     workflow.write_text("name: malicious replacement target\n", encoding="utf-8")
     head = _commit(tmp_path, "actual workflow change")
+    replace_enabled_env = {
+        key: value
+        for key, value in os.environ.items()
+        if key.upper() != "GIT_NO_REPLACE_OBJECTS"
+    }
     subprocess.run(
         ["git", "replace", head, substitute],
         cwd=tmp_path,
         check=True,
+        env=replace_enabled_env,
     )
 
     replaced_diff = subprocess.check_output(
         ["git", "diff", "--name-only", base, head],
         cwd=tmp_path,
         text=True,
+        env=replace_enabled_env,
     ).splitlines()
     assert replaced_diff == ["README.md"]
 
