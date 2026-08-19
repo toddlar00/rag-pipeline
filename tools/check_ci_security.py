@@ -503,13 +503,17 @@ def render_force_full_bootstrap(text: str) -> str:
     lane_start = normalized.index(markers[0])
     quality_start = normalized.index(markers[1], lane_start)
     promotion_start = normalized.index(markers[2], quality_start)
+    phase_marker = "\n  phase-a0:\n"
+    next_marker = "\n  vector-store-smoke:\n"
+    if normalized.count(phase_marker) != 1 or normalized.count(next_marker) != 1:
+        raise ValueError(
+            "active workflow must contain one phase-a0 and vector-store-smoke job"
+        )
     bootstrap = (
         normalized[:lane_start]
         + _BOOTSTRAP_LANE_TEXT
         + normalized[quality_start:promotion_start]
     )
-    phase_marker = "\n  phase-a0:\n"
-    next_marker = "\n  vector-store-smoke:\n"
     if bootstrap.count(phase_marker) != 1 or bootstrap.count(next_marker) != 1:
         raise ValueError(
             "bootstrap must contain one phase-a0 and vector-store-smoke job"

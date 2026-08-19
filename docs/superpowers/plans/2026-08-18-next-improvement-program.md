@@ -138,10 +138,14 @@ policy/tool, and focused tests.
   "intentionally not required," and "incorrectly skipped" by inspecting every
   `needs.*.result`; failed, cancelled, timed-out, unexpectedly skipped, or
   unavailable classifier/heavy jobs fail the aggregate.
-- [x] Bind the decision to the exact tested candidate separately from the raw
-  event head. On pull requests, run every execution job against GitHub's
-  synthetic merge SHA and verify its exact base/head parents; on merge queues,
-  use the merge-group candidate.
+- [x] Bind the active decision to the exact tested candidate separately from
+  the raw event head. In the active topology, run every execution job against
+  GitHub's synthetic merge SHA and verify its exact base/head parents; on merge
+  queues, use the merge-group candidate. The force-full seed bootstrap has no
+  promotion aggregate: Phase A0 alone checks raw evidence head `E` so its
+  retained report can bind that immutable commit, while the other seven jobs
+  continue to test the synthetic candidate. That bootstrap artifact is not
+  active promotion evidence.
 - [x] Test representative service, vector, worker, retention, dependency,
   evaluator, packaging, and documentation diffs plus rename/delete, malicious
   classifier/workflow edits, a digest-valid but semantically weakened
@@ -159,8 +163,11 @@ policy/tool, and focused tests.
 - [x] Preserve the reviewed active workflow bytes as the security-owned
   `.github/ci/active-ci.yml`. Seed validation checks that fixture as the exact
   active topology and checks the live workflow as its exact rendered
-  force-full bootstrap; activation copies the fixture to the live workflow and
-  revalidates their normalized bytes, digest, and topology.
+  force-full bootstrap. The renderer changes only the Phase A0 checkout from
+  active candidate SHA to literal seed head in addition to replacing the lane
+  and removing the aggregate. Activation copies the fixture to the live
+  workflow and revalidates its normalized bytes, digest, all-candidate
+  checkouts, and topology.
 - [x] Dry-run the complete `S → E` evidence choreography in an isolated clone
   on CPython 3.12.13 x86-64. Clean Windows and Linux 9×5 reports shared one
   source/lock/scenario contract, `E` changed only the two allowed baselines,
@@ -186,13 +193,17 @@ implementation and force-full workflow as clean source `S`. The old baselines
 are expected to reject `S`; generate the two new platform reports from clean
 `S`, then create its direct gate-only evidence child `E`. Promote `E` as the
 force-full seed head after every heavy job passes while retaining and
-validating `.github/ci/active-ci.yml` as the canonical active form. Then create
-workflow-only activation `A` by copying that fixture to
+validating `.github/ci/active-ci.yml` as the canonical active form. The seed's
+Phase A0 evidence binds raw `E`; the external record separately identifies the
+synthetic candidate tested by the other jobs and must not describe the raw-head
+artifact as proof that candidate ran Phase A0. Then create workflow-only
+activation `A` by copying that fixture to
 `.github/workflows/ci.yml` from `E`. `A` must prove the live workflow matches
-the fixture, pass a hosted fork-PR case, and bind the exact tested candidate,
-base, and head in its external promotion record. History-preserving `S → E → A`
-ancestry is mandatory; a squash, rebase, source amendment, or material target
-base movement invalidates the generated reports.
+the fixture, restore Phase A0 to the synthetic candidate alongside all other
+execution jobs, pass a hosted fork-PR case, and bind the exact tested candidate,
+base, and head in its external promotion record. History-preserving
+`S → E → A` ancestry is mandatory; a squash, rebase, source amendment, or
+material target base movement invalidates the generated reports.
 
 **Source-candidate preparation status (recorded before `S`):** The force-full
 source-candidate tree is authored and locally validated. The live workflow

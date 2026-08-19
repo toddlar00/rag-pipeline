@@ -350,6 +350,31 @@ def test_reviewed_active_fixture_preserves_both_rollout_forms():
     }
 
 
+@pytest.mark.parametrize(
+    "mutation",
+    ("missing_job", "duplicate_job", "missing_ref", "duplicate_ref"),
+)
+def test_bootstrap_renderer_rejects_malformed_phase_a0(mutation):
+    text = _active_ci_workflow_text()
+    phase_marker = "\n  phase-a0:\n"
+    next_marker = "\n  vector-store-smoke:\n"
+    candidate_ref = "          ref: ${{ github.sha }}\n"
+    if mutation == "missing_job":
+        text = text.replace(phase_marker, "\n  phase-a0-renamed:\n", 1)
+    elif mutation == "duplicate_job":
+        text += phase_marker
+    else:
+        phase_start = text.index(phase_marker)
+        phase_end = text.index(next_marker, phase_start)
+        phase_block = text[phase_start:phase_end]
+        replacement = "" if mutation == "missing_ref" else candidate_ref * 2
+        phase_block = phase_block.replace(candidate_ref, replacement, 1)
+        text = text[:phase_start] + phase_block + text[phase_end:]
+
+    with pytest.raises(ValueError):
+        check_ci_security.render_force_full_bootstrap(text)
+
+
 def test_repository_validator_accepts_fixture_backed_seed_form(tmp_path):
     _policy_data, _workflow_path = _valid_tree(tmp_path)
     ci_path = tmp_path / check_ci_security.CI_WORKFLOW_PATH

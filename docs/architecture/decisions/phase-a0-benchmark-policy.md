@@ -113,11 +113,17 @@ provenance/status documentation; its hosted checks, retained current-report
 artifacts, external exact-SHA promotion record, and own commit identity are
 still pending.
 
-The pull-request matrix explicitly checks out the exact PR head rather than the
-synthetic merge ref. Before comparison, the harness validates and publishes the
-candidate report. Failures identify only a stable stage and content-free
-diagnostic code; raw paths, corpus material, exception text, and credentials are
-not logged. A failed comparison report is retained for 7 days for diagnosis.
+The temporary force-full seed matrix explicitly checks out the exact PR head
+rather than the synthetic merge ref so its report can bind immutable evidence
+child `E`. That bootstrap has no promotion aggregate, and its raw-head Phase A0
+result is not proof that the prospective merge candidate ran Phase A0. The
+reviewed active workflow instead checks out the synthetic candidate for Phase
+A0, as it does for every execution job. In both forms, the report and
+attestation bind whichever exact commit/tree the job checked out. Before
+comparison, the harness validates and publishes the candidate report. Failures
+identify only a stable stage and content-free diagnostic code; raw paths,
+corpus material, exception text, and credentials are not logged. A failed
+comparison report is retained for 7 days for diagnosis.
 
 After a successful comparison, CI strictly revalidates the generated current
 report and requires its clean source commit to equal the job's exact `HEAD` and
