@@ -1,6 +1,8 @@
 # TOC hierarchy output contract
 
-Status: proposed implementation for owner review
+Status: technical implementation integrated through
+[PR #76](https://github.com/toddlar00/rag-pipeline/pull/76); inherited R0C
+semantic-rejection and provider-chain authority remains owner-pending
 
 Date: 2026-07-25
 
@@ -21,16 +23,17 @@ including when they originate from a configured provider or a local cache. A
 contract rejection must not retain private source text or rejected response
 text in exceptions, events, reports, or public provenance.
 
-## Proposed decision
+## Integrated mechanics and pending policy decision
 
-This implementation is a reviewable candidate, not an approved policy. It
-extends the dependency-light contract authority in
+This technical implementation is present on `main` through PR #76. Integration
+does not approve the unresolved R0C policy. The implementation extends the
+dependency-light contract authority in
 [`llm-output-contracts.md`](llm-output-contracts.md) to one bounded response
 family only: the hierarchy arrays returned by `toc.scaffold` and `toc.parse`.
 
 The predecessor decision's rule that a non-empty semantic rejection stops the
-provider chain is inherited unchanged. That authority choice remains pending
-owner approval before either proposal may merge.
+provider chain is inherited unchanged in code. That release-authority choice
+remains pending owner approval; the merged mechanics do not settle it.
 
 ### Exact `toc-hierarchy-v1` value
 
@@ -96,8 +99,8 @@ separate one-line `LAYOUT_JSON` value. Each hint is limited to 512 characters
 and 2,048 encoded JSON bytes; the complete value is limited to 128 KiB.
 Non-string/non-list values and non-string list members are omitted. Those hints
 are labeled as untrusted generated data. This framing does not make the earlier
-layout response authoritative or give it the exact hierarchy-array contract.
-The separate `toc.layout` request is addressed by the proposed successor
+  layout response authoritative or give it the exact hierarchy-array contract.
+  The separate `toc.layout` request is addressed by the integrated companion
 [TOC layout output contract](toc-layout-output-contract.md), which gives that
 upstream response its own bounded input and exact eight-field schema without
 making its values authoritative hierarchy evidence.
@@ -154,14 +157,14 @@ change the global chunking or index schema.
 - Only synthetic fixtures and hostile canaries are used for verification. No
   private `Ethics` text, output, or corpus-derived judgment is embedded in the
   repository.
-- `toc.layout` is addressed by a separate proposed contract, and the later
-  page spot-check is addressed by the proposed
+- `toc.layout` is addressed by a separate integrated contract, and the later
+  page spot-check is addressed by the integrated
   [TOC page-verification output contract](toc-verification-output-contract.md).
   Every `agent_team.*` response remains permissive and outside this decision.
   Grounded answers, case briefs, questions, flashcards, summaries, contextual
   prefixes, reconstructed headings, and quality scores also still need
   reviewed contracts.
-- With the proposed layout and page-verification successors,
+- With the integrated layout and page-verification companions,
   `toc_scaffold_generation` binds those three contracted operations but is
   still not complete identity for every permissive operation used by
   `--llm-scaffold`. Until `agent_team.*` prompts and contracts are versioned,
@@ -169,7 +172,7 @@ change the global chunking or index schema.
   completion reuse.
 - Provider model-code qualification, scoped egress, and the owner-pending
   semantic-rejection provider-chain rule remain separate release gates. This
-  proposal is related to, but does not close, R0C issue #48.
+  integrated technical slice is related to, but does not close, R0C issue #48.
 - `toc.parse` is a retained private helper with no current production call site;
   the live `--llm-scaffold` hierarchy path uses `toc.scaffold`.
 - Refactoring the shared bounded-text helper also removes a predecessor

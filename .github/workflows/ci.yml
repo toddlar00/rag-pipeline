@@ -2,6 +2,8 @@ name: CI
 
 on:
   pull_request:
+  merge_group:
+    types: [checks_requested]
   push:
     branches: [main]
   workflow_dispatch:
@@ -14,40 +16,34 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  GIT_NO_REPLACE_OBJECTS: "1"
   PYTHONUTF8: "1"
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
 
 jobs:
   lane:
-    name: Select lane
+    name: Force full CI bootstrap
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 2
     outputs:
-      heavy: ${{ steps.pick.outputs.heavy }}
-      pythons: ${{ steps.pick.outputs.pythons }}
+      pythons: ${{ steps.force.outputs.pythons }}
+      require_unit_windows: ${{ steps.force.outputs.require_unit_windows }}
+      require_service_api: ${{ steps.force.outputs.require_service_api }}
+      require_phase_a0: ${{ steps.force.outputs.require_phase_a0 }}
+      require_vector_store_smoke: ${{ steps.force.outputs.require_vector_store_smoke }}
+      require_full_integration: ${{ steps.force.outputs.require_full_integration }}
     steps:
-      - name: Pick lane from event and head ref
-        id: pick
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          HEAD_REF: ${{ github.head_ref }}
+      - name: Force every heavy job for the trusted seed checkpoint
+        id: force
+        shell: bash
         run: |
-          heavy=false
-          if [ "$EVENT_NAME" = "push" ] || [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            heavy=true
-          elif [ "$EVENT_NAME" = "pull_request" ]; then
-            case "$HEAD_REF" in
-              *-candidate) heavy=true ;;
-            esac
-          fi
-          if [ "$heavy" = "true" ]; then
-            pythons='["3.10", "3.11", "3.12", "3.13", "3.14"]'
-          else
-            pythons='["3.12"]'
-          fi
           {
-            echo "heavy=$heavy"
-            echo "pythons=$pythons"
+            echo 'pythons=["3.10","3.11","3.12","3.13","3.14"]'
+            echo 'require_unit_windows=true'
+            echo 'require_service_api=true'
+            echo 'require_phase_a0=true'
+            echo 'require_vector_store_smoke=true'
+            echo 'require_full_integration=true'
           } >> "$GITHUB_OUTPUT"
 
   quality:
@@ -58,6 +54,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -103,6 +100,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -190,14 +188,16 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     needs: lane
+    if: ${{ always() }}
     strategy:
       fail-fast: false
       matrix:
-        python-version: ${{ fromJSON(needs.lane.outputs.pythons) }}
+        python-version: ${{ fromJSON(needs.lane.outputs.pythons || '["3.10","3.11","3.12","3.13","3.14"]') }}
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -215,11 +215,12 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 20
     needs: lane
-    if: needs.lane.outputs.heavy == 'true'
+    if: ${{ always() && needs.lane.outputs.require_unit_windows != 'false' }}
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -237,7 +238,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     needs: lane
-    if: needs.lane.outputs.heavy == 'true'
+    if: ${{ always() && needs.lane.outputs.require_service_api != 'false' }}
     strategy:
       fail-fast: false
       matrix:
@@ -246,6 +247,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -279,7 +281,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     needs: lane
-    if: needs.lane.outputs.heavy == 'true'
+    if: ${{ always() && needs.lane.outputs.require_phase_a0 != 'false' }}
     strategy:
       fail-fast: false
       matrix:
@@ -298,7 +300,7 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.sha }}
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -503,7 +505,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     needs: lane
-    if: needs.lane.outputs.heavy == 'true'
+    if: ${{ always() && needs.lane.outputs.require_vector_store_smoke != 'false' }}
     strategy:
       fail-fast: false
       matrix:
@@ -512,6 +514,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -534,11 +537,12 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     needs: lane
-    if: needs.lane.outputs.heavy == 'true'
+    if: ${{ always() && needs.lane.outputs.require_full_integration != 'false' }}
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0

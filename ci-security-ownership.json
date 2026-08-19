@@ -32,8 +32,21 @@
     ]
   },
   "governance_paths": [
+    ".github/ci/active-ci.yml",
+    ".github/workflows/ci.yml",
+    ".github/workflows/dependency-compatibility.yml",
+    ".github/workflows/security.yml",
+    "ci-risk-policy.json",
     "ci-security-ownership.json",
+    "dependency-license-policy.json",
+    "dependency-vulnerability-policy.json",
+    "model-artifact-policy.json",
+    "model-artifacts.lock.json",
+    "tests/test_ci_promotion.py",
+    "tests/test_ci_security.py",
     "tools/check_ci_security.py",
-    ".github/workflows/security.yml"
+    "tools/check_licenses.py",
+    "tools/check_vulnerabilities.py",
+    "tools/ci_promotion.py"
   ]
 }

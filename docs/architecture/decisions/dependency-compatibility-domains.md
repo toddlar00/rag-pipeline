@@ -1,7 +1,8 @@
 # Dependency Compatibility Domains
 
-- **Status:** Implemented on the R2 successor branch; exact-head CI and human
-  review pending
+- **Status:** Integrated on `main` through
+  [PR #76](https://github.com/toddlar00/rag-pipeline/pull/76); the optional
+  reviewer-bound transitive exception mechanism is not implemented
 - **Milestone:** R2b-0, before dependency version changes
 - **Schema:** `dependency-compatibility-domains-v1`
 
@@ -31,7 +32,7 @@ Every normalized direct dependency declared in the eight governed requirement
 input manifests belongs to exactly one declared compatibility domain:
 
 | Domain | Direct packages |
-|---|---|
+| --- | --- |
 | PDF/Docling | `docling`, `docling-core`, `pymupdf`, `pypdfium2` |
 | Vector stores | `chromadb`, `onnxruntime`, `qdrant-client` |
 | ML/runtime | `einops`, `flagembedding`, `numpy`, `rank-bm25`, `sentence-transformers`, `torch`, `torchvision`, `tqdm` |
@@ -108,6 +109,11 @@ provides no inline waiver.
 
 This policy does not approve Google GenAI 2, renew any vulnerability or license
 exception, choose the repository's license, or name accountable people. Those
-remain separate R2 owner decisions. PR #30 should be closed as superseded only
-after this policy is published; its historical discussion remains useful, but
-its checks are not compatibility evidence for a new lock.
+remain separate R2 owner decisions. PR #30 was superseded when this policy was
+integrated; its historical discussion remains useful, but its checks are not
+compatibility evidence for a new lock. The 2026-08-18 transitive advisory
+branch remains prohibited by the current rule until an owner chooses direct
+promotion, a separately reviewed exception mechanism, or narrow time-boxed
+vulnerability acceptances. The point-in-time branch and workflow state is
+recorded in the
+[`443dce4` evidence entry](../../evidence/2026-08-18-main-443dce4.md).

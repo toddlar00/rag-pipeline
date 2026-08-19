@@ -24204,14 +24204,14 @@
   },
   "schema_version": 3,
   "source_architecture": {
-    "class_count": 211,
-    "function_count": 2625,
+    "class_count": 222,
+    "function_count": 2690,
     "import_graph": {
       "cyclic_components": [],
       "edge_count": 157,
       "edge_policy": "first-party-all-contexts-with-provenance-v1"
     },
-    "module_count": 75,
+    "module_count": 76,
     "modules": [
       {
         "class_count": 4,
@@ -42159,21 +42159,61 @@
         "top_level_function_count": 76
       },
       {
-        "class_count": 1,
+        "class_count": 2,
         "classes": [
           {
             "name": "OwnershipPolicy",
             "scope": "top_level"
+          },
+          {
+            "name": "_DuplicatePolicyKeyError",
+            "scope": "top_level"
           }
         ],
-        "definition_locations_sha256": "9003dc94971a4f454ebffb6d1dbe79e8d698aa7d6cb1170eab4b50ee0367cf47",
-        "function_count": 16,
+        "definition_locations_sha256": "915d243ff305b1ecfa12e39923cf04036453f2b8c76539b1c1fc8a833583525b",
+        "function_count": 41,
         "functions": [
           {
             "kind": "function",
             "name": "OwnershipPolicy.security_trigger_paths",
             "scope": "class",
             "signature_sha256": "0893eb66236ef09890b658d49ce4c26fbd1b52ba1c8cd51ce30350a63ee4697a"
+          },
+          {
+            "kind": "function",
+            "name": "_allowed_group_assignment",
+            "scope": "top_level",
+            "signature_sha256": "e69a48fb10879307f19493ced176ad6c02b6c04fcb12bf95f084e9e382ea3947"
+          },
+          {
+            "kind": "function",
+            "name": "_checkout_step_ranges",
+            "scope": "top_level",
+            "signature_sha256": "31bd8c8090ce121ccaa91e4d97fdbabc2131fa2a6d2c30e887c3b506f4f1f892"
+          },
+          {
+            "kind": "function",
+            "name": "_child_mapping",
+            "scope": "top_level",
+            "signature_sha256": "0478e1bc34cf22c7a45615dfd90d2583f6c726c8c74a913656051806fdbe829a"
+          },
+          {
+            "kind": "function",
+            "name": "_direct_needs",
+            "scope": "top_level",
+            "signature_sha256": "02ffba7320b025017b6ed2ec8d70a52b39a310a74c4bb917e4b8dd1e34942673"
+          },
+          {
+            "kind": "function",
+            "name": "_direct_value",
+            "scope": "top_level",
+            "signature_sha256": "6e4bafba767c1257662a9739958dcd03e63290f7aa89c415d66a498af910bc58"
+          },
+          {
+            "kind": "function",
+            "name": "_has_exact_terminal_rejection",
+            "scope": "top_level",
+            "signature_sha256": "6d122575fbb1b6272e9b2392ab259606bab71e58facf8ee36102a896d426e801"
           },
           {
             "kind": "function",
@@ -42189,9 +42229,39 @@
           },
           {
             "kind": "function",
+            "name": "_job_ranges",
+            "scope": "top_level",
+            "signature_sha256": "4b0058568ec896bd089712695ee37b8567f83bd47be0800c468a50c9b6d58720"
+          },
+          {
+            "kind": "function",
             "name": "_mapping_line_indices",
             "scope": "top_level",
             "signature_sha256": "dc3e01efeed073baf5b41914e4e98b68894828d2edc401772a33f4e0bf4af371"
+          },
+          {
+            "kind": "function",
+            "name": "_mapping_values",
+            "scope": "top_level",
+            "signature_sha256": "8af320ed940d8fe5a29a13a4520ab7f6772058445a85aa961a0c11ff92ba428f"
+          },
+          {
+            "kind": "function",
+            "name": "_matrix_block_lines",
+            "scope": "top_level",
+            "signature_sha256": "dad8bdfc370534a70681b33e27da64dd5ea42c55c3056a30ff4106f12723dfca"
+          },
+          {
+            "kind": "function",
+            "name": "_named_step_range",
+            "scope": "top_level",
+            "signature_sha256": "b21b5acfe9ba403bce9bfd4eebc24d942d8ab8ba5e2eec9b8014ad9197b9c479"
+          },
+          {
+            "kind": "function",
+            "name": "_normalized_workflow_text",
+            "scope": "top_level",
+            "signature_sha256": "a03174b343b7402fed3999a1f1aa3777c1f68a7f7dc8f66d914a487502b78075"
           },
           {
             "kind": "function",
@@ -42213,9 +42283,39 @@
           },
           {
             "kind": "function",
+            "name": "_reject_duplicate_policy_pairs",
+            "scope": "top_level",
+            "signature_sha256": "a38f5ac81eaf17d045ceffbe6ccbe57e7b9912414a52457935d5e17d91c935ec"
+          },
+          {
+            "kind": "function",
+            "name": "_require_markers",
+            "scope": "top_level",
+            "signature_sha256": "37ac9ff82600f04c45caa8c35e59e4e560b13e6eed3859647d6b600548c94231"
+          },
+          {
+            "kind": "function",
+            "name": "_reviewed_block_sha256",
+            "scope": "top_level",
+            "signature_sha256": "a39786e2f892f7bf54a2acd0fad8ece3d83f69cd12ab9692741f34d5bf42c541"
+          },
+          {
+            "kind": "function",
             "name": "_single_mapping_line",
             "scope": "top_level",
             "signature_sha256": "0c9fe19a7fb2d0533c81d1341db0261d2de93bdaa5218a035e28ec37fb824a52"
+          },
+          {
+            "kind": "function",
+            "name": "_stripped_lines",
+            "scope": "top_level",
+            "signature_sha256": "98bc8c94b8ea653382c8b4e4bbe3cd92f325047c44425ca5f8f183dceb2bd4ec"
+          },
+          {
+            "kind": "function",
+            "name": "_structural_workflow_lines",
+            "scope": "top_level",
+            "signature_sha256": "9c63ec879c52e1cf43862cf91e61210a1d01171804c4f5517f208a0395d5e3f8"
           },
           {
             "kind": "function",
@@ -42225,9 +42325,39 @@
           },
           {
             "kind": "function",
+            "name": "_validate_ci_triggers",
+            "scope": "top_level",
+            "signature_sha256": "7926913fa34942845f720c74f6d0b17c0ea4b896e497abef391b2b4e5a8aabfa"
+          },
+          {
+            "kind": "function",
+            "name": "_validate_force_full_bootstrap",
+            "scope": "top_level",
+            "signature_sha256": "c0c448218393bf7c1a66ab811454564c5ddb933e2a95cd6b5922278ba147c1ff"
+          },
+          {
+            "kind": "function",
             "name": "_validate_permissions",
             "scope": "top_level",
             "signature_sha256": "5023c386f8b7334f67bb952c62c262d7ee7bc23572ebcea866ad6d3d66055e22"
+          },
+          {
+            "kind": "function",
+            "name": "_validate_supported_workflow_syntax",
+            "scope": "top_level",
+            "signature_sha256": "da8ff80432ec426c640c86ac93e3eeec0aa5b229d8a95369595403c312955691"
+          },
+          {
+            "kind": "function",
+            "name": "_validator_python_tree",
+            "scope": "top_level",
+            "signature_sha256": "88cda74c97c2a9f842b461480c6b9912aff0933cc1bdcd366bd395903cf1645c"
+          },
+          {
+            "kind": "function",
+            "name": "_workflow_sha256",
+            "scope": "top_level",
+            "signature_sha256": "c0275da50149f76e3e39740e6712f4c259d3bfcb648a474c40d35db66cfa208a"
           },
           {
             "kind": "function",
@@ -42255,9 +42385,33 @@
           },
           {
             "kind": "function",
+            "name": "render_force_full_bootstrap",
+            "scope": "top_level",
+            "signature_sha256": "596ce397b6d9a4c9a71683e13b972e75d71b2c259c3ad1e9a4c7e4f76cea8272"
+          },
+          {
+            "kind": "function",
             "name": "validate",
             "scope": "top_level",
             "signature_sha256": "31f7f5047f1af40ceaf7b9cdcf508d6108c8eb46ef0c571a9e7eb547607ed29d"
+          },
+          {
+            "kind": "function",
+            "name": "validate_ci_promotion_contract",
+            "scope": "top_level",
+            "signature_sha256": "7bd45e808656e5c04e2ca7cce051e8ae69f4a290a7d369fcfc54fe7d06ba0f94"
+          },
+          {
+            "kind": "function",
+            "name": "validate_ci_topology",
+            "scope": "top_level",
+            "signature_sha256": "57f2b3fd2affcf5a3451fbf9fe59f8ea5cb2b9de0f984581fe19664b579c405e"
+          },
+          {
+            "kind": "function",
+            "name": "validate_merge_group_trigger",
+            "scope": "top_level",
+            "signature_sha256": "fef1e30d1ec477623cb85d86c7cad7f82dfbac47d0531a811b5291aee49a6416"
           },
           {
             "kind": "function",
@@ -42268,10 +42422,10 @@
         ],
         "import_edges": [],
         "module": "tools.check_ci_security",
-        "non_blank_lines": 460,
+        "non_blank_lines": 1778,
         "path": "tools/check_ci_security.py",
-        "physical_lines": 508,
-        "top_level_function_count": 15
+        "physical_lines": 1904,
+        "top_level_function_count": 40
       },
       {
         "class_count": 0,
@@ -42627,6 +42781,301 @@
         "path": "tools/check_vulnerabilities.py",
         "physical_lines": 244,
         "top_level_function_count": 6
+      },
+      {
+        "class_count": 10,
+        "classes": [
+          {
+            "name": "Change",
+            "scope": "top_level"
+          },
+          {
+            "name": "ChangeSet",
+            "scope": "top_level"
+          },
+          {
+            "name": "Decision",
+            "scope": "top_level"
+          },
+          {
+            "name": "GroupPolicy",
+            "scope": "top_level"
+          },
+          {
+            "name": "PromotionError",
+            "scope": "top_level"
+          },
+          {
+            "name": "PromotionVerification",
+            "scope": "top_level"
+          },
+          {
+            "name": "RiskPolicy",
+            "scope": "top_level"
+          },
+          {
+            "name": "Selectors",
+            "scope": "top_level"
+          },
+          {
+            "name": "TreeEndpoint",
+            "scope": "top_level"
+          },
+          {
+            "name": "TreeSelector",
+            "scope": "top_level"
+          }
+        ],
+        "definition_locations_sha256": "c334b941c07d6568de2f5ae808f7cb82c535bc086e3ff367c9e599240ba66e22",
+        "function_count": 40,
+        "functions": [
+          {
+            "kind": "function",
+            "name": "Change.paths",
+            "scope": "class",
+            "signature_sha256": "a1d7a7cf57a809323280492da3b318989a25879f4c77d773bfc62d1ca6a0d82f"
+          },
+          {
+            "kind": "function",
+            "name": "Decision.decision_sha256",
+            "scope": "class",
+            "signature_sha256": "1f59292f4a8e58ac757d8ff7f89345b350412d7bb506531b344390ee56a8c78c"
+          },
+          {
+            "kind": "function",
+            "name": "Decision.payload",
+            "scope": "class",
+            "signature_sha256": "e874a469832ac33521e9d199315e2063851a94fdebe23342625c3894856f6ea2"
+          },
+          {
+            "kind": "function",
+            "name": "Decision.unsigned_payload",
+            "scope": "class",
+            "signature_sha256": "87f8a58c2b7899fd98fbedd550138495e7ca1fe4f007e4c9982b995b6199f674"
+          },
+          {
+            "kind": "function",
+            "name": "Selectors.matches",
+            "scope": "class",
+            "signature_sha256": "68b1a7558299dd59584bf321972add7c256af232ca5b51ab1a3c024742356986"
+          },
+          {
+            "kind": "function",
+            "name": "TreeSelector.matches",
+            "scope": "class",
+            "signature_sha256": "32ec5a09f0fca30bdefba00750c97984d178802f36e1697432eaa10bfd70cdf5"
+          },
+          {
+            "kind": "function",
+            "name": "_attach_tree_endpoints",
+            "scope": "top_level",
+            "signature_sha256": "0deb08020ed7cc03e07feda398b19274574bac672d2683b01dfa2d416a95279d"
+          },
+          {
+            "kind": "function",
+            "name": "_canonical_json",
+            "scope": "top_level",
+            "signature_sha256": "125c7d7cbc003a173bcc60ce2c9935892b85847d277d556cbecd71c5f77510cc"
+          },
+          {
+            "kind": "function",
+            "name": "_change_set_sha256",
+            "scope": "top_level",
+            "signature_sha256": "0e5c2b9508ab3aac47d9de7f72675ed286f1bc5b7be682594ca04153765a8539"
+          },
+          {
+            "kind": "function",
+            "name": "_classify_command",
+            "scope": "top_level",
+            "signature_sha256": "965439b765ff4e2556373db0c045362fe11bc7f18c278dda29d2b14450e0e5ba"
+          },
+          {
+            "kind": "function",
+            "name": "_decision_from_payload",
+            "scope": "top_level",
+            "signature_sha256": "d234913ea9b8d16860eb6ecda3c67bd80bac04133d4a00b653aa27dfdab6fcd8"
+          },
+          {
+            "kind": "function",
+            "name": "_decision_semantic_errors",
+            "scope": "top_level",
+            "signature_sha256": "d799b8b8606d22db0a023aff65c798757ed4b94cc171f545a1f5fffef9599009"
+          },
+          {
+            "kind": "function",
+            "name": "_expected_tree_endpoints",
+            "scope": "top_level",
+            "signature_sha256": "8a28f9093d6c669d88b4b92dcbb6570b77a12c9fafd20e12f00b4ecc686830ac"
+          },
+          {
+            "kind": "function",
+            "name": "_is_policy_path",
+            "scope": "top_level",
+            "signature_sha256": "a0467dac064312d24026240ee7669a10d9b943533fee096ea8bb43a1f0516db3"
+          },
+          {
+            "kind": "function",
+            "name": "_load_selectors",
+            "scope": "top_level",
+            "signature_sha256": "df8a85c4719e89c58c0c915adcc5fde44ee13d4271c9a95206ca9a2b3b7a8e54"
+          },
+          {
+            "kind": "function",
+            "name": "_loads_strict",
+            "scope": "top_level",
+            "signature_sha256": "30339728e2bd584acca80e242d3a65dd1d469663a4c2dd3d7edd5c99964c6db5"
+          },
+          {
+            "kind": "function",
+            "name": "_matching_groups",
+            "scope": "top_level",
+            "signature_sha256": "9fb6385acb4ab49d8ff8e9920e0451211e2c304d1ed93d7d1748077302952f0c"
+          },
+          {
+            "kind": "function",
+            "name": "_output_text",
+            "scope": "top_level",
+            "signature_sha256": "67610d58e6d99a4a29604af6b574da1a61e4869388fefd2d725d7c4649b6bbae"
+          },
+          {
+            "kind": "function",
+            "name": "_parser",
+            "scope": "top_level",
+            "signature_sha256": "adb10fff102d63bf927d966a20f661deff93f5d36ecd1a46448e0414ecc255a7"
+          },
+          {
+            "kind": "function",
+            "name": "_read_json",
+            "scope": "top_level",
+            "signature_sha256": "694a517d9932f15a302737f0125025d1a54beea74bca2dd882c59d381340746d"
+          },
+          {
+            "kind": "function",
+            "name": "_regular_blob_modes_verified",
+            "scope": "top_level",
+            "signature_sha256": "578be977d34aa735c9c4e7fedfc9ed016f435c8277008eb6f72f4e7f518e7928"
+          },
+          {
+            "kind": "function",
+            "name": "_reject_duplicate_pairs",
+            "scope": "top_level",
+            "signature_sha256": "2442954f9d0708dfce5e8ad9c5063230aaac4e510a843389e5a62d8d77391aa5"
+          },
+          {
+            "kind": "function",
+            "name": "_require_decision_semantics",
+            "scope": "top_level",
+            "signature_sha256": "511afa363de1121258c53f16d045a25cbb77c71c53e2d8dc018ce8d24dc317e9"
+          },
+          {
+            "kind": "function",
+            "name": "_sha256",
+            "scope": "top_level",
+            "signature_sha256": "1aa6768d3eddc00fdf0f8eedb5043797b1f680eda22b4ca7f14e7afc6072303a"
+          },
+          {
+            "kind": "function",
+            "name": "_strict_keys",
+            "scope": "top_level",
+            "signature_sha256": "a2bb6468f351ec9c90b6249c08c70a67a08ea84115eb9f576cc10af3faa46ebf"
+          },
+          {
+            "kind": "function",
+            "name": "_text_list",
+            "scope": "top_level",
+            "signature_sha256": "e5d7d0600c45e6e246cc9ccf1d5608603fd105aa620f9f92085399936d2e1e99"
+          },
+          {
+            "kind": "function",
+            "name": "_tree_entries",
+            "scope": "top_level",
+            "signature_sha256": "1d77bcfc7afe7ed8e93c26c79cbfcfd1a5448e8900c5945312b4a34d574cf9c2"
+          },
+          {
+            "kind": "function",
+            "name": "_validate_change_path",
+            "scope": "top_level",
+            "signature_sha256": "f136a2e4d7ca50b970159698b64115d016dd2d8f5b15f788655576c06d0053f0"
+          },
+          {
+            "kind": "function",
+            "name": "_validate_sha",
+            "scope": "top_level",
+            "signature_sha256": "72a9d6d7b65b924fd245f029ce727edd93e87481eca8578b9949ababb4720e65"
+          },
+          {
+            "kind": "function",
+            "name": "_verify_command",
+            "scope": "top_level",
+            "signature_sha256": "58a2bb6f54eeff3ccfa78c97bf9d63c2ed07ec838277fd8be7f1c2e0679b54ca"
+          },
+          {
+            "kind": "function",
+            "name": "_verify_exact_commit",
+            "scope": "top_level",
+            "signature_sha256": "900fa81c66cb2ca55d9ba9661d8055b531d2bb3aa7c6f5c198d32c7fb3f9ea07"
+          },
+          {
+            "kind": "function",
+            "name": "_verify_pull_request_candidate",
+            "scope": "top_level",
+            "signature_sha256": "9a91dda3661f3f193829cce633edea159290813e2611bffacbd49f3076b0ba97"
+          },
+          {
+            "kind": "function",
+            "name": "_write_json_atomic",
+            "scope": "top_level",
+            "signature_sha256": "5ed8c32c9e4952af52d58449cf837ace3b1132a3169e16016d7a012c2cb962d0"
+          },
+          {
+            "kind": "function",
+            "name": "classify",
+            "scope": "top_level",
+            "signature_sha256": "8b46c0f262587c72eee7d5b0999cc48d407e6f6c97be431d0f5efa19b0799c65"
+          },
+          {
+            "kind": "function",
+            "name": "git_changes",
+            "scope": "top_level",
+            "signature_sha256": "f4a328da7c40457aa13d930e8c4c452b5787998f600c77540c5efd11820d2505"
+          },
+          {
+            "kind": "function",
+            "name": "load_policy",
+            "scope": "top_level",
+            "signature_sha256": "a6b9142374a187fb4365d8ab4485d813d0fa994aa8bfd38c678b871c9a7a6275"
+          },
+          {
+            "kind": "function",
+            "name": "main",
+            "scope": "top_level",
+            "signature_sha256": "cc3cbb0cb810e5428f768fba85c60b4b02595d9ea3e8e3607ca675ba49cb9e97"
+          },
+          {
+            "kind": "function",
+            "name": "parse_name_status_z",
+            "scope": "top_level",
+            "signature_sha256": "1af2a2370b3b4b0e386bf91401eb830fbde0986a5733f0a22398a4e2ed0ea425"
+          },
+          {
+            "kind": "function",
+            "name": "verify_promotion",
+            "scope": "top_level",
+            "signature_sha256": "9f05559f96c1470bc606bf18c638bdf9066b4906f5985de8360d9eea9991a5b0"
+          },
+          {
+            "kind": "function",
+            "name": "write_outputs",
+            "scope": "top_level",
+            "signature_sha256": "ba1d3ffc8486117870a6d52d6476d4d72768a3cf0430e612d2008cdaef148ace"
+          }
+        ],
+        "import_edges": [],
+        "module": "tools.ci_promotion",
+        "non_blank_lines": 1341,
+        "path": "tools/ci_promotion.py",
+        "physical_lines": 1472,
+        "top_level_function_count": 34
       },
       {
         "class_count": 0,
@@ -43364,16 +43813,16 @@
         "top_level_function_count": 2
       }
     ],
-    "physical_line_count": 88064,
+    "physical_line_count": 90932,
     "source_groups": [
       "production",
       "tools",
       "other"
     ],
-    "top_level_function_count": 1797
+    "top_level_function_count": 1856
   },
   "tracked_sources": {
-    "count": 168,
+    "count": 170,
     "groups": [
       {
         "count": 59,
@@ -43441,7 +43890,7 @@
         ]
       },
       {
-        "count": 93,
+        "count": 94,
         "name": "tests",
         "paths": [
           "tests/test_ai_project_export.py",
@@ -43452,6 +43901,7 @@
           "tests/test_artifact_io.py",
           "tests/test_attempt_reporting.py",
           "tests/test_chunking_core.py",
+          "tests/test_ci_promotion.py",
           "tests/test_ci_security.py",
           "tests/test_cli_policy.py",
           "tests/test_cli_run_telemetry.py",
@@ -43540,7 +43990,7 @@
         ]
       },
       {
-        "count": 14,
+        "count": 15,
         "name": "tools",
         "paths": [
           "tools/__init__.py",
@@ -43552,6 +44002,7 @@
           "tools/check_model_artifacts.py",
           "tools/check_python_sources.py",
           "tools/check_vulnerabilities.py",
+          "tools/ci_promotion.py",
           "tools/operational_drill_worker.py",
           "tools/refresh_locks.py",
           "tools/refresh_model_artifacts.py",
