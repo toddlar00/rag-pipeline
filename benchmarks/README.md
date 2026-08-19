@@ -8,8 +8,8 @@ fresh-process repetitions.
 ## Provenance
 
 Both current reports were generated from the clean Task 0.2 pre-gate source
-checkpoint `ca7f54c3192c83e3d0ee99135480a454acdd3af4` (tree
-`0a1aaf8e8fbeb1a06bc6462d98bf982bbd81c517`). That source contains the
+checkpoint `b07e3270881376cf60586c363e6285722562c7f5` (tree
+`b287ef0452ffd9d35d7ec361d5e7a03b50f01258`). That source contains the
 reviewed deterministic CI classifier, terminal promotion contract, force-full
 bootstrap workflow, and security-owned active-workflow fixture. The executing
 environments were
@@ -29,8 +29,8 @@ marker-resolved distributions before generation.
 
 | Platform | Runtime | Report | Bytes | File SHA-256 | Embedded report SHA-256 |
 |---|---:|---|---:|---|---|
-| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 50,411 | `6a5388ae25df06a671165c1137ec13b37edacd1c2ba16664e87d97261913368c` | `6fb0a38d1fc5effcb5326484fe1cde8bac78e54b193511e23cf94c32f2fbbbf7` |
-| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 49,828 | `d6bbc5e4b5c111afcec8bb64765ea205d0281167dd1ed034fc4135bb1e3c11b2` | `99183dcf5bf14eac82d36200b89f32b737276736bb742842f967f213f3c3e09d` |
+| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 50,409 | `b8a3bb3dce7733a445f3c880ab83a15b1e719788457ca5b0d8f75665e8199c06` | `6ff8b67fe5c24a3eb08950f38a23860f47f63866cc4587585cbb140c8372414a` |
+| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 49,825 | `acf7885edde5c6fab49e823c9501bf70af606474c9aa10fbf0ff6af725e867e2` | `2befec9250e6ee99524f7d9dd72ce10b10abc211db07ea1571dd6e013026fa2f` |
 
 The reports attest the same source commit, clean-worktree state, tracked-diff
 digest, eight LF and `HEAD`-identical dependency/model-lock inputs, authoritative
@@ -101,7 +101,7 @@ skips on Windows CPython 3.12.13. Reports-and-documentation-only head
 `443dce4` froze that historical pair, and both hosted A0 cells passed with
 retained evidence.
 
-Task 0.2 source `ca7f54c` now supersedes that pair. The current reports above
+Task 0.2 source `b07e327` now supersedes that pair. The current reports above
 bind that exact clean source and each passes an independent complete
 same-platform 9×5 comparison. This direct reports-and-documentation-only child
 is the force-full seed candidate. No hosted result or evidence-child SHA is
@@ -133,7 +133,7 @@ ancestor of the final head. Integrate a passing candidate with a
 history-preserving merge; a squash or history-rewriting rebase invalidates this
 evidence and requires regeneration from the replacement history.
 
-The Task 0.2 gate-only delta after source `ca7f54c` is limited to the two
+The Task 0.2 gate-only delta after source `b07e327` is limited to the two
 reviewed reports and their provenance/status documentation. The force-full
 bootstrap, active-workflow fixture, deterministic classifier, terminal
 promotion contract, line-ending policy, and Python gates are already part of

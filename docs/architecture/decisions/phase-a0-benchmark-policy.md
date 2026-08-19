@@ -101,8 +101,8 @@ review or separate owner authorization for R8c-6 was found; passing the hosted
 A0b jobs does not supply that authorization or complete the review binding.
 
 The current Task 0.2 replacement pair uses clean source
-`ca7f54c3192c83e3d0ee99135480a454acdd3af4` (tree
-`0a1aaf8e8fbeb1a06bc6462d98bf982bbd81c517`). Its Windows and Linux CPython
+`b07e3270881376cf60586c363e6285722562c7f5` (tree
+`b287ef0452ffd9d35d7ec361d5e7a03b50f01258`). Its Windows and Linux CPython
 3.12.13 reports were generated after the same strict hash-locked synchronization
 and dependency-consistency checks: 189 marker-resolved distributions on
 Windows and 187 on Linux. They bind that one clean source, the same eight LF
@@ -224,14 +224,14 @@ identities, workflow run, and limitation that no submitted human review was
 found are recorded in the
 [`443dce4` evidence entry](../../evidence/2026-08-18-main-443dce4.md).
 
-Task 0.2 source `ca7f54c` supersedes that historical pair. Its Windows report
-is 50,411 bytes (file SHA-256
-`6a5388ae25df06a671165c1137ec13b37edacd1c2ba16664e87d97261913368c`;
+Task 0.2 source `b07e327` supersedes that historical pair. Its Windows report
+is 50,409 bytes (file SHA-256
+`b8a3bb3dce7733a445f3c880ab83a15b1e719788457ca5b0d8f75665e8199c06`;
 embedded report SHA-256
-`6fb0a38d1fc5effcb5326484fe1cde8bac78e54b193511e23cf94c32f2fbbbf7`).
-Its Linux report is 49,828 bytes (file SHA-256
-`d6bbc5e4b5c111afcec8bb64765ea205d0281167dd1ed034fc4135bb1e3c11b2`;
+`6ff8b67fe5c24a3eb08950f38a23860f47f63866cc4587585cbb140c8372414a`).
+Its Linux report is 49,825 bytes (file SHA-256
+`acf7885edde5c6fab49e823c9501bf70af606474c9aa10fbf0ff6af725e867e2`;
 embedded report SHA-256
-`99183dcf5bf14eac82d36200b89f32b737276736bb742842f967f213f3c3e09d`).
+`2befec9250e6ee99524f7d9dd72ce10b10abc211db07ea1571dd6e013026fa2f`).
 Both use CPython 3.12.13 and pass their complete local same-platform 9×5
 comparisons. Hosted promotion remains pending.

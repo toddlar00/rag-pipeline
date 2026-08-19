@@ -130,8 +130,8 @@ in the [`443dce4` evidence entry](evidence/2026-08-18-main-443dce4.md). It
 remains historical evidence rather than the source identity for later changes.
 
 The current Task 0.2 branch is the direct gate-only evidence child of clean
-source `ca7f54c3192c83e3d0ee99135480a454acdd3af4` (tree
-`0a1aaf8e8fbeb1a06bc6462d98bf982bbd81c517`). Its clean Windows and Linux
+source `b07e3270881376cf60586c363e6285722562c7f5` (tree
+`b287ef0452ffd9d35d7ec361d5e7a03b50f01258`). Its clean Windows and Linux
 CPython 3.12.13 reports share the exact source, lock, and authoritative 9x5
 scenario contract, and each passes its local same-platform comparison. Hosted
 force-full checks and an external exact-SHA promotion record are still pending;

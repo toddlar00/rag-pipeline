@@ -55,8 +55,8 @@ That pair remains historical evidence; see its
 [exact-head evidence record](docs/evidence/2026-08-18-main-443dce4.md).
 
 The current Task 0.2 evidence candidate is the direct gate-only child of clean
-source `ca7f54c3192c83e3d0ee99135480a454acdd3af4` (tree
-`0a1aaf8e8fbeb1a06bc6462d98bf982bbd81c517`). Its separate Windows and
+source `b07e3270881376cf60586c363e6285722562c7f5` (tree
+`b287ef0452ffd9d35d7ec361d5e7a03b50f01258`). Its separate Windows and
 Linux CPython 3.12.13 reports each cover the authoritative 9x5 scenario set,
 share the exact source, lock, and scenario contract, and pass a local
 same-platform comparison. Hosted checks and the external exact-SHA promotion
@@ -151,11 +151,13 @@ Execute it in this order:
 | Deferred | Product simplification and retrieval experiments | Phase 4 and applicable qualification gates | Each product/quality change proves its own privacy, usability, and promotion contract |
 
 Task 0.2 now has exact clean source `S`
-(`ca7f54c3192c83e3d0ee99135480a454acdd3af4`, tree
-`0a1aaf8e8fbeb1a06bc6462d98bf982bbd81c517`) and this branch is its direct
+(`b07e3270881376cf60586c363e6285722562c7f5`, tree
+`b287ef0452ffd9d35d7ec361d5e7a03b50f01258`) and this branch is its direct
 gate-only evidence child `E`. The live CI workflow remains the reviewed
 force-full bootstrap rendering, the future active workflow remains preserved
 as a security-owned fixture, and the paired local Phase A0 comparisons pass.
+Earlier Task 0.2 evidence checkpoints in this branch are superseded and are not
+promotable.
 The next action is to promote `E` through its hosted force-full checks and
 external exact-SHA record. Only after that evidence head is the trusted base
 may a later workflow-only commit `A` copy the fixture into the live workflow,
