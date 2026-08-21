@@ -74,12 +74,28 @@ external exact-SHA record on
 through history-preserving `f3bcb91`. That `376750d` pair supersedes the
 `b07e327` pair as the completed hosted checkpoint; see the
 [closure evidence record](docs/evidence/2026-08-21-task-0-2-closure-1e79540.md).
-The one-domain vector-stores dependency checkpoint `0703dde` has since
-changed the four mapped core/full/service/smoke locks, so its regenerated
-Windows/Linux pair (independent local same-platform comparisons passed)
-supersedes the `376750d` pair as the current candidate; its hosted checks
-and external exact-SHA record are pending on the vector-stores domain pull
-request.
+The one-domain vector-stores dependency checkpoint `0703dde` then changed
+the four mapped core/full/service/smoke locks and completed the same
+cycle: gate-only child `fa71ff3` passed the hosted full lane, received the
+external exact-SHA record on
+[PR #97](https://github.com/toddlar00/rag-pipeline/pull/97), and merged
+through history-preserving `b3c7cf7`. The one-domain ML/runtime checkpoint
+`6f65acb` has since changed the five mapped core/full/service/smoke/test
+locks, so its regenerated Windows/Linux pair (independent local
+same-platform comparisons passed) supersedes the `0703dde` pair as the
+current candidate; its hosted checks and external exact-SHA record are
+pending on the ML/runtime domain pull request.
+
+Two operational follow-ups from the post-merge `main` push runs are open:
+a documentation-only merge passes its fast-lane pull-request run but then
+fails the forced-heavy `main` push run's ancestor-bound Phase A0 delta
+check until the next source checkpoint supersedes the baseline (observed at
+`48b47fd`; cured by the `0703dde` checkpoint; a fix path — extending the
+gate-only allowed set or classifier-aware push handling — is a
+security-owned workflow change requiring its own review); and
+`test_posix_escalation_kills_descendant_that_ignores_sigterm` showed one
+cleanup-confirmation flake on a busy hosted runner at `b3c7cf7` (tree
+identical to the fully green pull-request run; rerun requested).
 
 No submitted exact-head human review or separate owner authorization for the
 R8c-6 ownership move was found. Technical A0 success is therefore not that
@@ -194,11 +210,15 @@ checker-hardening follow-up recorded in the promotion evidence record.
 The next actions, in order: supersede the open Dependabot group PRs with
 ordered, policy-compliant one-domain PRs — each with regenerated locks,
 installed-lock testing, domain gates, and its own Phase A0 source/evidence
-pair. The vector-stores supersession of
-[PR #90](https://github.com/toddlar00/rag-pipeline/pull/90) is in flight at
-checkpoint `0703dde` (qdrant-client 1.19.0, onnxruntime 1.29.0 for CPython
-3.11+; the proposed chromadb floor bump is dropped as a no-op the domain
-policy rejects). ML/runtime (#92), Service/UI (#87), Test/audit (#89), and
+pair. The vector-stores supersession of PR #90 merged through
+[PR #97](https://github.com/toddlar00/rag-pipeline/pull/97) at `b3c7cf7`
+(qdrant-client 1.19.0, onnxruntime 1.29.0 for CPython 3.11+; the proposed
+chromadb floor bump was dropped as a no-op the domain policy rejects). The
+ML/runtime supersession of
+[PR #92](https://github.com/toddlar00/rag-pipeline/pull/92) is in flight at
+checkpoint `6f65acb` (tqdm 4.70.0, numpy 2.5.2 for CPython 3.12+,
+sentence-transformers 5.7.0; the proposed einops and FlagEmbedding floor
+bumps are dropped as no-ops). Service/UI (#87), Test/audit (#89), and
 PDF/Docling (#91) follow one at a time, while
 [PR #88](https://github.com/toddlar00/rag-pipeline/pull/88) (Google GenAI 2)
 stays parked on its recorded owner decision; then begin Task 0.6's Node
