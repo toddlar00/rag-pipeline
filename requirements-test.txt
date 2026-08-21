@@ -1,6 +1,6 @@
 # Exact pins keep the dependency-light CI matrix reproducible.
 pip==26.2.1
-PyMuPDF==1.28.0
+PyMuPDF==1.28.2
 # Universal runtime resolution selects wheel-compatible NumPy lines by Python.
 numpy==2.2.6; python_version < "3.11"
 numpy==2.4.6; python_version >= "3.11" and python_version < "3.12"
