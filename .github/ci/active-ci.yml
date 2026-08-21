@@ -137,6 +137,8 @@ jobs:
               "head_sha": head_sha,
               "trusted_sha": trusted_sha,
           }
+          if any("\n" in value or "\r" in value for value in values.values()):
+              raise SystemExit("refusing to write a multiline workflow output")
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               for key, value in values.items():
                   print(f"{key}={value}", file=output)

@@ -165,15 +165,18 @@ integrated by history-preserving merge
 [promotion evidence record](docs/evidence/2026-08-21-ci-promotion-seed-d142065.md).
 The live CI workflow is the reviewed force-full bootstrap rendering, and the
 future active workflow remains preserved as a security-owned fixture.
-The next action is the workflow-only activation checkpoint `A`: copy the
-fixture into the live workflow, pass its hosted activation cases, and receive
-its own external exact-SHA record. The promotion review logged follow-ups
-F1-F4 in the promotion evidence record. F1 (executable coverage for the
-fixture's inline promotion-gate validator fail-closed branches) must be
-resolved no later than activation acceptance; because the activation
-checkpoint is workflow-only, F1's test slice lands as its own reviewed change
-under the Phase A0 policy's source-change rules. F2-F4 are non-blocking
-hardening follow-ups. Task 0.3 must not start before the activation
+The next action is the pre-activation hardening checkpoint in flight on
+[PR #94](https://github.com/toddlar00/rag-pipeline/pull/94): it adds
+executable coverage for the fixture's inline promotion-gate validator and
+event-identity step (promotion-review follow-ups F1 and F3), hardens the
+fixture's event outputs against multiline values (F2), and refreshes the
+paired Phase A0 baselines from its own clean source under the Phase A0
+policy's source-change rules. After that checkpoint merges, the
+workflow-only activation checkpoint `A` copies the hardened fixture into the
+live workflow, passes its hosted activation cases, and receives its own
+external exact-SHA record. F4 (workflow-syntax validator anchor/alias
+rejection) remains an open checker-hardening follow-up recorded in the
+promotion evidence record. Task 0.3 must not start before the activation
 checkpoint is accepted; it then stops for the transitive-policy owner choice
 if that choice has not been recorded.
 

@@ -108,6 +108,13 @@ Fixing F1-F4 inside PR #93 would have moved its head and invalidated the
 frozen `S3 -> E3` evidence chain; they were deliberately deferred under the
 append-only evidence rule.
 
+**Resolution status (2026-08-21):** F1, F2, F3, and F5 are resolved by the
+pre-activation hardening checkpoint that carries this record
+([PR #94](https://github.com/toddlar00/rag-pipeline/pull/94)): executable
+validator-branch and event-identity-step coverage, the fixture's multiline
+output guard with its updated reviewed lane/workflow digests, and both
+cosmetic corrections. F4 remains open as a checker-hardening follow-up.
+
 ## Boundaries
 
 This record does not activate classification. The workflow-only activation
