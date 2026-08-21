@@ -99,8 +99,8 @@ separate one-line `LAYOUT_JSON` value. Each hint is limited to 512 characters
 and 2,048 encoded JSON bytes; the complete value is limited to 128 KiB.
 Non-string/non-list values and non-string list members are omitted. Those hints
 are labeled as untrusted generated data. This framing does not make the earlier
-  layout response authoritative or give it the exact hierarchy-array contract.
-  The separate `toc.layout` request is addressed by the integrated companion
+layout response authoritative or give it the exact hierarchy-array contract.
+The separate `toc.layout` request is addressed by the integrated companion
 [TOC layout output contract](toc-layout-output-contract.md), which gives that
 upstream response its own bounded input and exact eight-field schema without
 making its values authoritative hierarchy evidence.
