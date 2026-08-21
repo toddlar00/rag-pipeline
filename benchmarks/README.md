@@ -7,16 +7,16 @@ fresh-process repetitions.
 
 ## Provenance
 
-Both current reports were generated from the clean test-audit tooling
+Both current reports were generated from the clean PDF/Docling
 dependency-domain source checkpoint
-`ca3886c9584cdaaca23f53ecde0660ba31cebe2c` (tree
-`456021e0d43f9cfb3fbd0a74e788ebfc45e159d5`). That source contains the
+`ed1f370260dff29a42bb3251198fa1e52e6252ba` (tree
+`3247ae5aaeb6f9d6f9357f1ce81b533ff37ba92d`). That source contains the
 activated deterministic CI promotion workflow, the hardened security-owned
-fixture, the integrated vector-stores, ML/runtime, and Service/UI domain
-upgrades, and the one-domain test-audit tooling upgrade: uv 0.12.5 (the
-pinned universal-lock resolver), pip 26.2.1, and ruff 0.16.3, with
-regenerated lock-tools/security/smoke/test locks. The executing
-environments were
+fixture, the integrated vector-stores, ML/runtime, Service/UI, and
+test-audit tooling domain upgrades, and the one-domain PDF/Docling
+upgrade: PyMuPDF 1.28.2 (test exact pin plus the requirements.txt floor),
+docling 2.121.0, docling-core 2.92.0, and pypdfium2 5.13.0, with
+regenerated core/full/smoke/test locks. The executing environments were
 synchronized with repository-pinned uv 0.12.5 against the exact CPU
 application/test lock union plus its retained bootstrapper:
 
@@ -33,8 +33,8 @@ marker-resolved distributions before generation.
 
 | Platform | Runtime | Report | Bytes | File SHA-256 | Embedded report SHA-256 |
 |---|---:|---|---:|---|---|
-| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 50,386 | `8f783180bd26bb98ef45aa7685a8791dfabe7cf386c17c8fa42f7f0d1f27b518` | `81421ab77f5a444b9960a62bfb34665b3ababd8dd152a9ee16fd842964bffc1f` |
-| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 49,804 | `824a25d53864374bc1f945abdbbe2a847ce414260a074c47dedc9b2a37b64126` | `3b388bfec666aee858a848cb5e7ef384b004df4e957008b53ba7dfe308e06b5a` |
+| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 50,388 | `3efe2c40bba882be0d3790b98d54583fe8bf70ff986e2d92ef0bc41d6de1fcfd` | `968a3443a2a94bb0892253027808a9eaff9b85e6e24717881b4abf8b4d2397e7` |
+| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 49,800 | `17f0b96ccdfb6a2d3201cf35700b93d50a8b80ceeb9724d7acbc792ffc1b8d4e` | `2babaaa1de42a2a621b2f5fbfd78e1b36216ce678ae08542d1351200a21995c1` |
 
 The reports attest the same source commit, clean-worktree state, tracked-diff
 digest, eight LF and `HEAD`-identical dependency/model-lock inputs, authoritative
@@ -131,12 +131,17 @@ passed the hosted full lane with retained artifacts, received the external
 exact-SHA record on
 [#99](https://github.com/toddlar00/rag-pipeline/pull/99), and merged
 through history-preserving `f1dae3b`. The one-domain test-audit tooling
-checkpoint `ca3886c` then changed the four mapped
-lock-tools/security/smoke/test locks, superseding the `248c57a` pair. The
-current reports above bind that exact clean tooling source and each passes
-an independent complete same-platform 9×5 comparison. No hosted result for
-this replacement pair is claimed here yet; its hosted checks and external
-exact-SHA record remain pending.
+checkpoint `ca3886c` repeated the cycle: its gate-only child `a129f37`
+passed the hosted full lane with retained artifacts, received the external
+exact-SHA record on
+[#100](https://github.com/toddlar00/rag-pipeline/pull/100), and merged
+through history-preserving `0ec2639`. The one-domain PDF/Docling
+checkpoint `ed1f370` then changed the four mapped core/full/smoke/test
+locks, superseding the `ca3886c` pair. The current reports above bind that
+exact clean PDF/Docling source and each passes an independent complete
+same-platform 9×5 comparison. No hosted result for this replacement pair
+is claimed here yet; its hosted checks and external exact-SHA record
+remain pending.
 
 ## Checking
 
