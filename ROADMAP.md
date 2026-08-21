@@ -3,8 +3,8 @@
 - **Status:** Live scheduling authority
 - **Current as of:** 2026-08-21
 - **Baseline:** `main` and `origin/main` at
-  `d142065cdcc890e2ad64057e0c9f627a079f93d6` (tree
-  `1c2a1c7ec6e3dcafc3b7265ca1c4b2d925f0b336`)
+  `1e79540c9e3fbbb31f5eabdac35d608d68b7588f` (tree
+  `96ff1600afc3aa1fcefac3d515bbdaf258f7c7b9`)
 - **Active implementation plan:**
   [`docs/superpowers/plans/2026-08-18-next-improvement-program.md`](docs/superpowers/plans/2026-08-18-next-improvement-program.md)
 - **Point-in-time evidence:** [`docs/evidence/`](docs/evidence/README.md)
@@ -65,13 +65,15 @@ artifacts, the external exact-SHA review record is posted on
 [PR #93](https://github.com/toddlar00/rag-pipeline/pull/93), and
 history-preserving merge `d142065` integrated it on `main`; see the
 [promotion evidence record](docs/evidence/2026-08-21-ci-promotion-seed-d142065.md).
-This pair supersedes the `4551c50`/`443dce4` pair as the completed hosted
-checkpoint. The pre-activation hardening checkpoint `376750d` has since
-changed Python test source and the security-owned fixture, so its own
-regenerated Windows/Linux pair (local same-platform comparisons passed)
-supersedes the `b07e327` pair as the current candidate; its hosted checks
-and external exact-SHA record are pending on
-[PR #94](https://github.com/toddlar00/rag-pipeline/pull/94).
+The pre-activation hardening checkpoint `376750d` then changed Python test
+source and the security-owned fixture, and its regenerated Windows/Linux
+pair completed the same cycle: gate-only evidence child `f8fc95b` passed all
+hosted force-full checks with retained Phase A0 artifacts, received the
+external exact-SHA record on
+[PR #94](https://github.com/toddlar00/rag-pipeline/pull/94), and merged
+through history-preserving `f3bcb91`. That `376750d` pair supersedes the
+`b07e327` pair as the completed hosted checkpoint; see the
+[closure evidence record](docs/evidence/2026-08-21-task-0-2-closure-1e79540.md).
 
 No submitted exact-head human review or separate owner authorization for the
 R8c-6 ownership move was found. Technical A0 success is therefore not that
@@ -127,7 +129,7 @@ authorize broader work. Anything not allowed below remains held.
 | Work | May start now? | Gate |
 | --- | --- | --- |
 | Task 0.1 status/evidence reconciliation | Yes; ongoing documentation duty | Documentation and content-free evidence only; do not select an owner policy |
-| Task 0.2 trusted CI promotion classifier | Yes, after Task 0.1's mechanical acceptance | Base-branch-trusted evaluation, fail-closed heavy selection, and exact-SHA aggregate/manual promotion evidence |
+| Task 0.2 trusted CI promotion classifier | Complete (seed #93, hardening #94, activation #95) | Base-branch-trusted evaluation, fail-closed heavy selection, and exact-SHA aggregate/manual promotion evidence — all live on `main` |
 | Tasks 0.3-0.4 transitive policy and lock remediation | Decision preparation only | Owner selects the ADR path before its mechanism or lock delta is integrated |
 | Task 0.5 licensing/distribution | Owner decision records only | Both dispositions must be approved before packaging eligibility |
 | Tasks 0.6-0.8 Node, secret, and static-security gates | Yes in sequence after their prerequisites | Pinned tools, synthetic canaries, redaction, security ownership, and no private source retention |
@@ -170,20 +172,28 @@ integrated by history-preserving merge
 [promotion evidence record](docs/evidence/2026-08-21-ci-promotion-seed-d142065.md).
 The live CI workflow is the reviewed force-full bootstrap rendering, and the
 future active workflow remains preserved as a security-owned fixture.
-The next action is the pre-activation hardening checkpoint in flight on
-[PR #94](https://github.com/toddlar00/rag-pipeline/pull/94): it adds
-executable coverage for the fixture's inline promotion-gate validator and
-event-identity step (promotion-review follow-ups F1 and F3), hardens the
-fixture's event outputs against multiline values (F2), and refreshes the
-paired Phase A0 baselines from its own clean source under the Phase A0
-policy's source-change rules. After that checkpoint merges, the
-workflow-only activation checkpoint `A` copies the hardened fixture into the
-live workflow, passes its hosted activation cases, and receives its own
-external exact-SHA record. F4 (workflow-syntax validator anchor/alias
-rejection) remains an open checker-hardening follow-up recorded in the
-promotion evidence record. Task 0.3 must not start before the activation
-checkpoint is accepted; it then stops for the transitive-policy owner choice
-if that choice has not been recorded.
+Task 0.2 is complete. The hardening checkpoint (executable fixture-validator
+and event-identity coverage, the multiline-output guard, and the refreshed
+`376750d` Phase A0 pair) merged through
+[PR #94](https://github.com/toddlar00/rag-pipeline/pull/94) at `f3bcb91`,
+and the workflow-only activation checkpoint merged through
+[PR #95](https://github.com/toddlar00/rag-pipeline/pull/95) at `1e79540`
+after its hosted activation run: the trusted classifier routed the change to
+the full lane, all eight execution jobs tested synthetic candidate
+`18caf7d0885c483da5e3096f2cc112e4cf55f2d3`, and the promotion aggregate
+accepted that exact candidate. Classification is live; every execution job
+tests the bound candidate; the aggregate is exact-SHA promotable. F4
+(workflow-syntax validator anchor/alias rejection) remains an open
+checker-hardening follow-up recorded in the promotion evidence record.
+The next actions, in order: supersede the open Dependabot group PRs
+(#87, #89-#92) with ordered, policy-compliant one-domain PRs — each with
+regenerated locks, installed-lock testing, domain gates, and its own Phase
+A0 source/evidence pair — while
+[PR #88](https://github.com/toddlar00/rag-pipeline/pull/88) (Google GenAI 2)
+stays parked on its recorded owner decision; then begin Task 0.6's Node
+audit/SBOM gate. Task 0.3's activation prerequisite is now met, but it
+still stops immediately for the transitive-policy owner choice, which
+remains unrecorded.
 
 ## Acceptance gates by phase
 
