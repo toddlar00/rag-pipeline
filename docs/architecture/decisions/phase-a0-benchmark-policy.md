@@ -1,10 +1,11 @@
 # Phase A0 Benchmark Policy
 
 - **Status:** A0a integrated; the latest completed hosted A0b technical
-  checkpoint passed at Task 0.2 seed evidence head `aa7a23b` and merged
-  through `d142065`; the pre-activation hardening replacement pair at source
-  `376750d` is local-only pending hosted promotion; exact-head human review
-  and separate R8 owner authorization are not recorded
+  checkpoint passed at hardening evidence head `f8fc95b` and merged through
+  `f3bcb91`, with the activation checkpoint merged through `1e79540`; the
+  vector-stores domain replacement pair at source `0703dde` is local-only
+  pending hosted promotion; exact-head human review and separate R8 owner
+  authorization are not recorded
 - **Milestone:** R10 prerequisite for the R8 pipeline-ownership move
 - **Report schema:** `phase-a0` v3
 
@@ -102,24 +103,28 @@ review or separate owner authorization for R8c-6 was found; passing the hosted
 A0b jobs does not supply that authorization or complete the review binding.
 
 The Task 0.2 replacement pair used clean source
-`b07e3270881376cf60586c363e6285722562c7f5` (tree
-`b287ef0452ffd9d35d7ec361d5e7a03b50f01258`). Its gate-only evidence child
-`aa7a23b` passed all hosted force-full checks with retained Phase A0
-artifacts, received the external exact-SHA promotion record on
-[PR #93](https://github.com/toddlar00/rag-pipeline/pull/93), and merged to
-`main` through history-preserving merge `d142065`, completing that hosted
-checkpoint. The current replacement pair uses the clean pre-activation
-hardening source `376750d6b992b04064d61e142d516c2ebda3b696` (tree
-`b16e9f4f9cec9e98d74323bee65e8b635297fa8f`). Its Windows and Linux CPython
-3.12.13 reports were generated after the same strict hash-locked
-synchronization and dependency-consistency checks: 189 marker-resolved
-distributions on Windows and 187 on Linux. They bind that one clean source,
-the same eight LF and `HEAD`-identical dependency/model inputs, and the
-complete 9×5 scenario contract. Each passes an independent complete local
-same-platform comparison. The direct gate-only evidence child contains only
-the reports and permitted provenance/status documentation; its hosted
-checks, retained current-report artifacts, external exact-SHA promotion
-record, and own commit identity are still pending.
+`b07e3270881376cf60586c363e6285722562c7f5`; its gate-only child `aa7a23b`
+completed the hosted checkpoint and merged through `d142065`
+([PR #93](https://github.com/toddlar00/rag-pipeline/pull/93)). The
+pre-activation hardening pair used clean source
+`376750d6b992b04064d61e142d516c2ebda3b696`; its gate-only child `f8fc95b`
+passed all hosted force-full checks with retained Phase A0 artifacts,
+received the external exact-SHA record on
+[PR #94](https://github.com/toddlar00/rag-pipeline/pull/94), and merged
+through `f3bcb91`, completing that hosted checkpoint before the activation
+merge `1e79540`. The current replacement pair uses the clean vector-stores
+dependency-domain source `0703dde635a5d819ca6c01b8eaab06cf53273f34` (tree
+`5f190b10d7fbee16a8bbc06cf43cd794522c07a9`), which changed the four mapped
+core/full/service/smoke locks. Its Windows and Linux CPython 3.12.13
+reports were generated after the same strict hash-locked synchronization
+and dependency-consistency checks: 189 marker-resolved distributions on
+Windows and 187 on Linux. They bind that one clean source, the same eight
+LF and `HEAD`-identical dependency/model inputs, and the complete 9×5
+scenario contract. Each passes an independent complete local same-platform
+comparison. The direct gate-only evidence child contains only the reports
+and permitted provenance/status documentation; its hosted checks, retained
+current-report artifacts, external exact-SHA promotion record, and own
+commit identity are still pending.
 
 The temporary force-full seed matrix explicitly checks out the exact PR head
 rather than the synthetic merge ref so its report can bind immutable evidence
@@ -236,14 +241,19 @@ Task 0.2 source `b07e327` superseded that historical pair; its evidence
 child `aa7a23b` passed both hosted Phase A0 cells with retained artifacts
 and merged through `d142065` with the external exact-SHA promotion record on
 [PR #93](https://github.com/toddlar00/rag-pipeline/pull/93). The
-pre-activation hardening source `376750d` supersedes that pair in turn. Its
-Windows report is 50,391 bytes (file SHA-256
-`ad1d21da8428ed6a944f043c30e3741321c8b4fae125e97744bac826a3ece536`;
+pre-activation hardening source `376750d` repeated the full cycle: its
+child `f8fc95b` passed both hosted cells with retained artifacts and merged
+through `f3bcb91`
+([PR #94](https://github.com/toddlar00/rag-pipeline/pull/94)), and the
+activation checkpoint merged through `1e79540`. The one-domain
+vector-stores dependency source `0703dde` supersedes that pair in turn. Its
+Windows report is 50,387 bytes (file SHA-256
+`f4436eb167301e8074f0420b882b3fed7c4f014735216a25343a045fd0df6629`;
 embedded report SHA-256
-`0b3afa6e153f3582520410038bdbe6894c81fb38cfdc4b181051d2cd27a9fb46`).
-Its Linux report is 49,800 bytes (file SHA-256
-`3cacc17cad39a63c87a1e8bf5d4e70e73b25876c1b8c6104dda93c94a7a8081a`;
+`23ce476a20f85a37074964154477571c7f11aa95dc4e32008f6dacfb3b3717b5`).
+Its Linux report is 49,799 bytes (file SHA-256
+`01f3959fd36f007651f416072feaecafc136231adf743e3454a096b31096d0a7`;
 embedded report SHA-256
-`4acff3d86ab7386f5317aad181c8ea5113d93fc486eb7df96883844dcd357dc3`).
+`f13cc706d8fbfd3cdbb95198c5f8d273a0f2c204d008ec5b82b56eb935a7783f`).
 Both use CPython 3.12.13 and pass their complete local same-platform 9×5
 comparisons. Hosted promotion remains pending.
