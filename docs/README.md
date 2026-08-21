@@ -8,12 +8,16 @@ material. When documents disagree, use the authority order below.
 1. Approved governance decisions — owner-controlled policy boundaries that an
    agent cannot choose, especially private-source disclosure and corpus
    approval.
-2. Architecture decision records — maintained behavioral and threat-model
-   decisions that implementations and tests must satisfy.
-3. [`ROADMAP.md`](../ROADMAP.md) — prioritized R0-R12 backlog, current delivery
-   state, dependencies, acceptance evidence, and PR disposition.
+2. Architecture decision records, machine-readable policy, and schemas —
+   maintained behavioral and threat-model constraints that implementations and
+   tests must satisfy.
+3. [`ROADMAP.md`](../ROADMAP.md) — live delivery state, work authorization,
+   dependencies, owner blockers, next actions, and acceptance gates.
 4. [`README.md`](../README.md) — operator-facing commands and current behavior.
 5. Historical plans — design inputs only; unchecked boxes are not live tasks.
+
+Runtime source and executable tests establish observed behavior and expose
+drift. They cannot override an owner decision or authorize work.
 
 ## Architecture decisions
 
@@ -50,35 +54,39 @@ material. When documents disagree, use the authority order below.
   — strict shared review/release inputs, the shared query domain,
   compatibility aliases, and both evaluation-side R8 inversions.
 - [CI security ownership policy](architecture/decisions/ci-security-ownership-policy.md)
-  — security-workflow trigger ownership, pinned actions, checkout credential
+  — security-workflow trigger ownership, base-trusted risk classification,
+  fail-closed promotion aggregation, pinned actions, checkout credential
   isolation, least privilege, and the residual secret-scan boundary.
 - [Dependency compatibility domains](architecture/decisions/dependency-compatibility-domains.md)
   — exact non-overlapping upgrade groups, manifest coverage, lock refresh and
   domain-specific qualification before dependency changes.
 - [LLM output contracts](architecture/decisions/llm-output-contracts.md)
-  — hostile generated-text validation, classification prompt framing,
-  cache/single-flight enforcement, the owner-pending semantic-rejection
-  fallback rule, and content-free receipts.
+  — integrated hostile generated-text validation, classification prompt
+  framing, cache/single-flight enforcement, the owner-pending
+  semantic-rejection authority rule, and content-free receipts.
 - [TOC hierarchy output contract](architecture/decisions/toc-hierarchy-output-contract.md)
-  — proposed exact hierarchy-array validation, untrusted TOC prompt framing,
-  atomic multi-batch fallback, and opt-in chunk provenance.
+  — integrated exact hierarchy-array validation, untrusted TOC prompt framing,
+  atomic multi-batch fallback, and opt-in chunk provenance; inherited R0C
+  authority remains owner-pending.
 - [TOC layout output contract](architecture/decisions/toc-layout-output-contract.md)
-  — proposed exact layout-hint validation, bounded source framing,
-  content-free fallback, and conditional completion identity.
+  — integrated exact layout-hint validation, bounded source framing,
+  content-free fallback, and conditional completion identity; inherited R0C
+  authority remains owner-pending.
 - [TOC page-verification output contract](architecture/decisions/toc-verification-output-contract.md)
-  — proposed exact Boolean verification authority, bounded page-evidence
-  framing, explicit inconclusive accounting, and content-free diagnostics.
+  — integrated exact Boolean verification mechanics, bounded page-evidence
+  framing, explicit inconclusive accounting, and content-free diagnostics;
+  inherited R0C authority remains owner-pending.
 - [Architecture and facade inventory policy](architecture/decisions/architecture-facade-inventory-policy.md)
   — schema-v3 static graph, facade/mutation characterization, normalized
   runtime contract, and reviewed baseline refreshes.
 - [Phase A0 benchmark policy](architecture/decisions/phase-a0-benchmark-policy.md)
-  — the cross-platform A0a harness contract, repaired local A0b replacement
-  candidates, the first hosted failure diagnosis, and the still-pending hosted
-  replacement frozen-head checkpoint.
+  — the cross-platform A0 contract, earlier diagnostic failures, the latest
+  completed hosted checkpoint, the current Task 0.2 evidence candidate, and
+  the still-open review/architecture authorization boundary.
 
-With the local CI-ownership and Phase A0a decisions plus the implemented and
-independently audited architecture-inventory policy now maintained here, the
-roadmap's remaining missing ADR coverage is vector lifecycle, table-row
+With the CI-ownership, architecture-inventory, and Phase A0 decisions now
+maintained here, the roadmap's remaining missing ADR coverage is vector
+lifecycle, table-row
 retrieval/evaluation, immutable source generation, pipeline composition/facade
 semantics, and release platform/support tiers. Historical implementation plans
 are not substitutes for those records.
@@ -88,6 +96,13 @@ are not substitutes for those records.
 - [Private-source documentation policy proposal](governance/private-source-documentation-policy-proposal.md)
   — content-free inventory and the unresolved owner decision. It is not an
   approval to publish corpus-derived material.
+
+## Current implementation plan
+
+- [Next improvement program](superpowers/plans/2026-08-18-next-improvement-program.md)
+  — prioritized release-readiness, semantic-qualification, quality-gate, product,
+  and architecture work. It remains subordinate to `ROADMAP.md`; follow the
+  roadmap's current authorization table and do not infer an owner decision.
 
 ## Historical Claude plans
 
@@ -102,31 +117,33 @@ ADRs, and `ROADMAP.md` deliberately supersede them.
 ## Evidence and publication state
 
 [`INTEGRATION_AUDIT.md`](../INTEGRATION_AUDIT.md) is the historical exact-head
-record for PRs #1-#28. PRs #31-#43, the local R0/R0A/R0B/R4/R8/R10/R12
-changes, the accepted local R7 architecture-inventory gate and CI-security
-ownership gate, CI status, review state, and release gaps are summarized in
-`ROADMAP.md` until R12 moves
-point-in-time transcripts and test counts into an immutable `docs/evidence/`
-ledger keyed by commit and PR.
+record for PRs #1-#28. The append-only
+[`docs/evidence/` ledger](evidence/README.md) now holds later point-in-time
+status, test counts, workflow identities, and the exact-byte historical roadmap
+snapshot. `ROADMAP.md` contains only live scheduling state; an evidence record
+does not settle an owner decision.
 
-The Phase A0a harness and its local tests are implementation evidence only. The
-first frozen A0b hosted attempt at `ba9c66d` exposed checkout-EOL drift in lock
-and architecture-inventory bytes plus host-dependent validation of the
-drive-relative path `C:escape.py`; it did not pass A0b. Replacement source
-`7594f8b` repaired those gates, and `fdb08d2` normalized the supported Python
-3.10-3.14 runtime-contract differences without weakening the probe's home/tilde
-denial. Gate-only `ed2995e` froze those candidates; R2 source `537f72b` and
-gate-only refresh `b813aa7` followed. Source-changing defect corrections in
-`c1bc042` invalidated both earlier report pairs. The publication-readiness
-implementation (`e904fa6`) and the strict LLM/TOC output-contract line each
-froze their own later candidate pairs, and merging both lines into the R2
-convergence candidate invalidates those pairs in turn. Fresh paired CPython
-3.12 x86-64 Windows/Linux reports must bind the merged clean pre-gate
-checkpoint and are recorded in the following reports-and-documentation-only
-commit. A0b still requires publishing its exact commit/tree, passing hosted
-comparisons on both operating systems, retaining successful evidence
-artifacts, and exact-head review. None of those hosted or review gates is
-implied by A0a, the failed first attempt, or a local-only result.
+The latest completed hosted Phase A0 pair binds source checkpoint `4551c50` to
+evidence head `443dce4`. Its paired local comparisons and both hosted
+Windows/Linux jobs pass; the exact identities and report digests are recorded
+in the [`443dce4` evidence entry](evidence/2026-08-18-main-443dce4.md). It
+remains historical evidence rather than the source identity for later changes.
+
+The current Task 0.2 branch is the direct gate-only evidence child of clean
+source `b07e3270881376cf60586c363e6285722562c7f5` (tree
+`b287ef0452ffd9d35d7ec361d5e7a03b50f01258`). Its clean Windows and Linux
+CPython 3.12.13 reports share the exact source, lock, and authoritative 9x5
+scenario contract, and each passes its local same-platform comparison. Hosted
+force-full checks and an external exact-SHA promotion record are still pending;
+the evidence child's own commit identity is therefore not claimed here. The
+next step is to promote that evidence child, then create and validate the
+separate workflow-only activation commit from its trusted base.
+
+No submitted exact-head human review or separate R8c-6 authorization was found,
+so neither the earlier passing technical checkpoint nor this pending candidate
+is permission for that architecture move. Earlier candidate, invalidation, and
+failure history remains in the
+[moved roadmap snapshot](evidence/roadmap-through-2026-08-18-443dce4.md).
 
 Ignored `output/` paths are not durable evidence in a fresh clone. A roadmap or
 PR claim that depends on private output must be backed by a tracked content-free

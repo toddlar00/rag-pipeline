@@ -1,6 +1,8 @@
 # LLM output contracts
 
-Status: proposed implementation for owner review
+Status: technical implementation integrated through
+[PR #76](https://github.com/toddlar00/rag-pipeline/pull/76); R0C
+semantic-rejection and provider-chain authority remains owner-pending
 
 Date: 2026-07-25
 
@@ -19,11 +21,14 @@ This tool processes private legal material. Rejected model text must not leak
 through exceptions, events, reports, or per-chunk metadata, and a cache or
 single-flight optimization must not bypass the same decision boundary.
 
-## Proposed decision
+## Integrated mechanics and pending policy decision
 
-The implementation and tests below form a reviewable candidate. In particular,
-the rule that a semantic rejection stops the provider chain is an authority
-choice that remains subject to owner approval before merge.
+The implementation and tests below are present on `main` through PR #76. Their
+integration does not settle the separate R0C support policy. In particular,
+whether a non-empty semantic rejection must stop the provider chain as a
+release-qualified authority rule remains subject to owner approval. Until that
+decision, the integrated behavior remains fail-closed but unqualified for a
+release support claim.
 
 ### Dependency-light contract authority
 
@@ -119,10 +124,11 @@ report schemas 2-5 while new runtime reports write schema 5.
   changes request IDs and invalidates older cache records for every LLM
   operation; this avoids mixed-schema interpretation during review.
 - The shared `toc.scaffold`/`toc.parse` hierarchy array is addressed by the
-  proposed successor [TOC hierarchy output contract](toc-hierarchy-output-contract.md).
-  Its upstream hint object is addressed separately by the proposed
+  integrated companion
+  [TOC hierarchy output contract](toc-hierarchy-output-contract.md). Its
+  upstream hint object is addressed separately by the integrated
   [TOC layout output contract](toc-layout-output-contract.md), and its later
-  page spot-check by the proposed
+  page spot-check by the integrated
   [TOC page-verification output contract](toc-verification-output-contract.md).
   None broadens this classification decision: every `agent_team.*` response,
   grounded-answer structure, case briefs, questions, flashcards, summaries,

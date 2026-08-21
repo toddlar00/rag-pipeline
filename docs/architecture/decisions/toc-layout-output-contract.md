@@ -1,6 +1,8 @@
 # TOC layout output contract
 
-Status: proposed implementation for owner review
+Status: technical implementation integrated through
+[PR #76](https://github.com/toddlar00/rag-pipeline/pull/76); inherited R0C
+semantic-rejection and provider-chain authority remains owner-pending
 
 Date: 2026-07-25
 
@@ -14,7 +16,7 @@ Technical owner: pending assignment
 The opt-in `--llm-scaffold` path first asks `toc.layout` to describe patterns
 in a bounded sample of a document's Table of Contents. Its result is not
 published directly, but selected values become untrusted hints in the later
-`toc.scaffold` hierarchy request. Before this proposal, the layout helper
+`toc.scaffold` hierarchy request. Before this technical slice, the layout helper
 interpolated raw source lines into its prompt, removed thinking tags, selected
 the text between the first and last braces, and decoded it with ordinary
 `json.loads`. Missing and extra fields, duplicate keys, coercive types,
@@ -30,17 +32,18 @@ Layout hints can change the generated hierarchy, section paths, stable chunk
 identities, retrieval, and output reuse. A rejected response must not appear in
 exceptions, runtime receipts, completion provenance, or ordinary logs.
 
-## Proposed decision
+## Integrated mechanics and pending policy decision
 
-This implementation is a reviewable candidate, not approved policy. It extends
-the dependency-light authority in
+This technical implementation is present on `main` through PR #76. Integration
+does not approve the unresolved R0C policy. The implementation extends the
+dependency-light authority in
 [`llm-output-contracts.md`](llm-output-contracts.md) to one response family:
-`toc.layout`. It is stacked on the proposed
+`toc.layout`. It is stacked on the integrated
 [`toc-hierarchy-v1`](toc-hierarchy-output-contract.md) decision.
 
 The predecessor rule that a non-empty semantic rejection stops the provider
-chain is inherited unchanged. That authority choice remains pending owner
-approval before this proposal may merge.
+chain is inherited unchanged in code. That release-authority choice remains
+pending owner approval; the merged mechanics do not settle it.
 
 ### Exact `toc-layout-v1` value
 
@@ -176,7 +179,7 @@ it.
 - Only synthetic fixtures and hostile canaries are used for verification. No
   private `Ethics` text, output, or corpus-derived judgment is embedded in the
   repository.
-- The later page spot-check is addressed by the proposed
+- The later page spot-check is addressed by the integrated
   [TOC page-verification output contract](toc-verification-output-contract.md).
   Every `agent_team.*` response remains permissive and outside this decision.
   Full `--llm-scaffold` generation identity is therefore still incomplete;
@@ -186,7 +189,8 @@ it.
   response contracts.
 - Provider/feature/data-class scoped egress, transfer and cost preflight,
   model-code isolation, and the owner-pending semantic-rejection rule remain
-  separate release gates. This proposal is related to, but does not close,
+  separate release gates. This integrated technical slice is related to, but
+  does not close,
   R0C issue #48.
 - This slice does not change the chunk schema, index schema, global runtime
   receipt format, release-security policy, or deterministic scaffold behavior.

@@ -1,0 +1,391 @@
+{
+  "schema_version": 1,
+  "execution_jobs": [
+    "quality",
+    "evaluation-smoke",
+    "unit-linux",
+    "unit-windows",
+    "service-api",
+    "phase-a0",
+    "vector-store-smoke",
+    "full-integration"
+  ],
+  "fast_python_versions": [
+    "3.12"
+  ],
+  "full_python_versions": [
+    "3.10",
+    "3.11",
+    "3.12",
+    "3.13",
+    "3.14"
+  ],
+  "documentation_group": "documentation_only",
+  "groups": {
+    "service": {
+      "selectors": {
+        "exact": [
+          "application_composition.py",
+          "job_application.py",
+          "service-config.example.json",
+          "service-openapi-v1.json",
+          "service_api.py",
+          "service_contracts.py",
+          "service_http.py",
+          "service_runtime.py",
+          "service_runtime_binding.py",
+          "service_search_worker.py",
+          "ui.py",
+          "tests/test_application_composition.py",
+          "tests/test_job_application.py",
+          "tests/test_service_api.py",
+          "tests/test_service_contracts.py",
+          "tests/test_service_http.py",
+          "tests/test_service_live.py",
+          "tests/test_service_runtime.py",
+          "tests/test_service_runtime_binding.py",
+          "tests/test_service_search_worker.py",
+          "tests/test_ui.py"
+        ],
+        "trees": [],
+        "root_prefixes": []
+      },
+      "python_lane": "full",
+      "required_jobs": [
+        "quality",
+        "evaluation-smoke",
+        "unit-linux",
+        "unit-windows",
+        "service-api",
+        "phase-a0",
+        "vector-store-smoke",
+        "full-integration"
+      ]
+    },
+    "vector": {
+      "selectors": {
+        "exact": [
+          "embedding_policy.py",
+          "index_state.py",
+          "resource_lease.py",
+          "retrieval_core.py",
+          "table_retrieval_core.py",
+          "vector_lifecycle.py",
+          "tests/test_embedding_policy.py",
+          "tests/test_index_manifests.py",
+          "tests/test_index_state.py",
+          "tests/test_resource_lease.py",
+          "tests/test_retrieval_core.py",
+          "tests/test_search.py",
+          "tests/test_table_retrieval_core.py",
+          "tests/test_vector_lifecycle.py",
+          "tests/test_vector_store_concurrency.py",
+          "tests/test_vector_store_lock_release.py"
+        ],
+        "trees": [],
+        "root_prefixes": []
+      },
+      "python_lane": "full",
+      "required_jobs": [
+        "quality",
+        "evaluation-smoke",
+        "unit-linux",
+        "unit-windows",
+        "service-api",
+        "phase-a0",
+        "vector-store-smoke",
+        "full-integration"
+      ]
+    },
+    "process_supervision": {
+      "selectors": {
+        "exact": [
+          "attempt_reporting.py",
+          "job_coordination.py",
+          "job_coordination_contracts.py",
+          "job_manager.py",
+          "job_runtime.py",
+          "operation_contracts.py",
+          "operational_drills.py",
+          "operational_metrics.py",
+          "process_supervision.py",
+          "run_telemetry.py",
+          "runtime_supervision.py",
+          "supervised_worker.py",
+          "tools/operational_drill_worker.py",
+          "tools/run_operational_drills.py",
+          "tests/test_attempt_reporting.py",
+          "tests/test_cli_run_telemetry.py",
+          "tests/test_job_coordination_contracts.py",
+          "tests/test_job_manager.py",
+          "tests/test_job_runtime.py",
+          "tests/test_jobs_cli.py",
+          "tests/test_operation_contracts.py",
+          "tests/test_operational_drills.py",
+          "tests/test_operational_metrics.py",
+          "tests/test_process_supervision.py",
+          "tests/test_process_supervision_module.py",
+          "tests/test_run_telemetry.py",
+          "tests/test_runtime_supervision.py"
+        ],
+        "trees": [],
+        "root_prefixes": []
+      },
+      "python_lane": "full",
+      "required_jobs": [
+        "quality",
+        "evaluation-smoke",
+        "unit-linux",
+        "unit-windows",
+        "service-api",
+        "phase-a0",
+        "vector-store-smoke",
+        "full-integration"
+      ]
+    },
+    "storage_publication": {
+      "selectors": {
+        "exact": [
+          "ai_project_export.py",
+          "artifact_io.py",
+          "chunking_core.py",
+          "cli_policy.py",
+          "document_profiles.py",
+          "heading_lineage.py",
+          "ingestion_core.py",
+          "inspect_chunks.py",
+          "markdown_validation.py",
+          "preprocess_pdf.py",
+          "publication_core.py",
+          "quality_core.py",
+          "retention.py",
+          "scaffold_to_markdown.py",
+          "source_fidelity_core.py",
+          "storage_policy.py",
+          "tests/test_ai_project_export.py",
+          "tests/test_ai_project_publication.py",
+          "tests/test_artifact_io.py",
+          "tests/test_chunking_core.py",
+          "tests/test_cli_policy.py",
+          "tests/test_document_profiles.py",
+          "tests/test_heading_lineage.py",
+          "tests/test_ingestion_core.py",
+          "tests/test_ingestion_facades.py",
+          "tests/test_ingestion_safety.py",
+          "tests/test_markdown_validation.py",
+          "tests/test_output_paths.py",
+          "tests/test_output_publication.py",
+          "tests/test_pipeline_publication.py",
+          "tests/test_pipeline_runner.py",
+          "tests/test_publication_core.py",
+          "tests/test_quality_core.py",
+          "tests/test_retention.py",
+          "tests/test_scaffold_cli.py",
+          "tests/test_scaffold_structure.py",
+          "tests/test_source_fidelity_core.py",
+          "tests/test_source_snapshot_integrity.py",
+          "tests/test_storage_cli.py",
+          "tests/test_storage_policy.py",
+          "tests/test_structure_profile_cli.py"
+        ],
+        "trees": [],
+        "root_prefixes": []
+      },
+      "python_lane": "full",
+      "required_jobs": [
+        "quality",
+        "evaluation-smoke",
+        "unit-linux",
+        "unit-windows",
+        "service-api",
+        "phase-a0",
+        "vector-store-smoke",
+        "full-integration"
+      ]
+    },
+    "evaluation": {
+      "selectors": {
+        "exact": [
+          "eval.py",
+          "eval_queries.jsonl",
+          "eval_queries_ethics_draft.jsonl",
+          "eval_queries_judged.jsonl",
+          "evaluation_contract.py",
+          "evaluation_inputs.py",
+          "evaluation_metrics.py",
+          "evaluation_queries.py",
+          "evaluation_release.py",
+          "evaluation_review.py",
+          "offline_retrieval.py",
+          "tests/test_eval.py",
+          "tests/test_eval_bootstrap.py",
+          "tests/test_evaluation_assets.py",
+          "tests/test_evaluation_inputs.py",
+          "tests/test_evaluation_metrics.py",
+          "tests/test_evaluation_queries.py",
+          "tests/test_evaluation_release.py",
+          "tests/test_evaluation_review.py",
+          "tests/test_offline_retrieval.py"
+        ],
+        "trees": [
+          {
+            "prefix": "evaluation/",
+            "suffixes": [
+              ".json",
+              ".jsonl"
+            ]
+          }
+        ],
+        "root_prefixes": []
+      },
+      "python_lane": "full",
+      "required_jobs": [
+        "quality",
+        "evaluation-smoke",
+        "unit-linux",
+        "unit-windows",
+        "service-api",
+        "phase-a0",
+        "vector-store-smoke",
+        "full-integration"
+      ]
+    },
+    "packaging": {
+      "selectors": {
+        "exact": [
+          ".gitattributes",
+          ".github/dependabot.yml",
+          ".github/workflows/dependency-compatibility.yml",
+          "dependency-compatibility-domains.json",
+          "dependency-license-policy.json",
+          "dependency-vulnerability-policy.json",
+          "pyproject.toml",
+          "setup_rtx5060.sh",
+          "tools/check_dependency_policy.py",
+          "tools/check_licenses.py",
+          "tools/check_vulnerabilities.py",
+          "tools/refresh_locks.py",
+          "tools/zettlr-markdown-validator/package-lock.json",
+          "tools/zettlr-markdown-validator/package.json",
+          "tools/zettlr-markdown-validator/validate.mjs",
+          "tests/test_dependency_policy.py"
+        ],
+        "trees": [],
+        "root_prefixes": [
+          "requirements"
+        ]
+      },
+      "python_lane": "full",
+      "required_jobs": [
+        "quality",
+        "evaluation-smoke",
+        "unit-linux",
+        "unit-windows",
+        "service-api",
+        "phase-a0",
+        "vector-store-smoke",
+        "full-integration"
+      ]
+    },
+    "security": {
+      "selectors": {
+        "exact": [
+          ".github/ci/active-ci.yml",
+          ".github/workflows/ci.yml",
+          ".github/workflows/security.yml",
+          "architecture-inventory.json",
+          "ci-risk-policy.json",
+          "ci-security-ownership.json",
+          "endpoint_policy.py",
+          "llm_adapters.py",
+          "llm_output_contracts.py",
+          "llm_runtime.py",
+          "model-artifact-policy.json",
+          "model-artifacts.lock.json",
+          "model_artifacts.py",
+          "provider_transport.py",
+          "rag.py",
+          "release_security.py",
+          "tools/benchmark_phase_a0.py",
+          "tools/check_architecture_inventory.py",
+          "tools/check_ci_security.py",
+          "tools/check_model_artifacts.py",
+          "tools/check_python_sources.py",
+          "tools/ci_promotion.py",
+          "tools/refresh_model_artifacts.py",
+          "tools/sync_model_artifacts.py",
+          "tests/test_architecture.py",
+          "tests/test_architecture_inventory.py",
+          "tests/test_ci_promotion.py",
+          "tests/test_ci_security.py",
+          "tests/test_endpoint_policy.py",
+          "tests/test_llm_adapters.py",
+          "tests/test_llm_config.py",
+          "tests/test_llm_gating.py",
+          "tests/test_llm_output_contracts.py",
+          "tests/test_llm_providers.py",
+          "tests/test_llm_runtime.py",
+          "tests/test_model_artifacts.py",
+          "tests/test_phase_a0_benchmark.py",
+          "tests/test_provider_transport.py",
+          "tests/test_python_source_gate.py",
+          "tests/test_release_security.py",
+          "tests/test_release_security_boundaries.py",
+          "tests/test_sync_model_artifacts.py"
+        ],
+        "trees": [],
+        "root_prefixes": []
+      },
+      "python_lane": "full",
+      "required_jobs": [
+        "quality",
+        "evaluation-smoke",
+        "unit-linux",
+        "unit-windows",
+        "service-api",
+        "phase-a0",
+        "vector-store-smoke",
+        "full-integration"
+      ]
+    },
+    "documentation_only": {
+      "selectors": {
+        "exact": [
+          "CLAUDE.md",
+          "INTEGRATION_AUDIT.md",
+          "README.md",
+          "ROADMAP.md",
+          "benchmarks/README.md"
+        ],
+        "trees": [
+          {
+            "prefix": "docs/",
+            "suffixes": [
+              ".md"
+            ]
+          }
+        ],
+        "root_prefixes": []
+      },
+      "python_lane": "fast",
+      "required_jobs": [
+        "quality",
+        "evaluation-smoke",
+        "unit-linux"
+      ]
+    }
+  },
+  "unknown": {
+    "python_lane": "full",
+    "required_jobs": [
+      "quality",
+      "evaluation-smoke",
+      "unit-linux",
+      "unit-windows",
+      "service-api",
+      "phase-a0",
+      "vector-store-smoke",
+      "full-integration"
+    ]
+  }
+}

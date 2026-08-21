@@ -1,8 +1,9 @@
 # Phase A0 Benchmark Policy
 
-- **Status:** A0a implemented locally; A0b replacement baselines and repaired
-  CI wiring implemented locally, hosted replacement frozen-head checkpoint
-  pending
+- **Status:** A0a integrated; the latest completed hosted A0b technical
+  checkpoint passed at evidence head `443dce4`; the Task 0.2 replacement pair
+  is local-only pending hosted promotion; exact-head human review and separate
+  R8 owner authorization are not recorded
 - **Milestone:** R10 prerequisite for the R8 pipeline-ownership move
 - **Report schema:** `phase-a0` v3
 
@@ -27,7 +28,7 @@ Phase A0 is intentionally split:
   generation. A following gate-only evidence commit may add only the two
   baselines and their provenance/status documentation, but no Python source,
   workflow, attribute policy, or dependency/model lock. CI and review bind the
-  resulting final R1 candidate commit/tree; any intervening source or lock
+  resulting evidence candidate commit/tree; any intervening source or lock
   change invalidates and regenerates both baselines.
 
 [`tools/benchmark_phase_a0.py`](../../../tools/benchmark_phase_a0.py) runs five
@@ -73,35 +74,56 @@ that `Path.home()` remains denied.
 
 ## A0b publication gate
 
-The replacement gate uses clean pre-gate source
+The latest completed hosted replacement gate used clean pre-gate source
 `4551c50970a07ac120d192802bcc692e39e3ece6` — the post-merge inventory
 refresh over the transport and logging hardening merge `d68af4f` on the
 glyph-truth head `eb29f86`, whose own pair passed both hosted Phase A0
-cells on the post-merge `main` workflow at that evidence head — and
-separate Windows and Linux CPython 3.12.13 x86-64 reports. Both were generated under the
-exact `requirements-full.lock`, `requirements-test.lock`, and retained
+cells on the post-merge `main` workflow at that evidence head — and separate
+Windows and Linux CPython 3.12.13 x86-64 reports. Both were generated under
+the exact `requirements-full.lock`, `requirements-test.lock`, and retained
 `requirements-lock-tools.lock` union after strict hash-locked synchronization
 and dependency-consistency checks: 189 marker-resolved distributions on
 Windows and 187 on Linux. They bind one clean source, the same eight LF and
 `HEAD`-identical dependency/model inputs, and the complete 9×5 scenario
 contract. Each passes an independent complete same-platform comparison. The
 repaired CI matrix, LF policy, source gates, Python 3.10-3.14 compatibility
-normalization, and the two-lane CI split precede `4551c50` and were
-exercised by generation and comparison. The following gate-only delta is
-limited to the two reports and their provenance/status documentation.
+normalization, and the two-lane CI split precede `4551c50` and were exercised
+by generation and comparison. Reports-and-documentation-only head
+`443dce4c312737eebb57a5bba6fc0abb9ace1a26` freezes the two reports and their
+provenance/status documentation.
 
-A0b nevertheless remains pending. No local smoke report, subset, noncanonical
-interpreter, baseline copied between operating systems, or local-only
-comparison is authoritative. Both Tier-1 hosted jobs must pass against their
-matching baseline at one frozen final commit/tree and retain their reports.
-Until that exact-head evidence exists, Phase A0 does not authorize the R8
-ownership move.
+Both Tier-1 hosted jobs passed against their matching baselines at that exact
+evidence head and retained their reports. This closed that A0b _technical_
+publication checkpoint. A local smoke report, subset,
+noncanonical interpreter, baseline copied between operating systems, or
+local-only comparison remains non-authoritative. No submitted exact-head human
+review or separate owner authorization for R8c-6 was found; passing the hosted
+A0b jobs does not supply that authorization or complete the review binding.
 
-The pull-request matrix explicitly checks out the exact PR head rather than the
-synthetic merge ref. Before comparison, the harness validates and publishes the
-candidate report. Failures identify only a stable stage and content-free
-diagnostic code; raw paths, corpus material, exception text, and credentials are
-not logged. A failed comparison report is retained for 7 days for diagnosis.
+The current Task 0.2 replacement pair uses clean source
+`b07e3270881376cf60586c363e6285722562c7f5` (tree
+`b287ef0452ffd9d35d7ec361d5e7a03b50f01258`). Its Windows and Linux CPython
+3.12.13 reports were generated after the same strict hash-locked synchronization
+and dependency-consistency checks: 189 marker-resolved distributions on
+Windows and 187 on Linux. They bind that one clean source, the same eight LF
+and `HEAD`-identical dependency/model inputs, and the complete 9×5 scenario
+contract. Each passes an independent complete local same-platform comparison.
+The direct gate-only evidence child contains only the reports and permitted
+provenance/status documentation; its hosted checks, retained current-report
+artifacts, external exact-SHA promotion record, and own commit identity are
+still pending.
+
+The temporary force-full seed matrix explicitly checks out the exact PR head
+rather than the synthetic merge ref so its report can bind immutable evidence
+child `E`. That bootstrap has no promotion aggregate, and its raw-head Phase A0
+result is not proof that the prospective merge candidate ran Phase A0. The
+reviewed active workflow instead checks out the synthetic candidate for Phase
+A0, as it does for every execution job. In both forms, the report and
+attestation bind whichever exact commit/tree the job checked out. Before
+comparison, the harness validates and publishes the candidate report. Failures
+identify only a stable stage and content-free diagnostic code; raw paths,
+corpus material, exception text, and credentials are not logged. A failed
+comparison report is retained for 7 days for diagnosis.
 
 After a successful comparison, CI strictly revalidates the generated current
 report and requires its clean source commit to equal the job's exact `HEAD` and
@@ -179,15 +201,14 @@ via #83, the read-only PDF triage scan merge `4975793` passed its hosted
 cells at evidence head `782c986`, the dependency domain-gate decomposition
 merge `71b4a23` passed its cells at evidence head `6efe0bc`, the ingestion
 quick-wins merge `3b2188c` passed its cells at evidence head `05eb6df`,
-the glyph-truth and evaluation-significance merge `db8132b` passed its
-cells at evidence head `eb29f86`, and the transport and logging
-hardening merge `d68af4f` (checkpoint `4551c50`) changes Python source
-again and supersedes its pair in turn. The current
-inventory records
-2,625 functions across 168 tracked sources with 956 static and 964 runtime
-`rag` bindings. After strict synchronization and dependency checks for 189
-Windows
-and 187 Linux distributions, the Windows replacement report is 50,390 bytes
+the glyph-truth and evaluation-significance merge `db8132b` passed its cells
+at evidence head `eb29f86`, and the transport and logging hardening merge
+`d68af4f` (checkpoint `4551c50`) changed Python source again and superseded its
+prior pair. The committed architecture inventory at that checkpoint is
+validated by `python tools/check_architecture_inventory.py`; volatile counts
+are not repeated in the live roadmap. After strict synchronization and
+dependency checks for 189 Windows and 187 Linux distributions, the Windows
+replacement report is 50,390 bytes
 under CPython 3.12.13 (file SHA-256
 `f958ac2d47e46a7a3660a408b5b011ac809586810cc16623e67db128bd7a7816`;
 embedded report SHA-256
@@ -196,7 +217,21 @@ The Linux report is 49,801 bytes under CPython 3.12.13 (file SHA-256
 `b9f740b44be219f8d2eb5bb903ec0c3a655d265c4fe7fcea6fc5da8deff3b0bb`;
 embedded report SHA-256
 `93ef091dd2828b24fcd2d875320a79ddd5435cb71e99ac97ca20b82a8ffb46c2`).
-Each current candidate passes an independent complete same-platform 9×5
-comparison. The following reports-and-documentation-only commit freezes the
-new local candidate; publishing its exact commit/tree plus hosted execution,
-retained evidence, and review at that head remain outstanding.
+Each report passed an independent complete same-platform 9×5 comparison.
+Reports-and-documentation-only evidence head `443dce4` froze that historical
+pair, and both matching hosted jobs passed with retained evidence. The exact
+identities, workflow run, and limitation that no submitted human review was
+found are recorded in the
+[`443dce4` evidence entry](../../evidence/2026-08-18-main-443dce4.md).
+
+Task 0.2 source `b07e327` supersedes that historical pair. Its Windows report
+is 50,409 bytes (file SHA-256
+`b8a3bb3dce7733a445f3c880ab83a15b1e719788457ca5b0d8f75665e8199c06`;
+embedded report SHA-256
+`6ff8b67fe5c24a3eb08950f38a23860f47f63866cc4587585cbb140c8372414a`).
+Its Linux report is 49,825 bytes (file SHA-256
+`acf7885edde5c6fab49e823c9501bf70af606474c9aa10fbf0ff6af725e867e2`;
+embedded report SHA-256
+`2befec9250e6ee99524f7d9dd72ce10b10abc211db07ea1571dd6e013026fa2f`).
+Both use CPython 3.12.13 and pass their complete local same-platform 9×5
+comparisons. Hosted promotion remains pending.

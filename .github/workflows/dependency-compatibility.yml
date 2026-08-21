@@ -11,6 +11,8 @@ on:
       - "tools/check_dependency_policy.py"
       - "tools/refresh_locks.py"
       - ".github/workflows/dependency-compatibility.yml"
+  merge_group:
+    types: [checks_requested]
   push:
     branches: [main]
     paths:

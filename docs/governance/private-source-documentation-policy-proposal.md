@@ -4,14 +4,15 @@
 - **Interim rule:** Introduce no new private-source excerpts
 - **Scope:** Git history, pull requests and comments, CI artifacts, releases,
   issue trackers, documentation, evaluation assets, and generated reports
-- **Status authority:** [ROADMAP.md](../../ROADMAP.md), milestone R0
+- **Status authority:**
+  [ROADMAP.md owner decisions](../../ROADMAP.md#owner-decisions-and-fail-closed-interim-rules)
 
 ## Why a decision is required
 
 The repository consistently treats root PDF inputs and generated pipeline
 artifacts as private and Git-ignored. Historical contributor guidance also
 prohibited committing excerpts or paraphrases from those inputs. Existing
-tracked documentation and one active PR description nevertheless contain
+tracked documentation and one historical PR description nevertheless contain
 source-specific examples, and the draft private-corpus evaluation set contains
 corpus-derived queries. A private GitHub repository reduces exposure but does
 not define which of those data classes the owner intends to permit.
@@ -24,7 +25,7 @@ until the owner selects a policy.
 ## Data classes
 
 | Data class | Interim treatment | Recommended long-term treatment |
-|---|---|---|
+| --- | --- | --- |
 | Source PDFs, extracted text, chunks, screenshots, tables, model-visible excerpts, prompts containing excerpts, and generated study output | Prohibited from Git, PRs, issues, CI artifacts, and releases | Prohibited; keep only in verified private storage governed by retention policy |
 | Verbatim source quotations or recovered rows in prose, tests, evaluation reports, or PR descriptions | Do not add | Prohibit; use synthetic or provenance-recorded CC0 replacements |
 | Corpus-derived paraphrases, authored queries, relevance labels, and answer judgments | Keep private and draft pending owner decision | Permit only in an explicitly approved private evaluation class, or prohibit and retain solely in ignored owner-review packets |
@@ -35,8 +36,9 @@ until the owner selects a policy.
 
 ## Owner choices
 
-The owner should select and sign one of these boundaries before cumulative
-integration:
+The owner should select and sign one of these boundaries before any new
+private-derived artifact class, private qualification evidence, or release
+evidence is created:
 
 1. **Strict non-derivation.** Corpus-derived queries, paraphrases, labels,
    stable IDs, page references, and identifying metadata remain outside Git and
@@ -54,11 +56,11 @@ history review/remediation. No history rewrite should occur implicitly.
 
 Without repeating their content, the current inventory includes:
 
-- source-specific examples in `README.md` and the historical evidence sections
-  of `ROADMAP.md`;
-- the description of PR #37;
+- source-specific examples in `README.md` and the exact-byte
+  [historical roadmap snapshot](../evidence/roadmap-through-2026-08-18-443dce4.md);
+- the historical description of PR #37;
 - `eval_queries_ethics_draft.jsonl` and the ignored owner-review packet/report;
-- active PR comments, retained CI artifacts, and any future GitHub release
+- applicable PR comments, retained CI artifacts, and any future GitHub release
   notes; and
 - contributor guidance in `CLAUDE.md` and the archived Claude plans.
 

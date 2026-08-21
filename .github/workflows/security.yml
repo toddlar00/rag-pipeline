@@ -10,6 +10,7 @@ on:
       - "model-artifact-policy.json"
       - "model-artifacts.lock.json"
       - "model_artifacts.py"
+      - "ci-risk-policy.json"
       - "ci-security-ownership.json"
       - "embedding_policy.py"
       - "endpoint_policy.py"
@@ -27,10 +28,18 @@ on:
       - "tools/check_ci_security.py"
       - "tools/check_licenses.py"
       - "tools/check_model_artifacts.py"
+      - "tools/ci_promotion.py"
       - "tools/check_vulnerabilities.py"
       - "tools/refresh_model_artifacts.py"
       - "tools/sync_model_artifacts.py"
+      - "tests/test_ci_promotion.py"
+      - "tests/test_ci_security.py"
+      - ".github/ci/active-ci.yml"
+      - ".github/workflows/ci.yml"
+      - ".github/workflows/dependency-compatibility.yml"
       - ".github/workflows/security.yml"
+  merge_group:
+    types: [checks_requested]
   push:
     branches: [main]
     paths:
@@ -41,6 +50,7 @@ on:
       - "model-artifact-policy.json"
       - "model-artifacts.lock.json"
       - "model_artifacts.py"
+      - "ci-risk-policy.json"
       - "ci-security-ownership.json"
       - "embedding_policy.py"
       - "endpoint_policy.py"
@@ -58,9 +68,15 @@ on:
       - "tools/check_ci_security.py"
       - "tools/check_licenses.py"
       - "tools/check_model_artifacts.py"
+      - "tools/ci_promotion.py"
       - "tools/check_vulnerabilities.py"
       - "tools/refresh_model_artifacts.py"
       - "tools/sync_model_artifacts.py"
+      - "tests/test_ci_promotion.py"
+      - "tests/test_ci_security.py"
+      - ".github/ci/active-ci.yml"
+      - ".github/workflows/ci.yml"
+      - ".github/workflows/dependency-compatibility.yml"
       - ".github/workflows/security.yml"
   schedule:
     - cron: "43 8 * * 4"

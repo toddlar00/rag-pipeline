@@ -1,6 +1,8 @@
 # TOC page-verification output contract
 
-Status: proposed implementation for owner review
+Status: technical implementation integrated through
+[PR #76](https://github.com/toddlar00/rag-pipeline/pull/76); inherited R0C
+semantic-rejection and provider-chain authority remains owner-pending
 
 Date: 2026-07-25
 
@@ -18,8 +20,8 @@ director for up to five entries. Its aggregate verification rate can therefore
 trigger another hierarchy-generation attempt and affect the scaffold that is
 returned for chunk publication.
 
-Before this proposal, the verifier interpolated titles, paths, chapter values,
-and page text directly into a prompt. It asked for four fields, removed thinking
+Before this technical slice, the verifier interpolated titles, paths, chapter
+values, and page text directly into a prompt. It asked for four fields, removed thinking
 tags, selected everything between the first and last braces, and decoded with
 ordinary `json.loads`. The caller then used Python truthiness for `verified`, so
 values such as the string `"false"` could receive affirmative authority.
@@ -40,18 +42,19 @@ failure reasons, programmatic AgentTeam issues, or verifier-owned logs. The
 broader AgentTeam still summarizes scaffold results containing source-derived
 titles and remains an explicit non-goal below.
 
-## Proposed decision
+## Integrated mechanics and pending policy decision
 
-This implementation is a reviewable candidate, not approved policy. It extends
-the dependency-light authority in
+This technical implementation is present on `main` through PR #76. Integration
+does not approve the unresolved R0C policy. The implementation extends the
+dependency-light authority in
 [`llm-output-contracts.md`](llm-output-contracts.md) to exactly one response
-family: `toc.verify`. It is stacked on the proposed
+family: `toc.verify`. It is stacked on the integrated
 [`toc-layout-v1`](toc-layout-output-contract.md) and
 [`toc-hierarchy-v1`](toc-hierarchy-output-contract.md) decisions.
 
 The inherited rule that a non-empty semantic rejection stops the provider chain
-is unchanged. That authority choice remains pending owner approval before this
-proposal may merge.
+is unchanged in code. That release-authority choice remains pending owner
+approval; the merged mechanics do not settle it.
 
 ### Exact `toc-verification-v1` value
 
@@ -207,8 +210,8 @@ under it.
   briefs, questions, flashcards, and summaries still need reviewed contracts.
 - Provider/feature/data-class scoped egress, mandatory finite release budgets,
   transfer/cost preflight, model-code isolation, and the owner-pending
-  semantic-rejection rule remain separate release gates. This proposal is
-  related to, but does not close, R0C issue #48.
+  semantic-rejection rule remain separate release gates. This integrated
+  technical slice is related to, but does not close, R0C issue #48.
 - This slice does not change the chunk schema, index schema, global runtime
   receipt format, release-security policy, deterministic-only scaffold
   behavior, AgentTeam prompts, retry count, sampling algorithm, or acceptance
