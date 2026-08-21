@@ -23,9 +23,9 @@ docling-core[chunking]>=2.89,<3
 pypdfium2>=4.30,<6
 
 # Embedding models (nomic, legal-bert, etc.)
-sentence-transformers>=3.0,<6
+sentence-transformers>=6.0.0,<7
 # Reviewed Nomic remote-code module imports einops directly.
-einops>=0.7,<1
+einops>=0.8.2,<1
 
 # Vector store (default backend)
 chromadb>=1.5.2,<2
@@ -35,16 +35,16 @@ onnxruntime>=1.14.1,<1.24; python_version < "3.11"
 onnxruntime>=1.28.0,<2; python_version >= "3.11"
 
 # Cross-encoder reranker
-FlagEmbedding>=1.3,<2
+FlagEmbedding>=1.4.0,<2
 
 # BM25 keyword search (hybrid mode)
 rank-bm25>=0.2,<0.3
 
 # Progress bars
-tqdm>=4.66,<5
+tqdm>=4.70.0,<5
 
 # HTTP clients used by cloud embedding and LLM backends
 requests>=2.31,<3
 
 # Numerical operations used by RAPTOR clustering
-numpy>=1.26,<3
+numpy>=2.5.2,<3
