@@ -1,9 +1,10 @@
 # Phase A0 Benchmark Policy
 
 - **Status:** A0a integrated; the latest completed hosted A0b technical
-  checkpoint passed at evidence head `443dce4`; the Task 0.2 replacement pair
-  is local-only pending hosted promotion; exact-head human review and separate
-  R8 owner authorization are not recorded
+  checkpoint passed at Task 0.2 seed evidence head `aa7a23b` and merged
+  through `d142065`; the pre-activation hardening replacement pair at source
+  `376750d` is local-only pending hosted promotion; exact-head human review
+  and separate R8 owner authorization are not recorded
 - **Milestone:** R10 prerequisite for the R8 pipeline-ownership move
 - **Report schema:** `phase-a0` v3
 
@@ -100,18 +101,25 @@ local-only comparison remains non-authoritative. No submitted exact-head human
 review or separate owner authorization for R8c-6 was found; passing the hosted
 A0b jobs does not supply that authorization or complete the review binding.
 
-The current Task 0.2 replacement pair uses clean source
+The Task 0.2 replacement pair used clean source
 `b07e3270881376cf60586c363e6285722562c7f5` (tree
-`b287ef0452ffd9d35d7ec361d5e7a03b50f01258`). Its Windows and Linux CPython
-3.12.13 reports were generated after the same strict hash-locked synchronization
-and dependency-consistency checks: 189 marker-resolved distributions on
-Windows and 187 on Linux. They bind that one clean source, the same eight LF
-and `HEAD`-identical dependency/model inputs, and the complete 9×5 scenario
-contract. Each passes an independent complete local same-platform comparison.
-The direct gate-only evidence child contains only the reports and permitted
-provenance/status documentation; its hosted checks, retained current-report
-artifacts, external exact-SHA promotion record, and own commit identity are
-still pending.
+`b287ef0452ffd9d35d7ec361d5e7a03b50f01258`). Its gate-only evidence child
+`aa7a23b` passed all hosted force-full checks with retained Phase A0
+artifacts, received the external exact-SHA promotion record on
+[PR #93](https://github.com/toddlar00/rag-pipeline/pull/93), and merged to
+`main` through history-preserving merge `d142065`, completing that hosted
+checkpoint. The current replacement pair uses the clean pre-activation
+hardening source `376750d6b992b04064d61e142d516c2ebda3b696` (tree
+`b16e9f4f9cec9e98d74323bee65e8b635297fa8f`). Its Windows and Linux CPython
+3.12.13 reports were generated after the same strict hash-locked
+synchronization and dependency-consistency checks: 189 marker-resolved
+distributions on Windows and 187 on Linux. They bind that one clean source,
+the same eight LF and `HEAD`-identical dependency/model inputs, and the
+complete 9×5 scenario contract. Each passes an independent complete local
+same-platform comparison. The direct gate-only evidence child contains only
+the reports and permitted provenance/status documentation; its hosted
+checks, retained current-report artifacts, external exact-SHA promotion
+record, and own commit identity are still pending.
 
 The temporary force-full seed matrix explicitly checks out the exact PR head
 rather than the synthetic merge ref so its report can bind immutable evidence
@@ -224,14 +232,18 @@ identities, workflow run, and limitation that no submitted human review was
 found are recorded in the
 [`443dce4` evidence entry](../../evidence/2026-08-18-main-443dce4.md).
 
-Task 0.2 source `b07e327` supersedes that historical pair. Its Windows report
-is 50,409 bytes (file SHA-256
-`b8a3bb3dce7733a445f3c880ab83a15b1e719788457ca5b0d8f75665e8199c06`;
+Task 0.2 source `b07e327` superseded that historical pair; its evidence
+child `aa7a23b` passed both hosted Phase A0 cells with retained artifacts
+and merged through `d142065` with the external exact-SHA promotion record on
+[PR #93](https://github.com/toddlar00/rag-pipeline/pull/93). The
+pre-activation hardening source `376750d` supersedes that pair in turn. Its
+Windows report is 50,391 bytes (file SHA-256
+`ad1d21da8428ed6a944f043c30e3741321c8b4fae125e97744bac826a3ece536`;
 embedded report SHA-256
-`6ff8b67fe5c24a3eb08950f38a23860f47f63866cc4587585cbb140c8372414a`).
-Its Linux report is 49,825 bytes (file SHA-256
-`acf7885edde5c6fab49e823c9501bf70af606474c9aa10fbf0ff6af725e867e2`;
+`0b3afa6e153f3582520410038bdbe6894c81fb38cfdc4b181051d2cd27a9fb46`).
+Its Linux report is 49,800 bytes (file SHA-256
+`3cacc17cad39a63c87a1e8bf5d4e70e73b25876c1b8c6104dda93c94a7a8081a`;
 embedded report SHA-256
-`2befec9250e6ee99524f7d9dd72ce10b10abc211db07ea1571dd6e013026fa2f`).
+`4acff3d86ab7386f5317aad181c8ea5113d93fc486eb7df96883844dcd357dc3`).
 Both use CPython 3.12.13 and pass their complete local same-platform 9×5
 comparisons. Hosted promotion remains pending.

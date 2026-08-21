@@ -7,12 +7,14 @@ fresh-process repetitions.
 
 ## Provenance
 
-Both current reports were generated from the clean Task 0.2 pre-gate source
-checkpoint `b07e3270881376cf60586c363e6285722562c7f5` (tree
-`b287ef0452ffd9d35d7ec361d5e7a03b50f01258`). That source contains the
+Both current reports were generated from the clean pre-activation hardening
+source checkpoint `376750d6b992b04064d61e142d516c2ebda3b696` (tree
+`b16e9f4f9cec9e98d74323bee65e8b635297fa8f`). That source contains the
 reviewed deterministic CI classifier, terminal promotion contract, force-full
-bootstrap workflow, and security-owned active-workflow fixture. The executing
-environments were
+bootstrap workflow, and security-owned active-workflow fixture, plus the
+executable fixture promotion-validator and event-identity coverage and the
+fixture's multiline-output guard added by the hardening checkpoint. The
+executing environments were
 synchronized with repository-pinned uv 0.11.31 against the exact CPU
 application/test lock union plus its retained bootstrapper:
 
@@ -29,8 +31,8 @@ marker-resolved distributions before generation.
 
 | Platform | Runtime | Report | Bytes | File SHA-256 | Embedded report SHA-256 |
 |---|---:|---|---:|---|---|
-| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 50,409 | `b8a3bb3dce7733a445f3c880ab83a15b1e719788457ca5b0d8f75665e8199c06` | `6ff8b67fe5c24a3eb08950f38a23860f47f63866cc4587585cbb140c8372414a` |
-| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 49,825 | `acf7885edde5c6fab49e823c9501bf70af606474c9aa10fbf0ff6af725e867e2` | `2befec9250e6ee99524f7d9dd72ce10b10abc211db07ea1571dd6e013026fa2f` |
+| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 50,391 | `ad1d21da8428ed6a944f043c30e3741321c8b4fae125e97744bac826a3ece536` | `0b3afa6e153f3582520410038bdbe6894c81fb38cfdc4b181051d2cd27a9fb46` |
+| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 49,800 | `3cacc17cad39a63c87a1e8bf5d4e70e73b25876c1b8c6104dda93c94a7a8081a` | `4acff3d86ab7386f5317aad181c8ea5113d93fc486eb7df96883844dcd357dc3` |
 
 The reports attest the same source commit, clean-worktree state, tracked-diff
 digest, eight LF and `HEAD`-identical dependency/model-lock inputs, authoritative
@@ -101,12 +103,17 @@ skips on Windows CPython 3.12.13. Reports-and-documentation-only head
 `443dce4` froze that historical pair, and both hosted A0 cells passed with
 retained evidence.
 
-Task 0.2 source `b07e327` now supersedes that pair. The current reports above
-bind that exact clean source and each passes an independent complete
-same-platform 9×5 comparison. This direct reports-and-documentation-only child
-is the force-full seed candidate. No hosted result or evidence-child SHA is
-claimed here yet; hosted checks and the external exact-SHA promotion record
-remain pending.
+Task 0.2 source `b07e327` superseded that pair. Its reports passed both
+hosted Phase A0 cells with retained evidence at exact seed head `aa7a23b`,
+received the external exact-SHA promotion record on
+[#93](https://github.com/toddlar00/rag-pipeline/pull/93), and merged to
+`main` on 2026-08-21 through history-preserving merge `d142065`. The
+pre-activation hardening checkpoint `376750d` then changed Python test
+source and the security-owned fixture, superseding that pair in turn. The
+current reports above bind that exact clean hardening source and each passes
+an independent complete same-platform 9×5 comparison. No hosted result for
+this replacement pair is claimed here yet; its hosted checks and external
+exact-SHA record remain pending.
 
 ## Checking
 

@@ -66,7 +66,12 @@ artifacts, the external exact-SHA review record is posted on
 history-preserving merge `d142065` integrated it on `main`; see the
 [promotion evidence record](docs/evidence/2026-08-21-ci-promotion-seed-d142065.md).
 This pair supersedes the `4551c50`/`443dce4` pair as the completed hosted
-checkpoint.
+checkpoint. The pre-activation hardening checkpoint `376750d` has since
+changed Python test source and the security-owned fixture, so its own
+regenerated Windows/Linux pair (local same-platform comparisons passed)
+supersedes the `b07e327` pair as the current candidate; its hosted checks
+and external exact-SHA record are pending on
+[PR #94](https://github.com/toddlar00/rag-pipeline/pull/94).
 
 No submitted exact-head human review or separate owner authorization for the
 R8c-6 ownership move was found. Technical A0 success is therefore not that
