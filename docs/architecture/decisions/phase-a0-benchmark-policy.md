@@ -1,10 +1,10 @@
 # Phase A0 Benchmark Policy
 
 - **Status:** A0a integrated; the latest completed hosted A0b technical
-  checkpoint passed at ML/runtime evidence head `78a99c2` and merged
-  through `d27d85c`; the Service/UI domain replacement pair at source
-  `248c57a` is local-only pending hosted promotion; exact-head human review
-  and separate R8 owner authorization are not recorded
+  checkpoint passed at Service/UI evidence head `4945878` and merged
+  through `f1dae3b`; the test-audit tooling domain replacement pair at
+  source `ca3886c` is local-only pending hosted promotion; exact-head human
+  review and separate R8 owner authorization are not recorded
 - **Milestone:** R10 prerequisite for the R8 pipeline-ownership move
 - **Report schema:** `phase-a0` v3
 
@@ -116,13 +116,17 @@ repeated the cycle through gate-only child `fa71ff3` and merge `b3c7cf7`
 ([PR #97](https://github.com/toddlar00/rag-pipeline/pull/97)), and the
 ML/runtime domain pair at source `6f65acb` repeated it through gate-only
 child `78a99c2` and merge `d27d85c`
-([PR #98](https://github.com/toddlar00/rag-pipeline/pull/98)). The current
-replacement pair uses the clean Service/UI dependency-domain source
-`248c57a8579e664b4903fb142ae94db8d40f7b8b` (tree
-`979d993e488848deeb298efc015ab582dabde1e4`), which changed the four mapped
-core/full/service/smoke locks. Its Windows and Linux CPython 3.12.13
-reports were generated after the same strict hash-locked synchronization
-and dependency-consistency checks: 189 marker-resolved distributions on
+([PR #98](https://github.com/toddlar00/rag-pipeline/pull/98)), and the
+Service/UI domain pair at source `248c57a` repeated it through gate-only
+child `4945878` and merge `f1dae3b`
+([PR #99](https://github.com/toddlar00/rag-pipeline/pull/99)). The current
+replacement pair uses the clean test-audit tooling dependency-domain
+source `ca3886c9584cdaaca23f53ecde0660ba31cebe2c` (tree
+`456021e0d43f9cfb3fbd0a74e788ebfc45e159d5`), which changed the four mapped
+lock-tools/security/smoke/test locks and moves the pinned universal-lock
+resolver to uv 0.12.5. Its Windows and Linux CPython 3.12.13 reports were
+generated after the same strict hash-locked synchronization and
+dependency-consistency checks: 189 marker-resolved distributions on
 Windows and 187 on Linux. They bind that one clean source, the same eight
 LF and `HEAD`-identical dependency/model inputs, and the complete 9×5
 scenario contract. Each passes an independent complete local same-platform
@@ -259,14 +263,18 @@ one-domain ML/runtime dependency source `6f65acb` repeated the cycle: its
 child `78a99c2` passed the hosted full lane with retained artifacts and
 merged through `d27d85c`
 ([PR #98](https://github.com/toddlar00/rag-pipeline/pull/98)). The
-one-domain Service/UI dependency source `248c57a` supersedes that pair in
-turn. Its Windows report is 50,392 bytes (file SHA-256
-`172fd5fa91ee268fc83b7716332ca573e3c382372762e8a2f2ca34374a425bb6`;
+one-domain Service/UI dependency source `248c57a` repeated the cycle: its
+child `4945878` passed the hosted full lane with retained artifacts and
+merged through `f1dae3b`
+([PR #99](https://github.com/toddlar00/rag-pipeline/pull/99)). The
+one-domain test-audit tooling dependency source `ca3886c` supersedes that
+pair in turn. Its Windows report is 50,386 bytes (file SHA-256
+`8f783180bd26bb98ef45aa7685a8791dfabe7cf386c17c8fa42f7f0d1f27b518`;
 embedded report SHA-256
-`cddca5bcb75787e4c5361cfc9fd3f77a849cc78a8ce129209933cf1701f96585`).
-Its Linux report is 49,801 bytes (file SHA-256
-`63aff3248341c01ecc0c8a781ea6b91c430542fc4475a37d3126c351173c21ea`;
+`81421ab77f5a444b9960a62bfb34665b3ababd8dd152a9ee16fd842964bffc1f`).
+Its Linux report is 49,804 bytes (file SHA-256
+`824a25d53864374bc1f945abdbbe2a847ce414260a074c47dedc9b2a37b64126`;
 embedded report SHA-256
-`a916d28b9e374970099ad039e581d29fb5613ee118002c5fc2f1fb9d90b5d741`).
+`3b388bfec666aee858a848cb5e7ef384b004df4e957008b53ba7dfe308e06b5a`).
 Both use CPython 3.12.13 and pass their complete local same-platform 9×5
 comparisons. Hosted promotion remains pending.

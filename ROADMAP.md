@@ -84,11 +84,16 @@ through history-preserving `b3c7cf7`. The one-domain ML/runtime checkpoint
 hosted full lane, received the external exact-SHA record on
 [PR #98](https://github.com/toddlar00/rag-pipeline/pull/98), and merged
 through history-preserving `d27d85c`. The one-domain Service/UI checkpoint
-`248c57a` has since changed the four mapped core/full/service/smoke locks,
-so its regenerated Windows/Linux pair (independent local same-platform
-comparisons passed) supersedes the `6f65acb` pair as the current
-candidate; its hosted checks and external exact-SHA record are pending on
-the Service/UI domain pull request.
+`248c57a` completed the same cycle: gate-only child `4945878` passed the
+hosted full lane, received the external exact-SHA record on
+[PR #99](https://github.com/toddlar00/rag-pipeline/pull/99), and merged
+through history-preserving `f1dae3b`. The one-domain test-audit tooling
+checkpoint `ca3886c` has since changed the four mapped
+lock-tools/security/smoke/test locks (moving the pinned lock resolver to
+uv 0.12.5), so its regenerated Windows/Linux pair (independent local
+same-platform comparisons passed) supersedes the `248c57a` pair as the
+current candidate; its hosted checks and external exact-SHA record are
+pending on the test-audit domain pull request.
 
 Two operational follow-ups from the post-merge `main` push runs are open:
 a documentation-only merge passes its fast-lane pull-request run but then
@@ -222,10 +227,14 @@ ML/runtime supersession of PR #92 merged through
 [PR #98](https://github.com/toddlar00/rag-pipeline/pull/98) at `d27d85c`
 (tqdm 4.70.0, numpy 2.5.2 for CPython 3.12+, sentence-transformers 5.7.0;
 the einops and FlagEmbedding floor bumps were dropped as no-ops). The
-Service/UI supersession of
-[PR #87](https://github.com/toddlar00/rag-pipeline/pull/87) is in flight
-at checkpoint `248c57a` (fastapi 0.141.1, uvicorn 0.52.4, gradio 6.25.0).
-Test/audit (#89) and PDF/Docling (#91) follow one at a time, while
+Service/UI supersession of PR #87 merged through
+[PR #99](https://github.com/toddlar00/rag-pipeline/pull/99) at `f1dae3b`
+(fastapi 0.141.1, uvicorn 0.52.4 — deliberately past Dependabot's stale
+0.52.3 target — and gradio 6.25.0). The test-audit supersession of
+[PR #89](https://github.com/toddlar00/rag-pipeline/pull/89) is in flight
+at checkpoint `ca3886c` (uv 0.12.5, pip 26.2.1, ruff 0.16.3; ruff 0.16.3
+passes the existing lint configuration with no new findings). PDF/Docling
+(#91) follows, while
 [PR #88](https://github.com/toddlar00/rag-pipeline/pull/88) (Google GenAI 2)
 stays parked on its recorded owner decision; then begin Task 0.6's Node
 audit/SBOM gate. Task 0.3's activation prerequisite is now met, but it
