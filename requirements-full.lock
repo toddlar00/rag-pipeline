@@ -778,9 +778,9 @@ faker==40.32.0 \
     --hash=sha256:2fd913ad02dabbea84d729937db68f9ca9773dce93cec45f1fd6fe0fd1b41840 \
     --hash=sha256:78271bfa3a0e982f1b90e1345b2b8f4a04a132864e0372262074e60c2cddd4ef
     # via polyfactory
-fastapi==0.139.2 \
-    --hash=sha256:333145a6891e9b5b3cfceb69baf817e8240cde4d4588ae5a10bf56ffacb6255e \
-    --hash=sha256:b9ad015a835173d59865e2f5d8296fbc2b317bf56a2ba1a5bfbdd03de2fd4b1c
+fastapi==0.141.1 \
+    --hash=sha256:bfb91aa2d334c61cb35ba9a116fc123b3d3df31640b801cf57a7a78ec3f603b3 \
+    --hash=sha256:e8822fc40db1e1858054d7a949a888695bc9bdce70139178e33bd2871a453ca1
     # via gradio
 filelock==3.32.0 \
     --hash=sha256:7be2ad23a14607ccc71808e68fe30848aeace7058ace17852f68e2a68e310402 \
@@ -954,13 +954,13 @@ googleapis-common-protos==1.75.0 \
     --hash=sha256:53a062ff3c32552fbd62c11fe23768b78e4ddf0494d5e5fd97d3f4689c75fbbd \
     --hash=sha256:961ed60399c457ceb0ee8f285a84c870aabc9c6a832b9d37bb281b5bebde43ed
     # via opentelemetry-exporter-otlp-proto-grpc
-gradio==6.20.0 \
-    --hash=sha256:8672866e9225a1f8297325a6742bb525a3a0ddc8aa4d75d99beb10a27ea2915f \
-    --hash=sha256:91d2ec29c37917d55b18dba87aa15bb15c4796d84dce9a9ef4ec7d87453a7fee
+gradio==6.25.0 \
+    --hash=sha256:0cb0755d67d2c3546b454074bbccae469f732bfb650e0d403b4041461b5690b0 \
+    --hash=sha256:871f3a43219a8e29540295334935aba885971ba67ebe09fd88433e78b21e17fe
     # via -r requirements-optional.txt
-gradio-client==2.5.0 \
-    --hash=sha256:4cde99bad62149595c30c90876ca2e405e3a13687ecf895474f3412cb476673d \
-    --hash=sha256:d43e2179c29076292a76485ad7ed2e6eaa19d14ac58283bd7f5beabfe4ca958c
+gradio-client==2.6.0 \
+    --hash=sha256:4493a6425560dd23d1eb5427a13290819135c664c5ed9f184eb517b1ea263291 \
+    --hash=sha256:e648110efa31347bb8b1abda150a7a975b40a9658fdd8562803e2ad6a300d033
     # via
     #   gradio
     #   hf-gradio
@@ -4533,9 +4533,9 @@ urllib3==2.7.0 \
     #   kubernetes
     #   qdrant-client
     #   requests
-uvicorn==0.51.0 \
-    --hash=sha256:5d38af6cd620f2ae3849fb44fd4879e0890aa1febe8d47eb355fb45d93fe6a5b \
-    --hash=sha256:f6f4b69b657c312f516dd2d268ab9ae6f254b11e4bac504f37b2ab58b24dd0b0
+uvicorn==0.52.4 \
+    --hash=sha256:73acfee47a0b133c5de13d219492d62d8a31e935f4fe6e41a232451a15379f86 \
+    --hash=sha256:f86e41a149d7d05a9969337e3946a9c171c06a5d42680896daaba624aeac8da1
     # via
     #   chromadb
     #   gradio

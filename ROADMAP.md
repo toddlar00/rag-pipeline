@@ -80,11 +80,15 @@ cycle: gate-only child `fa71ff3` passed the hosted full lane, received the
 external exact-SHA record on
 [PR #97](https://github.com/toddlar00/rag-pipeline/pull/97), and merged
 through history-preserving `b3c7cf7`. The one-domain ML/runtime checkpoint
-`6f65acb` has since changed the five mapped core/full/service/smoke/test
-locks, so its regenerated Windows/Linux pair (independent local
-same-platform comparisons passed) supersedes the `0703dde` pair as the
-current candidate; its hosted checks and external exact-SHA record are
-pending on the ML/runtime domain pull request.
+`6f65acb` completed the same cycle: gate-only child `78a99c2` passed the
+hosted full lane, received the external exact-SHA record on
+[PR #98](https://github.com/toddlar00/rag-pipeline/pull/98), and merged
+through history-preserving `d27d85c`. The one-domain Service/UI checkpoint
+`248c57a` has since changed the four mapped core/full/service/smoke locks,
+so its regenerated Windows/Linux pair (independent local same-platform
+comparisons passed) supersedes the `6f65acb` pair as the current
+candidate; its hosted checks and external exact-SHA record are pending on
+the Service/UI domain pull request.
 
 Two operational follow-ups from the post-merge `main` push runs are open:
 a documentation-only merge passes its fast-lane pull-request run but then
@@ -214,12 +218,14 @@ pair. The vector-stores supersession of PR #90 merged through
 [PR #97](https://github.com/toddlar00/rag-pipeline/pull/97) at `b3c7cf7`
 (qdrant-client 1.19.0, onnxruntime 1.29.0 for CPython 3.11+; the proposed
 chromadb floor bump was dropped as a no-op the domain policy rejects). The
-ML/runtime supersession of
-[PR #92](https://github.com/toddlar00/rag-pipeline/pull/92) is in flight at
-checkpoint `6f65acb` (tqdm 4.70.0, numpy 2.5.2 for CPython 3.12+,
-sentence-transformers 5.7.0; the proposed einops and FlagEmbedding floor
-bumps are dropped as no-ops). Service/UI (#87), Test/audit (#89), and
-PDF/Docling (#91) follow one at a time, while
+ML/runtime supersession of PR #92 merged through
+[PR #98](https://github.com/toddlar00/rag-pipeline/pull/98) at `d27d85c`
+(tqdm 4.70.0, numpy 2.5.2 for CPython 3.12+, sentence-transformers 5.7.0;
+the einops and FlagEmbedding floor bumps were dropped as no-ops). The
+Service/UI supersession of
+[PR #87](https://github.com/toddlar00/rag-pipeline/pull/87) is in flight
+at checkpoint `248c57a` (fastapi 0.141.1, uvicorn 0.52.4, gradio 6.25.0).
+Test/audit (#89) and PDF/Docling (#91) follow one at a time, while
 [PR #88](https://github.com/toddlar00/rag-pipeline/pull/88) (Google GenAI 2)
 stays parked on its recorded owner decision; then begin Task 0.6's Node
 audit/SBOM gate. Task 0.3's activation prerequisite is now met, but it
