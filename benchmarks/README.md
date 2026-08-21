@@ -7,16 +7,15 @@ fresh-process repetitions.
 
 ## Provenance
 
-Both current reports were generated from the clean ML/runtime
+Both current reports were generated from the clean Service/UI
 dependency-domain source checkpoint
-`6f65acbd02c070b007c4bd81542270ea511ddcd1` (tree
-`9a3c32e1f1f65523b78ef8079e661d9d3169eeb3`). That source contains the
+`248c57a8579e664b4903fb142ae94db8d40f7b8b` (tree
+`979d993e488848deeb298efc015ab582dabde1e4`). That source contains the
 activated deterministic CI promotion workflow, the hardened security-owned
-fixture, the integrated vector-stores domain upgrade, and the one-domain
-ML/runtime upgrade: tqdm 4.70.0 (service/test exact pins plus the
-requirements.txt floor), numpy 2.5.2 for CPython 3.12+ (the 3.10/3.11
-marker pins are unchanged), and sentence-transformers 5.7.0, with
-regenerated core/full/service/smoke/test locks. The executing environments
+fixture, the integrated vector-stores and ML/runtime domain upgrades, and
+the one-domain Service/UI upgrade: fastapi 0.141.1 and uvicorn 0.52.4
+(service exact pins) and gradio 6.25.0 (optional floor `>=6.24.0`), with
+regenerated core/full/service/smoke locks. The executing environments
 were
 synchronized with repository-pinned uv 0.11.31 against the exact CPU
 application/test lock union plus its retained bootstrapper:
@@ -34,8 +33,8 @@ marker-resolved distributions before generation.
 
 | Platform | Runtime | Report | Bytes | File SHA-256 | Embedded report SHA-256 |
 |---|---:|---|---:|---|---|
-| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 50,388 | `83e143c3b506d00a063fcba1477e23f2704024e6610b7f59b7cb2b371599b8d2` | `0703bd3e9da8e55ada061e442694a90d67f6c89e9ee497168674e43a58ebe3ed` |
-| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 49,800 | `0eff9501c80336ec3f57880965c0b8879352c02d8e05a3f7d87f32aa4046c11b` | `60f3f678a6d35d674203cac5d5ac07c1cf85fe446d1e89d6a716667bfdfc15fd` |
+| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 50,392 | `172fd5fa91ee268fc83b7716332ca573e3c382372762e8a2f2ca34374a425bb6` | `cddca5bcb75787e4c5361cfc9fd3f77a849cc78a8ce129209933cf1701f96585` |
+| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 49,801 | `63aff3248341c01ecc0c8a781ea6b91c430542fc4475a37d3126c351173c21ea` | `a916d28b9e374970099ad039e581d29fb5613ee118002c5fc2f1fb9d90b5d741` |
 
 The reports attest the same source commit, clean-worktree state, tracked-diff
 digest, eight LF and `HEAD`-identical dependency/model-lock inputs, authoritative
@@ -123,11 +122,15 @@ the hosted full lane with retained artifacts, received the external
 exact-SHA record on
 [#97](https://github.com/toddlar00/rag-pipeline/pull/97), and merged
 through history-preserving `b3c7cf7`. The one-domain ML/runtime checkpoint
-`6f65acb` then changed the five mapped locks, superseding the `0703dde`
-pair. The current reports above bind that exact clean ML/runtime source
-and each passes an independent complete same-platform 9×5 comparison. No
-hosted result for this replacement pair is claimed here yet; its hosted
-checks and external exact-SHA record remain pending.
+`6f65acb` repeated the cycle: its gate-only child `78a99c2` passed the
+hosted full lane with retained artifacts, received the external exact-SHA
+record on [#98](https://github.com/toddlar00/rag-pipeline/pull/98), and
+merged through history-preserving `d27d85c`. The one-domain Service/UI
+checkpoint `248c57a` then changed the four mapped locks, superseding the
+`6f65acb` pair. The current reports above bind that exact clean Service/UI
+source and each passes an independent complete same-platform 9×5
+comparison. No hosted result for this replacement pair is claimed here
+yet; its hosted checks and external exact-SHA record remain pending.
 
 ## Checking
 

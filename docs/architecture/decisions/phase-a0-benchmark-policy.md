@@ -1,9 +1,9 @@
 # Phase A0 Benchmark Policy
 
 - **Status:** A0a integrated; the latest completed hosted A0b technical
-  checkpoint passed at vector-stores evidence head `fa71ff3` and merged
-  through `b3c7cf7`; the ML/runtime domain replacement pair at source
-  `6f65acb` is local-only pending hosted promotion; exact-head human review
+  checkpoint passed at ML/runtime evidence head `78a99c2` and merged
+  through `d27d85c`; the Service/UI domain replacement pair at source
+  `248c57a` is local-only pending hosted promotion; exact-head human review
   and separate R8 owner authorization are not recorded
 - **Milestone:** R10 prerequisite for the R8 pipeline-ownership move
 - **Report schema:** `phase-a0` v3
@@ -113,11 +113,14 @@ received the external exact-SHA record on
 through `f3bcb91`, completing that hosted checkpoint before the activation
 merge `1e79540`. The vector-stores domain pair at source `0703dde`
 repeated the cycle through gate-only child `fa71ff3` and merge `b3c7cf7`
-([PR #97](https://github.com/toddlar00/rag-pipeline/pull/97)). The current
-replacement pair uses the clean ML/runtime dependency-domain source
-`6f65acbd02c070b007c4bd81542270ea511ddcd1` (tree
-`9a3c32e1f1f65523b78ef8079e661d9d3169eeb3`), which changed the five mapped
-core/full/service/smoke/test locks. Its Windows and Linux CPython 3.12.13
+([PR #97](https://github.com/toddlar00/rag-pipeline/pull/97)), and the
+ML/runtime domain pair at source `6f65acb` repeated it through gate-only
+child `78a99c2` and merge `d27d85c`
+([PR #98](https://github.com/toddlar00/rag-pipeline/pull/98)). The current
+replacement pair uses the clean Service/UI dependency-domain source
+`248c57a8579e664b4903fb142ae94db8d40f7b8b` (tree
+`979d993e488848deeb298efc015ab582dabde1e4`), which changed the four mapped
+core/full/service/smoke locks. Its Windows and Linux CPython 3.12.13
 reports were generated after the same strict hash-locked synchronization
 and dependency-consistency checks: 189 marker-resolved distributions on
 Windows and 187 on Linux. They bind that one clean source, the same eight
@@ -252,14 +255,18 @@ vector-stores dependency source `0703dde` repeated the cycle: its child
 `fa71ff3` passed the hosted full lane with retained artifacts and merged
 through `b3c7cf7`
 ([PR #97](https://github.com/toddlar00/rag-pipeline/pull/97)). The
-one-domain ML/runtime dependency source `6f65acb` supersedes that pair in
-turn. Its Windows report is 50,388 bytes (file SHA-256
-`83e143c3b506d00a063fcba1477e23f2704024e6610b7f59b7cb2b371599b8d2`;
+one-domain ML/runtime dependency source `6f65acb` repeated the cycle: its
+child `78a99c2` passed the hosted full lane with retained artifacts and
+merged through `d27d85c`
+([PR #98](https://github.com/toddlar00/rag-pipeline/pull/98)). The
+one-domain Service/UI dependency source `248c57a` supersedes that pair in
+turn. Its Windows report is 50,392 bytes (file SHA-256
+`172fd5fa91ee268fc83b7716332ca573e3c382372762e8a2f2ca34374a425bb6`;
 embedded report SHA-256
-`0703bd3e9da8e55ada061e442694a90d67f6c89e9ee497168674e43a58ebe3ed`).
-Its Linux report is 49,800 bytes (file SHA-256
-`0eff9501c80336ec3f57880965c0b8879352c02d8e05a3f7d87f32aa4046c11b`;
+`cddca5bcb75787e4c5361cfc9fd3f77a849cc78a8ce129209933cf1701f96585`).
+Its Linux report is 49,801 bytes (file SHA-256
+`63aff3248341c01ecc0c8a781ea6b91c430542fc4475a37d3126c351173c21ea`;
 embedded report SHA-256
-`60f3f678a6d35d674203cac5d5ac07c1cf85fe446d1e89d6a716667bfdfc15fd`).
+`a916d28b9e374970099ad039e581d29fb5613ee118002c5fc2f1fb9d90b5d741`).
 Both use CPython 3.12.13 and pass their complete local same-platform 9×5
 comparisons. Hosted promotion remains pending.
