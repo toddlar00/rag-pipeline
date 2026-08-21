@@ -22,29 +22,204 @@ env:
 
 jobs:
   lane:
-    name: Force full CI bootstrap
+    name: Classify CI risk
     runs-on: ubuntu-24.04
-    timeout-minutes: 2
+    timeout-minutes: 5
     outputs:
-      pythons: ${{ steps.force.outputs.pythons }}
-      require_unit_windows: ${{ steps.force.outputs.require_unit_windows }}
-      require_service_api: ${{ steps.force.outputs.require_service_api }}
-      require_phase_a0: ${{ steps.force.outputs.require_phase_a0 }}
-      require_vector_store_smoke: ${{ steps.force.outputs.require_vector_store_smoke }}
-      require_full_integration: ${{ steps.force.outputs.require_full_integration }}
+      classifier_ok: ${{ steps.classify.outputs.classifier_ok }}
+      decision: ${{ steps.classify.outputs.decision }}
+      requirements: ${{ steps.classify.outputs.requirements }}
+      pythons: ${{ steps.classify.outputs.pythons }}
+      require_unit_windows: ${{ steps.classify.outputs.require_unit_windows }}
+      require_service_api: ${{ steps.classify.outputs.require_service_api }}
+      require_phase_a0: ${{ steps.classify.outputs.require_phase_a0 }}
+      require_vector_store_smoke: ${{ steps.classify.outputs.require_vector_store_smoke }}
+      require_full_integration: ${{ steps.classify.outputs.require_full_integration }}
+      base_sha: ${{ steps.classify.outputs.base_sha }}
+      head_sha: ${{ steps.classify.outputs.head_sha }}
+      candidate_sha: ${{ steps.classify.outputs.candidate_sha }}
+      trusted_sha: ${{ steps.classify.outputs.trusted_sha }}
+      policy_sha256: ${{ steps.classify.outputs.policy_sha256 }}
+      decision_sha256: ${{ steps.classify.outputs.decision_sha256 }}
+      groups: ${{ steps.classify.outputs.groups }}
+      changed_count: ${{ steps.classify.outputs.changed_count }}
     steps:
-      - name: Force every heavy job for the trusted seed checkpoint
-        id: force
+      - name: Bind exact event identities
+        id: event
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import re
+
+          event_name = os.environ["EVENT_NAME"]
+          payload = json.loads(
+              Path(os.environ["GITHUB_EVENT_PATH"]).read_text(encoding="utf-8")
+          )
+          github_sha = os.environ["GITHUB_SHA"]
+          github_ref = os.environ.get("GITHUB_REF", "")
+
+          if event_name == "pull_request":
+              pull = payload["pull_request"]
+              base_sha = pull["base"]["sha"]
+              head_sha = pull["head"]["sha"]
+              candidate_sha = github_sha
+              trusted_sha = base_sha
+              head_fetch_ref = f"refs/pull/{pull['number']}/head"
+              candidate_ref = f"refs/pull/{pull['number']}/merge"
+              if github_ref != candidate_ref:
+                  raise SystemExit(
+                      "pull-request GITHUB_REF is not its exact merge ref"
+                  )
+              head_ref = pull["head"]["ref"]
+          elif event_name == "merge_group":
+              group = payload["merge_group"]
+              base_sha = group["base_sha"]
+              head_sha = group["head_sha"]
+              candidate_sha = github_sha
+              trusted_sha = base_sha
+              head_fetch_ref = group["head_ref"]
+              candidate_ref = github_ref
+              head_ref = group["head_ref"]
+              if github_sha != head_sha or github_ref != group["head_ref"]:
+                  raise SystemExit(
+                      "merge-group SHA/ref does not match the queue candidate"
+                  )
+          elif event_name == "push":
+              head_sha = github_sha
+              candidate_sha = github_sha
+              base_sha = payload.get("before", head_sha)
+              if base_sha == "0" * 40:
+                  base_sha = head_sha
+              trusted_sha = head_sha
+              head_fetch_ref = github_ref
+              candidate_ref = github_ref
+              head_ref = payload.get("ref", github_ref).removeprefix(
+                  "refs/heads/"
+              )
+          elif event_name == "workflow_dispatch":
+              if github_ref != "refs/heads/main":
+                  raise SystemExit(
+                      "manual CI dispatch is restricted to refs/heads/main"
+                  )
+              base_sha = head_sha = candidate_sha = trusted_sha = github_sha
+              head_fetch_ref = github_ref
+              candidate_ref = github_ref
+              head_ref = github_ref.removeprefix("refs/heads/")
+          else:
+              raise SystemExit(f"unsupported CI event: {event_name}")
+
+          sha_pattern = re.compile(r"[0-9a-f]{40}")
+          for label, value in (
+              ("base", base_sha),
+              ("head", head_sha),
+              ("candidate", candidate_sha),
+              ("trusted", trusted_sha),
+          ):
+              if sha_pattern.fullmatch(value) is None:
+                  raise SystemExit(f"event supplied an invalid {label} SHA")
+          for label, value in (
+              ("head", head_fetch_ref),
+              ("candidate", candidate_ref),
+          ):
+              if not value.startswith("refs/"):
+                  raise SystemExit(f"event supplied an invalid {label} ref")
+
+          values = {
+              "base_sha": base_sha,
+              "candidate_ref": candidate_ref,
+              "candidate_sha": candidate_sha,
+              "head_fetch_ref": head_fetch_ref,
+              "head_ref": head_ref,
+              "head_sha": head_sha,
+              "trusted_sha": trusted_sha,
+          }
+          if any("\n" in value or "\r" in value for value in values.values()):
+              raise SystemExit("refusing to write a multiline workflow output")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              for key, value in values.items():
+                  print(f"{key}={value}", file=output)
+          PY
+      - name: Check out the exact trusted revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ steps.event.outputs.trusted_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Fetch and verify the exact candidate revision
+        env:
+          BASE_SHA: ${{ steps.event.outputs.base_sha }}
+          CANDIDATE_REF: ${{ steps.event.outputs.candidate_ref }}
+          CANDIDATE_SHA: ${{ steps.event.outputs.candidate_sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_FETCH_REF: ${{ steps.event.outputs.head_fetch_ref }}
+          HEAD_SHA: ${{ steps.event.outputs.head_sha }}
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          {
-            echo 'pythons=["3.10","3.11","3.12","3.13","3.14"]'
-            echo 'require_unit_windows=true'
-            echo 'require_service_api=true'
-            echo 'require_phase_a0=true'
-            echo 'require_vector_store_smoke=true'
-            echo 'require_full_integration=true'
-          } >> "$GITHUB_OUTPUT"
+          auth_header=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w 0)
+          refspecs=("+$HEAD_FETCH_REF:refs/remotes/ci-head")
+          if [ "$CANDIDATE_REF" != "$HEAD_FETCH_REF" ]; then
+            refspecs+=("+$CANDIDATE_REF:refs/remotes/ci-candidate")
+          fi
+          git --no-replace-objects \
+            -c http.https://github.com/.extraheader="AUTHORIZATION: basic $auth_header" \
+            fetch --no-tags --no-recurse-submodules origin \
+            "${refspecs[@]}"
+          test "$(git --no-replace-objects rev-parse refs/remotes/ci-head^{commit})" = "$HEAD_SHA"
+          if [ "$CANDIDATE_REF" = "$HEAD_FETCH_REF" ]; then
+            test "$CANDIDATE_SHA" = "$HEAD_SHA"
+          else
+            test "$(git --no-replace-objects rev-parse refs/remotes/ci-candidate^{commit})" = "$CANDIDATE_SHA"
+          fi
+          test "$(git --no-replace-objects rev-parse "$BASE_SHA^{commit}")" = "$BASE_SHA"
+          test "$(git --no-replace-objects rev-parse "$CANDIDATE_SHA^{commit}")" = "$CANDIDATE_SHA"
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            read -r commit parent_one parent_two extra < <(
+              git --no-replace-objects rev-list --parents -n 1 "$CANDIDATE_SHA"
+            )
+            test "$commit" = "$CANDIDATE_SHA"
+            test "$parent_one" = "$BASE_SHA"
+            test "$parent_two" = "$HEAD_SHA"
+            test -z "${extra:-}"
+          fi
+      - name: Run the exact trusted classifier
+        id: classify
+        env:
+          BASE_SHA: ${{ steps.event.outputs.base_sha }}
+          CANDIDATE_SHA: ${{ steps.event.outputs.candidate_sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REF: ${{ steps.event.outputs.head_ref }}
+          HEAD_SHA: ${{ steps.event.outputs.head_sha }}
+          TRUSTED_SHA: ${{ steps.event.outputs.trusted_sha }}
+        shell: bash
+        run: |
+          trusted_dir="$RUNNER_TEMP/ci-promotion-trusted"
+          mkdir -p "$trusted_dir/tools"
+          if ! git --no-replace-objects cat-file -e "$TRUSTED_SHA:tools/ci_promotion.py" \
+              || ! git --no-replace-objects cat-file -e "$TRUSTED_SHA:ci-risk-policy.json"; then
+            echo "::error::Trusted CI classifier is not present at $TRUSTED_SHA. This is the force-full bootstrap rollout; seed the trusted files before activation."
+            exit 1
+          fi
+          git --no-replace-objects show "$TRUSTED_SHA:tools/ci_promotion.py" \
+            > "$trusted_dir/tools/ci_promotion.py"
+          git --no-replace-objects show "$TRUSTED_SHA:ci-risk-policy.json" \
+            > "$trusted_dir/ci-risk-policy.json"
+          python -I "$trusted_dir/tools/ci_promotion.py" classify \
+            --policy "$trusted_dir/ci-risk-policy.json" \
+            --root "$GITHUB_WORKSPACE" \
+            --base-sha "$BASE_SHA" \
+            --head-sha "$HEAD_SHA" \
+            --candidate-sha "$CANDIDATE_SHA" \
+            --trusted-sha "$TRUSTED_SHA" \
+            --event-name "$EVENT_NAME" \
+            --head-ref "$HEAD_REF" \
+            --github-output "$GITHUB_OUTPUT" \
+            --decision-out "$RUNNER_TEMP/ci-risk-decision.json"
 
   quality:
     name: Quality gates
@@ -300,7 +475,7 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.sha }}
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -563,3 +738,395 @@ jobs:
         run: python -m pip check
       - name: Run the complete suite
         run: python -m pytest -q
+
+  promotion-gate:
+    name: CI promotion gate
+    if: ${{ always() }}
+    needs:
+      - lane
+      - quality
+      - evaluation-smoke
+      - unit-linux
+      - unit-windows
+      - service-api
+      - phase-a0
+      - vector-store-smoke
+      - full-integration
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Validate the exact promotion decision and every job result
+        if: ${{ always() }}
+        shell: bash
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+          EXPECTED_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || (github.event.before != '0000000000000000000000000000000000000000' && github.event.before) || github.sha }}
+          EXPECTED_CANDIDATE_SHA: ${{ github.sha }}
+          EXPECTED_EVENT_NAME: ${{ github.event_name }}
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
+          EXPECTED_HEAD_REF: ${{ github.event.pull_request.head.ref || github.event.merge_group.head_ref || github.ref_name }}
+          EXPECTED_TRUSTED_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.sha }}
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import sys
+
+          classifier = "lane"
+          always_required = {"quality", "evaluation-smoke", "unit-linux"}
+          conditional_flags = {
+              "unit-windows": "require_unit_windows",
+              "service-api": "require_service_api",
+              "phase-a0": "require_phase_a0",
+              "vector-store-smoke": "require_vector_store_smoke",
+              "full-integration": "require_full_integration",
+          }
+          governed = always_required | set(conditional_flags)
+          expected_needs = governed | {classifier}
+          full_pythons = ["3.10", "3.11", "3.12", "3.13", "3.14"]
+          fast_pythons = ["3.12"]
+          sha_pattern = re.compile(r"[0-9a-f]{40}")
+          digest_pattern = re.compile(r"[0-9a-f]{64}")
+          errors = []
+
+          def reject_duplicate_pairs(pairs):
+              value = {}
+              for key, item in pairs:
+                  if key in value:
+                      raise ValueError(f"duplicate JSON key {key!r}")
+                  value[key] = item
+              return value
+
+          def load_strict_json(raw):
+              return json.loads(
+                  raw,
+                  object_pairs_hook=reject_duplicate_pairs,
+                  parse_constant=lambda token: (_ for _ in ()).throw(
+                      ValueError(f"non-standard JSON number {token}")
+                  ),
+              )
+
+          try:
+              needs = json.loads(os.environ["NEEDS_JSON"])
+          except (json.JSONDecodeError, TypeError) as exc:
+              needs = {}
+              errors.append(f"needs JSON is invalid: {type(exc).__name__}")
+          if not isinstance(needs, dict) or set(needs) != expected_needs:
+              errors.append("aggregate needs are incomplete or unexpected")
+
+          for job in sorted(expected_needs):
+              result = needs.get(job, {}).get("result", "missing")
+              if result not in {"success", "failure", "cancelled", "skipped"}:
+                  errors.append(f"{job}: invalid result {result!r}")
+
+          lane = needs.get(classifier, {})
+          if lane.get("result") != "success":
+              errors.append(
+                  f"classifier job did not succeed: {lane.get('result', 'missing')}"
+              )
+          outputs = lane.get("outputs", {})
+          if outputs.get("classifier_ok") != "true":
+              errors.append("trusted classifier did not complete successfully")
+
+          decision_keys = {
+              "base_sha",
+              "candidate_sha",
+              "change_set_sha256",
+              "changed_count",
+              "classifier_ok",
+              "decision_sha256",
+              "event_name",
+              "forced_heavy",
+              "groups",
+              "head_sha",
+              "policy_sha256",
+              "pythons",
+              "reason_codes",
+              "requirements",
+              "schema_version",
+              "trusted_sha",
+          }
+          try:
+              decision = load_strict_json(outputs.get("decision", ""))
+          except (json.JSONDecodeError, TypeError, ValueError) as exc:
+              decision = {}
+              errors.append(
+                  f"canonical decision is invalid: {type(exc).__name__}"
+              )
+          if not isinstance(decision, dict) or set(decision) != decision_keys:
+              decision = {}
+              errors.append("canonical decision fields are incomplete or unexpected")
+          else:
+              unsigned = dict(decision)
+              claimed_digest = unsigned.pop("decision_sha256")
+              rendered_unsigned = json.dumps(
+                  unsigned,
+                  ensure_ascii=True,
+                  sort_keys=True,
+                  separators=(",", ":"),
+              )
+              recomputed_digest = hashlib.sha256(
+                  rendered_unsigned.encode("ascii")
+              ).hexdigest()
+              if claimed_digest != recomputed_digest:
+                  errors.append("decision digest does not match canonical content")
+
+          try:
+              requirements = json.loads(outputs.get("requirements", ""))
+          except (json.JSONDecodeError, TypeError) as exc:
+              requirements = {}
+              errors.append(
+                  f"classifier requirements are invalid: {type(exc).__name__}"
+              )
+          if not isinstance(requirements, dict) or set(requirements) != governed:
+              errors.append("classifier requirements are incomplete or unexpected")
+
+          for job in sorted(governed):
+              requirement = requirements.get(job)
+              if requirement not in {"required", "not_required"}:
+                  errors.append(f"{job}: invalid requirement {requirement!r}")
+                  continue
+              if job in always_required and requirement != "required":
+                  errors.append(f"{job}: always-required job was made optional")
+              expected_result = (
+                  "success" if requirement == "required" else "skipped"
+              )
+              actual_result = needs.get(job, {}).get("result", "missing")
+              if actual_result != expected_result:
+                  errors.append(
+                      f"{job}: expected {expected_result}, got {actual_result}"
+                  )
+
+          for job, output_name in conditional_flags.items():
+              expected_flag = (
+                  "true" if requirements.get(job) == "required" else "false"
+              )
+              if outputs.get(output_name) != expected_flag:
+                  errors.append(
+                      f"{job}: requirement and {output_name} disagree"
+                  )
+
+          try:
+              pythons = json.loads(outputs.get("pythons", ""))
+          except (json.JSONDecodeError, TypeError) as exc:
+              pythons = None
+              errors.append(f"Python matrix is invalid: {type(exc).__name__}")
+          any_heavy = any(
+              requirements.get(job) == "required" for job in conditional_flags
+          )
+          expected_pythons = full_pythons if any_heavy else fast_pythons
+          if pythons != expected_pythons:
+              errors.append("Python matrix does not match the promotion decision")
+
+          for label, output_name, expected in (
+              ("base", "base_sha", os.environ["EXPECTED_BASE_SHA"]),
+              ("head", "head_sha", os.environ["EXPECTED_HEAD_SHA"]),
+              (
+                  "candidate",
+                  "candidate_sha",
+                  os.environ["EXPECTED_CANDIDATE_SHA"],
+              ),
+              ("trusted", "trusted_sha", os.environ["EXPECTED_TRUSTED_SHA"]),
+          ):
+              actual = outputs.get(output_name, "")
+              if sha_pattern.fullmatch(actual) is None or actual != expected:
+                  errors.append(f"{label} SHA does not match the event")
+          for label in ("policy_sha256", "decision_sha256"):
+              if digest_pattern.fullmatch(outputs.get(label, "")) is None:
+                  errors.append(f"{label} is missing or invalid")
+
+          changed_count = outputs.get("changed_count", "")
+          if re.fullmatch(r"0|[1-9][0-9]*", changed_count) is None:
+              errors.append("changed_count is missing or invalid")
+          try:
+              groups = json.loads(outputs.get("groups", ""))
+          except (json.JSONDecodeError, TypeError) as exc:
+              groups = None
+              errors.append(f"groups are invalid: {type(exc).__name__}")
+          allowed_groups = {
+              "documentation_only",
+              "evaluation",
+              "packaging",
+              "process_supervision",
+              "security",
+              "service",
+              "storage_publication",
+              "unknown",
+              "vector",
+          }
+          if (
+              not isinstance(groups, list)
+              or not groups
+              or groups != sorted(set(groups))
+              or any(
+                  not isinstance(group, str)
+                  or re.fullmatch(r"[a-z0-9_-]+", group) is None
+                  for group in groups
+              )
+              or any(group not in allowed_groups for group in groups)
+          ):
+              errors.append("groups must be a non-empty list of safe identifiers")
+          safe_groups = groups if isinstance(groups, list) else []
+
+          allowed_reasons = {
+              "candidate_force_heavy",
+              "documentation_only",
+              "forced_heavy",
+              "manual_force_heavy",
+              "merge_group_force_heavy",
+              "non_documentation_change",
+              "push_force_heavy",
+              "unknown_change",
+              "unsafe_or_unverified_mode",
+          }
+          reasons = decision.get("reason_codes")
+          if (
+              not isinstance(reasons, list)
+              or not reasons
+              or reasons != sorted(set(reasons))
+              or any(
+                  not isinstance(reason, str)
+                  or reason not in allowed_reasons
+                  for reason in reasons
+              )
+          ):
+              errors.append("decision reason codes are invalid")
+              reasons = []
+
+          if decision:
+              if (
+                  not isinstance(decision.get("schema_version"), int)
+                  or isinstance(decision.get("schema_version"), bool)
+                  or decision.get("schema_version") != 2
+                  or decision.get("classifier_ok") is not True
+              ):
+                  errors.append("decision schema or completion marker is invalid")
+              expected_decision_fields = {
+                  "base_sha": outputs.get("base_sha"),
+                  "candidate_sha": outputs.get("candidate_sha"),
+                  "event_name": os.environ["EXPECTED_EVENT_NAME"],
+                  "head_sha": outputs.get("head_sha"),
+                  "policy_sha256": outputs.get("policy_sha256"),
+                  "trusted_sha": outputs.get("trusted_sha"),
+              }
+              for field, expected in expected_decision_fields.items():
+                  if decision.get(field) != expected:
+                      errors.append(
+                          f"decision {field} disagrees with its bound output"
+                      )
+              if decision.get("decision_sha256") != outputs.get(
+                  "decision_sha256"
+              ):
+                  errors.append("decision digest disagrees with its bound output")
+              change_set_digest = decision.get("change_set_sha256")
+              if (
+                  not isinstance(change_set_digest, str)
+                  or digest_pattern.fullmatch(change_set_digest) is None
+              ):
+                  errors.append("change-set digest is missing or invalid")
+              if decision.get("requirements") != requirements:
+                  errors.append("decision requirements disagree with bound output")
+              if decision.get("pythons") != pythons:
+                  errors.append("decision Python matrix disagrees with bound output")
+              if decision.get("groups") != groups:
+                  errors.append("decision groups disagree with bound output")
+              decision_count = decision.get("changed_count")
+              if (
+                  not isinstance(decision_count, int)
+                  or isinstance(decision_count, bool)
+                  or decision_count < 0
+                  or str(decision_count) != changed_count
+              ):
+                  errors.append("decision changed count disagrees with bound output")
+              if not isinstance(decision.get("forced_heavy"), bool):
+                  errors.append("decision forced-heavy marker is invalid")
+
+              event_name = os.environ["EXPECTED_EVENT_NAME"]
+              force_reasons = set()
+              if event_name == "push":
+                  force_reasons.add("push_force_heavy")
+              elif event_name == "workflow_dispatch":
+                  force_reasons.add("manual_force_heavy")
+              elif event_name == "merge_group":
+                  force_reasons.add("merge_group_force_heavy")
+              elif (
+                  event_name == "pull_request"
+                  and os.environ["EXPECTED_HEAD_REF"].endswith("-candidate")
+              ):
+                  force_reasons.add("candidate_force_heavy")
+              observed_force_reasons = set(reasons) & {
+                  "candidate_force_heavy",
+                  "manual_force_heavy",
+                  "merge_group_force_heavy",
+                  "push_force_heavy",
+              }
+              if observed_force_reasons != force_reasons:
+                  errors.append("decision force reason disagrees with the event")
+              if decision.get("forced_heavy") is not bool(force_reasons):
+                  errors.append("decision forced-heavy marker disagrees with the event")
+
+              unsafe_modes = "unsafe_or_unverified_mode" in reasons
+              should_fast = (
+                  safe_groups == ["documentation_only"]
+                  and not force_reasons
+                  and not unsafe_modes
+              )
+              semantic_requirements = {
+                  job: (
+                      "required"
+                      if not should_fast or job in always_required
+                      else "not_required"
+                  )
+                  for job in governed
+              }
+              if requirements != semantic_requirements:
+                  errors.append("requirements are inconsistent with risk groups")
+              if pythons != (fast_pythons if should_fast else full_pythons):
+                  errors.append("Python matrix is inconsistent with risk groups")
+
+              semantic_reasons = set(force_reasons)
+              if should_fast:
+                  semantic_reasons = {"documentation_only"}
+                  if decision_count == 0:
+                      errors.append("documentation-only decision cannot be empty")
+              elif "unknown" in safe_groups:
+                  semantic_reasons.add("unknown_change")
+              elif set(safe_groups) - {"documentation_only"}:
+                  semantic_reasons.add("non_documentation_change")
+              else:
+                  semantic_reasons.add("forced_heavy")
+              if unsafe_modes:
+                  semantic_reasons.add("unsafe_or_unverified_mode")
+              if set(reasons) != semantic_reasons:
+                  errors.append("reason codes are inconsistent with risk groups")
+              if decision_count == 0 and safe_groups != ["unknown"]:
+                  errors.append("empty change set must use the unknown group")
+              if decision_count == 0 and unsafe_modes:
+                  errors.append("empty change set cannot carry mode evidence")
+
+          if errors:
+              print("CI promotion rejected:", *errors, sep="\n- ", file=sys.stderr)
+              raise SystemExit(1)
+
+          summary = [
+              "## CI promotion gate",
+              "",
+              f"- Tested candidate SHA: `{outputs['candidate_sha']}`",
+              f"- Base SHA: `{outputs['base_sha']}`",
+              f"- Pull-request/event head SHA: `{outputs['head_sha']}`",
+              f"- Trusted classifier SHA: `{outputs['trusted_sha']}`",
+              f"- Policy SHA-256: `{outputs['policy_sha256']}`",
+              f"- Decision SHA-256: `{outputs['decision_sha256']}`",
+              f"- Changed records: `{changed_count}`",
+              f"- Risk groups: `{','.join(groups)}`",
+              "- Result: `passed`",
+              "",
+          ]
+          Path(os.environ["GITHUB_STEP_SUMMARY"]).write_text(
+              "\n".join(summary), encoding="utf-8", newline="\n"
+          )
+          print(f"CI promotion accepted for {outputs['candidate_sha']}")
+          PY
