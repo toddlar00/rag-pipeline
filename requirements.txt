@@ -15,12 +15,12 @@
 # --- Core ---
 
 # PDF preprocessing (strip Paper Capture background scans)
-PyMuPDF>=1.24,<2
+PyMuPDF>=1.28.2,<2
 
 # PDF conversion + layout detection
-docling>=2.117,<3
-docling-core[chunking]>=2.89,<3
-pypdfium2>=4.30,<6
+docling>=2.120.3,<3
+docling-core[chunking]>=2.91.0,<3
+pypdfium2>=5.13.0,<6
 
 # Embedding models (nomic, legal-bert, etc.)
 sentence-transformers>=5.7.0,<6
