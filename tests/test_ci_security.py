@@ -82,6 +82,82 @@ def _promotion_validator_source() -> str:
     )
 
 
+def _event_step_source() -> str:
+    raw_lines = _active_ci_workflow_text().splitlines()
+    lines = check_ci_security._structural_workflow_lines(raw_lines)
+    errors: list[str] = []
+    jobs = check_ci_security._job_ranges(
+        lines, check_ci_security.CI_WORKFLOW_PATH, errors
+    )
+    assert errors == []
+    assert "lane" in jobs
+    step = check_ci_security._named_step_range(
+        lines,
+        jobs["lane"],
+        "Bind exact event identities",
+    )
+    assert step is not None
+    starts = [
+        index for index in range(step[0], step[1])
+        if raw_lines[index].strip() == "python - <<'PY'"
+    ]
+    assert len(starts) == 1
+    ends = [
+        index for index in range(starts[0] + 1, step[1])
+        if raw_lines[index].strip() == "PY"
+    ]
+    assert len(ends) == 1
+    return textwrap.dedent(
+        "\n".join(raw_lines[starts[0] + 1:ends[0]]) + "\n"
+    )
+
+
+def _run_event_step(
+    tmp_path: Path,
+    *,
+    event_name: str,
+    payload: dict,
+    github_sha: str,
+    github_ref: str,
+) -> tuple[subprocess.CompletedProcess[str], dict[str, str]]:
+    event_path = tmp_path / "event.json"
+    event_path.write_text(json.dumps(payload), encoding="utf-8")
+    output_path = tmp_path / "github-output"
+    output_path.write_text("", encoding="utf-8")
+    environment = {
+        "EVENT_NAME": event_name,
+        "GITHUB_EVENT_PATH": str(event_path),
+        "GITHUB_OUTPUT": str(output_path),
+        "GITHUB_REF": github_ref,
+        "GITHUB_SHA": github_sha,
+    }
+    result = subprocess.run(
+        [sys.executable, "-c", _event_step_source()],
+        cwd=tmp_path,
+        env={**os.environ, **environment},
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    outputs: dict[str, str] = {}
+    for line in output_path.read_text(encoding="utf-8").splitlines():
+        key, _, value = line.partition("=")
+        outputs[key] = value
+    return result, outputs
+
+
+def _canonical_json(value: object) -> str:
+    return json.dumps(
+        value,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
 def _promotion_validator_environment(
     summary_path: Path,
     *,
@@ -596,6 +672,348 @@ def test_promotion_validator_rejects_unbound_candidate_branch_force(
 
     assert result.returncode == 1
     assert "force reason disagrees with the event" in result.stderr
+
+
+def _security_environment_with_needs(tmp_path, mutate) -> dict[str, str]:
+    environment = _promotion_validator_environment(
+        tmp_path / "summary.md", groups=["security"], full=True
+    )
+    needs = json.loads(environment["NEEDS_JSON"])
+    mutate(needs, environment)
+    environment["NEEDS_JSON"] = _canonical_json(needs)
+    return environment
+
+
+@pytest.mark.parametrize("job_result", ("failure", "cancelled", "skipped"))
+def test_promotion_validator_rejects_required_job_non_success(
+    tmp_path, job_result,
+):
+    def mutate(needs, environment):
+        needs["phase-a0"]["result"] = job_result
+
+    environment = _security_environment_with_needs(tmp_path, mutate)
+
+    result = _run_promotion_validator(tmp_path, environment)
+
+    assert result.returncode == 1
+    assert f"phase-a0: expected success, got {job_result}" in result.stderr
+
+
+def test_promotion_validator_rejects_not_required_job_success(tmp_path):
+    environment = _promotion_validator_environment(
+        tmp_path / "summary.md", groups=["documentation_only"], full=False
+    )
+    needs = json.loads(environment["NEEDS_JSON"])
+    needs["full-integration"]["result"] = "success"
+    environment["NEEDS_JSON"] = _canonical_json(needs)
+
+    result = _run_promotion_validator(tmp_path, environment)
+
+    assert result.returncode == 1
+    assert (
+        "full-integration: expected skipped, got success" in result.stderr
+    )
+
+
+def test_promotion_validator_rejects_failed_classifier_lane(tmp_path):
+    def mutate(needs, environment):
+        needs["lane"]["result"] = "failure"
+
+    environment = _security_environment_with_needs(tmp_path, mutate)
+
+    result = _run_promotion_validator(tmp_path, environment)
+
+    assert result.returncode == 1
+    assert "classifier job did not succeed: failure" in result.stderr
+
+
+def test_promotion_validator_rejects_incomplete_classifier(tmp_path):
+    def mutate(needs, environment):
+        needs["lane"]["outputs"]["classifier_ok"] = "false"
+
+    environment = _security_environment_with_needs(tmp_path, mutate)
+
+    result = _run_promotion_validator(tmp_path, environment)
+
+    assert result.returncode == 1
+    assert "trusted classifier did not complete successfully" in result.stderr
+
+
+@pytest.mark.parametrize(("label", "variable"), (
+    ("base", "EXPECTED_BASE_SHA"),
+    ("head", "EXPECTED_HEAD_SHA"),
+    ("candidate", "EXPECTED_CANDIDATE_SHA"),
+    ("trusted", "EXPECTED_TRUSTED_SHA"),
+))
+def test_promotion_validator_rejects_event_sha_mismatch(
+    tmp_path, label, variable,
+):
+    environment = _promotion_validator_environment(
+        tmp_path / "summary.md", groups=["security"], full=True
+    )
+    environment[variable] = "f" * 40
+
+    result = _run_promotion_validator(tmp_path, environment)
+
+    assert result.returncode == 1
+    assert f"{label} SHA does not match the event" in result.stderr
+
+
+def test_promotion_validator_rejects_tampered_decision_digest(tmp_path):
+    def mutate(needs, environment):
+        outputs = needs["lane"]["outputs"]
+        decision = json.loads(outputs["decision"])
+        decision["changed_count"] = 2
+        outputs["decision"] = _canonical_json(decision)
+
+    environment = _security_environment_with_needs(tmp_path, mutate)
+
+    result = _run_promotion_validator(tmp_path, environment)
+
+    assert result.returncode == 1
+    assert "decision digest does not match canonical content" in result.stderr
+
+
+def test_promotion_validator_rejects_duplicate_decision_keys(tmp_path):
+    def mutate(needs, environment):
+        outputs = needs["lane"]["outputs"]
+        outputs["decision"] = (
+            outputs["decision"][:-1] + ',"schema_version":2}'
+        )
+
+    environment = _security_environment_with_needs(tmp_path, mutate)
+
+    result = _run_promotion_validator(tmp_path, environment)
+
+    assert result.returncode == 1
+    assert "canonical decision is invalid: ValueError" in result.stderr
+
+
+def test_promotion_validator_rejects_missing_needs_entry(tmp_path):
+    def mutate(needs, environment):
+        del needs["full-integration"]
+
+    environment = _security_environment_with_needs(tmp_path, mutate)
+
+    result = _run_promotion_validator(tmp_path, environment)
+
+    assert result.returncode == 1
+    assert "aggregate needs are incomplete or unexpected" in result.stderr
+
+
+def test_promotion_validator_rejects_unexpected_needs_entry(tmp_path):
+    def mutate(needs, environment):
+        needs["rogue-job"] = {"outputs": {}, "result": "success"}
+
+    environment = _security_environment_with_needs(tmp_path, mutate)
+
+    result = _run_promotion_validator(tmp_path, environment)
+
+    assert result.returncode == 1
+    assert "aggregate needs are incomplete or unexpected" in result.stderr
+
+
+def test_promotion_validator_rejects_optional_always_required_job(tmp_path):
+    def mutate(needs, environment):
+        outputs = needs["lane"]["outputs"]
+        requirements = json.loads(outputs["requirements"])
+        requirements["quality"] = "not_required"
+        outputs["requirements"] = _canonical_json(requirements)
+
+    environment = _security_environment_with_needs(tmp_path, mutate)
+
+    result = _run_promotion_validator(tmp_path, environment)
+
+    assert result.returncode == 1
+    assert "quality: always-required job was made optional" in result.stderr
+
+
+@pytest.mark.parametrize("changed_count", ("", "01", "-1", "x"))
+def test_promotion_validator_rejects_invalid_changed_count(
+    tmp_path, changed_count,
+):
+    def mutate(needs, environment):
+        needs["lane"]["outputs"]["changed_count"] = changed_count
+
+    environment = _security_environment_with_needs(tmp_path, mutate)
+
+    result = _run_promotion_validator(tmp_path, environment)
+
+    assert result.returncode == 1
+    assert "changed_count is missing or invalid" in result.stderr
+
+
+def test_promotion_validator_rejects_unknown_group_vocabulary(tmp_path):
+    def mutate(needs, environment):
+        needs["lane"]["outputs"]["groups"] = _canonical_json(["exotic"])
+
+    environment = _security_environment_with_needs(tmp_path, mutate)
+
+    result = _run_promotion_validator(tmp_path, environment)
+
+    assert result.returncode == 1
+    assert (
+        "groups must be a non-empty list of safe identifiers" in result.stderr
+    )
+
+
+def test_event_step_binds_pull_request_identities(tmp_path):
+    result, outputs = _run_event_step(
+        tmp_path,
+        event_name="pull_request",
+        payload={
+            "pull_request": {
+                "number": 7,
+                "base": {"sha": "a" * 40},
+                "head": {"sha": "b" * 40, "ref": "feature-branch"},
+            }
+        },
+        github_sha="c" * 40,
+        github_ref="refs/pull/7/merge",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert outputs == {
+        "base_sha": "a" * 40,
+        "candidate_ref": "refs/pull/7/merge",
+        "candidate_sha": "c" * 40,
+        "head_fetch_ref": "refs/pull/7/head",
+        "head_ref": "feature-branch",
+        "head_sha": "b" * 40,
+        "trusted_sha": "a" * 40,
+    }
+
+
+def test_event_step_rejects_pull_request_off_merge_ref(tmp_path):
+    result, outputs = _run_event_step(
+        tmp_path,
+        event_name="pull_request",
+        payload={
+            "pull_request": {
+                "number": 7,
+                "base": {"sha": "a" * 40},
+                "head": {"sha": "b" * 40, "ref": "feature-branch"},
+            }
+        },
+        github_sha="c" * 40,
+        github_ref="refs/pull/7/head",
+    )
+
+    assert result.returncode == 1
+    assert "pull-request GITHUB_REF is not its exact merge ref" in result.stderr
+    assert outputs == {}
+
+
+def test_event_step_rejects_merge_group_candidate_mismatch(tmp_path):
+    result, outputs = _run_event_step(
+        tmp_path,
+        event_name="merge_group",
+        payload={
+            "merge_group": {
+                "base_sha": "a" * 40,
+                "head_sha": "b" * 40,
+                "head_ref": "refs/heads/gh-readonly-queue/main/pr-7",
+            }
+        },
+        github_sha="c" * 40,
+        github_ref="refs/heads/gh-readonly-queue/main/pr-7",
+    )
+
+    assert result.returncode == 1
+    assert (
+        "merge-group SHA/ref does not match the queue candidate"
+        in result.stderr
+    )
+    assert outputs == {}
+
+
+def test_event_step_rejects_manual_dispatch_off_main(tmp_path):
+    result, outputs = _run_event_step(
+        tmp_path,
+        event_name="workflow_dispatch",
+        payload={},
+        github_sha="c" * 40,
+        github_ref="refs/heads/dev",
+    )
+
+    assert result.returncode == 1
+    assert (
+        "manual CI dispatch is restricted to refs/heads/main" in result.stderr
+    )
+    assert outputs == {}
+
+
+def test_event_step_rejects_unsupported_event(tmp_path):
+    result, outputs = _run_event_step(
+        tmp_path,
+        event_name="issue_comment",
+        payload={},
+        github_sha="c" * 40,
+        github_ref="refs/heads/main",
+    )
+
+    assert result.returncode == 1
+    assert "unsupported CI event: issue_comment" in result.stderr
+    assert outputs == {}
+
+
+def test_event_step_rejects_invalid_event_sha(tmp_path):
+    result, outputs = _run_event_step(
+        tmp_path,
+        event_name="pull_request",
+        payload={
+            "pull_request": {
+                "number": 7,
+                "base": {"sha": "not-a-sha"},
+                "head": {"sha": "b" * 40, "ref": "feature-branch"},
+            }
+        },
+        github_sha="c" * 40,
+        github_ref="refs/pull/7/merge",
+    )
+
+    assert result.returncode == 1
+    assert "event supplied an invalid base SHA" in result.stderr
+    assert outputs == {}
+
+
+def test_event_step_rejects_multiline_head_ref(tmp_path):
+    result, outputs = _run_event_step(
+        tmp_path,
+        event_name="pull_request",
+        payload={
+            "pull_request": {
+                "number": 7,
+                "base": {"sha": "a" * 40},
+                "head": {
+                    "sha": "b" * 40,
+                    "ref": "feature\ninjected_key=1",
+                },
+            }
+        },
+        github_sha="c" * 40,
+        github_ref="refs/pull/7/merge",
+    )
+
+    assert result.returncode == 1
+    assert "refusing to write a multiline workflow output" in result.stderr
+    assert outputs == {}
+
+
+def test_event_step_uses_head_for_empty_push_before(tmp_path):
+    result, outputs = _run_event_step(
+        tmp_path,
+        event_name="push",
+        payload={"before": "0" * 40, "ref": "refs/heads/main"},
+        github_sha="c" * 40,
+        github_ref="refs/heads/main",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert outputs["base_sha"] == "c" * 40
+    assert outputs["trusted_sha"] == "c" * 40
+    assert outputs["candidate_sha"] == "c" * 40
+    assert outputs["head_ref"] == "main"
 
 
 @pytest.mark.parametrize("workflow_path", (

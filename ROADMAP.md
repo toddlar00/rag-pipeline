@@ -1,10 +1,10 @@
 # Improvement Roadmap
 
 - **Status:** Live scheduling authority
-- **Current as of:** 2026-08-19
+- **Current as of:** 2026-08-21
 - **Baseline:** `main` and `origin/main` at
-  `443dce4c312737eebb57a5bba6fc0abb9ace1a26` (tree
-  `344a9b224dd5942a50d370bc10dfb62384962440`)
+  `d142065cdcc890e2ad64057e0c9f627a079f93d6` (tree
+  `1c2a1c7ec6e3dcafc3b7265ca1c4b2d925f0b336`)
 - **Active implementation plan:**
   [`docs/superpowers/plans/2026-08-18-next-improvement-program.md`](docs/superpowers/plans/2026-08-18-next-improvement-program.md)
 - **Point-in-time evidence:** [`docs/evidence/`](docs/evidence/README.md)
@@ -47,21 +47,31 @@ publish a release.
 
 ### Phase A0
 
-A0a is integrated. The latest completed hosted A0b technical checkpoint binds
+A0a is integrated. An earlier completed hosted A0b technical checkpoint binds
 clean pre-gate source `4551c50970a07ac120d192802bcc692e39e3ece6` to
 evidence head `443dce4`. Both hosted Windows and Linux Phase A0 jobs passed at
 that exact head, and retained evidence artifacts were present when audited.
 That pair remains historical evidence; see its
 [exact-head evidence record](docs/evidence/2026-08-18-main-443dce4.md).
 
-The current Task 0.2 evidence candidate is the direct gate-only child of clean
-source `b07e3270881376cf60586c363e6285722562c7f5` (tree
-`b287ef0452ffd9d35d7ec361d5e7a03b50f01258`). Its separate Windows and
-Linux CPython 3.12.13 reports each cover the authoritative 9x5 scenario set,
-share the exact source, lock, and scenario contract, and pass a local
-same-platform comparison. Hosted checks and the external exact-SHA promotion
-record are pending, so this candidate does not yet replace the earlier pair as
-the completed hosted checkpoint.
+The completed Task 0.2 hosted checkpoint is evidence head
+`aa7a23bbb0179beab001261da43529d670ee5720`, the direct gate-only child of
+clean source `b07e3270881376cf60586c363e6285722562c7f5` (tree
+`b287ef0452ffd9d35d7ec361d5e7a03b50f01258`). Its separate Windows and Linux
+CPython 3.12.13 reports each cover the authoritative 9x5 scenario set, share
+the exact source, lock, and scenario contract, and pass a local same-platform
+comparison. Both hosted Phase A0 jobs passed at that exact head with retained
+artifacts, the external exact-SHA review record is posted on
+[PR #93](https://github.com/toddlar00/rag-pipeline/pull/93), and
+history-preserving merge `d142065` integrated it on `main`; see the
+[promotion evidence record](docs/evidence/2026-08-21-ci-promotion-seed-d142065.md).
+This pair supersedes the `4551c50`/`443dce4` pair as the completed hosted
+checkpoint. The pre-activation hardening checkpoint `376750d` has since
+changed Python test source and the security-owned fixture, so its own
+regenerated Windows/Linux pair (local same-platform comparisons passed)
+supersedes the `b07e327` pair as the current candidate; its hosted checks
+and external exact-SHA record are pending on
+[PR #94](https://github.com/toddlar00/rag-pipeline/pull/94).
 
 No submitted exact-head human review or separate owner authorization for the
 R8c-6 ownership move was found. Technical A0 success is therefore not that
@@ -116,7 +126,7 @@ authorize broader work. Anything not allowed below remains held.
 
 | Work | May start now? | Gate |
 | --- | --- | --- |
-| Task 0.1 status/evidence reconciliation | Yes; current slice | Documentation and content-free evidence only; do not select an owner policy |
+| Task 0.1 status/evidence reconciliation | Yes; ongoing documentation duty | Documentation and content-free evidence only; do not select an owner policy |
 | Task 0.2 trusted CI promotion classifier | Yes, after Task 0.1's mechanical acceptance | Base-branch-trusted evaluation, fail-closed heavy selection, and exact-SHA aggregate/manual promotion evidence |
 | Tasks 0.3-0.4 transitive policy and lock remediation | Decision preparation only | Owner selects the ADR path before its mechanism or lock delta is integrated |
 | Task 0.5 licensing/distribution | Owner decision records only | Both dispositions must be approved before packaging eligibility |
@@ -150,22 +160,30 @@ Execute it in this order:
 | Phase 4 | Safe runtime ownership and decomposition | Phase 3 evidence plus explicit R8/R9 authorization | Characterized facade, bounded ownership slices, privacy-safe service telemetry, per-slice rollback and exact evidence |
 | Deferred | Product simplification and retrieval experiments | Phase 4 and applicable qualification gates | Each product/quality change proves its own privacy, usability, and promotion contract |
 
-Task 0.2 now has exact clean source `S`
-(`b07e3270881376cf60586c363e6285722562c7f5`, tree
-`b287ef0452ffd9d35d7ec361d5e7a03b50f01258`) and this branch is its direct
-gate-only evidence child `E`. The live CI workflow remains the reviewed
-force-full bootstrap rendering, the future active workflow remains preserved
-as a security-owned fixture, and the paired local Phase A0 comparisons pass.
-Earlier Task 0.2 evidence checkpoints in this branch are superseded and are not
-promotable.
-The next action is to promote `E` through its hosted force-full checks and
-external exact-SHA record. Only after that evidence head is the trusted base
-may a later workflow-only commit `A` copy the fixture into the live workflow,
-pass its hosted activation cases, and receive its own external exact-SHA
-record. Neither local success nor the as-yet-unrecorded identity of `E` closes
-Task 0.2. Task 0.3 must not start before the activation checkpoint is accepted;
-it then stops for the transitive-policy owner choice if that choice has not
-been recorded.
+Task 0.2's seed evidence head `E`
+(`aa7a23bbb0179beab001261da43529d670ee5720`, direct gate-only child of clean
+source `S = b07e3270881376cf60586c363e6285722562c7f5`) passed all hosted
+force-full checks at its exact head, received the external exact-SHA review
+record on [PR #93](https://github.com/toddlar00/rag-pipeline/pull/93), and was
+integrated by history-preserving merge
+`d142065cdcc890e2ad64057e0c9f627a079f93d6`; see the
+[promotion evidence record](docs/evidence/2026-08-21-ci-promotion-seed-d142065.md).
+The live CI workflow is the reviewed force-full bootstrap rendering, and the
+future active workflow remains preserved as a security-owned fixture.
+The next action is the pre-activation hardening checkpoint in flight on
+[PR #94](https://github.com/toddlar00/rag-pipeline/pull/94): it adds
+executable coverage for the fixture's inline promotion-gate validator and
+event-identity step (promotion-review follow-ups F1 and F3), hardens the
+fixture's event outputs against multiline values (F2), and refreshes the
+paired Phase A0 baselines from its own clean source under the Phase A0
+policy's source-change rules. After that checkpoint merges, the
+workflow-only activation checkpoint `A` copies the hardened fixture into the
+live workflow, passes its hosted activation cases, and receives its own
+external exact-SHA record. F4 (workflow-syntax validator anchor/alias
+rejection) remains an open checker-hardening follow-up recorded in the
+promotion evidence record. Task 0.3 must not start before the activation
+checkpoint is accepted; it then stops for the transitive-policy owner choice
+if that choice has not been recorded.
 
 ## Acceptance gates by phase
 
