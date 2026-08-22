@@ -190,7 +190,20 @@ def _valid_policy_tree(root: Path) -> None:
         "      github-actions:\n"
         "        patterns: [\"*\"]\n"
         "    commit-message:\n"
-        "      prefix: ci\n",
+        "      prefix: ci\n"
+        "  - package-ecosystem: npm\n"
+        "    directory: \"/tools/zettlr-markdown-validator\"\n"
+        "    schedule:\n"
+        "      interval: weekly\n"
+        "      day: monday\n"
+        "      time: \"09:00\"\n"
+        "      timezone: America/Denver\n"
+        "    open-pull-requests-limit: 5\n"
+        "    groups:\n"
+        "      zettlr-markdown-validator:\n"
+        "        patterns: [\"*\"]\n"
+        "    commit-message:\n"
+        "      prefix: deps\n",
     )
 
 
@@ -495,11 +508,11 @@ def test_dependency_domains_reject_quoted_pull_request_limit(tmp_path):
     assert any("must be an unquoted positive integer" in error for error in errors)
 
 
-def test_dependency_domains_require_one_pip_and_one_actions_block(tmp_path):
+def test_dependency_domains_require_one_block_per_ecosystem(tmp_path):
     _valid_policy_tree(tmp_path)
     path = tmp_path / ".github" / "dependabot.yml"
     original = path.read_text(encoding="utf-8")
-    for replacement in ("uv", "pip"):
+    for replacement in ("uv", "pip", "npm"):
         _write(
             path,
             original.replace(
@@ -511,7 +524,68 @@ def test_dependency_domains_require_one_pip_and_one_actions_block(tmp_path):
 
         errors = check_dependency_policy.validate_dependency_domains(tmp_path)
 
-        assert any("exactly one pip and one github-actions" in error for error in errors)
+        assert any(
+            "exactly one pip, one npm, and one github-actions" in error
+            for error in errors
+        )
+
+
+def test_dependency_domains_pin_npm_directory(tmp_path):
+    _valid_policy_tree(tmp_path)
+    path = tmp_path / ".github" / "dependabot.yml"
+    _write(
+        path,
+        path.read_text(encoding="utf-8").replace(
+            '    directory: "/tools/zettlr-markdown-validator"',
+            '    directory: "/"',
+            1,
+        ),
+    )
+
+    errors = check_dependency_policy.validate_dependency_domains(tmp_path)
+
+    assert any(
+        "npm directory must be /tools/zettlr-markdown-validator" in error
+        for error in errors
+    )
+
+
+def test_dependency_domains_pin_npm_wildcard_group(tmp_path):
+    _valid_policy_tree(tmp_path)
+    path = tmp_path / ".github" / "dependabot.yml"
+    _write(
+        path,
+        path.read_text(encoding="utf-8").replace(
+            "      zettlr-markdown-validator:\n        patterns: [\"*\"]\n",
+            "      zettlr-markdown-validator:\n"
+            "        patterns: [\"remark\"]\n",
+            1,
+        ),
+    )
+
+    errors = check_dependency_policy.validate_dependency_domains(tmp_path)
+
+    assert any(
+        "npm group must remain the single declared wildcard group" in error
+        for error in errors
+    )
+
+
+def test_dependency_domains_reject_npm_schedule_drift(tmp_path):
+    _valid_policy_tree(tmp_path)
+    path = tmp_path / ".github" / "dependabot.yml"
+    _write(
+        path,
+        path.read_text(encoding="utf-8").replace(
+            '      time: "09:00"',
+            '      time: "09:30"',
+            1,
+        ),
+    )
+
+    errors = check_dependency_policy.validate_dependency_domains(tmp_path)
+
+    assert any("npm schedule differs" in error for error in errors)
 
 
 def test_dependency_domains_reject_duplicate_group_and_patterns(tmp_path):

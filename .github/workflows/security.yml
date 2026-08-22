@@ -5,10 +5,13 @@ on:
     paths:
       - "requirements*.txt"
       - "requirements*.lock"
+      - "tools/zettlr-markdown-validator/package.json"
+      - "tools/zettlr-markdown-validator/package-lock.json"
       - "dependency-license-policy.json"
       - "dependency-vulnerability-policy.json"
       - "model-artifact-policy.json"
       - "model-artifacts.lock.json"
+      - "node-vulnerability-policy.json"
       - "model_artifacts.py"
       - "ci-risk-policy.json"
       - "ci-security-ownership.json"
@@ -30,10 +33,13 @@ on:
       - "tools/check_model_artifacts.py"
       - "tools/ci_promotion.py"
       - "tools/check_vulnerabilities.py"
+      - "tools/check_node_vulnerabilities.py"
+      - "tools/normalize_node_sbom.py"
       - "tools/refresh_model_artifacts.py"
       - "tools/sync_model_artifacts.py"
       - "tests/test_ci_promotion.py"
       - "tests/test_ci_security.py"
+      - "tests/test_node_supply_chain.py"
       - ".github/ci/active-ci.yml"
       - ".github/workflows/ci.yml"
       - ".github/workflows/dependency-compatibility.yml"
@@ -45,10 +51,13 @@ on:
     paths:
       - "requirements*.txt"
       - "requirements*.lock"
+      - "tools/zettlr-markdown-validator/package.json"
+      - "tools/zettlr-markdown-validator/package-lock.json"
       - "dependency-license-policy.json"
       - "dependency-vulnerability-policy.json"
       - "model-artifact-policy.json"
       - "model-artifacts.lock.json"
+      - "node-vulnerability-policy.json"
       - "model_artifacts.py"
       - "ci-risk-policy.json"
       - "ci-security-ownership.json"
@@ -70,10 +79,13 @@ on:
       - "tools/check_model_artifacts.py"
       - "tools/ci_promotion.py"
       - "tools/check_vulnerabilities.py"
+      - "tools/check_node_vulnerabilities.py"
+      - "tools/normalize_node_sbom.py"
       - "tools/refresh_model_artifacts.py"
       - "tools/sync_model_artifacts.py"
       - "tests/test_ci_promotion.py"
       - "tests/test_ci_security.py"
+      - "tests/test_node_supply_chain.py"
       - ".github/ci/active-ci.yml"
       - ".github/workflows/ci.yml"
       - ".github/workflows/dependency-compatibility.yml"
@@ -230,5 +242,66 @@ jobs:
             vulnerability-audit.json
             normalized-vulnerability-audit.json
             dependency-licenses.json
+          if-no-files-found: error
+          retention-days: 30
+
+  node-audit:
+    name: Node vulnerabilities and SBOM
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+      - name: Audit the exact Node lock
+        working-directory: tools/zettlr-markdown-validator
+        run: |
+          set +e
+          npm audit --package-lock-only --json \
+            > "$GITHUB_WORKSPACE/node-vulnerability-audit.json"
+          status=$?
+          set -e
+          test -s "$GITHUB_WORKSPACE/node-vulnerability-audit.json"
+          python -m json.tool \
+            "$GITHUB_WORKSPACE/node-vulnerability-audit.json" > /dev/null
+          if [ "$status" -gt 1 ]; then
+            echo "npm audit failed with status $status"
+            exit "$status"
+          fi
+      - name: Enforce Node vulnerability policy
+        run: >-
+          python tools/check_node_vulnerabilities.py
+          node-vulnerability-audit.json
+          --policy node-vulnerability-policy.json
+          --scanner-npm "$(npm --version)"
+          --scanner-node "$(node --version)"
+          --output-envelope node-vulnerability-envelope.json
+      - name: Generate normalized Node CycloneDX SBOM
+        working-directory: tools/zettlr-markdown-validator
+        run: |
+          npm sbom --sbom-format cyclonedx --package-lock-only --omit dev \
+            > "$GITHUB_WORKSPACE/node-dependency-sbom-raw.json"
+          test -s "$GITHUB_WORKSPACE/node-dependency-sbom-raw.json"
+          cd "$GITHUB_WORKSPACE"
+          python tools/normalize_node_sbom.py node-dependency-sbom-raw.json \
+            --output node-dependency-sbom.json
+      - name: Retain Node security reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: node-supply-chain-reports
+          path: |
+            node-vulnerability-audit.json
+            node-vulnerability-envelope.json
+            node-dependency-sbom.json
           if-no-files-found: error
           retention-days: 30

@@ -64,12 +64,18 @@ _REQUIRED_GOVERNANCE_PATHS = frozenset({
     "dependency-vulnerability-policy.json",
     "model-artifact-policy.json",
     "model-artifacts.lock.json",
+    "node-vulnerability-policy.json",
     "tests/test_ci_promotion.py",
     "tests/test_ci_security.py",
+    "tests/test_node_supply_chain.py",
     "tools/check_ci_security.py",
     "tools/check_licenses.py",
+    "tools/check_node_vulnerabilities.py",
     "tools/check_vulnerabilities.py",
     "tools/ci_promotion.py",
+    "tools/normalize_node_sbom.py",
+    "tools/zettlr-markdown-validator/package-lock.json",
+    "tools/zettlr-markdown-validator/package.json",
 })
 _REQUIRED_SECURITY_FILTERS = frozenset({
     "requirements*.lock",

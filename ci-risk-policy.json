@@ -259,16 +259,20 @@
           "dependency-compatibility-domains.json",
           "dependency-license-policy.json",
           "dependency-vulnerability-policy.json",
+          "node-vulnerability-policy.json",
           "pyproject.toml",
           "setup_rtx5060.sh",
           "tools/check_dependency_policy.py",
           "tools/check_licenses.py",
+          "tools/check_node_vulnerabilities.py",
           "tools/check_vulnerabilities.py",
           "tools/refresh_locks.py",
+          "tools/normalize_node_sbom.py",
           "tools/zettlr-markdown-validator/package-lock.json",
           "tools/zettlr-markdown-validator/package.json",
           "tools/zettlr-markdown-validator/validate.mjs",
-          "tests/test_dependency_policy.py"
+          "tests/test_dependency_policy.py",
+          "tests/test_node_supply_chain.py"
         ],
         "trees": [],
         "root_prefixes": [
