@@ -69,6 +69,19 @@ and Torchaudio wheels outside these universal CPU manifests. That unqualified
 GPU helper is an R5 support-tier and packaging input, not a Dependabot-managed
 R2 domain; this policy must not be cited as qualification for it.
 
+The repository's single Node ecosystem
+(`tools/zettlr-markdown-validator`) is Dependabot-managed through its own
+exactly-validated npm update block with one pinned wildcard group, added by
+Task 0.6. Node packages are not direct inputs of this Python domain policy:
+they carry no domain assignment, and `package-lock.json` changes are
+invisible to the one-domain requirement/lock diff gate above. Node
+supply-chain review is owned by the separate Node audit/SBOM gate
+(`node-vulnerability-policy.json`, `tools/check_node_vulnerabilities.py`,
+`tools/normalize_node_sbom.py`) and the security ownership map. Any Node
+dependency upgrade must regenerate `package-lock.json` and co-update the
+frozen validator bundle digests in `markdown_validation.py` in the same
+reviewed change, or the validator probe fails closed as unsupported.
+
 ## Change protocol
 
 At most one compatibility domain is upgraded per pull request, enforced against

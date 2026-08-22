@@ -93,11 +93,16 @@ resolver to uv 0.12.5): gate-only child `a129f37` passed the hosted full
 lane, received the external exact-SHA record on
 [PR #100](https://github.com/toddlar00/rag-pipeline/pull/100), and merged
 through history-preserving `0ec2639`. The one-domain PDF/Docling
-checkpoint `ed1f370` has since changed the four mapped
-core/full/smoke/test locks, so its regenerated Windows/Linux pair
+checkpoint `ed1f370` completed the same cycle: gate-only child `33c61ff`
+passed the hosted full lane, received the external exact-SHA record on
+[PR #101](https://github.com/toddlar00/rag-pipeline/pull/101), and merged
+through history-preserving `39f6c9e`, completing the Dependabot
+supersession queue. The Task 0.6 Node supply-chain ownership checkpoint
+`5f45757` has since changed Python gate source and workflows (no
+dependency or model lock), so its regenerated Windows/Linux pair
 (independent local same-platform comparisons passed) supersedes the
-`ca3886c` pair as the current candidate; its hosted checks and external
-exact-SHA record are pending on the PDF/Docling domain pull request.
+`ed1f370` pair as the current candidate; its hosted checks and external
+exact-SHA record are pending on the Task 0.6 pull request.
 
 Two operational follow-ups from the post-merge `main` push runs are open:
 a documentation-only merge passes its fast-lane pull-request run but then
@@ -240,7 +245,15 @@ merged through
 (uv 0.12.5, pip 26.2.1, ruff 0.16.3). The PDF/Docling supersession of
 [PR #91](https://github.com/toddlar00/rag-pipeline/pull/91) is in flight
 at checkpoint `ed1f370` (PyMuPDF 1.28.2, docling 2.121.0, docling-core
-2.92.0, pypdfium2 5.13.0), completing the Dependabot queue, while
+2.92.0, pypdfium2 5.13.0), completing the Dependabot queue. Task 0.6's Node
+supply-chain ownership slice is now in flight: the npm ecosystem joins
+Dependabot as an exactly-validated update block, the exact
+`package-lock.json` is audited against a GHSA-keyed expiring
+`node-vulnerability-policy.json` with a content-free scanner/scan-time
+identity envelope, a normalized byte-stable CycloneDX SBOM is retained
+under the 30-day artifact policy, and the Node manifests plus scan tooling
+enter the security ownership map. Tasks 0.7 (secret scanning) and 0.8
+(static-security scanning) follow in sequence, while
 [PR #88](https://github.com/toddlar00/rag-pipeline/pull/88) (Google GenAI 2)
 stays parked on its recorded owner decision; then begin Task 0.6's Node
 audit/SBOM gate. Task 0.3's activation prerequisite is now met, but it

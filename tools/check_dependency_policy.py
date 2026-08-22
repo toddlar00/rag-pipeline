@@ -473,10 +473,10 @@ def _dependabot_pip_groups(
         )
 
     ecosystems = [update.get("package-ecosystem") for update in updates]
-    if sorted(ecosystems) != ["github-actions", "pip"]:
+    if sorted(ecosystems) != ["github-actions", "npm", "pip"]:
         errors.append(
-            f"{DEPENDABOT_CONFIG}: expected exactly one pip and one "
-            "github-actions update block"
+            f"{DEPENDABOT_CONFIG}: expected exactly one pip, one npm, and "
+            "one github-actions update block"
         )
 
     expected_update_fields = {
@@ -508,6 +508,21 @@ def _dependabot_pip_groups(
             },
             "prefix": "ci",
         },
+        "npm": {
+            "open-pull-requests-limit": "5",
+            "schedule": {
+                "interval": "weekly",
+                "day": "monday",
+                "time": "09:00",
+                "timezone": "America/Denver",
+            },
+            "prefix": "deps",
+        },
+    }
+    expected_directories = {
+        "github-actions": "/",
+        "npm": "/tools/zettlr-markdown-validator",
+        "pip": "/",
     }
     for update in updates:
         ecosystem = update.get("package-ecosystem") or "<invalid>"
@@ -517,9 +532,16 @@ def _dependabot_pip_groups(
                 "exactly commit-message, directory, groups, "
                 "open-pull-requests-limit, package-ecosystem, and schedule"
             )
-        if update.get("directory") != "/":
+        expected_directory = expected_directories.get(ecosystem)
+        if expected_directory is None:
             errors.append(
-                f"{DEPENDABOT_CONFIG}: {ecosystem} directory must be /"
+                f"{DEPENDABOT_CONFIG}: {ecosystem} has no declared "
+                "directory control"
+            )
+        elif update.get("directory") != expected_directory:
+            errors.append(
+                f"{DEPENDABOT_CONFIG}: {ecosystem} directory must be "
+                f"{expected_directory}"
             )
         limit = update.get("open-pull-requests-limit")
         if not isinstance(limit, str) or not limit.isdigit() or int(limit) < 1:
@@ -554,7 +576,12 @@ def _dependabot_pip_groups(
                 "one patterns field"
             )
         controls = expected_controls.get(ecosystem)
-        if controls is not None:
+        if controls is None:
+            errors.append(
+                f"{DEPENDABOT_CONFIG}: {ecosystem} has no declared "
+                "repository control"
+            )
+        else:
             if limit != controls["open-pull-requests-limit"]:
                 errors.append(
                     f"{DEPENDABOT_CONFIG}: {ecosystem} pull-request limit "
@@ -579,6 +606,13 @@ def _dependabot_pip_groups(
             errors.append(
                 f"{DEPENDABOT_CONFIG}: github-actions group must remain the "
                 "single declared wildcard group"
+            )
+        if ecosystem == "npm" and groups != {
+            "zettlr-markdown-validator": {"patterns": ("*",)}
+        }:
+            errors.append(
+                f"{DEPENDABOT_CONFIG}: npm group must remain the single "
+                "declared wildcard group"
             )
 
     pip_updates = [

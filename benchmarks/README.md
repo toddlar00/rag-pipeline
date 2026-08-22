@@ -7,16 +7,17 @@ fresh-process repetitions.
 
 ## Provenance
 
-Both current reports were generated from the clean PDF/Docling
-dependency-domain source checkpoint
-`ed1f370260dff29a42bb3251198fa1e52e6252ba` (tree
-`3247ae5aaeb6f9d6f9357f1ce81b533ff37ba92d`). That source contains the
+Both current reports were generated from the clean Task 0.6 Node
+supply-chain ownership source checkpoint
+`5f45757840d00301bf71a70346d6d981ebc422cb` (tree
+`011f465d9c1bdcb24270051ff26d314a5457051d`). That source contains the
 activated deterministic CI promotion workflow, the hardened security-owned
-fixture, the integrated vector-stores, ML/runtime, Service/UI, and
-test-audit tooling domain upgrades, and the one-domain PDF/Docling
-upgrade: PyMuPDF 1.28.2 (test exact pin plus the requirements.txt floor),
-docling 2.121.0, docling-core 2.92.0, and pypdfium2 5.13.0, with
-regenerated core/full/smoke/test locks. The executing environments were
+fixture, all five integrated dependency-domain upgrades, and the Task 0.6
+slice: the npm Dependabot block with its extended fail-closed dialect
+checker, the Node audit/SBOM gate (`node-vulnerability-policy.json`,
+`tools/check_node_vulnerabilities.py`, `tools/normalize_node_sbom.py`),
+and the security-owned Node manifests. No dependency or model lock
+changed. The executing environments were
 synchronized with repository-pinned uv 0.12.5 against the exact CPU
 application/test lock union plus its retained bootstrapper:
 
@@ -33,8 +34,8 @@ marker-resolved distributions before generation.
 
 | Platform | Runtime | Report | Bytes | File SHA-256 | Embedded report SHA-256 |
 |---|---:|---|---:|---|---|
-| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 50,388 | `3efe2c40bba882be0d3790b98d54583fe8bf70ff986e2d92ef0bc41d6de1fcfd` | `968a3443a2a94bb0892253027808a9eaff9b85e6e24717881b4abf8b4d2397e7` |
-| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 49,800 | `17f0b96ccdfb6a2d3201cf35700b93d50a8b80ceeb9724d7acbc792ffc1b8d4e` | `2babaaa1de42a2a621b2f5fbfd78e1b36216ce678ae08542d1351200a21995c1` |
+| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 50,388 | `7acd48d8db8efc706a39fa663b381d28136162718da583a8c5a18dae62d6d2c6` | `e5c3882617163244bfbded3f1d803abf7b28775c7e7a942661d2bf754f6e4b75` |
+| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 49,802 | `568b87667f04add35818e6096cd4d05f54026ba42a769a0ba560e3af93b30b5b` | `57527a56f38dba7b09a37c2fcdf8ae9ad509ab81395ac0c9ca07d7ccb4ab027a` |
 
 The reports attest the same source commit, clean-worktree state, tracked-diff
 digest, eight LF and `HEAD`-identical dependency/model-lock inputs, authoritative
@@ -136,12 +137,17 @@ passed the hosted full lane with retained artifacts, received the external
 exact-SHA record on
 [#100](https://github.com/toddlar00/rag-pipeline/pull/100), and merged
 through history-preserving `0ec2639`. The one-domain PDF/Docling
-checkpoint `ed1f370` then changed the four mapped core/full/smoke/test
-locks, superseding the `ca3886c` pair. The current reports above bind that
-exact clean PDF/Docling source and each passes an independent complete
-same-platform 9×5 comparison. No hosted result for this replacement pair
-is claimed here yet; its hosted checks and external exact-SHA record
-remain pending.
+checkpoint `ed1f370` repeated the cycle: its gate-only child `33c61ff`
+passed the hosted full lane with retained artifacts, received the external
+exact-SHA record on
+[#101](https://github.com/toddlar00/rag-pipeline/pull/101), and merged
+through history-preserving `39f6c9e`, completing the Dependabot
+supersession queue. The Task 0.6 Node supply-chain ownership checkpoint
+`5f45757` then changed Python gate source (no lock change), superseding
+the `ed1f370` pair. The current reports above bind that exact clean
+Task 0.6 source and each passes an independent complete same-platform
+9×5 comparison. No hosted result for this replacement pair is claimed
+here yet; its hosted checks and external exact-SHA record remain pending.
 
 ## Checking
 

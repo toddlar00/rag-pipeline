@@ -37,3 +37,17 @@ updates:
         patterns: ["*"]
     commit-message:
       prefix: ci
+
+  - package-ecosystem: npm
+    directory: "/tools/zettlr-markdown-validator"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: America/Denver
+    open-pull-requests-limit: 5
+    groups:
+      zettlr-markdown-validator:
+        patterns: ["*"]
+    commit-message:
+      prefix: deps

@@ -24205,13 +24205,13 @@
   "schema_version": 3,
   "source_architecture": {
     "class_count": 222,
-    "function_count": 2690,
+    "function_count": 2703,
     "import_graph": {
       "cyclic_components": [],
       "edge_count": 157,
       "edge_policy": "first-party-all-contexts-with-provenance-v1"
     },
-    "module_count": 76,
+    "module_count": 78,
     "modules": [
       {
         "class_count": 4,
@@ -42170,7 +42170,7 @@
             "scope": "top_level"
           }
         ],
-        "definition_locations_sha256": "a45d07162f6791aa916a559f5269c9b1cdb4b5bbe234659410d795f261fb90b9",
+        "definition_locations_sha256": "246ecb6d5f9992dbc5caf7e84ebd4ea3fc4ade4cc4c7cb07f110ea8443fc3602",
         "function_count": 41,
         "functions": [
           {
@@ -42422,15 +42422,15 @@
         ],
         "import_edges": [],
         "module": "tools.check_ci_security",
-        "non_blank_lines": 1808,
+        "non_blank_lines": 1814,
         "path": "tools/check_ci_security.py",
-        "physical_lines": 1934,
+        "physical_lines": 1940,
         "top_level_function_count": 40
       },
       {
         "class_count": 0,
         "classes": [],
-        "definition_locations_sha256": "ba65e682a47abaedea424d1fa9dd17f8c29682182edd5568487a636461f146b5",
+        "definition_locations_sha256": "b7c0c9808796226513b185ef1a33b353cbbd0a72cd0e2f1f110a9694fd9dbd62",
         "function_count": 24,
         "functions": [
           {
@@ -42580,9 +42580,9 @@
         ],
         "import_edges": [],
         "module": "tools.check_dependency_policy",
-        "non_blank_lines": 1117,
+        "non_blank_lines": 1151,
         "path": "tools/check_dependency_policy.py",
-        "physical_lines": 1195,
+        "physical_lines": 1229,
         "top_level_function_count": 24
       },
       {
@@ -42664,6 +42664,68 @@
         "path": "tools/check_model_artifacts.py",
         "physical_lines": 177,
         "top_level_function_count": 3
+      },
+      {
+        "class_count": 0,
+        "classes": [],
+        "definition_locations_sha256": "f9851a3dee060d32ab0bb8d5e36a8799a9fa1b0db0aed463389a39b36803584c",
+        "function_count": 8,
+        "functions": [
+          {
+            "kind": "function",
+            "name": "_advisories",
+            "scope": "top_level",
+            "signature_sha256": "ad44de3b15bb75c4988042e7b7292c06a651b2e895605f209949d4fce77f2dae"
+          },
+          {
+            "kind": "function",
+            "name": "_envelope",
+            "scope": "top_level",
+            "signature_sha256": "776e41da0d9f61900015644588c8c982442619958fb661399d40eb3a49f8047a"
+          },
+          {
+            "kind": "function",
+            "name": "_load_strict_json",
+            "scope": "top_level",
+            "signature_sha256": "39eb059ab3e5bcbdd95d6177ceb6c2d0f40abebab547cc5f3039ceabec765a8a"
+          },
+          {
+            "kind": "function",
+            "name": "_nonempty_text",
+            "scope": "top_level",
+            "signature_sha256": "2627825ae05fbe44e6dd0fa3b38d5168f219c34d128c55d6fdbb78f8a554bbec"
+          },
+          {
+            "kind": "function",
+            "name": "_policy_exceptions",
+            "scope": "top_level",
+            "signature_sha256": "3fb447b9b6c0d87c260829c84c3d0b07f22a71b7f49fe7938cc30a7cfa955305"
+          },
+          {
+            "kind": "function",
+            "name": "_reject_duplicate_pairs",
+            "scope": "top_level",
+            "signature_sha256": "862914ed282aef0e8c8848da2eeed258381a27a4bb8de90b7681358ad3d8104b"
+          },
+          {
+            "kind": "function",
+            "name": "evaluate",
+            "scope": "top_level",
+            "signature_sha256": "03a90f11b38f20a992e67fab42cfc769c5054b193ca0f1b931c7e7aa1e8be770"
+          },
+          {
+            "kind": "function",
+            "name": "main",
+            "scope": "top_level",
+            "signature_sha256": "0e8d505be8cccdf9a029c369b4fc6abbecfbb019aaa42d95141ecdcdfd0a5f5e"
+          }
+        ],
+        "import_edges": [],
+        "module": "tools.check_node_vulnerabilities",
+        "non_blank_lines": 257,
+        "path": "tools/check_node_vulnerabilities.py",
+        "physical_lines": 279,
+        "top_level_function_count": 8
       },
       {
         "class_count": 1,
@@ -43076,6 +43138,50 @@
         "path": "tools/ci_promotion.py",
         "physical_lines": 1472,
         "top_level_function_count": 34
+      },
+      {
+        "class_count": 0,
+        "classes": [],
+        "definition_locations_sha256": "00e402513afdf4697a09f4ff6e4a289c2466ad8dd9693d6aa8a96dd876186b46",
+        "function_count": 5,
+        "functions": [
+          {
+            "kind": "function",
+            "name": "_load_strict_json",
+            "scope": "top_level",
+            "signature_sha256": "6d63e347cc70987331cfaf8a5aeaeead14deb2f0408ab2406204ea46dd4f7244"
+          },
+          {
+            "kind": "function",
+            "name": "_reject_duplicate_pairs",
+            "scope": "top_level",
+            "signature_sha256": "afd4ad14864fddac463038ccc477ad935b4fa8cb1c9abbead03d40e14390ecae"
+          },
+          {
+            "kind": "function",
+            "name": "main",
+            "scope": "top_level",
+            "signature_sha256": "6287da0343ca98679d9ebc797005f85cb1e362e0f3f37b130445a96a1d088792"
+          },
+          {
+            "kind": "function",
+            "name": "normalize",
+            "scope": "top_level",
+            "signature_sha256": "0e339077992d99684f0cedca7a2b3691c1c47e13d287a4106f06c09490bbbe51"
+          },
+          {
+            "kind": "function",
+            "name": "serialized_bytes",
+            "scope": "top_level",
+            "signature_sha256": "db1ec9521bb8573f3795d65e998b99f2014957274eee6064232865b2ee862d96"
+          }
+        ],
+        "import_edges": [],
+        "module": "tools.normalize_node_sbom",
+        "non_blank_lines": 137,
+        "path": "tools/normalize_node_sbom.py",
+        "physical_lines": 155,
+        "top_level_function_count": 5
       },
       {
         "class_count": 0,
@@ -43813,16 +43919,16 @@
         "top_level_function_count": 2
       }
     ],
-    "physical_line_count": 90962,
+    "physical_line_count": 91436,
     "source_groups": [
       "production",
       "tools",
       "other"
     ],
-    "top_level_function_count": 1856
+    "top_level_function_count": 1869
   },
   "tracked_sources": {
-    "count": 170,
+    "count": 173,
     "groups": [
       {
         "count": 59,
@@ -43890,7 +43996,7 @@
         ]
       },
       {
-        "count": 94,
+        "count": 95,
         "name": "tests",
         "paths": [
           "tests/test_ai_project_export.py",
@@ -43942,6 +44048,7 @@
           "tests/test_llm_runtime.py",
           "tests/test_markdown_validation.py",
           "tests/test_model_artifacts.py",
+          "tests/test_node_supply_chain.py",
           "tests/test_offline_retrieval.py",
           "tests/test_operation_contracts.py",
           "tests/test_operational_drills.py",
@@ -43990,7 +44097,7 @@
         ]
       },
       {
-        "count": 15,
+        "count": 17,
         "name": "tools",
         "paths": [
           "tools/__init__.py",
@@ -44000,9 +44107,11 @@
           "tools/check_dependency_policy.py",
           "tools/check_licenses.py",
           "tools/check_model_artifacts.py",
+          "tools/check_node_vulnerabilities.py",
           "tools/check_python_sources.py",
           "tools/check_vulnerabilities.py",
           "tools/ci_promotion.py",
+          "tools/normalize_node_sbom.py",
           "tools/operational_drill_worker.py",
           "tools/refresh_locks.py",
           "tools/refresh_model_artifacts.py",
