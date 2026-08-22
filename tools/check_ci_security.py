@@ -26,6 +26,7 @@ CI_WORKFLOW_PATH = ".github/workflows/ci.yml"
 ACTIVE_CI_FIXTURE_PATH = ".github/ci/active-ci.yml"
 DEPENDENCY_WORKFLOW_PATH = ".github/workflows/dependency-compatibility.yml"
 SECURITY_WORKFLOW_PATH = ".github/workflows/security.yml"
+SECRET_WORKFLOW_PATH = ".github/workflows/secret-scan.yml"
 CI_PROMOTION_TOOL_PATH = "tools/ci_promotion.py"
 POLICY_SCHEMA_VERSION = 1
 _POLICY_KEYS = frozenset({
@@ -57,7 +58,11 @@ _REQUIRED_GOVERNANCE_PATHS = frozenset({
     ACTIVE_CI_FIXTURE_PATH,
     CI_WORKFLOW_PATH,
     DEPENDENCY_WORKFLOW_PATH,
+    SECRET_WORKFLOW_PATH,
     SECURITY_WORKFLOW_PATH,
+    "secret-scan-policy.json",
+    "tools/check_secrets.py",
+    "tests/test_secret_scan.py",
     "ci-risk-policy.json",
     POLICY_PATH,
     "dependency-license-policy.json",
@@ -1832,7 +1837,11 @@ def validate(root: Path = PROJECT_ROOT) -> list[str]:
         if relative == CI_WORKFLOW_PATH:
             ci_text = text
             errors.extend(validate_ci_topology(text))
-        if relative in {DEPENDENCY_WORKFLOW_PATH, SECURITY_WORKFLOW_PATH}:
+        if relative in {
+            DEPENDENCY_WORKFLOW_PATH,
+            SECRET_WORKFLOW_PATH,
+            SECURITY_WORKFLOW_PATH,
+        }:
             errors.extend(validate_merge_group_trigger(relative, text))
 
     fixture_path = root / ACTIVE_CI_FIXTURE_PATH

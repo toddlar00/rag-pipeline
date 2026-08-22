@@ -245,15 +245,23 @@ merged through
 (uv 0.12.5, pip 26.2.1, ruff 0.16.3). The PDF/Docling supersession of
 [PR #91](https://github.com/toddlar00/rag-pipeline/pull/91) is in flight
 at checkpoint `ed1f370` (PyMuPDF 1.28.2, docling 2.121.0, docling-core
-2.92.0, pypdfium2 5.13.0), completing the Dependabot queue. Task 0.6's Node
-supply-chain ownership slice is now in flight: the npm ecosystem joins
-Dependabot as an exactly-validated update block, the exact
-`package-lock.json` is audited against a GHSA-keyed expiring
-`node-vulnerability-policy.json` with a content-free scanner/scan-time
-identity envelope, a normalized byte-stable CycloneDX SBOM is retained
-under the 30-day artifact policy, and the Node manifests plus scan tooling
-enter the security ownership map. Tasks 0.7 (secret scanning) and 0.8
-(static-security scanning) follow in sequence, while
+2.92.0, pypdfium2 5.13.0), completing the Dependabot queue. Task 0.6
+merged through
+[PR #102](https://github.com/toddlar00/rag-pipeline/pull/102) at
+`893c4a0`: the npm ecosystem is Dependabot-managed, the exact
+`package-lock.json` is audited against the GHSA-keyed expiring
+`node-vulnerability-policy.json` with a content-free identity envelope,
+and a normalized byte-stable CycloneDX SBOM is retained. Task 0.7's
+secret-scanning slice is now in flight: a repository-owned stdlib scanner
+(`tools/check_secrets.py`) whose findings carry only rule ids, locations,
+and match digests — never matched bytes — scans the full tracked tree on
+every pull request through the dedicated unfiltered
+`.github/workflows/secret-scan.yml` workflow and every blob reachable
+from any ref on push/schedule; suppression exists only as narrow expiring
+records in `secret-scan-policy.json` (no baseline file, currently empty),
+a live-fire canary step proves the deployed gate detects and redacts, and
+the first full-history verification scanned 1,450 blobs with zero
+findings. Task 0.8 (static-security scanning) follows, while
 [PR #88](https://github.com/toddlar00/rag-pipeline/pull/88) (Google GenAI 2)
 stays parked on its recorded owner decision; then begin Task 0.6's Node
 audit/SBOM gate. Task 0.3's activation prerequisite is now met, but it
