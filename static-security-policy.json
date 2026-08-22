@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "ruff_version": "0.16.3",
+  "blocking_rules": [
+    "S102",
+    "S104",
+    "S301",
+    "S302",
+    "S307",
+    "S324",
+    "S501",
+    "S506",
+    "S602",
+    "S604",
+    "S605",
+    "S606",
+    "S608"
+  ],
+  "test_exempt_rules": [
+    "S102",
+    "S104",
+    "S301",
+    "S302",
+    "S307"
+  ],
+  "suppressions": [
+    {
+      "rule": "S324",
+      "path": "retrieval_core.py",
+      "count": 1,
+      "expires": "2026-11-30",
+      "reason": "_stable_token_hash uses MD5 as a deterministic non-cryptographic sparse-vector token index. Replacing the digest changes every existing sparse-vector index, so remediation is a separate versioned index-migration slice (or an explicit usedforsecurity=False marking) rather than an in-gate edit.",
+      "references": [
+        "https://docs.python.org/3/library/hashlib.html#hashlib.md5",
+        "https://docs.astral.sh/ruff/rules/hashlib-insecure-hash-function/"
+      ]
+    }
+  ]
+}

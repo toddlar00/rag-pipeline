@@ -255,17 +255,24 @@ merged through
 `893c4a0`: the npm ecosystem is Dependabot-managed, the exact
 `package-lock.json` is audited against the GHSA-keyed expiring
 `node-vulnerability-policy.json` with a content-free identity envelope,
-and a normalized byte-stable CycloneDX SBOM is retained. Task 0.7's
-secret-scanning slice is now in flight: a repository-owned stdlib scanner
-(`tools/check_secrets.py`) whose findings carry only rule ids, locations,
-and match digests — never matched bytes — scans the full tracked tree on
-every pull request through the dedicated unfiltered
-`.github/workflows/secret-scan.yml` workflow and every blob reachable
-from any ref on push/schedule; suppression exists only as narrow expiring
-records in `secret-scan-policy.json` (no baseline file, currently empty),
-a live-fire canary step proves the deployed gate detects and redacts, and
-the first full-history verification scanned 1,450 blobs with zero
-findings. Task 0.8 (static-security scanning) follows, while
+and a normalized byte-stable CycloneDX SBOM is retained. Task 0.7 merged through
+[PR #106](https://github.com/toddlar00/rag-pipeline/pull/106) at
+`376277c`: the repository-owned redaction-by-construction secret scanner
+covers every pull request (unfiltered workflow) and the full reachable
+history (first hosted history scan passed; the entire 1,450-blob history
+verified credential-free), with suppression only through narrow expiring
+records and follow-ups F1-F3 (filename-echo channel, documented value-gate
+bounds, unquoted-format coverage) recorded on the PR for a hardening
+slice. Task 0.8's static-security slice is now in flight: the hash-locked
+ruff 0.16.3 runs a reviewed thirteen-rule flake8-bandit blocking subset
+through `tools/check_static_security.py` and the dedicated unfiltered
+`.github/workflows/static-security.yml` workflow, with declared test-scope
+exemptions for deliberate rejection-path constructs, content-free
+rule/path/line findings, and exactly one counted expiring suppression
+(the non-cryptographic MD5 sparse-vector token index in
+`retrieval_core.py`, whose replacement is a separate versioned
+index-migration follow-up). This completes the Task 0.6-0.8 gate
+sequence, while
 [PR #88](https://github.com/toddlar00/rag-pipeline/pull/88) (Google GenAI 2)
 stays parked on its recorded owner decision; then begin Task 0.6's Node
 audit/SBOM gate. Task 0.3's activation prerequisite is now met, but it

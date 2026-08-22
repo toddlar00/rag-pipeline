@@ -27,6 +27,7 @@ ACTIVE_CI_FIXTURE_PATH = ".github/ci/active-ci.yml"
 DEPENDENCY_WORKFLOW_PATH = ".github/workflows/dependency-compatibility.yml"
 SECURITY_WORKFLOW_PATH = ".github/workflows/security.yml"
 SECRET_WORKFLOW_PATH = ".github/workflows/secret-scan.yml"
+STATIC_WORKFLOW_PATH = ".github/workflows/static-security.yml"
 CI_PROMOTION_TOOL_PATH = "tools/ci_promotion.py"
 POLICY_SCHEMA_VERSION = 1
 _POLICY_KEYS = frozenset({
@@ -60,9 +61,13 @@ _REQUIRED_GOVERNANCE_PATHS = frozenset({
     DEPENDENCY_WORKFLOW_PATH,
     SECRET_WORKFLOW_PATH,
     SECURITY_WORKFLOW_PATH,
+    STATIC_WORKFLOW_PATH,
     "secret-scan-policy.json",
+    "static-security-policy.json",
     "tools/check_secrets.py",
+    "tools/check_static_security.py",
     "tests/test_secret_scan.py",
+    "tests/test_static_security.py",
     "ci-risk-policy.json",
     POLICY_PATH,
     "dependency-license-policy.json",
@@ -1841,6 +1846,7 @@ def validate(root: Path = PROJECT_ROOT) -> list[str]:
             DEPENDENCY_WORKFLOW_PATH,
             SECRET_WORKFLOW_PATH,
             SECURITY_WORKFLOW_PATH,
+            STATIC_WORKFLOW_PATH,
         }:
             errors.extend(validate_merge_group_trigger(relative, text))
 
