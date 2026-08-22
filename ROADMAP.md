@@ -98,11 +98,15 @@ passed the hosted full lane, received the external exact-SHA record on
 [PR #101](https://github.com/toddlar00/rag-pipeline/pull/101), and merged
 through history-preserving `39f6c9e`, completing the Dependabot
 supersession queue. The Task 0.6 Node supply-chain ownership checkpoint
-`5f45757` has since changed Python gate source and workflows (no
+`5f45757` completed the same cycle: gate-only child `344e873` passed the
+hosted full lane, received the external exact-SHA record on
+[PR #102](https://github.com/toddlar00/rag-pipeline/pull/102), and merged
+through history-preserving `893c4a0`. The Task 0.7 secret-scan checkpoint
+`e055bd0` has since changed Python gate source and workflows (no
 dependency or model lock), so its regenerated Windows/Linux pair
 (independent local same-platform comparisons passed) supersedes the
-`ed1f370` pair as the current candidate; its hosted checks and external
-exact-SHA record are pending on the Task 0.6 pull request.
+`5f45757` pair as the current candidate; its hosted checks and external
+exact-SHA record are pending on the Task 0.7 pull request.
 
 Two operational follow-ups from the post-merge `main` push runs are open:
 a documentation-only merge passes its fast-lane pull-request run but then

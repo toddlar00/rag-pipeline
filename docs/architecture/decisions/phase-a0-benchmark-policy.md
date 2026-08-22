@@ -1,10 +1,10 @@
 # Phase A0 Benchmark Policy
 
 - **Status:** A0a integrated; the latest completed hosted A0b technical
-  checkpoint passed at PDF/Docling evidence head `33c61ff` and merged
-  through `39f6c9e`; the Task 0.6 Node supply-chain replacement pair at
-  source `5f45757` is local-only pending hosted promotion; exact-head
-  human review and separate R8 owner authorization are not recorded
+  checkpoint passed at Task 0.6 evidence head `344e873` and merged
+  through `893c4a0`; the Task 0.7 secret-scan replacement pair at source
+  `e055bd0` is local-only pending hosted promotion; exact-head human
+  review and separate R8 owner authorization are not recorded
 - **Milestone:** R10 prerequisite for the R8 pipeline-ownership move
 - **Report schema:** `phase-a0` v3
 
@@ -126,9 +126,12 @@ domain pair at source `ca3886c` repeated it through gate-only child
 PDF/Docling domain pair at source `ed1f370` through gate-only child
 `33c61ff` and merge `39f6c9e`
 ([PR #101](https://github.com/toddlar00/rag-pipeline/pull/101)). The
-current replacement pair uses the clean Task 0.6 Node supply-chain
-ownership source `5f45757840d00301bf71a70346d6d981ebc422cb` (tree
-`011f465d9c1bdcb24270051ff26d314a5457051d`), which changed Python gate
+Task 0.6 Node supply-chain pair at source `5f45757` repeated it through
+gate-only child `344e873` and merge `893c4a0`
+([PR #102](https://github.com/toddlar00/rag-pipeline/pull/102)). The
+current replacement pair uses the clean Task 0.7 secret-scan source
+`e055bd07e7460459933326215cdc2d00e4478363` (tree
+`79d809006790b32b091906b07d42d56dd4851411`), which changed Python gate
 source and workflows but no dependency or model lock. Its Windows and
 Linux CPython 3.12.13 reports were
 generated after the same strict hash-locked synchronization and
@@ -281,14 +284,18 @@ one-domain PDF/Docling dependency source `ed1f370` repeated the cycle: its
 child `33c61ff` passed the hosted full lane with retained artifacts and
 merged through `39f6c9e`
 ([PR #101](https://github.com/toddlar00/rag-pipeline/pull/101)). The
-Task 0.6 Node supply-chain ownership source `5f45757` supersedes that
-pair in turn. Its Windows report is 50,388 bytes (file SHA-256
-`7acd48d8db8efc706a39fa663b381d28136162718da583a8c5a18dae62d6d2c6`;
+Task 0.6 Node supply-chain ownership source `5f45757` repeated the
+cycle: its child `344e873` passed the hosted full lane with retained
+artifacts and merged through `893c4a0`
+([PR #102](https://github.com/toddlar00/rag-pipeline/pull/102)). The
+Task 0.7 secret-scan source `e055bd0` supersedes that pair in turn. Its
+Windows report is 50,389 bytes (file SHA-256
+`325b6112c87c9d7ae75f5ce06c317712ea5e91fdb39da537d85c1505c1d019f1`;
 embedded report SHA-256
-`e5c3882617163244bfbded3f1d803abf7b28775c7e7a942661d2bf754f6e4b75`).
-Its Linux report is 49,802 bytes (file SHA-256
-`568b87667f04add35818e6096cd4d05f54026ba42a769a0ba560e3af93b30b5b`;
+`8a0f5eb5196b041b7199b8b054f6d479f082e918b2a73e85a5062e6335ed106d`).
+Its Linux report is 49,795 bytes (file SHA-256
+`e9b55b766f577edbdf39278a48060d63acba7360e396e4f3235872a05afb9fb5`;
 embedded report SHA-256
-`57527a56f38dba7b09a37c2fcdf8ae9ad509ab81395ac0c9ca07d7ccb4ab027a`).
+`40ef0ff5222bae90e9731d36c6d77502449446149af10856e3f9bccbd3157dd8`).
 Both use CPython 3.12.13 and pass their complete local same-platform 9×5
 comparisons. Hosted promotion remains pending.
