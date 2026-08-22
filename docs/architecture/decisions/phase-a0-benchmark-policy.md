@@ -1,10 +1,10 @@
 # Phase A0 Benchmark Policy
 
 - **Status:** A0a integrated; the latest completed hosted A0b technical
-  checkpoint passed at test-audit evidence head `a129f37` and merged
-  through `0ec2639`; the PDF/Docling domain replacement pair at source
-  `ed1f370` is local-only pending hosted promotion; exact-head human
-  review and separate R8 owner authorization are not recorded
+  checkpoint passed at PDF/Docling evidence head `33c61ff` and merged
+  through `39f6c9e`; the Task 0.6 Node supply-chain replacement pair at
+  source `5f45757` is local-only pending hosted promotion; exact-head
+  human review and separate R8 owner authorization are not recorded
 - **Milestone:** R10 prerequisite for the R8 pipeline-ownership move
 - **Report schema:** `phase-a0` v3
 
@@ -122,11 +122,15 @@ child `4945878` and merge `f1dae3b`
 ([PR #99](https://github.com/toddlar00/rag-pipeline/pull/99)). The test-audit tooling
 domain pair at source `ca3886c` repeated it through gate-only child
 `a129f37` and merge `0ec2639`
-([PR #100](https://github.com/toddlar00/rag-pipeline/pull/100)). The
-current replacement pair uses the clean PDF/Docling dependency-domain
-source `ed1f370260dff29a42bb3251198fa1e52e6252ba` (tree
-`3247ae5aaeb6f9d6f9357f1ce81b533ff37ba92d`), which changed the four mapped
-core/full/smoke/test locks. Its Windows and Linux CPython 3.12.13 reports were
+([PR #100](https://github.com/toddlar00/rag-pipeline/pull/100)), and the
+PDF/Docling domain pair at source `ed1f370` through gate-only child
+`33c61ff` and merge `39f6c9e`
+([PR #101](https://github.com/toddlar00/rag-pipeline/pull/101)). The
+current replacement pair uses the clean Task 0.6 Node supply-chain
+ownership source `5f45757840d00301bf71a70346d6d981ebc422cb` (tree
+`011f465d9c1bdcb24270051ff26d314a5457051d`), which changed Python gate
+source and workflows but no dependency or model lock. Its Windows and
+Linux CPython 3.12.13 reports were
 generated after the same strict hash-locked synchronization and
 dependency-consistency checks: 189 marker-resolved distributions on
 Windows and 187 on Linux. They bind that one clean source, the same eight
@@ -273,14 +277,18 @@ one-domain test-audit tooling dependency source `ca3886c` repeated the
 cycle: its child `a129f37` passed the hosted full lane with retained
 artifacts and merged through `0ec2639`
 ([PR #100](https://github.com/toddlar00/rag-pipeline/pull/100)). The
-one-domain PDF/Docling dependency source `ed1f370` supersedes that pair in
-turn. Its Windows report is 50,388 bytes (file SHA-256
-`3efe2c40bba882be0d3790b98d54583fe8bf70ff986e2d92ef0bc41d6de1fcfd`;
+one-domain PDF/Docling dependency source `ed1f370` repeated the cycle: its
+child `33c61ff` passed the hosted full lane with retained artifacts and
+merged through `39f6c9e`
+([PR #101](https://github.com/toddlar00/rag-pipeline/pull/101)). The
+Task 0.6 Node supply-chain ownership source `5f45757` supersedes that
+pair in turn. Its Windows report is 50,388 bytes (file SHA-256
+`7acd48d8db8efc706a39fa663b381d28136162718da583a8c5a18dae62d6d2c6`;
 embedded report SHA-256
-`968a3443a2a94bb0892253027808a9eaff9b85e6e24717881b4abf8b4d2397e7`).
-Its Linux report is 49,800 bytes (file SHA-256
-`17f0b96ccdfb6a2d3201cf35700b93d50a8b80ceeb9724d7acbc792ffc1b8d4e`;
+`e5c3882617163244bfbded3f1d803abf7b28775c7e7a942661d2bf754f6e4b75`).
+Its Linux report is 49,802 bytes (file SHA-256
+`568b87667f04add35818e6096cd4d05f54026ba42a769a0ba560e3af93b30b5b`;
 embedded report SHA-256
-`2babaaa1de42a2a621b2f5fbfd78e1b36216ce678ae08542d1351200a21995c1`).
+`57527a56f38dba7b09a37c2fcdf8ae9ad509ab81395ac0c9ca07d7ccb4ab027a`).
 Both use CPython 3.12.13 and pass their complete local same-platform 9×5
 comparisons. Hosted promotion remains pending.

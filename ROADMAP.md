@@ -93,11 +93,16 @@ resolver to uv 0.12.5): gate-only child `a129f37` passed the hosted full
 lane, received the external exact-SHA record on
 [PR #100](https://github.com/toddlar00/rag-pipeline/pull/100), and merged
 through history-preserving `0ec2639`. The one-domain PDF/Docling
-checkpoint `ed1f370` has since changed the four mapped
-core/full/smoke/test locks, so its regenerated Windows/Linux pair
+checkpoint `ed1f370` completed the same cycle: gate-only child `33c61ff`
+passed the hosted full lane, received the external exact-SHA record on
+[PR #101](https://github.com/toddlar00/rag-pipeline/pull/101), and merged
+through history-preserving `39f6c9e`, completing the Dependabot
+supersession queue. The Task 0.6 Node supply-chain ownership checkpoint
+`5f45757` has since changed Python gate source and workflows (no
+dependency or model lock), so its regenerated Windows/Linux pair
 (independent local same-platform comparisons passed) supersedes the
-`ca3886c` pair as the current candidate; its hosted checks and external
-exact-SHA record are pending on the PDF/Docling domain pull request.
+`ed1f370` pair as the current candidate; its hosted checks and external
+exact-SHA record are pending on the Task 0.6 pull request.
 
 Two operational follow-ups from the post-merge `main` push runs are open:
 a documentation-only merge passes its fast-lane pull-request run but then
