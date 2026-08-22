@@ -1,0 +1,55 @@
+name: Static security scan
+
+on:
+  pull_request:
+  merge_group:
+    types: [checks_requested]
+  push:
+    branches: [main]
+  schedule:
+    - cron: "43 10 * * 4"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: static-security-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GIT_NO_REPLACE_OBJECTS: "1"
+  PYTHONUTF8: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  static-scan:
+    name: Narrow Python static-security scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-test.lock
+      - name: Install the hash-locked test toolchain
+        run: python -m pip install --require-hashes -r requirements-test.lock
+      - name: Enforce the pinned static-security ruleset
+        run: >-
+          python tools/check_static_security.py
+          --policy static-security-policy.json
+          --output-envelope static-security-envelope.json
+      - name: Retain the static scan envelope
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: static-security-envelope
+          path: static-security-envelope.json
+          if-no-files-found: error
+          retention-days: 30

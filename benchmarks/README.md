@@ -7,16 +7,18 @@ fresh-process repetitions.
 
 ## Provenance
 
-Both current reports were generated from the clean Task 0.7 secret-scan
-source checkpoint `e055bd07e7460459933326215cdc2d00e4478363` (tree
-`79d809006790b32b091906b07d42d56dd4851411`). That source contains the
+Both current reports were generated from the clean Task 0.8
+static-security source checkpoint
+`8891e1b27c04213fea6d59cd6b93e85051f00817` (tree
+`5a2c632ea1df5661c580c815c8904519b531393d`). That source contains the
 activated deterministic CI promotion workflow, the hardened security-owned
 fixture, all five integrated dependency-domain upgrades, the Task 0.6
-Node supply-chain gate, and the Task 0.7 slice: the repository-owned
-redaction-by-construction secret scanner (`tools/check_secrets.py`), its
-expiring no-baseline allowlist policy (`secret-scan-policy.json`), and
-the dedicated unfiltered `.github/workflows/secret-scan.yml` workflow.
-No dependency or model lock changed. The executing environments were
+Node supply-chain gate, the Task 0.7 secret scanner, and the Task 0.8
+slice: the pinned thirteen-rule static-security gate
+(`tools/check_static_security.py`, `static-security-policy.json`) and
+the dedicated unfiltered `.github/workflows/static-security.yml`
+workflow. No dependency or model lock changed. The executing
+environments were
 synchronized with repository-pinned uv 0.12.5 against the exact CPU
 application/test lock union plus its retained bootstrapper:
 
@@ -33,8 +35,8 @@ marker-resolved distributions before generation.
 
 | Platform | Runtime | Report | Bytes | File SHA-256 | Embedded report SHA-256 |
 |---|---:|---|---:|---|---|
-| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 50,389 | `325b6112c87c9d7ae75f5ce06c317712ea5e91fdb39da537d85c1505c1d019f1` | `8a0f5eb5196b041b7199b8b054f6d479f082e918b2a73e85a5062e6335ed106d` |
-| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 49,795 | `e9b55b766f577edbdf39278a48060d63acba7360e396e4f3235872a05afb9fb5` | `40ef0ff5222bae90e9731d36c6d77502449446149af10856e3f9bccbd3157dd8` |
+| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 50,392 | `15cb2bbaeaaa94ea492935180a22994b1b7e32f383f2ef39b55090d2d38e6db4` | `831f737cf4aa9fc76bf2c7670f3e360bb748e1e37bcd5503df890793eb12728b` |
+| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 49,801 | `922eda3321fbf86e52e4f836824e07c3ea59611ef08185f82e71dc6f307097d3` | `ea2832a70e7cba1438968ec8b5e213df30614ec3fc4404b1f4caaa3e307ef792` |
 
 The reports attest the same source commit, clean-worktree state, tracked-diff
 digest, eight LF and `HEAD`-identical dependency/model-lock inputs, authoritative
@@ -146,9 +148,14 @@ supersession queue. The Task 0.6 Node supply-chain ownership checkpoint
 hosted full lane with retained artifacts, received the external exact-SHA
 record on [#102](https://github.com/toddlar00/rag-pipeline/pull/102), and
 merged through history-preserving `893c4a0`. The Task 0.7 secret-scan
-checkpoint `e055bd0` then changed Python gate source and workflows (no
-lock change), superseding the `5f45757` pair. The current reports above
-bind that exact clean Task 0.7 source and each passes an independent
+checkpoint `e055bd0` repeated the cycle: its gate-only child `32153e9`
+passed the hosted full lane with retained artifacts, received the
+external exact-SHA record on
+[#106](https://github.com/toddlar00/rag-pipeline/pull/106), and merged
+through history-preserving `376277c`. The Task 0.8 static-security
+checkpoint `8891e1b` then changed Python gate source and workflows (no
+lock change), superseding the `e055bd0` pair. The current reports above
+bind that exact clean Task 0.8 source and each passes an independent
 complete same-platform 9×5 comparison. No hosted result for this
 replacement pair is claimed here yet; its hosted checks and external
 exact-SHA record remain pending.

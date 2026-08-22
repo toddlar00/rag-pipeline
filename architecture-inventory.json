@@ -24205,13 +24205,13 @@
   "schema_version": 3,
   "source_architecture": {
     "class_count": 222,
-    "function_count": 2714,
+    "function_count": 2721,
     "import_graph": {
       "cyclic_components": [],
       "edge_count": 157,
       "edge_policy": "first-party-all-contexts-with-provenance-v1"
     },
-    "module_count": 79,
+    "module_count": 80,
     "modules": [
       {
         "class_count": 4,
@@ -42170,7 +42170,7 @@
             "scope": "top_level"
           }
         ],
-        "definition_locations_sha256": "7428c64d1031a9ca880baf786f08634792439eb1cfd98a744deebc5dc81ab216",
+        "definition_locations_sha256": "42703a7448d618b6d67ee4532af25f3d8914665ff82c5148848763c365ec6b17",
         "function_count": 41,
         "functions": [
           {
@@ -42422,9 +42422,9 @@
         ],
         "import_edges": [],
         "module": "tools.check_ci_security",
-        "non_blank_lines": 1823,
+        "non_blank_lines": 1829,
         "path": "tools/check_ci_security.py",
-        "physical_lines": 1949,
+        "physical_lines": 1955,
         "top_level_function_count": 40
       },
       {
@@ -42873,6 +42873,62 @@
         "path": "tools/check_secrets.py",
         "physical_lines": 428,
         "top_level_function_count": 11
+      },
+      {
+        "class_count": 0,
+        "classes": [],
+        "definition_locations_sha256": "be68fbd5e22038840ab3d7e9c40b4805c3fc5075b1deb8d1e6cf7f6dd0a898d1",
+        "function_count": 7,
+        "functions": [
+          {
+            "kind": "function",
+            "name": "_load_policy",
+            "scope": "top_level",
+            "signature_sha256": "06f17d885ba823c4cafa77663f19d5822d5e8ffc1b5da49a03267ccef0ab9d40"
+          },
+          {
+            "kind": "function",
+            "name": "_normalize",
+            "scope": "top_level",
+            "signature_sha256": "257b3eb5b50bd393e95ad42fc5f0254acf5da23e1452b822bb641fd4ad26e9d9"
+          },
+          {
+            "kind": "function",
+            "name": "_reject_duplicate_pairs",
+            "scope": "top_level",
+            "signature_sha256": "e7f28427ad3a25734dcfe0826e5a41efcc9e186fbb5f262dc7d7881162b61fc1"
+          },
+          {
+            "kind": "function",
+            "name": "_ruff_version",
+            "scope": "top_level",
+            "signature_sha256": "1b11514df3c45de48ae5bad15a3b70ff2ff7b6d48913947ace25521be3765ff3"
+          },
+          {
+            "kind": "function",
+            "name": "_run_ruff",
+            "scope": "top_level",
+            "signature_sha256": "d9f7767c190800878515f584c07081a4dc4d0534567505dbd52c25ab6f3eb79f"
+          },
+          {
+            "kind": "function",
+            "name": "evaluate",
+            "scope": "top_level",
+            "signature_sha256": "86b5433453c6069e80cdfccd14807424edc45436e35a378ffca415838bf898c1"
+          },
+          {
+            "kind": "function",
+            "name": "main",
+            "scope": "top_level",
+            "signature_sha256": "ce989ff8b7fdff4812153793fc416547fec4b35fb48e4eebe200922a9a23bab1"
+          }
+        ],
+        "import_edges": [],
+        "module": "tools.check_static_security",
+        "non_blank_lines": 296,
+        "path": "tools/check_static_security.py",
+        "physical_lines": 316,
+        "top_level_function_count": 7
       },
       {
         "class_count": 0,
@@ -43999,16 +44055,16 @@
         "top_level_function_count": 2
       }
     ],
-    "physical_line_count": 91873,
+    "physical_line_count": 92195,
     "source_groups": [
       "production",
       "tools",
       "other"
     ],
-    "top_level_function_count": 1880
+    "top_level_function_count": 1887
   },
   "tracked_sources": {
-    "count": 175,
+    "count": 177,
     "groups": [
       {
         "count": 59,
@@ -44076,7 +44132,7 @@
         ]
       },
       {
-        "count": 96,
+        "count": 97,
         "name": "tests",
         "paths": [
           "tests/test_ai_project_export.py",
@@ -44165,6 +44221,7 @@
           "tests/test_service_search_worker.py",
           "tests/test_source_fidelity_core.py",
           "tests/test_source_snapshot_integrity.py",
+          "tests/test_static_security.py",
           "tests/test_storage_cli.py",
           "tests/test_storage_policy.py",
           "tests/test_structure_profile_cli.py",
@@ -44178,7 +44235,7 @@
         ]
       },
       {
-        "count": 18,
+        "count": 19,
         "name": "tools",
         "paths": [
           "tools/__init__.py",
@@ -44191,6 +44248,7 @@
           "tools/check_node_vulnerabilities.py",
           "tools/check_python_sources.py",
           "tools/check_secrets.py",
+          "tools/check_static_security.py",
           "tools/check_vulnerabilities.py",
           "tools/ci_promotion.py",
           "tools/normalize_node_sbom.py",
