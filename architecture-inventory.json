@@ -24205,13 +24205,13 @@
   "schema_version": 3,
   "source_architecture": {
     "class_count": 222,
-    "function_count": 2703,
+    "function_count": 2714,
     "import_graph": {
       "cyclic_components": [],
       "edge_count": 157,
       "edge_policy": "first-party-all-contexts-with-provenance-v1"
     },
-    "module_count": 78,
+    "module_count": 79,
     "modules": [
       {
         "class_count": 4,
@@ -42170,7 +42170,7 @@
             "scope": "top_level"
           }
         ],
-        "definition_locations_sha256": "246ecb6d5f9992dbc5caf7e84ebd4ea3fc4ade4cc4c7cb07f110ea8443fc3602",
+        "definition_locations_sha256": "7428c64d1031a9ca880baf786f08634792439eb1cfd98a744deebc5dc81ab216",
         "function_count": 41,
         "functions": [
           {
@@ -42422,9 +42422,9 @@
         ],
         "import_edges": [],
         "module": "tools.check_ci_security",
-        "non_blank_lines": 1814,
+        "non_blank_lines": 1823,
         "path": "tools/check_ci_security.py",
-        "physical_lines": 1940,
+        "physical_lines": 1949,
         "top_level_function_count": 40
       },
       {
@@ -42793,6 +42793,86 @@
         "path": "tools/check_python_sources.py",
         "physical_lines": 175,
         "top_level_function_count": 8
+      },
+      {
+        "class_count": 0,
+        "classes": [],
+        "definition_locations_sha256": "edd9881a4b0028bc190709400f121a08b619f59251531288e0daa38307874def",
+        "function_count": 11,
+        "functions": [
+          {
+            "kind": "function",
+            "name": "_assignment_gate",
+            "scope": "top_level",
+            "signature_sha256": "b88a2c345c3fec61d2d44f95ae5528015b0862550027050ab96a59b8134e7d81"
+          },
+          {
+            "kind": "function",
+            "name": "_git_lines",
+            "scope": "top_level",
+            "signature_sha256": "c07abe9f47bbbff34f65c97bdcce34204878b00193b2945f08ec10fb39262915"
+          },
+          {
+            "kind": "function",
+            "name": "_history_documents",
+            "scope": "top_level",
+            "signature_sha256": "41c9cdf2cf7f8b59164071b02a90e2367761814ad099ab7d6c48ef3129163390"
+          },
+          {
+            "kind": "function",
+            "name": "_load_policy",
+            "scope": "top_level",
+            "signature_sha256": "a40fbc52e34f1af8ba2e97214be43e9e6737c0969069e38c993e1cc6eea63bb4"
+          },
+          {
+            "kind": "function",
+            "name": "_plausible_secret",
+            "scope": "top_level",
+            "signature_sha256": "c5ee4ad11f684f51f3b216b9352295cfc1437ec1d028f11d67f6c32436e2c92d"
+          },
+          {
+            "kind": "function",
+            "name": "_reject_duplicate_pairs",
+            "scope": "top_level",
+            "signature_sha256": "0e925562d0078deec7b15aab242cbb848516d160b474382f767d7926670f9a31"
+          },
+          {
+            "kind": "function",
+            "name": "_tracked_documents",
+            "scope": "top_level",
+            "signature_sha256": "01be3efcbe0ce262e86854f08bee7b331852d534476154a5de099466f954ade5"
+          },
+          {
+            "kind": "function",
+            "name": "_url_credential_gate",
+            "scope": "top_level",
+            "signature_sha256": "49144ce66c6495665eef033a12e3da7f57757357023e7372d717cfe00b6ca6b8"
+          },
+          {
+            "kind": "function",
+            "name": "evaluate",
+            "scope": "top_level",
+            "signature_sha256": "f444fcbf632aacdc3e2444aae68b61cf852f5f7f95f4097efd24fee4251f85b5"
+          },
+          {
+            "kind": "function",
+            "name": "main",
+            "scope": "top_level",
+            "signature_sha256": "39d0b70c9607ad1a0ebfb450e8f3f8a2bd7edfd2470e6579c387c81011df7acb"
+          },
+          {
+            "kind": "function",
+            "name": "scan_text",
+            "scope": "top_level",
+            "signature_sha256": "a0437696c530d423c21aadcb2e6871e9089422bb987e60777d019c022f34f879"
+          }
+        ],
+        "import_edges": [],
+        "module": "tools.check_secrets",
+        "non_blank_lines": 397,
+        "path": "tools/check_secrets.py",
+        "physical_lines": 428,
+        "top_level_function_count": 11
       },
       {
         "class_count": 0,
@@ -43919,16 +43999,16 @@
         "top_level_function_count": 2
       }
     ],
-    "physical_line_count": 91436,
+    "physical_line_count": 91873,
     "source_groups": [
       "production",
       "tools",
       "other"
     ],
-    "top_level_function_count": 1869
+    "top_level_function_count": 1880
   },
   "tracked_sources": {
-    "count": 173,
+    "count": 175,
     "groups": [
       {
         "count": 59,
@@ -43996,7 +44076,7 @@
         ]
       },
       {
-        "count": 95,
+        "count": 96,
         "name": "tests",
         "paths": [
           "tests/test_ai_project_export.py",
@@ -44075,6 +44155,7 @@
           "tests/test_scaffold_structure.py",
           "tests/test_scan_cli.py",
           "tests/test_search.py",
+          "tests/test_secret_scan.py",
           "tests/test_service_api.py",
           "tests/test_service_contracts.py",
           "tests/test_service_http.py",
@@ -44097,7 +44178,7 @@
         ]
       },
       {
-        "count": 17,
+        "count": 18,
         "name": "tools",
         "paths": [
           "tools/__init__.py",
@@ -44109,6 +44190,7 @@
           "tools/check_model_artifacts.py",
           "tools/check_node_vulnerabilities.py",
           "tools/check_python_sources.py",
+          "tools/check_secrets.py",
           "tools/check_vulnerabilities.py",
           "tools/ci_promotion.py",
           "tools/normalize_node_sbom.py",
