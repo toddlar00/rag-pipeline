@@ -18,8 +18,8 @@
 PyMuPDF>=1.28.2,<2
 
 # PDF conversion + layout detection
-docling>=2.120.3,<3
-docling-core[chunking]>=2.91.0,<3
+docling>=2.121.0,<3
+docling-core[chunking]>=2.92.0,<3
 pypdfium2>=5.13.0,<6
 
 # Embedding models (nomic, legal-bert, etc.)
