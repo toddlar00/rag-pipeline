@@ -23,9 +23,9 @@ docling-core[chunking]>=2.91.0,<3
 pypdfium2>=5.13.0,<6
 
 # Embedding models (nomic, legal-bert, etc.)
-sentence-transformers>=5.7.0,<6
+sentence-transformers>=6.0.0,<7
 # Reviewed Nomic remote-code module imports einops directly.
-einops>=0.7,<1
+einops>=0.8.2,<1
 
 # Vector store (default backend)
 chromadb>=1.5.2,<2
@@ -35,7 +35,7 @@ onnxruntime>=1.14.1,<1.24; python_version < "3.11"
 onnxruntime>=1.28.0,<2; python_version >= "3.11"
 
 # Cross-encoder reranker
-FlagEmbedding>=1.3,<2
+FlagEmbedding>=1.4.0,<2
 
 # BM25 keyword search (hybrid mode)
 rank-bm25>=0.2,<0.3
