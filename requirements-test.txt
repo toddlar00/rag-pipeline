@@ -8,5 +8,5 @@ numpy==2.5.2; python_version >= "3.12"
 pytest==9.1.1
 rank-bm25==0.2.2
 requests==2.34.2
-ruff==0.16.3
+ruff==0.16.4
 tqdm==4.70.0
