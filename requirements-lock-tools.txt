@@ -1,2 +1,2 @@
 # Exact resolver pin used to generate and verify the universal CPU lockfiles.
-uv==0.12.5
+uv==0.12.7
