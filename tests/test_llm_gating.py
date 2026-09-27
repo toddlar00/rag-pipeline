@@ -1,5 +1,6 @@
 import inspect
 import json
+import threading
 
 import pytest
 
@@ -1260,3 +1261,70 @@ def test_adaptive_throttle_reduces_limit_while_other_calls_are_active():
     assert throttle.current_workers == 2
     for _ in range(3):
         throttle.release_error()
+
+
+@pytest.mark.parametrize("release_method", ["release_429", "release_ok"])
+def test_adaptive_throttle_failing_logger_does_not_block_waiting_worker(
+        monkeypatch, release_method):
+    waiting = threading.Event()
+    acquired = threading.Event()
+    logger_observed_worker = []
+    worker_errors = []
+
+    def failing_logger(_message):
+        # A slow logger must allow an already-waiting worker to acquire its
+        # released slot before logging finishes, even when logging then fails.
+        logger_observed_worker.append(acquired.wait(timeout=2))
+        raise RuntimeError("logging unavailable")
+
+    recovering = release_method == "release_ok"
+    throttle = rag._AdaptiveThrottle(
+        max_workers=4 if recovering else 1,
+        sleep_fn=lambda _seconds: None,
+        info_fn=failing_logger if recovering else lambda _message: None,
+        warning_fn=(
+            (lambda _message: None) if recovering else failing_logger),
+    )
+    if recovering:
+        throttle.acquire()
+        throttle.release_429()
+        for _ in range(19):
+            throttle.acquire()
+            throttle.release_ok()
+
+    occupied_slots = throttle.current_workers
+    for _ in range(occupied_slots):
+        throttle.acquire()
+    original_wait = throttle._condition.wait
+
+    def observed_wait(*args, **kwargs):
+        waiting.set()
+        return original_wait(*args, **kwargs)
+
+    monkeypatch.setattr(throttle._condition, "wait", observed_wait)
+
+    def worker():
+        try:
+            throttle.acquire()
+            acquired.set()
+            throttle.release_error()
+        except BaseException as error:
+            worker_errors.append(error)
+
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+    try:
+        assert waiting.wait(timeout=2)
+        getattr(throttle, release_method)()
+        assert logger_observed_worker == [True]
+        assert acquired.is_set()
+        assert throttle.current_workers == (3 if recovering else 1)
+    finally:
+        # Release any held capacity and wake the worker even if the regression
+        # returns, so a failed assertion cannot strand the test thread.
+        for _ in range(occupied_slots):
+            throttle.release_error()
+        thread.join(timeout=2)
+        assert not thread.is_alive()
+
+    assert worker_errors == []

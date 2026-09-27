@@ -61,12 +61,55 @@ PROVIDER_ERROR_CATEGORIES = frozenset({
     "empty_response",
     "provider_error",
 })
+_ERROR_GUIDANCE = {
+    "missing_credentials": (
+        "Configure credentials for the selected provider, then retry."),
+    "configuration_error": (
+        "Check provider model and endpoint settings, then retry."),
+    "timeout": (
+        "Retry, or increase the request timeout for slow providers."),
+    "connection_error": (
+        "Check provider availability and your network connection, then retry."),
+    "rate_limited": (
+        "Wait before retrying; check provider rate limits and quota."),
+    "authentication_error": (
+        "Check that the configured credentials are valid and permitted "
+        "to use the selected model."),
+    "client_error": (
+        "Check request settings and model support before retrying."),
+    "server_error": (
+        "Retry later or configure another available provider."),
+    "content_filtered": (
+        "Review the request against the provider's content policy."),
+    "invalid_response": (
+        "Check the selected model's response format and output requirements, "
+        "then retry."),
+    "empty_response": (
+        "Retry, or check the model settings if responses remain empty."),
+    "provider_error": (
+        "Check provider availability and configuration, then retry."),
+    "no_provider": (
+        "Configure an enabled provider before retrying."),
+    "budget_exceeded": (
+        "Reduce the workload or explicitly adjust the configured LLM budget "
+        "before retrying."),
+    "runtime_error": (
+        "Retry the request; if the problem persists, check the LLM runtime "
+        "configuration."),
+}
 USAGE_SOURCES = frozenset({"exact", "estimated", "unavailable"})
 
 CacheMode = Literal["readwrite", "readonly", "refresh", "off"]
 FallbackPolicy = Literal["ordered", "none"]
 FailurePolicy = Literal["best-effort", "strict"]
 OutputContractStatus = Literal["accepted", "rejected", "not_evaluated"]
+
+
+def _failure_description(category: str | None) -> str:
+    """Format only fixed category labels and guidance, never provider data."""
+    if isinstance(category, str) and category in _ERROR_GUIDANCE:
+        return f"{category}. {_ERROR_GUIDANCE[category]}"
+    return "unknown error. Check the LLM runtime configuration and retry."
 
 
 def default_cache_dir() -> Path:
@@ -143,15 +186,17 @@ class ProviderCallError(RuntimeError):
     """A normalized provider failure that never embeds raw response data."""
 
     def __init__(self, category: str, *, transport_attempts: int = 1):
-        if category not in PROVIDER_ERROR_CATEGORIES:
-            raise ValueError(f"invalid provider error category: {category}")
+        if (not isinstance(category, str)
+                or category not in PROVIDER_ERROR_CATEGORIES):
+            raise ValueError("invalid provider error category")
         if (isinstance(transport_attempts, bool)
                 or not isinstance(transport_attempts, int)
                 or transport_attempts < 0):
             raise ValueError("transport_attempts must be a non-negative integer")
         self.category = category.strip()
         self.transport_attempts = transport_attempts
-        super().__init__(f"LLM provider call failed: {self.category}")
+        super().__init__(
+            f"LLM provider call failed: {_failure_description(self.category)}")
 
 
 @dataclass(frozen=True)
@@ -245,7 +290,7 @@ class LLMExecutionError(RuntimeError):
         self.result = result
         super().__init__(
             f"LLM request {result.request_id} failed: "
-            f"{result.error_category or 'unknown error'}")
+            f"{_failure_description(result.error_category)}")
 
 
 @dataclass
@@ -271,15 +316,11 @@ def _atomic_write_json(path: Path, payload: object, *, indent: int | None) -> No
     atomic_write_private(path, write, text=True)
 
 
-def _append_private_jsonl(path: Path, payload: dict) -> None:
-    """Append one event through the shared no-follow private policy."""
-    append_private_jsonl(path, payload)
-
-
-def _percentile(values: list[float], percentile: float) -> float | None:
+def _percentile(values: list[float], percentile: float, *,
+                presorted: bool = False) -> float | None:
     if not values:
         return None
-    ordered = sorted(values)
+    ordered = values if presorted else sorted(values)
     index = max(0, math.ceil(percentile * len(ordered)) - 1)
     return round(ordered[index], 3)
 
@@ -1269,7 +1310,7 @@ class LLMRuntime:
         if events_path is not None:
             try:
                 with self._event_lock:
-                    _append_private_jsonl(events_path, event)
+                    append_private_jsonl(events_path, event)
             except Exception:
                 with self._lock:
                     self._counts["event_write_errors"] += 1
@@ -1439,13 +1480,14 @@ class LLMRuntime:
                 "counts": dict(self._counts),
                 "terminal_error_categories": dict(sorted(
                     self._terminal_error_categories.items())),
-                "latency_ms": {
-                    "p50": _percentile(self._request_latencies, 0.50),
-                    "p95": _percentile(self._request_latencies, 0.95),
-                },
-                "providers": providers,
-                "output_contracts": output_contracts,
             }
+            ordered = sorted(self._request_latencies)
+            payload["latency_ms"] = {
+                "p50": _percentile(ordered, 0.50, presorted=True),
+                "p95": _percentile(ordered, 0.95, presorted=True),
+            }
+            payload["providers"] = providers
+            payload["output_contracts"] = output_contracts
             if config.run_id is not None:
                 payload["run_id"] = config.run_id
             return payload

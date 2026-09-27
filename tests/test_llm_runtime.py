@@ -16,6 +16,7 @@ from llm_runtime import (
     LLMRequest,
     LLMRuntime,
     LLMRuntimeConfig,
+    PROVIDER_ERROR_CATEGORIES,
     ProviderCallError,
     ProviderResponse,
     ProviderSpec,
@@ -529,7 +530,116 @@ def test_strict_policy_from_runtime_raises_structured_error(tmp_path):
 
     assert error.value.result.error_category == "empty_response"
     assert error.value.result.fallback_path == ("primary",)
+    assert "check the model settings" in str(error.value)
     assert runtime.report_payload()["counts"]["failed"] == 1
+
+
+_ERROR_GUIDANCE_CASES = [
+    ("missing_credentials", "Configure credentials"),
+    ("configuration_error", "model and endpoint settings"),
+    ("timeout", "increase the request timeout"),
+    ("connection_error", "your network connection"),
+    ("rate_limited", "Wait before retrying"),
+    ("authentication_error", "credentials are valid and permitted"),
+    ("client_error", "request settings and model support"),
+    ("server_error", "Retry later"),
+    ("content_filtered", "provider's content policy"),
+    ("invalid_response", "response format and output requirements"),
+    ("empty_response", "check the model settings"),
+    ("provider_error", "provider availability and configuration"),
+    ("no_provider", "Configure an enabled provider"),
+    ("budget_exceeded", "Reduce the workload"),
+    ("runtime_error", "check the LLM runtime configuration"),
+]
+
+
+@pytest.mark.parametrize("category,guidance", _ERROR_GUIDANCE_CASES)
+def test_execution_errors_offer_category_guidance(tmp_path, category, guidance):
+    runtime = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="off", cache_dir=tmp_path / "cache"))
+    base = runtime.execute(LLMRequest(prompt="private prompt"), [])
+    result = replace(base, error_category=category)
+
+    error = LLMExecutionError(result)
+
+    assert error.result is result
+    assert str(error).startswith(
+        f"LLM request {result.request_id} failed: {category}. ")
+    assert guidance in str(error)
+
+
+@pytest.mark.parametrize("category", sorted(PROVIDER_ERROR_CATEGORIES))
+def test_provider_errors_offer_guidance_without_changing_attempts(category):
+    guidance_by_category = dict(_ERROR_GUIDANCE_CASES)
+    error = ProviderCallError(category, transport_attempts=3)
+
+    assert error.category == category
+    assert error.transport_attempts == 3
+    assert str(error).startswith(f"LLM provider call failed: {category}. ")
+    assert guidance_by_category[category] in str(error)
+
+
+@pytest.mark.parametrize("category", [
+    None,
+    "",
+    "private prompt https://private.example sk-private-key",
+    "timeout: sk-private-key",
+])
+def test_execution_error_unknown_category_has_safe_guidance(tmp_path, category):
+    runtime = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="off", cache_dir=tmp_path / "cache"))
+    base = runtime.execute(LLMRequest(prompt="private prompt"), [])
+    result = replace(
+        base, error_category=category, text="private response",
+        provider="private provider", model="private model")
+
+    error = LLMExecutionError(result)
+
+    assert error.result is result
+    assert str(error) == (
+        f"LLM request {result.request_id} failed: unknown error. "
+        "Check the LLM runtime configuration and retry.")
+    assert "private" not in str(error)
+
+
+@pytest.mark.parametrize("category", [
+    None,
+    [],
+    "",
+    "private prompt https://private.example sk-private-key",
+    "timeout: sk-private-key",
+])
+def test_invalid_provider_error_category_does_not_echo_input(category):
+    with pytest.raises(ValueError) as caught:
+        ProviderCallError(category)
+
+    assert str(caught.value) == "invalid provider error category"
+
+
+def test_strict_error_guidance_does_not_include_sensitive_context(tmp_path):
+    secret = "private prompt https://private.example sk-private-key"
+
+    def invoke(_request):
+        raise TimeoutError(secret)
+
+    runtime = LLMRuntime(LLMRuntimeConfig(
+        cache_mode="off", cache_dir=tmp_path / "cache",
+        failure_policy="strict"))
+
+    with pytest.raises(LLMExecutionError) as caught:
+        runtime.execute(
+            LLMRequest(prompt=secret),
+            [_provider(invoke, endpoint=secret)],
+        )
+
+    result = caught.value.result
+    assert result.error_category == "timeout"
+    assert result.attempts == 1
+    assert result.provider_attempts[0].error_category == "timeout"
+    assert "increase the request timeout" in str(caught.value)
+    assert "private" not in str(caught.value)
+    assert "sk-" not in str(caught.value)
+    assert "https://" not in str(caught.value)
 
 
 def test_provider_dispatch_budget_is_hard(tmp_path):
@@ -1855,3 +1965,27 @@ def test_cli_runtime_flags_configure_run_and_write_report(
     assert report["configuration"]["max_transport_attempts"] == 11
     assert report["counts"]["requests"] == 0
     assert isolated_rag_runtime.config.cache_mode == "off"
+
+
+@pytest.mark.parametrize("latencies,expected", [
+    ([], {"p50": None, "p95": None}),
+    ([1.2346], {"p50": 1.235, "p95": 1.235}),
+    (list(range(20, 0, -1)), {"p50": 10, "p95": 19}),
+    (list(range(21, 0, -1)), {"p50": 11, "p95": 20}),
+    ([9.9996, 1.2344, 1.2346, 3.0], {"p50": 1.235, "p95": 10.0}),
+    ([4.0, 4.0, 0.0, 4.0], {"p50": 4.0, "p95": 4.0}),
+])
+def test_report_latency_nearest_rank_rounding_and_sample_ownership(
+        tmp_path, latencies, expected):
+    from llm_runtime import _percentile
+
+    assert _percentile(latencies, 0.50) == expected["p50"]
+    assert _percentile(latencies, 0.95) == expected["p95"]
+    runtime = LLMRuntime(LLMRuntimeConfig(cache_dir=tmp_path / "unused-cache"))
+    runtime._request_latencies.extend(latencies)
+    first = runtime.report_payload()
+    assert first["latency_ms"] == expected
+    assert runtime._request_latencies == latencies
+    first["latency_ms"]["p50"] = "changed"
+    assert runtime.report_payload()["latency_ms"] == expected
+    assert runtime._request_latencies == latencies
