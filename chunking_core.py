@@ -977,19 +977,32 @@ ChapterHeadingFn = Callable[[str], bool]
 FingerprintFn = Callable[[str], str]
 TrigramFn = Callable[[str], frozenset[str]]
 RemovedCallback = Callable[[int], None]
+NormalizationAuditHook = Callable[[str, str, str], None]
 
 
 def _normalize_text(
         text: str, *,
         strip_headers_footers_fn: TextTransformFn | None = None,
-        dedup_nearby_lines_fn: TextTransformFn | None = None) -> str:
+        dedup_nearby_lines_fn: TextTransformFn | None = None,
+        audit_hook: NormalizationAuditHook | None = None) -> str:
     """Fix common encoding artifacts from PDF extraction.
 
     Handles: non-breaking spaces (\xa0), smart quotes, en/em dashes,
     ligatures (fi, fl, ff, ffi, ffl), and stray control characters.
+
+    The optional observer receives actual changed rule boundaries as immutable
+    strings. It does not replace transformations; its errors propagate. Callback
+    boundaries attribute the injected callback as a whole, not its internals.
+    With no observer the established output and callback/error behavior remain.
     """
     if not text:
         return ""
+
+    def observed(rule: str, before: str, after: str) -> str:
+        if audit_hook is not None and before != after:
+            audit_hook(rule, before, after)
+        return after
+
     replacements = {
         "\xa0": " ",
         "\u2018": "'",
@@ -1006,44 +1019,44 @@ def _normalize_text(
         "\ufffd": "",
     }
     for old, new in replacements.items():
-        text = text.replace(old, new)
+        text = observed(f"unicode_u{ord(old):04x}", text, text.replace(old, new))
     # PDF text layers sometimes insert invisible format controls in the middle
     # of otherwise contiguous words and URLs. These characters carry no text
     # semantics here and prevent the URL-bound repair rules below from matching.
-    text = _remove_safe_zero_width_formatting(text)
+    text = observed("safe_zero_width", text, _remove_safe_zero_width_formatting(text))
     if any(0xE000 <= ord(char) <= 0xF8FF for char in text):
         pua_map = {chr(0xF643 + index): str(index) for index in range(10)}
-        text = "".join(pua_map.get(char, char) for char in text)
+        text = observed("private_use_digits", text, "".join(pua_map.get(char, char) for char in text))
 
     # These repairs target extraction artifacts with strong delimiters.  In
     # particular, do not remove ordinary spaces around hyphens: those may be
     # intentional punctuation rather than broken word wrapping.
-    text = _EDITORIAL_BOILERPLATE_RE.sub("", text)
+    text = observed("editorial_boilerplate", text, _EDITORIAL_BOILERPLATE_RE.sub("", text))
     # Casebook publishers often render the letter for a major section as a
     # separate decorative glyph. Docling can merge that glyph into prose even
     # though the adjacent section heading already carries the semantics.
-    text = _SECTION_MARKER_LINE_RE.sub("", text)
-    text = _DECORATIVE_SQUARE_LINE_RE.sub("", text)
-    text = _PERMA_URL_RE.sub(
+    text = observed("section_marker_line", text, _SECTION_MARKER_LINE_RE.sub("", text))
+    text = observed("decorative_square_line", text, _DECORATIVE_SQUARE_LINE_RE.sub("", text))
+    text = observed("perma_url", text, _PERMA_URL_RE.sub(
         lambda match: (
             f"{match.group(1)}perma.cc/"
             f"{match.group(2)}-{match.group(3)}"
         ),
         text,
-    )
-    text = _BARE_PERMA_URL_RE.sub(
+    ))
+    text = observed("bare_perma_url", text, _BARE_PERMA_URL_RE.sub(
         lambda match: f"perma.cc/{match.group(1)}-{match.group(2)}",
         text,
-    )
+    ))
     # Commit a spaced-URL repair only after one same-line candidate has a
     # closed host and a bounded path/query/fragment endpoint.  This prevents
     # partial cleanup from hiding malformed URLs and prevents a sentence dot
     # or prose dash after a valid host from being swallowed into the URL.
-    text = _repair_spaced_url_candidates(text)
-    text = _SPACED_HYPHEN_RE.sub("-", text)
-    text = _BRACKETED_CONTRACTION_RE.sub(r"\1", text)
-    text = _FUSED_TERM_RE.sub(
-        lambda match: _FUSED_TERM_REPLACEMENTS[match.group(0).lower()], text)
+    text = observed("spaced_url", text, _repair_spaced_url_candidates(text))
+    text = observed("spaced_hyphen", text, _SPACED_HYPHEN_RE.sub("-", text))
+    text = observed("bracketed_contraction", text, _BRACKETED_CONTRACTION_RE.sub(r"\1", text))
+    text = observed("known_fused_term", text, _FUSED_TERM_RE.sub(
+        lambda match: _FUSED_TERM_REPLACEMENTS[match.group(0).lower()], text))
 
     def restore_sentence_space(match: re.Match[str]) -> str:
         """Add a missing sentence space, except inside URL-like tokens."""
@@ -1056,9 +1069,9 @@ def _normalize_text(
             return "."
         return ". "
 
-    text = _MISSING_SENTENCE_SPACE_RE.sub(restore_sentence_space, text)
-    text = _WHITESPACE_RE.sub(" ", text)
-    text = _NEWLINES_RE.sub("\n\n", text)
+    text = observed("sentence_space", text, _MISSING_SENTENCE_SPACE_RE.sub(restore_sentence_space, text))
+    text = observed("horizontal_whitespace", text, _WHITESPACE_RE.sub(" ", text))
+    text = observed("blank_lines", text, _NEWLINES_RE.sub("\n\n", text))
     strip_fn = (
         _strip_headers_footers
         if strip_headers_footers_fn is None else strip_headers_footers_fn
@@ -1067,9 +1080,11 @@ def _normalize_text(
         _dedup_nearby_lines
         if dedup_nearby_lines_fn is None else dedup_nearby_lines_fn
     )
-    text = strip_fn(text)
-    text = dedup_fn(text)
-    return text.strip()
+    text = observed("strip_headers_footers" if strip_headers_footers_fn is None
+                    else "header_footer_callback", text, strip_fn(text))
+    text = observed("dedup_nearby_lines" if dedup_nearby_lines_fn is None
+                    else "nearby_line_callback", text, dedup_fn(text))
+    return observed("outer_whitespace", text, text.strip())
 
 
 def _strip_headers_footers(text: str) -> str:
@@ -1160,9 +1175,17 @@ def _deduplicate_chunks(
         make_trigrams_fn: TrigramFn | None = None,
         removed_callback: RemovedCallback | None = None,
         can_deduplicate_fn: Callable[[dict, dict], bool] | None = None,
+        audit_hook: Callable[[str, int, object], object] | None = None,
         ) -> list[dict]:
-    """Remove near-duplicate chunks based on trigram Jaccard similarity."""
+    """Remove near-duplicate chunks based on trigram Jaccard similarity.
+
+    The optional internal observer returns the exact consumed text for input
+    events. Other events carry occurrence ordinals or the final list identity;
+    they never expose mutable records.
+    """
     if not chunks:
+        if audit_hook is not None:
+            audit_hook("result", 0, id(chunks))
         return chunks
 
     fingerprint_fn = (
@@ -1171,17 +1194,22 @@ def _deduplicate_chunks(
     )
     trigrams_fn = _make_trigrams if make_trigrams_fn is None else make_trigrams_fn
     kept: list[dict] = []
-    seen: list[tuple[int, frozenset[str], dict]] = []
-    for chunk in chunks:
-        fingerprint = fingerprint_fn(chunk["text"])
+    seen: list[tuple[int, frozenset[str], dict, int]] = []
+    for index, chunk in enumerate(chunks):
+        if audit_hook is None:
+            fingerprint = fingerprint_fn(chunk["text"])
+        else:
+            fingerprint = fingerprint_fn(audit_hook("input", index, chunk["text"]))
         fingerprint_length = len(fingerprint)
         trigrams_a = trigrams_fn(fingerprint)
         if not trigrams_a:
             kept.append(chunk)
+            if audit_hook is not None:
+                audit_hook("keep", index, None)
             continue
 
         is_duplicate = False
-        for seen_length, trigrams_b, seen_chunk in seen:
+        for seen_length, trigrams_b, seen_chunk, seen_index in seen:
             if (abs(fingerprint_length - seen_length)
                     / max(fingerprint_length, seen_length) > 0.2):
                 continue
@@ -1192,15 +1220,21 @@ def _deduplicate_chunks(
                     and (can_deduplicate_fn is None
                          or can_deduplicate_fn(seen_chunk, chunk))):
                 is_duplicate = True
+                if audit_hook is not None:
+                    audit_hook("remove", index, seen_index)
                 break
 
         if not is_duplicate:
             kept.append(chunk)
-            seen.append((fingerprint_length, trigrams_a, chunk))
+            seen.append((fingerprint_length, trigrams_a, chunk, index))
+            if audit_hook is not None:
+                audit_hook("keep", index, None)
 
     removed = len(chunks) - len(kept)
     if removed > 0 and removed_callback is not None:
         removed_callback(removed)
+    if audit_hook is not None:
+        audit_hook("result", len(kept), id(kept))
     return kept
 
 

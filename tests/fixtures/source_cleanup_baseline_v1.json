@@ -1,0 +1,2555 @@
+{
+  "baseline_receipt_sha256": "cb0954db857a71b94f8b5718bf91dd984a11e882a16a640570f42625b5d1212c",
+  "capture_helper_sha256": "79250ef57571368d7fbcdbe6cb141f477bef863c7011d88e9ba4b72a6f22caff",
+  "case_count": 24,
+  "cases": [
+    {
+      "exception": null,
+      "fixture": {
+        "content_source": "body",
+        "fault": null,
+        "id": "empty",
+        "item_order": [],
+        "items": {},
+        "overrides": {},
+        "preserve_source_identity": false,
+        "rebuild_refs": [],
+        "text": ""
+      },
+      "observations": [],
+      "output": ""
+    },
+    {
+      "exception": null,
+      "fixture": {
+        "content_source": "body",
+        "fault": null,
+        "id": "body-typography",
+        "item_order": [],
+        "items": {},
+        "overrides": {},
+        "preserve_source_identity": false,
+        "rebuild_refs": [],
+        "text": "\u03c0\u2019s  A\u2013B \ufb01le\u00a0ID_007"
+      },
+      "observations": [
+        {
+          "arguments": {
+            "text": "\u03c0's A-B file ID_007"
+          },
+          "event": "call",
+          "function": "header_footer_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "text": "\u03c0's A-B file ID_007"
+          },
+          "event": "return_or_unwind",
+          "function": "header_footer_callback",
+          "result": "\u03c0's A-B file ID_007"
+        },
+        {
+          "arguments": {
+            "text": "\u03c0's A-B file ID_007"
+          },
+          "event": "call",
+          "function": "nearby_line_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "text": "\u03c0's A-B file ID_007"
+          },
+          "event": "return_or_unwind",
+          "function": "nearby_line_callback",
+          "result": "\u03c0's A-B file ID_007"
+        }
+      ],
+      "output": "\u03c0's A-B file ID_007"
+    },
+    {
+      "exception": null,
+      "fixture": {
+        "content_source": "figure",
+        "fault": null,
+        "id": "figure-apostrophe",
+        "item_order": [],
+        "items": {},
+        "overrides": {},
+        "preserve_source_identity": true,
+        "rebuild_refs": [],
+        "text": "Figure: \u03c0\u2019s calibration and operator\u2019s note"
+      },
+      "observations": [
+        {
+          "arguments": {
+            "text": "Figure: \u03c0's calibration and operator's note"
+          },
+          "event": "call",
+          "function": "header_footer_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "text": "Figure: \u03c0's calibration and operator's note"
+          },
+          "event": "return_or_unwind",
+          "function": "header_footer_callback",
+          "result": "Figure: \u03c0's calibration and operator's note"
+        },
+        {
+          "arguments": {
+            "text": "Figure: \u03c0's calibration and operator's note"
+          },
+          "event": "call",
+          "function": "nearby_line_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "text": "Figure: \u03c0's calibration and operator's note"
+          },
+          "event": "return_or_unwind",
+          "function": "nearby_line_callback",
+          "result": "Figure: \u03c0's calibration and operator's note"
+        }
+      ],
+      "output": "Figure: \u03c0\u2019s calibration and operator\u2019s note"
+    },
+    {
+      "exception": null,
+      "fixture": {
+        "content_source": "figure",
+        "fault": null,
+        "id": "figure-token-count-mismatch",
+        "item_order": [],
+        "items": {},
+        "overrides": {},
+        "preserve_source_identity": true,
+        "rebuild_refs": [],
+        "text": "7\n\u03c0\u2019s"
+      },
+      "observations": [
+        {
+          "arguments": {
+            "text": "7\n\u03c0's"
+          },
+          "event": "call",
+          "function": "header_footer_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "text": "7\n\u03c0's"
+          },
+          "event": "return_or_unwind",
+          "function": "header_footer_callback",
+          "result": "\n\u03c0's"
+        },
+        {
+          "arguments": {
+            "text": "\n\u03c0's"
+          },
+          "event": "call",
+          "function": "nearby_line_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "text": "\n\u03c0's"
+          },
+          "event": "return_or_unwind",
+          "function": "nearby_line_callback",
+          "result": "\n\u03c0's"
+        }
+      ],
+      "output": "\u03c0's"
+    },
+    {
+      "exception": null,
+      "fixture": {
+        "content_source": "figure",
+        "fault": null,
+        "id": "figure-token-length-mismatch",
+        "item_order": [],
+        "items": {},
+        "overrides": {},
+        "preserve_source_identity": true,
+        "rebuild_refs": [],
+        "text": "\ufb01rm\u2019s"
+      },
+      "observations": [
+        {
+          "arguments": {
+            "text": "firm's"
+          },
+          "event": "call",
+          "function": "header_footer_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "text": "firm's"
+          },
+          "event": "return_or_unwind",
+          "function": "header_footer_callback",
+          "result": "firm's"
+        },
+        {
+          "arguments": {
+            "text": "firm's"
+          },
+          "event": "call",
+          "function": "nearby_line_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "text": "firm's"
+          },
+          "event": "return_or_unwind",
+          "function": "nearby_line_callback",
+          "result": "firm's"
+        }
+      ],
+      "output": "firm's"
+    },
+    {
+      "exception": null,
+      "fixture": {
+        "content_source": "footnote",
+        "fault": null,
+        "id": "footnote-marker",
+        "item_order": [],
+        "items": {},
+        "overrides": {},
+        "preserve_source_identity": false,
+        "rebuild_refs": [],
+        "text": "7"
+      },
+      "observations": [
+        {
+          "arguments": {
+            "value": "7"
+          },
+          "event": "call",
+          "function": "header_footer_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "value": "7"
+          },
+          "event": "return_or_unwind",
+          "function": "header_footer_callback",
+          "result": "7"
+        },
+        {
+          "arguments": {
+            "text": "7"
+          },
+          "event": "call",
+          "function": "nearby_line_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "text": "7"
+          },
+          "event": "return_or_unwind",
+          "function": "nearby_line_callback",
+          "result": "7"
+        }
+      ],
+      "output": "7"
+    },
+    {
+      "exception": null,
+      "fixture": {
+        "content_source": "body",
+        "fault": null,
+        "id": "body-page-number",
+        "item_order": [],
+        "items": {},
+        "overrides": {},
+        "preserve_source_identity": false,
+        "rebuild_refs": [],
+        "text": "7"
+      },
+      "observations": [
+        {
+          "arguments": {
+            "text": "7"
+          },
+          "event": "call",
+          "function": "header_footer_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "text": "7"
+          },
+          "event": "return_or_unwind",
+          "function": "header_footer_callback",
+          "result": ""
+        },
+        {
+          "arguments": {
+            "text": ""
+          },
+          "event": "call",
+          "function": "nearby_line_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "text": ""
+          },
+          "event": "return_or_unwind",
+          "function": "nearby_line_callback",
+          "result": ""
+        }
+      ],
+      "output": ""
+    },
+    {
+      "exception": null,
+      "fixture": {
+        "content_source": "body",
+        "fault": null,
+        "id": "source-numeric-rescue",
+        "item_order": [],
+        "items": {},
+        "overrides": {},
+        "preserve_source_identity": true,
+        "rebuild_refs": [],
+        "text": "2003"
+      },
+      "observations": [
+        {
+          "arguments": {
+            "text": "2003"
+          },
+          "event": "call",
+          "function": "header_footer_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "text": "2003"
+          },
+          "event": "return_or_unwind",
+          "function": "header_footer_callback",
+          "result": ""
+        },
+        {
+          "arguments": {
+            "text": ""
+          },
+          "event": "call",
+          "function": "nearby_line_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "text": ""
+          },
+          "event": "return_or_unwind",
+          "function": "nearby_line_callback",
+          "result": ""
+        },
+        {
+          "arguments": {
+            "value": "2003"
+          },
+          "event": "call",
+          "function": "header_footer_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "value": "2003"
+          },
+          "event": "return_or_unwind",
+          "function": "header_footer_callback",
+          "result": "2003"
+        },
+        {
+          "arguments": {
+            "text": "2003"
+          },
+          "event": "call",
+          "function": "nearby_line_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "text": "2003"
+          },
+          "event": "return_or_unwind",
+          "function": "nearby_line_callback",
+          "result": "2003"
+        }
+      ],
+      "output": "2003"
+    },
+    {
+      "exception": null,
+      "fixture": {
+        "content_source": "body",
+        "fault": null,
+        "id": "ordinary-duplicate",
+        "item_order": [],
+        "items": {},
+        "overrides": {},
+        "preserve_source_identity": true,
+        "rebuild_refs": [],
+        "text": "Repeated prose.\nRepeated prose."
+      },
+      "observations": [
+        {
+          "arguments": {
+            "text": "Repeated prose.\nRepeated prose."
+          },
+          "event": "call",
+          "function": "header_footer_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "text": "Repeated prose.\nRepeated prose."
+          },
+          "event": "return_or_unwind",
+          "function": "header_footer_callback",
+          "result": "Repeated prose.\nRepeated prose."
+        },
+        {
+          "arguments": {
+            "text": "Repeated prose.\nRepeated prose."
+          },
+          "event": "call",
+          "function": "nearby_line_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "text": "Repeated prose.\nRepeated prose."
+          },
+          "event": "return_or_unwind",
+          "function": "nearby_line_callback",
+          "result": "Repeated prose."
+        }
+      ],
+      "output": "Repeated prose."
+    },
+    {
+      "exception": null,
+      "fixture": {
+        "content_source": "body",
+        "fault": null,
+        "id": "markdown-list-duplicate",
+        "item_order": [],
+        "items": {},
+        "overrides": {},
+        "preserve_source_identity": true,
+        "rebuild_refs": [],
+        "text": "- First\n  - Repeat\n  - Repeat"
+      },
+      "observations": [
+        {
+          "arguments": {
+            "text": "\ue101- First\n\ue100\ue100\ue101\ue101- Repeat\n\ue100\ue100\ue101\ue101\ue101- Repeat"
+          },
+          "event": "call",
+          "function": "header_footer_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "text": "\ue101- First\n\ue100\ue100\ue101\ue101- Repeat\n\ue100\ue100\ue101\ue101\ue101- Repeat"
+          },
+          "event": "return_or_unwind",
+          "function": "header_footer_callback",
+          "result": "\ue101- First\n\ue100\ue100\ue101\ue101- Repeat\n\ue100\ue100\ue101\ue101\ue101- Repeat"
+        },
+        {
+          "arguments": {
+            "text": "\ue101- First\n\ue100\ue100\ue101\ue101- Repeat\n\ue100\ue100\ue101\ue101\ue101- Repeat"
+          },
+          "event": "call",
+          "function": "nearby_line_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "text": "\ue101- First\n\ue100\ue100\ue101\ue101- Repeat\n\ue100\ue100\ue101\ue101\ue101- Repeat"
+          },
+          "event": "return_or_unwind",
+          "function": "nearby_line_callback",
+          "result": "\ue101- First\n\ue100\ue100\ue101\ue101- Repeat\n\ue100\ue100\ue101\ue101\ue101- Repeat"
+        }
+      ],
+      "output": "- First\n  - Repeat\n  - Repeat"
+    },
+    {
+      "exception": null,
+      "fixture": {
+        "content_source": "body",
+        "fault": null,
+        "id": "table-row-duplicate",
+        "item_order": [],
+        "items": {},
+        "overrides": {},
+        "preserve_source_identity": true,
+        "rebuild_refs": [],
+        "text": "| Date | Value |\n| Date | Value |"
+      },
+      "observations": [
+        {
+          "arguments": {
+            "text": "| Date | Value |\n| Date | Value |"
+          },
+          "event": "call",
+          "function": "header_footer_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "text": "| Date | Value |\n| Date | Value |"
+          },
+          "event": "return_or_unwind",
+          "function": "header_footer_callback",
+          "result": "| Date | Value |\n| Date | Value |"
+        },
+        {
+          "arguments": {
+            "text": "| Date | Value |\n| Date | Value |"
+          },
+          "event": "call",
+          "function": "nearby_line_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "text": "| Date | Value |\n| Date | Value |"
+          },
+          "event": "return_or_unwind",
+          "function": "nearby_line_callback",
+          "result": "| Date | Value |\n| Date | Value |"
+        }
+      ],
+      "output": "| Date | Value |\n| Date | Value |"
+    },
+    {
+      "exception": null,
+      "fixture": {
+        "content_source": "body",
+        "fault": null,
+        "id": "markdown-sentinels-exhausted",
+        "item_order": [],
+        "items": {},
+        "overrides": {},
+        "preserve_source_identity": false,
+        "rebuild_refs": [],
+        "text": "- Repeat\n- Repeat\n\ue100\ue101\ue102\ue103\ue104\ue105\ue106\ue107\ue108\ue109\ue10a\ue10b\ue10c\ue10d\ue10e\ue10f\ue110\ue111\ue112\ue113\ue114\ue115\ue116\ue117\ue118\ue119\ue11a\ue11b\ue11c\ue11d\ue11e\ue11f\ue120\ue121\ue122\ue123\ue124\ue125\ue126\ue127\ue128\ue129\ue12a\ue12b\ue12c\ue12d\ue12e\ue12f\ue130\ue131\ue132\ue133\ue134\ue135\ue136\ue137\ue138\ue139\ue13a\ue13b\ue13c\ue13d\ue13e\ue13f\ue140\ue141\ue142\ue143\ue144\ue145\ue146\ue147\ue148\ue149\ue14a\ue14b\ue14c\ue14d\ue14e\ue14f\ue150\ue151\ue152\ue153\ue154\ue155\ue156\ue157\ue158\ue159\ue15a\ue15b\ue15c\ue15d\ue15e\ue15f\ue160\ue161\ue162\ue163\ue164\ue165\ue166\ue167\ue168\ue169\ue16a\ue16b\ue16c\ue16d\ue16e\ue16f\ue170\ue171\ue172\ue173\ue174\ue175\ue176\ue177\ue178\ue179\ue17a\ue17b\ue17c\ue17d\ue17e\ue17f\ue180\ue181\ue182\ue183\ue184\ue185\ue186\ue187\ue188\ue189\ue18a\ue18b\ue18c\ue18d\ue18e\ue18f\ue190\ue191\ue192\ue193\ue194\ue195\ue196\ue197\ue198\ue199\ue19a\ue19b\ue19c\ue19d\ue19e\ue19f\ue1a0\ue1a1\ue1a2\ue1a3\ue1a4\ue1a5\ue1a6\ue1a7\ue1a8\ue1a9\ue1aa\ue1ab\ue1ac\ue1ad\ue1ae\ue1af\ue1b0\ue1b1\ue1b2\ue1b3\ue1b4\ue1b5\ue1b6\ue1b7\ue1b8\ue1b9\ue1ba\ue1bb\ue1bc\ue1bd\ue1be\ue1bf\ue1c0\ue1c1\ue1c2\ue1c3\ue1c4\ue1c5\ue1c6\ue1c7\ue1c8\ue1c9\ue1ca\ue1cb\ue1cc\ue1cd\ue1ce\ue1cf\ue1d0\ue1d1\ue1d2\ue1d3\ue1d4\ue1d5\ue1d6\ue1d7\ue1d8\ue1d9\ue1da\ue1db\ue1dc\ue1dd\ue1de\ue1df\ue1e0\ue1e1\ue1e2\ue1e3\ue1e4\ue1e5\ue1e6\ue1e7\ue1e8\ue1e9\ue1ea\ue1eb\ue1ec\ue1ed\ue1ee\ue1ef\ue1f0\ue1f1\ue1f2\ue1f3\ue1f4\ue1f5\ue1f6\ue1f7\ue1f8\ue1f9\ue1fa\ue1fb\ue1fc\ue1fd\ue1fe\ue1ff"
+      },
+      "observations": [
+        {
+          "arguments": {
+            "text": "- Repeat\n- Repeat\n\ue100\ue101\ue102\ue103\ue104\ue105\ue106\ue107\ue108\ue109\ue10a\ue10b\ue10c\ue10d\ue10e\ue10f\ue110\ue111\ue112\ue113\ue114\ue115\ue116\ue117\ue118\ue119\ue11a\ue11b\ue11c\ue11d\ue11e\ue11f\ue120\ue121\ue122\ue123\ue124\ue125\ue126\ue127\ue128\ue129\ue12a\ue12b\ue12c\ue12d\ue12e\ue12f\ue130\ue131\ue132\ue133\ue134\ue135\ue136\ue137\ue138\ue139\ue13a\ue13b\ue13c\ue13d\ue13e\ue13f\ue140\ue141\ue142\ue143\ue144\ue145\ue146\ue147\ue148\ue149\ue14a\ue14b\ue14c\ue14d\ue14e\ue14f\ue150\ue151\ue152\ue153\ue154\ue155\ue156\ue157\ue158\ue159\ue15a\ue15b\ue15c\ue15d\ue15e\ue15f\ue160\ue161\ue162\ue163\ue164\ue165\ue166\ue167\ue168\ue169\ue16a\ue16b\ue16c\ue16d\ue16e\ue16f\ue170\ue171\ue172\ue173\ue174\ue175\ue176\ue177\ue178\ue179\ue17a\ue17b\ue17c\ue17d\ue17e\ue17f\ue180\ue181\ue182\ue183\ue184\ue185\ue186\ue187\ue188\ue189\ue18a\ue18b\ue18c\ue18d\ue18e\ue18f\ue190\ue191\ue192\ue193\ue194\ue195\ue196\ue197\ue198\ue199\ue19a\ue19b\ue19c\ue19d\ue19e\ue19f\ue1a0\ue1a1\ue1a2\ue1a3\ue1a4\ue1a5\ue1a6\ue1a7\ue1a8\ue1a9\ue1aa\ue1ab\ue1ac\ue1ad\ue1ae\ue1af\ue1b0\ue1b1\ue1b2\ue1b3\ue1b4\ue1b5\ue1b6\ue1b7\ue1b8\ue1b9\ue1ba\ue1bb\ue1bc\ue1bd\ue1be\ue1bf\ue1c0\ue1c1\ue1c2\ue1c3\ue1c4\ue1c5\ue1c6\ue1c7\ue1c8\ue1c9\ue1ca\ue1cb\ue1cc\ue1cd\ue1ce\ue1cf\ue1d0\ue1d1\ue1d2\ue1d3\ue1d4\ue1d5\ue1d6\ue1d7\ue1d8\ue1d9\ue1da\ue1db\ue1dc\ue1dd\ue1de\ue1df\ue1e0\ue1e1\ue1e2\ue1e3\ue1e4\ue1e5\ue1e6\ue1e7\ue1e8\ue1e9\ue1ea\ue1eb\ue1ec\ue1ed\ue1ee\ue1ef\ue1f0\ue1f1\ue1f2\ue1f3\ue1f4\ue1f5\ue1f6\ue1f7\ue1f8\ue1f9\ue1fa\ue1fb\ue1fc\ue1fd\ue1fe\ue1ff"
+          },
+          "event": "call",
+          "function": "header_footer_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "text": "- Repeat\n- Repeat\n\ue100\ue101\ue102\ue103\ue104\ue105\ue106\ue107\ue108\ue109\ue10a\ue10b\ue10c\ue10d\ue10e\ue10f\ue110\ue111\ue112\ue113\ue114\ue115\ue116\ue117\ue118\ue119\ue11a\ue11b\ue11c\ue11d\ue11e\ue11f\ue120\ue121\ue122\ue123\ue124\ue125\ue126\ue127\ue128\ue129\ue12a\ue12b\ue12c\ue12d\ue12e\ue12f\ue130\ue131\ue132\ue133\ue134\ue135\ue136\ue137\ue138\ue139\ue13a\ue13b\ue13c\ue13d\ue13e\ue13f\ue140\ue141\ue142\ue143\ue144\ue145\ue146\ue147\ue148\ue149\ue14a\ue14b\ue14c\ue14d\ue14e\ue14f\ue150\ue151\ue152\ue153\ue154\ue155\ue156\ue157\ue158\ue159\ue15a\ue15b\ue15c\ue15d\ue15e\ue15f\ue160\ue161\ue162\ue163\ue164\ue165\ue166\ue167\ue168\ue169\ue16a\ue16b\ue16c\ue16d\ue16e\ue16f\ue170\ue171\ue172\ue173\ue174\ue175\ue176\ue177\ue178\ue179\ue17a\ue17b\ue17c\ue17d\ue17e\ue17f\ue180\ue181\ue182\ue183\ue184\ue185\ue186\ue187\ue188\ue189\ue18a\ue18b\ue18c\ue18d\ue18e\ue18f\ue190\ue191\ue192\ue193\ue194\ue195\ue196\ue197\ue198\ue199\ue19a\ue19b\ue19c\ue19d\ue19e\ue19f\ue1a0\ue1a1\ue1a2\ue1a3\ue1a4\ue1a5\ue1a6\ue1a7\ue1a8\ue1a9\ue1aa\ue1ab\ue1ac\ue1ad\ue1ae\ue1af\ue1b0\ue1b1\ue1b2\ue1b3\ue1b4\ue1b5\ue1b6\ue1b7\ue1b8\ue1b9\ue1ba\ue1bb\ue1bc\ue1bd\ue1be\ue1bf\ue1c0\ue1c1\ue1c2\ue1c3\ue1c4\ue1c5\ue1c6\ue1c7\ue1c8\ue1c9\ue1ca\ue1cb\ue1cc\ue1cd\ue1ce\ue1cf\ue1d0\ue1d1\ue1d2\ue1d3\ue1d4\ue1d5\ue1d6\ue1d7\ue1d8\ue1d9\ue1da\ue1db\ue1dc\ue1dd\ue1de\ue1df\ue1e0\ue1e1\ue1e2\ue1e3\ue1e4\ue1e5\ue1e6\ue1e7\ue1e8\ue1e9\ue1ea\ue1eb\ue1ec\ue1ed\ue1ee\ue1ef\ue1f0\ue1f1\ue1f2\ue1f3\ue1f4\ue1f5\ue1f6\ue1f7\ue1f8\ue1f9\ue1fa\ue1fb\ue1fc\ue1fd\ue1fe\ue1ff"
+          },
+          "event": "return_or_unwind",
+          "function": "header_footer_callback",
+          "result": "- Repeat\n- Repeat\n\ue100\ue101\ue102\ue103\ue104\ue105\ue106\ue107\ue108\ue109\ue10a\ue10b\ue10c\ue10d\ue10e\ue10f\ue110\ue111\ue112\ue113\ue114\ue115\ue116\ue117\ue118\ue119\ue11a\ue11b\ue11c\ue11d\ue11e\ue11f\ue120\ue121\ue122\ue123\ue124\ue125\ue126\ue127\ue128\ue129\ue12a\ue12b\ue12c\ue12d\ue12e\ue12f\ue130\ue131\ue132\ue133\ue134\ue135\ue136\ue137\ue138\ue139\ue13a\ue13b\ue13c\ue13d\ue13e\ue13f\ue140\ue141\ue142\ue143\ue144\ue145\ue146\ue147\ue148\ue149\ue14a\ue14b\ue14c\ue14d\ue14e\ue14f\ue150\ue151\ue152\ue153\ue154\ue155\ue156\ue157\ue158\ue159\ue15a\ue15b\ue15c\ue15d\ue15e\ue15f\ue160\ue161\ue162\ue163\ue164\ue165\ue166\ue167\ue168\ue169\ue16a\ue16b\ue16c\ue16d\ue16e\ue16f\ue170\ue171\ue172\ue173\ue174\ue175\ue176\ue177\ue178\ue179\ue17a\ue17b\ue17c\ue17d\ue17e\ue17f\ue180\ue181\ue182\ue183\ue184\ue185\ue186\ue187\ue188\ue189\ue18a\ue18b\ue18c\ue18d\ue18e\ue18f\ue190\ue191\ue192\ue193\ue194\ue195\ue196\ue197\ue198\ue199\ue19a\ue19b\ue19c\ue19d\ue19e\ue19f\ue1a0\ue1a1\ue1a2\ue1a3\ue1a4\ue1a5\ue1a6\ue1a7\ue1a8\ue1a9\ue1aa\ue1ab\ue1ac\ue1ad\ue1ae\ue1af\ue1b0\ue1b1\ue1b2\ue1b3\ue1b4\ue1b5\ue1b6\ue1b7\ue1b8\ue1b9\ue1ba\ue1bb\ue1bc\ue1bd\ue1be\ue1bf\ue1c0\ue1c1\ue1c2\ue1c3\ue1c4\ue1c5\ue1c6\ue1c7\ue1c8\ue1c9\ue1ca\ue1cb\ue1cc\ue1cd\ue1ce\ue1cf\ue1d0\ue1d1\ue1d2\ue1d3\ue1d4\ue1d5\ue1d6\ue1d7\ue1d8\ue1d9\ue1da\ue1db\ue1dc\ue1dd\ue1de\ue1df\ue1e0\ue1e1\ue1e2\ue1e3\ue1e4\ue1e5\ue1e6\ue1e7\ue1e8\ue1e9\ue1ea\ue1eb\ue1ec\ue1ed\ue1ee\ue1ef\ue1f0\ue1f1\ue1f2\ue1f3\ue1f4\ue1f5\ue1f6\ue1f7\ue1f8\ue1f9\ue1fa\ue1fb\ue1fc\ue1fd\ue1fe\ue1ff"
+        },
+        {
+          "arguments": {
+            "text": "- Repeat\n- Repeat\n\ue100\ue101\ue102\ue103\ue104\ue105\ue106\ue107\ue108\ue109\ue10a\ue10b\ue10c\ue10d\ue10e\ue10f\ue110\ue111\ue112\ue113\ue114\ue115\ue116\ue117\ue118\ue119\ue11a\ue11b\ue11c\ue11d\ue11e\ue11f\ue120\ue121\ue122\ue123\ue124\ue125\ue126\ue127\ue128\ue129\ue12a\ue12b\ue12c\ue12d\ue12e\ue12f\ue130\ue131\ue132\ue133\ue134\ue135\ue136\ue137\ue138\ue139\ue13a\ue13b\ue13c\ue13d\ue13e\ue13f\ue140\ue141\ue142\ue143\ue144\ue145\ue146\ue147\ue148\ue149\ue14a\ue14b\ue14c\ue14d\ue14e\ue14f\ue150\ue151\ue152\ue153\ue154\ue155\ue156\ue157\ue158\ue159\ue15a\ue15b\ue15c\ue15d\ue15e\ue15f\ue160\ue161\ue162\ue163\ue164\ue165\ue166\ue167\ue168\ue169\ue16a\ue16b\ue16c\ue16d\ue16e\ue16f\ue170\ue171\ue172\ue173\ue174\ue175\ue176\ue177\ue178\ue179\ue17a\ue17b\ue17c\ue17d\ue17e\ue17f\ue180\ue181\ue182\ue183\ue184\ue185\ue186\ue187\ue188\ue189\ue18a\ue18b\ue18c\ue18d\ue18e\ue18f\ue190\ue191\ue192\ue193\ue194\ue195\ue196\ue197\ue198\ue199\ue19a\ue19b\ue19c\ue19d\ue19e\ue19f\ue1a0\ue1a1\ue1a2\ue1a3\ue1a4\ue1a5\ue1a6\ue1a7\ue1a8\ue1a9\ue1aa\ue1ab\ue1ac\ue1ad\ue1ae\ue1af\ue1b0\ue1b1\ue1b2\ue1b3\ue1b4\ue1b5\ue1b6\ue1b7\ue1b8\ue1b9\ue1ba\ue1bb\ue1bc\ue1bd\ue1be\ue1bf\ue1c0\ue1c1\ue1c2\ue1c3\ue1c4\ue1c5\ue1c6\ue1c7\ue1c8\ue1c9\ue1ca\ue1cb\ue1cc\ue1cd\ue1ce\ue1cf\ue1d0\ue1d1\ue1d2\ue1d3\ue1d4\ue1d5\ue1d6\ue1d7\ue1d8\ue1d9\ue1da\ue1db\ue1dc\ue1dd\ue1de\ue1df\ue1e0\ue1e1\ue1e2\ue1e3\ue1e4\ue1e5\ue1e6\ue1e7\ue1e8\ue1e9\ue1ea\ue1eb\ue1ec\ue1ed\ue1ee\ue1ef\ue1f0\ue1f1\ue1f2\ue1f3\ue1f4\ue1f5\ue1f6\ue1f7\ue1f8\ue1f9\ue1fa\ue1fb\ue1fc\ue1fd\ue1fe\ue1ff"
+          },
+          "event": "call",
+          "function": "nearby_line_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "text": "- Repeat\n- Repeat\n\ue100\ue101\ue102\ue103\ue104\ue105\ue106\ue107\ue108\ue109\ue10a\ue10b\ue10c\ue10d\ue10e\ue10f\ue110\ue111\ue112\ue113\ue114\ue115\ue116\ue117\ue118\ue119\ue11a\ue11b\ue11c\ue11d\ue11e\ue11f\ue120\ue121\ue122\ue123\ue124\ue125\ue126\ue127\ue128\ue129\ue12a\ue12b\ue12c\ue12d\ue12e\ue12f\ue130\ue131\ue132\ue133\ue134\ue135\ue136\ue137\ue138\ue139\ue13a\ue13b\ue13c\ue13d\ue13e\ue13f\ue140\ue141\ue142\ue143\ue144\ue145\ue146\ue147\ue148\ue149\ue14a\ue14b\ue14c\ue14d\ue14e\ue14f\ue150\ue151\ue152\ue153\ue154\ue155\ue156\ue157\ue158\ue159\ue15a\ue15b\ue15c\ue15d\ue15e\ue15f\ue160\ue161\ue162\ue163\ue164\ue165\ue166\ue167\ue168\ue169\ue16a\ue16b\ue16c\ue16d\ue16e\ue16f\ue170\ue171\ue172\ue173\ue174\ue175\ue176\ue177\ue178\ue179\ue17a\ue17b\ue17c\ue17d\ue17e\ue17f\ue180\ue181\ue182\ue183\ue184\ue185\ue186\ue187\ue188\ue189\ue18a\ue18b\ue18c\ue18d\ue18e\ue18f\ue190\ue191\ue192\ue193\ue194\ue195\ue196\ue197\ue198\ue199\ue19a\ue19b\ue19c\ue19d\ue19e\ue19f\ue1a0\ue1a1\ue1a2\ue1a3\ue1a4\ue1a5\ue1a6\ue1a7\ue1a8\ue1a9\ue1aa\ue1ab\ue1ac\ue1ad\ue1ae\ue1af\ue1b0\ue1b1\ue1b2\ue1b3\ue1b4\ue1b5\ue1b6\ue1b7\ue1b8\ue1b9\ue1ba\ue1bb\ue1bc\ue1bd\ue1be\ue1bf\ue1c0\ue1c1\ue1c2\ue1c3\ue1c4\ue1c5\ue1c6\ue1c7\ue1c8\ue1c9\ue1ca\ue1cb\ue1cc\ue1cd\ue1ce\ue1cf\ue1d0\ue1d1\ue1d2\ue1d3\ue1d4\ue1d5\ue1d6\ue1d7\ue1d8\ue1d9\ue1da\ue1db\ue1dc\ue1dd\ue1de\ue1df\ue1e0\ue1e1\ue1e2\ue1e3\ue1e4\ue1e5\ue1e6\ue1e7\ue1e8\ue1e9\ue1ea\ue1eb\ue1ec\ue1ed\ue1ee\ue1ef\ue1f0\ue1f1\ue1f2\ue1f3\ue1f4\ue1f5\ue1f6\ue1f7\ue1f8\ue1f9\ue1fa\ue1fb\ue1fc\ue1fd\ue1fe\ue1ff"
+          },
+          "event": "return_or_unwind",
+          "function": "nearby_line_callback",
+          "result": "- Repeat\n\ue100\ue101\ue102\ue103\ue104\ue105\ue106\ue107\ue108\ue109\ue10a\ue10b\ue10c\ue10d\ue10e\ue10f\ue110\ue111\ue112\ue113\ue114\ue115\ue116\ue117\ue118\ue119\ue11a\ue11b\ue11c\ue11d\ue11e\ue11f\ue120\ue121\ue122\ue123\ue124\ue125\ue126\ue127\ue128\ue129\ue12a\ue12b\ue12c\ue12d\ue12e\ue12f\ue130\ue131\ue132\ue133\ue134\ue135\ue136\ue137\ue138\ue139\ue13a\ue13b\ue13c\ue13d\ue13e\ue13f\ue140\ue141\ue142\ue143\ue144\ue145\ue146\ue147\ue148\ue149\ue14a\ue14b\ue14c\ue14d\ue14e\ue14f\ue150\ue151\ue152\ue153\ue154\ue155\ue156\ue157\ue158\ue159\ue15a\ue15b\ue15c\ue15d\ue15e\ue15f\ue160\ue161\ue162\ue163\ue164\ue165\ue166\ue167\ue168\ue169\ue16a\ue16b\ue16c\ue16d\ue16e\ue16f\ue170\ue171\ue172\ue173\ue174\ue175\ue176\ue177\ue178\ue179\ue17a\ue17b\ue17c\ue17d\ue17e\ue17f\ue180\ue181\ue182\ue183\ue184\ue185\ue186\ue187\ue188\ue189\ue18a\ue18b\ue18c\ue18d\ue18e\ue18f\ue190\ue191\ue192\ue193\ue194\ue195\ue196\ue197\ue198\ue199\ue19a\ue19b\ue19c\ue19d\ue19e\ue19f\ue1a0\ue1a1\ue1a2\ue1a3\ue1a4\ue1a5\ue1a6\ue1a7\ue1a8\ue1a9\ue1aa\ue1ab\ue1ac\ue1ad\ue1ae\ue1af\ue1b0\ue1b1\ue1b2\ue1b3\ue1b4\ue1b5\ue1b6\ue1b7\ue1b8\ue1b9\ue1ba\ue1bb\ue1bc\ue1bd\ue1be\ue1bf\ue1c0\ue1c1\ue1c2\ue1c3\ue1c4\ue1c5\ue1c6\ue1c7\ue1c8\ue1c9\ue1ca\ue1cb\ue1cc\ue1cd\ue1ce\ue1cf\ue1d0\ue1d1\ue1d2\ue1d3\ue1d4\ue1d5\ue1d6\ue1d7\ue1d8\ue1d9\ue1da\ue1db\ue1dc\ue1dd\ue1de\ue1df\ue1e0\ue1e1\ue1e2\ue1e3\ue1e4\ue1e5\ue1e6\ue1e7\ue1e8\ue1e9\ue1ea\ue1eb\ue1ec\ue1ed\ue1ee\ue1ef\ue1f0\ue1f1\ue1f2\ue1f3\ue1f4\ue1f5\ue1f6\ue1f7\ue1f8\ue1f9\ue1fa\ue1fb\ue1fc\ue1fd\ue1fe\ue1ff"
+        }
+      ],
+      "output": "- Repeat\n\ue100\ue101\ue102\ue103\ue104\ue105\ue106\ue107\ue108\ue109\ue10a\ue10b\ue10c\ue10d\ue10e\ue10f\ue110\ue111\ue112\ue113\ue114\ue115\ue116\ue117\ue118\ue119\ue11a\ue11b\ue11c\ue11d\ue11e\ue11f\ue120\ue121\ue122\ue123\ue124\ue125\ue126\ue127\ue128\ue129\ue12a\ue12b\ue12c\ue12d\ue12e\ue12f\ue130\ue131\ue132\ue133\ue134\ue135\ue136\ue137\ue138\ue139\ue13a\ue13b\ue13c\ue13d\ue13e\ue13f\ue140\ue141\ue142\ue143\ue144\ue145\ue146\ue147\ue148\ue149\ue14a\ue14b\ue14c\ue14d\ue14e\ue14f\ue150\ue151\ue152\ue153\ue154\ue155\ue156\ue157\ue158\ue159\ue15a\ue15b\ue15c\ue15d\ue15e\ue15f\ue160\ue161\ue162\ue163\ue164\ue165\ue166\ue167\ue168\ue169\ue16a\ue16b\ue16c\ue16d\ue16e\ue16f\ue170\ue171\ue172\ue173\ue174\ue175\ue176\ue177\ue178\ue179\ue17a\ue17b\ue17c\ue17d\ue17e\ue17f\ue180\ue181\ue182\ue183\ue184\ue185\ue186\ue187\ue188\ue189\ue18a\ue18b\ue18c\ue18d\ue18e\ue18f\ue190\ue191\ue192\ue193\ue194\ue195\ue196\ue197\ue198\ue199\ue19a\ue19b\ue19c\ue19d\ue19e\ue19f\ue1a0\ue1a1\ue1a2\ue1a3\ue1a4\ue1a5\ue1a6\ue1a7\ue1a8\ue1a9\ue1aa\ue1ab\ue1ac\ue1ad\ue1ae\ue1af\ue1b0\ue1b1\ue1b2\ue1b3\ue1b4\ue1b5\ue1b6\ue1b7\ue1b8\ue1b9\ue1ba\ue1bb\ue1bc\ue1bd\ue1be\ue1bf\ue1c0\ue1c1\ue1c2\ue1c3\ue1c4\ue1c5\ue1c6\ue1c7\ue1c8\ue1c9\ue1ca\ue1cb\ue1cc\ue1cd\ue1ce\ue1cf\ue1d0\ue1d1\ue1d2\ue1d3\ue1d4\ue1d5\ue1d6\ue1d7\ue1d8\ue1d9\ue1da\ue1db\ue1dc\ue1dd\ue1de\ue1df\ue1e0\ue1e1\ue1e2\ue1e3\ue1e4\ue1e5\ue1e6\ue1e7\ue1e8\ue1e9\ue1ea\ue1eb\ue1ec\ue1ed\ue1ee\ue1ef\ue1f0\ue1f1\ue1f2\ue1f3\ue1f4\ue1f5\ue1f6\ue1f7\ue1f8\ue1f9\ue1fa\ue1fb\ue1fc\ue1fd\ue1fe\ue1ff"
+    },
+    {
+      "exception": null,
+      "fixture": {
+        "content_source": "body",
+        "fault": null,
+        "id": "distinct-refs",
+        "item_order": [
+          "a",
+          "b"
+        ],
+        "items": {
+          "a": {
+            "self_ref": [
+              "#/texts/1"
+            ],
+            "text": [
+              "Date:"
+            ]
+          },
+          "b": {
+            "self_ref": [
+              "#/texts/2"
+            ],
+            "text": [
+              "Date:"
+            ]
+          }
+        },
+        "overrides": {},
+        "preserve_source_identity": true,
+        "rebuild_refs": [],
+        "text": "Date:\nDate:"
+      },
+      "observations": [
+        {
+          "event": "items_truthiness",
+          "value": true
+        },
+        {
+          "event": "items_iteration"
+        },
+        {
+          "event": "property",
+          "field": "label",
+          "item": "a",
+          "ordinal": 1,
+          "value": "text"
+        },
+        {
+          "event": "property",
+          "field": "self_ref",
+          "item": "a",
+          "ordinal": 1,
+          "value": "#/texts/1"
+        },
+        {
+          "event": "property",
+          "field": "text",
+          "item": "a",
+          "ordinal": 1,
+          "value": "Date:"
+        },
+        {
+          "arguments": {
+            "value": "Date:"
+          },
+          "event": "call",
+          "function": "header_footer_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "value": "Date:"
+          },
+          "event": "return_or_unwind",
+          "function": "header_footer_callback",
+          "result": "Date:"
+        },
+        {
+          "arguments": {
+            "value": "Date:"
+          },
+          "event": "call",
+          "function": "nearby_line_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "value": "Date:"
+          },
+          "event": "return_or_unwind",
+          "function": "nearby_line_callback",
+          "result": "Date:"
+        },
+        {
+          "event": "property",
+          "field": "label",
+          "item": "b",
+          "ordinal": 1,
+          "value": "text"
+        },
+        {
+          "event": "property",
+          "field": "self_ref",
+          "item": "b",
+          "ordinal": 1,
+          "value": "#/texts/2"
+        },
+        {
+          "event": "property",
+          "field": "text",
+          "item": "b",
+          "ordinal": 1,
+          "value": "Date:"
+        },
+        {
+          "arguments": {
+            "value": "Date:"
+          },
+          "event": "call",
+          "function": "header_footer_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "value": "Date:"
+          },
+          "event": "return_or_unwind",
+          "function": "header_footer_callback",
+          "result": "Date:"
+        },
+        {
+          "arguments": {
+            "value": "Date:"
+          },
+          "event": "call",
+          "function": "nearby_line_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "value": "Date:"
+          },
+          "event": "return_or_unwind",
+          "function": "nearby_line_callback",
+          "result": "Date:"
+        },
+        {
+          "event": "items_truthiness",
+          "value": true
+        },
+        {
+          "event": "items_iteration"
+        },
+        {
+          "event": "property",
+          "field": "self_ref",
+          "item": "a",
+          "ordinal": 2,
+          "value": "#/texts/1"
+        },
+        {
+          "event": "property",
+          "field": "self_ref",
+          "item": "a",
+          "ordinal": 3,
+          "value": "#/texts/1"
+        },
+        {
+          "event": "property",
+          "field": "self_ref",
+          "item": "b",
+          "ordinal": 2,
+          "value": "#/texts/2"
+        },
+        {
+          "event": "property",
+          "field": "self_ref",
+          "item": "b",
+          "ordinal": 3,
+          "value": "#/texts/2"
+        },
+        {
+          "arguments": {
+            "text": "Date:\nDate:"
+          },
+          "event": "call",
+          "function": "header_footer_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "text": "Date:\nDate:"
+          },
+          "event": "return_or_unwind",
+          "function": "header_footer_callback",
+          "result": "Date:\nDate:"
+        },
+        {
+          "arguments": {
+            "value": "Date:\nDate:"
+          },
+          "event": "call",
+          "function": "nearby_line_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "value": "Date:\nDate:"
+          },
+          "event": "return_or_unwind",
+          "function": "nearby_line_callback",
+          "result": "Date:\nDate:"
+        }
+      ],
+      "output": "Date:\nDate:"
+    },
+    {
+      "exception": null,
+      "fixture": {
+        "content_source": "body",
+        "fault": null,
+        "id": "repeated-same-ref",
+        "item_order": [
+          "a",
+          "a"
+        ],
+        "items": {
+          "a": {
+            "self_ref": [
+              "#/texts/1"
+            ],
+            "text": [
+              "Date:"
+            ]
+          }
+        },
+        "overrides": {},
+        "preserve_source_identity": true,
+        "rebuild_refs": [],
+        "text": "Date:\nDate:"
+      },
+      "observations": [
+        {
+          "event": "items_truthiness",
+          "value": true
+        },
+        {
+          "event": "items_iteration"
+        },
+        {
+          "event": "property",
+          "field": "label",
+          "item": "a",
+          "ordinal": 1,
+          "value": "text"
+        },
+        {
+          "event": "property",
+          "field": "self_ref",
+          "item": "a",
+          "ordinal": 1,
+          "value": "#/texts/1"
+        },
+        {
+          "event": "property",
+          "field": "text",
+          "item": "a",
+          "ordinal": 1,
+          "value": "Date:"
+        },
+        {
+          "arguments": {
+            "value": "Date:"
+          },
+          "event": "call",
+          "function": "header_footer_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "value": "Date:"
+          },
+          "event": "return_or_unwind",
+          "function": "header_footer_callback",
+          "result": "Date:"
+        },
+        {
+          "arguments": {
+            "value": "Date:"
+          },
+          "event": "call",
+          "function": "nearby_line_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "value": "Date:"
+          },
+          "event": "return_or_unwind",
+          "function": "nearby_line_callback",
+          "result": "Date:"
+        },
+        {
+          "event": "property",
+          "field": "label",
+          "item": "a",
+          "ordinal": 2,
+          "value": "text"
+        },
+        {
+          "event": "property",
+          "field": "self_ref",
+          "item": "a",
+          "ordinal": 2,
+          "value": "#/texts/1"
+        },
+        {
+          "event": "property",
+          "field": "text",
+          "item": "a",
+          "ordinal": 2,
+          "value": "Date:"
+        },
+        {
+          "arguments": {
+            "value": "Date:"
+          },
+          "event": "call",
+          "function": "header_footer_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "value": "Date:"
+          },
+          "event": "return_or_unwind",
+          "function": "header_footer_callback",
+          "result": "Date:"
+        },
+        {
+          "arguments": {
+            "value": "Date:"
+          },
+          "event": "call",
+          "function": "nearby_line_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "value": "Date:"
+          },
+          "event": "return_or_unwind",
+          "function": "nearby_line_callback",
+          "result": "Date:"
+        },
+        {
+          "event": "items_truthiness",
+          "value": true
+        },
+        {
+          "event": "items_iteration"
+        },
+        {
+          "event": "property",
+          "field": "self_ref",
+          "item": "a",
+          "ordinal": 3,
+          "value": "#/texts/1"
+        },
+        {
+          "event": "property",
+          "field": "self_ref",
+          "item": "a",
+          "ordinal": 4,
+          "value": "#/texts/1"
+        },
+        {
+          "event": "property",
+          "field": "self_ref",
+          "item": "a",
+          "ordinal": 5,
+          "value": "#/texts/1"
+        },
+        {
+          "event": "property",
+          "field": "self_ref",
+          "item": "a",
+          "ordinal": 6,
+          "value": "#/texts/1"
+        },
+        {
+          "event": "property",
+          "field": "label",
+          "item": "a",
+          "ordinal": 3,
+          "value": "text"
+        },
+        {
+          "event": "override_truthiness",
+          "value": false
+        },
+        {
+          "event": "rebuild_membership",
+          "key": "#/texts/1",
+          "value": false
+        },
+        {
+          "arguments": {
+            "text": "Date:\nDate:"
+          },
+          "event": "call",
+          "function": "header_footer_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "text": "Date:\nDate:"
+          },
+          "event": "return_or_unwind",
+          "function": "header_footer_callback",
+          "result": "Date:\nDate:"
+        },
+        {
+          "arguments": {
+            "text": "Date:\nDate:"
+          },
+          "event": "call",
+          "function": "nearby_line_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "text": "Date:\nDate:"
+          },
+          "event": "return_or_unwind",
+          "function": "nearby_line_callback",
+          "result": "Date:"
+        }
+      ],
+      "output": "Date:"
+    },
+    {
+      "exception": null,
+      "fixture": {
+        "content_source": "body",
+        "fault": null,
+        "id": "unsupported-label",
+        "item_order": [
+          "a",
+          "b"
+        ],
+        "items": {
+          "a": {
+            "label": [
+              "section_header"
+            ],
+            "self_ref": [
+              "#/h1"
+            ],
+            "text": [
+              "Introduction"
+            ]
+          },
+          "b": {
+            "label": [
+              "section_header"
+            ],
+            "self_ref": [
+              "#/h2"
+            ],
+            "text": [
+              "Introduction"
+            ]
+          }
+        },
+        "overrides": {},
+        "preserve_source_identity": false,
+        "rebuild_refs": [],
+        "text": "Introduction\nIntroduction"
+      },
+      "observations": [
+        {
+          "event": "items_truthiness",
+          "value": true
+        },
+        {
+          "event": "items_iteration"
+        },
+        {
+          "event": "property",
+          "field": "label",
+          "item": "a",
+          "ordinal": 1,
+          "value": "section_header"
+        },
+        {
+          "event": "property",
+          "field": "label",
+          "item": "b",
+          "ordinal": 1,
+          "value": "section_header"
+        },
+        {
+          "event": "items_truthiness",
+          "value": true
+        },
+        {
+          "event": "items_iteration"
+        },
+        {
+          "event": "property",
+          "field": "self_ref",
+          "item": "a",
+          "ordinal": 1,
+          "value": "#/h1"
+        },
+        {
+          "event": "property",
+          "field": "self_ref",
+          "item": "a",
+          "ordinal": 2,
+          "value": "#/h1"
+        },
+        {
+          "event": "property",
+          "field": "self_ref",
+          "item": "b",
+          "ordinal": 1,
+          "value": "#/h2"
+        },
+        {
+          "event": "property",
+          "field": "self_ref",
+          "item": "b",
+          "ordinal": 2,
+          "value": "#/h2"
+        },
+        {
+          "arguments": {
+            "text": "Introduction\nIntroduction"
+          },
+          "event": "call",
+          "function": "header_footer_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "text": "Introduction\nIntroduction"
+          },
+          "event": "return_or_unwind",
+          "function": "header_footer_callback",
+          "result": "Introduction\nIntroduction"
+        },
+        {
+          "arguments": {
+            "text": "Introduction\nIntroduction"
+          },
+          "event": "call",
+          "function": "nearby_line_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "text": "Introduction\nIntroduction"
+          },
+          "event": "return_or_unwind",
+          "function": "nearby_line_callback",
+          "result": "Introduction"
+        }
+      ],
+      "output": "Introduction"
+    },
+    {
+      "exception": null,
+      "fixture": {
+        "content_source": "body",
+        "fault": null,
+        "id": "canonical-window",
+        "item_order": [
+          "a"
+        ],
+        "items": {
+          "a": {
+            "label_object": true,
+            "self_ref": [
+              "#/texts/20"
+            ],
+            "text": [
+              "corrupt source"
+            ]
+          }
+        },
+        "overrides": {
+          "#/texts/20": "Opening\nRev.\nFirst\nSecond\nRev.\nClosing"
+        },
+        "preserve_source_identity": true,
+        "rebuild_refs": [
+          "#/texts/20"
+        ],
+        "text": "Opening\nRev.\nFirst\nSecond\nRev.\nClosing"
+      },
+      "observations": [
+        {
+          "event": "items_truthiness",
+          "value": true
+        },
+        {
+          "event": "items_iteration"
+        },
+        {
+          "event": "property",
+          "field": "label",
+          "item": "a",
+          "ordinal": 1,
+          "value": "<scripted-label-object>"
+        },
+        {
+          "event": "property",
+          "field": "label_value",
+          "item": "a",
+          "ordinal": 1,
+          "value": "text"
+        },
+        {
+          "event": "property",
+          "field": "self_ref",
+          "item": "a",
+          "ordinal": 1,
+          "value": "#/texts/20"
+        },
+        {
+          "event": "property",
+          "field": "text",
+          "item": "a",
+          "ordinal": 1,
+          "value": "corrupt source"
+        },
+        {
+          "arguments": {
+            "value": "corrupt source"
+          },
+          "event": "call",
+          "function": "header_footer_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "value": "corrupt source"
+          },
+          "event": "return_or_unwind",
+          "function": "header_footer_callback",
+          "result": "corrupt source"
+        },
+        {
+          "arguments": {
+            "value": "corrupt source"
+          },
+          "event": "call",
+          "function": "nearby_line_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "value": "corrupt source"
+          },
+          "event": "return_or_unwind",
+          "function": "nearby_line_callback",
+          "result": "corrupt source"
+        },
+        {
+          "event": "items_truthiness",
+          "value": true
+        },
+        {
+          "event": "items_iteration"
+        },
+        {
+          "event": "property",
+          "field": "self_ref",
+          "item": "a",
+          "ordinal": 2,
+          "value": "#/texts/20"
+        },
+        {
+          "event": "property",
+          "field": "self_ref",
+          "item": "a",
+          "ordinal": 3,
+          "value": "#/texts/20"
+        },
+        {
+          "event": "property",
+          "field": "label",
+          "item": "a",
+          "ordinal": 2,
+          "value": "<scripted-label-object>"
+        },
+        {
+          "event": "property",
+          "field": "label_value",
+          "item": "a",
+          "ordinal": 2,
+          "value": "text"
+        },
+        {
+          "event": "override_truthiness",
+          "value": true
+        },
+        {
+          "event": "override_lookup",
+          "key": "#/texts/20",
+          "value": "Opening\nRev.\nFirst\nSecond\nRev.\nClosing"
+        },
+        {
+          "event": "rebuild_membership",
+          "key": "#/texts/20",
+          "value": true
+        },
+        {
+          "arguments": {
+            "value": "Opening\nRev.\nFirst\nSecond\nRev.\nClosing"
+          },
+          "event": "call",
+          "function": "header_footer_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "value": "Opening\nRev.\nFirst\nSecond\nRev.\nClosing"
+          },
+          "event": "return_or_unwind",
+          "function": "header_footer_callback",
+          "result": "Opening\nRev.\nFirst\nSecond\nRev.\nClosing"
+        },
+        {
+          "arguments": {
+            "value": "Opening\nRev.\nFirst\nSecond\nRev.\nClosing"
+          },
+          "event": "call",
+          "function": "nearby_line_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "value": "Opening\nRev.\nFirst\nSecond\nRev.\nClosing"
+          },
+          "event": "return_or_unwind",
+          "function": "nearby_line_callback",
+          "result": "Opening\nRev.\nFirst\nSecond\nRev.\nClosing"
+        },
+        {
+          "arguments": {
+            "text": "Opening\nRev.\nFirst\nSecond\nRev.\nClosing"
+          },
+          "event": "call",
+          "function": "header_footer_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "text": "Opening\nRev.\nFirst\nSecond\nRev.\nClosing"
+          },
+          "event": "return_or_unwind",
+          "function": "header_footer_callback",
+          "result": "Opening\nRev.\nFirst\nSecond\nRev.\nClosing"
+        },
+        {
+          "arguments": {
+            "value": "Opening\nRev.\nFirst\nSecond\nRev.\nClosing"
+          },
+          "event": "call",
+          "function": "nearby_line_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "value": "Opening\nRev.\nFirst\nSecond\nRev.\nClosing"
+          },
+          "event": "return_or_unwind",
+          "function": "nearby_line_callback",
+          "result": "Opening\nRev.\nFirst\nSecond\nRev.\nClosing"
+        }
+      ],
+      "output": "Opening\nRev.\nFirst\nSecond\nRev.\nClosing"
+    },
+    {
+      "exception": null,
+      "fixture": {
+        "content_source": "body",
+        "fault": null,
+        "id": "canonical-no-rebuild",
+        "item_order": [
+          "a"
+        ],
+        "items": {
+          "a": {
+            "label_object": true,
+            "self_ref": [
+              "#/texts/20"
+            ],
+            "text": [
+              "corrupt source"
+            ]
+          }
+        },
+        "overrides": {
+          "#/texts/20": "Opening\nRev.\nFirst\nSecond\nRev.\nClosing"
+        },
+        "preserve_source_identity": true,
+        "rebuild_refs": [],
+        "text": "Opening\nRev.\nFirst\nSecond\nRev.\nClosing"
+      },
+      "observations": [
+        {
+          "event": "items_truthiness",
+          "value": true
+        },
+        {
+          "event": "items_iteration"
+        },
+        {
+          "event": "property",
+          "field": "label",
+          "item": "a",
+          "ordinal": 1,
+          "value": "<scripted-label-object>"
+        },
+        {
+          "event": "property",
+          "field": "label_value",
+          "item": "a",
+          "ordinal": 1,
+          "value": "text"
+        },
+        {
+          "event": "property",
+          "field": "self_ref",
+          "item": "a",
+          "ordinal": 1,
+          "value": "#/texts/20"
+        },
+        {
+          "event": "property",
+          "field": "text",
+          "item": "a",
+          "ordinal": 1,
+          "value": "corrupt source"
+        },
+        {
+          "arguments": {
+            "value": "corrupt source"
+          },
+          "event": "call",
+          "function": "header_footer_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "value": "corrupt source"
+          },
+          "event": "return_or_unwind",
+          "function": "header_footer_callback",
+          "result": "corrupt source"
+        },
+        {
+          "arguments": {
+            "value": "corrupt source"
+          },
+          "event": "call",
+          "function": "nearby_line_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "value": "corrupt source"
+          },
+          "event": "return_or_unwind",
+          "function": "nearby_line_callback",
+          "result": "corrupt source"
+        },
+        {
+          "event": "items_truthiness",
+          "value": true
+        },
+        {
+          "event": "items_iteration"
+        },
+        {
+          "event": "property",
+          "field": "self_ref",
+          "item": "a",
+          "ordinal": 2,
+          "value": "#/texts/20"
+        },
+        {
+          "event": "property",
+          "field": "self_ref",
+          "item": "a",
+          "ordinal": 3,
+          "value": "#/texts/20"
+        },
+        {
+          "event": "property",
+          "field": "label",
+          "item": "a",
+          "ordinal": 2,
+          "value": "<scripted-label-object>"
+        },
+        {
+          "event": "property",
+          "field": "label_value",
+          "item": "a",
+          "ordinal": 2,
+          "value": "text"
+        },
+        {
+          "event": "override_truthiness",
+          "value": true
+        },
+        {
+          "event": "override_lookup",
+          "key": "#/texts/20",
+          "value": "Opening\nRev.\nFirst\nSecond\nRev.\nClosing"
+        },
+        {
+          "event": "rebuild_membership",
+          "key": "#/texts/20",
+          "value": false
+        },
+        {
+          "arguments": {
+            "text": "Opening\nRev.\nFirst\nSecond\nRev.\nClosing"
+          },
+          "event": "call",
+          "function": "header_footer_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "text": "Opening\nRev.\nFirst\nSecond\nRev.\nClosing"
+          },
+          "event": "return_or_unwind",
+          "function": "header_footer_callback",
+          "result": "Opening\nRev.\nFirst\nSecond\nRev.\nClosing"
+        },
+        {
+          "arguments": {
+            "text": "Opening\nRev.\nFirst\nSecond\nRev.\nClosing"
+          },
+          "event": "call",
+          "function": "nearby_line_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "text": "Opening\nRev.\nFirst\nSecond\nRev.\nClosing"
+          },
+          "event": "return_or_unwind",
+          "function": "nearby_line_callback",
+          "result": "Opening\nRev.\nFirst\nSecond\nClosing"
+        }
+      ],
+      "output": "Opening\nRev.\nFirst\nSecond\nClosing"
+    },
+    {
+      "exception": null,
+      "fixture": {
+        "content_source": "body",
+        "fault": null,
+        "id": "canonical-unrelated-fragment",
+        "item_order": [
+          "a"
+        ],
+        "items": {
+          "a": {
+            "label_object": true,
+            "self_ref": [
+              "#/texts/20"
+            ],
+            "text": [
+              "corrupt source"
+            ]
+          }
+        },
+        "overrides": {
+          "#/texts/20": "Opening\nRev.\nFirst\nSecond\nRev.\nClosing"
+        },
+        "preserve_source_identity": true,
+        "rebuild_refs": [
+          "#/texts/20"
+        ],
+        "text": "Invented\nOpening\nRev.\nFirst\nSecond\nRev.\nClosing"
+      },
+      "observations": [
+        {
+          "event": "items_truthiness",
+          "value": true
+        },
+        {
+          "event": "items_iteration"
+        },
+        {
+          "event": "property",
+          "field": "label",
+          "item": "a",
+          "ordinal": 1,
+          "value": "<scripted-label-object>"
+        },
+        {
+          "event": "property",
+          "field": "label_value",
+          "item": "a",
+          "ordinal": 1,
+          "value": "text"
+        },
+        {
+          "event": "property",
+          "field": "self_ref",
+          "item": "a",
+          "ordinal": 1,
+          "value": "#/texts/20"
+        },
+        {
+          "event": "property",
+          "field": "text",
+          "item": "a",
+          "ordinal": 1,
+          "value": "corrupt source"
+        },
+        {
+          "arguments": {
+            "value": "corrupt source"
+          },
+          "event": "call",
+          "function": "header_footer_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "value": "corrupt source"
+          },
+          "event": "return_or_unwind",
+          "function": "header_footer_callback",
+          "result": "corrupt source"
+        },
+        {
+          "arguments": {
+            "value": "corrupt source"
+          },
+          "event": "call",
+          "function": "nearby_line_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "value": "corrupt source"
+          },
+          "event": "return_or_unwind",
+          "function": "nearby_line_callback",
+          "result": "corrupt source"
+        },
+        {
+          "event": "items_truthiness",
+          "value": true
+        },
+        {
+          "event": "items_iteration"
+        },
+        {
+          "event": "property",
+          "field": "self_ref",
+          "item": "a",
+          "ordinal": 2,
+          "value": "#/texts/20"
+        },
+        {
+          "event": "property",
+          "field": "self_ref",
+          "item": "a",
+          "ordinal": 3,
+          "value": "#/texts/20"
+        },
+        {
+          "event": "property",
+          "field": "label",
+          "item": "a",
+          "ordinal": 2,
+          "value": "<scripted-label-object>"
+        },
+        {
+          "event": "property",
+          "field": "label_value",
+          "item": "a",
+          "ordinal": 2,
+          "value": "text"
+        },
+        {
+          "event": "override_truthiness",
+          "value": true
+        },
+        {
+          "event": "override_lookup",
+          "key": "#/texts/20",
+          "value": "Opening\nRev.\nFirst\nSecond\nRev.\nClosing"
+        },
+        {
+          "event": "rebuild_membership",
+          "key": "#/texts/20",
+          "value": true
+        },
+        {
+          "arguments": {
+            "text": "Invented\nOpening\nRev.\nFirst\nSecond\nRev.\nClosing"
+          },
+          "event": "call",
+          "function": "header_footer_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "text": "Invented\nOpening\nRev.\nFirst\nSecond\nRev.\nClosing"
+          },
+          "event": "return_or_unwind",
+          "function": "header_footer_callback",
+          "result": "Invented\nOpening\nRev.\nFirst\nSecond\nRev.\nClosing"
+        },
+        {
+          "arguments": {
+            "text": "Invented\nOpening\nRev.\nFirst\nSecond\nRev.\nClosing"
+          },
+          "event": "call",
+          "function": "nearby_line_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "text": "Invented\nOpening\nRev.\nFirst\nSecond\nRev.\nClosing"
+          },
+          "event": "return_or_unwind",
+          "function": "nearby_line_callback",
+          "result": "Invented\nOpening\nRev.\nFirst\nSecond\nClosing"
+        }
+      ],
+      "output": "Invented\nOpening\nRev.\nFirst\nSecond\nClosing"
+    },
+    {
+      "exception": null,
+      "fixture": {
+        "content_source": "body",
+        "fault": null,
+        "id": "canonical-inline-oracle",
+        "item_order": [
+          "a"
+        ],
+        "items": {
+          "a": {
+            "label_object": true,
+            "self_ref": [
+              "#/texts/20"
+            ],
+            "text": [
+              "corrupt source"
+            ]
+          }
+        },
+        "overrides": {
+          "#/texts/20": "First Sys. Rep. 37; second Sys. Rep. 857."
+        },
+        "preserve_source_identity": true,
+        "rebuild_refs": [
+          "#/texts/20"
+        ],
+        "text": "First Sys.\nRep.\n37; second Sys.\nRep.\n857."
+      },
+      "observations": [
+        {
+          "event": "items_truthiness",
+          "value": true
+        },
+        {
+          "event": "items_iteration"
+        },
+        {
+          "event": "property",
+          "field": "label",
+          "item": "a",
+          "ordinal": 1,
+          "value": "<scripted-label-object>"
+        },
+        {
+          "event": "property",
+          "field": "label_value",
+          "item": "a",
+          "ordinal": 1,
+          "value": "text"
+        },
+        {
+          "event": "property",
+          "field": "self_ref",
+          "item": "a",
+          "ordinal": 1,
+          "value": "#/texts/20"
+        },
+        {
+          "event": "property",
+          "field": "text",
+          "item": "a",
+          "ordinal": 1,
+          "value": "corrupt source"
+        },
+        {
+          "arguments": {
+            "value": "corrupt source"
+          },
+          "event": "call",
+          "function": "header_footer_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "value": "corrupt source"
+          },
+          "event": "return_or_unwind",
+          "function": "header_footer_callback",
+          "result": "corrupt source"
+        },
+        {
+          "arguments": {
+            "value": "corrupt source"
+          },
+          "event": "call",
+          "function": "nearby_line_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "value": "corrupt source"
+          },
+          "event": "return_or_unwind",
+          "function": "nearby_line_callback",
+          "result": "corrupt source"
+        },
+        {
+          "event": "items_truthiness",
+          "value": true
+        },
+        {
+          "event": "items_iteration"
+        },
+        {
+          "event": "property",
+          "field": "self_ref",
+          "item": "a",
+          "ordinal": 2,
+          "value": "#/texts/20"
+        },
+        {
+          "event": "property",
+          "field": "self_ref",
+          "item": "a",
+          "ordinal": 3,
+          "value": "#/texts/20"
+        },
+        {
+          "event": "property",
+          "field": "label",
+          "item": "a",
+          "ordinal": 2,
+          "value": "<scripted-label-object>"
+        },
+        {
+          "event": "property",
+          "field": "label_value",
+          "item": "a",
+          "ordinal": 2,
+          "value": "text"
+        },
+        {
+          "event": "override_truthiness",
+          "value": true
+        },
+        {
+          "event": "override_lookup",
+          "key": "#/texts/20",
+          "value": "First Sys. Rep. 37; second Sys. Rep. 857."
+        },
+        {
+          "event": "rebuild_membership",
+          "key": "#/texts/20",
+          "value": true
+        },
+        {
+          "arguments": {
+            "value": "First Sys.\nRep.\n37; second Sys.\nRep.\n857."
+          },
+          "event": "call",
+          "function": "header_footer_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "value": "First Sys.\nRep.\n37; second Sys.\nRep.\n857."
+          },
+          "event": "return_or_unwind",
+          "function": "header_footer_callback",
+          "result": "First Sys.\nRep.\n37; second Sys.\nRep.\n857."
+        },
+        {
+          "arguments": {
+            "value": "First Sys.\nRep.\n37; second Sys.\nRep.\n857."
+          },
+          "event": "call",
+          "function": "nearby_line_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "value": "First Sys.\nRep.\n37; second Sys.\nRep.\n857."
+          },
+          "event": "return_or_unwind",
+          "function": "nearby_line_callback",
+          "result": "First Sys.\nRep.\n37; second Sys.\nRep.\n857."
+        },
+        {
+          "arguments": {
+            "text": "First Sys.\nRep.\n37; second Sys.\nRep.\n857."
+          },
+          "event": "call",
+          "function": "header_footer_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "text": "First Sys.\nRep.\n37; second Sys.\nRep.\n857."
+          },
+          "event": "return_or_unwind",
+          "function": "header_footer_callback",
+          "result": "First Sys.\nRep.\n37; second Sys.\nRep.\n857."
+        },
+        {
+          "arguments": {
+            "value": "First Sys.\nRep.\n37; second Sys.\nRep.\n857."
+          },
+          "event": "call",
+          "function": "nearby_line_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "value": "First Sys.\nRep.\n37; second Sys.\nRep.\n857."
+          },
+          "event": "return_or_unwind",
+          "function": "nearby_line_callback",
+          "result": "First Sys.\nRep.\n37; second Sys.\nRep.\n857."
+        }
+      ],
+      "output": "First Sys.\nRep.\n37; second Sys.\nRep.\n857."
+    },
+    {
+      "exception": null,
+      "fixture": {
+        "content_source": "body",
+        "fault": null,
+        "id": "orig-fallback",
+        "item_order": [
+          "a",
+          "b"
+        ],
+        "items": {
+          "a": {
+            "orig": [
+              "Date:"
+            ],
+            "self_ref": [
+              "#/a"
+            ],
+            "text": [
+              ""
+            ]
+          },
+          "b": {
+            "orig": [
+              "Date:"
+            ],
+            "self_ref": [
+              "#/b"
+            ],
+            "text": [
+              ""
+            ]
+          }
+        },
+        "overrides": {},
+        "preserve_source_identity": false,
+        "rebuild_refs": [],
+        "text": "Date:\nDate:"
+      },
+      "observations": [
+        {
+          "event": "items_truthiness",
+          "value": true
+        },
+        {
+          "event": "items_iteration"
+        },
+        {
+          "event": "property",
+          "field": "label",
+          "item": "a",
+          "ordinal": 1,
+          "value": "text"
+        },
+        {
+          "event": "property",
+          "field": "self_ref",
+          "item": "a",
+          "ordinal": 1,
+          "value": "#/a"
+        },
+        {
+          "event": "property",
+          "field": "text",
+          "item": "a",
+          "ordinal": 1,
+          "value": ""
+        },
+        {
+          "event": "property",
+          "field": "orig",
+          "item": "a",
+          "ordinal": 1,
+          "value": "Date:"
+        },
+        {
+          "arguments": {
+            "value": "Date:"
+          },
+          "event": "call",
+          "function": "header_footer_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "value": "Date:"
+          },
+          "event": "return_or_unwind",
+          "function": "header_footer_callback",
+          "result": "Date:"
+        },
+        {
+          "arguments": {
+            "value": "Date:"
+          },
+          "event": "call",
+          "function": "nearby_line_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "value": "Date:"
+          },
+          "event": "return_or_unwind",
+          "function": "nearby_line_callback",
+          "result": "Date:"
+        },
+        {
+          "event": "property",
+          "field": "label",
+          "item": "b",
+          "ordinal": 1,
+          "value": "text"
+        },
+        {
+          "event": "property",
+          "field": "self_ref",
+          "item": "b",
+          "ordinal": 1,
+          "value": "#/b"
+        },
+        {
+          "event": "property",
+          "field": "text",
+          "item": "b",
+          "ordinal": 1,
+          "value": ""
+        },
+        {
+          "event": "property",
+          "field": "orig",
+          "item": "b",
+          "ordinal": 1,
+          "value": "Date:"
+        },
+        {
+          "arguments": {
+            "value": "Date:"
+          },
+          "event": "call",
+          "function": "header_footer_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "value": "Date:"
+          },
+          "event": "return_or_unwind",
+          "function": "header_footer_callback",
+          "result": "Date:"
+        },
+        {
+          "arguments": {
+            "value": "Date:"
+          },
+          "event": "call",
+          "function": "nearby_line_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "value": "Date:"
+          },
+          "event": "return_or_unwind",
+          "function": "nearby_line_callback",
+          "result": "Date:"
+        },
+        {
+          "event": "items_truthiness",
+          "value": true
+        },
+        {
+          "event": "items_iteration"
+        },
+        {
+          "event": "property",
+          "field": "self_ref",
+          "item": "a",
+          "ordinal": 2,
+          "value": "#/a"
+        },
+        {
+          "event": "property",
+          "field": "self_ref",
+          "item": "a",
+          "ordinal": 3,
+          "value": "#/a"
+        },
+        {
+          "event": "property",
+          "field": "self_ref",
+          "item": "b",
+          "ordinal": 2,
+          "value": "#/b"
+        },
+        {
+          "event": "property",
+          "field": "self_ref",
+          "item": "b",
+          "ordinal": 3,
+          "value": "#/b"
+        },
+        {
+          "arguments": {
+            "text": "Date:\nDate:"
+          },
+          "event": "call",
+          "function": "header_footer_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "text": "Date:\nDate:"
+          },
+          "event": "return_or_unwind",
+          "function": "header_footer_callback",
+          "result": "Date:\nDate:"
+        },
+        {
+          "arguments": {
+            "value": "Date:\nDate:"
+          },
+          "event": "call",
+          "function": "nearby_line_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "value": "Date:\nDate:"
+          },
+          "event": "return_or_unwind",
+          "function": "nearby_line_callback",
+          "result": "Date:\nDate:"
+        }
+      ],
+      "output": "Date:\nDate:"
+    },
+    {
+      "exception": null,
+      "fixture": {
+        "content_source": "body",
+        "fault": null,
+        "id": "dynamic-ref-and-label",
+        "item_order": [
+          "a"
+        ],
+        "items": {
+          "a": {
+            "label_object": true,
+            "label_value": [
+              "text",
+              "caption"
+            ],
+            "self_ref": [
+              "#/first",
+              "#/condition",
+              "#/key"
+            ],
+            "text": [
+              "corrupt source"
+            ]
+          }
+        },
+        "overrides": {
+          "#/key": "Date: Date:"
+        },
+        "preserve_source_identity": true,
+        "rebuild_refs": [
+          "#/key"
+        ],
+        "text": "Date:\nDate:"
+      },
+      "observations": [
+        {
+          "event": "items_truthiness",
+          "value": true
+        },
+        {
+          "event": "items_iteration"
+        },
+        {
+          "event": "property",
+          "field": "label",
+          "item": "a",
+          "ordinal": 1,
+          "value": "<scripted-label-object>"
+        },
+        {
+          "event": "property",
+          "field": "label_value",
+          "item": "a",
+          "ordinal": 1,
+          "value": "text"
+        },
+        {
+          "event": "property",
+          "field": "self_ref",
+          "item": "a",
+          "ordinal": 1,
+          "value": "#/first"
+        },
+        {
+          "event": "property",
+          "field": "text",
+          "item": "a",
+          "ordinal": 1,
+          "value": "corrupt source"
+        },
+        {
+          "arguments": {
+            "value": "corrupt source"
+          },
+          "event": "call",
+          "function": "header_footer_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "value": "corrupt source"
+          },
+          "event": "return_or_unwind",
+          "function": "header_footer_callback",
+          "result": "corrupt source"
+        },
+        {
+          "arguments": {
+            "value": "corrupt source"
+          },
+          "event": "call",
+          "function": "nearby_line_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "value": "corrupt source"
+          },
+          "event": "return_or_unwind",
+          "function": "nearby_line_callback",
+          "result": "corrupt source"
+        },
+        {
+          "event": "items_truthiness",
+          "value": true
+        },
+        {
+          "event": "items_iteration"
+        },
+        {
+          "event": "property",
+          "field": "self_ref",
+          "item": "a",
+          "ordinal": 2,
+          "value": "#/condition"
+        },
+        {
+          "event": "property",
+          "field": "self_ref",
+          "item": "a",
+          "ordinal": 3,
+          "value": "#/key"
+        },
+        {
+          "event": "property",
+          "field": "label",
+          "item": "a",
+          "ordinal": 2,
+          "value": "<scripted-label-object>"
+        },
+        {
+          "event": "property",
+          "field": "label_value",
+          "item": "a",
+          "ordinal": 2,
+          "value": "caption"
+        },
+        {
+          "event": "override_truthiness",
+          "value": true
+        },
+        {
+          "event": "override_lookup",
+          "key": "#/key",
+          "value": "Date: Date:"
+        },
+        {
+          "event": "rebuild_membership",
+          "key": "#/key",
+          "value": true
+        },
+        {
+          "arguments": {
+            "value": "Date:\nDate:"
+          },
+          "event": "call",
+          "function": "header_footer_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "value": "Date:\nDate:"
+          },
+          "event": "return_or_unwind",
+          "function": "header_footer_callback",
+          "result": "Date:\nDate:"
+        },
+        {
+          "arguments": {
+            "value": "Date:\nDate:"
+          },
+          "event": "call",
+          "function": "nearby_line_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "value": "Date:\nDate:"
+          },
+          "event": "return_or_unwind",
+          "function": "nearby_line_callback",
+          "result": "Date:\nDate:"
+        },
+        {
+          "arguments": {
+            "text": "Date:\nDate:"
+          },
+          "event": "call",
+          "function": "header_footer_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "text": "Date:\nDate:"
+          },
+          "event": "return_or_unwind",
+          "function": "header_footer_callback",
+          "result": "Date:\nDate:"
+        },
+        {
+          "arguments": {
+            "value": "Date:\nDate:"
+          },
+          "event": "call",
+          "function": "nearby_line_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "value": "Date:\nDate:"
+          },
+          "event": "return_or_unwind",
+          "function": "nearby_line_callback",
+          "result": "Date:\nDate:"
+        }
+      ],
+      "output": "Date:\nDate:"
+    },
+    {
+      "exception": {
+        "message": "generated-self-ref-error",
+        "type": "ProbeError"
+      },
+      "fixture": {
+        "content_source": "body",
+        "fault": null,
+        "id": "source-property-error",
+        "item_order": [
+          "a"
+        ],
+        "items": {
+          "a": {
+            "self_ref": [
+              {
+                "raise": "generated-self-ref-error"
+              }
+            ]
+          }
+        },
+        "overrides": {},
+        "preserve_source_identity": false,
+        "rebuild_refs": [],
+        "text": "Date:"
+      },
+      "observations": [
+        {
+          "event": "items_truthiness",
+          "value": true
+        },
+        {
+          "event": "items_iteration"
+        },
+        {
+          "event": "property",
+          "field": "label",
+          "item": "a",
+          "ordinal": 1,
+          "value": "text"
+        },
+        {
+          "event": "property",
+          "field": "self_ref",
+          "item": "a",
+          "ordinal": 1,
+          "value": {
+            "raise": "generated-self-ref-error"
+          }
+        }
+      ],
+      "output": null
+    },
+    {
+      "exception": {
+        "message": "generated-header-callback-error",
+        "type": "ProbeError"
+      },
+      "fixture": {
+        "content_source": "body",
+        "fault": "header",
+        "id": "header-callback-error",
+        "item_order": [],
+        "items": {},
+        "overrides": {},
+        "preserve_source_identity": false,
+        "rebuild_refs": [],
+        "text": "A  B"
+      },
+      "observations": [
+        {
+          "arguments": {
+            "text": "A B"
+          },
+          "event": "call",
+          "function": "header_footer_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "text": "A B"
+          },
+          "event": "return_or_unwind",
+          "function": "header_footer_callback",
+          "result": null
+        }
+      ],
+      "output": null
+    },
+    {
+      "exception": {
+        "message": "generated-dedup-callback-error",
+        "type": "ProbeError"
+      },
+      "fixture": {
+        "content_source": "body",
+        "fault": "dedup",
+        "id": "dedup-callback-error",
+        "item_order": [],
+        "items": {},
+        "overrides": {},
+        "preserve_source_identity": false,
+        "rebuild_refs": [],
+        "text": "A  B"
+      },
+      "observations": [
+        {
+          "arguments": {
+            "text": "A B"
+          },
+          "event": "call",
+          "function": "header_footer_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "text": "A B"
+          },
+          "event": "return_or_unwind",
+          "function": "header_footer_callback",
+          "result": "A B"
+        },
+        {
+          "arguments": {
+            "text": "A B"
+          },
+          "event": "call",
+          "function": "nearby_line_callback",
+          "result": null
+        },
+        {
+          "arguments": {
+            "text": "A B"
+          },
+          "event": "return_or_unwind",
+          "function": "nearby_line_callback",
+          "result": null
+        }
+      ],
+      "output": null
+    }
+  ],
+  "kind": "generated_source_cleanup_prechange_fixtures",
+  "observation_semantics": "Exact scripted property/truthiness/iteration/lookup events interleaved with core callback call/return boundaries. None on return_or_unwind is ambiguous; the outer exception is authoritative. Excludes incidental frame-local snapshots and timing.",
+  "schema_version": 1,
+  "source_core_sha256": "7e30e05114e04a430ca1dcbc47deceab5d232d5d97d8951c0015f31d523c4938",
+  "source_rag_sha256": "9746038156805ee9493d06bd26bb97f6732f19baf9f3623cc37fc1781081bdba"
+}

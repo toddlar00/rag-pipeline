@@ -69,6 +69,8 @@ import retrieval_core as _retrieval_core
 import run_telemetry as _run_telemetry
 import runtime_supervision as _runtime_supervision
 import source_fidelity_core as _source_fidelity_core
+import source_cleanup_audit as _source_cleanup_audit
+import chunk_dedup_audit as _chunk_dedup_audit
 import storage_policy as _storage_policy
 import table_retrieval_core as _table_retrieval_core
 import vector_lifecycle as _vector_lifecycle
@@ -84,6 +86,9 @@ from llm_runtime import (
     ProviderResponse,
     ProviderSpec,
 )
+
+_SOURCE_CLEANUP_CORE_NORMALIZE = _chunking_core._normalize_text
+_CHUNK_DEDUP_CORE = _chunking_core._deduplicate_chunks
 
 # Runtime ML/database libraries are never allowed to emit auxiliary analytics
 # or version-check traffic from this private-data process. Provider calls are
@@ -6402,8 +6407,8 @@ def _normalize_text(
     Handles: non-breaking spaces (\\xa0), smart quotes, en/em dashes,
     ligatures (fi, fl, ff, ffi, ffl), and stray control characters.
     """
-    return _chunking_core._normalize_text(
-        text,
+    return _source_cleanup_audit._call_core(
+        _chunking_core._normalize_text, _SOURCE_CLEANUP_CORE_NORMALIZE, text,
         strip_headers_footers_fn=_strip_headers_footers,
         dedup_nearby_lines_fn=(
             _dedup_nearby_lines
@@ -6422,10 +6427,12 @@ _SOURCE_APOSTROPHE_TOKEN_RE = re.compile(
 def _restore_source_apostrophe_typography(
         source_text: str, normalized_text: str) -> str:
     """Restore only source-attested in-word curly apostrophes one for one."""
+    before_restoration = normalized_text
     source_matches = list(_SOURCE_APOSTROPHE_TOKEN_RE.finditer(source_text))
     normalized_matches = list(
         _SOURCE_APOSTROPHE_TOKEN_RE.finditer(normalized_text))
     if len(source_matches) != len(normalized_matches):
+        _source_cleanup_audit._value("figure.decision", "token_count_mismatch")
         return normalized_text
     replacements = []
     for source_match, normalized_match in zip(
@@ -6438,12 +6445,15 @@ def _restore_source_apostrophe_typography(
         if (len(source_token) != len(normalized_token)
                 or source_token.translate(str.maketrans("\u2018\u2019", "''"))
                 != normalized_token):
+            _source_cleanup_audit._value("figure.decision", "token_correspondence_mismatch")
             return normalized_text
         replacements.append((
             normalized_match.start(), normalized_match.end(), source_token))
     for start, end, replacement in reversed(replacements):
         normalized_text = (
             normalized_text[:start] + replacement + normalized_text[end:])
+    _source_cleanup_audit._value("figure.decision", "correspondence_accepted")
+    _source_cleanup_audit._step("source_apostrophe_restore", before_restoration, normalized_text)
     return normalized_text
 
 
@@ -6452,6 +6462,7 @@ def _normalize_source_markdown_text(
         dedup_nearby_lines_fn: Callable[[str], str] | None = None) -> str:
     """Normalize source Markdown without flattening or deduping list rows."""
     if _SOURCE_MARKDOWN_LIST_LINE_RE.search(text) is None:
+        _source_cleanup_audit._value("markdown.decision", "no_list")
         return _normalize_text(
             text, dedup_nearby_lines_fn=dedup_nearby_lines_fn)
     sentinels = [
@@ -6459,9 +6470,13 @@ def _normalize_source_markdown_text(
         if chr(code) not in text
     ][:2]
     if len(sentinels) != 2:
+        _source_cleanup_audit._value("markdown.decision", "sentinels_exhausted")
         return _normalize_text(
             text, dedup_nearby_lines_fn=dedup_nearby_lines_fn)
     indent_sentinel, row_sentinel = sentinels
+    _source_cleanup_audit._value("markdown.decision", "protected")
+    _source_cleanup_audit._value("markdown.indent_sentinel", indent_sentinel)
+    _source_cleanup_audit._value("markdown.row_sentinel", row_sentinel)
     row_index = 0
 
     def protect_list_row(match: re.Match[str]) -> str:
@@ -6476,11 +6491,14 @@ def _normalize_source_markdown_text(
         )
 
     protected = _SOURCE_MARKDOWN_LIST_LINE_RE.sub(protect_list_row, text)
-    return (_normalize_text(
-                protected,
-                dedup_nearby_lines_fn=dedup_nearby_lines_fn)
-            .replace(indent_sentinel, " ")
-            .replace(row_sentinel, ""))
+    _source_cleanup_audit._step("markdown_protect", text, protected)
+    normalized = _normalize_text(
+        protected, dedup_nearby_lines_fn=dedup_nearby_lines_fn)
+    unindented = normalized.replace(indent_sentinel, " ")
+    _source_cleanup_audit._step("markdown_restore_indent", normalized, unindented)
+    restored = unindented.replace(row_sentinel, "")
+    _source_cleanup_audit._step("markdown_remove_row_identity", unindented, restored)
+    return restored
 
 
 def _source_attested_duplicate_line_allowances(
@@ -6497,58 +6515,82 @@ def _source_attested_duplicate_line_allowances(
     repeated appearances of one source reference do not.
     """
     refs_by_line: dict[str, set[str]] = {}
-    for item in source_items or []:
+    first_items = source_items or []
+    _source_cleanup_audit._value("source_items.first_selected", first_items is source_items)
+    for item in first_items:
+        _source_cleanup_audit._value("source_item.begin", None)
         label = _doc_item_label(item)
         if label not in {"text", "list_item", "footnote", "caption", "code"}:
+            _source_cleanup_audit._value("source_item.decision", "unsupported_label")
             continue
-        ref = str(getattr(item, "self_ref", "") or "")
+        ref = _source_cleanup_audit._value("source_item.ref", str(
+            _source_cleanup_audit._value("source_item.ref_raw", getattr(item, "self_ref", "")) or ""))
         source_text = _source_item_text(item)
         if not ref or not source_text.strip():
+            _source_cleanup_audit._value("source_item.decision", "empty_ref_or_text")
             continue
-        normalized = _chunking_core._normalize_text(
-            source_text,
-            strip_headers_footers_fn=lambda value: value,
-            dedup_nearby_lines_fn=lambda value: value,
-        )
+        with _source_cleanup_audit._pass_scope("source_line", "auxiliary", source_text) as attempt:
+            normalized = _source_cleanup_audit._call_core(
+                _chunking_core._normalize_text, _SOURCE_CLEANUP_CORE_NORMALIZE, source_text,
+                strip_headers_footers_fn=lambda value: value,
+                dedup_nearby_lines_fn=lambda value: value,
+            )
+            attempt.finish(normalized, "auxiliary")
         lines = [line.strip() for line in normalized.splitlines()
                  if line.strip()]
         if len(lines) != 1:
+            _source_cleanup_audit._value("source_item.decision", "not_one_line")
             continue
         refs_by_line.setdefault(lines[0], set()).add(ref)
+        _source_cleanup_audit._value("source_item.accepted_line", lines[0])
     allowances = {
         line: len(refs)
         for line, refs in refs_by_line.items()
         if len(refs) > 1
     }
+    _source_cleanup_audit._mapping("allowances.distinct_refs", allowances)
+    second_items = source_items or []
+    _source_cleanup_audit._value("source_items.second_selected", second_items is source_items)
     unique_items = {
-        str(getattr(item, "self_ref", "") or ""): item
-        for item in source_items or []
-        if getattr(item, "self_ref", "")
+        _source_cleanup_audit._value("unique.ref_key", str(
+            _source_cleanup_audit._value("unique.ref_key_raw", getattr(item, "self_ref", "")) or "")): item
+        for item in second_items
+        if _source_cleanup_audit._value("unique.ref_filter_raw", getattr(item, "self_ref", ""))
     }
+    _source_cleanup_audit._value("unique.count", len(unique_items))
     if len(unique_items) != 1:
+        _source_cleanup_audit._value("canonical.decision", "not_one_unique_item")
         return allowances
     ref, item = next(iter(unique_items.items()))
     label = _doc_item_label(item)
-    override = (canonical_text_overrides or {}).get(ref, "")
-    if (ref not in text_rebuild_refs
-            or label not in {"text", "list_item", "footnote", "caption", "code"}
-            or not fragment_text.strip() or not override.strip()):
+    _source_cleanup_audit._value("canonical.lookup_key", ref)
+    override = _source_cleanup_audit._value("canonical.lookup_value", (canonical_text_overrides or {}).get(ref, ""))
+    if (_source_cleanup_audit._value("canonical.rebuild_denied", ref not in text_rebuild_refs)
+            or _source_cleanup_audit._value("canonical.label_denied", label not in {"text", "list_item", "footnote", "caption", "code"})
+            or _source_cleanup_audit._value("canonical.fragment_empty", not fragment_text.strip())
+            or _source_cleanup_audit._value("canonical.override_empty", not override.strip())):
+        _source_cleanup_audit._value("canonical.decision", "ineligible")
         return allowances
     fragment_tokens = _source_fidelity_core.lexical_tokens(fragment_text)
     override_tokens = _source_fidelity_core.lexical_tokens(override)
     width = len(fragment_tokens)
-    if (not width or not any(
+    _source_cleanup_audit._value("canonical.fragment_token_count", width)
+    if (not width or not _source_cleanup_audit._value("canonical.window_match", any(
             override_tokens[start:start + width] == fragment_tokens
-            for start in range(0, len(override_tokens) - width + 1))):
+            for start in range(0, len(override_tokens) - width + 1)))):
         # A rebuild designation alone does not prove that an arbitrary raw
         # chunk is canonical. Only an exact lexical window of the bound native
         # override can authorize its authored duplicate-line multiplicity.
+        _source_cleanup_audit._value("canonical.decision", "window_denied")
         return allowances
-    normalized_fragment = _chunking_core._normalize_text(
-        fragment_text,
-        strip_headers_footers_fn=lambda value: value,
-        dedup_nearby_lines_fn=lambda value: value,
-    )
+    _source_cleanup_audit._value("canonical.decision", "window_accepted")
+    with _source_cleanup_audit._pass_scope("canonical_fragment", "auxiliary", fragment_text) as attempt:
+        normalized_fragment = _source_cleanup_audit._call_core(
+            _chunking_core._normalize_text, _SOURCE_CLEANUP_CORE_NORMALIZE, fragment_text,
+            strip_headers_footers_fn=lambda value: value,
+            dedup_nearby_lines_fn=lambda value: value,
+        )
+        attempt.finish(normalized_fragment, "auxiliary")
     fragment_counts = Counter(
         line.strip() for line in normalized_fragment.splitlines()
         if line.strip())
@@ -6563,12 +6605,16 @@ def _source_attested_duplicate_line_allowances(
             override_tokens[start:start + line_width] == line_tokens
             for start in range(
                 0, len(override_tokens) - line_width + 1))
+        _source_cleanup_audit._value("canonical.repeated_line", line)
+        _source_cleanup_audit._value("canonical.fragment_occurrences", count)
+        _source_cleanup_audit._value("canonical.source_occurrences", source_occurrences)
         if source_occurrences >= count:
             # Token-bounded splitting can introduce line breaks that do not
             # exist in a one-line native-PDF oracle.  Preserve a repeated
             # rendered line only when its complete lexical sequence occurs at
             # least that many times in the exact canonical source window.
             allowances[line] = max(allowances.get(line, 1), count)
+    _source_cleanup_audit._mapping("allowances.canonical", allowances)
     return allowances
 
 
@@ -6600,39 +6646,52 @@ def _normalize_source_chunk_text(
         canonical_text_overrides: dict[str, str] | None = None,
         text_rebuild_refs: set[str] | frozenset[str] = frozenset()) -> str:
     """Preserve source-bound numeric text without retaining page furniture."""
-    duplicate_line_allowances = _source_attested_duplicate_line_allowances(
-        source_items, fragment_text=text,
-        canonical_text_overrides=canonical_text_overrides,
-        text_rebuild_refs=text_rebuild_refs)
-    dedup_fn = (
-        (lambda value: _dedup_nearby_lines_with_source_allowances(
-            value, duplicate_line_allowances))
-        if duplicate_line_allowances else _dedup_nearby_lines
-    )
-    if (content_source == "footnote"
-            and _SOURCE_FOOTNOTE_MARKER_ONLY_RE.fullmatch(text)):
-        return _chunking_core._normalize_text(
-            text,
-            strip_headers_footers_fn=lambda value: value,
-            dedup_nearby_lines_fn=dedup_fn,
+    with _source_cleanup_audit._invocation(text) as observation:
+        _source_cleanup_audit._value("wrapper.content_source", content_source)
+        _source_cleanup_audit._value("wrapper.preserve_source_identity", preserve_source_identity)
+        duplicate_line_allowances = _source_attested_duplicate_line_allowances(
+            source_items, fragment_text=text,
+            canonical_text_overrides=canonical_text_overrides,
+            text_rebuild_refs=text_rebuild_refs)
+        _source_cleanup_audit._mapping("allowances.final", duplicate_line_allowances)
+        dedup_fn = (
+            (lambda value: _dedup_nearby_lines_with_source_allowances(
+                value, duplicate_line_allowances))
+            if duplicate_line_allowances else _dedup_nearby_lines
         )
-    normalized = _normalize_source_markdown_text(
-        text, dedup_nearby_lines_fn=dedup_fn)
-    if content_source == "figure":
-        normalized = _restore_source_apostrophe_typography(text, normalized)
-    if (normalized.strip() or not preserve_source_identity
-            or not text.strip()):
-        return normalized
-    # Lineage preparation deliberately emits every publishable source object.
-    # A standalone numeric label nested in a picture (for example a year) can
-    # resemble a page number even though its source label is body text.  Retry
-    # only when the generic cleaner erased the entire source-bound fragment;
-    # actual page headers/footers are excluded before this point.
-    return _chunking_core._normalize_text(
-        text,
-        strip_headers_footers_fn=lambda value: value,
-        dedup_nearby_lines_fn=dedup_fn,
-    )
+        if (content_source == "footnote"
+                and _SOURCE_FOOTNOTE_MARKER_ONLY_RE.fullmatch(text)):
+            with _source_cleanup_audit._pass_scope("footnote", "output", text) as attempt:
+                normalized = _source_cleanup_audit._call_core(
+                    _chunking_core._normalize_text, _SOURCE_CLEANUP_CORE_NORMALIZE, text,
+                    strip_headers_footers_fn=lambda value: value,
+                    dedup_nearby_lines_fn=dedup_fn,
+                )
+                attempt.finish(normalized, "committed")
+                return normalized if observation is None else observation.finish(normalized, attempt)
+        with _source_cleanup_audit._pass_scope("ordinary", "output", text) as attempt:
+            normalized = _normalize_source_markdown_text(
+                text, dedup_nearby_lines_fn=dedup_fn)
+            if content_source == "figure":
+                normalized = _restore_source_apostrophe_typography(text, normalized)
+            if (normalized.strip() or not preserve_source_identity
+                    or not text.strip()):
+                attempt.finish(normalized, "committed")
+                return normalized if observation is None else observation.finish(normalized, attempt)
+            attempt.finish(normalized, "discarded")
+        # Lineage preparation deliberately emits every publishable source object.
+        # A standalone numeric label nested in a picture (for example a year) can
+        # resemble a page number even though its source label is body text. Retry
+        # only when the generic cleaner erased the entire source-bound fragment;
+        # actual page headers/footers are excluded before this point.
+        with _source_cleanup_audit._pass_scope("numeric_rescue", "output", text) as attempt:
+            normalized = _source_cleanup_audit._call_core(
+                _chunking_core._normalize_text, _SOURCE_CLEANUP_CORE_NORMALIZE, text,
+                strip_headers_footers_fn=lambda value: value,
+                dedup_nearby_lines_fn=dedup_fn,
+            )
+            attempt.finish(normalized, "committed")
+            return normalized if observation is None else observation.finish(normalized, attempt)
 
 
 def _strip_headers_footers(text: str) -> str:
@@ -6711,7 +6770,8 @@ def _deduplicate_chunks(chunks: list[dict],
             and candidate.get("text") == kept.get("text")
         )
 
-    return _chunking_core._deduplicate_chunks(
+    return _chunk_dedup_audit._call_core(
+        _chunking_core._deduplicate_chunks, _CHUNK_DEDUP_CORE,
         chunks,
         threshold,
         text_fingerprint_fn=_text_fingerprint,
@@ -9516,8 +9576,9 @@ def _split_source_text_by_tokens(
 
 def _doc_item_label(item) -> str:
     """Return a stable lowercase Docling item label."""
-    label = getattr(item, "label", "")
-    return str(getattr(label, "value", label)).lower()
+    label = _source_cleanup_audit._value("item.label_raw", getattr(item, "label", ""))
+    return _source_cleanup_audit._value("item.label", str(
+        _source_cleanup_audit._value("item.label_value_raw", getattr(label, "value", label))).lower())
 
 
 def _is_editorial_boilerplate_text(text: str) -> bool:
@@ -10898,8 +10959,9 @@ def _recover_incomplete_table_markdown(
 
 def _source_item_text(item) -> str:
     """Return the source-authored text exposed by one Docling item."""
-    return str(
-        getattr(item, "text", "") or getattr(item, "orig", "") or "")
+    return _source_cleanup_audit._value("item.source_text", str(
+        _source_cleanup_audit._value("item.text_raw", getattr(item, "text", ""))
+        or _source_cleanup_audit._value("item.orig_raw", getattr(item, "orig", "")) or ""))
 
 
 def _source_item_position(item) -> tuple[int, float, float] | None:
