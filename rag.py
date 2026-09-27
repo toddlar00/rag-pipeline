@@ -10581,6 +10581,8 @@ class BoundSourceEnrichments:
     figure_text: dict[str, FigureTextRecovery] = field(default_factory=dict)
     page_labels: dict[int, str] = field(default_factory=dict)
     manifest_input: dict | None = None
+    # Proven multi-block groups awaiting a failed reading-order gate.
+    deferred_text_groups: tuple[SourceTextGroupRecovery, ...] = ()
 
 
 def _strict_json_object(raw: bytes, *, description: str) -> dict:
@@ -14302,11 +14304,60 @@ def _canonicalize_native_repair_urls(
     return repaired
 
 
+def _native_blocks_form_one_ordered_run(
+        page_words: list[tuple], union) -> bool:
+    """Prove several native text blocks are one stacked, ordered text run.
+
+    A PDF text layer can split one paragraph into consecutive blocks.  Accept
+    that only when every block contributing a word lies wholly inside the
+    group's union, the text layer's own content order equals the geometric
+    reading order, and line centers strictly descend in that content order.
+    A block continuing into neighboring text, a reordered stream, and
+    side-by-side lanes all fail closed.
+    """
+    def inside(word) -> bool:
+        return (union.x0 - 0.5
+                <= (float(word[0]) + float(word[2])) / 2
+                <= union.x1 + 0.5
+                and union.y0 - 0.5
+                <= (float(word[1]) + float(word[3])) / 2
+                <= union.y1 + 0.5)
+
+    members = [word for word in page_words if inside(word)]
+    blocks = {int(word[5]) for word in members}
+    if len(blocks) < 2 or any(
+            int(word[5]) in blocks and not inside(word)
+            for word in page_words):
+        return False
+    content_order = sorted(
+        members, key=lambda word: (int(word[5]), int(word[6]), int(word[7])))
+    if content_order != members:
+        return False
+    line_extents: dict[tuple[int, int], list[float]] = {}
+    for word in members:
+        line_extents.setdefault((int(word[5]), int(word[6])), []).extend(
+            (float(word[1]), float(word[3])))
+    centers = [
+        (min(extents) + max(extents)) / 2
+        for _, extents in sorted(line_extents.items())
+    ]
+    return all(lower > upper for upper, lower in zip(centers, centers[1:]))
+
+
 def _recover_overlapping_native_text_groups(
         dl_doc, pdf_path: Path, *,
         structural_ranges: set[tuple[int, int]] | None = None,
+        reading_order_violations: frozenset[tuple[str, int]] = frozenset(),
+        deferred_groups: list[SourceTextGroupRecovery] | None = None,
 ) -> tuple[SourceTextGroupRecovery, ...]:
-    """Recover reading order only for source fragments with overlapping bboxes."""
+    """Recover reading order only for source fragments with overlapping bboxes.
+
+    A group whose union holds several native text blocks must also pass the
+    ordered-run and exact-lexeme proofs, and is returned only when
+    ``reading_order_violations`` holds ``(member ref, page)`` from a failed
+    ``same_page_reading_order`` gate.  Otherwise such a proven group is
+    appended to ``deferred_groups`` (when given) and left unrecovered.
+    """
     import difflib
     import pymupdf
 
@@ -14448,6 +14499,7 @@ def _recover_overlapping_native_text_groups(
         return ()
 
     recoveries: list[SourceTextGroupRecovery] = []
+    deferred: list[SourceTextGroupRecovery] = []
     with pymupdf.open(str(pdf_path)) as pdf:
         hard_hyphen_attestations = _native_hard_hyphen_attestations(pdf)
         for group in candidates:
@@ -14496,16 +14548,20 @@ def _recover_overlapping_native_text_groups(
             for clip in clips[1:]:
                 union |= clip
 
-            # Require exactly one native text block and no source section
-            # heading crossing the union. These gates exclude parallel lanes
-            # and mid-page section transitions.
+            # A group normally needs exactly one native text block and no
+            # source section heading crossing the union. These gates exclude
+            # parallel lanes and mid-page section transitions. Several blocks
+            # additionally need one ordered text-layer run and identical
+            # lexemes, and are admitted only by a failed reading-order gate
+            # (see below).
             native_blocks = [
                 block for block in page.get_text(
                     "blocks", clip=union, sort=True)
                 if len(block) > 6 and block[6] == 0
                 and str(block[4]).strip()
             ]
-            if len(native_blocks) != 1:
+            multiple_native_blocks = len(native_blocks) > 1
+            if not native_blocks:
                 continue
             intersects_heading = False
             for heading in texts:
@@ -14544,6 +14600,10 @@ def _recover_overlapping_native_text_groups(
                     <= (float(word[1]) + float(word[3])) / 2
                     <= union.y1 + 0.5)
             ]
+            if (multiple_native_blocks
+                    and not _native_blocks_form_one_ordered_run(
+                        page_words, union)):
+                continue
             native_text = _native_text_from_words(
                 native_words, hard_hyphen_attestations)
             source_text = " ".join(
@@ -14574,6 +14634,10 @@ def _recover_overlapping_native_text_groups(
                 and abs(len(source_tokens) - len(native_tokens))
                 <= allowed_difference
             )
+            # Several native blocks may only reorder the same lexemes; they
+            # never use the late-fragment or native-equivalence path below.
+            if multiple_native_blocks and source_counts != native_counts:
+                continue
 
             # A late Docling fragment can be genuine even when ordinary OCR
             # splits (``Th e``, ``ow n``) make the raw token multiset miss the
@@ -14657,9 +14721,23 @@ def _recover_overlapping_native_text_groups(
                 ref for item in group
                 if (ref := str(getattr(item, "self_ref", "")))
             )
-            if refs:
-                recoveries.append(SourceTextGroupRecovery(
-                    text=native_text, refs=refs, page=page_number))
+            if not refs:
+                continue
+            recovery = SourceTextGroupRecovery(
+                text=native_text, refs=refs, page=page_number)
+            # Only the published output can prove Docling's order wrong:
+            # chunk preparation may already place a detached member beside
+            # its host.  A proven group therefore waits for a failed gate
+            # edge whose ``before_ref`` it contains, keeping passing output
+            # unchanged.
+            if multiple_native_blocks and not any(
+                    (ref, page_number) in reading_order_violations
+                    for ref in refs):
+                deferred.append(recovery)
+            else:
+                recoveries.append(recovery)
+    if deferred_groups is not None:
+        deferred_groups.extend(deferred)
     return tuple(recoveries)
 
 
@@ -15868,6 +15946,7 @@ def _recover_bound_source_enrichments(
         source_pdf_path: Path | None = None,
         forbidden_output_paths: dict[str, Path] | None = None,
         structural_ranges: set[tuple[int, int]] | None = None,
+        reading_order_violations: frozenset[tuple[str, int]] = frozenset(),
 ) -> BoundSourceEnrichments:
     """Recover all PDF-derived supplements from one verified snapshot."""
     def optional_stage(name: str, operation, fallback):
@@ -15920,11 +15999,14 @@ def _recover_bound_source_enrichments(
                     rebuild_refs=native_text_rebuild_refs),
                 {},
             )
+            deferred_text_groups: list[SourceTextGroupRecovery] = []
             text_group_recoveries = optional_stage(
                 "overlapping native-PDF text groups",
                 lambda: _recover_overlapping_native_text_groups(
                     dl_doc, recovery_source.pdf.path,
-                    structural_ranges=structural_ranges),
+                    structural_ranges=structural_ranges,
+                    reading_order_violations=reading_order_violations,
+                    deferred_groups=deferred_text_groups),
                 (),
             )
             text_group_recoveries += optional_stage(
@@ -15979,6 +16061,7 @@ def _recover_bound_source_enrichments(
                     {},
                 ),
                 manifest_input=manifest_input,
+                deferred_text_groups=tuple(deferred_text_groups),
             )
     except _SourceOutputAliasError:
         raise
@@ -20082,6 +20165,53 @@ def _recovered_table_refs_from_records(records: list[dict]) -> set[str]:
     return refs
 
 
+def _native_group_order_replay_violations(
+        report: dict,
+        deferred_groups: tuple[SourceTextGroupRecovery, ...],
+) -> frozenset[tuple[str, int]]:
+    """Return ``(member ref, page)`` for failed edges a replay may repair.
+
+    A ``same_page_reading_order`` violation's ``before_ref`` must be published
+    before its ``after_ref`` but was not: the upper item of a vertical edge,
+    or the last left-lane item of a two-column transition.  Only a deferred
+    group member named as ``before_ref`` on that group's page qualifies.
+    """
+    fidelity = (report.get("source_lineage") or {}).get("fidelity") or {}
+    deferred_members = {
+        (ref, group.page) for group in deferred_groups for ref in group.refs}
+    return frozenset(
+        (violation["before_ref"], violation["page"])
+        for violation in fidelity.get("geometry_violations") or ()
+        if isinstance(violation, dict)
+        and (violation.get("before_ref"), violation.get("page"))
+        in deferred_members
+    )
+
+
+def _publish_quality_report_or_request_order_replay(
+        publish: Callable[[list[dict]], dict],
+        deferred_groups: tuple[SourceTextGroupRecovery, ...],
+        replay_requests: list[frozenset[tuple[str, int]]] | None,
+) -> dict:
+    """Publish quality evidence, requesting a replay for a named order failure.
+
+    ``publish`` appends a failed report to the list it receives before raising
+    the gate failure, which always propagates unchanged.  Only a first pass
+    passes ``replay_requests``; it then records the deferred members that the
+    failed report names, so ``chunk_document`` can replay the chunk once.
+    """
+    failed_reports: list[dict] = []
+    try:
+        return publish(failed_reports)
+    except RuntimeError:
+        if replay_requests is not None and failed_reports:
+            violations = _native_group_order_replay_violations(
+                failed_reports[0], deferred_groups)
+            if violations:
+                replay_requests.append(violations)
+        raise
+
+
 def _publish_corpus_quality_report(
         doc_path: Path, chunks_output: Path, *, parameters: dict,
         structural_ranges: set[tuple[int, int]] | None = None,
@@ -20111,8 +20241,13 @@ def _publish_corpus_quality_report_locked(
         structure_profile: (
             str | _document_profiles.StructureProfile | None
         ) = None,
+        failed_reports: list[dict] | None = None,
 ) -> dict:
-    """Build and atomically publish a report over exact artifact snapshots."""
+    """Build and atomically publish a report over exact artifact snapshots.
+
+    A failed report is appended to ``failed_reports`` (when given) before the
+    gate failure is raised.
+    """
     doc_path = Path(doc_path)
     chunks_output = Path(chunks_output)
     if document_snapshot is None:
@@ -20194,6 +20329,8 @@ def _publish_corpus_quality_report_locked(
             check["name"] for check in report["checks"]
             if check["status"] == "fail"
         ]
+        if failed_reports is not None:
+            failed_reports.append(report)
         raise RuntimeError(
             "Corpus quality gate failed: " + ", ".join(failed))
 
@@ -20275,7 +20412,12 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
                    ) = None,
                    telemetry: _run_telemetry.RunTelemetry | None = None
                    ) -> None:
-    """Build one complete chunk artifact set under a path-wide lease."""
+    """Build one complete chunk artifact set under a path-wide lease.
+
+    A first pass whose quality gate fails on reading-order edges naming
+    deferred native text groups is replayed once under the same lease; the
+    replay is recorded as a ``chunk_order_replay`` telemetry observation.
+    """
     profile = _document_profiles.get_profile(structure_profile)
     chunks_output = Path(chunks_output)
     _run_telemetry.validate_distinct_output_paths({
@@ -20291,34 +20433,59 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
             chunks_output),
         "quality report": _quality_core.quality_report_path(chunks_output),
     })
+    arguments = dict(
+        source_pdf_path=source_pdf_path,
+        embedding_model=embedding_model,
+        max_tokens=max_tokens,
+        min_words=min_words,
+        dedup_threshold=dedup_threshold,
+        watermark=watermark,
+        llm_classify=llm_classify,
+        zeroshot_classify=zeroshot_classify,
+        contextualize=contextualize,
+        ollama_url=ollama_url,
+        ollama_model=ollama_model,
+        gemini_key=gemini_key,
+        cloud_url=cloud_url,
+        cloud_model=cloud_model,
+        cloud_key=cloud_key,
+        llm_workers=llm_workers,
+        thinking=thinking,
+        reconstruct_headings=reconstruct_headings,
+        quality_score=quality_score,
+        llm_scaffold=llm_scaffold,
+        table_children=table_children,
+        structure_profile=profile,
+        security_policy=security_policy,
+    )
+    replay_requests: list[frozenset[tuple[str, int]]] = []
     with _chunk_output_lease(chunks_output):
+        try:
+            _chunk_document_locked(
+                doc_path, chunks_output, **arguments, telemetry=telemetry,
+                order_replay_requests=replay_requests)
+        except RuntimeError:
+            if not replay_requests:
+                raise
+        else:
+            return
+        # The first pass is the unchanged pipeline, and its published output
+        # failed ``same_page_reading_order`` on edges naming deferred native
+        # groups.  Replay it once, outside that failure's handler, admitting
+        # only those groups.  The first pass already recorded the
+        # deterministic telemetry; its warnings and any LLM calls repeat.
+        # The observation below is the run report's durable replay record.
+        log.info(
+            "Replaying chunking to recover %s reading-order violation(s) "
+            "from deferred native text groups",
+            len(replay_requests[0]))
+        if telemetry is not None:
+            telemetry.stage_observation(
+                "chunk_order_replay", metrics={
+                    "reading_order_violations": len(replay_requests[0])})
         _chunk_document_locked(
-            doc_path, chunks_output,
-            source_pdf_path=source_pdf_path,
-            embedding_model=embedding_model,
-            max_tokens=max_tokens,
-            min_words=min_words,
-            dedup_threshold=dedup_threshold,
-            watermark=watermark,
-            llm_classify=llm_classify,
-            zeroshot_classify=zeroshot_classify,
-            contextualize=contextualize,
-            ollama_url=ollama_url,
-            ollama_model=ollama_model,
-            gemini_key=gemini_key,
-            cloud_url=cloud_url,
-            cloud_model=cloud_model,
-            cloud_key=cloud_key,
-            llm_workers=llm_workers,
-            thinking=thinking,
-            reconstruct_headings=reconstruct_headings,
-            quality_score=quality_score,
-            llm_scaffold=llm_scaffold,
-            table_children=table_children,
-            structure_profile=profile,
-            security_policy=security_policy,
-            telemetry=telemetry,
-        )
+            doc_path, chunks_output, **arguments, telemetry=None,
+            reading_order_violations=replay_requests[0])
 
 
 def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
@@ -20349,9 +20516,19 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
                    security_policy: (
                        _release_security.ReleaseSecurityPolicy | None
                    ) = None,
-                   telemetry: _run_telemetry.RunTelemetry | None = None
+                   telemetry: _run_telemetry.RunTelemetry | None = None,
+                   reading_order_violations: (
+                       frozenset[tuple[str, int]]) = frozenset(),
+                   order_replay_requests: (
+                       list[frozenset[tuple[str, int]]] | None) = None,
                    ) -> None:
-    """Load a DoclingDocument, chunk with HybridChunker, and enrich."""
+    """Load a DoclingDocument, chunk with HybridChunker, and enrich.
+
+    ``chunk_document`` passes ``order_replay_requests`` to its first pass only;
+    a failed quality gate that names deferred native groups is recorded there
+    before it propagates.  Its replay passes the recorded
+    ``reading_order_violations`` instead.
+    """
     from docling_core.types import DoclingDocument
     from docling_core.transforms.chunker import HybridChunker
     from docling_core.transforms.chunker.tokenizer.huggingface import (
@@ -20528,7 +20705,8 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
             "source oracle registry": _source_oracle_registry_path(
                 chunks_output),
         },
-        structural_ranges=structural_ranges)
+        structural_ranges=structural_ranges,
+        reading_order_violations=reading_order_violations)
     table_markdown_overrides = (
         source_enrichments.table_markdown_overrides)
     table_recovery_input = source_enrichments.manifest_input
@@ -21679,14 +21857,19 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
                     _artifact_parameters_sha256(completion_parameters),
                     completion_parameters["structure_profile"])),
         })
-    quality_report = _publish_corpus_quality_report_locked(
-        doc_path,
-        chunks_output,
-        parameters=completion_parameters,
-        structural_ranges=structural_ranges,
-        document_snapshot=(doc_dict, source_sha256, source_size),
-        chunk_inputs=chunk_input_bindings,
-        structure_profile=profile,
+    quality_report = _publish_quality_report_or_request_order_replay(
+        lambda failed_reports: _publish_corpus_quality_report_locked(
+            doc_path,
+            chunks_output,
+            parameters=completion_parameters,
+            structural_ranges=structural_ranges,
+            document_snapshot=(doc_dict, source_sha256, source_size),
+            chunk_inputs=chunk_input_bindings,
+            structure_profile=profile,
+            failed_reports=failed_reports,
+        ),
+        source_enrichments.deferred_text_groups,
+        order_replay_requests,
     )
 
     # Stats

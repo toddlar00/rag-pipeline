@@ -684,6 +684,41 @@ def test_quality_report_is_repairable_and_required_for_lineaged_chunks(
         document, chunks, parameters=parameters)
 
 
+def test_failed_quality_gate_hands_its_published_report_to_a_sink(
+        monkeypatch, tmp_path):
+    document = tmp_path / "book.json"
+    chunks = tmp_path / "book_chunks.jsonl"
+    parameters = {"embedding_model": "model-a", "chunking_policy_version": 19}
+    _write_quality_source(document)
+    _write_chunks(chunks, [_lineaged_record()])
+    _write_chunk_completion(document, chunks, parameters)
+    failing = {"status": "fail", "checks": [
+        {"name": "nonempty_corpus", "status": "pass"},
+        {"name": "same_page_reading_order", "status": "fail"},
+    ]}
+    monkeypatch.setattr(
+        rag._quality_core, "build_quality_report", lambda **_kwargs: failing)
+    failed_reports = []
+
+    for sink in (None, failed_reports):
+        with pytest.raises(
+                RuntimeError,
+                match="^Corpus quality gate failed: same_page_reading_order$",
+        ) as failure:
+            rag._publish_corpus_quality_report_locked(
+                document, chunks, parameters=parameters,
+                structural_ranges=set(), failed_reports=sink)
+
+        # Run reports record the exact type of a failed quality gate.
+        assert type(failure.value) is RuntimeError
+        assert rag._run_telemetry.failure_diagnostic(
+            failure.value)["error_type"] == "RuntimeError"
+    assert len(failed_reports) == 1
+    assert failed_reports[0] is failing
+    assert json.loads(rag._quality_core.quality_report_path(chunks).read_text(
+        encoding="utf-8")) == failing
+
+
 def test_source_oracle_sidecar_tamper_fails_closed_until_regenerated(
         tmp_path):
     document = tmp_path / "book.json"

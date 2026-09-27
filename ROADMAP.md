@@ -227,7 +227,9 @@ output that fails the gates today; no schema or policy version changed.
   and gate-silent scanner-layer misreads (h18); fused-native repair re-splits
   clean OCR words into letter-spaced layer tokens (h16 p19); relaxing the
   one-native-block recovery gate (h03) would also rebuild h18's p20 pair from
-  its misread layer; quote-led cross-page footnote continuations are demoted
+  its misread layer (a naive relaxation; the gate-driven one implemented
+  under "Multi-block overlapping-group recovery" below leaves h18
+  unchanged); quote-led cross-page footnote continuations are demoted
   into body flow (h17 p13); contents records keep a pre-swap raw
   `token_count`, `table_recovered_from_pdf` and case names, and split contents
   rows are caught only by the gate; a printed range across a page-label gap
@@ -264,6 +266,152 @@ owner-approved follow-up above. No schema or policy version changed.
   - h04 keeps its 3 accepted gate-silent scrambles (pp.4/6/7).
   - No end-to-end `full` publish of the flagged h04 has run yet.
   - The architecture inventory needs a reviewed `--refresh`.
+
+### Multi-block overlapping-group recovery (2026-09-26, local, uncommitted)
+
+This has the same status as the sections above. It implements the
+owner-approved h03 recovery-gate fix. No schema or policy version changed.
+
+- **Change.** Overlapping-group recovery used to reject every group whose
+  union holds more than one native text block. One-block groups keep their
+  exact previous path. A group with several blocks is now deferred when two
+  text-layer proofs hold:
+  - The text layer shows one ordered run: every contributing block lies
+    wholly inside the union, stream order equals geometric order, and line
+    centers descend.
+  - The lexeme multiset is identical. Such groups never use the late-fragment
+    or native-equivalence path.
+
+  The first chunking pass never recovers a deferred group, so it is the
+  previous pipeline. Its quality publication gets a failure sink. When the
+  published report fails `same_page_reading_order` on an edge whose
+  `before_ref` is a deferred member on the group's page, the pass records
+  those members, then lets the unchanged gate failure propagate. The
+  `before_ref` is the item that must come first: the upper item of a vertical
+  edge, or the last left-lane item of a two-column transition.
+  `chunk_document` then replays the chunk once, outside the first failure's
+  handler but under the same path-wide chunk-output lease, so no other writer
+  can publish between the two passes. The replay admits exactly the named
+  groups, gets no sink (so it never replays again), and skips the telemetry
+  observations the first pass already recorded.
+- **Failures keep their type.** Every gate failure, replayed or not, is still
+  the previous plain `RuntimeError` with the same message, so run reports and
+  events keep recording `error_type` `RuntimeError`. A fix-up-1 draft raised a
+  private subclass, which `run_telemetry` records as `Exception`; on h18 with
+  `--run-report`, the pre-change code and this code both record
+  `RuntimeError` (category `internal_error`).
+- **Replays are recorded.** Before it replays, `chunk_document` records one
+  `chunk_order_replay` run-telemetry observation. Its
+  `reading_order_violations` metric counts the named members. Run reports
+  and events therefore show every replay, including one that fails, and
+  `--quiet` hides only the INFO log line. A one-pass chunk records none.
+  Stage names are open identifiers, so no telemetry schema changed.
+- **Why the gate itself.** An earlier draft admitted a group when Docling's
+  `iterate_items()` order put a member after lower same-lane text. Review
+  showed that chunk preparation can already publish a detached member beside
+  its host, so that draft changed synthetic documents that pass every gate.
+  It was removed.
+- **Scope.** By construction, output changes only when the unchanged first
+  pass fails `same_page_reading_order`. Verified on the 14 READY excerpts, the
+  Summer 2026 Update, h04, h16 and h18 (none replays), and on the 12 review
+  synthetic cases, re-run on the final code. All 12 are byte-identical to the
+  pre-change function, including the three the draft changed.
+  A second 30-case review matrix, also re-run on the final code, shows the
+  changed side. 5 synthetic documents that failed only
+  `same_page_reading_order` before now replay once and pass: stacked groups
+  with a detached late member, including two whose `texts` order differs
+  from their body order. The other 25 are byte-identical to the pre-change
+  functions: 19 that pass and 6 that still fail.
+- **Cost.** A document that replays is chunked twice, including HybridChunker,
+  enrichment and any enabled LLM calls, which run again. The replay also
+  repeats the first pass's warnings (bookmark cross-check, QC flags). The
+  first pass publishes its failing artifacts as before. The replay then
+  republishes each file atomically, in the usual order: chunks, oracles,
+  chunking receipt, quality report. A replay killed part-way can therefore
+  leave a mixed set, which the artifact bindings detect, as with any
+  interrupted re-chunk. The first pass now also evaluates the text-layer
+  proofs for multi-block groups it used to skip. An exception there would
+  fail an explicit-source chunk; none occurs in the verified corpus.
+- **h03.** The staged conversion is chunked against its staged PDF.
+  - With the replay disabled, the first pass is byte-identical to rc5 and fails
+    only `same_page_reading_order` (p4 `#/texts/42` published after the lower
+    `#/texts/39`).
+  - The replay admits p4 [`#/texts/37`, `#/texts/42`] in text-layer order. It
+    exits 0 and passes all 31 checks.
+  - Records go from 30 to 32: page 4's two records become four smaller ones
+    ([#36] 125 tokens, [#37,#42] 104, [#38,#39] 75, [#40,#41,#46] 330),
+    because the recovered group is one indivisible oracle. The other 28
+    records keep their text, stable ids and metadata, except for positional
+    fields: `chunk_index` moves by two for the 17 later records, record 10
+    changes its `next_stable_id`, and record 15 changes its
+    `previous_stable_id`.
+  - The output is byte-identical to the draft's and to fix-ups 1 and 2.
+  - A scratch conversion of the labeled PDF has the same parameters digest
+    (`bd9ee649…`) and the same content. Chunked against the labeled PDF, it
+    replays the same way and passes 31/31 with the same 32 record texts.
+- **Preservation.** The 14 READY excerpts and the Summer 2026 Update were
+  re-chunked against their labeled PDFs. Chunks, quality, oracles and chunking
+  receipts are byte-identical to their publications.
+- **h18 stays blocked.** It fails only `normalization_invariants`
+  (split_hyphen record 62), so it never replays, and it is byte-identical to
+  rc5. The containment proof would also exclude both of its multi-block pairs
+  (p17, p20), because their text-layer blocks continue past the group. h04
+  and h16 are also byte-identical to rc5.
+- **Tort law.** The tort-law evidence is only a direct-call simulation on its
+  schema-2 conversion. That conversion cannot be re-bound on current code:
+  `--source-pdf` fails verification, and without it this stage never runs.
+- **Evidence.**
+  - `tests/test_overlapping_native_block_runs.py` (15 tests) pins the
+    recovery proofs, including the pre-existing section-heading gate that
+    multi-block groups now reach. `tests/test_native_group_order_replay.py`
+    (21 tests) pins the replay: the named violations, the publication hook,
+    `chunk_document` (one lease held across both passes, and the replay
+    observation), and the real `_chunk_document_locked` run end to end on
+    a one-paragraph document with a stand-in tokenizer and chunker. One more
+    test is in `tests/test_output_publication.py`.
+  - Baselines for these 37 tests, with each `rag.py` loaded whole:
+    - Against the pre-change code, 33 fail. The 4 that pass are
+      characterizations: the fixture shape, emission order alone admitting
+      nothing, and `chunk_document` running one pass for a success and for a
+      plain gate failure.
+    - Against the fix-up-1 code, 20 fail: every test of the new replay
+      interface, including the exact-`RuntimeError` checks. The 17 that pass
+      are the recovery-proof tests, the heading-gate pin and the two one-pass
+      `chunk_document` characterizations.
+    - Against the fix-up-2 code, only the 2 replay-observation tests fail.
+      The lease pin passes there, because that code already held the lease.
+      It fails when the replay runs after the lease is released, when the
+      replay re-acquires the lease, and when there is no lease at all.
+  - Each of 39 mutants turns its intended test red. They cover the admission
+    clauses, deferral, both text-layer proofs, the heading gate, the named
+    violations, the publication hook and its sink, the locked pass's
+    forwarding of violations, deferred groups and requests, the replay
+    control in `chunk_document`, including its lease and its observation, and
+    the exact gate error type.
+  - On h03, `--run-report` records 6 events instead of 5. The extra event is
+    the `chunk_order_replay` observation (1 violation), and the run succeeds.
+    h18's report is unchanged: 5 events, no replay, `error_type`
+    `RuntimeError`.
+- **Open question (owner).** h03 still carries a gate-silent candidate
+  disorder at p4 [#33,#34] (record 10), where a citation's reporter precedes
+  its case name. Publish h03 with it, as with h04's accepted scrambles, or
+  hold it for a broader fix?
+- **Follow-ups (not fixed).**
+  - Candidate gate-silent paragraph scrambles, found by a contiguity heuristic
+    and not confirmed:
+    - 32 multi-block groups in 14 READY h26 runs, plus tort law p361;
+    - h13 p5 may be side-by-side text, and h01 p7's lexeme multisets differ.
+
+    `same_page_reading_order` creates no edge between vertically overlapping
+    boxes, so no gate sees these candidates and none replays.
+  - An admitted group publishes the text layer's text, so the text layer's
+    punctuation and case replace Docling's. The multiset proof compares
+    NFKC-casefolded lexemes only. h03 still passes `source_token_fidelity`
+    and `normalization_invariants`.
+  - The architecture inventory drift now also covers the two new private
+    replay helpers, the new keyword parameters of
+    `_publish_corpus_quality_report_locked` and `_chunk_document_locked`, and
+    one test patch target. It needs a reviewed `--refresh`.
 
 ### Integrated convergence
 
