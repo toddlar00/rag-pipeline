@@ -924,6 +924,32 @@ def test_conversion_resume_rechecks_source_after_output_validation(
         source, document, markdown, parameters=parameters)
 
 
+@pytest.mark.parametrize(
+    "recorded", [{}, {"ocr_angle_classifier": False}],
+    ids=["alone", "beside-override"])
+def test_conversion_manifest_rejects_unknown_root_fields(tmp_path, recorded):
+    # The OCR override is the only optional root field; any other extra field
+    # stays an invalid field set, alone or beside the override.
+    source = tmp_path / "book.pdf"
+    document = tmp_path / "book.json"
+    markdown = tmp_path / "book_docling.md"
+    source.write_bytes(b"source")
+    document.write_text('{"texts":[]}', encoding="utf-8")
+    markdown.write_text("complete", encoding="utf-8")
+    _write_conversion_v2(source, document, markdown, {"backend": "auto"})
+    manifest = rag._artifact_completion_path(document, stage="conversion")
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload.update(recorded, unexpected_root_field=False)
+    rag._atomic_write_json(manifest, payload)
+
+    with pytest.raises(ValueError, match="invalid field set"):
+        rag._load_conversion_source_binding(
+            document,
+            document_sha256=hashlib.sha256(document.read_bytes()).hexdigest(),
+            document_size=document.stat().st_size,
+        )
+
+
 def test_conversion_manifest_rejects_unhashable_output_role(tmp_path):
     source = tmp_path / "book.pdf"
     document = tmp_path / "book.json"

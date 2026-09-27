@@ -2751,6 +2751,19 @@ handshake deadline.
 - **Overrides**: `--ocr` forces OCR and `--no-ocr` disables it. Disabling OCR on
   a weak text layer emits a warning. `--no-preprocess` skips background-image
   stripping but does not disable automatic OCR selection.
+  `--ocr-no-angle-classifier` (`convert`, `full`, `batch`) turns off RapidOCR's
+  text-direction classifier whenever OCR runs. Use it only for a scan whose
+  lines are all upright but whose OCR text comes out garbled, because the
+  classifier can flip clean upright lines. It does not enable OCR, and
+  `--no-ocr` overrides it. The conversion parameters digest records the
+  choice, and the conversion manifest records it as
+  `"ocr_angle_classifier": false`, so resume and publication are bound to it.
+  Docling OCR retry proposals (`tools/propose_ocr_layout.py`) refuse such
+  conversions; service evidence search still binds them because it splices
+  no OCR text. Apply the flag to one PDF at a
+  time and never to a batch rebuild. The flag is recorded as requested even
+  when OCR does not run, so a batch-wide flag would rewrite every text-layer
+  run's conversion receipt and force reconversion on resume.
 
 ```bash
 # Default: inspect text quality and choose OCR automatically
@@ -2759,6 +2772,9 @@ python rag.py convert --pdf book.pdf
 # Explicit overrides
 python rag.py convert --pdf scanned_book.pdf --ocr
 python rag.py convert --pdf born_digital_book.pdf --no-ocr
+
+# Per PDF only: an upright scan whose OCR lines come out garbled
+python rag.py convert --pdf upright_scan.pdf --ocr-no-angle-classifier
 ```
 
 ### Text Cleaning

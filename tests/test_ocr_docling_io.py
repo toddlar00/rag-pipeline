@@ -107,6 +107,16 @@ def test_old_ambiguous_or_unknown_completion_version_rejected(files, version):
     assert not files["output"].exists()
 
 
+def test_conversion_without_the_angle_classifier_rejected(files):
+    # Retry OCR runs with the classifier on; never splice it into a cls-off document.
+    value = json.loads(files["manifest"].read_bytes())
+    value["ocr_angle_classifier"] = False
+    files["manifest"].write_text(json.dumps(value), encoding="utf-8")
+    with pytest.raises(ValueError, match="angle classifier"):
+        run(files)
+    assert not files["output"].exists()
+
+
 def test_missing_completion_rejected(files):
     files["manifest"].unlink()
     with pytest.raises(FileNotFoundError):

@@ -7255,12 +7255,13 @@ def _conversion_parameters(*, batch_size_override: int | None,
                            backend: str, auto_preprocess: bool,
                            ocr: bool | None,
                            ocr_full_page: bool = False,
+                           ocr_angle_classifier: bool = True,
                            watermark: re.Pattern | None) -> dict:
     # Full-page OCR is meaningless once OCR itself is disabled; normalize it
     # away so a disabled-OCR receipt hashes identically regardless of the
     # (ignored) --ocr-full-page flag's value.
     ocr_full_page = ocr_full_page and ocr is not False
-    return {
+    parameters = {
         "batch_size_override": batch_size_override,
         "backend": backend,
         "auto_preprocess": auto_preprocess,
@@ -7273,6 +7274,12 @@ def _conversion_parameters(*, batch_size_override: int | None,
         "watermark_flags": watermark.flags if watermark else None,
         "model_artifact_lock_sha256": _model_artifact_lock_sha256(),
     }
+    # The RapidOCR angle-classifier override is opt-in.  The key is absent by
+    # default so every existing receipt keeps its digest, and it is normalized
+    # away with --no-ocr exactly like --ocr-full-page.
+    if not ocr_angle_classifier and ocr is not False:
+        parameters["ocr_angle_classifier"] = False
+    return parameters
 
 
 def _pin_docling_layout_revision(pipeline_options) -> str | None:
@@ -7292,6 +7299,7 @@ def _pin_docling_layout_revision(pipeline_options) -> str | None:
 def _configure_docling_model_artifacts(
         pipeline_options, *, include_ocr: bool,
         ocr_full_page: bool = False,
+        ocr_angle_classifier: bool = True,
         security_policy: (
             _release_security.ReleaseSecurityPolicy | None) = None,
 ) -> Path:
@@ -7323,7 +7331,12 @@ def _configure_docling_model_artifacts(
     if include_ocr:
         mode = (OcrMode.FULL_PAGE if ocr_full_page
                 else OcrMode.PDF_AWARE_LAYOUT_REGIONS)
+        # Unset use_cls keeps RapidOCR's configured default (classifier on).
+        # The opt-in override assumes upright lines: the classifier can flip
+        # clean upright book lines by 180 degrees before recognition.
+        overrides = {} if ocr_angle_classifier else {"use_cls": False}
         pipeline_options.ocr_options = RapidOcrOptions(
+            **overrides,
             backend="onnxruntime",
             lang=["english"],
             mode=mode,
@@ -7389,7 +7402,9 @@ def _converted_outputs_complete_locked(
                 or os.path.normcase(binding.source_name)
                 != os.path.normcase(Path(pdf_path).name)
                 or binding.source_sha256 != source_generation.sha256
-                or binding.source_size != source_generation.size):
+                or binding.source_size != source_generation.size
+                or binding.ocr_angle_classifier
+                != parameters.get("ocr_angle_classifier", True)):
             return False
         outputs = {
             "docling_json": doc_output,
@@ -7430,6 +7445,7 @@ def convert_pdf(pdf_path: Path, doc_output: Path, *,
                 auto_preprocess: bool = True,
                 ocr: bool | None = None,
                 ocr_full_page: bool = False,
+                ocr_angle_classifier: bool = True,
                 preprocessed_output: Path | None = None,
                 markdown_output: Path | None = None,
                 security_policy: (
@@ -7459,6 +7475,7 @@ def convert_pdf(pdf_path: Path, doc_output: Path, *,
             backend=backend, force=force, watermark=watermark,
             auto_preprocess=auto_preprocess, ocr=ocr,
             ocr_full_page=ocr_full_page,
+            ocr_angle_classifier=ocr_angle_classifier,
             preprocessed_output=preprocessed_output,
             markdown_output=markdown_output,
             security_policy=security_policy,
@@ -7473,6 +7490,7 @@ def _convert_pdf_locked(pdf_path: Path, doc_output: Path, *,
                 auto_preprocess: bool = True,
                 ocr: bool | None = None,
                 ocr_full_page: bool = False,
+                ocr_angle_classifier: bool = True,
                 preprocessed_output: Path | None = None,
                 markdown_output: Path | None = None,
                 security_policy: (
@@ -7489,7 +7507,8 @@ def _convert_pdf_locked(pdf_path: Path, doc_output: Path, *,
     completion_parameters = _conversion_parameters(
         batch_size_override=batch_size_override, backend=backend,
         auto_preprocess=auto_preprocess, ocr=ocr,
-        ocr_full_page=ocr_full_page, watermark=watermark)
+        ocr_full_page=ocr_full_page,
+        ocr_angle_classifier=ocr_angle_classifier, watermark=watermark)
 
     if (not force and _converted_outputs_complete_locked(
             source_pdf_path, doc_output, md_path,
@@ -7513,6 +7532,7 @@ def _convert_pdf_locked(pdf_path: Path, doc_output: Path, *,
             force=force, watermark=watermark,
             auto_preprocess=auto_preprocess, ocr=ocr,
             ocr_full_page=ocr_full_page,
+            ocr_angle_classifier=ocr_angle_classifier,
             preprocessed_output=preprocessed_path,
             markdown_output=markdown_output,
             security_policy=security_policy,
@@ -7566,6 +7586,10 @@ def _convert_pdf_locked(pdf_path: Path, doc_output: Path, *,
                 "size": effective_input.size,
                 "sha256": effective_input.sha256,
             },
+            # Readable record of the opt-in override; the digest binds it
+            # too.  Default manifests keep the legacy root field set.
+            **({"ocr_angle_classifier": False}
+               if "ocr_angle_classifier" in completion_parameters else {}),
         })
     if _cached_artifact_sha256(source_pdf_path) != source_snapshot.sha256:
         raise RuntimeError(
@@ -7610,6 +7634,7 @@ def _convert_pdf_generation(
                 auto_preprocess: bool = True,
                 ocr: bool | None = None,
                 ocr_full_page: bool = False,
+                ocr_angle_classifier: bool = True,
                 preprocessed_output: Path | None = None,
                 markdown_output: Path | None = None,
                 security_policy: (
@@ -7742,6 +7767,12 @@ def _convert_pdf_generation(
         ocr_mode = "enabled (automatic)"
     else:
         ocr_mode = "disabled"
+    if effective_ocr and not ocr_angle_classifier:
+        ocr_mode += ", angle classifier disabled"
+    elif not ocr_angle_classifier:
+        log.warning(
+            "--ocr-no-angle-classifier has no effect because OCR is not "
+            "running for this PDF.")
     log.info(f"OCR: {ocr_mode}")
 
     if use_gpu:
@@ -7763,6 +7794,7 @@ def _convert_pdf_generation(
     artifacts_root = _configure_docling_model_artifacts(
         pipeline_opts, include_ocr=effective_ocr,
         ocr_full_page=force_full_page_ocr,
+        ocr_angle_classifier=ocr_angle_classifier,
         security_policy=security_policy)
     log.info(f"Docling verified model artifacts: {artifacts_root}")
 
@@ -10327,6 +10359,7 @@ class ConversionSourceBinding:
     effective_input_name: str
     effective_input_sha256: str
     effective_input_size: int
+    ocr_angle_classifier: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -10614,8 +10647,11 @@ def _load_conversion_source_binding(
         "source_record_count", "parameters_sha256", "outputs", "source",
         "effective_input",
     }
-    if set(payload) != expected_root_fields:
+    # The only optional root field records the opt-in RapidOCR override.
+    if set(payload) - {"ocr_angle_classifier"} != expected_root_fields:
         raise ValueError("conversion completion has an invalid field set")
+    if payload.get("ocr_angle_classifier", False) is not False:
+        raise ValueError("conversion completion OCR override is invalid")
     if (payload.get("stage") != "conversion"
             or payload.get("source_record_count") is not None
             or not isinstance(payload.get("parameters_sha256"), str)
@@ -10695,6 +10731,7 @@ def _load_conversion_source_binding(
         effective_input_name=effective_input["name"],
         effective_input_sha256=effective_input["sha256"],
         effective_input_size=effective_input["size"],
+        ocr_angle_classifier="ocr_angle_classifier" not in payload,
     )
 
 
@@ -30231,11 +30268,14 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
     publication_receipt: dict | None = None
     try:
         stage_started(current_stage)
+        ocr_angle_classifier = not getattr(
+            args, "ocr_no_angle_classifier", False)
         conversion_parameters = _conversion_parameters(
             batch_size_override=args.batch_size, backend=args.backend,
             auto_preprocess=not args.no_preprocess,
             ocr=getattr(args, "ocr", None),
             ocr_full_page=getattr(args, "ocr_full_page", False),
+            ocr_angle_classifier=ocr_angle_classifier,
             watermark=watermark)
         if resume and _converted_outputs_complete(
                 pdf_path, paths["doc"], paths["converted_markdown"],
@@ -30254,6 +30294,7 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
                 auto_preprocess=not args.no_preprocess,
                 ocr=getattr(args, "ocr", None),
                 ocr_full_page=getattr(args, "ocr_full_page", False),
+                ocr_angle_classifier=ocr_angle_classifier,
                 preprocessed_output=paths["preprocessed"],
                 markdown_output=paths["converted_markdown"],
                 security_policy=llm_kwargs["security_policy"],
@@ -31346,6 +31387,15 @@ def main(argv: list[str] | None = None):
                  "region OCR (implies --ocr)",
         )
 
+    def add_ocr_angle_classifier_flag(p):
+        p.add_argument(
+            "--ocr-no-angle-classifier",
+            action="store_true",
+            help="Disable RapidOCR's text-direction (angle) classifier "
+                 "whenever OCR runs; assumes upright text lines. Does not "
+                 "enable OCR itself and is ignored with --no-ocr",
+        )
+
     def add_chunk_llm_flags(p):
         p.add_argument("--llm-classify", action="store_true",
                         help="Use LLM for content classification")
@@ -31458,6 +31508,7 @@ def main(argv: list[str] | None = None):
     add_watermark_flag(p_conv)
     add_ocr_flag(p_conv)
     add_ocr_full_page_flag(p_conv)
+    add_ocr_angle_classifier_flag(p_conv)
 
     # chunk
     p_chunk = sub.add_parser("chunk", help="DoclingDocument to enriched chunks")
@@ -31780,6 +31831,7 @@ def main(argv: list[str] | None = None):
     add_watermark_flag(p_full)
     add_ocr_flag(p_full)
     add_ocr_full_page_flag(p_full)
+    add_ocr_angle_classifier_flag(p_full)
     add_chunk_llm_flags(p_full)
     add_table_retrieval_flag(p_full)
     add_markdown_validation_flag(p_full)
@@ -31825,6 +31877,7 @@ def main(argv: list[str] | None = None):
     add_watermark_flag(p_batch)
     add_ocr_flag(p_batch)
     add_ocr_full_page_flag(p_batch)
+    add_ocr_angle_classifier_flag(p_batch)
     add_chunk_llm_flags(p_batch)
     add_table_retrieval_flag(p_batch)
     add_markdown_validation_flag(p_batch)
@@ -32011,6 +32064,8 @@ def main(argv: list[str] | None = None):
                         auto_preprocess=not args.no_preprocess,
                         ocr=getattr(args, "ocr", None),
                         ocr_full_page=getattr(args, "ocr_full_page", False),
+                        ocr_angle_classifier=not getattr(
+                            args, "ocr_no_angle_classifier", False),
                         security_policy=security_policy,
                         telemetry=run_telemetry)
 

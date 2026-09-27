@@ -39,6 +39,10 @@ def load_conversion_binding(docling_path: Path, *, document_sha256: str, documen
     _, after = _read_snapshot(path, label="conversion completion", max_bytes=MAX_MANIFEST_BYTES)
     if before != after:
         raise RuntimeError("conversion completion changed while validating")
+    if binding.ocr_angle_classifier is False:
+        # Retry OCR always runs RapidOCR's angle classifier; its text must not
+        # be spliced into a conversion that was made without it.
+        raise ValueError("conversions made without the OCR angle classifier are unsupported")
     return binding
 
 

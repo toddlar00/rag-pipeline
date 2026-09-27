@@ -233,6 +233,38 @@ output that fails the gates today; no schema or policy version changed.
   rows are caught only by the gate; a printed range across a page-label gap
   renders as one span (h07 `pp.535-559`).
 
+### OCR angle-classifier override (2026-09-26, local, uncommitted)
+
+This has the same status as the sections above. It implements the first
+owner-approved follow-up above. No schema or policy version changed.
+
+- **Flag.** `--ocr-no-angle-classifier` (`convert`, `full`, `batch`, off by
+  default) builds RapidOCR with `use_cls=False` whenever OCR runs. It does not
+  enable OCR, `--no-ocr` normalizes it away, and it composes with
+  `--ocr-full-page`.
+- **Recording.** Only when the flag is set does it add
+  `"ocr_angle_classifier": false` to the parameters digest and to the v3
+  conversion manifest. The strict loader accepts that field only as JSON
+  `false`. Resume refuses a manifest whose record contradicts its digest.
+  The resume command keeps the flag. OCR Docling retry proposals refuse
+  flagged conversions, because retry OCR always runs the classifier.
+- **Evidence.** Default parameter digests are unchanged, including the
+  `bd9ee649…` digest on every h26 receipt. A default conversion of h07 is
+  byte-identical to its READY run (JSON, Markdown and receipt). A default
+  conversion of h04 is byte-identical to the pre-change code. Re-chunks of
+  h02 and the Summer 2026 Update are byte-identical to their publications.
+  A flagged conversion of the labeled h04 reproduces the reviewed no-classifier
+  Docling JSON (`551c65be…`) and passes 31/31 quality checks.
+- **Use.** Apply the flag per PDF (h04 only) and never in a batch rebuild. The
+  flag is recorded as requested even when OCR does not run, so a batch-wide
+  flag would rewrite every text-layer receipt and force reconversion.
+- **Follow-ups (not fixed).**
+  - Code from before this change rejects a flagged manifest.
+  - The OCR retry and disposition tools have no no-classifier route.
+  - h04 keeps its 3 accepted gate-silent scrambles (pp.4/6/7).
+  - No end-to-end `full` publish of the flagged h04 has run yet.
+  - The architecture inventory needs a reviewed `--refresh`.
+
 ### Integrated convergence
 
 - **R1:** [PR #44](https://github.com/toddlar00/rag-pipeline/pull/44)
