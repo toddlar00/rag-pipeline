@@ -8788,14 +8788,47 @@ def _merge_enriched_chunk_group(
     return merged
 
 
+def _opening_list_marker_ref(
+        record: dict, right_body: str, list_markers: dict[str, str],
+) -> str | None:
+    """Return the list item whose punctuation marker opens ``right_body``.
+
+    ``list_markers`` maps source list item refs to their canonical
+    punctuation marker (``_source_punctuation_list_marker``), which the
+    fidelity audit requires at line start.  Only the record's first lineage
+    item is considered, and only when the body starts with its marker.
+    """
+    items = (record.get("metadata") or {}).get("source_items") or []
+    ref = items[0].get("ref") if items and isinstance(items[0], dict) else None
+    marker = list_markers.get(ref) if isinstance(ref, str) else None
+    if marker is None or re.match(
+            rf"{re.escape(marker)}(?=[^\S\r\n]|$)",
+            right_body.lstrip()) is None:
+        return None
+    return ref
+
+
 def _coalesce_chunk_boundaries(
         records: list[dict], token_counter: Callable[[str], int],
         max_tokens: int, *, hard_max_tokens: int | None = None,
         structure_profile: (
             str | _document_profiles.StructureProfile
         ) = DEFAULT_STRUCTURE_PROFILE,
+        list_markers: dict[str, str] | None = None,
+        inline_list_joins: set[str] | None = None,
+        separated_list_refs: frozenset[str] = frozenset(),
 ) -> list[dict]:
-    """Repair split sentences and alternating rule/explanation layout lanes."""
+    """Repair split sentences and alternating rule/explanation layout lanes.
+
+    A continuation joins inline, so a record that opens with a source list
+    item's punctuation marker (``_opening_list_marker_ref`` over
+    ``list_markers``) has that marker placed mid-line.  Each such performed
+    join adds the item's ref to ``inline_list_joins`` (when given); that
+    observation never changes the output.  Only a gate-driven replay passes
+    ``separated_list_refs``: a continuation opened by one of those items is
+    joined as a separate block instead, keeping its marker line-initial, and
+    must still satisfy every other join condition.
+    """
     if len(records) < 2:
         return records
 
@@ -8895,10 +8928,13 @@ def _coalesce_chunk_boundaries(
                 or right_core[0] in ",.;:)]}'\"’”"
                 or left_core.endswith(("-", "–", "—", ",", ";", ":")))
 
-    def _join_continued_boundary(left: str, right: str) -> str:
+    def _join_continued_boundary(
+            left: str, right: str, *, separate: bool = False) -> str:
         """Join one visible continuation without retaining PDF line wrap."""
         left_core = left.rstrip()
         right_core = right.lstrip()
+        if separate:
+            return f"{left_core}\n\n{right_core}".strip()
         # A lowercase fragment after a terminal ASCII hyphen is a PDF
         # discretionary line wrap (``ques-`` + ``tion``), not punctuation.
         # Uppercase continuations are deliberately excluded: dialogue can use
@@ -8928,7 +8964,12 @@ def _coalesce_chunk_boundaries(
             previous["text"], leading=False)
         right_body, leading_footnotes = _edge_footnotes(
             record["text"], leading=True)
-        reordered_text = _join_continued_boundary(left_body, right_body)
+        list_ref = (
+            _opening_list_marker_ref(record, right_body, list_markers)
+            if list_markers else None)
+        separate = list_ref is not None and list_ref in separated_list_refs
+        reordered_text = _join_continued_boundary(
+            left_body, right_body, separate=separate)
         boundary_footnotes = trailing_footnotes + leading_footnotes
         if boundary_footnotes:
             reordered_text += "\n\n" + "\n".join(boundary_footnotes)
@@ -8945,6 +8986,9 @@ def _coalesce_chunk_boundaries(
                 and _pages_touch(previous, record)
                 and _continues_sentence(left_body, right_body)
                 and token_counter(reordered_text) <= combined_limit):
+            if (list_ref is not None and not separate
+                    and inline_list_joins is not None):
+                inline_list_joins.add(list_ref)
             previous_copy = {
                 "text": reordered_text,
                 "metadata": dict(previous["metadata"]),
@@ -20188,17 +20232,44 @@ def _native_group_order_replay_violations(
     )
 
 
+def _list_boundary_replay_refs(
+        report: dict, inline_list_joins: frozenset[str],
+) -> frozenset[str]:
+    """Return inline-joined list items that a failed report leaves uncovered.
+
+    ``inline_list_joins`` holds the list items whose line-initial marker the
+    first pass's boundary repair placed mid-line.  Only those the published
+    report names in ``source_coverage_issues`` while failing
+    ``source_token_fidelity`` qualify.
+    """
+    if not any(
+            isinstance(check, dict)
+            and check.get("name") == "source_token_fidelity"
+            and check.get("status") == "fail"
+            for check in report.get("checks") or ()):
+        return frozenset()
+    fidelity = (report.get("source_lineage") or {}).get("fidelity") or {}
+    return inline_list_joins.intersection(
+        ref for ref in fidelity.get("source_coverage_issues") or ()
+        if isinstance(ref, str))
+
+
 def _publish_quality_report_or_request_order_replay(
         publish: Callable[[list[dict]], dict],
         deferred_groups: tuple[SourceTextGroupRecovery, ...],
         replay_requests: list[frozenset[tuple[str, int]]] | None,
+        *,
+        inline_list_joins: frozenset[str] = frozenset(),
+        list_replay_requests: list[frozenset[str]] | None = None,
 ) -> dict:
-    """Publish quality evidence, requesting a replay for a named order failure.
+    """Publish quality evidence, requesting a replay for a named failure.
 
     ``publish`` appends a failed report to the list it receives before raising
     the gate failure, which always propagates unchanged.  Only a first pass
-    passes ``replay_requests``; it then records the deferred members that the
-    failed report names, so ``chunk_document`` can replay the chunk once.
+    passes ``replay_requests`` and ``list_replay_requests``; it then records
+    the deferred members that the failed report names, and separately the
+    inline-joined list items it names (``_list_boundary_replay_refs``), so
+    ``chunk_document`` can replay the chunk once.
     """
     failed_reports: list[dict] = []
     try:
@@ -20209,6 +20280,11 @@ def _publish_quality_report_or_request_order_replay(
                 failed_reports[0], deferred_groups)
             if violations:
                 replay_requests.append(violations)
+        if list_replay_requests is not None and failed_reports:
+            list_refs = _list_boundary_replay_refs(
+                failed_reports[0], inline_list_joins)
+            if list_refs:
+                list_replay_requests.append(list_refs)
         raise
 
 
@@ -20417,6 +20493,10 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
     A first pass whose quality gate fails on reading-order edges naming
     deferred native text groups is replayed once under the same lease; the
     replay is recorded as a ``chunk_order_replay`` telemetry observation.
+    Otherwise, a first pass whose gate fails ``source_token_fidelity`` on
+    list items that its boundary repair joined inline is replayed once,
+    separating exactly those joins, and recorded as a
+    ``chunk_list_boundary_replay`` observation.  No pass replays twice.
     """
     profile = _document_profiles.get_profile(structure_profile)
     chunks_output = Path(chunks_output)
@@ -20459,33 +20539,54 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
         security_policy=security_policy,
     )
     replay_requests: list[frozenset[tuple[str, int]]] = []
+    list_replay_requests: list[frozenset[str]] = []
     with _chunk_output_lease(chunks_output):
         try:
             _chunk_document_locked(
                 doc_path, chunks_output, **arguments, telemetry=telemetry,
-                order_replay_requests=replay_requests)
+                order_replay_requests=replay_requests,
+                list_replay_requests=list_replay_requests)
         except RuntimeError:
-            if not replay_requests:
+            if not replay_requests and not list_replay_requests:
                 raise
         else:
             return
-        # The first pass is the unchanged pipeline, and its published output
-        # failed ``same_page_reading_order`` on edges naming deferred native
-        # groups.  Replay it once, outside that failure's handler, admitting
-        # only those groups.  The first pass already recorded the
-        # deterministic telemetry; its warnings and any LLM calls repeat.
-        # The observation below is the run report's durable replay record.
+        if replay_requests:
+            # The first pass is the unchanged pipeline, and its published
+            # output failed ``same_page_reading_order`` on edges naming
+            # deferred native groups.  Replay it once, outside that failure's
+            # handler, admitting only those groups.  This replay takes
+            # precedence and is exactly the previous one: a list request
+            # recorded beside it is dropped, because this replay may pass
+            # without it.  The first pass already recorded the deterministic
+            # telemetry; its warnings and any LLM calls repeat.  The
+            # observation below is the run report's durable replay record.
+            log.info(
+                "Replaying chunking to recover %s reading-order violation(s) "
+                "from deferred native text groups",
+                len(replay_requests[0]))
+            if telemetry is not None:
+                telemetry.stage_observation(
+                    "chunk_order_replay", metrics={
+                        "reading_order_violations": len(replay_requests[0])})
+            _chunk_document_locked(
+                doc_path, chunks_output, **arguments, telemetry=None,
+                reading_order_violations=replay_requests[0])
+            return
+        # The first pass, which is the final output without this replay,
+        # failed ``source_token_fidelity`` on list items whose line-initial
+        # marker its boundary repair placed mid-line.  Replay it once,
+        # outside that failure's handler, separating only those joins.
         log.info(
-            "Replaying chunking to recover %s reading-order violation(s) "
-            "from deferred native text groups",
-            len(replay_requests[0]))
+            "Replaying chunking to separate %s inline-joined list item(s)",
+            len(list_replay_requests[0]))
         if telemetry is not None:
             telemetry.stage_observation(
-                "chunk_order_replay", metrics={
-                    "reading_order_violations": len(replay_requests[0])})
+                "chunk_list_boundary_replay", metrics={
+                    "list_boundary_items": len(list_replay_requests[0])})
         _chunk_document_locked(
             doc_path, chunks_output, **arguments, telemetry=None,
-            reading_order_violations=replay_requests[0])
+            separated_list_refs=list_replay_requests[0])
 
 
 def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
@@ -20521,13 +20622,18 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
                        frozenset[tuple[str, int]]) = frozenset(),
                    order_replay_requests: (
                        list[frozenset[tuple[str, int]]] | None) = None,
+                   separated_list_refs: frozenset[str] = frozenset(),
+                   list_replay_requests: (
+                       list[frozenset[str]] | None) = None,
                    ) -> None:
     """Load a DoclingDocument, chunk with HybridChunker, and enrich.
 
-    ``chunk_document`` passes ``order_replay_requests`` to its first pass only;
-    a failed quality gate that names deferred native groups is recorded there
-    before it propagates.  Its replay passes the recorded
-    ``reading_order_violations`` instead.
+    ``chunk_document`` passes ``order_replay_requests`` and
+    ``list_replay_requests`` to its first pass only; a failed quality gate
+    that names deferred native groups, or inline-joined list items left
+    uncovered, is recorded there before it propagates.  Its replay passes
+    the recorded ``reading_order_violations`` or ``separated_list_refs``
+    instead.
     """
     from docling_core.types import DoclingDocument
     from docling_core.transforms.chunker import HybridChunker
@@ -21005,6 +21111,9 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
                  f"{filtered_tiny} tiny (<{min_words} words)")
 
     before_coalescing = len(enriched)
+    # Observe which source list items an inline boundary join places
+    # mid-line; only a gate-driven replay separates those joins.
+    inline_list_joins: set[str] = set()
     enriched = _coalesce_chunk_boundaries(
         enriched,
         lambda value: int(tokenizer.count_tokens(value)),
@@ -21018,6 +21127,11 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
             ),
         ),
         structure_profile=profile,
+        list_markers={
+            ref: marker for ref, item in lineage_item_by_ref.items()
+            if (marker := _source_punctuation_list_marker(item))},
+        inline_list_joins=inline_list_joins,
+        separated_list_refs=separated_list_refs,
     )
     if len(enriched) != before_coalescing:
         log.info(
@@ -21870,6 +21984,8 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
         ),
         source_enrichments.deferred_text_groups,
         order_replay_requests,
+        inline_list_joins=frozenset(inline_list_joins),
+        list_replay_requests=list_replay_requests,
     )
 
     # Stats

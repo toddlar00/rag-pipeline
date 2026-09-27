@@ -158,6 +158,8 @@ def test_chunk_document_replays_a_named_failure_once_outside_its_handler(
     first, replay = calls
     assert first.pop("telemetry") is telemetry
     assert first.pop("order_replay_requests") == [NAMED]
+    # The first pass also gets the list sink; this replay gets no list refs.
+    assert first.pop("list_replay_requests") == []
     # The first pass already recorded its telemetry observation.
     assert replay.pop("telemetry") is None
     assert replay.pop("reading_order_violations") == NAMED

@@ -178,7 +178,10 @@ it has no PR, hosted CI or independent release review, so it is not
   native text-group recovery rejects a paragraph split across two text-layer
   blocks; a text item made only of U+25A0 is dropped with its lineage
   (exclusion needs an owner decision and quality schema bump); boundary merge
-  joins a bullet list line inline; the token splitter breaks after `v.`;
+  joins a bullet list line inline (still true for every document that passes;
+  a join that fails `source_token_fidelity` is now separated by a one-time
+  replay unless the order replay takes precedence, see "Bullet list after a
+  lead-in at boundary merge" below); the token splitter breaks after `v.`;
   duplicate-line allowances do not cover multi-item entries; the architecture
   inventory needs a reviewed `--refresh`.
 
@@ -412,6 +415,145 @@ owner-approved h03 recovery-gate fix. No schema or policy version changed.
     replay helpers, the new keyword parameters of
     `_publish_corpus_quality_report_locked` and `_chunk_document_locked`, and
     one test patch target. It needs a reviewed `--refresh`.
+
+### Bullet list after a lead-in at boundary merge (2026-09-27, local, uncommitted)
+
+This has the same status as the sections above. It implements the
+owner-approved h16 list-join fix (`#/texts/57`) as a gate-driven replay. No
+schema or policy version changed.
+
+- **Defect.** Boundary repair joins a same-heading sentence continuation
+  inline, as `left + " " + right`. When the right record opens with a source
+  list item's punctuation marker, for example a bullet after a lead-in that
+  ends `for example,`, the marker lands mid-line. The fidelity audit accepts
+  such a marker only at line start, so h16 fails `source_token_fidelity`
+  (13700/13701, `#/texts/57` uncovered). A rule that separated every such join
+  was refuted in review: it changed synthetic documents that pass every gate
+  today, such as an ineligible opening bullet or a split item whose tail opens
+  with an in-text dash.
+- **Observation.** The first pass is the previous pipeline and only observes.
+  It maps lineage items to their canonical punctuation marker
+  (`_source_punctuation_list_marker`). It records a boundary in
+  `inline_list_joins` only when all of these hold:
+  - the right record's first lineage item has a marker;
+  - the lstripped right body opens with that marker, followed by horizontal
+    whitespace or its end (`_opening_list_marker_ref`);
+  - the join is actually performed.
+
+  Recording never changes output.
+- **Trigger.** The quality-publication failure sink records a list request
+  only when the first pass's published report fails `source_token_fidelity`
+  and names a recorded item in `source_coverage_issues`
+  (`_list_boundary_replay_refs`). The unchanged gate failure then propagates.
+  No output-side issue is required: a marker is not a lexical token, so h16's
+  `output_coverage_issues` is empty.
+- **Replay.** `chunk_document` replays the chunk once, under the same lease
+  and outside the failure's handler. It first records a
+  `chunk_list_boundary_replay` observation whose `list_boundary_items` metric
+  counts the named items, so run reports show a replay even when it fails.
+  The replay reruns the whole pipeline. Only a boundary opened by a named
+  item changes: it joins as a separate block (`left + "\n\n" + right`) and
+  must still meet every other join condition, including the token limit. A
+  separated join that does not fit leaves the records separate, which also
+  keeps the marker at line start. The replay gets no sink, so it never
+  replays again, and a failing replay raises the plain, unchained gate
+  `RuntimeError`.
+- **One dispatcher, h03 precedence (limitation).** A chunk replays at most
+  once. When the same failed report also names a deferred native group,
+  today's order replay runs verbatim and the list request is dropped, so a
+  document that needs both repairs stays failing. This is fail-closed; no
+  such document exists in h26 or in the review corpora. A combined replay is
+  not provably failing-only: today's order-only replay may pass with the item
+  still joined inline, because another line-start marker can cover it, and
+  adding separations could change that passing output. Ruling this out would
+  mean re-deriving the audit's token alignment over the records the order
+  replay changes. Any future gate-driven replay (for example for the h16
+  U+25A0 glyph or the p19 letter-spaced run) must join this dispatcher under
+  the same at-most-one-replay and precedence rules. Stacking replays would
+  break the failing-only argument.
+- **Scope.** By construction, output changes only when the unchanged first
+  pass fails `source_token_fidelity` on an observed item and its report names
+  no deferred group. That first pass's failing output is today's final
+  output, and today's run exits with the gate failure. All of the following
+  ran the identical `rag.py` (`5625478f…`) over every earlier review corpus.
+  The designer and one design reviewer each ran the 770-job sweep; that
+  reviewer alone ran the other three checks. The other design reviewer ran
+  the real runs, the mutants and a both-trigger probe. An implementation
+  reviewer re-ran the three sweeps against the repo copy with the same counts,
+  plus a 770-job order-trigger composition with no problems.
+  - 770 synthetic jobs: all 529 that pass today are byte-identical, including
+    182 that observe an inline join. The 213 list replays are all on
+    documents that fail today.
+  - 2,448 jobs at 13 more budgets and 688 jobs from 86 new documents: every
+    document that passes today is identical.
+  - A 200,000-case differential fuzz of the coalescer's first pass found no
+    difference.
+  - 36 documents with an injected order trigger: final artifacts identical.
+- **h16.** The staged conversion, chunked against its staged PDF, replays
+  once. Only record 14's text changes, from ` - ` to a blank line before the
+  bullet, plus its `stable_id` and `source_fidelity` and its neighbours'
+  linked ids. It still has 88 records, and oracles are identical.
+  `source_token_fidelity` passes (13701/13701, no issues). h16 still fails
+  `eligible_source_items_represented` (the U+25A0 glyph) and
+  `normalization_invariants` (p19), so it is not READY. The output is
+  byte-identical to the reviewed prototype's.
+- **Preservation.** The 17 READY runs (h01-h15 with h03_3, h04_3 and h06_4,
+  plus h17_3 and the Summer 2026 Update) re-chunk byte-identical to their
+  publications: chunks, quality, oracles and chunking receipts. h03_3 and
+  h03_2 still run the order replay once. h04_2 and h18_2 are byte-identical to
+  the previous full-tree verification, and tort law's pre-gate records are
+  identical (2,868).
+- **Operations.** `rag.py full --resume` treats a failed chunk set as complete
+  (`_chunks_complete` ignores the quality report). It then skips chunking, so
+  no replay runs. The order replay behaves the same way. Re-chunk h16 without
+  `--resume`. A replayed document is chunked twice, including HybridChunker,
+  enrichment and any enabled LLM calls, and its warnings repeat. A replay
+  killed part-way can leave a mixed artifact set, which the artifact bindings
+  detect. Targeting uses rag's canonical marker, while the audit applies NFKC;
+  a compatibility-form glyph may therefore go untargeted. That affects only
+  whether a failing document gets fixed.
+- **Evidence.**
+  - `tests/test_list_boundary_characterization.py` (5 tests) passes on the
+    pre-change code. It pins the default inline join, a period-ended lead-in,
+    and three documents published inline in one pass: two ineligible opening
+    bullets, and a split item whose tail opens with an in-text dash (real
+    HybridChunker, word tokenizer, 44-token budget).
+  - `tests/test_list_boundary_replay.py` (40 tests) pins the trigger, the
+    publication hook, the dispatcher, the lease, the observation, the
+    coalescer and the marker predicate. It also pins that a request carries
+    only the named items when more joins were observed, that a multi-item
+    request reaches the replay whole, that a pass that publishes never
+    replays, and that a named item that is not the record's first lineage
+    item does not separate. `tests/test_list_boundary_replay_locked.py`
+    (7 tests) drives the real locked pass. It includes a real-audit case
+    where both triggers fire, and a two-list document where both joins are
+    observed but only the named one is separated; the other list's
+    ineligible opening bullet stays inline. All 47 fail on the pre-change
+    code; the behavioural failure is the propagated `source_token_fidelity`
+    gate error. `tests/test_native_group_order_replay.py` gains one
+    assertion.
+  - Focused related suites (23 files): 1,064 passed, 4 skipped. The one
+    failure, `test_guided_ocr_review_has_exact_inward_and_host_only_boundaries`,
+    is unrelated: the dirty worktree's OCR guided-review modules are
+    untracked. Ruff is clean.
+  - Mutation: 61 mutants (the design's 24, a design reviewer's 17, an
+    implementation reviewer's 19 and one for the dispatcher's success
+    branch). 56 are killed. The 5 survivors are equivalent. One reads the
+    whole record instead of its footnote-stripped body, and one drops a
+    strip of already stripped cores. The other three are equivalent in
+    production: the fidelity check is only ever `pass` or `fail`, report
+    issues are always strings, and `chunk_document` always passes both
+    replay sinks together.
+  - The 6 wiring mutants are killed only by the end-to-end tests. Those tests
+    `importorskip` `docling_core`, so in CI they run only in the
+    full-integration lane.
+- **Follow-ups (not fixed).**
+  - The architecture inventory drift now also covers the two new private
+    helpers, the new keyword parameters of `_coalesce_chunk_boundaries`,
+    `_publish_quality_report_or_request_order_replay` and
+    `_chunk_document_locked`, and the three new test modules and their patch
+    targets. It needs a reviewed `--refresh`.
+  - h16 is still blocked on the glyph and p19 fixes.
 
 ### Integrated convergence
 
