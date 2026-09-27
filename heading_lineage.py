@@ -9,7 +9,7 @@ from __future__ import annotations
 import math
 import re
 from collections import Counter, defaultdict
-from typing import Iterable, Sequence
+from typing import Iterable, Mapping, Sequence
 
 
 HEADING_LINEAGE_SCHEMA_VERSION = 3
@@ -769,8 +769,12 @@ def _display_depth_hints(
 
 def _heading_level(
         item: dict, depth_hints: dict[str, int], *, ref: str = "",
+        level_overrides: Mapping[str, tuple[int, bool]] | None = None,
 ) -> tuple[int, bool]:
     """Infer a semantic stack level without using text as identity."""
+    # An explicit caller policy is keyed by exact occurrence, never by text.
+    if level_overrides is not None and ref in level_overrides:
+        return level_overrides[ref]
     text = _clean_marker(_text(item))
     identity = canonical_text(text)
     # These publisher-level markers are authoritative.  A tampered path may
@@ -974,8 +978,13 @@ def expected_heading_bindings(
         document: dict, records: Sequence[dict], *,
         structural_ranges: Iterable[tuple[int, int]] = (),
         excluded_heading_refs: Iterable[str] = (),
+        level_overrides: Mapping[str, tuple[int, bool]] | None = None,
 ) -> dict:
-    """Return exact expected paths/direct claims for a document generation."""
+    """Return exact expected paths/direct claims for a document generation.
+
+    ``level_overrides`` maps exact heading refs to ``(level, attested)`` and
+    replaces record-derived depth hints for those occurrences.
+    """
     ranges = tuple(sorted(set(structural_ranges)))
     artifacts = sparse_ocr_heading_artifact_refs(document)
     # A caller may demote these refs while building records, but the heading
@@ -1052,7 +1061,7 @@ def expected_heading_bindings(
             path_before_heading[ref] = tuple(
                 value for _, values, _ in active for value in values)
             level, level_attested = _heading_level(
-                item, depth_hints, ref=ref)
+                item, depth_hints, ref=ref, level_overrides=level_overrides)
             previous_text = (
                 " ".join(_text(items.get(value)) for value in active[-1][1])
                 if active else ""

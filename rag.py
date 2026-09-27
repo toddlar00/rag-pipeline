@@ -2570,6 +2570,15 @@ def _identify_book_sections(
     must never widen the TOC across intervening chapters.
     """
     profile = _document_profiles.get_profile(structure_profile)
+    if not _document_profiles.requires_toc(profile):
+        # An excerpt has no front/back matter of its own. Deriving front
+        # matter from its first division heading would silently drop pages,
+        # and every later recomputation must agree on the same empty result.
+        if emit_log:
+            log.info(
+                "Source-heading profile %s: no front/back-matter ranges",
+                profile.name)
+        return {"front_matter": None}
     texts = doc.get("texts", [])
     tables = doc.get("tables", [])
     section_pages: dict[str, list[int]] = {
@@ -5067,6 +5076,10 @@ def _build_chapter_map_from_document(
     """Build chapter ranges from one already-captured document mapping."""
 
     profile = _document_profiles.get_profile(structure_profile)
+    if not _document_profiles.requires_toc(profile):
+        # Running heads are page furniture: a chapter known only from them
+        # has no in-excerpt heading occurrence a section path may bind to.
+        return {}
     texts = doc.get("texts", [])
     if not texts:
         return {}
@@ -6515,6 +6528,7 @@ def _source_attested_duplicate_line_allowances(
     repeated appearances of one source reference do not.
     """
     refs_by_line: dict[str, set[str]] = {}
+    one_line_source_text_by_ref: dict[str, str] = {}
     first_items = source_items or []
     _source_cleanup_audit._value("source_items.first_selected", first_items is source_items)
     for item in first_items:
@@ -6542,6 +6556,7 @@ def _source_attested_duplicate_line_allowances(
             _source_cleanup_audit._value("source_item.decision", "not_one_line")
             continue
         refs_by_line.setdefault(lines[0], set()).add(ref)
+        one_line_source_text_by_ref.setdefault(ref, source_text)
         _source_cleanup_audit._value("source_item.accepted_line", lines[0])
     allowances = {
         line: len(refs)
@@ -6565,7 +6580,17 @@ def _source_attested_duplicate_line_allowances(
     label = _doc_item_label(item)
     _source_cleanup_audit._value("canonical.lookup_key", ref)
     override = _source_cleanup_audit._value("canonical.lookup_value", (canonical_text_overrides or {}).get(ref, ""))
-    if (_source_cleanup_audit._value("canonical.rebuild_denied", ref not in text_rebuild_refs)
+    rebuild_denied = _source_cleanup_audit._value(
+        "canonical.rebuild_denied", ref not in text_rebuild_refs)
+    if (rebuild_denied and not override.strip()
+            and ref in one_line_source_text_by_ref):
+        # With no native override, the one-line Docling text is this ref's
+        # exact fidelity oracle ("plain" transform), so every line break in
+        # the fragment was introduced by token-bounded splitting.
+        override = _source_cleanup_audit._value(
+            "canonical.plain_source_oracle", one_line_source_text_by_ref[ref])
+        rebuild_denied = False
+    if (rebuild_denied
             or _source_cleanup_audit._value("canonical.label_denied", label not in {"text", "list_item", "footnote", "caption", "code"})
             or _source_cleanup_audit._value("canonical.fragment_empty", not fragment_text.strip())
             or _source_cleanup_audit._value("canonical.override_empty", not override.strip())):
@@ -7903,7 +7928,7 @@ def classify_content_type(
     profile = _document_profiles.get_profile(structure_profile)
 
     def structural_content(value: str, values: list[str] | None) -> bool:
-        if profile.name == DEFAULT_STRUCTURE_PROFILE:
+        if _document_profiles.casebook_family(profile):
             return _is_structural_content(value, values)
         return _chunking_core._is_structural_content(
             value, values,
@@ -8178,6 +8203,76 @@ def _filter_same_page_future_headings(
     return filtered
 
 
+# Case captions, citation lines, casebook panels and other unmarked headings
+# sit below every numbered or lettered marker.
+_SOURCE_HEADING_LEAF_LEVEL = 6
+
+
+def _source_heading_stack_level(value: str) -> tuple[int, bool]:
+    """Return a source-heading stack level for heading lineage.
+
+    The numbering mirrors heading lineage's marker defaults. Division and
+    ``§ N.NN`` headings keep lineage's own authoritative, attested levels, so
+    the later audit (which has no overrides) reproduces the same stack. Every
+    other level is reported unattested, so consecutive headings with no
+    intervening body content nest instead of displacing one another: OCR
+    splits a caption from its citation line, and opinions place ``III.``
+    directly above ``A.``. ``I.``, ``V.`` and ``X.`` are Roman siblings of
+    ``II.``; other single capitals, including ``C.`` and ``D.``, are casebook
+    section letters.
+    """
+    text = re.sub(r"\s+", " ", value).strip().strip("*_ ")
+    if re.match(r"^(?:Chapter|Part|Unit)\s+", text, re.IGNORECASE):
+        return 1, True
+    if re.match(r"^§\s*(?:[1-9]|1[0-9])\.\d{2}\b", text):
+        return 2, True
+    if (re.match(r"^(?:[IVX]|[IVXLCDM]{2,})\.(?:\s+|$)", text)
+            or re.match(r"^\d+[.)](?:\s+|$)", text)):
+        level = 4
+    elif re.match(r"^[A-Z]\.(?:\s+|$)", text):
+        level = 3
+    elif (re.match(r"^[a-z][.)](?:\s+|$)", text)
+          or re.match(r"^[ivxlcdm]+\.(?:\s+|$)", text)):
+        level = 5
+    else:
+        level = _SOURCE_HEADING_LEAF_LEVEL
+    return level, False
+
+
+def _assign_source_heading_paths(
+        doc_dict: dict, records: list[dict], *,
+        structural_ranges: set[tuple[int, int]],
+        excluded_heading_refs: set[str],
+) -> None:
+    """Derive each record's section path from its exact source scope.
+
+    Heading lineage computes the occurrence stack that owns every record's
+    source items; the displayed path is exactly that stack, so no component
+    can come from a TOC, running header or file name. Content before the
+    excerpt's first heading keeps an empty path.
+    """
+    items = {
+        item.get("self_ref"): item for item in doc_dict.get("texts", [])
+        if isinstance(item, dict) and item.get("self_ref")
+    }
+    overrides = {
+        ref: _source_heading_stack_level(str(item.get("text") or ""))
+        for ref, item in items.items()
+        if item.get("label") == "section_header"
+    }
+    expected = _heading_lineage.expected_heading_bindings(
+        doc_dict, records, structural_ranges=structural_ranges,
+        excluded_heading_refs=excluded_heading_refs,
+        level_overrides=overrides)
+    for record, scope in zip(records, expected["source_scope_paths"]):
+        displays = [
+            re.sub(r"\s+", " ", str(items[ref].get("text") or "")).strip()
+            for ref in scope
+        ]
+        record["metadata"]["section_path"] = " → ".join(displays)
+        record["metadata"]["headings"] = displays
+
+
 def _source_heading_level_hint(
         value: str, profile: _document_profiles.StructureProfile, *,
         heading_levels: dict[str, int] | None = None,
@@ -8186,17 +8281,17 @@ def _source_heading_level_hint(
     """Return a source-attested or narrowly inferred hierarchy level."""
     cleaned = _chunking_core.clean_heading_text(value)
     identity = _source_heading_identity(cleaned)
-    if (profile.name == DEFAULT_STRUCTURE_PROFILE
+    if (_document_profiles.casebook_family(profile)
             and re.match(r"^(?:Chapter|Part|Unit)\s+\d+\b", cleaned,
                          re.IGNORECASE)):
         return 1
     # In the legal profile, a numbered section is a direct child of the
     # chapter.  TOC typography can otherwise give it the generic level 3 and
     # leave an earlier lettered subsection attached as a stale parent.
-    if (profile.name == DEFAULT_STRUCTURE_PROFILE
+    if (_document_profiles.casebook_family(profile)
             and re.match(r"^§\s*\d+(?:\.\d+)+\b", cleaned)):
         return 2
-    if profile.name == DEFAULT_STRUCTURE_PROFILE:
+    if _document_profiles.casebook_family(profile):
         # Numbered casebook sections own the familiar A / 1 / a hierarchy.
         # TOC indentation is not reliable enough to override these authored
         # markers: doing so previously made ``A.`` replace ``§ 2.02`` and
@@ -8216,7 +8311,7 @@ def _source_heading_level_hint(
     # These recurring casebook panels are siblings below the active numbered
     # section.  Source text is authoritative even when a TOC OCR typo prevents
     # an exact identity match (for example ``Confli t`` versus ``Conflict``).
-    if (profile.name == DEFAULT_STRUCTURE_PROFILE
+    if (_document_profiles.casebook_family(profile)
             and re.match(
                 r"^(?:Notes\s*&\s*Questions|Ethics Note\b|"
                 r"Accomplishment Note\b)", cleaned, re.IGNORECASE)):
@@ -8380,7 +8475,7 @@ def _reconcile_scaffold_path_with_source_headings(
                 chapter_number = int(chapter_match.group(1))
             section_match = re.match(
                 r"^§\s*(\d+)\.\d+\b", heading)
-            if (profile.name == DEFAULT_STRUCTURE_PROFILE
+            if (_document_profiles.casebook_family(profile)
                     and chapter_number is not None and section_match
                     and int(section_match.group(1)) != chapter_number):
                 skipped_mismatched_section = True
@@ -8392,7 +8487,7 @@ def _reconcile_scaffold_path_with_source_headings(
                         re.IGNORECASE)):
                 continue
             skipped_mismatched_section = False
-            if (profile.name == DEFAULT_STRUCTURE_PROFILE
+            if (_document_profiles.casebook_family(profile)
                     and chapter_number is not None
                     and section_match
                     and int(section_match.group(1)) == chapter_number):
@@ -8799,7 +8894,13 @@ def _coalesce_chunk_boundaries(
         combined_limit = max_tokens + max(128, max_tokens // 4)
         if hard_max_tokens is not None:
             combined_limit = min(combined_limit, hard_max_tokens)
+        # Relocating edge lines would reorder a source-bound record's text
+        # against its lineage (a numbered list line is not a footnote there),
+        # which the fidelity audit rejects; keep such records separate.
+        source_bound = any(
+            item["metadata"].get("source_items") for item in (previous, record))
         if (same_heading and mergeable_body
+                and not (source_bound and boundary_footnotes)
                 and _pages_touch(previous, record)
                 and _continues_sentence(left_body, right_body)
                 and token_counter(reordered_text) <= combined_limit):
@@ -9042,6 +9143,90 @@ def _source_boxes_horizontally_overlap(
     return minimum_width > 0 and overlap >= max(2.0, minimum_width * 0.20)
 
 
+def _footnote_slot_boxes(
+        record: dict) -> list[tuple[int, tuple[float, float, float, float]]]:
+    """Return the page boxes of lineage entries the fidelity audit observes.
+
+    Only entries with source tokens register page occurrences in the audit, so
+    only they may constrain order. Malformed lineage yields no constraint.
+    """
+    metadata = record.get("metadata")
+    values = metadata.get("source_items") if isinstance(metadata, dict) else None
+    boxes: list[tuple[int, tuple[float, float, float, float]]] = []
+    for entry in values if isinstance(values, list) else ():
+        count = entry.get("oracle_lexical_count") if isinstance(entry, dict) else None
+        if not isinstance(count, int) or isinstance(count, bool) or count <= 0:
+            continue
+        pages = sorted({
+            span.get("page") for span in entry.get("spans") or ()
+            if isinstance(span, dict) and isinstance(span.get("page"), int)})
+        for page in pages:
+            box = _record_scoped_source_box({"metadata": {"source_items": [entry]}}, page)
+            if box is not None:
+                boxes.append((page, box))
+    return boxes
+
+
+def _order_footnote_slot_by_source_geometry(slot: list[dict]) -> list[dict]:
+    """Order one sidecar slot by the fidelity audit's same-page geometry.
+
+    Fragments recovered as one group can be emitted ahead of notes printed
+    above them. A stable topological order over the audit's own edge rule
+    (horizontal overlap and a 0.5pt vertical gap) repairs that; an order that
+    already satisfies every edge is returned unchanged. Records move only
+    among positions sharing a start page. A group containing a page-order
+    reason, two-way edges or a cycle is left as it is and stays reportable.
+    """
+    if len(slot) < 2:
+        return slot
+    groups: dict[object, list[int]] = {}
+    for position, record in enumerate(slot):
+        groups.setdefault((record.get("metadata") or {}).get("page_start"), []).append(
+            position)
+    ordered = list(slot)
+    for positions in groups.values():
+        members = [slot[position] for position in positions]
+        if len(members) < 2 or any(
+                (member.get("metadata") or {}).get(
+                    _quality_core.PAGE_ORDER_REASON_FIELD)
+                for member in members):
+            continue
+        boxes = [_footnote_slot_boxes(member) for member in members]
+        edges: set[tuple[int, int]] = set()
+        for first in range(len(members)):
+            for second in range(len(members)):
+                if first == second:
+                    continue
+                if any(page == other_page
+                       and _source_boxes_horizontally_overlap(box, other)
+                       and box[3] <= other[1] - 0.5
+                       for page, box in boxes[first]
+                       for other_page, other in boxes[second]):
+                    edges.add((first, second))
+        if not edges or any((second, first) in edges for first, second in edges):
+            continue
+        incoming = {index: 0 for index in range(len(members))}
+        for _first, second in edges:
+            incoming[second] += 1
+        remaining = set(incoming)
+        order: list[int] = []
+        while remaining:
+            ready = [index for index in remaining if incoming[index] == 0]
+            if not ready:
+                break
+            chosen = min(ready)
+            order.append(chosen)
+            remaining.remove(chosen)
+            for first, second in edges:
+                if first == chosen:
+                    incoming[second] -= 1
+        if len(order) != len(members):
+            continue
+        for position, index in zip(positions, order):
+            ordered[position] = members[index]
+    return ordered
+
+
 def _reorder_footnote_sidecars(records: list[dict]) -> list[dict]:
     """Move footnotes after body flow while retaining source-page order."""
     if not records:
@@ -9158,9 +9343,11 @@ def _reorder_footnote_sidecars(records: list[dict]) -> list[dict]:
             placements_after.setdefault(len(body) - 1, []).append(footnote)
     reordered = []
     for index, record in enumerate(body):
-        reordered.extend(placements_before.get(index, []))
+        reordered.extend(_order_footnote_slot_by_source_geometry(
+            placements_before.get(index, [])))
         reordered.append(record)
-        reordered.extend(placements_after.get(index, []))
+        reordered.extend(_order_footnote_slot_by_source_geometry(
+            placements_after.get(index, [])))
     return reordered
 
 
@@ -17444,7 +17631,7 @@ def _prepare_source_preserving_chunks(
             ), None)
             section_match = re.match(r"^§\s*(\d+)\.\d+\b", heading)
             major_section_reset = bool(
-                profile.name == DEFAULT_STRUCTURE_PROFILE
+                _document_profiles.casebook_family(profile)
                 and section_match
                 and (
                     int(section_match.group(1)) in casebook_chapter_numbers
@@ -18237,7 +18424,9 @@ def _prepare_source_preserving_chunks(
                         or ref in continuation_ref_set
                         or ref in table_caption_refs
                         or ref in figure_parent_refs
-                        or ref in picture_caption_refs):
+                        or ref in picture_caption_refs
+                        # Already published whole by its singleton chunk.
+                        or ref in emitted_wholesale_rebuild_refs):
                     continue
                 value = item_display_text(item)
                 if value:
@@ -18253,6 +18442,10 @@ def _prepare_source_preserving_chunks(
                     pending_occurrence_path = item_occurrence_path
                     pending_text.append(value)
                     pending_items.append(item)
+                    if ref in wholesale_rebuild_refs:
+                        # Its complete display text is now published; a later
+                        # singleton chunk holding its tail must not repeat it.
+                        emitted_wholesale_rebuild_refs.add(ref)
             flush_layout_text()
             for item in original_items:
                 append_missing_nested_footnotes(
@@ -18334,6 +18527,13 @@ def _prepare_source_preserving_chunks(
                 if str(getattr(item, "self_ref", ""))
                 not in all_footnote_refs]
             has_nested_footnotes = len(retained_items) != len(items)
+            # A native rebuild already published whole by its singleton chunk
+            # must not be claimed again by a later chunk holding its tail; as
+            # an excluded item its text is detached like any other.
+            retained_items = [
+                item for item in retained_items
+                if str(getattr(item, "self_ref", ""))
+                not in emitted_wholesale_rebuild_refs]
             picture_groups, crossing_picture_refs = (
                 split_picture_interleaved_items(retained_items))
             if len(picture_groups) > 1:
@@ -19275,6 +19475,32 @@ _STRUCTURAL_SECTION_NAMES = (
         _document_profiles.get_profile(DEFAULT_STRUCTURE_PROFILE)))
 
 
+def _require_structure_scaffold_evidence(
+        book_sections: dict,
+        profile: _document_profiles.StructureProfile,
+        doc_path, *, llm_scaffold: bool,
+) -> None:
+    """Fail closed unless the selected profile's scaffold input exists."""
+    if not _document_profiles.requires_toc(profile):
+        if llm_scaffold:
+            raise ValueError(
+                "--llm-scaffold reviews a TOC scaffold; structure profile "
+                f"{profile.name} derives hierarchy from source headings")
+        return
+    has_toc = any(
+        book_sections.get(name) is not None
+        for name in _document_profiles.toc_seed_keys(profile)
+    )
+    if not has_toc:
+        log.error("FATAL: No Table of Contents or Contents section found.")
+        log.error(
+            "  The selected structure profile requires a recognized "
+            "TOC/Contents section. Cannot proceed.")
+        log.error(f"  Structure profile: {profile.name}")
+        log.error(f"  Document: {doc_path}")
+        sys.exit(1)
+
+
 def _book_structural_ranges(
         book_sections: dict, *,
         structure_profile: (
@@ -19938,18 +20164,8 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
         doc_dict, structure_profile=profile)
     book_sections = _identify_book_sections(
         doc_dict, structure_profile=profile)
-    has_toc = any(
-        book_sections.get(name) is not None
-        for name in _document_profiles.toc_seed_keys(profile)
-    )
-    if not has_toc:
-        log.error("FATAL: No Table of Contents or Contents section found.")
-        log.error(
-            "  The selected structure profile requires a recognized "
-            "TOC/Contents section. Cannot proceed.")
-        log.error(f"  Structure profile: {profile.name}")
-        log.error(f"  Document: {doc_path}")
-        sys.exit(1)
+    _require_structure_scaffold_evidence(
+        book_sections, profile, doc_path, llm_scaffold=llm_scaffold)
 
     structural_ranges = _book_structural_ranges(
         book_sections, structure_profile=profile)
@@ -19981,9 +20197,12 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
                       ollama_model=ollama_model, gemini_key=gemini_key,
                       llm_workers=llm_workers, thinking=thinking,
                       security_policy=security_policy)
+    # A source-heading profile has no TOC scaffold; its hierarchy is bound to
+    # exact heading occurrences just before the lineage audit.
     scaffold = _build_scaffold(
         doc_dict, book_sections, structure_profile=profile,
-        use_llm=llm_scaffold, **llm_kwargs)
+        use_llm=llm_scaffold, **llm_kwargs,
+    ) if _document_profiles.requires_toc(profile) else []
     repaired_markers = _repair_bare_scaffold_section_markers(
         scaffold, doc_dict, structure_profile=profile)
     if repaired_markers:
@@ -21072,6 +21291,13 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
         log.info(
             "Generated %s header-propagated table retrieval children",
             child_count,
+        )
+
+    if not _document_profiles.requires_toc(profile):
+        _assign_source_heading_paths(
+            doc_dict, enriched,
+            structural_ranges=structural_ranges,
+            excluded_heading_refs=demoted_source_heading_refs,
         )
 
     # Bind every displayed hierarchy component to its exact Docling source
@@ -31416,6 +31642,20 @@ def main(argv: list[str] | None = None):
             "endpoint and credential options must be written in full and "
             "with exact case")
     args = parser.parse_args(parse_argv)
+    if (getattr(args, "llm_scaffold", False)
+            and not _document_profiles.requires_toc(
+                _document_profiles.get_profile(args.structure_profile))):
+        # A fixed message: parse errors never reproduce submitted values.
+        parser.exit(2, (
+            f"{parser.prog}: error: --llm-scaffold requires a TOC-scaffold "
+            "structure profile\n"))
+    if (getattr(args, "split_chapters", False)
+            and not _document_profiles.requires_toc(
+                _document_profiles.get_profile(args.structure_profile))):
+        # Source-heading excerpts have no chapter page anchors to split on.
+        parser.exit(2, (
+            f"{parser.prog}: error: --split-chapters requires a TOC-scaffold "
+            "structure profile\n"))
     try:
         security_policy = _cli_policy._release_security_policy_from_args(args)
         if (

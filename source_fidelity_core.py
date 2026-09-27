@@ -1287,6 +1287,16 @@ def _valid_exemption(value: object, catalog: dict[str, dict]) -> bool:
     return False
 
 
+# Mirrors chunking_core's standalone section-marker line erasure.
+_CHUNKER_ERASED_SECTION_MARKER_RE = re.compile(r"[ \t]*[A-J][ \t]*")
+
+
+def chunker_erases_section_marker(text: str) -> bool:
+    """Return whether the chunker deletes this whole source text as a marker."""
+    return (isinstance(text, str)
+            and _CHUNKER_ERASED_SECTION_MARKER_RE.fullmatch(text) is not None)
+
+
 def audit_source_fidelity(
         *, records: Sequence[dict], document: dict,
         eligible_refs: Iterable[str],
@@ -1296,6 +1306,13 @@ def audit_source_fidelity(
     """Audit lexical coverage and same-page geometric partial ordering."""
     catalog = _source_catalog(document)
     eligible = set(eligible_refs)
+    # An ineligible marker glyph erased from the output has no output token.
+    # Tokens compare case-insensitively, so its lineage entry could otherwise
+    # take the token of an eligible item such as a lowercase "i".
+    erased_marker_refs = frozenset(
+        ref for ref, item in catalog.items()
+        if ref not in eligible
+        and chunker_erases_section_marker(source_item_text(item)))
     source_tokens = {
         ref: lexical_tokens(source_item_text(item))
         for ref, item in catalog.items()
@@ -1531,6 +1548,20 @@ def audit_source_fidelity(
         alignment = _find_alignment(
             record_tokens, haystack, covered_positions,
             last_source_offset)
+        erased_refs = {
+            entry["ref"] for entry in entries
+            if entry["transform"] not in OPAQUE_TRANSFORMS
+            and entry["ref"] in erased_marker_refs}
+        if (alignment is not None and erased_refs
+                and any(ref in erased_refs for ref, _offset in alignment)):
+            # Prefer an explanation that leaves erased markers unmatched. The
+            # retry keeps every other rule, so it is adopted only if it holds.
+            preferred = _find_alignment(
+                record_tokens,
+                [value for value in haystack if value[0] not in erased_refs],
+                covered_positions, last_source_offset)
+            if preferred is not None:
+                alignment = preferred
         scope_alignment_valid = True
         if not opaque_valid:
             lineage_issue_records.add(record_index)

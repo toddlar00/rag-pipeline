@@ -137,6 +137,51 @@ representative accuracy or source-completeness claim follows. Unified guided
 review, approved reference inputs, adaptive retries, independent-engine checks,
 AI scan evidence and correction publication/rollback remain active work.
 
+### Casebook excerpts and source-order fixes (2026-09-25, local, uncommitted)
+
+A private 18-excerpt casebook course corpus (page-bounded scans with no table
+of contents) exposed these gaps. The work is in the dirty local worktree only;
+it has no PR, hosted CI or independent release review, so it is not
+"Implemented (draft)".
+
+- **Excerpt profile.** `us-law-casebook-excerpt-v1` (`scaffold_source =
+  "source_headings"`) skips the TOC gate and scaffold, excludes no pages as
+  front/back matter at every recompute site, builds no running-header chapter
+  map, and derives each record's section path from its exact source-heading
+  occurrence stack (heading lineage `level_overrides`). Existing profile
+  digests are unchanged and now pinned by literal golden values.
+  `--llm-scaffold` and `--split-chapters` are rejected for it at parse time.
+- **Worker stdio.** Supervised workers are windowless only when the parent has
+  no console window, and then receive the parent's stdio explicitly (unusable
+  streams go to `DEVNULL`); before, direct CLI output of isolated commands was
+  silently lost.
+- **Source-order fixes** (each changes only output that fails the gates today):
+  no numbered-edge relocation between lineage-bound records at boundary
+  merge; one-line plain source items attest split duplicate lines; footnote
+  sidecar slots follow the audit's same-page geometry; the fidelity audit no
+  longer lets an erased A-J marker take an eligible item's token; a
+  native-rebuilt paragraph split across raw chunks is emitted once (generic
+  and layout branches).
+- **Evidence.** Focused suites pass; the full suite ran 14,787 passed and 3
+  failed (two from untracked OCR modules/test helper, one the stale
+  architecture inventory). Re-chunking the corpus kept all 11 READY excerpts
+  byte-identical through the first five fixes. **Not yet verified:** a
+  real-corpus re-chunk after the final layout-branch fix, and a full-casebook
+  A/B (both stopped for low system memory). A July-era casebook conversion
+  (conversion manifest schema 2) cannot be re-bound to its PDF and fails a
+  split-URL structural check on current code, independent of these fixes.
+- **Follow-ups (not fixed):** an excerpt ending on a bare heading fails
+  lineage (needs a typed exception and policy decision); marker-only levels can
+  re-parent book sections under opinion-internal `A.`/`B.`; a native rebuild
+  first emitted as a generic-branch slice is still claimed twice (fail-closed);
+  native text-group recovery rejects a paragraph split across two text-layer
+  blocks; a text item made only of U+25A0 is dropped with its lineage
+  (exclusion needs an owner decision and quality schema bump); boundary merge
+  joins a bullet list line inline; the token splitter breaks after `v.`;
+  duplicate-line allowances do not cover multi-item entries; `"CHAPTER x.y:"`
+  cross-reference headings are treated by lineage as authoritative divisions;
+  the architecture inventory needs a reviewed `--refresh`.
+
 ### Integrated convergence
 
 - **R1:** [PR #44](https://github.com/toddlar00/rag-pipeline/pull/44)
