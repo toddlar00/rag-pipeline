@@ -228,7 +228,9 @@ output that fails the gates today; no schema or policy version changed.
   disposition contracts treat it as unsupported); gate-silent reading-order
   scrambles from overlapping or out-of-order layout items (h04 pp.4/6/7, h18)
   and gate-silent scanner-layer misreads (h18); fused-native repair re-splits
-  clean OCR words into letter-spaced layer tokens (h16 p19); relaxing the
+  clean OCR words into letter-spaced layer tokens (h16 p19; retried from the
+  content stream when the result fails the gate, see "Letter-spaced text-layer
+  retry" below); relaxing the
   one-native-block recovery gate (h03) would also rebuild h18's p20 pair from
   its misread layer (a naive relaxation; the gate-driven one implemented
   under "Multi-block overlapping-group recovery" below leaves h18
@@ -553,7 +555,212 @@ schema or policy version changed.
     `_publish_quality_report_or_request_order_replay` and
     `_chunk_document_locked`, and the three new test modules and their patch
     targets. It needs a reviewed `--refresh`.
-  - h16 is still blocked on the glyph and p19 fixes.
+  - h16 is still blocked on the glyph fix. The p19 fix is in the next
+    section.
+
+### Letter-spaced text-layer retry (2026-09-27, local, uncommitted)
+
+This has the same status as the sections above. It implements the
+owner-approved h16 p19 fix (`#/texts/179`, record 49). No schema or policy
+version changed. It is not a replay: it runs inside the first pass, so the
+one-dispatcher rule above does not apply to it.
+
+- **Defect.** h16 p19 lies in a scanner OCR text layer that places each glyph
+  of three short words separately, with real space glyphs only between words.
+  PyMuPDF's default words are then single letters, and native split-word
+  repair re-splits Docling's text into isolated letters. Record 49 fails
+  `normalization_invariants` (`ocr_gibberish`), and the `#/texts/179`
+  `native_repair` oracle has 52 tokens.
+- **Retry.** `_recover_native_text_repairs` computes every item's repair
+  exactly as before. The per-item pipeline moved into
+  `_repair_native_text_item`, verbatim except for two mechanical
+  substitutions; its AST equals the reviewed prototype's. A retry is computed
+  only when the caller passes `letter_spaced_retries` and the item passes
+  `_letter_spaced_layer_retry_applies`: label `text` or `list_item`, body
+  layer, exactly one provenance, its page outside the structural ranges, and
+  today's final text matching quality's exact `ocr_gibberish` pattern. The
+  pipeline then reruns over native words rebuilt from the content stream
+  (`_content_stream_letter_words`, PyMuPDF `TEXT_INHIBIT_SPACES`). A run of
+  same-line single ASCII-letter words merges only when:
+  - exactly one stream word covers its first letter and spells exactly its
+    letters;
+  - every gap inside it is narrower than every stream-word gap on that line,
+    so the line needs a second stream word;
+  - one span style owns all of its letters (`_letter_run_has_uniform_style`):
+    each letter's center lies in exactly one span that contains the letter,
+    no owning span is flagged superscript, and the spans share one font, a
+    size within max(0.75, 8%) and a baseline within 12% of the size. The
+    baseline test compares span origins. MuPDF keeps a lowered letter in its
+    line's span, so a lowered letter is measured only when its span splits
+    (a font, size or color change); it still has to lie inside the one
+    stream word that spells the run. Such a word bypasses the generic
+    bbox-overlap style check, which leaks into the previous line because
+    scanner word boxes are taller than the line pitch.
+
+  The retry is recorded only when its text no longer matches the pattern and
+  its concatenated lexemes equal today's (`_native_lexical_key`). Its edits
+  are localized and deduplicated as today's are; the retry's own OCR
+  fallback, an edit that recurs in the source, or a duplicate edit asks for
+  a rebuild.
+- **Exemptions.** `_letter_spaced_retry_exempt_refs`, computed once per
+  document and only when an item passes the gate, excludes text that can
+  publish where the detector does not apply: items related to a picture or
+  table anywhere in their ancestry (parent, enclosing groups, or a caption,
+  footnote or child relation), members of a synthetic aligned-list table
+  (published as a pipe table), and running section banners (never
+  published). This closes the direct-parent-only gap the design review found.
+  Aligned-list membership depends only on geometry, so it is computed without
+  overrides; chunking later drops layouts whose items are reserved, so the
+  exempt set covers every published pipe-table member. The walk goes upward
+  only: a text whose own child is a picture, or that shares a non-body group
+  with one, is not exempt (the co-chunk residual below).
+- **Commit.** `_recover_bound_source_enrichments` commits the retries
+  (`_apply_letter_spaced_layer_retries`) after all four native group stages,
+  so each stage decides on today's overrides. A ref named by a recovered group
+  or by a deferred multi-block group is skipped: a group oracle replaces its
+  members' overrides, and a deferred member keeps today's text in the first
+  pass, so the retry cannot change whether the order replay runs. A failed
+  native stage drops any partial retries. The committed rebuild flag is
+  today's OR the retry's.
+- **Scope.** A retried item is quality-eligible, and today it publishes its
+  own override, because no group names it. A document can therefore change
+  only if today it:
+  - publishes the letter run in a gated record, failing
+    `normalization_invariants`;
+  - drops the item, failing `eligible_source_items_represented`; or
+  - misses the oracle's letter tokens, failing `source_token_fidelity`.
+
+  Residual, not decidable when enrichment runs:
+  - a record typed `figure` or `table` by co-chunked content: a merged picture
+    or table item, or pipe or tab lines from other text. The exposure exists:
+    the July `output/Ethics_5` chunks have 141 body text refs co-chunked with
+    `#/tables` items that the exemption does not cover (for example record
+    1333, `#/texts/3479`). None of them trips the gate, so nothing changes;
+    only the conjunction of such a record with a gated letter run is
+    unobserved. A review scan of 28 conversions found no text with a picture
+    child or sharing a non-body group with a picture. All 155 figure or table
+    text refs in tort law are covered through the ancestry walk;
+  - a chunk boundary that splits a four- or five-letter run into pieces
+    shorter than four letters (not observed);
+  - an exception in the retry path (the exemption set or the stream-word
+    read) would fail an explicit-source chunk. That is not limited to failing
+    documents: the gate reads an item's own repaired text, so it also admits
+    items that pass today because a group replaces their text. h15
+    `#/texts/32` is gated, and h15_3 is READY. None occurs in the verified
+    corpus.
+- **Correction.** The design cited h15 `#/texts/32` as the reason commits
+  follow the group stages. That was wrong: its native words (a letter, a
+  two-letter piece and a letter)
+  hold no run of two single letters, so no retry is computed whether or not
+  its group claims it. Commits follow the group stages because those stages
+  must decide on today's overrides and a group oracle replaces its members'
+  overrides.
+- **h16.** The staged conversion, chunked against its staged PDF, replays
+  once (list boundary) and now fails only `eligible_source_items_represented`
+  (`#/texts/14`, the U+25A0 glyph). Against the list-replay output:
+  - only record 49's text changes: a two-letter word and two function words,
+    all letter-spaced, are rejoined. Its non-space characters are identical;
+  - record 49's token counts, `stable_id`, `source_fidelity` and
+    `#/texts/179` lineage hashes change with it. Records 48 and 50 change
+    only their linked ids. There are still 88 records;
+  - the `#/texts/179` oracle goes from 52 to 47 tokens and stays
+    `native_repair`. No other oracle changes;
+  - `normalization_invariants` passes, and `source_token_fidelity` stays at
+    13701/13701.
+
+  A repeat run is byte-identical.
+- **Preservation.** The 17 READY runs (h01-h15 with h03_3, h04_3 and h06_4,
+  plus h17_3 and the Summer 2026 Update) re-chunk byte-identical to their
+  publications: chunks, quality, oracles and chunking receipts. h03_3 and
+  h03_2 still run the order replay once. h18_2, h04_2 and h03_2 are
+  byte-identical to the previous full-tree verification.
+- **Evidence.**
+  - A native-stage replay loaded the pre-change `rag.py` beside this one over
+    31 bound conversions: Contracts_2/4/5, Criminal Law_2, Ethics and
+    Ethics_2-5, tort law, and 21 h26 runs (every READY run plus h03_2, h04_2,
+    h16_2 and h18_2). Default repairs, edits and rebuild refs are identical
+    for all 31. With retries requested and no range or claim narrowing, the
+    only retry is h16 `#/texts/179`. h04_2's five gated items and h15
+    `#/texts/32` get none, because no letter run merges. Contracts' 27
+    letter-spaced hits are headings or furniture, which the gate excludes.
+    Tort law has no hit, so its output cannot change.
+  - `tests/test_letter_spaced_text_layer.py` (47 tests: gate, exemptions,
+    commit rules and production wiring) and
+    `tests/test_letter_spaced_merge_proofs.py` (22 tests: the merge proofs)
+    use synthetic PDFs built with PyMuPDF. On the pre-change code 61 of the
+    69 fail. Most fail because the new interface is missing. The two wiring
+    tests that commit a retry fail on the defect itself (the letter run). The
+    8 that pass pin today's behaviour: the default output, including the OCR
+    fallback's rebuild, a group claim at each of the four stages, a deferred
+    member, and a failed native stage. The wiring tests drive the real
+    `_recover_bound_source_enrichments` through a snapshot stand-in, as
+    `tests/test_contents_outline_guards.py` does.
+  - Review fix-up: the first mutation claim overstated what was pinned. An
+    independent review left 15 of its 24 mutants and 13 of 14 more alive,
+    among them the gate's input (today's text, not the source), the
+    footnote and child relations, the retry's rebuild rule, the lexeme
+    comparison with today's text, and the font, superscript, baseline,
+    single-owner and single-word-line merge proofs. Tests now pin each of
+    them, plus the `list_item` and `footnote` labels and a form-item
+    ancestor. The review also found that the old letter test
+    (`"A" <= upper() <= "Z"`) admitted non-ASCII letters whose upper case
+    starts with A-Z, such as U+00DF; the test is now `isascii()` and
+    `isalpha()` (RED first: only that case failed on the previous code). It
+    removes merges, except where a stream word's box also covers a
+    neighbouring non-ASCII letter that its text does not spell (not
+    observed), and the retries of the three conversions with gated items
+    (h04_2, h15_3, h16_2) are unchanged.
+  - Second review fix-up (tests and this section only; no production code
+    changed): the quantifier of the gap proof was not pinned. With
+    `max(word_gaps)` in place of `min(word_gaps)` every test still passed,
+    because the wide-gap fixture's word gaps are all equal, and on a
+    justified line (one wide word gap, ordinary gaps elsewhere) the retry
+    committed a glued two-word form that clears the gate with today's lexemes.
+    A negative case whose inner gap lies between the line's narrowest and
+    widest word gap now fails on that mutant and passes on the production
+    code. Tests also now pin a key-value-item ancestor, the `caption` and
+    `code` labels, digit and punctuation runs, a retry that adds an override
+    today's repair lacks, today's rebuild flag surviving a retry that asks
+    for none, the retry's own fallback rebuild, duplicate retry edits, and
+    the merged word's box.
+  - 149 mutants of the production code, not the prototype, ran on a private
+    copy: the implementation's 34, the first reviews' 24 and 13 (the
+    review's non-ASCII mutant is replaced by two on the new predicate), one
+    that drops both owner checks together, and the second reviews' 48 and 27
+    (several repeat earlier ones). 142 are killed. The 7 survivors are
+    equivalent: recomputing the exemptions for every gated item changes
+    only cost; a single-letter run is rejected by three
+    redundant checks (run length, span length, non-empty letter gaps), so
+    dropping either of the first two changes nothing; the same-line run
+    check (two equivalent mutants) is redundant because a merged span must
+    lie inside one stream word and spell exactly that word, and a stream
+    word never crosses a MuPDF line, which PyMuPDF segments the same way with
+    and without `TEXT_INHIBIT_SPACES` (argued, not tested); the retry's own
+    gate needs no structural ranges, because the item already passed the
+    gate with them; and retrying with the unmerged words when nothing merges
+    reproduces today's failing text, which the commit rules reject.
+  - After the fix-ups, the h16 target and all preservation runs re-chunk
+    byte-identical to the results above. Focused related suites (17 files):
+    958 passed. Ruff and `tools/check_python_sources.py` are clean.
+- **Follow-ups (not fixed).**
+  - The architecture inventory drift now also covers nine new private `rag`
+    bindings (`_ContentStreamLetterWord`, `_LetterSpacedLayerRetry`,
+    `_letter_run_has_uniform_style`, `_content_stream_letter_words`,
+    `_letter_spaced_layer_retry_applies`, `_letter_spaced_retry_exempt_refs`,
+    `_native_lexical_key`, `_repair_native_text_item`,
+    `_apply_letter_spaced_layer_retries`), the two new keyword parameters of
+    `_recover_native_text_repairs`, and, once tracked, the two new test
+    modules and their patch targets. It needs a reviewed `--refresh`.
+  - Footnote items are not retried; nothing in the corpus needs it.
+  - The merge proofs depend on PyMuPDF 1.28.2's `TEXT_INHIBIT_SPACES` word
+    segmentation and on its span splitting and superscript flag; the
+    synthetic tests catch a change.
+  - `_content_stream_letter_words` re-reads the page's stream words for each
+    gated item; the corpus has seven gated items, so this is not cached.
+  - Gate-silent text remains in h16: the p19 `Auer` reading-order scramble
+    (records 49/50), the garbled p1 scanner layer (record 0) and many word
+    splits from the text layer (for example `#/texts/173`). An owner decision
+    is needed before h16 publishes at this text quality.
 
 ### Integrated convergence
 

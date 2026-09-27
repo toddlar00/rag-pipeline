@@ -12400,8 +12400,11 @@ def _native_word_has_uniform_style(
     PyMuPDF can expose ``defense`` followed by a superscript footnote marker
     ``b`` as the single word ``defenseb``.  Joining Docling's ``defense b``
     in that case would erase a real note marker, so a candidate word must not
-    cross a material font-size or superscript boundary.
+    cross a material font-size or superscript boundary.  A content-stream
+    letter word proved one span style for its letters when it was built.
     """
+    if isinstance(word, _ContentStreamLetterWord):
+        return True
     left, top, right, bottom = (float(value) for value in word[:4])
     sizes: list[float] = []
     baselines: list[float] = []
@@ -14071,16 +14074,435 @@ def _repair_one_line_native_heading_order(
     return candidate if candidate and "\n" not in candidate else source_text
 
 
+class _ContentStreamLetterWord(tuple):
+    """A native word rebuilt from one letter-spaced content-stream word."""
+
+
+@dataclass(frozen=True, slots=True)
+class _LetterSpacedLayerRetry:
+    """One failing item's native repair recomputed with stream words."""
+
+    text: str
+    edits: tuple[tuple[str, str], ...]
+    rebuild: bool
+    source_text: str
+
+
+def _letter_run_has_uniform_style(
+        words: list[tuple], spans: list[dict]) -> bool:
+    """Every letter lies in exactly one span, and all spans share one style.
+
+    Scanner layers report word boxes taller than their line pitch, so the
+    generic bbox-overlap test reaches into adjacent lines.  Containment of
+    each letter's center is local to its own printed line.
+    """
+    styles: list[tuple[str, float, float]] = []
+    for word in words:
+        center_x = (float(word[0]) + float(word[2])) / 2
+        center_y = (float(word[1]) + float(word[3])) / 2
+        owners = [
+            span for span in spans
+            if span.get("bbox")
+            and str(word[4]) in str(span.get("text", ""))
+            and float(span["bbox"][0]) <= center_x <= float(span["bbox"][2])
+            and float(span["bbox"][1]) <= center_y <= float(span["bbox"][3])
+        ]
+        if len(owners) != 1:
+            return False
+        span = owners[0]
+        flags = span.get("flags")
+        size = span.get("size")
+        origin = span.get("origin")
+        if (not isinstance(flags, int) or isinstance(flags, bool)
+                or flags & 1
+                or not isinstance(size, (int, float))
+                or isinstance(size, bool)
+                or not isinstance(origin, (list, tuple))
+                or len(origin) < 2):
+            return False
+        styles.append((str(span.get("font")), float(size), float(origin[1])))
+    if not styles:
+        return False
+    sizes = [style[1] for style in styles]
+    baselines = [style[2] for style in styles]
+    return (len({style[0] for style in styles}) == 1
+            and max(sizes) - min(sizes) <= max(0.75, 0.08 * max(sizes))
+            and max(baselines) - min(baselines) <= 0.12 * max(sizes))
+
+
+def _content_stream_letter_words(
+        page, native_words: list[tuple],
+        page_spans: list[dict]) -> list[tuple] | None:
+    """Merge letter-spaced native words that the content stream joins.
+
+    A scanner OCR layer can position each glyph of a word separately, and
+    PyMuPDF then synthesizes a space at every positioning gap (single letters).
+    With TEXT_INHIBIT_SPACES the page yields only real space glyphs.  A run
+    of same-line single ASCII-letter words merges only when exactly one
+    stream word covers it and spells exactly its letters, every gap inside it
+    is narrower than every real word gap on that printed line, and one span
+    style owns all of its letters.  Returns None when nothing merges.
+    """
+    import pymupdf
+
+    runs: list[list[int]] = []
+    current: list[int] = []
+    for index, word in enumerate(native_words):
+        word_text = str(word[4])
+        single = (len(word) >= 7 and len(word_text) == 1
+                  and word_text.isascii() and word_text.isalpha())
+        if (single and current
+                and native_words[current[-1]][5:7] == word[5:7]):
+            current.append(index)
+            continue
+        if len(current) >= 2:
+            runs.append(current)
+        current = [index] if single else []
+    if len(current) >= 2:
+        runs.append(current)
+    if not runs:
+        return None
+
+    stream_words = page.get_text(
+        "words", sort=True,
+        flags=pymupdf.TEXTFLAGS_WORDS | pymupdf.TEXT_INHIBIT_SPACES)
+
+    def center(word: tuple) -> tuple[float, float]:
+        return ((float(word[0]) + float(word[2])) / 2,
+                (float(word[1]) + float(word[3])) / 2)
+
+    def contains(outer: tuple, point: tuple[float, float]) -> bool:
+        return (float(outer[0]) - 0.5 <= point[0] <= float(outer[2]) + 0.5
+                and float(outer[1]) - 0.5 <= point[1]
+                <= float(outer[3]) + 0.5)
+
+    merged: dict[int, tuple] = {}
+    absorbed: set[int] = set()
+    for run in runs:
+        position = 0
+        while position < len(run):
+            first = native_words[run[position]]
+            owners = [
+                stream for stream in stream_words
+                if contains(stream, center(first))
+            ]
+            if len(owners) != 1:
+                position += 1
+                continue
+            owner = owners[0]
+            span = [run[position]]
+            while (position + len(span) < len(run)
+                   and contains(owner, center(
+                       native_words[run[position + len(span)]]))):
+                span.append(run[position + len(span)])
+            words = [native_words[index] for index in span]
+            letters = "".join(str(word[4]) for word in words)
+            line_words = sorted(
+                (stream for stream in stream_words
+                 if abs(center(stream)[1] - center(owner)[1])
+                 <= (float(owner[3]) - float(owner[1])) / 2),
+                key=lambda stream: float(stream[0]))
+            word_gaps = [
+                float(right[0]) - float(left[2])
+                for left, right in zip(line_words, line_words[1:])
+            ]
+            letter_gaps = [
+                float(right[0]) - float(left[2])
+                for left, right in zip(words, words[1:])
+            ]
+            if (len(span) >= 2 and str(owner[4]) == letters
+                    and word_gaps and letter_gaps
+                    and max(letter_gaps) < min(word_gaps)
+                    and _letter_run_has_uniform_style(words, page_spans)):
+                merged[span[0]] = _ContentStreamLetterWord((
+                    min(float(word[0]) for word in words),
+                    min(float(word[1]) for word in words),
+                    max(float(word[2]) for word in words),
+                    max(float(word[3]) for word in words),
+                    letters, *first[5:],
+                ))
+                absorbed.update(span[1:])
+            position += len(span)
+    if not merged:
+        return None
+    return [
+        merged.get(index, word)
+        for index, word in enumerate(native_words)
+        if index not in absorbed
+    ]
+
+
+def _letter_spaced_layer_retry_applies(
+        item, repaired: str,
+        structural_ranges: set[tuple[int, int]] | None = None) -> bool:
+    """Return whether an item's repaired text fails quality's ocr_gibberish.
+
+    Only a single-provenance body text or list item outside the structural
+    ranges qualifies.  Quality treats such an item as eligible, and its text
+    publishes as record text, where that detector applies.  Headings and
+    furniture never reach record text.  A multi-provenance item can publish
+    as page fragments whose boundary splits a letter run, and its later
+    provenances have no native words here.  Relations that can place an item
+    in a record the detector exempts are checked separately
+    (``_letter_spaced_retry_exempt_refs``).
+    """
+    layer = str(getattr(getattr(item, "content_layer", None), "value",
+                        getattr(item, "content_layer", "body")))
+    provenance = list(getattr(item, "prov", None) or [])
+    if (_doc_item_label(item) not in {"text", "list_item"}
+            or layer != "body"
+            or len(provenance) != 1
+            or any(start <= int(provenance[0].page_no) <= end
+                   for start, end in structural_ranges or ())):
+        return False
+    return _OCR_SINGLETON_GIBBERISH_RE.search(
+        " ".join(repaired.split())) is not None
+
+
+def _letter_spaced_retry_exempt_refs(dl_doc) -> frozenset[str]:
+    """Return text refs whose letter-spaced output can pass quality today.
+
+    Quality exempts figure and table records from ``ocr_gibberish``, and a
+    record is typed that way when its items include a picture or table.  A
+    text item related to a picture or table anywhere in its ancestry (a
+    parent, an enclosing group, or a caption, footnote or child relation) can
+    share such a record.  A member of an aligned-list table publishes inside
+    a pipe table, and a running section banner never publishes.  None of
+    these is retried.  Aligned-list membership depends only on geometry, so
+    no overrides are passed; chunking later drops layouts whose items are
+    reserved, so this set covers every published pipe-table member.
+    """
+    parents: dict[str, set[str]] = {}
+    for collection in (
+            "texts", "groups", "pictures", "tables", "key_value_items",
+            "form_items"):
+        for node in getattr(dl_doc, collection, None) or []:
+            ref = str(getattr(node, "self_ref", "") or "")
+            if not ref:
+                continue
+            parent = str(getattr(
+                getattr(node, "parent", None), "cref", "") or "")
+            if parent:
+                parents.setdefault(ref, set()).add(parent)
+            for relationship in ("captions", "footnotes", "children"):
+                for reference in getattr(node, relationship, None) or []:
+                    child = str(getattr(reference, "cref", "") or "")
+                    if child:
+                        parents.setdefault(child, set()).add(ref)
+
+    def related_to_picture_or_table(ref: str) -> bool:
+        seen = {ref}
+        pending = [ref]
+        while pending:
+            for ancestor in parents.get(pending.pop(), ()):
+                if ancestor.startswith(("#/pictures/", "#/tables/")):
+                    return True
+                if ancestor not in seen:
+                    seen.add(ancestor)
+                    pending.append(ancestor)
+        return False
+
+    exempt = {
+        ref
+        for item in getattr(dl_doc, "texts", None) or []
+        if (ref := str(getattr(item, "self_ref", "") or ""))
+        and related_to_picture_or_table(ref)
+    }
+    exempt.update(
+        str(getattr(member, "self_ref", "") or "")
+        for layout in _detect_aligned_list_tables(dl_doc)
+        for member in layout.items)
+    exempt.update(_running_section_heading_refs(dl_doc))
+    return frozenset(exempt)
+
+
+def _native_lexical_key(value: str) -> str:
+    """Concatenate a text's native lexeme keys, ignoring word boundaries."""
+    return "".join(
+        _native_lexeme_key(match.group())
+        for match in _NATIVE_LEXEME_RE.finditer(value))
+
+
+def _repair_native_text_item(
+        item, source_text: str, *, pdf, page,
+        native_words: list[tuple], page_spans: list[dict],
+        overlapping_refs: set[str],
+        hard_hyphen_attestations: set[str],
+        pdf_plain_word_keys: set[str],
+        plain_native_word_keys: set[str],
+        all_hard_native_word_keys: set[str],
+        trace_cache: list[list[dict]],
+) -> tuple[str, list[tuple[str, str]], bool]:
+    """Run one item's native repair pipeline over the given native words.
+
+    Returns the repaired text, its edits, and whether the OCR fallback asks
+    for a wholesale rebuild.  ``trace_cache`` holds the page's text trace
+    once it is first needed.
+    """
+    item_edits: list[tuple[str, str]] = []
+    needs_rebuild = False
+    item_provenance = list(getattr(item, "prov", None) or [])
+    first = item_provenance[0]
+    clip = _pdf_clip_for_provenance(page, first)
+    native_text = _native_text_from_words(
+        native_words, hard_hyphen_attestations,
+        pdf_plain_word_keys)
+    native_segments = [(native_text, native_words)]
+    if (_SOURCE_SPLIT_HYPHEN_WORD_RE.search(source_text)
+            and len(item_provenance) > 1):
+        for provenance in item_provenance[1:]:
+            segment_page_number = int(provenance.page_no)
+            if not 1 <= segment_page_number <= len(pdf):
+                continue
+            segment_page = pdf[segment_page_number - 1]
+            segment_clip = _pdf_clip_for_provenance(
+                segment_page, provenance)
+            segment_words = [
+                word for word in segment_page.get_text(
+                    "words", sort=True)
+                if (segment_clip.x0 - 0.5
+                    <= (float(word[0]) + float(word[2])) / 2
+                    <= segment_clip.x1 + 0.5
+                    and segment_clip.y0 - 0.5
+                    <= (float(word[1]) + float(word[3])) / 2
+                    <= segment_clip.y1 + 0.5)
+            ]
+            native_segments.append((
+                _native_text_from_words(
+                    segment_words, hard_hyphen_attestations,
+                    pdf_plain_word_keys),
+                segment_words,
+            ))
+    ref = str(getattr(item, "self_ref", ""))
+    repaired = _repair_source_attested_split_hyphen_words(
+        source_text,
+        plain_word_keys=plain_native_word_keys,
+        hard_hyphen_keys=all_hard_native_word_keys,
+        _edits=item_edits,
+    )
+    repaired = _repair_source_split_hyphens_from_native_segments(
+        repaired,
+        native_segments=native_segments,
+        pdf_plain_word_keys=pdf_plain_word_keys,
+        hard_hyphen_keys=hard_hyphen_attestations,
+        _edits=item_edits,
+    )
+    repaired = _repair_source_attested_soft_hyphen_fragment_word(
+        repaired,
+        native_segments=native_segments,
+        pdf_plain_word_keys=pdf_plain_word_keys,
+        _edits=item_edits,
+    )
+    reordered = _repair_one_line_native_heading_order(
+        repaired, native_text, native_words,
+        is_section_header=(
+            _doc_item_label(item) == "section_header"),
+        provenance_count=len(item_provenance),
+        has_provenance_overlap=ref in overlapping_refs,
+    )
+    if reordered != repaired:
+        item_edits.append((repaired, reordered))
+    repaired = _repair_text_from_native_pdf(
+        reordered, native_text, _edits=item_edits)
+    repaired = _repair_split_words_to_fixpoint(
+        repaired, native_words, page_spans, _edits=item_edits,
+        hard_hyphen_attestations=hard_hyphen_attestations)
+    if (ref and ref not in overlapping_refs
+            and len(item_provenance) == 1):
+        candidate = _strip_native_list_prefix(
+            item, repaired, _normalize_text(native_text))
+        candidate = _join_source_attested_native_splits(
+            repaired, candidate)
+        fallback = _native_ocr_fallback(
+            repaired, candidate, native_words,
+            allow_wholesale=True)
+        if fallback is not None:
+            repaired, fallback_edits = fallback
+            item_edits.extend(fallback_edits)
+            needs_rebuild = True
+    if (len(item_provenance) == 1
+            and "http" in repaired.casefold()
+            and _SOURCE_URL_GLYPH_GAP_RE.search(repaired)):
+        if not trace_cache:
+            trace_cache.append(list(page.get_texttrace()))
+        repaired = _repair_source_attested_url_missing_glyph(
+            repaired,
+            plain_word_keys=plain_native_word_keys,
+            native_trace_spans=trace_cache[0],
+            clip=clip,
+            provenance_count=len(item_provenance),
+            _edits=item_edits,
+        )
+    repaired = _repair_source_attested_split_hyphen_words(
+        repaired,
+        plain_word_keys=plain_native_word_keys,
+        hard_hyphen_keys=all_hard_native_word_keys,
+        _edits=item_edits,
+    )
+    # Alignment and OCR fallback can reintroduce the native
+    # separator with different spacing. Reassert the same local
+    # provenance proof before serializing the final override.
+    repaired = _repair_source_split_hyphens_from_native_segments(
+        repaired,
+        native_segments=native_segments,
+        pdf_plain_word_keys=pdf_plain_word_keys,
+        hard_hyphen_keys=hard_hyphen_attestations,
+        _edits=item_edits,
+    )
+    # Use the same transactional URL parser as final chunk
+    # normalization so native-repair oracles and their serialized
+    # slices cannot disagree over extraction-spaced schemes.
+    repaired = _canonicalize_native_repair_urls(
+        repaired, source_text=source_text)
+    return repaired, item_edits, needs_rebuild
+
+
+def _apply_letter_spaced_layer_retries(
+        retries: dict[str, _LetterSpacedLayerRetry], *,
+        text_overrides: dict[str, str],
+        repair_edits: dict[str, tuple[tuple[str, str], ...]],
+        rebuild_refs: set[str],
+        claimed_refs: set[str] | frozenset[str]) -> None:
+    """Commit retries only for refs that no native group names.
+
+    The group stages decided on today's overrides.  A recovered group's
+    oracle replaces its members' overrides, so a claimed ref can pass today
+    and keeps today's repair.  A ref already in ``rebuild_refs`` stays there.
+    """
+    for ref, retry in sorted(retries.items()):
+        if ref in claimed_refs:
+            continue
+        if retry.text != retry.source_text:
+            text_overrides[ref] = retry.text
+            repair_edits[ref] = retry.edits
+        else:
+            text_overrides.pop(ref, None)
+            repair_edits.pop(ref, None)
+        if retry.rebuild:
+            rebuild_refs.add(ref)
+
+
 def _recover_native_text_repairs(
         dl_doc, pdf_path: Path, *,
         repair_edits: dict[str, tuple[tuple[str, str], ...]] | None = None,
         rebuild_refs: set[str] | None = None,
+        structural_ranges: set[tuple[int, int]] | None = None,
+        letter_spaced_retries: (
+            dict[str, _LetterSpacedLayerRetry] | None) = None,
 ) -> dict[str, str]:
-    """Repair Docling token splits using position- and style-bound PDF text."""
+    """Repair Docling token splits using position- and style-bound PDF text.
+
+    ``letter_spaced_retries``, when given, receives failing-only recomputed
+    repairs for letter-spaced text layers
+    (``_letter_spaced_layer_retry_applies``).  They are not applied here:
+    ``_recover_bound_source_enrichments`` commits them after its native group
+    stages (``_apply_letter_spaced_layer_retries``).
+    """
     import pymupdf
 
     repairs: dict[str, str] = {}
     overlapping_refs = _overlapping_provenance_refs(dl_doc)
+    exempt_refs: frozenset[str] | None = None
     page_items: dict[int, list[object]] = {}
     for item in getattr(dl_doc, "texts", []) or []:
         source_text = _source_item_text(item)
@@ -14134,10 +14556,9 @@ def _recover_native_text_repairs(
                 for line in block.get("lines", [])
                 for span in line.get("spans", [])
             ]
-            page_trace_spans: list[dict] | None = None
+            page_trace_cache: list[list[dict]] = []
             for item in items:
                 source_text = _source_item_text(item)
-                item_edits: list[tuple[str, str]] = []
                 item_provenance = list(getattr(item, "prov", None) or [])
                 first = item_provenance[0]
                 clip = _pdf_clip_for_provenance(page, first)
@@ -14149,117 +14570,53 @@ def _recover_native_text_repairs(
                         <= (float(word[1]) + float(word[3])) / 2
                         <= clip.y1 + 0.5)
                 ]
-                native_text = _native_text_from_words(
-                    native_words, hard_hyphen_attestations,
-                    pdf_plain_word_keys)
-                native_segments = [(native_text, native_words)]
-                if (_SOURCE_SPLIT_HYPHEN_WORD_RE.search(source_text)
-                        and len(item_provenance) > 1):
-                    for provenance in item_provenance[1:]:
-                        segment_page_number = int(provenance.page_no)
-                        if not 1 <= segment_page_number <= len(pdf):
-                            continue
-                        segment_page = pdf[segment_page_number - 1]
-                        segment_clip = _pdf_clip_for_provenance(
-                            segment_page, provenance)
-                        segment_words = [
-                            word for word in segment_page.get_text(
-                                "words", sort=True)
-                            if (segment_clip.x0 - 0.5
-                                <= (float(word[0]) + float(word[2])) / 2
-                                <= segment_clip.x1 + 0.5
-                                and segment_clip.y0 - 0.5
-                                <= (float(word[1]) + float(word[3])) / 2
-                                <= segment_clip.y1 + 0.5)
-                        ]
-                        native_segments.append((
-                            _native_text_from_words(
-                                segment_words, hard_hyphen_attestations,
-                                pdf_plain_word_keys),
-                            segment_words,
-                        ))
+                context = {
+                    "pdf": pdf, "page": page, "page_spans": page_spans,
+                    "overlapping_refs": overlapping_refs,
+                    "hard_hyphen_attestations": hard_hyphen_attestations,
+                    "pdf_plain_word_keys": pdf_plain_word_keys,
+                    "plain_native_word_keys": plain_native_word_keys,
+                    "all_hard_native_word_keys": all_hard_native_word_keys,
+                    "trace_cache": page_trace_cache,
+                }
+                repaired, item_edits, needs_rebuild = (
+                    _repair_native_text_item(
+                        item, source_text, native_words=native_words,
+                        **context))
                 ref = str(getattr(item, "self_ref", ""))
-                repaired = _repair_source_attested_split_hyphen_words(
-                    source_text,
-                    plain_word_keys=plain_native_word_keys,
-                    hard_hyphen_keys=all_hard_native_word_keys,
-                    _edits=item_edits,
-                )
-                repaired = _repair_source_split_hyphens_from_native_segments(
-                    repaired,
-                    native_segments=native_segments,
-                    pdf_plain_word_keys=pdf_plain_word_keys,
-                    hard_hyphen_keys=hard_hyphen_attestations,
-                    _edits=item_edits,
-                )
-                repaired = _repair_source_attested_soft_hyphen_fragment_word(
-                    repaired,
-                    native_segments=native_segments,
-                    pdf_plain_word_keys=pdf_plain_word_keys,
-                    _edits=item_edits,
-                )
-                reordered = _repair_one_line_native_heading_order(
-                    repaired, native_text, native_words,
-                    is_section_header=(
-                        _doc_item_label(item) == "section_header"),
-                    provenance_count=len(item_provenance),
-                    has_provenance_overlap=ref in overlapping_refs,
-                )
-                if reordered != repaired:
-                    item_edits.append((repaired, reordered))
-                repaired = _repair_text_from_native_pdf(
-                    reordered, native_text, _edits=item_edits)
-                repaired = _repair_split_words_to_fixpoint(
-                    repaired, native_words, page_spans, _edits=item_edits,
-                    hard_hyphen_attestations=hard_hyphen_attestations)
-                if (ref and ref not in overlapping_refs
-                        and len(item_provenance) == 1):
-                    candidate = _strip_native_list_prefix(
-                        item, repaired, _normalize_text(native_text))
-                    candidate = _join_source_attested_native_splits(
-                        repaired, candidate)
-                    fallback = _native_ocr_fallback(
-                        repaired, candidate, native_words,
-                        allow_wholesale=True)
-                    if fallback is not None:
-                        repaired, fallback_edits = fallback
-                        item_edits.extend(fallback_edits)
-                        if rebuild_refs is not None:
-                            rebuild_refs.add(ref)
-                if (len(item_provenance) == 1
-                        and "http" in repaired.casefold()
-                        and _SOURCE_URL_GLYPH_GAP_RE.search(repaired)):
-                    if page_trace_spans is None:
-                        page_trace_spans = list(page.get_texttrace())
-                    repaired = _repair_source_attested_url_missing_glyph(
-                        repaired,
-                        plain_word_keys=plain_native_word_keys,
-                        native_trace_spans=page_trace_spans,
-                        clip=clip,
-                        provenance_count=len(item_provenance),
-                        _edits=item_edits,
-                    )
-                repaired = _repair_source_attested_split_hyphen_words(
-                    repaired,
-                    plain_word_keys=plain_native_word_keys,
-                    hard_hyphen_keys=all_hard_native_word_keys,
-                    _edits=item_edits,
-                )
-                # Alignment and OCR fallback can reintroduce the native
-                # separator with different spacing. Reassert the same local
-                # provenance proof before serializing the final override.
-                repaired = _repair_source_split_hyphens_from_native_segments(
-                    repaired,
-                    native_segments=native_segments,
-                    pdf_plain_word_keys=pdf_plain_word_keys,
-                    hard_hyphen_keys=hard_hyphen_attestations,
-                    _edits=item_edits,
-                )
-                # Use the same transactional URL parser as final chunk
-                # normalization so native-repair oracles and their serialized
-                # slices cannot disagree over extraction-spaced schemes.
-                repaired = _canonicalize_native_repair_urls(
-                    repaired, source_text=source_text)
+                if (letter_spaced_retries is not None and ref
+                        and _letter_spaced_layer_retry_applies(
+                            item, repaired, structural_ranges)):
+                    # Failing-only: today's text trips ocr_gibberish.
+                    # Recompute with content-stream words; the caller commits
+                    # the result only after group recovery claimed its refs.
+                    if exempt_refs is None:
+                        exempt_refs = _letter_spaced_retry_exempt_refs(dl_doc)
+                    stream_words = (
+                        None if ref in exempt_refs
+                        else _content_stream_letter_words(
+                            page, native_words, page_spans))
+                    if stream_words is not None:
+                        retry_text, retry_edits, retry_rebuild = (
+                            _repair_native_text_item(
+                                item, source_text, native_words=stream_words,
+                                **context))
+                        if (not _letter_spaced_layer_retry_applies(
+                                item, retry_text, structural_ranges)
+                                and _native_lexical_key(retry_text)
+                                == _native_lexical_key(repaired)):
+                            localized = tuple(dict.fromkeys(
+                                edit for edit in retry_edits
+                                if edit[0] and source_text.count(edit[0]) == 1
+                            ))
+                            letter_spaced_retries[ref] = (
+                                _LetterSpacedLayerRetry(
+                                    text=retry_text, edits=localized,
+                                    rebuild=(retry_rebuild or len(localized)
+                                             != len(retry_edits)),
+                                    source_text=source_text))
+                if needs_rebuild and rebuild_refs is not None:
+                    rebuild_refs.add(ref)
                 if ref and repaired != source_text:
                     repairs[ref] = repaired
                     if repair_edits is not None:
@@ -16035,14 +16392,21 @@ def _recover_bound_source_enrichments(
             native_repair_edits: dict[
                 str, tuple[tuple[str, str], ...]] = {}
             native_text_rebuild_refs: set[str] = set()
+            letter_spaced_retries: dict[str, _LetterSpacedLayerRetry] = {}
             native_text_overrides = optional_stage(
                 "native-PDF text repairs",
                 lambda: _recover_native_text_repairs(
                     dl_doc, recovery_source.pdf.path,
                     repair_edits=native_repair_edits,
-                    rebuild_refs=native_text_rebuild_refs),
-                {},
+                    rebuild_refs=native_text_rebuild_refs,
+                    structural_ranges=structural_ranges,
+                    letter_spaced_retries=letter_spaced_retries),
+                None,
             )
+            if native_text_overrides is None:
+                # A failed optional stage must not leak partial retries.
+                native_text_overrides = {}
+                letter_spaced_retries.clear()
             deferred_text_groups: list[SourceTextGroupRecovery] = []
             text_group_recoveries = optional_stage(
                 "overlapping native-PDF text groups",
@@ -16084,6 +16448,21 @@ def _recover_bound_source_enrichments(
                     structural_ranges=structural_ranges),
                 (),
             )
+            # Every group stage above decided on today's overrides.  A
+            # recovered group's oracle replaces its members' overrides, and a
+            # deferred group's members may be admitted by the order replay, so
+            # neither kind of member is retried.
+            _apply_letter_spaced_layer_retries(
+                letter_spaced_retries,
+                text_overrides=native_text_overrides,
+                repair_edits=native_repair_edits,
+                rebuild_refs=native_text_rebuild_refs,
+                claimed_refs={
+                    ref
+                    for recovery in (
+                        *text_group_recoveries, *deferred_text_groups)
+                    for ref in recovery.refs
+                })
             return BoundSourceEnrichments(
                 table_markdown_overrides=table_overrides,
                 table_continuation_refs=continuation_refs,
