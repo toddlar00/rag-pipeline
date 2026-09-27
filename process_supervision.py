@@ -8,6 +8,7 @@ configuration, and mutable collaborators at call time.
 
 from __future__ import annotations
 
+import ntpath
 import os
 import signal
 import subprocess
@@ -18,6 +19,36 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+
+def python_worker_launch(
+        arguments: list[str], environment: dict[str, str],
+) -> tuple[list[str], dict[str, str]]:
+    """Launch this interpreter without a Windows venv PID redirector.
+
+    CPython's multiprocessing Windows launcher uses this same base-interpreter
+    mechanism (bpo-35797). The child-only launcher variable preserves the venv's
+    executable, prefix and packages, while Popen owns the actual worker PID.
+    Neither the supplied environment nor the parent's environment is changed.
+    """
+    executable = sys.executable
+    child_environment = dict(environment)
+    if sys.platform == "win32":
+        # Windows environment names are case insensitive. Caller overrides may
+        # not redirect the worker into a different interpreter environment.
+        child_environment = {
+            key: value for key, value in child_environment.items()
+            if key.upper() != "__PYVENV_LAUNCHER__"
+        }
+        if sys.implementation.name == "cpython" and not getattr(sys, "frozen", False):
+            base = getattr(sys, "_base_executable", None)
+            if (not isinstance(base, str) or not base or "\0" in base
+                    or not ntpath.splitdrive(base)[0] or not ntpath.isabs(base)):
+                raise RuntimeError("Python base interpreter identity is unavailable")
+            if ntpath.normcase(executable) != ntpath.normcase(base):
+                child_environment["__PYVENV_LAUNCHER__"] = executable
+                executable = base
+    return [executable, *arguments], child_environment
 
 
 _DEFAULT_TERMINATE_GRACE = 5.0
@@ -521,7 +552,16 @@ def _run_cli_with_deadline(
                 exc=exc,
             )
 
-    environment = os.environ.copy()
+    # The parent may have used -I, but the gated child does not inherit that
+    # interpreter flag. Do not let ambient Python startup/import selectors
+    # redirect or optimize it. Explicit host-owned overrides below remain
+    # supported; this is not a scrub of unrelated environment or a sandbox.
+    environment = {
+        name: value for name, value in os.environ.items()
+        if not name.upper().startswith(("PYTHON", "_PYTHON"))
+        and name.upper() != "__PYVENV_LAUNCHER__"
+    }
+    environment.update({"PYTHONDONTWRITEBYTECODE": "1", "PYTHONNOUSERSITE": "1", "PYTHONUTF8": "1"})
     environment[config.supervised_child_env] = "1"
     for name, value in (environment_overrides or {}).items():
         if value is None:
@@ -560,8 +600,7 @@ def _run_cli_with_deadline(
             process_options["start_new_session"] = True
         start_gate = start_gate_factory()
         process_options.update(start_gate.popen_options())
-        command = [
-            sys.executable,
+        command, child_environment = python_worker_launch([
             "-u",
             bootstrap_script,
             start_gate.kind,
@@ -569,7 +608,8 @@ def _run_cli_with_deadline(
             str(config.start_gate_timeout),
             target_script,
             *argv,
-        ]
+        ], environment)
+        process_options["env"] = child_environment
         process = subprocess.Popen(command, **process_options)
     except BaseException as exc:
         if start_gate is not None:

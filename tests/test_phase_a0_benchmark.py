@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import stat
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -593,6 +594,7 @@ def test_safe_child_environment_is_fixed_and_drops_ambient_state(
     monkeypatch.setenv("HF_HOME", str(tmp_path / "private-cache"))
     monkeypatch.setenv("LD_LIBRARY_PATH", str(tmp_path / "private-libraries"))
     monkeypatch.setenv("PYTHONUSERBASE", str(tmp_path / "private-user-base"))
+    monkeypatch.setenv("__PYVENV_LAUNCHER__", str(tmp_path / "untrusted-launcher"))
     monkeypatch.setenv("RAG_LLM_CACHE_DIR", str(tmp_path / "operator-llm-cache"))
     monkeypatch.setenv("PATH", "safe-path")
     guard = tmp_path / "guard"
@@ -618,7 +620,7 @@ def test_safe_child_environment_is_fixed_and_drops_ambient_state(
     assert environment["XDG_STATE_HOME"] == str(tmp_path / "xdg-state")
     forbidden = {
         "home", "codex_home", "gemini_api_key", "https_proxy", "hf_home",
-        "ld_library_path"}
+        "ld_library_path", "__pyvenv_launcher__"}
     assert not {name.casefold() for name in environment}.intersection(forbidden)
     assert "provider-secret" not in json.dumps(environment)
     assert "private-user-base" not in json.dumps(environment)
@@ -665,6 +667,213 @@ print(json.dumps({
         "sysconfig_loaded": True,
         "user_base_redirected": True,
     }
+
+
+def _startup_hook(monkeypatch, tmp_path, delegate, *, ambient=None):
+    """Execute only the generated forwarding hook, never an in-process guard."""
+    module = SimpleNamespace(_run_supervised_entrypoint=delegate)
+    monkeypatch.setitem(sys.modules, "process_supervision", module)
+    environment = ({"RAG_PHASE_A0_GUARD_ROLE": "rag-info"}
+                   if ambient is None else ambient)
+    for name in ("RAG_PHASE_A0_GUARD_ROLE", "RAG_PIPELINE_SUPERVISED_CHILD"):
+        if name in environment:
+            monkeypatch.setenv(name, environment[name])
+        else:
+            monkeypatch.delenv(name, raising=False)
+    namespace = {}
+    source = benchmark._rag_info_startup_source(tmp_path, tmp_path / "guard")
+    exec(compile(source, "generated-startup-hook", "exec"), namespace)
+    return module._run_supervised_entrypoint, namespace
+
+
+def _startup_arguments():
+    return {
+        "script_path": benchmark.PROJECT_ROOT / "rag.py",
+        "config": SimpleNamespace(
+            supervised_child_env="RAG_PIPELINE_SUPERVISED_CHILD"),
+        "unrelated_callback": object(),
+    }
+
+
+def test_generated_startup_mapping_is_fixed_not_ambient(monkeypatch, tmp_path):
+    for name in ("PYTHONPATH", "PYTHONUSERBASE", "pYtHoNoPtImIzE",
+                 "_PYTHON_SYSCONFIGDATA_NAME", "__PYVENV_LAUNCHER__"):
+        monkeypatch.setenv(name, "hostile-startup-selector")
+    _, namespace = _startup_hook(monkeypatch, tmp_path, lambda *a, **kw: 0)
+    assert namespace["_phase_a0_rag_info_startup"] == {
+        "PYTHONDONTWRITEBYTECODE": "1", "PYTHONHASHSEED": "0",
+        "PYTHONIOENCODING": "utf-8", "PYTHONNOUSERSITE": "1",
+        "PYTHONPATH": os.pathsep.join([
+            str(tmp_path / "guard"), str(benchmark.PROJECT_ROOT)]),
+        "PYTHONUSERBASE": str(tmp_path / "python-user-base"),
+        "PYTHONUTF8": "1",
+    }
+    assert "hostile-startup-selector" not in repr(namespace["_phase_a0_rag_info_startup"])
+
+
+def test_default_guard_does_not_install_startup_forwarder(tmp_path):
+    guard = benchmark._install_sitecustomize_guard(tmp_path)
+    source = (guard / "sitecustomize.py").read_text(encoding="utf-8")
+    assert source == benchmark._SITECUSTOMIZE_SOURCE
+    assert "_forward_rag_info_startup" not in source
+
+
+def test_generated_startup_delegates_once_preserving_inputs(monkeypatch, tmp_path):
+    calls = []
+    result = object()
+
+    def delegate(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return result
+
+    hook, namespace = _startup_hook(monkeypatch, tmp_path, delegate)
+    arguments = ["info"]
+    options = _startup_arguments()
+    explicit = {"KEEP": "value", "REMOVE": None, "PYTHONHASHSEED": "0"}
+    original = dict(explicit)
+    assert hook(arguments, environment_overrides=explicit, **options) is result
+    assert len(calls) == 1 and calls[0][0] is arguments
+    assert explicit == original
+    forwarded = calls[0][1].pop("environment_overrides")
+    assert calls[0][1] == options
+    assert forwarded is not explicit
+    assert forwarded == {**explicit, **namespace["_phase_a0_rag_info_startup"]}
+
+
+@pytest.mark.parametrize("override", [
+    {"PYTHONPATH": "untrusted"}, {"PYTHONUSERBASE": None},
+    {"PYTHONHASHSEED": "7"}, {"PYTHONIOENCODING": "ascii"},
+    {"PYTHONDONTWRITEBYTECODE": "0"}, {"PYTHONNOUSERSITE": "0"},
+    {"PYTHONUTF8": "0"}, {"pythonpath": "untrusted"},
+    {"pYtHoNoPtImIzE": "2"}, {"_PYTHON_SYSCONFIGDATA_NAME": "untrusted"},
+    {"__PyVENV_LAUNCHER__": "untrusted"},
+])
+def test_generated_startup_refuses_conflicting_selectors(monkeypatch, tmp_path, override):
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("conflicting startup override reached real entrypoint")
+
+    hook, _ = _startup_hook(monkeypatch, tmp_path, forbidden)
+    original = dict(override)
+    with pytest.raises(RuntimeError):
+        hook(["info"], environment_overrides=override, **_startup_arguments())
+    assert override == original
+
+
+@pytest.mark.parametrize("scope", ["role", "inner", "target", "config"])
+def test_generated_startup_does_not_forward_outside_cli_info_scope(monkeypatch, tmp_path, scope):
+    ambient = {"RAG_PHASE_A0_GUARD_ROLE": "rag-info"}
+    options = _startup_arguments()
+    if scope == "role":
+        ambient["RAG_PHASE_A0_GUARD_ROLE"] = "worker"
+    elif scope == "inner":
+        ambient["RAG_PIPELINE_SUPERVISED_CHILD"] = "1"
+    elif scope == "target":
+        options["script_path"] = tmp_path / "different.py"
+    else:
+        options["config"] = SimpleNamespace(supervised_child_env="OTHER_CHILD")
+    calls = []
+
+    def delegate(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return 42
+
+    hook, _ = _startup_hook(monkeypatch, tmp_path, delegate, ambient=ambient)
+    explicit = {"PYTHONPATH": "unrelated-host-owned"}
+    arguments = ["info"]
+    assert hook(arguments, environment_overrides=explicit, **options) == 42
+    assert len(calls) == 1 and calls[0][0] is arguments
+    assert calls[0][1] == {**options, "environment_overrides": explicit}
+    assert calls[0][1]["environment_overrides"] is explicit
+
+
+def test_generated_startup_preserves_delegate_exception(monkeypatch, tmp_path):
+    failure = RuntimeError("delegate failed")
+
+    def delegate(*_args, **_kwargs):
+        raise failure
+
+    hook, _ = _startup_hook(monkeypatch, tmp_path, delegate)
+    with pytest.raises(RuntimeError) as raised:
+        hook(["info"], **_startup_arguments())
+    assert raised.value is failure
+
+
+def test_generated_startup_reaches_nested_guard_and_sysconfig(tmp_path):
+    """Real two-hop control; the existing CLI test separately exercises rag."""
+    guard = benchmark._install_sitecustomize_guard(
+        tmp_path, forward_rag_info_startup=True)
+    child = tmp_path / "nested_sysconfig.py"
+    parent = tmp_path / "outer_entrypoint.py"
+    expected_startup = {
+        "PYTHONDONTWRITEBYTECODE": "1", "PYTHONHASHSEED": "0",
+        "PYTHONIOENCODING": "utf-8", "PYTHONNOUSERSITE": "1",
+        "PYTHONPATH": os.pathsep.join([str(guard), str(benchmark.PROJECT_ROOT)]),
+        "PYTHONUSERBASE": str(tmp_path / "python-user-base"), "PYTHONUTF8": "1",
+    }
+    benchmark._write_private_generated_text(child, """\
+import json
+import os
+from pathlib import Path
+import socket
+import sysconfig
+
+def denied(action):
+    try:
+        action()
+    except RuntimeError:
+        return True
+    return False
+
+observed = {
+    "home_denied": denied(Path.home),
+    "tilde_denied": denied(lambda: Path("~").expanduser()),
+    "socket_denied": denied(socket.socket),
+    "dns_denied": denied(lambda: socket.getaddrinfo("localhost", 80)),
+    "sysconfig_loaded": bool(sysconfig.get_paths()),
+    "user_base_redirected": sysconfig.get_config_var("userbase") == EXPECTED["PYTHONUSERBASE"],
+    "selectors_equal": all(os.environ.get(k) == v for k, v in EXPECTED.items()),
+    "production_supervised": os.environ.get("RAG_PIPELINE_SUPERVISED_CHILD") == "1",
+}
+print(json.dumps(observed, sort_keys=True))
+""".replace("import json\n", "import json\nEXPECTED = " + repr(expected_startup) + "\n", 1))
+    benchmark._write_private_generated_text(parent, """\
+from pathlib import Path
+import process_supervision as ps
+
+config = ps.SupervisionConfig("RAG_PIPELINE_SUPERVISED_CHILD", "RAG_RUN_ID", 1., .01, 5.)
+
+def actual_supervisor(script, args, **kwargs):
+    assert script == RAG_SCRIPT and args == ["info"]
+    return ps._run_cli_with_deadline(CHILD_SCRIPT, [], config=config, **kwargs)
+
+def unexpected(*_args):
+    raise AssertionError("nested supervision was bypassed")
+
+raise SystemExit(ps._run_supervised_entrypoint(
+    ["info"], config=config, script_path=RAG_SCRIPT,
+    command_resolver=lambda args: args[0], operation_timeouts={"info": 10.},
+    telemetry_options_fn=lambda *_args: {"run_id": None, "events_path": None, "report_path": None},
+    timeout_fn=lambda *_args: 10., run_id_factory=lambda: "generated-nested-control",
+    menu_fn=unexpected, main_fn=unexpected, supervisor_fn=actual_supervisor))
+""".replace("import process_supervision as ps\n", "import process_supervision as ps\n"
+            + "RAG_SCRIPT = Path(" + repr(str(benchmark.PROJECT_ROOT / "rag.py")) + ")\n"
+            + "CHILD_SCRIPT = Path(" + repr(str(child)) + ")\n", 1))
+    trace = tmp_path / "trace.jsonl"
+    environment = benchmark._guarded_child_environment(
+        tmp_path, guard, trace_path=trace, role="rag-info")
+    result = benchmark._run_contained_process(
+        parent, (), cwd=tmp_path, environment=environment, timeout_seconds=20)
+    assert result.returncode == 0 and result.stderr == b"" and result.cleanup_confirmed
+    assert json.loads(result.stdout) == {
+        "home_denied": True, "tilde_denied": True, "socket_denied": True,
+        "dns_denied": True, "sysconfig_loaded": True, "user_base_redirected": True,
+        "selectors_equal": True, "production_supervised": True,
+    }
+    events = benchmark._read_guard_trace(trace)
+    assert len(events) == 2
+    assert [item["role"] for item in events] == ["rag-info", "rag-info"]
+    assert [item["production_supervised"] for item in events] == [False, True]
+    assert events[1]["ppid"] == events[0]["pid"]
 
 
 def test_contained_runner_uses_exact_environment_and_bounded_files(
@@ -906,6 +1115,48 @@ def test_worker_import_probe_gates_real_import_footprint():
 def test_real_isolation_guard_covers_parent_and_descendant():
     result = benchmark.run_probe("isolation_guard", timeout_seconds=30)
     assert result["contract"] == _valid_contract("isolation_guard")
+
+
+def test_generated_isolation_descendant_uses_shared_python_launch(
+        monkeypatch, tmp_path, capsys):
+    import ast
+    import process_supervision
+
+    calls = []
+    command = ["synthetic-base-python", "synthetic-script"]
+    environment = {"SAFE": "child-only"}
+
+    def launch(arguments, inherited):
+        calls.append((arguments, inherited))
+        return command, environment
+
+    def run(actual_command, **kwargs):
+        assert actual_command is command
+        assert kwargs == {
+            "env": environment, "stdin": benchmark.subprocess.DEVNULL,
+            "stdout": benchmark.subprocess.DEVNULL, "stderr": benchmark.subprocess.DEVNULL,
+            "check": False, "timeout": 10,
+        }
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(process_supervision, "python_worker_launch", launch)
+    # Execute the actual generated import and two launch statements, without
+    # launching a process or weakening the real probe's home/network guard.
+    parsed = ast.parse(benchmark._ISOLATION_PROBE_SOURCE)
+    statements = [node for node in parsed.body if (
+        isinstance(node, ast.ImportFrom) and node.module == "process_supervision"
+        or isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Tuple) and any(isinstance(item, ast.Name) and item.id == "command" for item in target.elts)
+            or isinstance(target, ast.Name) and target.id == "completed"
+            for target in node.targets))]
+    assert len(statements) == 3
+    namespace = {"os": SimpleNamespace(environ={"SAFE": "parent"}),
+                 "subprocess": SimpleNamespace(run=run, DEVNULL=benchmark.subprocess.DEVNULL),
+                 "__file__": "synthetic-script", "child_result": tmp_path / "child-result.json"}
+    exec(compile(ast.Module(body=statements, type_ignores=[]), "generated-launch", "exec"), namespace)
+    assert calls == [(["synthetic-script", "--child", str(tmp_path / "child-result.json")], {"SAFE": "parent"})]
+    assert namespace["completed"].returncode == 0
+    assert not capsys.readouterr().out
 
 
 def test_real_noop_resume_observes_validators_lock_index_and_result():

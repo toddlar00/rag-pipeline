@@ -17,7 +17,6 @@ import os
 import signal
 import stat
 import subprocess
-import sys
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -36,6 +35,7 @@ from job_coordination_contracts import (
     ServiceJobCoordinationBinding,
 )
 import job_runtime
+import process_supervision
 import run_telemetry
 import runtime_supervision
 import storage_policy
@@ -1232,8 +1232,8 @@ def launch_detached(
             OUTPUT_ROOT_ENV):
         environment.pop(name, None)
     environment[_READY_NONCE_ENV] = nonce
-    command = [
-        sys.executable, "-u", str(MANAGER_SCRIPT_PATH), "_manage",
+    arguments = [
+        "-u", str(MANAGER_SCRIPT_PATH), "_manage",
         "--root", str(store.root), "--job-id", job_id,
         "--script", str(script_path.resolve()),
     ]
@@ -1254,8 +1254,10 @@ def launch_detached(
     else:
         options["start_new_session"] = True
     try:
+        command, options["env"] = process_supervision.python_worker_launch(
+            arguments, environment)
         process = subprocess.Popen(command, **options)
-    except (OSError, subprocess.SubprocessError) as exc:
+    except (OSError, subprocess.SubprocessError, RuntimeError) as exc:
         current = reconcile_job(store, job_id, fail_queued=True)
         raise JobManagerLaunchError(
             "background manager could not be started "

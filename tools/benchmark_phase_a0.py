@@ -235,6 +235,53 @@ if (os.environ.get("RAG_PHASE_A0_TEST_ONLY_BREAK_SUPERVISION")
 '''
 
 
+_RAG_INFO_STARTUP_SOURCE = r'''
+import os
+from pathlib import Path
+import process_supervision
+
+_phase_a0_rag_info_startup = %r
+_phase_a0_rag_script = Path(%r).resolve()
+_phase_a0_original_entrypoint = process_supervision._run_supervised_entrypoint
+
+def _forward_rag_info_startup(argv=None, **kwargs):
+    if (os.environ.get("RAG_PHASE_A0_GUARD_ROLE") == "rag-info"
+            and os.environ.get("RAG_PIPELINE_SUPERVISED_CHILD") != "1"
+            and getattr(kwargs.get("config"), "supervised_child_env", None)
+                == "RAG_PIPELINE_SUPERVISED_CHILD"
+            and isinstance(kwargs.get("script_path"), Path)
+            and kwargs["script_path"].resolve() == _phase_a0_rag_script):
+        overrides = dict(kwargs.get("environment_overrides") or {})
+        for name, value in overrides.items():
+            if not isinstance(name, str):
+                raise RuntimeError("phase-a0 trusted startup override conflict")
+            if (name.upper().startswith(("PYTHON", "_PYTHON"))
+                    or name.upper() == "__PYVENV_LAUNCHER__"):
+                if (name not in _phase_a0_rag_info_startup
+                        or value != _phase_a0_rag_info_startup[name]):
+                    raise RuntimeError("phase-a0 trusted startup override conflict")
+        overrides.update(_phase_a0_rag_info_startup)
+        kwargs["environment_overrides"] = overrides
+    return _phase_a0_original_entrypoint(argv, **kwargs)
+
+process_supervision._run_supervised_entrypoint = _forward_rag_info_startup
+'''
+
+
+def _rag_info_startup_source(root: Path, guard_root: Path) -> str:
+    """Bind only benchmark-owned startup selectors for real nested CLI info."""
+    startup = {
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONHASHSEED": "0",
+        "PYTHONIOENCODING": "utf-8",
+        "PYTHONNOUSERSITE": "1",
+        "PYTHONPATH": os.pathsep.join([str(guard_root), str(PROJECT_ROOT)]),
+        "PYTHONUSERBASE": str(root / "python-user-base"),
+        "PYTHONUTF8": "1",
+    }
+    return _RAG_INFO_STARTUP_SOURCE % (startup, str(PROJECT_ROOT / "rag.py"))
+
+
 def _write_private_generated_text(path: Path, value: str) -> None:
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
@@ -251,11 +298,22 @@ def _write_private_generated_text(path: Path, value: str) -> None:
         pass
 
 
-def _install_sitecustomize_guard(root: Path) -> Path:
+def _install_sitecustomize_guard(
+        root: Path, *, forward_rag_info_startup: bool = False,
+) -> Path:
+    if type(forward_rag_info_startup) is not bool:
+        raise ValueError("forward_rag_info_startup must be a boolean")
     guard_root = root / "phase-a0-isolation"
     guard_root.mkdir(mode=0o700, parents=True, exist_ok=False)
+    source = _SITECUSTOMIZE_SOURCE
+    if forward_rag_info_startup:
+        # The bypass negative control must remain after the normal forwarding
+        # hook. All other guards retain their original source and import costs.
+        anchor = '\nif (os.environ.get("RAG_PHASE_A0_TEST_ONLY_BREAK_SUPERVISION")'
+        source = source.replace(
+            anchor, _rag_info_startup_source(root, guard_root) + anchor, 1)
     _write_private_generated_text(
-        guard_root / "sitecustomize.py", _SITECUSTOMIZE_SOURCE)
+        guard_root / "sitecustomize.py", source)
     return guard_root
 
 
@@ -772,7 +830,8 @@ def _probe_cli_info_empty(
 ) -> tuple[dict[str, object], dict[str, object]]:
     fixture_root = Path.cwd() / "generated-cli-info"
     fixture_root.mkdir(mode=0o700)
-    guard_root = _install_sitecustomize_guard(fixture_root)
+    guard_root = _install_sitecustomize_guard(
+        fixture_root, forward_rag_info_startup=True)
     trace_path = fixture_root / "guard-trace.jsonl"
     environment = _guarded_child_environment(
         fixture_root,
@@ -957,6 +1016,7 @@ from pathlib import Path
 import socket
 import subprocess
 import sys
+from process_supervision import python_worker_launch
 
 def denied(call):
     try:
@@ -983,9 +1043,10 @@ if len(sys.argv) == 3 and sys.argv[1] == "--child":
     raise SystemExit(0)
 
 child_result = Path(sys.argv[1])
+command, child_environment = python_worker_launch(
+    [__file__, "--child", str(child_result)], dict(os.environ))
 completed = subprocess.run(
-    [sys.executable, __file__, "--child", str(child_result)],
-    env=dict(os.environ), stdin=subprocess.DEVNULL,
+    command, env=child_environment, stdin=subprocess.DEVNULL,
     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     check=False, timeout=10)
 payload = {
