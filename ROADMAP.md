@@ -35,7 +35,7 @@ publish a release.
 ### Local OCR development qualification (2026-09-06)
 
 The user-requested [OCR and AI-access improvement program](docs/ocr-improvement-program.md)
-remains active in the dirty local worktree; it does not supersede the integrated
+remains active on a local, unpushed branch; it does not supersede the integrated
 milestones or grant release/private-corpus approval. A frozen Windows CPython
 3.12.10 full-lock run observed 6,841 passing tests, seven skips and eight failures.
 One failure was a stale architecture consumer expectation; the other seven
@@ -137,10 +137,10 @@ representative accuracy or source-completeness claim follows. Unified guided
 review, approved reference inputs, adaptive retries, independent-engine checks,
 AI scan evidence and correction publication/rollback remain active work.
 
-### Casebook excerpts and source-order fixes (2026-09-25, local, uncommitted)
+### Casebook excerpts and source-order fixes (2026-09-25, local branch, not integrated)
 
 A private 18-excerpt casebook course corpus (page-bounded scans with no table
-of contents) exposed these gaps. The work is in the dirty local worktree only;
+of contents) exposed these gaps. The work is on a local, unpushed branch only;
 it has no PR, hosted CI or independent release review, so it is not
 "Implemented (draft)".
 
@@ -186,9 +186,9 @@ it has no PR, hosted CI or independent release review, so it is not
   duplicate-line allowances do not cover multi-item entries; the architecture
   inventory needs a reviewed `--refresh`.
 
-### Casebook supplement, audit scope and OCR findings (2026-09-26, local, uncommitted)
+### Casebook supplement, audit scope and OCR findings (2026-09-26, local branch, not integrated)
 
-Same status as the section above: dirty local worktree only, no PR or hosted
+Same status as the section above: local unpushed branch only, no PR or hosted
 CI. Each change was independently and adversarially reviewed and changes only
 output that fails the gates today; no schema or policy version changed.
 
@@ -241,7 +241,7 @@ output that fails the gates today; no schema or policy version changed.
   rows are caught only by the gate; a printed range across a page-label gap
   renders as one span (h07 `pp.535-559`).
 
-### OCR angle-classifier override (2026-09-26, local, uncommitted)
+### OCR angle-classifier override (2026-09-26, local branch, not integrated)
 
 This has the same status as the sections above. It implements the first
 owner-approved follow-up above. No schema or policy version changed.
@@ -273,7 +273,7 @@ owner-approved follow-up above. No schema or policy version changed.
   - No end-to-end `full` publish of the flagged h04 has run yet.
   - The architecture inventory needs a reviewed `--refresh`.
 
-### Multi-block overlapping-group recovery (2026-09-26, local, uncommitted)
+### Multi-block overlapping-group recovery (2026-09-26, local branch, not integrated)
 
 This has the same status as the sections above. It implements the
 owner-approved h03 recovery-gate fix. No schema or policy version changed.
@@ -419,7 +419,7 @@ owner-approved h03 recovery-gate fix. No schema or policy version changed.
     `_publish_corpus_quality_report_locked` and `_chunk_document_locked`, and
     one test patch target. It needs a reviewed `--refresh`.
 
-### Bullet list after a lead-in at boundary merge (2026-09-27, local, uncommitted)
+### Bullet list after a lead-in at boundary merge (2026-09-27, local branch, not integrated)
 
 This has the same status as the sections above. It implements the
 owner-approved h16 list-join fix (`#/texts/57`) as a gate-driven replay. No
@@ -559,7 +559,7 @@ schema or policy version changed.
   - h16 is still blocked on the glyph fix. The p19 fix is in the next
     section; the glyph fix is in "Decorative square glyph exclusion" below.
 
-### Letter-spaced text-layer retry (2026-09-27, local, uncommitted)
+### Letter-spaced text-layer retry (2026-09-27, local branch, not integrated)
 
 This has the same status as the sections above. It implements the
 owner-approved h16 p19 fix (`#/texts/179`, record 49). No schema or policy
@@ -763,7 +763,7 @@ one-dispatcher rule above does not apply to it.
     splits from the text layer (for example `#/texts/173`). An owner decision
     is needed before h16 publishes at this text quality.
 
-### Decorative square glyph exclusion (2026-09-27, local, uncommitted)
+### Decorative square glyph exclusion (2026-09-27, local branch, not integrated)
 
 This has the same status as the sections above. It implements the
 owner-approved h16 `#/texts/14` fix as a typed quality exclusion. It is the
