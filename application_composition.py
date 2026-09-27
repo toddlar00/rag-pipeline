@@ -29,6 +29,9 @@ class ServiceApplicationComposition:
     runtime_binding: object
     job_coordination_binding: object
     http_binding: object
+    evidence_runner: ApplicationFactory | None = None
+    evidence_http_installer: ApplicationFactory | None = None
+    evidence_http_binding: object | None = None
 
     def __post_init__(self) -> None:
         if not callable(self.runtime_factory):
@@ -40,6 +43,13 @@ class ServiceApplicationComposition:
                 "http_binding"):
             if getattr(self, name) is None:
                 raise TypeError(f"{name} must not be None")
+        evidence = (self.evidence_runner, self.evidence_http_installer,
+                    self.evidence_http_binding)
+        if any(value is not None for value in evidence):
+            if (not all(value is not None for value in evidence)
+                    or not callable(self.evidence_runner)
+                    or not callable(self.evidence_http_installer)):
+                raise TypeError("evidence composition must be complete")
 
 
 def _build_default_service_application_composition(
@@ -49,6 +59,8 @@ def _build_default_service_application_composition(
     import service_http
     import service_runtime
     import service_runtime_binding
+    import service_evidence_http
+    import service_evidence_runtime
 
     return ServiceApplicationComposition(
         runtime_factory=service_runtime.RagApplicationService,
@@ -62,6 +74,11 @@ def _build_default_service_application_composition(
             default_job_page_limit=service_runtime.DEFAULT_JOB_PAGE_LIMIT,
             max_job_page_limit=service_runtime.MAX_JOB_PAGE_LIMIT,
         ),
+        evidence_runner=service_evidence_runtime.supervised_evidence_search,
+        evidence_http_installer=service_evidence_http.install_evidence_routes,
+        evidence_http_binding=service_evidence_http.EvidenceHttpBinding(
+            require_reader=service_http.require_reader,
+            bounded_json_body=service_http._bounded_json_body),
     )
 
 
@@ -106,6 +123,7 @@ def create_service_runtime(
         job_coordination_binding=None,
         search_runner=_UNSET,
         launcher=_UNSET,
+        evidence_configs=None,
 ) -> object:
     """Construct one runtime from a single complete composition snapshot."""
     selected = _resolve_composition(composition)
@@ -129,6 +147,11 @@ def create_service_runtime(
         options["search_runner"] = search_runner
     if launcher is not _UNSET:
         options["launcher"] = launcher
+    if evidence_configs is not None:
+        if selected.evidence_runner is None:
+            raise TypeError("evidence composition is not configured")
+        options["evidence_configs"] = evidence_configs
+        options["evidence_runner"] = selected.evidence_runner
     return selected.runtime_factory(corpora, **options)
 
 
@@ -141,10 +164,15 @@ def create_service_http_app(
         reconcile_interval_seconds: float = 2.0,
         max_http_concurrency: int = 64,
         enforce_peer_loopback: bool = True,
+        evidence_enabled: bool = False,
 ) -> object:
     """Wrap an existing runtime with the captured concrete HTTP policy."""
     selected = _resolve_composition(composition)
-    return selected.http_factory(
+    if type(evidence_enabled) is not bool:
+        raise TypeError("evidence_enabled must be boolean")
+    if evidence_enabled and selected.evidence_http_installer is None:
+        raise TypeError("evidence composition is not configured")
+    app = selected.http_factory(
         runtime,
         credentials,
         http_binding=(
@@ -154,6 +182,10 @@ def create_service_http_app(
         max_http_concurrency=max_http_concurrency,
         enforce_peer_loopback=enforce_peer_loopback,
     )
+    if evidence_enabled:
+        selected.evidence_http_installer(
+            app, runtime, binding=selected.evidence_http_binding)
+    return app
 
 
 def create_service_application(
@@ -171,6 +203,7 @@ def create_service_application(
         job_coordination_binding=None,
         search_runner=_UNSET,
         launcher=_UNSET,
+        evidence_configs=None,
         http_binding=None,
         host: str = "127.0.0.1",
         reconcile_interval_seconds: float = 2.0,
@@ -193,6 +226,7 @@ def create_service_application(
         job_coordination_binding=job_coordination_binding,
         search_runner=search_runner,
         launcher=launcher,
+        **({"evidence_configs": evidence_configs} if evidence_configs is not None else {}),
     )
     return create_service_http_app(
         runtime,
@@ -203,6 +237,7 @@ def create_service_application(
         reconcile_interval_seconds=reconcile_interval_seconds,
         max_http_concurrency=max_http_concurrency,
         enforce_peer_loopback=enforce_peer_loopback,
+        **({"evidence_enabled": True} if evidence_configs is not None else {}),
     )
 
 

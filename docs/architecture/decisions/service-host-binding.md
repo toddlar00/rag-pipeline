@@ -88,6 +88,11 @@ transitively.
 
 ## Consequences and residual work
 
+The local 2026-09-06 [evidence companion extension](service-evidence-companion.md)
+adds one separately versioned fixed worker action and inward evidence contracts.
+Ordinary search v2 and the existing host binding remain unchanged; physical
+evidence retrieval is composed only in the same contained child shell.
+
 A host-only import can now validate configuration, manage jobs, and construct
 the service without loading `rag` or optional vector/ML clients. Physical
 search composition is visible at one small child boundary, and the shared

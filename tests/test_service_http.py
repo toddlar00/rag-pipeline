@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import pickle
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import ContextVar
 from dataclasses import FrozenInstanceError
 
 import pytest
@@ -312,3 +314,263 @@ def test_reconcile_base_exception_propagates_and_still_closes_runtime():
     assert raised.value is marker
     assert runtime.marked_unhealthy == 0
     assert runtime.closed
+
+
+class ThreadOwnedRuntime(StructuralRuntime):
+    def __init__(self):
+        super().__init__()
+        self.lifecycle_threads = []
+        self.owner_state = threading.local()
+        self.start_entered = threading.Event()
+        self.start_release = threading.Event()
+        self.start_release.set()
+        self.close_entered = threading.Event()
+        self.close_release = threading.Event()
+        self.close_release.set()
+        self.calls = []
+
+    def start(self):
+        self.calls.append("start")
+        self.lifecycle_threads.append(threading.get_ident())
+        self.owner_state.acquired = True
+        self.start_entered.set()
+        assert self.start_release.wait(5)
+        super().start()
+
+    def close(self):
+        self.calls.append("close")
+        self.lifecycle_threads.append(threading.get_ident())
+        assert self.owner_state.acquired
+        self.close_entered.set()
+        assert self.close_release.wait(5)
+        super().close()
+
+
+async def _event(event):
+    # Do not consume the default executor: the ownership regression deliberately
+    # saturates it and must keep the ASGI event loop independently responsive.
+    for _ in range(500):
+        if event.is_set():
+            return
+        await asyncio.sleep(0.01)
+    pytest.fail("bounded synthetic lifecycle event did not occur")
+
+
+def test_lifespan_pins_owner_thread_even_when_default_executor_is_busy():
+    runtime = ThreadOwnedRuntime()
+    app = _app(runtime)
+    busy, release = threading.Event(), threading.Event()
+    busy_threads = []
+
+    def blocking_default_work():
+        busy_threads.append(threading.get_ident())
+        busy.set()
+        assert release.wait(5)
+
+    async def exercise():
+        loop = asyncio.get_running_loop()
+        loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
+        context = app.router.lifespan_context(app)
+        await context.__aenter__()
+        worker = asyncio.create_task(asyncio.to_thread(blocking_default_work))
+        try:
+            await _event(busy)
+            # Close must not queue behind the occupied default worker.
+            await asyncio.wait_for(context.__aexit__(None, None, None), timeout=1)
+            assert runtime.closed and not release.is_set()
+        finally:
+            release.set()
+            await worker
+
+    asyncio.run(exercise())
+    assert runtime.calls == ["start", "close"]
+    assert runtime.lifecycle_threads[0] == runtime.lifecycle_threads[1]
+    assert runtime.lifecycle_threads[0] not in busy_threads
+    assert not any(thread.name.startswith("service-lifecycle") for thread in threading.enumerate())
+
+
+@pytest.mark.parametrize("stage", ["start", "close"])
+@pytest.mark.parametrize("repeat_cancel", [False, True])
+def test_lifespan_cancellation_drains_owned_operation_and_releases_same_thread(stage, repeat_cancel):
+    runtime = ThreadOwnedRuntime()
+    app = _app(runtime)
+    entered = runtime.start_entered if stage == "start" else runtime.close_entered
+    release = runtime.start_release if stage == "start" else runtime.close_release
+    release.clear()
+
+    async def exercise():
+        context = app.router.lifespan_context(app)
+        if stage == "close":
+            await context.__aenter__()
+        operation = context.__aenter__() if stage == "start" else context.__aexit__(None, None, None)
+        task = asyncio.create_task(operation)
+        try:
+            await _event(entered)
+            task.cancel()
+            await asyncio.sleep(0.01)
+            assert not task.done()
+            if repeat_cancel:
+                task.cancel()
+                await asyncio.sleep(0.01)
+                assert not task.done()
+        finally:
+            release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=2)
+        assert runtime.closed
+
+    asyncio.run(exercise())
+    assert runtime.calls == ["start", "close"]
+    assert len(set(runtime.lifecycle_threads)) == 1
+    assert not any(thread.name.startswith("service-lifecycle") for thread in threading.enumerate())
+
+
+@pytest.mark.parametrize("stage", ["start", "close"])
+def test_lifespan_preserves_base_exception_identity_without_thread_leak(stage):
+    runtime = ThreadOwnedRuntime()
+    marker = ReconcileAbort("private lifecycle base marker")
+    if stage == "start":
+        runtime.start_error = marker
+    else:
+        runtime.close_error = marker
+    app = _app(runtime)
+
+    async def exercise():
+        with pytest.raises(ReconcileAbort) as caught:
+            async with app.router.lifespan_context(app):
+                assert stage == "close"
+        assert caught.value is marker
+
+    asyncio.run(exercise())
+    assert runtime.calls == (["start"] if stage == "start" else ["start", "close"])
+    assert len(set(runtime.lifecycle_threads)) == 1
+    assert not any(thread.name.startswith("service-lifecycle") for thread in threading.enumerate())
+
+
+def test_cancelled_start_that_fails_does_not_fabricate_success_or_close():
+    runtime = ThreadOwnedRuntime()
+    runtime.start_release.clear()
+    runtime.start_error = ValueError("private startup failure after cancellation")
+    app = _app(runtime)
+
+    async def exercise():
+        context = app.router.lifespan_context(app)
+        task = asyncio.create_task(context.__aenter__())
+        try:
+            await _event(runtime.start_entered)
+            task.cancel()
+            await asyncio.sleep(0.01)
+            assert not task.done()
+        finally:
+            runtime.start_release.set()
+        with pytest.raises(RuntimeError, match="^local service startup failed$"):
+            await task
+
+    asyncio.run(exercise())
+    assert runtime.calls == ["start"] and not runtime.closed
+    assert not any(thread.name.startswith("service-lifecycle") for thread in threading.enumerate())
+
+
+def test_cancelled_close_failure_retains_sanitized_cleanup_failure_precedence():
+    runtime = ThreadOwnedRuntime()
+    runtime.close_release.clear()
+    runtime.close_error = OSError("private close error")
+    app = _app(runtime)
+
+    async def exercise():
+        context = app.router.lifespan_context(app)
+        await context.__aenter__()
+        task = asyncio.create_task(context.__aexit__(None, None, None))
+        try:
+            await _event(runtime.close_entered)
+            task.cancel()
+            await asyncio.sleep(0.01)
+            assert not task.done()
+        finally:
+            runtime.close_release.set()
+        with pytest.raises(RuntimeError, match="^local service shutdown failed$"):
+            await task
+
+    asyncio.run(exercise())
+    assert runtime.calls == ["start", "close"] and runtime.closed
+    assert not any(thread.name.startswith("service-lifecycle") for thread in threading.enumerate())
+
+
+def test_owned_lifecycle_retains_per_call_context_variable_propagation():
+    runtime = ThreadOwnedRuntime()
+    context = ContextVar("synthetic_lifecycle_context", default="unset")
+    observed = []
+    original_start, original_close = runtime.start, runtime.close
+
+    def start():
+        observed.append(context.get())
+        original_start()
+
+    def close():
+        observed.append(context.get())
+        original_close()
+
+    runtime.start, runtime.close = start, close
+    app = _app(runtime)
+
+    async def exercise():
+        context.set("startup")
+        async with app.router.lifespan_context(app):
+            context.set("shutdown")
+
+    asyncio.run(exercise())
+    assert observed == ["startup", "shutdown"]
+    assert len(set(runtime.lifecycle_threads)) == 1
+
+
+def test_cancelled_real_service_start_releases_instance_lease_for_successor(tmp_path):
+    # The original bug occurred in the canonical PathLease, not merely in a
+    # mock lifecycle. These files contain generated-only text and no index.
+    import service_contracts
+    import service_runtime
+
+    chunks = tmp_path / "synthetic.jsonl"
+    chunks.write_text('{"text":"Synthetic text","metadata":{}}\n', encoding="utf-8")
+    database = tmp_path / "qdrant"
+    database.mkdir()
+    config = service_contracts.CorpusConfig(corpus_id="synthetic", db_path=database,
+        chunks_path=chunks, collection_name="synthetic", embedding_model="synthetic-no-model")
+
+    def create():
+        return service_runtime.RagApplicationService({"synthetic": config},
+            working_directory=tmp_path, output_root=tmp_path / "output",
+            job_root=tmp_path / "jobs", service_state_root=tmp_path / "state")
+
+    runtime = create()
+    entered, release = threading.Event(), threading.Event()
+    original_start = runtime.start
+
+    def blocked_start():
+        original_start()
+        entered.set()
+        assert release.wait(5)
+
+    runtime.start = blocked_start
+    binding = service_http.ServiceHttpBinding(service_runtime.ServiceRuntimeError, 20, 100)
+    app = service_http.create_app(runtime, service_http.ServiceCredentials(READER_TOKEN, ADMIN_TOKEN),
+                                  http_binding=binding, enforce_peer_loopback=False)
+
+    async def exercise():
+        context = app.router.lifespan_context(app)
+        task = asyncio.create_task(context.__aenter__())
+        try:
+            await _event(entered)
+            assert runtime.started
+            task.cancel()
+            await asyncio.sleep(0.01)
+            assert not task.done()
+        finally:
+            release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(exercise())
+    assert runtime.started is False and runtime._instance_lease is None
+    successor = create()
+    successor.start()
+    successor.close()
