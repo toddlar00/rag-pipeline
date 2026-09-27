@@ -17,6 +17,89 @@ findings and their disposition are recorded in
 [`INTEGRATION_AUDIT.md`](INTEGRATION_AUDIT.md). The maintained documentation
 map is [`docs/README.md`](docs/README.md).
 
+For OCR troubleshooting, see [OCR accuracy measurement and targeted retries](docs/ocr-accuracy.md):
+an offline CER/WER benchmark and bounded 300/400-DPI page candidates that preserve
+the original extraction and source provenance. Source-bound comparisons flag
+page and critical-token regressions even when average error rates improve.
+Opt-in deskew/contrast experiments preserve the original scan and record their
+coordinate transforms for review.
+Use `compare_ocr.py --baseline-recovery ... --recovery ...` to compare two runs'
+candidate text directly on one fixed reference cohort, with two-sided coverage
+and configuration-difference notices.
+For native-call stalls, opt into a contained retry worker with
+`retry_ocr.py --timeout-seconds 600 ...`; inspect output after interruption.
+Build a fixed eight-page synthetic scan challenge with
+`python tools/build_ocr_challenge.py --output-dir output/pdf/ocr-challenge-v1`
+(existing parent, new output directory); compare all modes against its fixed
+references with `--pages 1 2 3 4 5 6 7 8 --max-pages 8`.
+For known interleaved columns, `tools/reorder_ocr.py` creates a separate review
+from saved line boxes and an explicit report-bound region plan; it preserves
+all original lines and does not infer tables or change default OCR order.
+Opt-in [column suggestions](docs/ocr-column-suggestions.md) infer unconfirmed
+body/gutter bounds from saved boxes. The editor separates prose confirmation,
+order preview and export, and rejects stale reading-order review requests.
+The [Phase 6 local checkpoint](docs/evidence/2026-09-07-ocr-column-review-qualification.md)
+passed; suggestions do not prove prose structure, complete transcription or
+representative accuracy.
+The [local visual editor](docs/ocr-review.md) draws source-bound crop/layout
+plans and reviewed references without hand-entered hashes; region retries keep
+crop-local and original-page coordinates in separate review artifacts.
+Source-bound drafts can resume unfinished review. [Docling suggestions](docs/ocr-docling.md)
+and [explicit line assignments](docs/ocr-layout-assignment.md) support visual
+resolution of unmatched lines and region order without dropping or rewriting OCR.
+[Omission checks](docs/ocr-omissions.md) flag missing or ambiguous saved-region
+line geometry, with partial assessments retained in v3 editor drafts; they do
+not prove complete scan coverage. [Cleanup audits](docs/cleanup-audit.md) record
+the existing core normalizer's exact rule-level changes on selected OCR spans,
+without altering canonical text or claiming to cover all pipeline cleanup.
+[Independent source-pixel inspection](docs/ocr-scan-inspection.md) adds bounded
+ink hypotheses and a separate original-scan crop-review panel. Its
+[Phase 7 local checkpoint](docs/evidence/2026-09-07-ocr-scan-review-qualification.md)
+passed, including annotation-context safeguards; hypotheses do not certify
+text, complete coverage or representative accuracy.
+The opt-in `--recipe spatial-v2` dense-page extension has a separate
+[Phase 8 local checkpoint](docs/evidence/2026-09-07-ocr-spatial-scan-qualification.md):
+8,960 passing tests and all nine local gates, plus generated native/CLI/replay
+checks. Legacy remains default; reduced grouping work and newly available
+dense pages do not establish better OCR or fewer non-text false alarms.
+[Stage diagnostics](docs/ocr-stage-diagnostics.md) observe detector-only boxes,
+full-page output and recognition-only gold-line crops separately, with bounded
+native image expansion and source-bound execution evidence. They distinguish
+geometry/order and transcription observations without claiming a causal error
+decomposition or automatically changing extraction.
+[Context-sensitive checks](docs/ocr-context-evaluation.md) distinguish swapped
+numbers and moved negations that token counts alone cannot detect.
+[Hard-scan retries](docs/ocr-hardscan.md) add separately reviewed orientation,
+limited bow correction and illumination normalization. [Execution receipts](docs/ocr-execution.md)
+record actual local engine calls and effective sessions against installation evidence.
+[Shared engine safeguards](docs/ocr-engine-allocation.md) bound selected internal
+image/crop/tensor allocations and keep setup failures outside actual-call counts.
+Their [Phase 9 local checkpoint](docs/evidence/2026-09-07-ocr-engine-guard-qualification.md)
+passed 9,387 tests and all nine gates, with unchanged generated native candidates.
+A completed raw call is not necessarily an accepted candidate; these safeguards
+do not guarantee total process memory or representative OCR accuracy.
+[Same-call missing-text diagnostics](docs/ocr-detection-disposition.md) trace
+observed detections through blank, filtered, retained and unresolved outcomes.
+Their separate [Phase 10 local checkpoint](docs/evidence/2026-09-07-ocr-disposition-qualification.md)
+passed 9,958 tests and all nine gates. Generated retained-bundle verification
+preserves all 12 candidates; the earlier failed outer comparison remains recorded.
+Accounting does not establish complete or accurate text, or adopt corrections.
+[Page execution checkpoints](docs/ocr-checkpoints.md) add explicit `--checkpoint`
+and `--resume` modes that retain committed results and their originating worker
+evidence; interrupted starts stay visibly failed instead of becoming blank text.
+[Structural scoring and runtime inspection](docs/ocr-benchmark.md) add
+family-separated cohort contracts, missing-region/order/table-cell metrics and
+explicit dependency-version mismatch reports. These are not representative
+held-out accuracy or locked-runtime qualification by themselves.
+For agents, the [reader-only JSON client](docs/ai-pipeline-access.md) uses the
+existing authenticated loopback service without admin routes or implicit cloud
+disclosure. [Opt-in evidence search](docs/ai-evidence-access.md) adds exact
+record/source scope and explicit unknown OCR state. Generated native integration
+and local frozen-source qualification passed; this does not grant scan or
+correction-publication authority or establish representative OCR accuracy.
+The [full OCR improvement program](docs/ocr-improvement-program.md)
+tracks remaining implementation and evidence requirements.
+
 ## Architecture
 
 ```
@@ -1244,6 +1327,14 @@ and stops fallback, with the contract violation exposed in the run report.
 Gemini receives the configured timeout and has SDK retries disabled, so its
 transport count remains explicit.
 
+LLM failures include a fixed error category and an actionable explanation.
+For example, `authentication_error` points to credentials and model access;
+`configuration_error` points to the endpoint and model settings;
+`rate_limited` points to provider quota; and `budget_exceeded` points to the
+configured LLM limits. Strict-mode exceptions retain the request ID and
+structured result for diagnosis. Messages never include raw provider errors,
+response bodies, or credentials. Unknown categories receive a generic message.
+
 ### Cloud-provider configuration
 
 The shorter LLM option names and the existing cloud option names are aliases:
@@ -1323,6 +1414,23 @@ The pipeline automatically handles API rate limits (429 errors) with an adaptive
 throttle. Starting at `--llm-workers` (default 10), it halves active workers on
 each 429, adds cooldown delays, and gradually recovers after 20 consecutive
 successes. No manual intervention needed.
+
+OpenAI-compatible generation also retries temporary gateway failures (HTTP
+502, 503, and 504). Each call makes at most two transport attempts, including
+rate-limit retries, and every additional attempt must pass the configured
+transport budget. Connections and worker slots are released before the retry
+wait. `Retry-After` supports both seconds and an HTTP date, as specified in
+[HTTP Semantics](https://www.rfc-editor.org/rfc/rfc9110.html#name-retry-after);
+the local wait remains capped at five seconds, with a two-second fallback for
+missing or invalid values. Other errors follow the existing provider fallback
+policy. Cancellation releases occupied slots and closes responses.
+Logging failures do not prevent waiting workers from continuing.
+
+Malformed response choices and usage details are rejected with
+`invalid_response`. An explicit provider refusal or content-filter result is
+reported as `content_filtered`, including when the provider also returned
+partial text. Ordinary empty text retains its usage accounting and follows
+the runtime's existing empty-response handling.
 
 ```bash
 # Start with 10 parallel workers (default)

@@ -32,6 +32,111 @@ publish a release.
 
 ## Active status and constraints
 
+### Local OCR development qualification (2026-09-06)
+
+The user-requested [OCR and AI-access improvement program](docs/ocr-improvement-program.md)
+remains active in the dirty local worktree; it does not supersede the integrated
+milestones or grant release/private-corpus approval. A frozen Windows CPython
+3.12.10 full-lock run observed 6,841 passing tests, seven skips and eight failures.
+One failure was a stale architecture consumer expectation; the other seven
+exposed Windows venv redirector PID mismatches in supervised workers, detached
+manager handshakes and Phase A0 parent/descendant traces.
+
+The qualification repair uses a shared same-interpreter launch helper, following
+CPython's base-executable/child-only launcher mechanism. This is an intentional
+Windows correctness repair, not a behavior-preserving extraction: exact PID,
+birth identity, nonce, startup-gate and isolation checks remain enforced.
+Dependencies, model locks and existing environments are unchanged. The reviewed
+replacement architecture snapshot and complete frozen-source gate run passed:
+6,871 tests passed, seven platform-specific skips, all static gates and three
+offline retrieval baseline suites passed. The
+[local qualification record](docs/evidence/2026-09-06-ocr-local-qualification.md)
+retains exact source/receipt hashes and limits. Representative OCR accuracy,
+remaining program features and owner policy decisions are still outstanding;
+this local checkpoint is not hosted CI, release or whole-program completion.
+
+Subsequent omission/editor, cleanup-audit and page-checkpoint work passed the
+separate 7,232-test Phase 3 frozen local checkpoint and all nine gates. The later
+stage-diagnostic modules and deliberately bounded Windows artifact-verification
+read now pass Phase 4: 7,495 tests, seven platform-specific skips, all nine gates
+and independent frozen-source/artifact verification. The actual generated stage
+run verified 54 calls and exposed 15 column-order inversions despite exact
+per-line recognition. These are local synthetic mechanics, not representative
+accuracy gains. The full program, including the latest suggested extensions,
+remains active. Subsequent opt-in AI text-evidence search now has local
+worker/HTTP/client integration and focused independent review. The generated
+native run passed cached-model indexing, contained search, authenticated HTTP
+and fresh CLI (12 indexed records, 11 hits). Phase 5 then passed all nine local
+gates: 7,952 tests passed, seven platform-specific skips, all 7,959 collected
+cases matched JUnit, and 445 tracked files stayed frozen through independent
+verification. The [2026-09-07 record](docs/evidence/2026-09-07-ai-evidence-local-qualification.md)
+retains its controlled-environment scope, exact identities and preserved failed
+fixture/preflight diagnoses. No representative accuracy claim follows.
+Integration also exposed and repaired the
+pre-existing HTTP start/close thread-affinity hazard with explicit owner-thread
+and cancellation regressions. Scan access, exact correction adoption and the
+remaining accuracy outcomes are still pending; Phase 4 does not cover this new
+implementation. See [evidence-search usage](docs/ai-evidence-access.md) and its
+[additive architecture decision](docs/architecture/decisions/service-evidence-companion.md).
+
+The unconfirmed source-bound column-layout suggestion now has its own
+[Phase 6 local checkpoint](docs/evidence/2026-09-07-ocr-column-review-qualification.md):
+8,230 passing tests, seven skips and all nine gates, with independent retained
+browser review. Operator prose classification and separate preview/export
+approval remain required. The prior boxes-only prototype's table-control
+regression remains evidence against automatic adoption, not evidence to erase.
+
+A later actual installed-Gradio queue probe separately reproduced stale
+reference, crop and omission actions using a changed page/annotation generation.
+The annotation-token/focus repair is an intentional correctness change, not a
+behavior-preserving refactor; its preserved pre-fix evidence and 49 focused
+controls received independent review. Bounded source-only pixel inspection,
+the separate original-page panel and this annotation repair now passed their
+own [Phase 7 local checkpoint](docs/evidence/2026-09-07-ocr-scan-review-qualification.md):
+8,652 tests passed, seven platform skips, six warnings, all nine selected gates,
+exact 8,659-node collection/JUnit correspondence and 468 unchanged tracked files
+through independent verification. Generated native/browser evidence is not
+representative accuracy or complete-source proof. At that checkpoint, the
+separate 323-case spatial grouping prototype was geometry-only evidence.
+The subsequent explicit `spatial-v2` production recipe now has its own
+[Phase 8 local checkpoint](docs/evidence/2026-09-07-ocr-spatial-scan-qualification.md):
+8,960 tests passed, seven platform skips, six warnings and all nine gates;
+all 8,967 collected nodes match JUnit and 471 tracked files/index stayed frozen
+through independent audit. Generated native checks preserve all eight pages'
+regions/IDs/pixels, the default output remains byte-identical on the retained
+challenge, and actual CLI/fresh/historical replay passed. Dense-page availability
+and lower predicate counts are not representative OCR accuracy or guaranteed
+memory reductions; retained non-text false positives remain explicit. Legacy
+remains default. The complete OCR/AI improvement program remains active, including
+approved reference inputs, AI scan serving, alternative readings, pale/reversed
+text, crop-edge safety, annotation-layer diagnostics and publication/rollback.
+
+The shared internal-engine allocation guard and intentional raw-dispatch
+accounting repair subsequently passed the
+[Phase 9 local checkpoint](docs/evidence/2026-09-07-ocr-engine-guard-qualification.md):
+9,387 tests, seven platform skips, six warnings and all nine selected gates.
+Independent verification matched every one of 9,394 collected JUnit identities
+and all 482 frozen tracked files/logical index bindings. The final native replay
+preserves complete candidates across eight pages, two regions and two hard-scan
+calls. Setup failures consume no raw call ID; completed raw dispatch remains
+distinct from accepted output. Conservative allocation abstentions and the
+absence of a total-memory guarantee remain explicit. Same-call text-loss tracing, representative
+accuracy and the remaining OCR/AI program are not completed by this checkpoint.
+
+The subsequent opt-in same-call disposition companion now has its own
+[Phase 10 local checkpoint](docs/evidence/2026-09-07-ocr-disposition-qualification.md):
+9,958 tests passed, seven platform skips, six warnings and all nine gates.
+Independent retained-artifact verification matched all 9,965 collected JUnit
+identities and the complete frozen source/logical-index bindings. The original
+native outer pixel comparison and first full gate run failed and remain
+preserved; separate zero-new-OCR posthoc verification validates the 12 retained
+page/region/hard-scan candidates. The first gate failure required only an exact
+architecture-test assertion repair. The independent audit's completed record
+was rechecked, but its original console exit status was not retained. No
+representative accuracy or source-completeness claim follows. Unified guided
+review, approved reference inputs, adaptive retries, independent-engine checks,
+AI scan evidence and correction publication/rollback remain active work.
+
 ### Integrated convergence
 
 - **R1:** [PR #44](https://github.com/toddlar00/rag-pipeline/pull/44)
