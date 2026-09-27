@@ -8249,14 +8249,23 @@ def _assign_source_heading_paths(
     Heading lineage computes the occurrence stack that owns every record's
     source items; the displayed path is exactly that stack, so no component
     can come from a TOC, running header or file name. Content before the
-    excerpt's first heading keeps an empty path.
+    excerpt's first heading keeps an empty path. A lettered title proven by
+    a following casebook-supplement pointer is a section letter, so a proven
+    ``I.``, ``V.`` or ``X.`` is a peer of the preceding section rather than
+    a Roman numeral nested below it.
     """
     items = {
         item.get("self_ref"): item for item in doc_dict.get("texts", [])
         if isinstance(item, dict) and item.get("self_ref")
     }
+    pointer_sections = {
+        run[0] for run in _heading_lineage._casebook_pointer_runs(
+            doc_dict, structural_ranges=structural_ranges,
+            excluded_heading_refs=excluded_heading_refs).values()
+    }
     overrides = {
-        ref: _source_heading_stack_level(str(item.get("text") or ""))
+        ref: ((3, False) if ref in pointer_sections
+              else _source_heading_stack_level(str(item.get("text") or "")))
         for ref, item in items.items()
         if item.get("label") == "section_header"
     }
@@ -9001,10 +9010,27 @@ def _retain_source_bound_structural_text(
     otherwise resemble furniture and be dropped after its source identity was
     already captured. Retain only labels that the lineage inventory itself
     treats as publishable; standalone section/page headers remain excluded.
+
+    A contents-outline row whose lineage binds its exact cell text (see
+    ``_contents_outline_row_overrides``) is otherwise dropped here, leaving an
+    eligible source item unrepresented.  Such a row is retained, and publishes
+    exactly its bound text, only when it is its chunk's sole source item;
+    any other chunk shape fails closed.  Only the text is replaced: metadata
+    the caller derived from the chunker's serialization of the row (its raw
+    token count, case names and cross-references) is left as derived.
     """
     metadata = record.get("metadata") or {}
     if metadata.get("content_type") != "structural":
         return False
+    contents_rows = _bound_contents_outline_rows(metadata, doc_items)
+    if contents_rows:
+        chunk_refs = {
+            str(getattr(item, "self_ref", "")) for item in doc_items or []
+        } | _record_source_refs(record)
+        if len(contents_rows) != 1 or chunk_refs != set(contents_rows):
+            raise RuntimeError(
+                "A bound contents outline row must be its chunk's only "
+                f"source item: {sorted(chunk_refs)}")
     labels = {
         _doc_item_label(item) for item in (doc_items or [])
         if _doc_item_label(item)
@@ -9032,13 +9058,43 @@ def _retain_source_bound_structural_text(
             and not labels.intersection({
                 "text", "list_item", "footnote", "caption", "code",
                 "table"})):
-        return False
+        if not contents_rows:
+            return False
+        record["text"] = next(iter(contents_rows.values()))
     metadata["content_type"] = {
         "table": "table",
         "footnote": "footnote",
         "figure": "figure",
     }.get(metadata.get("content_source"), "author_narrative")
     return True
+
+
+def _bound_contents_outline_rows(
+        metadata: dict, doc_items: list | None,
+) -> dict[str, str]:
+    """Return chunk rows whose lineage binds their exact contents text.
+
+    Only a contents-outline row recovered by
+    ``_recover_incomplete_table_markdown`` carries a ``table`` oracle whose
+    digest is the row's own cell text; the lineage entry proves the binding.
+    """
+    lineage = {
+        entry["ref"]: entry
+        for entry in (metadata.get("source_items") or [])
+        if isinstance(entry, dict) and isinstance(entry.get("ref"), str)
+    }
+    rows: dict[str, str] = {}
+    for item in doc_items or []:
+        ref = str(getattr(item, "self_ref", ""))
+        entry = lineage.get(ref)
+        if (_doc_item_label(item) != "document_index" or entry is None
+                or entry.get("transform") != "table"):
+            continue
+        text = _contents_outline_row_text(item)
+        if text and entry.get("oracle_text_sha256") == (
+                _source_fidelity_core.text_sha256(text)):
+            rows[ref] = text
+    return rows
 
 
 def _record_source_refs(record: dict) -> set[str]:
@@ -11030,8 +11086,156 @@ def _chapter_summary_outline_from_pdf_words(
     return [(depth, text) for depth, text, _ in entries]
 
 
+_CONTENTS_OUTLINE_TITLES = frozenset({"contents", "tableofcontents"})
+
+
+def _contents_outline_row_text(table) -> str:
+    """Return one contents-outline row's Docling cell text in row order.
+
+    Each cell's whitespace is collapsed, cells of one printed row are joined
+    by a space and rows by a newline, so the lexical tokens are exactly the
+    row's source cell tokens.  No line is indented, whereas a recovered
+    Summary-of-Contents outline always nests at least two levels.
+    """
+    rows: dict[int, list[tuple[int, str]]] = {}
+    for cell in getattr(
+            getattr(table, "data", None), "table_cells", None) or []:
+        value = getattr(cell, "text", "")
+        text = " ".join(value.split()) if isinstance(value, str) else ""
+        if text:
+            rows.setdefault(
+                int(getattr(cell, "start_row_offset_idx", 0) or 0), []
+            ).append((int(getattr(cell, "start_col_offset_idx", 0) or 0),
+                      text))
+    return "\n".join(
+        " ".join(text for _, text in sorted(cells))
+        for _, cells in sorted(rows.items()))
+
+
+def _docling_serialized_refs(dl_doc) -> list[str]:
+    """Flatten the live Docling body order as heading lineage does.
+
+    Groups expand in place, an item precedes its children, and refs the body
+    never reaches follow in collection order.  The live model has already
+    received the single-column wrap repair that lineage re-applies.
+    """
+    item_by_ref, _, _ = _docling_lineage_catalog(dl_doc)
+    groups = {
+        str(getattr(group, "self_ref", "")): group
+        for group in (getattr(dl_doc, "groups", None) or [])
+        if getattr(group, "self_ref", "")
+    }
+    ordered: list[str] = []
+    visited: set[str] = set()
+
+    def append(ref: str, active: frozenset[str] = frozenset()) -> None:
+        if not ref or ref in active:
+            return
+        group = groups.get(ref)
+        children = []
+        if group is not None:
+            children = list(getattr(group, "children", None) or [])
+        elif ref in item_by_ref and ref not in visited:
+            visited.add(ref)
+            ordered.append(ref)
+            children = list(getattr(item_by_ref[ref], "children", None) or [])
+        for child in children:
+            append(str(getattr(child, "cref", "")), active | {ref})
+
+    for child in getattr(getattr(dl_doc, "body", None), "children", None) or []:
+        append(str(getattr(child, "cref", "")))
+    for collection in (
+            "texts", "tables", "pictures", "key_value_items", "form_items"):
+        for item in getattr(dl_doc, collection, None) or []:
+            append(str(getattr(item, "self_ref", "")))
+    return ordered
+
+
+def _contents_outline_row_overrides(
+        dl_doc, structural_ranges: set[tuple[int, int]],
+) -> dict[str, str]:
+    """Bind contents-outline rows whose output fails the source gates today.
+
+    A row qualifies only as a ``document_index`` table that directly follows,
+    skipping only bare printed page labels, a body section header whose
+    canonical text is exactly "contents" or "table of contents"; the title
+    and every row lie outside the structural ranges.  Each row also needs
+    only empty provenance charspans, at least one lexical token, and no
+    Docling item relationship: it is no item's child, caption or footnote
+    and owns none.
+
+    Such a row is an eligible source item.  Native repairs rewrite only
+    ``texts``, only a Summary-of-Contents window gives a ``document_index``
+    a table oracle, and a visual container alias needs its owner to claim
+    the row.  An isolated row is therefore either dropped as structural
+    today, leaving it unrepresented, or published under a plain oracle whose
+    empty charspans map no token to a page.  Both fail the gates, so binding
+    its exact cell text as an opaque table oracle changes only failing
+    output.
+    """
+    item_by_ref, parent_refs_by_child, _ = _docling_lineage_catalog(dl_doc)
+    related_refs = set(parent_refs_by_child).union(
+        *parent_refs_by_child.values())
+    table_refs = {
+        str(getattr(table, "self_ref", ""))
+        for table in (getattr(dl_doc, "tables", None) or [])
+    }
+
+    def layer(item) -> str:
+        value = getattr(item, "content_layer", "")
+        return str(getattr(value, "value", value) or "").lower()
+
+    def outside_ranges(item) -> bool:
+        pages = [getattr(span, "page_no", None)
+                 for span in (getattr(item, "prov", None) or [])]
+        return bool(pages) and all(
+            isinstance(page, int) and not isinstance(page, bool)
+            and not any(start <= page <= end
+                        for start, end in structural_ranges)
+            for page in pages)
+
+    def source_text(item) -> str:
+        return str(getattr(item, "text", "") or getattr(item, "orig", "")
+                   or "")
+
+    titles = [
+        ref for ref, item in item_by_ref.items()
+        if (_doc_item_label(item) == "section_header"
+            and "furniture" not in layer(item) and outside_ranges(item)
+            and _heading_lineage.canonical_text(source_text(item))
+            in _CONTENTS_OUTLINE_TITLES)
+    ]
+    if not titles:
+        return {}
+    order = _docling_serialized_refs(dl_doc)
+    position = {ref: index for index, ref in enumerate(order)}
+    rows: dict[str, str] = {}
+    for title_ref in titles:
+        for ref in order[position[title_ref] + 1:]:
+            item = item_by_ref[ref]
+            label = _doc_item_label(item)
+            if _heading_lineage._page_label_furniture(
+                    {"label": label, "text": source_text(item)}):
+                continue
+            text = (
+                _contents_outline_row_text(item)
+                if label == "document_index" and ref in table_refs else "")
+            spans = list(getattr(item, "prov", None) or [])
+            if (not _source_fidelity_core.lexical_tokens(text)
+                    or ref in related_refs
+                    or "furniture" in layer(item)
+                    or not outside_ranges(item)
+                    or any(tuple(getattr(span, "charspan", None) or ())
+                           != (0, 0) for span in spans)):
+                break
+            rows[ref] = text
+    return rows
+
+
 def _recover_incomplete_table_markdown(
-        dl_doc, pdf_path: Path) -> dict[str, str]:
+        dl_doc, pdf_path: Path, *,
+        structural_ranges: set[tuple[int, int]] | None = None,
+) -> dict[str, str]:
     """Recover tables whose Docling cells omit text present in the source PDF.
 
     The recovery is deliberately narrow: compare token multisets inside each
@@ -11039,9 +11243,17 @@ def _recover_incomplete_table_markdown(
     proportional omission or a smaller omission that cannot be explained by
     token fusion.  Ordinary tables continue to use Docling's richer row/column
     model.
+
+    A contents-outline row outside any Summary-of-Contents window is bound to
+    its exact Docling cell text (``_contents_outline_row_overrides``).  A
+    caller that cannot supply the profile's structural ranges gets no such
+    binding, which keeps today's output.
     """
     import pymupdf
     recovered: dict[str, str] = {}
+    contents_rows = (
+        {} if structural_ranges is None
+        else _contents_outline_row_overrides(dl_doc, structural_ranges))
     text_by_ref = {
         str(getattr(item, "self_ref", "")): item
         for item in (getattr(dl_doc, "texts", None) or [])
@@ -11077,6 +11289,9 @@ def _recover_incomplete_table_markdown(
                         recovered[str(table.self_ref)] = "\n".join(
                             "  " * depth + f"- {text}"
                             for depth, text in entries)
+                elif str(table.self_ref) in contents_rows:
+                    recovered[str(table.self_ref)] = contents_rows[
+                        str(table.self_ref)]
                 continue
             pdf_text = page.get_text("text", clip=rectangle, sort=True).strip()
             cells = list(getattr(table.data, "table_cells", []) or [])
@@ -15647,7 +15862,8 @@ def _recover_bound_source_enrichments(
             table_overrides = optional_stage(
                 "incomplete source tables",
                 lambda: _recover_incomplete_table_markdown(
-                    dl_doc, recovery_source.pdf.path),
+                    dl_doc, recovery_source.pdf.path,
+                    structural_ranges=structural_ranges),
                 {},
             )
             table_overrides, continuation_refs = optional_stage(

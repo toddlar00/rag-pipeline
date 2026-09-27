@@ -165,9 +165,10 @@ it has no PR, hosted CI or independent release review, so it is not
 - **Evidence.** Focused suites pass; the full suite ran 14,787 passed and 3
   failed (two from untracked OCR modules/test helper, one the stale
   architecture inventory). Re-chunking the corpus kept all 11 READY excerpts
-  byte-identical through the first five fixes. **Not yet verified:** a
-  real-corpus re-chunk after the final layout-branch fix, and a full-casebook
-  A/B (both stopped for low system memory). A July-era casebook conversion
+  byte-identical through all six fixes, and the full tort-law casebook's
+  records before the structural gate were identical (2,868) with and without
+  them; both runs had been reported as stopped for low memory but completed
+  (checked 2026-09-26). A July-era casebook conversion
   (conversion manifest schema 2) cannot be re-bound to its PDF and fails a
   split-URL structural check on current code, independent of these fixes.
 - **Follow-ups (not fixed):** an excerpt ending on a bare heading fails
@@ -178,9 +179,59 @@ it has no PR, hosted CI or independent release review, so it is not
   blocks; a text item made only of U+25A0 is dropped with its lineage
   (exclusion needs an owner decision and quality schema bump); boundary merge
   joins a bullet list line inline; the token splitter breaks after `v.`;
-  duplicate-line allowances do not cover multi-item entries; `"CHAPTER x.y:"`
-  cross-reference headings are treated by lineage as authoritative divisions;
-  the architecture inventory needs a reviewed `--refresh`.
+  duplicate-line allowances do not cover multi-item entries; the architecture
+  inventory needs a reviewed `--refresh`.
+
+### Casebook supplement, audit scope and OCR findings (2026-09-26, local, uncommitted)
+
+Same status as the section above: dirty local worktree only, no PR or hosted
+CI. Each change was independently and adversarially reviewed and changes only
+output that fails the gates today; no schema or policy version changed.
+
+- **Fidelity audit scope.** The greedy alignment fallback could lend the next
+  cited item's token to an omitted out-of-scope page view of a scoped plain
+  item (one token produced all five h17 issues). A scoped realignment now runs
+  only when the unchanged alignment already contains an out-of-scope position,
+  and the exclusion and the scope check share one predicate.
+- **Supplement profile.** Additive `us-law-casebook-supplement-v1` (excerpt
+  behavior, honest provenance for standalone casebook supplements). Existing
+  digests are unchanged; the excerpt digest is now pinned.
+- **Casebook pointer headings.** A case-sensitive `CHAPTER n.X…:`,
+  `CHAPTER n, SECTION X:` or `CHAPTER n IN GENERAL/GENERALLY` heading that
+  directly follows a bodiless, stack-opening lettered section heading (in
+  serialized and printed order, with only bare page labels between; same-line
+  title fragments fold in) joins that section's node, and proven lettered heads
+  get section level so `I.` is a peer of `H.`.
+- **Contents outlines.** `document_index` rows with no item relationships that
+  directly follow a `Contents`/`Table of Contents` heading outside structural
+  ranges and are dropped as structural today are published as their exact cell
+  text with a table oracle; a mixed chunk fails closed. Structural ranges are
+  now passed to the enrichment recovery.
+- **Evidence.** Full suite 14,924 passed, 7 skipped and the same 3 failures as
+  above (the inventory drift now also covers the new private helpers). A
+  final-code re-chunk kept the 11 READY excerpts byte-identical to their
+  publications (chunks, quality, oracles, receipts); h01, h12 and h17 pass;
+  h03/h04/h16/h18 fail unchanged; the Summer 2026 Update passes 31/31 with no
+  lineage issues; tort-law pre-gate records are identical.
+- **OCR retry findings (no code change).** The retry tools are diagnostic only;
+  re-conversion is the only publishable OCR route. Garbled OCR lines come from
+  RapidOCR's text-direction classifier (`use_cls`, on by default and set by
+  neither `rag.py` nor the retry tools), which flips clean upright lines;
+  without it an h04 region-mode conversion passes every gate and drops no line.
+  Full-page OCR of scanner-text-layer excerpts adds gate-silent line
+  interleaving (h18).
+- **Follow-ups (not fixed; owner decisions):** an opt-in `use_cls=False`
+  conversion parameter (in the digest only when non-default; the retry and
+  disposition contracts treat it as unsupported); gate-silent reading-order
+  scrambles from overlapping or out-of-order layout items (h04 pp.4/6/7, h18)
+  and gate-silent scanner-layer misreads (h18); fused-native repair re-splits
+  clean OCR words into letter-spaced layer tokens (h16 p19); relaxing the
+  one-native-block recovery gate (h03) would also rebuild h18's p20 pair from
+  its misread layer; quote-led cross-page footnote continuations are demoted
+  into body flow (h17 p13); contents records keep a pre-swap raw
+  `token_count`, `table_recovered_from_pdf` and case names, and split contents
+  rows are caught only by the gate; a printed range across a page-label gap
+  renders as one span (h07 `pp.535-559`).
 
 ### Integrated convergence
 

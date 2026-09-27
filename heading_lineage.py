@@ -33,6 +33,30 @@ _CANONICAL_RE = re.compile(r"[^a-z0-9]+")
 _CASE_TITLE_RE = re.compile(
     r"(?:\bv(?:s)?\.?\b|^in\s+re\b|^ex\s+parte\b)", re.IGNORECASE)
 _MAX_CASE_ANNOTATION_SOURCE_DISTANCE = 32
+# Publisher division markers carry authoritative stack levels.
+_DIVISION_RE = re.compile(r"^(?:Chapter|Part|Unit)\s+", re.IGNORECASE)
+_SECTION_NUMBER_RE = re.compile(r"^§\s*(?:[1-9]|1[0-9])\.\d{2}\b")
+# A standalone casebook supplement prints, directly below each lettered update
+# section title, where that section belongs in the main casebook ("CHAPTER
+# 2.B: ...", "CHAPTER 5, SECTION C: ...", "CHAPTER 6 IN GENERAL").  The
+# pointer is a cross-reference, never a division of the supplement.  Printed
+# pointers are uppercase, so matching is case-sensitive.  A dotted pointer
+# addresses a lettered section of a chapter ("2.B", "2.A.1.E."), so a bare
+# "CHAPTER 3", "CHAPTER 3: TITLE" or decimal "CHAPTER 1.1: TITLE" never
+# matches.
+_CASEBOOK_POINTER_RE = re.compile(
+    r"CHAPTER\s+\d{1,2}(?:"
+    r"\.[A-Z](?:\.[0-9A-Z]{1,3})*\.?\s*:(?:\s.*)?"
+    r"|,\s*SECTION\s+[A-Z](?:\.\d{1,3})*\s*:(?:\s.*)?"
+    r"|\s+(?:IN\s+GENERAL|GENERALLY))")
+_LETTERED_SECTION_RE = re.compile(r"[A-Z]\.\s+\S")
+_MARKER_FRAGMENT_RE = re.compile(
+    r"(?:Chapter|Part|Unit)\s+|§|(?:[A-Za-z]|[IVXLCDM]+|\d+)[.)](?:\s|$)",
+    re.IGNORECASE)
+# The printed page-label form that quality_core never publishes as a
+# substantive page footer.
+_PAGE_LABEL_RE = re.compile(
+    r"(?:page\s+)?(?:[0-9]{1,6}|[ivxlcdm]{1,16})", re.IGNORECASE)
 
 
 def canonical_text(value: object) -> str:
@@ -654,6 +678,183 @@ def _source_outline_analysis(
     return frozenset(result), scope_ends
 
 
+def _same_line_title_fragment(title: object, fragment: object) -> bool:
+    """Prove a heading is the rest of one printed section-title line.
+
+    Converters can split one title row into two header items.  Both items
+    need one provenance box on the same page with at least half of the
+    shorter box's height shared, and the fragment may not itself be a marker
+    or pointer heading.
+    """
+    left, right = _provenance_boxes(title), _provenance_boxes(fragment)
+    if len(left) != 1 or len(right) != 1 or left[0][0] != right[0][0]:
+        return False
+    text = _clean_marker(_text(fragment))
+    if (_MARKER_FRAGMENT_RE.match(text)
+            or _CASEBOOK_POINTER_RE.fullmatch(text)):
+        return False
+    (_, top_a, bottom_a, _, _), (_, top_b, bottom_b, _, _) = left[0], right[0]
+    shorter = min(bottom_a - top_a, bottom_b - top_b)
+    overlap = min(bottom_a, bottom_b) - max(top_a, top_b)
+    return shorter > 0 and overlap >= 0.5 * shorter
+
+
+def _page_label_furniture(item: object) -> bool:
+    """Return whether furniture is a bare printed page label.
+
+    Only such labels may separate a section title from its pointer across a
+    page turn.  The form is exactly the one quality_core never publishes;
+    any other footer text can be published as a substantive footer, which
+    would give the section title content of its own.
+    """
+    text = " ".join(_text(item).split())
+    return (_label(item) in {"page_header", "page_footer"}
+            and (not text or _PAGE_LABEL_RE.fullmatch(text) is not None))
+
+
+def _printed_pointer_gap_is_clear(
+        items: dict[str, dict], run: Sequence[str], pointer: str, *,
+        skipped: frozenset[str],
+) -> bool:
+    """Prove nothing else is printed from a section title to its pointer.
+
+    Serialized adjacency is not enough.  The scope walk rolls an item back
+    onto the section title when it is printed at or below the title line but
+    serialized after the pointer, and a table serialized before the title
+    binds to a heading printed above it.  Either gives the title content
+    today, and joining would then re-parent a document that passes.  The
+    pointer must be printed below the title on the same page or on the next
+    page, and only the run itself, running headings and bare page labels may
+    be printed from the title line down to the pointer line.
+    """
+    title_boxes = _provenance_boxes(items[run[0]])
+    pointer_boxes = _provenance_boxes(items[pointer])
+    if len(title_boxes) != 1 or len(pointer_boxes) != 1:
+        return False
+    page, title_top, title_bottom, _, _ = title_boxes[0]
+    pointer_page, pointer_top, pointer_bottom, _, _ = pointer_boxes[0]
+    # Each band is (page, first top, end top, gap start, gap end): an item
+    # blocks when its top lies in [first, end) or it overlaps the gap.
+    if pointer_page == page and pointer_top >= title_top - 0.5:
+        bands = ((page, title_top - 0.5, pointer_bottom,
+                  title_bottom, pointer_top),)
+    elif pointer_page == page + 1:
+        bands = (
+            (page, title_top - 0.5, math.inf, title_bottom, math.inf),
+            (pointer_page, -math.inf, pointer_bottom, -math.inf, pointer_top),
+        )
+    else:
+        return False
+    members = {*run, pointer}
+    for ref, item in items.items():
+        furniture = "furniture" in str(
+            item.get("content_layer") or "").casefold()
+        if (ref in members or ref in skipped
+                or (furniture and _page_label_furniture(item))):
+            continue
+        for box_page, top, bottom, _, _ in _provenance_boxes(item):
+            for band_page, first, end, gap_start, gap_end in bands:
+                if box_page == band_page and (
+                        first <= top < end
+                        or min(bottom, gap_end) - max(top, gap_start) > 0.5):
+                    return False
+    return True
+
+
+def _casebook_pointer_run_map(
+        order: Sequence[str], items: dict[str, dict],
+        ranges: Sequence[tuple[int, int]], *, excluded: frozenset[str],
+        skipped: frozenset[str], outline: frozenset[str],
+) -> dict[str, tuple[str, ...]]:
+    """Map each proven casebook pointer to the section heading run it joins.
+
+    The run is every heading opened since the last source item other than a
+    bare page label: a lettered section title plus same-line fragments of
+    that title.  The title must open the bottom of the heading stack, so it
+    follows body content (or the document start or a structural range)
+    while no ``Chapter``/``Part``/``Unit`` or ``§ N.NN`` division is open in
+    the current structural segment, and nothing else may be printed between
+    the title and its pointer.  The title therefore owns no source item and
+    today's scope walk closes it empty at the pointer, so every join changes
+    only a document that fails lineage today.  The walk mirrors the scope
+    loop in ``expected_heading_bindings`` without consulting levels; level
+    overrides and record depth hints therefore cannot change which pointers
+    qualify.
+    """
+    result: dict[str, tuple[str, ...]] = {}
+    run: list[str] = []
+    run_opens_stack = False
+    content_since_heading = True
+    division_open = False
+    in_structural_range = False
+    for ref in order:
+        item = items[ref]
+        if _inside_ranges(item, ranges):
+            run.clear()
+            if not in_structural_range:
+                content_since_heading = True
+                division_open = False
+            in_structural_range = True
+            continue
+        in_structural_range = False
+        label = _label(item)
+        furniture = "furniture" in str(
+            item.get("content_layer") or "").casefold()
+        if (label == "section_header" and ref not in excluded
+                and not furniture and canonical_text(_text(item))):
+            if ref in skipped:
+                continue
+            if ref in outline:
+                run.clear()
+                continue
+            text = _clean_marker(_text(item))
+            if (run and run_opens_stack
+                    and _CASEBOOK_POINTER_RE.fullmatch(text)
+                    and _LETTERED_SECTION_RE.match(
+                        _clean_marker(_text(items[run[0]])))
+                    and all(_same_line_title_fragment(
+                        items[run[0]], items[value]) for value in run[1:])
+                    and _printed_pointer_gap_is_clear(
+                        items, run, ref, skipped=skipped)):
+                result[ref] = tuple(run)
+            elif _DIVISION_RE.match(text) or _SECTION_NUMBER_RE.match(text):
+                division_open = True
+            if not run:
+                run_opens_stack = content_since_heading and not division_open
+            run.append(ref)
+            content_since_heading = False
+            continue
+        if ref in skipped or (furniture and _page_label_furniture(item)):
+            continue
+        run.clear()
+        if label in _BODY_CONTENT_LABELS and not furniture:
+            content_since_heading = True
+    return result
+
+
+def _casebook_pointer_runs(
+        document: dict, *, structural_ranges: Iterable[tuple[int, int]] = (),
+        excluded_heading_refs: Iterable[str] = (),
+) -> dict[str, tuple[str, ...]]:
+    """Return the pointer joins that ``expected_heading_bindings`` applies.
+
+    The proof is source-only and level-independent, so source-heading path
+    assignment can give each proven section title its section level before
+    the scope walk runs.
+    """
+    ranges = tuple(sorted(set(structural_ranges)))
+    artifacts = sparse_ocr_heading_artifact_refs(document)
+    excluded = frozenset(excluded_heading_refs) - artifacts
+    items, groups = _catalog(document)
+    order = _ordered_source_refs(document, items, groups, ranges)
+    running = running_section_heading_refs(document) - artifacts
+    embedded_outline, _ = _source_outline_analysis(
+        order, items, groups, running | artifacts)
+    return _casebook_pointer_run_map(
+        order, items, ranges, excluded=excluded,
+        skipped=running | artifacts, outline=embedded_outline)
+
+
 def _common_prefix(values: Sequence[tuple[str, ...]]) -> tuple[str, ...]:
     if not values:
         return ()
@@ -779,9 +980,9 @@ def _heading_level(
     identity = canonical_text(text)
     # These publisher-level markers are authoritative.  A tampered path may
     # not promote a book section to depth 1 and thereby erase its chapter.
-    if re.match(r"^(?:Chapter|Part|Unit)\s+", text, re.IGNORECASE):
+    if _DIVISION_RE.match(text):
         return 1, True
-    if re.match(r"^§\s*(?:[1-9]|1[0-9])\.\d{2}\b", text):
+    if _SECTION_NUMBER_RE.match(text):
         return 2, True
     hinted = depth_hints.get(f"ref:{ref}") if ref else None
     if hinted is None:
@@ -997,6 +1198,9 @@ def expected_heading_bindings(
     running = running_section_heading_refs(document) - artifacts
     embedded_outline, summary_scope_ends = _source_outline_analysis(
         order, items, groups, running | artifacts)
+    pointer_runs = _casebook_pointer_run_map(
+        order, items, ranges, excluded=excluded,
+        skipped=running | artifacts, outline=embedded_outline)
     depth_heading_refs = frozenset(
         ref for ref in order
         if (_label(items.get(ref)) == "section_header"
@@ -1019,6 +1223,8 @@ def expected_heading_bindings(
     heading_groups: list[tuple[tuple[str, ...], int, int, int]] = []
     content_since_heading = True
     in_structural_range = False
+    # Headings opened since the last source item other than a page label.
+    heading_run: list[str] = []
 
     def close_node(node: tuple[int, tuple[str, ...], int], end: int) -> None:
         level, refs, start = node
@@ -1034,6 +1240,7 @@ def expected_heading_bindings(
         item = items[ref]
         structural = _inside_ranges(item, ranges)
         if structural:
+            heading_run.clear()
             if not in_structural_range:
                 for node in active:
                     close_node(node, order_position)
@@ -1056,6 +1263,7 @@ def expected_heading_bindings(
             if ref in running:
                 continue
             if ref in embedded_outline:
+                heading_run.clear()
                 continue
             attachable.append(ref)
             path_before_heading[ref] = tuple(
@@ -1082,7 +1290,22 @@ def expected_heading_bindings(
                     r"^[a-z][.)]\s+",
                     _clean_marker(_text(item)), re.IGNORECASE)
             )
+            if (pointer_runs.get(ref) == tuple(heading_run)
+                    and not content_since_heading
+                    and [value for _, values, _ in active
+                         for value in values] == heading_run):
+                # A proven casebook pointer and any same-line fragments of
+                # its section title join that section's node, which is the
+                # bottom of the stack.  At most bare page labels were seen
+                # since the section opened, so the folded fragment nodes own
+                # no publishable source item.
+                active[:] = [(
+                    active[0][0], (*heading_run, ref), active[0][2])]
+                heading_run.append(ref)
+                path_after_heading[ref] = tuple(active[0][1])
+                continue
             if division_continuation:
+                heading_run.append(ref)
                 active[-1] = (
                     active[-1][0], (*active[-1][1], ref), active[-1][2])
                 path_after_heading[ref] = tuple(
@@ -1100,12 +1323,16 @@ def expected_heading_bindings(
                 while active and active[-1][0] >= level:
                     close_node(active.pop(), order_position)
             active.append((level, (ref,), order_position))
+            heading_run.append(ref)
             path_after_heading[ref] = tuple(
                 value for _, values, _ in active for value in values)
             content_since_heading = False
             continue
         paths_by_ref[ref] = tuple(
             ref for _, values, _ in active for ref in values)
+        if (ref not in running and ref not in artifacts
+                and not (furniture and _page_label_furniture(item))):
+            heading_run.clear()
         if (label in _BODY_CONTENT_LABELS and not furniture
                 and ref not in running):
             content_since_heading = True

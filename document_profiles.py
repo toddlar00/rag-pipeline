@@ -31,7 +31,10 @@ _DIVISION_CONTEXTS = frozenset({
 _NUMBER_STYLES = frozenset({"arabic", "roman", "word"})
 _SCAFFOLD_SOURCES = frozenset({"toc", "source_headings"})
 EXCERPT_STRUCTURE_PROFILE = "us-law-casebook-excerpt-v1"
-_CASEBOOK_FAMILY = frozenset({DEFAULT_STRUCTURE_PROFILE, EXCERPT_STRUCTURE_PROFILE})
+SUPPLEMENT_STRUCTURE_PROFILE = "us-law-casebook-supplement-v1"
+_CASEBOOK_FAMILY = frozenset({
+    DEFAULT_STRUCTURE_PROFILE, EXCERPT_STRUCTURE_PROFILE,
+    SUPPLEMENT_STRUCTURE_PROFILE})
 
 
 @dataclass(frozen=True, slots=True)
@@ -523,8 +526,27 @@ _LEGAL_EXCERPT_PROFILE = replace(
 )
 
 
+# Standalone casebook updates follow the excerpt policy (source headings, no
+# excluded page ranges) but are not excerpts of one casebook: each lettered
+# update section carries a pointer to its place in the main casebook.  The
+# excerpt payload is bound by published receipts and stays unchanged.
+_LEGAL_SUPPLEMENT_PROFILE = replace(
+    _LEGAL_EXCERPT_PROFILE,
+    name=SUPPLEMENT_STRUCTURE_PROFILE,
+    revision=1,
+    document_description=(
+        "Standalone supplements to United States law-school casebooks: "
+        "lettered update sections, each with a pointer heading to its place "
+        "in the main casebook; hierarchy comes only from in-document "
+        "headings"),
+)
+
+
 def _build_registry() -> Mapping[str, StructureProfile]:
-    profiles = (_LEGAL_PROFILE, _ROMAN_PART_PROFILE, _LEGAL_EXCERPT_PROFILE)
+    profiles = (
+        _LEGAL_PROFILE, _ROMAN_PART_PROFILE, _LEGAL_EXCERPT_PROFILE,
+        _LEGAL_SUPPLEMENT_PROFILE,
+    )
     registry: dict[str, StructureProfile] = {}
     for profile in profiles:
         _validate_profile(profile)

@@ -60,10 +60,12 @@ def _record(ref):
 
 
 def test_existing_profile_digests_are_unchanged():
+    # Every published h26 excerpt receipt binds the excerpt digest; changing
+    # the excerpt (or the LEGAL payload it is derived from) invalidates them.
     assert {
         name: document_profiles.profile_sha256(
             document_profiles.get_profile(name))
-        for name in (LEGAL, "roman-parts-book-v1")
+        for name in (LEGAL, "roman-parts-book-v1", EXCERPT)
     } == {
         LEGAL: (
             "5fdc5c2539b20ae75173e9673a2d8ee5"
@@ -71,6 +73,9 @@ def test_existing_profile_digests_are_unchanged():
         "roman-parts-book-v1": (
             "655388134ba62e37c2d392959be998cb"
             "a98df39e8b57ea601da3fe79f8b14378"),
+        EXCERPT: (
+            "e102b8271916df676bd1d4651c568775"
+            "65e49dae508d1868fce1a486f2023e82"),
     }
 
 
@@ -78,7 +83,8 @@ def test_excerpt_profile_is_explicit_and_shares_casebook_divisions():
     legal = document_profiles.get_profile(LEGAL)
     excerpt = document_profiles.get_profile(EXCERPT)
 
-    assert document_profiles.profile_names()[-1] == EXCERPT
+    # The additive casebook-supplement profile is registered after it.
+    assert document_profiles.profile_names()[2] == EXCERPT
     assert excerpt.scaffold_source == "source_headings"
     assert legal.scaffold_source == "toc"
     assert document_profiles.requires_toc(legal)
