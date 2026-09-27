@@ -51,6 +51,23 @@ def python_worker_launch(
     return [executable, *arguments], child_environment
 
 
+def _windows_console_attached() -> bool:
+    """Return whether this Windows process is attached to a console window."""
+    import ctypes
+
+    get_console_window = ctypes.windll.kernel32.GetConsoleWindow
+    get_console_window.restype = ctypes.c_void_p
+    return bool(get_console_window())
+
+
+def _has_os_handle(stream: Any) -> bool:
+    """Return whether a parent stream can be passed to a child process."""
+    try:
+        return stream is not None and stream.fileno() >= 0
+    except (AttributeError, OSError, ValueError):
+        return False
+
+
 _DEFAULT_TERMINATE_GRACE = 5.0
 
 
@@ -593,8 +610,26 @@ def _run_cli_with_deadline(
     try:
         if os.name == "nt":
             process_options["creationflags"] = getattr(
-                subprocess, "CREATE_NEW_PROCESS_GROUP", 0
-            )
+                subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            # A console parent's worker shares that console, which opens no
+            # window. Without one, Windows would open a new console, so the
+            # worker is windowless; it then does not receive the parent's
+            # standard handles implicitly, so hand over any usable stream.
+            # An unusable one is discarded explicitly: an empty slot would get
+            # a reader-less pipe, turning the worker's writes into errors.
+            if not _windows_console_attached():
+                process_options["creationflags"] |= getattr(
+                    subprocess, "CREATE_NO_WINDOW", 0)
+                for name, stream in (("stdout", sys.stdout), ("stderr", sys.stderr)):
+                    if name in process_options:
+                        continue
+                    if _has_os_handle(stream):
+                        # Parent text buffered so far must precede the
+                        # unbuffered worker's writes to the shared handle.
+                        stream.flush()
+                        process_options[name] = stream
+                    else:
+                        process_options[name] = subprocess.DEVNULL
             kill_job = kill_job_factory()
         else:
             process_options["start_new_session"] = True

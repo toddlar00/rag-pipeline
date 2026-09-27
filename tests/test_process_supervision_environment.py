@@ -125,3 +125,137 @@ def test_actual_harmless_child_ignores_inherited_startup_selectors(tmp_path, mon
                         "prefix": sys.prefix, "base_prefix": sys.base_prefix}
     assert dict(os.environ) == parent_environment
     assert not tuple(tmp_path.rglob("*.pyc"))
+
+
+class _ParentStream:
+    """A parent stdio stand-in with an OS descriptor and observable flushes."""
+
+    def __init__(self, events, name):
+        self.events, self.name = events, name
+
+    def fileno(self):
+        return 1
+
+    def flush(self):
+        self.events.append(f"flush:{self.name}")
+
+
+def _windows_launch_options(monkeypatch, *, console_attached, stdout, stderr):
+    observed = {}
+    events = []
+
+    class Gate:
+        kind, child_value = "inert-gate", "7"
+
+        def popen_options(self):
+            return {}
+
+        def release(self):
+            pass
+
+        def close(self):
+            pass
+
+    class Process:
+        def wait(self, timeout):
+            return 0
+
+    def popen(command, **options):
+        events.append("popen")
+        observed.update(options)
+        return Process()
+
+    streams = {
+        name: _ParentStream(events, name) if value == "usable" else value
+        for name, value in (("stdout", stdout), ("stderr", stderr))
+    }
+    monkeypatch.setattr(ps, "_windows_console_attached", lambda: console_attached)
+    monkeypatch.setattr(ps.subprocess, "Popen", popen)
+    monkeypatch.setattr(ps.sys, "stdout", streams["stdout"])
+    monkeypatch.setattr(ps.sys, "stderr", streams["stderr"])
+    assert ps._run_cli_with_deadline(
+        Path("synthetic-child.py"), [], operation="console-control", timeout=1.,
+        config=CONFIG, kill_job_factory=lambda: None, start_gate_factory=Gate,
+        terminate_fn=lambda *_args, **_kwargs: True) == 0
+    return observed, streams, events
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows console behavior")
+@pytest.mark.parametrize("console_attached", [False, True])
+def test_worker_is_windowless_only_when_parent_has_no_console(monkeypatch, console_attached):
+    observed, streams, _events = _windows_launch_options(
+        monkeypatch, console_attached=console_attached,
+        stdout="usable", stderr="usable")
+
+    windowless = bool(observed["creationflags"] & subprocess.CREATE_NO_WINDOW)
+    assert observed["creationflags"] & subprocess.CREATE_NEW_PROCESS_GROUP
+    assert windowless is not console_attached
+    # A console parent's worker shares that console and its handles; a
+    # windowless worker needs the parent's streams passed explicitly.
+    if windowless:
+        assert observed["stdout"] is streams["stdout"]
+        assert observed["stderr"] is streams["stderr"]
+    else:
+        assert "stdout" not in observed and "stderr" not in observed
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows console behavior")
+def test_windowless_worker_discards_an_unusable_parent_stream(monkeypatch):
+    observed, streams, _events = _windows_launch_options(
+        monkeypatch, console_attached=False, stdout="usable", stderr=None)
+
+    # Leaving the slot empty lets Popen substitute a pipe with no reader.
+    assert observed["stdout"] is streams["stdout"]
+    assert observed["stderr"] == subprocess.DEVNULL
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows console behavior")
+def test_windowless_worker_flushes_handed_over_parent_streams(monkeypatch):
+    _observed, _streams, events = _windows_launch_options(
+        monkeypatch, console_attached=False, stdout="usable", stderr="usable")
+
+    assert events.index("flush:stdout") < events.index("popen")
+    assert events.index("flush:stderr") < events.index("popen")
+
+
+def test_actual_default_worker_output_reaches_parent_streams(
+        tmp_path, capfd, monkeypatch):
+    if os.name == "nt":
+        # Exercise the console-less launch that previously lost all output.
+        monkeypatch.setattr(ps, "_windows_console_attached", lambda: False)
+    script = tmp_path / "output_probe.py"
+    script.write_text(
+        "import sys\nprint('worker-stdout-marker')\n"
+        "print('worker-stderr-marker', file=sys.stderr)\n",
+        encoding="utf-8")
+    result = ps._run_cli_with_deadline(
+        script, [], operation="output-control", timeout=10., config=CONFIG)
+    captured = capfd.readouterr()
+    assert result == 0
+    assert "worker-stdout-marker" in captured.out
+    assert "worker-stderr-marker" in captured.err
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows console behavior")
+def test_actual_supervised_worker_never_opens_a_new_console_window(tmp_path):
+    import ctypes
+
+    get_console = ctypes.windll.kernel32.GetConsoleWindow
+    get_console.restype = ctypes.c_void_p
+    parent_console = int(get_console() or 0)
+    marker = tmp_path / "console-window.json"
+    script = tmp_path / "console_probe.py"
+    script.write_text(
+        "import ctypes,json,sys\nfrom pathlib import Path\n"
+        "get_console = ctypes.windll.kernel32.GetConsoleWindow\n"
+        "get_console.restype = ctypes.c_void_p\n"
+        "Path(sys.argv[1]).write_text(json.dumps({\"console\": "
+        "int(get_console() or 0)}), encoding='utf-8')\n",
+        encoding="utf-8")
+    result = ps._run_cli_with_deadline(
+        script, [str(marker)], operation="hidden-console-control", timeout=10.,
+        config=CONFIG, stdout_target=subprocess.DEVNULL,
+        stderr_target=subprocess.DEVNULL)
+    assert result == 0
+    # Windowless without a parent console; otherwise the parent's console.
+    assert json.loads(marker.read_text(encoding="utf-8")) == {"console": parent_console}
