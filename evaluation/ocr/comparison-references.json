@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "source_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "pages": [
+    {
+      "page_number": 1,
+      "reference": "The tenant did not waive notice.",
+      "critical_tokens": ["not"]
+    },
+    {
+      "page_number": 2,
+      "reference": "Rule 12 requires 30 days.",
+      "critical_tokens": ["12", "30"]
+    }
+  ]
+}

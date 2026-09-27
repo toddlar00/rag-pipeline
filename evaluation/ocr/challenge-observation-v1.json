@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "kind": "ocr_synthetic_observation",
+  "observed_date": "2026-09-06",
+  "challenge_version": "synthetic-ocr-v1",
+  "source_sha256": "fb337c41515e517f09750a58f8935a8f927fa7a19085099438f28b5e4ffe7e6f",
+  "references_sha256": "f315afb20cb757dfd12c6c7d9067980ee53cc6470c3c08150276ebe61a172746",
+  "recipe_sha256": "026761b73101dc7a0055ec0e1ad574d28101894b5db65f83faf7c27df993fa36",
+  "generator_sha256": "d78ad8fa1e0a3a11ff03eab389d867893929711f19dd0058a593c3571ed89f5d",
+  "model_lock_sha256": "4b40e1730d5afa7612309bd726607a5134e728a93e1d2579ae86c5631d4cbdbd",
+  "environment": {
+    "os": "Windows",
+    "python": "3.14.3",
+    "pymupdf": "1.25.1",
+    "opencv": "4.13.0",
+    "numpy": "2.3.5",
+    "rapidocr": "3.9.2",
+    "locked_environment_verified": false
+  },
+  "settings": {
+    "source_dpi": 180,
+    "retry_dpi": 300,
+    "max_pages": 8,
+    "requested_pages": [1, 2, 3, 4, 5, 6, 7, 8],
+    "worker_timeout_seconds": 120,
+    "modes": ["none", "deskew", "contrast", "deskew-contrast"]
+  },
+  "shared_result_all_four_modes": {
+    "selected_pages": 8,
+    "paired_pages": 8,
+    "failed_pages": 0,
+    "empty_pages": 0,
+    "deferred_pages": 0,
+    "reference_characters": 3386,
+    "character_edits": 147,
+    "character_error_rate": 0.043414057885410515,
+    "reference_words": 574,
+    "word_edits": 33,
+    "word_error_rate": 0.05749128919860627,
+    "exact_match_pages": 7,
+    "critical_reference_occurrences": 36,
+    "critical_matched_occurrences": 36,
+    "critical_missing_occurrences": 0,
+    "critical_extra_occurrences": 0,
+    "regressions_relative_to_none": 0,
+    "improvements_relative_to_none": 0
+  },
+  "non_exact_pages": [
+    {
+      "page_number": 6,
+      "case_id": "columns",
+      "reference_characters": 289,
+      "character_edits": 147,
+      "character_error_rate": 0.5086505190311419,
+      "finding": "OCR line order interleaves the two columns instead of the declared left-column-first order"
+    }
+  ],
+  "scope": "fixed synthetic diagnostic, not held-out or representative document accuracy",
+  "interpretation": "No measured preprocessing gain in this cohort. No relative regression does not imply accurate text or validated table structure. Critical phrase counts do not validate reading order.",
+  "canonical_extraction_modified": false
+}
