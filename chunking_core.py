@@ -30,6 +30,12 @@ _SECTION_MARKER_LINE_RE = re.compile(
     r"^[ \t]*[A-J][ \t]*(?:\n|$)", re.MULTILINE)
 _DECORATIVE_SQUARE_LINE_RE = re.compile(
     r"^[ \t]*(?:\u25a0[ \t]*)+(?:\n|$)", re.MULTILINE)
+# Whole-text mirror of the line rule above: square-only lines plus blank
+# lines, which the later whitespace rules collapse and strip.  A no-break space
+# becomes a space before the square rule runs.
+_DECORATIVE_SQUARE_TEXT_RE = re.compile(
+    r"(?:[^\S\n]*\n)*[ \t]*\u25a0[\u25a0 \t]*"
+    r"(?:\n(?:[ \t]*\u25a0[\u25a0 \t]*|[^\S\n]*))*")
 _SPACED_HYPHEN_RE = re.compile(r"(?<=[A-Za-z0-9])-\s+(?=[A-Za-z0-9])")
 _MISSING_SENTENCE_SPACE_RE = re.compile(r"(?<=[a-z])\.(?=[A-Z])")
 _BRACKETED_CONTRACTION_RE = re.compile(
@@ -969,6 +975,20 @@ def is_probable_running_division_banner(text: str) -> bool:
     """Recognize a compact all-caps casebook running-division banner."""
     cleaned = " ".join(str(text or "").split())
     return bool(_RUNNING_DIVISION_BANNER_RE.fullmatch(cleaned))
+
+
+def normalization_erases_decorative_squares(text: str) -> bool:
+    """Return whether ``_normalize_text`` erases *text* as square glyphs.
+
+    Every line is blank or only U+25A0 BLACK SQUARE glyphs with spaces, tabs
+    or no-break spaces, and at least one line holds a square; the square rule
+    and the later whitespace rules then remove all of it.  Any other character,
+    including U+25A1 WHITE SQUARE, a list marker or other whitespace beside a
+    square, keeps the text emitted.
+    """
+    return (isinstance(text, str)
+            and _DECORATIVE_SQUARE_TEXT_RE.fullmatch(
+                text.replace("\xa0", " ")) is not None)
 
 
 TextTransformFn = Callable[[str], str]

@@ -329,12 +329,15 @@ _EMBEDDING_HEADING_CHAR_LIMIT = 256
 
 # Incremental vector-index metadata. Bump this whenever the indexed payload or
 # vector layout changes in a way that requires rebuilding existing collections.
-INDEX_MANIFEST_SCHEMA_VERSION = 9
+INDEX_MANIFEST_SCHEMA_VERSION = 10
 # Bump when document-side embedding input construction changes, including
 # contextual prefixes, task prefixes, or truncation/bounding semantics.
 EMBEDDING_INPUT_POLICY_VERSION = 1
-_LEGACY_QUERY_SCHEMA_BINDINGS = ((6, 2), (7, 3))
-_CONTEXT_QUERY_SCHEMA_BINDINGS = ((7, 3),)
+_LEGACY_QUERY_SCHEMA_BINDINGS = ((6, 2), (7, 3), (9, 12))
+_CONTEXT_QUERY_SCHEMA_BINDINGS = ((7, 3), (9, 12))
+# Manifest 10 changed only its quality binding (12 -> 13), so a manifest-9
+# query keeps the current payload checks and its table-family depth.
+_CURRENT_PAYLOAD_LEGACY_MANIFEST_VERSIONS = (9,)
 
 # Content type labels for LLM classification prompt
 _CONTENT_LABELS = (
@@ -23440,7 +23443,9 @@ def _query_manifest_dimension_impl(
         load_manifest_fn=_load_index_manifest,
         compatible_schema_bindings=(
             _LEGACY_QUERY_SCHEMA_BINDINGS
-            if allow_legacy else _CONTEXT_QUERY_SCHEMA_BINDINGS))
+            if allow_legacy else _CONTEXT_QUERY_SCHEMA_BINDINGS),
+        current_payload_schema_versions=(
+            _CURRENT_PAYLOAD_LEGACY_MANIFEST_VERSIONS))
 
 
 def _query_manifest_dimension(
@@ -23460,11 +23465,13 @@ def _query_manifest_dimension(
 def _indexed_table_child_count(
         db_dir: Path, *, backend: str, collection_name: str,
 ) -> int:
-    """Return the manifested row-child count for a current index generation."""
+    """Return the manifested row-child count for a current-payload index."""
     manifest = _load_index_manifest(
         db_dir, backend=backend, collection_name=collection_name)
     if (manifest is None
-            or manifest.get("schema_version") != INDEX_MANIFEST_SCHEMA_VERSION):
+            or manifest.get("schema_version") not in (
+                INDEX_MANIFEST_SCHEMA_VERSION,
+                *_CURRENT_PAYLOAD_LEGACY_MANIFEST_VERSIONS)):
         return 0
     count = manifest.get("table_child_count")
     if isinstance(count, bool) or not isinstance(count, int) or count < 0:

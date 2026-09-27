@@ -21,7 +21,7 @@ import retrieval_core
 import source_fidelity_core
 import table_retrieval_core
 
-QUALITY_REPORT_SCHEMA_VERSION = 12
+QUALITY_REPORT_SCHEMA_VERSION = 13
 SOURCE_LINEAGE_SCHEMA_VERSION = 5
 SOURCE_ANALYSIS_SCHEMA_VERSION = 4
 # Mirrors rag.CONVERSION_COMPLETION_SCHEMA_VERSION; this leaf cannot import
@@ -702,9 +702,11 @@ def running_page_number_furniture_refs(document: dict) -> set[str]:
 def _source_exclusion_reason(
         item: dict, *, structural_ranges: Sequence[tuple[int, int]],
         page_footer_frequencies: Counter[str] | None = None,
-        substantive_picture: bool = False) -> str | None:
+        substantive_picture: bool = False,
+        source_oracle_bound: bool = False) -> str | None:
     label = _label(item.get("label"))
-    text = str(item.get("text") or item.get("orig") or "").strip()
+    raw_text = str(item.get("text") or item.get("orig") or "")
+    text = raw_text.strip()
     canonical = _canonical_text(text)
     substantive_page_footer = (
         label == "page_footer"
@@ -731,6 +733,10 @@ def _source_exclusion_reason(
     if (label == "text"
             and _SINGLE_LETTER_SECTION_MARKER_RE.fullmatch(text)):
         return "section_marker"
+    if (label == "text" and not source_oracle_bound
+            and chunking_core.normalization_erases_decorative_squares(
+                raw_text)):
+        return "decorative_glyph"
     if _EMPHASIS_BOILERPLATE_RE.fullmatch(text):
         return "editorial_boilerplate"
     if "This and other authors' explanations draw" in text:
@@ -741,6 +747,7 @@ def _source_exclusion_reason(
 def source_inventory(
         document: dict, *,
         structural_ranges: Iterable[tuple[int, int]],
+        source_oracle_refs: Iterable[str] = (),
 ) -> tuple[
         dict[str, dict], dict[str, dict], dict[str, int],
         dict[str, list[object]],
@@ -752,6 +759,7 @@ def source_inventory(
     source object silently disappears during chunk preparation or deduplication.
     """
     ranges = tuple(sorted(set(structural_ranges)))
+    oracle_refs = frozenset(source_oracle_refs)
     all_items: dict[str, dict] = {}
     raw_items: dict[str, dict] = {}
     item_locations: dict[str, str] = {}
@@ -835,7 +843,8 @@ def source_inventory(
                 else _source_exclusion_reason(
                     item, structural_ranges=ranges,
                     page_footer_frequencies=page_footer_frequencies,
-                    substantive_picture=ref in substantive_picture_refs)
+                    substantive_picture=ref in substantive_picture_refs,
+                    source_oracle_bound=ref in oracle_refs)
             )
             if reason is None:
                 eligible[ref] = descriptor
@@ -1576,7 +1585,8 @@ def build_quality_report(
     ranges = tuple(sorted(set(structural_ranges)))
     (all_items, eligible_items, exclusion_counts,
      source_inventory_issues) = source_inventory(
-        document, structural_ranges=ranges)
+        document, structural_ranges=ranges,
+        source_oracle_refs=trusted_source_oracles)
 
     represented_refs: set[str] = set()
     chunks_without_lineage = []
@@ -2579,7 +2589,8 @@ def validate_quality_report(
             raise ValueError(
                 "corpus quality report source analysis does not match source")
         (_, expected_eligible, _, _) = source_inventory(
-            document, structural_ranges=ranges)
+            document, structural_ranges=ranges,
+            source_oracle_refs=trusted_source_oracles)
         expected_fidelity = source_fidelity_core.audit_source_fidelity(
             records=records, document=document,
             eligible_refs=set(expected_eligible),

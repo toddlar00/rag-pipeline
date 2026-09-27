@@ -177,7 +177,8 @@ it has no PR, hosted CI or independent release review, so it is not
   first emitted as a generic-branch slice is still claimed twice (fail-closed);
   native text-group recovery rejects a paragraph split across two text-layer
   blocks; a text item made only of U+25A0 is dropped with its lineage
-  (exclusion needs an owner decision and quality schema bump); boundary merge
+  (now a typed `decorative_glyph` exclusion under quality schema 13, see
+  "Decorative square glyph exclusion" below); boundary merge
   joins a bullet list line inline (still true for every document that passes;
   a join that fails `source_token_fidelity` is now separated by a one-time
   replay unless the order replay takes precedence, see "Bullet list after a
@@ -556,7 +557,7 @@ schema or policy version changed.
     `_chunk_document_locked`, and the three new test modules and their patch
     targets. It needs a reviewed `--refresh`.
   - h16 is still blocked on the glyph fix. The p19 fix is in the next
-    section.
+    section; the glyph fix is in "Decorative square glyph exclusion" below.
 
 ### Letter-spaced text-layer retry (2026-09-27, local, uncommitted)
 
@@ -761,6 +762,215 @@ one-dispatcher rule above does not apply to it.
     (records 49/50), the garbled p1 scanner layer (record 0) and many word
     splits from the text layer (for example `#/texts/173`). An owner decision
     is needed before h16 publishes at this text quality.
+
+### Decorative square glyph exclusion (2026-09-27, local, uncommitted)
+
+This has the same status as the sections above. It implements the
+owner-approved h16 `#/texts/14` fix as a typed quality exclusion. It is the
+owner-approved exception to the rule above: the quality report schema goes
+from 12 to 13 and the index manifest schema from 9 to 10, with a legacy query
+binding `(9, 12)`. No other schema or policy version changed. It is not a
+replay, and chunking never calls the new predicate, so no chunk output can
+change.
+
+- **Defect.** h16 `#/texts/14` is a `text` item made only of U+25A0 in the
+  page 2 margin. Normalization removes square-only lines, so its prepared
+  chunk is empty and is dropped with its lineage. Quality kept the item
+  eligible, so `eligible_source_items_represented` failed (`missing_refs`
+  [`#/texts/14`]). h14 `#/texts/24` passed only because its square shared a
+  chunk with other text.
+- **Exclusion.** `chunking_core.normalization_erases_decorative_squares`
+  mirrors `_normalize_text` for a whole text. After the no-break-space rule,
+  every line must be blank or hold only U+25A0 with spaces or tabs, and at
+  least one line must hold a square. It is public, like the banner and
+  misclassified-heading predicates that quality already calls.
+  `quality_core._source_exclusion_reason` returns `decorative_glyph` for a
+  `text` item whose raw `text` (else `orig`) matches, right after the
+  section-marker branch. A ref bound by a trusted source oracle stays
+  eligible: `source_inventory` takes `source_oracle_refs`, and both the
+  report build and the source-backed validation pass the validated registry
+  refs. A registry-bound repair replaces the text, so it is emitted and keeps
+  its oracle-token coverage.
+  - The inventory tests the unstripped text, as the chunker sees it. Python's
+    `str.strip()` also removes em spaces, ideographic spaces and carriage
+    returns, which the square rule keeps, so testing stripped text would
+    exclude squares the chunker emits.
+  - Still eligible, so they fail closed as today: a square next to any other
+    character (U+25A1, a list marker, an em or ideographic space, a carriage
+    return); text that is erased only with help from another rule (U+200B,
+    U+FFFD, an A-J marker line, a bare digit line); square-only `list_item`,
+    `caption` and `section_header` items.
+  - Precedence is unchanged: every earlier reason still wins.
+  - Scope: across the design's 41 and its review's 67 Docling JSONs, the
+    exclusion matches only h14_3 `#/texts/24`, h16_2 `#/texts/14` and four
+    items in the July `Criminal Law_2` conversion (its report is schema 5 and
+    already stale). Tort law has no U+25A0.
+- **Versions (owner decision).**
+  - `QUALITY_REPORT_SCHEMA_VERSION` 12 -> 13. Without the bump, the stored h14
+    report would fail source-backed validation with a misleading "fidelity
+    does not match source", while every other v12 report stayed valid.
+  - `INDEX_MANIFEST_SCHEMA_VERSION` 9 -> 10, and `(9, 12)` is appended to
+    `_LEGACY_QUERY_SCHEMA_BINDINGS` and `_CONTEXT_QUERY_SCHEMA_BINDINGS`.
+    Manifest 10 keeps manifest 9's payload; only the quality binding moves.
+  - `_CURRENT_PAYLOAD_LEGACY_MANIFEST_VERSIONS = (9,)` keeps every query
+    check a manifest-9 index had while current. That covers the
+    embedding-input policy and table-child checks
+    (`index_state._query_manifest_dimension_impl(current_payload_schema_versions=...)`)
+    and its table-family depth and collapse (`_indexed_table_child_count`).
+    The legacy branch would otherwise skip them, in ordinary and context
+    queries alike. None of the 18 private manifest-9 indexes (the 17 READY
+    h26 runs and tort law) has table children, but the Git-ignored
+    synthetic smoke corpora `evaluation-reports/ai-evidence-native-smoke-v1`
+    and `-v2` hold Qdrant indexes at manifest 9, bound to quality 12, with 4
+    table children each. They are historical evidence that no test reads;
+    without this list they would lose that depth and collapse.
+  - The context binding matters only for a manifest-9 index with a null
+    quality binding (a corpus outside the quality contract), which keeps
+    answering context queries. Context assembly validates the adjacent quality
+    report first, and it must now be v13, so a v12-bound corpus is refused
+    before the manifest is read. The 7 -> 8 bump set the precedent with
+    `(7, 3)`. The "old manifest" case in `tests/test_index_state.py` now uses
+    8, the newest version with no binding.
+- **Consequences.** The change is forward-only: code from before it rejects
+  v13 reports and manifest 10.
+  - Every stored v12 report is rejected ("unsupported corpus quality report
+    schema"). The 17 READY h26 receipts pin quality 12 and manifest 9, so
+    `info` shows them STALE, and AI project export and publication refuse
+    them until each run is rebuilt.
+  - `full --resume` keeps the conversion and chunk receipts, which bind no
+    quality, and regenerates the v13 report. It then rebuilds the whole
+    collection, because a manifest-9 index is no longer reusable
+    (`schema_version changed (9 -> 10)`). That is a full re-embed. Last, it
+    republishes the receipt. h16 still needs a fresh chunk without `--resume`
+    (see the list-replay operations above).
+  - Ordinary queries on a manifest-9 index bound to quality 12 answer as
+    before: CLI `query`, `search_index` without context, and ordinary service
+    search. Context-window queries, corpus-pinned evaluation (its index check
+    is current-only) and publication refuse them.
+  - For the 17 READY h26 runs (h01-h15 with h03_3, h04_3 and h06_4, plus
+    h17_3 and the Summer 2026 Update) that refusal is new. A context-window
+    query on a scratch copy of h14 returned 5 hits with the pre-change code
+    and now fails with "unsupported corpus quality report schema"; the other
+    16 carry the same quality-12 binding. Their rebuild restores it. Tort
+    law's context-window query already failed (below).
+  - The service evidence companion stays current-only (exact manifest match
+    and a current quality proof). It now refuses manifest-9 indexes, as it
+    already refuses `(6, 2)` and `(7, 3)`. The service is Qdrant-only. The
+    only Qdrant indexes found here (h26 data, `output/` and this repository)
+    are the two synthetic smoke corpora above, which it now refuses. No
+    private corpus is served.
+- **Tort law.** `output/tort law` is a Chroma index, manifest 9 bound to
+  quality 12, with 2,721 records, no table children and embedding policy 1.
+  - The same four queries ran once with the pre-edit code snapshot and once
+    with this tree, one process at a time (`rag.py query`, local-only,
+    cache-only, `nomic-ai/nomic-embed-text-v2-moe`, `-n 10`). Auto (hybrid),
+    `--vector-only --no-rerank` and `--hybrid --no-rerank` return identical
+    parsed JSON: the same ranked stable ids, scores and modes. The bytes
+    differ only in metadata key order. `--context-window 1` fails before and
+    after with the same error (`chunk completion header or inputs are
+    invalid`), because its July chunk receipt is stale.
+  - The service evidence search never admitted it, before or after:
+    `CorpusConfig` refuses the Chroma backend, a Qdrant configuration
+    conflicts with the manifest's backend, and its quality proof fails on the
+    same stale chunk receipt.
+  - It was already STALE (schema-2 conversion manifest, split-URL structural
+    failure). Its quality report and index binding are now stale as well, so
+    publishing it again needs a full reconversion, a v13 report and a full
+    re-embed, then a new NotebookLM export.
+  - These queries ran against the live `output/tort law` index. Every
+    `rag.py query` rewrites the bytes of Chroma's `chroma.sqlite3` (same
+    size), with the pre-edit code too; one more snapshot query confirmed it.
+    The index manifest, chunks, report and every other file are unchanged.
+    Future smokes should query scratch copies, as the review did.
+- **h16.** The staged conversion, chunked against its staged PDF, replays
+  once (list boundary) and exits 0. All 31 checks pass at quality schema 13,
+  with 88 records. Chunks, oracles and the chunking receipt are
+  byte-identical to the letter-spaced fix-up 2 run, the tree just before this
+  change. The report changes only here:
+  - status goes from fail to pass, and so does
+    `eligible_source_items_represented` (observed 1 -> 0);
+  - eligible items go from 169 to 168, `coverage_ppm` from 994082 to 1000000,
+    and `missing_refs` from [`#/texts/14`] to [];
+  - `decorative_glyph: 1` is added, and the fidelity
+    `source_descriptor_root_sha256` and `evidence_sha256` change.
+
+  The gates now pass. The gate-silent text noted in the previous section still
+  needs an owner decision before h16 publishes.
+- **Preservation.** The 17 READY runs (h01-h15 with h03_3, h04_3 and h06_4,
+  plus h17_3 and the Summer 2026 Update) were re-chunked against their
+  labeled PDFs. Chunks, oracles and chunking receipts are byte-identical to
+  their publications. The reports differ only in `schema_version`, except
+  h14, which still passes: eligible and represented items go from 80 to 79,
+  `decorative_glyph: 1` is added, and the fidelity descriptor-root and
+  evidence digests change. h03_3 still replays the order recovery once.
+  h18_2, h03_2 and h04_2 match the letter-spaced fix-up 2 run except for
+  `schema_version`. h18 still fails only `normalization_invariants` and
+  stays blocked.
+- **Evidence.**
+  - `tests/test_decorative_glyph_exclusion.py` had 32 tests in the first
+    round. On the pre-change tree 26 failed, 21 of them because the predicate
+    is missing. The 6 that passed are three emitted-square
+    characterizations, the previous-schema rejection, the no-key case and the
+    registry-bound report test. The erased-only test also asserts that each
+    item stays eligible. Invisible and look-alike characters are written as
+    `\u` escapes.
+  - Review fix-up 1 made it 37 tests. The predicate table now has 20 cases
+    (7 erased, 13 kept), and each case also runs `source_inventory`: the
+    item is `decorative_glyph` exactly when normalization erases it, and
+    otherwise stays eligible unless it is blank. A new exhaustive test does
+    the same for all 11,110 texts of length 1-4 over a ten-symbol alphabet,
+    and the typed-inventory test gains an em space before a square and a
+    square before CRLF. They kill the mutant that passes the stripped text
+    to the predicate (7 failures). The first-round files, with
+    `tests/test_quality_core.py` and `tests/test_index_state.py` (166
+    tests), let it survive.
+  - The registry-bound build-and-validate test binds a square-only item to a
+    `native_repair` oracle. It fails when the build call site drops
+    `source_oracle_refs` (eligible 1, not 2), when the validation call site
+    drops it ("fidelity does not match source"), and with the unguarded
+    predicate.
+  - `tests/test_quality_v13_query_binding.py` had 20 tests. 4 fail on the
+    pre-change tree: the version and binding pins, manifest 10 requiring
+    quality 13, new manifests at 10, and a manifest-9 index being rebuilt
+    rather than reused. The other 16 pass there and pin manifest 9's
+    behaviour: queries with and without context, on both backends, with and
+    without a quality binding; its policy, table-child and quality-binding
+    refusals; its table-family depth; and the refusal of the unbound
+    versions 8 and 11. All six mutants are killed: no current-payload set, a
+    current-only table count, no context binding, no legacy binding, and a
+    current-only policy or table-child check.
+  - Review fix-up 1 made it 25 tests: the refusal and table-depth tests now
+    run for ordinary and context-window queries. All 18 manifest-9 cases pass
+    unchanged on the pre-change tree. They kill the mutant that keeps the
+    current-payload checks for ordinary queries only (3 failures: the
+    policy, table-child count and unbound table-children refusals in
+    context mode), which the same 166 tests let survive.
+  - Two existing tests changed on purpose: the "old manifest" case in
+    `tests/test_index_state.py` (9 -> 8) and the migration marker in
+    `tests/test_vector_store_lock_release.py` (`5->9` -> `5->10`).
+  - Focused related suites (62 files): 2,823 passed, 1 skipped. The one
+    failure, `test_guided_ocr_review_has_exact_inward_and_host_only_boundaries`,
+    is the unrelated untracked-OCR-module failure; the architecture inventory
+    test fails only on the stale baseline. Ruff and
+    `tools/check_python_sources.py` are clean.
+- **Follow-ups (not fixed).**
+  - Rebuild the 17 READY runs once, after all of today's changes: a v13
+    report, a full re-embed and a new receipt each. Chunk h16 fresh before
+    publishing it.
+  - The architecture inventory drift now also covers the new public
+    `chunking_core.normalization_erases_decorative_squares`, the new keyword
+    parameters `quality_core.source_inventory(source_oracle_refs)`,
+    `quality_core._source_exclusion_reason(source_oracle_bound)` and
+    `index_state._query_manifest_dimension_impl(current_payload_schema_versions)`,
+    the new `rag` binding `_CURRENT_PAYLOAD_LEGACY_MANIFEST_VERSIONS`, the
+    changed version and binding values, and, once tracked, the two new test
+    modules. It needs a reviewed `--refresh`.
+  - `validate_quality_report` still does not recompute
+    `excluded_items_by_reason`. The gap predates this change; the counts are
+    informational, and eligibility stays bound through the fidelity
+    descriptor root.
+  - A square-only caption, which the chunker can also erase, still fails
+    closed; none exists in the scanned conversions.
 
 ### Integrated convergence
 

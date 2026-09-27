@@ -373,12 +373,16 @@ def _query_manifest_dimension_impl(
         manifest_path_fn: PathFn,
         load_manifest_fn: ManifestLoaderFn,
         compatible_schema_bindings: tuple[tuple[int, int], ...] = (),
+        current_payload_schema_versions: tuple[int, ...] = (),
 ) -> int | None:
     """Validate query/index compatibility and return the indexed dimension.
 
     Legacy collections without a manifest remain queryable. Once a manifest
     exists, however, querying with a different model or stale schema is refused
     rather than silently comparing vectors from incompatible embedding spaces.
+    A compatible older version listed in *current_payload_schema_versions*
+    shares the current payload, so it keeps the current embedding-policy and
+    table-child checks.
     """
     marker_path = marker_path_fn(
         db_dir, backend=backend, collection_name=collection_name)
@@ -412,13 +416,16 @@ def _query_manifest_dimension_impl(
             f"{sorted(quality_policy_by_manifest)!r}. Re-run indexing or "
             "query with the indexed embedding model."
         )
+    current_payload = (
+        manifest_version == manifest_schema_version
+        or manifest_version in current_payload_schema_versions)
     expected = {
         "backend": backend,
         "collection": collection_name,
         "embedding_model": embedding_model,
         "model_artifact_lock_sha256": model_artifact_lock_sha256,
     }
-    if manifest_version == manifest_schema_version:
+    if current_payload:
         expected["embedding_input_policy_version"] = (
             embedding_input_policy_version)
     for key, value in expected.items():
@@ -438,7 +445,7 @@ def _query_manifest_dimension_impl(
             f"({quality_mismatch}): {manifest_path}. Re-run indexing for "
             "this collection."
         )
-    if manifest_version == manifest_schema_version:
+    if current_payload:
         table_child_count = manifest.get("table_child_count")
         source_record_count = manifest.get("source_record_count")
         if (isinstance(table_child_count, bool)

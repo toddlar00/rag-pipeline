@@ -184,7 +184,10 @@ the published lexical tokens: every eligible source token must be represented,
 every published token must be source-owned, and declared list markers are
 mandatory source tokens rather than optional Markdown decoration. Numeric page
 furniture is removed only through its exact source-bound classification, and
-footnotes retain their source page and order before endnote serialization.
+footnotes retain their source page and order before endnote serialization. A
+`text` item whose every line is blank or holds only U+25A0 black squares
+with spaces, tabs or no-break spaces, which normalization erases, is excluded
+as a typed `decorative_glyph` unless a source oracle binds a repair of it.
 
 Same-page reading order is checked from each item's first and last published
 token positions. Typed `container_alias` ownership permits a table or picture
@@ -1854,8 +1857,8 @@ before work begins, publish the JSONL via atomic replacement, and retain the
 vector lease until the matching index commits. A crash therefore exposes
 neither partial JSONL nor an apparently clean old index paired with a new
 corpus. Before any vector-client mutation, indexing validates the adjacent
-quality report against one exact chunks snapshot; schema-v9 manifests bind the
-validated schema-v12 report SHA-256 and attest the row-child count used to select
+quality report against one exact chunks snapshot; schema-v10 manifests bind the
+validated schema-v13 report SHA-256 and attest the row-child count used to select
 a safe candidate depth. Chroma hybrid search and opt-in neighbor
 assembly compare both the chunks and quality-report SHA-256 values with the
 manifest, parse and hash one exact file-handle snapshot, and refuse
@@ -1925,7 +1928,7 @@ an existing manifest.
 
 The real-vector-client release rehearsal recreates the exact schema-5 manifest
 field set emitted by the last integrated release, upgrades only the selected
-collection to schema 9, and verifies exact IDs and hashes, sibling collection
+collection to schema 10, and verifies exact IDs and hashes, sibling collection
 and manifest preservation, a subsequent no-op, successful queries against both
 collections, clean recovery-marker state, and immediate database-directory
 removal on Windows and Linux for both Chroma and Qdrant.
@@ -2079,8 +2082,8 @@ validating their artifacts as follows:
 |-------|-----------|
 | Convert | Schema-v2 immutable original/effective PDF binding, config/model lock, and exact JSON/Markdown/derived-PDF output hashes |
 | Chunk | Schema-v7 exact Docling/conversion/recovery inputs, immutable structure-profile receipt, output hash, and strict JSONL schema |
-| Quality | Schema-v12 chunk-input provenance plus exact Docling/chunks/parameters/retrieval-linkage/table-family binding and every required PASS check |
-| Index | Clean schema-v9 manifest plus schema-v12 report binding, physical IDs/count, row-child count, and chunk hashes |
+| Quality | Schema-v13 chunk-input provenance plus exact Docling/chunks/parameters/retrieval-linkage/table-family binding and every required PASS check |
+| Index | Clean schema-v10 manifest plus schema-v13 report binding, physical IDs/count, row-child count, and chunk hashes |
 | Export | Source/config completion and output hash |
 | Chapter export | Exact manifested chapter-file set and hashes |
 | RAPTOR | Source/config-bound tree schema and statistics |
@@ -2102,10 +2105,16 @@ Legacy completion and quality files can be retained as migration inputs, but
 they are not verified resume evidence unless every current validator accepts
 their exact artifact generation. A corpus carrying quality evidence, source
 lineage, opaque source oracles, or table-family metadata requires the current
-schema-v12 quality report for indexing. Current indexing writes a schema-v9
-manifest bound to that schema-v12 report. Migrate the whole artifact chain in
-order, using the same processing flags, embedding model, and explicit structure
-profile as the original run:
+schema-v13 quality report for indexing. Current indexing writes a schema-v10
+manifest bound to that schema-v13 report. Schema v13 changed only which source
+items are eligible, so a schema-v9 manifest keeps its previous query checks.
+Ordinary queries accept it bound to a schema-v12 report or without a quality
+binding. Context assembly accepts it only without a quality binding, because
+it also validates the corpus quality report, which must now be schema v13.
+Corpus-pinned evaluation, publication, AI project export and the service
+evidence companion require the current chain. Migrate the whole artifact
+chain in order, using the same processing flags, embedding model, and explicit
+structure profile as the original run:
 
 ```bash
 # Rebuild conversion, chunks, and quality evidence when needed, then reconcile
@@ -2120,7 +2129,7 @@ python rag.py full --pdf Book.pdf --resume --full-reindex \
 
 Do not query or export the old collection until this command finishes. Resume
 keeps valid schema-v2 conversion evidence, rebuilds stale chunk evidence under
-schema v7 and chunking policy v79, regenerates the schema-v12 quality report
+schema v7 and chunking policy v79, regenerates the schema-v13 quality report
 from the exact chunk-completion inputs, and then reconciles or
 rebuilds an index whose
 prior quality binding is incompatible. The chunk receipt records the selected
