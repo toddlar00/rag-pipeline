@@ -87,6 +87,50 @@ def assert_no_link_components(path: Path, *, include_leaf: bool = True) -> None:
                 "sensitive storage paths cannot traverse links or junctions")
 
 
+def _bounded_snapshot(path: Path, limit: int, *, min_size: int, retain: bool,
+                      chunk_size: Callable[[], int], identity: Callable[[Any], tuple],
+                      invalid: str, opened_changed: str, oversized: str, changed: str,
+                      final_before_first: bool = False) -> tuple[bytes | None, str]:
+    """Verify two bounded same-handle passes; optionally retain the first bytes."""
+    assert_no_link_components(path)
+    before = path.lstat()
+    if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1
+            or not min_size <= before.st_size <= limit):
+        raise ValueError(invalid)
+    digests, raw = [], None
+    with path.open("rb") as handle:
+        opened = os.fstat(handle.fileno())
+        if identity(opened) != identity(before) or opened.st_nlink != 1:
+            raise RuntimeError(opened_changed)
+        for attempt in range(2):
+            handle.seek(0)
+            digest, count = hashlib.sha256(), 0
+            blocks = [] if retain and attempt == 0 else None
+            while True:
+                block = handle.read(min(chunk_size(), limit + 1 - count))
+                if not block:
+                    break
+                count += len(block)
+                if count > limit:
+                    raise ValueError(oversized)
+                digest.update(block)
+                if blocks is not None:
+                    blocks.append(block)
+            current = os.fstat(handle.fileno())
+            if count != before.st_size or identity(current) != identity(before) or current.st_nlink != 1:
+                raise RuntimeError(changed)
+            digests.append(digest.hexdigest())
+            if blocks is not None:
+                raw = b"".join(blocks)
+    assert_no_link_components(path)
+    after = path.lstat()
+    if (not stat.S_ISREG(after.st_mode) or after.st_nlink != 1
+            or identity(before if final_before_first else after) != identity(after if final_before_first else before)
+            or digests[0] != digests[1]):
+        raise RuntimeError(changed)
+    return raw, digests[0]
+
+
 @lru_cache(maxsize=1)
 def _windows_current_user_sid() -> str:
     if os.name != "nt":

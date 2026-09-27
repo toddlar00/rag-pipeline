@@ -83,13 +83,13 @@ class OfflineBM25Index:
             stable_ids=self.stable_ids,
             id_scheme=_chunk_id_scheme(records),
         )
-        self._tokens = tuple(
+        token_lists = tuple(
             _content_tokens(_lexical_document_text(
                 record["text"], record["metadata"]))
             for record in records
         )
-        self._frequencies = tuple(Counter(tokens) for tokens in self._tokens)
-        self._document_lengths = tuple(len(tokens) for tokens in self._tokens)
+        self._frequencies = tuple(Counter(tokens) for tokens in token_lists)
+        self._document_lengths = tuple(len(tokens) for tokens in token_lists)
         self._average_length = (
             sum(self._document_lengths) / len(self._document_lengths)) or 1.0
         document_frequency = Counter()

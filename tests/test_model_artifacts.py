@@ -4,6 +4,7 @@ import io
 import json
 import os
 from dataclasses import replace
+from pathlib import Path
 import subprocess
 import sys
 from types import ModuleType, SimpleNamespace
@@ -15,7 +16,7 @@ import pytest
 import model_artifacts
 import rag
 import release_security
-from tools import check_model_artifacts
+from tools import check_model_artifacts, refresh_model_artifacts
 
 
 def _policy_data():
@@ -1363,3 +1364,61 @@ def test_model_lock_and_sbom_serialization_are_valid_utf8_json():
     ))
     assert payload.endswith(b"\n")
     assert json.loads(payload.decode("utf-8"))["bomFormat"] == "CycloneDX"
+
+
+@pytest.mark.parametrize("tool", [check_model_artifacts, refresh_model_artifacts],
+                         ids=["check", "refresh"])
+@pytest.mark.parametrize("failure", [None, "fsync", "replace", "cleanup"],
+                         ids=["success", "fsync", "replace", "cleanup-precedence"])
+def test_model_tool_writer_preserves_bytes_and_failure_precedence(
+        tmp_path, monkeypatch, tool, failure):
+    target = tmp_path / "artifact.json"
+    target.write_bytes(b"old artifact")
+    payload = b"new artifact\x00\xff\n"
+    temporary = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+    primary = OSError("injected publication failure")
+    cleanup_error = PermissionError("injected cleanup failure")
+    calls = []
+    real_fsync, real_replace, real_unlink = os.fsync, os.replace, Path.unlink
+
+    def fsync(fd):
+        calls.append("fsync")
+        if failure == "fsync":
+            raise primary
+        real_fsync(fd)
+
+    def replace_file(source, destination):
+        calls.append("replace")
+        assert (source, destination) == (temporary, target)
+        assert source.read_bytes() == payload
+        if failure in ("replace", "cleanup"):
+            raise primary
+        real_replace(source, destination)
+
+    def unlink(path, *args, **kwargs):
+        if path == temporary:
+            calls.append("cleanup")
+            if failure == "cleanup":
+                raise cleanup_error
+        return real_unlink(path, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "fsync", fsync)
+        patch.setattr(os, "replace", replace_file)
+        patch.setattr(Path, "unlink", unlink)
+        if failure is None:
+            assert tool._atomic_write(target, payload) is None
+        else:
+            with pytest.raises(OSError) as raised:
+                tool._atomic_write(target, payload)
+            assert raised.value is (cleanup_error if failure == "cleanup"
+                                    else primary)
+            if failure == "cleanup":
+                assert raised.value.__context__ is primary
+
+    assert calls == (["fsync", "cleanup"] if failure == "fsync"
+                     else ["fsync", "replace", "cleanup"])
+    assert target.read_bytes() == (payload if failure is None else b"old artifact")
+    assert temporary.exists() is (failure == "cleanup")
+    if failure == "cleanup":
+        assert temporary.read_bytes() == payload

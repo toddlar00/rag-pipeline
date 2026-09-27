@@ -267,6 +267,85 @@ def test_quality_report_path_is_canonical_and_adjacent(tmp_path):
         tmp_path / "book_chunks.quality.json")
 
 
+@pytest.mark.parametrize("values, expected", [
+    ([], (None, None, None)),
+    ([7], (7, 7, 7)),
+    ([100, 0], (0, 100, 100)),
+    ([9, 1, 9, 1], (1, 9, 9)),
+    (list(range(20, 0, -1)), (10, 19, 20)),
+    (list(range(21, 0, -1)), (11, 20, 21)),
+    (list(range(100, 0, -1)), (50, 95, 99)),
+    (list(range(101, 0, -1)), (51, 96, 100)),
+])
+def test_token_percentiles_preserve_nearest_rank_boundaries(values, expected):
+    original = list(values)
+    assert quality_core._token_percentiles(values) == expected
+    assert tuple(quality_core._nearest_rank(values, rank)
+                 for rank in (50, 95, 99)) == expected
+    assert values == original
+
+
+def test_token_percentiles_are_recomputed_from_validation_records():
+    document = {"texts": [_source_item(f"#/texts/{i}", 1) for i in range(3)]}
+    records = [_record(i, f"#/texts/{i}", 1) for i in range(3)]
+    for record, raw in zip(records, (1, 2, 100)):
+        record["metadata"].update(token_count=raw, embedding_token_count=raw + 2)
+    report = _build(records, document)
+    kwargs = _validation_kwargs(record_count=3)
+    assert report["embedding"]["raw_token_p50"] == 2
+    assert report["embedding"]["input_token_p50"] == 4
+    assert quality_core.validate_quality_report(report, **kwargs, records=records) is report
+
+    for field, changed in (("raw_token_p50", 1), ("input_token_p50", 3)):
+        tampered = copy.deepcopy(report)
+        tampered["embedding"][field] = changed  # Still within ordered min/max bounds.
+        with pytest.raises(ValueError, match="token summaries do not match records"):
+            quality_core.validate_quality_report(tampered, **kwargs, records=records)
+
+
+@pytest.mark.parametrize("phase", ["build", "validation"])
+def test_token_percentiles_preserve_int_subclass_order_and_errors(phase):
+    events = []
+    fail = False
+    failure = RuntimeError("custom maximum comparison")
+
+    class Count(int):
+        def __lt__(self, other):
+            if type(other) is Count:
+                events.append(("lt", int(self), int(other)))
+            return int.__lt__(self, other)
+
+        def __gt__(self, other):
+            if type(other) is Count:
+                events.append(("gt", int(self), int(other)))
+                if fail:
+                    raise failure
+            return int.__gt__(self, other)
+
+    document = {"texts": [_source_item(f"#/texts/{i}", 1) for i in range(2)]}
+    records = [_record(i, f"#/texts/{i}", 1) for i in range(2)]
+    for record, raw in zip(records, (2, 1)):
+        record["metadata"].update(token_count=raw, embedding_token_count=raw + 2)
+    report = _build(records, document)
+    for record in records:
+        record["metadata"]["token_count"] = Count(record["metadata"]["token_count"])
+
+    def run():
+        if phase == "build":
+            return _build(records, document)
+        return quality_core.validate_quality_report(
+            report, **_validation_kwargs(record_count=2), records=records)
+
+    assert run()["embedding"] == report["embedding"]
+    assert events == [("lt", 1, 2), ("gt", 1, 2)] + [("lt", 1, 2)] * 3
+    events.clear()
+    fail = True
+    with pytest.raises(RuntimeError) as caught:
+        run()
+    assert caught.value is failure
+    assert events == [("lt", 1, 2), ("gt", 1, 2)]
+
+
 def test_quality_report_rejects_left_space_hyphen_boundary():
     text = "A low -level offense."
     document = {"texts": [

@@ -116,11 +116,6 @@ def _provenance_boxes(
     return result
 
 
-def _first_page(item: object) -> int | None:
-    boxes = _provenance_boxes(item)
-    return boxes[0][0] if boxes else None
-
-
 def _inside_ranges(item: object, ranges: Sequence[tuple[int, int]]) -> bool:
     boxes = _provenance_boxes(item)
     return bool(boxes) and all(
@@ -884,41 +879,6 @@ def _running_heading_resumes(
         and running_tokens[-1].isdigit()
         and any(token.isalpha() for token in ancestor_tokens)
     )
-
-
-def _component_bindings(
-        record: dict, path: Sequence[str], items: dict[str, dict],
-) -> tuple[list[dict], bool]:
-    displays = _section_parts(record)
-    components: list[dict] = []
-    path_index = 0
-    valid = True
-    for display in displays:
-        match = None
-        # Composite title lines are adjacent and small.  Bounding the search
-        # prevents a display from laundering an arbitrary collection of refs.
-        for end in range(path_index + 1, min(len(path), path_index + 3) + 1):
-            candidate = list(path[path_index:end])
-            if _display_matches_refs(display, candidate, items):
-                match = candidate
-                break
-        if match is None:
-            components.append({
-                "display": display,
-                "occurrence_ids": [],
-                "binding": "unbound",
-            })
-            valid = False
-            continue
-        components.append({
-            "display": display,
-            "occurrence_ids": match,
-            "binding": "source_heading",
-        })
-        path_index += len(match)
-    if path_index != len(path):
-        valid = False
-    return components, valid
 
 
 def _occurrence_component_bindings(

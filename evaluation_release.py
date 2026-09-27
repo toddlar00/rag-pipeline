@@ -11,6 +11,7 @@ from pathlib import Path
 
 import evaluation_contract
 import evaluation_inputs
+from evaluation_inputs import _hex_digest as _digest
 import model_artifacts
 import retrieval_core
 
@@ -34,7 +35,6 @@ REQUIRED_MINIMUMS = frozenset({
 REQUIRED_MAXIMUMS = frozenset({"false_answer_rate"})
 
 _POLICY_ID_RE = re.compile(r"[a-z0-9][a-z0-9._-]{2,63}")
-_HEX64_RE = re.compile(r"[0-9a-f]{64}")
 _CONFLICTING_EVAL_OPTIONS = frozenset({
     "--retriever",
     "--compare",
@@ -68,12 +68,6 @@ def _exact_fields(value: object, expected: set[str], *, label: str) -> dict:
         raise ValueError(
             f"{label} fields do not match release-policy schema "
             f"v{RELEASE_POLICY_SCHEMA_VERSION}")
-    return value
-
-
-def _digest(value: object, *, label: str) -> str:
-    if not isinstance(value, str) or _HEX64_RE.fullmatch(value) is None:
-        raise ValueError(f"{label} must be a lowercase SHA-256 digest")
     return value
 
 

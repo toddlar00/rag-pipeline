@@ -211,6 +211,19 @@ def _nearest_rank(values: Sequence[int], percentile: int) -> int | None:
     return ordered[min(rank, len(ordered)) - 1]
 
 
+def _token_percentiles(values: Sequence[int]) -> tuple[int | None, ...] | None:
+    """Sort native counts once; defer subclasses to the original field calls."""
+    if any(type(value) is not int for value in values):
+        return None
+    if not values:
+        return None, None, None
+    ordered = sorted(values)
+    return tuple(
+        ordered[(len(ordered) * percentile + 99) // 100 - 1]
+        for percentile in (50, 95, 99)
+    )
+
+
 def _is_nonnegative_int(value: object) -> bool:
     return (isinstance(value, int) and not isinstance(value, bool)
             and value >= 0)
@@ -472,12 +485,6 @@ def _item_pages(item: dict) -> tuple[int, ...]:
         if isinstance(page, int) and not isinstance(page, bool) and page > 0:
             pages.append(page)
     return tuple(dict.fromkeys(pages))
-
-
-def _source_spans(item: dict) -> list[dict]:
-    """Serialize source provenance exactly as ``rag`` serializes lineage."""
-    spans, _ = source_fidelity_core.provenance_spans(item)
-    return spans
 
 
 def _relationship_ref(value: object) -> str:
@@ -1626,24 +1633,14 @@ def build_quality_report(
                     "fields": mismatched_fields,
                 })
 
-        scoped_spans_by_entry = [
-            [
-                span for span in entry["spans"]
-                if span["provenance_index"] in set(
-                    source_fidelity_core.lineage_scope_indexes(entry) or ())
-            ]
+        lineage_pages_by_entry = [
+            source_fidelity_core.lineage_scope_pages(entry) or frozenset()
             for entry in lineage_entries
         ]
-        lineage_pages = {
-            span["page"]
-            for spans in scoped_spans_by_entry
-            for span in spans
-        }
+        lineage_pages = set().union(*lineage_pages_by_entry)
         lineage_structural_leak = any(
-            spans
-            and all(_inside_ranges(span["page"], ranges)
-                    for span in spans)
-            for spans in scoped_spans_by_entry
+            pages and all(_inside_ranges(page, ranges) for page in pages)
+            for pages in lineage_pages_by_entry
         )
 
         page_start = metadata.get("page_start")
@@ -1933,6 +1930,8 @@ def build_quality_report(
         else "pass"
     eligible_count = len(eligible_refs)
     represented_eligible_count = eligible_count - len(missing_refs)
+    raw_percentiles = _token_percentiles(raw_counts)
+    input_percentiles = _token_percentiles(embedding_counts)
 
     return {
         "schema_version": QUALITY_REPORT_SCHEMA_VERSION,
@@ -1957,15 +1956,21 @@ def build_quality_report(
             "limit": embedding_limit,
             "raw_token_min": min(raw_counts) if raw_counts else None,
             "raw_token_max": max(raw_counts) if raw_counts else None,
-            "raw_token_p50": _nearest_rank(raw_counts, 50),
-            "raw_token_p95": _nearest_rank(raw_counts, 95),
-            "raw_token_p99": _nearest_rank(raw_counts, 99),
+            "raw_token_p50": (raw_percentiles[0] if raw_percentiles is not None
+                              else _nearest_rank(raw_counts, 50)),
+            "raw_token_p95": (raw_percentiles[1] if raw_percentiles is not None
+                              else _nearest_rank(raw_counts, 95)),
+            "raw_token_p99": (raw_percentiles[2] if raw_percentiles is not None
+                              else _nearest_rank(raw_counts, 99)),
             "raw_token_count": len(raw_counts),
             "input_token_min": min(embedding_counts) if embedding_counts else None,
             "input_token_max": max(embedding_counts) if embedding_counts else None,
-            "input_token_p50": _nearest_rank(embedding_counts, 50),
-            "input_token_p95": _nearest_rank(embedding_counts, 95),
-            "input_token_p99": _nearest_rank(embedding_counts, 99),
+            "input_token_p50": (input_percentiles[0] if input_percentiles is not None
+                                else _nearest_rank(embedding_counts, 50)),
+            "input_token_p95": (input_percentiles[1] if input_percentiles is not None
+                                else _nearest_rank(embedding_counts, 95)),
+            "input_token_p99": (input_percentiles[2] if input_percentiles is not None
+                                else _nearest_rank(embedding_counts, 99)),
             "inputs_over_limit": len(over_limit),
         },
         "source_lineage": {
@@ -2525,18 +2530,26 @@ def validate_quality_report(
                        for value in input_counts)):
             raise ValueError(
                 "corpus quality report token summaries are invalid")
+        raw_percentiles = _token_percentiles(raw_counts)
+        input_percentiles = _token_percentiles(input_counts)
         expected_embedding = {
             "raw_token_min": min(raw_counts),
             "raw_token_max": max(raw_counts),
-            "raw_token_p50": _nearest_rank(raw_counts, 50),
-            "raw_token_p95": _nearest_rank(raw_counts, 95),
-            "raw_token_p99": _nearest_rank(raw_counts, 99),
+            "raw_token_p50": (raw_percentiles[0] if raw_percentiles is not None
+                              else _nearest_rank(raw_counts, 50)),
+            "raw_token_p95": (raw_percentiles[1] if raw_percentiles is not None
+                              else _nearest_rank(raw_counts, 95)),
+            "raw_token_p99": (raw_percentiles[2] if raw_percentiles is not None
+                              else _nearest_rank(raw_counts, 99)),
             "raw_token_count": len(raw_counts),
             "input_token_min": min(input_counts),
             "input_token_max": max(input_counts),
-            "input_token_p50": _nearest_rank(input_counts, 50),
-            "input_token_p95": _nearest_rank(input_counts, 95),
-            "input_token_p99": _nearest_rank(input_counts, 99),
+            "input_token_p50": (input_percentiles[0] if input_percentiles is not None
+                                else _nearest_rank(input_counts, 50)),
+            "input_token_p95": (input_percentiles[1] if input_percentiles is not None
+                                else _nearest_rank(input_counts, 95)),
+            "input_token_p99": (input_percentiles[2] if input_percentiles is not None
+                                else _nearest_rank(input_counts, 99)),
             "inputs_over_limit": (
                 sum(value > embedding["limit"] for value in input_counts)
                 if embedding["limit"] is not None else 0),
