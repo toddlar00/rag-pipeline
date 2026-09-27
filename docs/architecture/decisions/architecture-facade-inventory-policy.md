@@ -59,6 +59,18 @@ paths and stable ordering. CI checks; it never refreshes automatically. A
 refresh requires a stated architectural reason, a named reviewer, review of the
 bounded semantic drift summary, and the full baseline diff when hashes change.
 
+After each patch, review remaining redundancy, source and inventory size,
+runtime and memory costs, and capability preservation. Record net maintained
+source and canonical inventory changes separately, the tradeoffs and validation
+performed, and any measurements supporting performance claims. Prefer existing
+shared mechanisms; add an abstraction only when its demonstrated benefit
+outweighs its maintenance and compatibility cost. Review inventory growth
+alongside each patch's benefits and costs, without a fixed size cap. Do not
+shrink the inventory by excluding sources,
+weakening characterization or tests, or removing required capabilities. Check
+affected compatibility and behavior with proportionate validation; clearly
+separate measured improvements, static reductions, and untested expectations.
+
 ## Boundaries
 
 This is characterization, not an API declaration. Recording a private name or
