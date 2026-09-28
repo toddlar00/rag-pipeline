@@ -7,11 +7,12 @@ fresh-process repetitions.
 
 ## Provenance
 
-Both current reports were generated from the clean pytest-xdist source
+Both current reports were generated from the clean FlagEmbedding source
 checkpoint
-`ff5e64f929701cdd3388c60d82a7d5f9412ce76d` (tree
-`c393869ac911dfcd7d43ccbe4fd6363aec72d71c`), stacked on the test-time economy checkpoint
-`365de1c` and the OCR-program and casebook-excerpt checkpoint `29ea76b`.
+`515ed913d1e6b1eb33841e49f82eab26fcfb43ce` (tree
+`f1051d6c016e2b36a8565e6c5d82fb4c9f3d8f0e`), stacked on the pytest-xdist checkpoint
+`ff5e64f`, the test-time economy checkpoint `365de1c` and the
+OCR-program and casebook-excerpt checkpoint `29ea76b`.
 That source contains everything through the Task 0.8
 static-security merge `e34103f` plus the local OCR accuracy, retry and
 guided-review program, opt-in AI evidence search, the passive cleanup
@@ -25,10 +26,12 @@ test guards, a Python 3.10/3.11-tolerant import-guard test, a
 60-minute Windows unit-lane timeout and the test-time economy changes
 (a session-shared architecture inventory, an indexed inventory builder,
 cached lock-record parsing and executed-source digests, and a Windows
-unit lane split into three shards), pytest-xdist for the unit lanes and
-gradio import guards in seven OCR review test modules.
-The only lock change adds pytest-xdist 3.8.0 and execnet 2.1.2 to
-`requirements-test.lock` and `requirements-smoke.lock`; no model lock
+unit lane split into three shards), pytest-xdist for the unit lanes,
+gradio import guards in seven OCR review test modules and FlagEmbedding
+1.4.2 for Transformers 5 reranking. The lock changes add pytest-xdist
+3.8.0 and execnet 2.1.2 to `requirements-test.lock` and
+`requirements-smoke.lock` and move FlagEmbedding from 1.4.0 to 1.4.2 in
+`requirements-core.lock` and `requirements-full.lock`; no model lock
 changed. The executing
 environments were
 synchronized with repository-pinned uv 0.12.5 against the exact CPU
@@ -47,8 +50,8 @@ marker-resolved distributions before generation.
 
 | Platform | Runtime | Report | Bytes | File SHA-256 | Embedded report SHA-256 |
 |---|---:|---|---:|---|---|
-| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,080 | `8f0732fddfd69e2cd6c4f31f5c9fe145a522c469f5ed570ada6ccedff91866a0` | `11a4cfd4acc7e39accf62b6324b5c400a1394f6b243be246983bbe6e33513c02` |
-| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,463 | `e0bd8b33d45f7e9eddea009df1158df2618fdb71867ed0df40dcb9fda826e373` | `26e44ea4f99771a11586c5bc9e3257e824e456a8bff2ec8bfa26eb0f61b6d246` |
+| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,086 | `83ef0e7f09a3a44584548f4d1ac4f6dbae7fb107105b4b45651b9726c838b943` | `cddbb1d4660f819c6709336970397f8b7864c402467dffa6fabb789696ebf12d` |
+| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,461 | `e73b039bdb5615f08864abcc39c497f66c790e3fc84f28660e93400b1f73d2d9` | `b1fc090d197dff4e696a342442056a568f2ac6b9750b58e1673c27335cf6dfa2` |
 
 The reports attest the same source commit, clean-worktree state, tracked-diff
 digest, eight LF and `HEAD`-identical dependency/model-lock inputs, authoritative
@@ -203,7 +206,13 @@ supersedes the `365de1c` pair for its own pull request. The `c31f4c9` pair
 #118](https://github.com/toddlar00/rag-pipeline/pull/118). Its lock change
 also triggered the dependency workflow's core-lock job, which failed because
 seven OCR review test modules imported gradio unconditionally. The test-only
-source `ff5e64f` guards those imports and supersedes the `c31f4c9` pair.
+source `ff5e64f` guards those imports and supersedes the `c31f4c9` pair. The
+`ff5e64f` pair (gate-only child `419e901`) passed the hosted CI promotion
+gate on [PR #118](https://github.com/toddlar00/rag-pipeline/pull/118). The
+stacked FlagEmbedding source `515ed91` (ML/runtime domain) moves
+FlagEmbedding from 1.4.0 to 1.4.2 in `requirements-core.lock` and
+`requirements-full.lock`, so local reranking works with Transformers 5, and
+supersedes the `ff5e64f` pair for its own pull request.
 The current reports above
 bind
 that exact clean source and each passes an independent complete

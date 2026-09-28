@@ -1415,11 +1415,17 @@ supersedes the `365de1c` pair for its own pull request. The `c31f4c9` pair
 #118](https://github.com/toddlar00/rag-pipeline/pull/118). Its lock change
 also triggered the dependency workflow's core-lock job, which failed because
 seven OCR review test modules imported gradio unconditionally. The test-only
-source `ff5e64f` guards those imports and supersedes the `c31f4c9` pair.
+source `ff5e64f` guards those imports and supersedes the `c31f4c9` pair. The
+`ff5e64f` pair (gate-only child `419e901`) passed the hosted CI promotion
+gate on [PR #118](https://github.com/toddlar00/rag-pipeline/pull/118). The
+stacked FlagEmbedding source `515ed91` (ML/runtime domain) moves
+FlagEmbedding from 1.4.0 to 1.4.2 in `requirements-core.lock` and
+`requirements-full.lock`, so local reranking works with Transformers 5, and
+supersedes the `ff5e64f` pair for its own pull request.
 Its Windows/Linux
 pair (independent local same-platform comparisons passed) is that branch's
 candidate; its hosted checks, and the external exact-SHA records for all
-three pull requests, are pending.
+four pull requests, are pending.
 
 Two operational follow-ups from the post-merge `main` push runs are open:
 a documentation-only merge passes its fast-lane pull-request run but then
