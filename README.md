@@ -2779,9 +2779,12 @@ handshake deadline.
   lines. Each OCR line then goes to whichever region covers more of it, so
   lines in the overlap jump a line or two out of order, and no quality gate
   can see it. With the flag, two text, list-item or footnote regions merge
-  when at least 80% of a line in one lies inside the other. The merged region
-  reads its lines in OCR order, top to bottom. A touch of a few points never
-  merges, and pictures, tables and regions with children are left alone. It
+  when their typical lines share one column and at least 80% of a line in one
+  lies inside the other. The merged region reads its lines in OCR line order,
+  which is top to bottom within a single column. A touch of a few points never
+  merges, a line read across a column gutter does not join two columns, and
+  pictures, tables and regions with children are left alone. It is meant for
+  single-column scans. It
   does not enable OCR, `--no-ocr` overrides it, and it composes with
   `--ocr-full-page` and `--ocr-no-angle-classifier`. The parameters digest
   records it, and the conversion manifest records it as

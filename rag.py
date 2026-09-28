@@ -7382,11 +7382,46 @@ def _cell_inside_region(cell, region_bbox) -> bool:
     return width > 0 and height > 0 and width * height / area >= 0.8
 
 
+def _layout_column_span(cluster) -> tuple[float, float] | None:
+    """Return the median left and right edges of a region's OCR lines."""
+    boxes = [box for cell in cluster.cells
+             if ((box := cell.rect.to_bounding_box()).r > box.l
+                 and box.b > box.t)]
+    if not boxes:
+        return None
+    lefts = sorted(box.l for box in boxes)
+    rights = sorted(box.r for box in boxes)
+    middle = len(boxes) // 2
+    if len(boxes) % 2:
+        return lefts[middle], rights[middle]
+    return ((lefts[middle - 1] + lefts[middle]) / 2,
+            (rights[middle - 1] + rights[middle]) / 2)
+
+
+def _layout_columns_agree(first, second) -> bool:
+    """True when two regions' typical lines share one column.
+
+    One line OCR reads across a column gutter widens its region over the
+    neighbouring column; the regions' median line extents still lie in
+    different columns, so the columns are never merged line by line.
+    """
+    first_span = _layout_column_span(first)
+    second_span = _layout_column_span(second)
+    if first_span is None or second_span is None:
+        return False
+    narrower = min(first_span[1] - first_span[0],
+                   second_span[1] - second_span[0])
+    overlap = (min(first_span[1], second_span[1])
+               - max(first_span[0], second_span[0]))
+    return narrower > 0 and overlap >= 0.8 * narrower
+
+
 def _layout_regions_interleave(first, second) -> bool:
-    return (any(_cell_inside_region(cell, second.bbox)
-                for cell in first.cells)
-            or any(_cell_inside_region(cell, first.bbox)
-                   for cell in second.cells))
+    return _layout_columns_agree(first, second) and (
+        any(_cell_inside_region(cell, second.bbox)
+            for cell in first.cells)
+        or any(_cell_inside_region(cell, first.bbox)
+               for cell in second.cells))
 
 
 def _layout_reading_key(cluster) -> tuple:
@@ -7403,9 +7438,10 @@ def _merge_interleaved_ocr_regions(clusters):
     line to the region covering most of it (ties go to the first), so lines in
     the overlap alternate between the regions and each region reads out of
     order.  Two final clusters interleave when they share a label in
-    _INTERLEAVED_REGION_LABELS, neither has children, and at least 80% of a
-    line assigned to one lies inside the other's box; a few points of edge
-    contact never qualify.  Groups close transitively.  Each group keeps the
+    _INTERLEAVED_REGION_LABELS, neither has children, their typical lines
+    share one column (_layout_columns_agree), and at least 80% of a line
+    assigned to one lies inside the other's box; a few points of edge contact
+    never qualify.  Groups close transitively.  Each group keeps the
     member whose first line comes first (its id, label and confidence), with
     the union box and every member's lines once each in line-index order.
 

@@ -1100,8 +1100,12 @@ or policy version changed.
   prediction object. The page `layout_score` is computed before the merge
   and is unchanged.
 - **Scope.** Two clusters interleave when they share one of the three
-  labels, neither has children, and at least 80% of a line assigned to one
-  lies inside the other's box. Zero-area lines are skipped. Groups close
+  labels, neither has children, their typical lines share one column, and at
+  least 80% of a line assigned to one lies inside the other's box. Columns
+  agree when the regions' median line extents overlap by at least 80% of the
+  narrower one (`_layout_columns_agree`), so a line OCR reads across a column
+  gutter never joins two columns line by line. The setting is meant for
+  single-column scans. Zero-area lines are skipped. Groups close
   transitively. A group keeps the member whose first line index is lowest
   (its id, label and confidence). It gets the union box and every member's
   lines, deduplicated and sorted by index. Clusters are then re-sorted by
@@ -1131,13 +1135,25 @@ or policy version changed.
     identical. A recording rerun reproduced the JSON byte for byte. It showed
     each merged region's 5-32 OCR lines in non-decreasing top order. In each,
     the lines of the two source regions interleave in 4 to 6 runs.
+  - An independent review approved with changes. It showed that a line read
+    across a column gutter could merge a two-column page line by line; the
+    column guard above fixes that. `tests/test_ocr_region_merge_columns.py`
+    (21 tests) pins the gutter case, the median column span, the agreement
+    threshold, transitive merging in all six input orders, a cell diagonally
+    outside a box, and Docling's real run context holding the merging model
+    on its `layout_postprocess` stage. With the guard, the flagged h18
+    conversion is byte-identical to the one above (JSON and Markdown).
+  - A page-by-page re-audit of the chunked, flagged h18 against the scans
+    found all 7 line swaps of the unflagged conversion in order and no new
+    defect: the whole-document word multiset is identical, 63 records with
+    the same pages and headings, 9 records changed at the fixed locations.
 - **Follow-ups (not fixed).**
   - Code from before this change rejects a flagged manifest.
   - The merge applies to every page of a conversion that runs OCR. A page
     whose lines come from a text layer is ordered by content-stream index,
     not position. h18 is image-only, so no such page exists there.
-  - The flagged h18 is not chunked or published here. Its chunking needs a
-    separate fix.
+  - Chunking the flagged h18 exposed a chunk-preparation duplicate; see
+    "Split item beside a synthetic layout" below.
   - The architecture inventory needs a reviewed `--refresh`: the new private
     helpers, the changed signatures and the new test module drift from it.
   - The OCR retry and disposition tools have no merged-region route.
