@@ -1216,7 +1216,7 @@ version changed.
     after any sidecars of the retracted slice's chunk; the geometry gate
     fails closed if that ever misorders a page.
 
-### Test-suite time (2026-09-28, draft PRs, not integrated)
+### Test-suite time (2026-09-28, integrated)
 
 The dependency-light suite has about 15,000 tests. On PR #116 the Windows
 unit lane needed 29.7 minutes (its limit was raised from 20 to 60) and the
@@ -1228,14 +1228,16 @@ shorten them without changing pipeline behavior.
   session. The inventory builder indexes scope-owned AST nodes once (one
   build 40.1 -> 27.0 s on Windows, output byte-identical). Hash-lock
   parsing is cached by content. A new `--shard INDEX/COUNT` option selects
-  every COUNT-th test after all other deselection, and the Windows unit lane
-  runs as three shards. OCR execution receipts reuse a source file's digest
+  every COUNT-th test after `-k`, `-m` and `--deselect`, and the Windows
+  unit lane runs as three shards. OCR execution receipts reuse a source file's digest
   while its `lstat` identity is unchanged and its last change is older than
   a 2-second racy window; the link-component refusal still runs on every
-  call. Hosted Windows shards took 7m44s to 8m47s.
-- **This PR** (on #117). pytest-xdist 3.8.0 and execnet 2.1.2 join the
+  call. Hosted Windows shards took 7m44s to 8m47s. Merged as `e15448b`.
+- **[PR #118](https://github.com/toddlar00/rag-pipeline/pull/118)** (merged as
+  `3b430bf`). pytest-xdist 3.8.0 and execnet 2.1.2 join the
   hash-locked test toolchain (test/audit tooling domain). The Linux unit
-  matrix and the Windows shards run `python -m pytest -q -n auto`. Six
+  matrix and the Windows shards run `python -m pytest -q -n auto` (the
+  shards add `--shard N/3`). Six
   entrypoint-admission tests patch `__main__.__file__` with
   `raising=False`, because an xdist worker's `__main__` has no `__file__`.
   Locally with four workers the Linux light suite takes 88 s (about 325 s
@@ -1247,7 +1249,7 @@ shorten them without changing pipeline behavior.
   vector-store lanes stay serial; per-worker model loading in the full
   environment is unmeasured. Without psutil, `-n auto` counts logical CPUs.
 
-### Corpus audit follow-ups (2026-09-28, draft PR, not integrated)
+### Corpus audit follow-ups (2026-09-28, integrated)
 
 An independent, read-only audit of the private h26 casebook corpus compared
 every page of its 19 published runs (382 pages) with the page scans. It
@@ -1258,10 +1260,11 @@ defect per 1.4 pages. `h18-agency-inaction` had none in 21 pages; it was
 read by fresh layout-aware OCR of an image-only derivative, using
 `--ocr-no-angle-classifier --ocr-merge-interleaved-regions`.
 
-- **Fixed here: `--rerank` in the locked environment.** FlagEmbedding
+- **Fixed in [PR #119](https://github.com/toddlar00/rag-pipeline/pull/119)
+  (merged as `ab6e159`): `--rerank` in the locked environment.** FlagEmbedding
   1.4.0 scores pairs through `tokenizer.prepare_for_model`, which the
   locked Transformers 5.8.1 tokenizers lack. Reranking therefore logged a
-  failure, kept the hybrid order and still exited 0. This PR raises
+  failure, kept the hybrid order and still exited 0. #119 raises
   FlagEmbedding to 1.4.2, which ships a Transformers v4/v5 compatibility
   layer, and adds a full-environment guard test.
 - **Corpus outcome (private data, not in this repository).** 17 other
@@ -1281,11 +1284,12 @@ read by fresh layout-aware OCR of an image-only derivative, using
     printed-line geometry from an independent detector, or from an existing
     text layer, with the conversion regions and fail closed on uncovered
     text.
-  - *Cross-item hyphen joins on OCR input.* Layout detection often gives a
-    paragraph's indented first line its own region. When one item ends in a
-    line-end hyphen, the join drops the hyphen, because an image-only input
-    has no native hard-hyphen attestation. `source_token_fidelity` then
-    fails closed (2 of 17 re-read excerpts, with both OCR modes).
+  - *Source-token changes on OCR input.* Two of 17 re-read excerpts failed
+    `source_token_fidelity` in both OCR modes. The causes were a same-heading
+    merge that removed a hyphen between two source items, the known
+    fused-term spellings applied to source-bound text, and one folio misread
+    as `1` and labeled body text. The first two are fixed by the section
+    below; the folio case remains open.
   - *Printed-page discontinuities.* A chunk can join text across a gap
     between two excerpt ranges. It then cites a span that includes the
     missing pages and inherits the earlier chapter's heading path. A
@@ -1303,6 +1307,54 @@ read by fresh layout-aware OCR of an image-only derivative, using
   - *Born-digital structure.* The born-digital supplement shows the same
     heading and opinion attribution errors, so attribution is a structure
     problem, not only an OCR one.
+
+### Fresh-OCR token fidelity (2026-09-28, draft PR, not integrated)
+
+The corpus audit's re-read showed three places where the pipeline changed
+the lexical tokens of fresh-OCR text. Each failed publication, although the
+source was read correctly. No schema or policy version changed.
+
+- **Merge join.** `_coalesce_chunk_boundaries` read a lowercase continuation
+  after a line-end hyphen as one wrapped word, so `Cabinet-` + `level`
+  became `Cabinetlevel`. When either record is source-bound, the join now
+  keeps the hyphen (`Cabinet-level`), which preserves both source tokens.
+  Text without lineage keeps the old join.
+- **Fused-term spellings.** Normalization rewrote `threejudge` as
+  `three-judge` even in source-bound text whose OCR item read `threejudge`.
+  `chunking_core._normalize_text` gains `repair_fused_terms` (default on).
+  The source-bound wrapper turns it off through a context variable, so no
+  patchable normalization seam changes its signature. A replacement core
+  with the established signature keeps working.
+- **Publication checks.** The structural publication check and the
+  quality report's `normalization_invariants` both rejected every known
+  fused term. Both now skip source-bound records, for which the fidelity
+  audit decides: a spelling the source attests is kept, and one the
+  pipeline fused fails fidelity. No READY run contains such a term, so no
+  report changes.
+- **Receipt digest cache (review follow-up from #117).** A digest is cached
+  only when the opened handle's content identity (device, inode, size,
+  mtime) matches the `lstat` identity observed before the read. The `lstat`
+  identity also includes ctime, which is compared only between `lstat`
+  calls because Windows `lstat` and `fstat` report different ctime
+  semantics.
+- **Evidence.** `tests/test_ocr_token_fidelity_fixes.py` (11 tests; the
+  behavioural ones fail on the base code) and two new receipt-cache
+  tests. All 19 READY h26 runs re-chunk byte-identical: chunks, oracles and
+  quality reports. The previously failing excerpt with the merge join now
+  fails only on its folio item. The fused-term excerpt now passes all five
+  publication gates.
+- **Follow-ups (not fixed).**
+  - A folio misread by OCR (here `4` read as `1`) and labeled body text is
+    stripped as a page number, so `source_token_fidelity` fails on it. The
+    mislabeled-page-number detector deliberately requires the dominant
+    printed-page offset, and a test pins an off-offset number as body text.
+    Accepting a one-digit misread in the folio lane of a page without its
+    own folio would change that fail-closed policy, so it is an owner
+    decision.
+  - The reranker still fails open: on any exception it logs, keeps the
+    hybrid order and exits 0.
+  - `build_save_feedback` imports gradio before it validates its panel
+    argument, so that argument's validation test needs gradio.
 
 ### Integrated convergence
 
