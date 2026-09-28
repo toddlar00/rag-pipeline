@@ -62,7 +62,8 @@ def capture_identity(*, installation_path: Path | None = None) -> dict:
     verified_installed_package_model("rapidocr", "docling_ocr")
     models = sorted([{"id": item.role, "sha256": item.content_sha256, "bytes": item.size}
                      for item in artifact.files], key=lambda item: item["id"])
-    executable, base = Path(sys.executable), Path(getattr(sys, "_base_executable", sys.executable))
+    executable, base = (storage_policy.interpreter_file(Path(path)) for path in (
+        sys.executable, getattr(sys, "_base_executable", sys.executable)))
     identity = {
         "environment_sha256": environment_identity(Path(sys.prefix)),
         "python_sha256": bounded_snapshot(executable, 64 * 1024 * 1024)[1],

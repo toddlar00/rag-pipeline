@@ -96,7 +96,7 @@ def _worker(argv: list[str]) -> int:
     if len(argv) != 4 or os.environ.get("RAG_OCR_INSTALL_CHILD") != "1":
         raise ValueError("installer worker requires its supervisor")
     _, step, target, interpreter = argv
-    target, interpreter = Path(target).absolute(), Path(interpreter).absolute()
+    target, interpreter = Path(target).absolute(), storage_policy.interpreter_file(Path(interpreter))
     for path in (target, interpreter):
         storage_policy.assert_no_link_components(path)
     marker, _ = _read_snapshot(target / ".ocr-install-owner.json", label="installer ownership", max_bytes=4096)
@@ -114,7 +114,8 @@ def install_environment(environment_path: Path, evidence_dir: Path, *, python_ex
     """Create-only install with a completion/failure receipt and no global writes."""
     if type(timeout) is not int or not 1 <= timeout <= 3600:
         raise ValueError("installation timeout is outside bounds")
-    target, evidence, interpreter = (Path(path).absolute() for path in (environment_path, evidence_dir, python_executable))
+    target, evidence = (Path(path).absolute() for path in (environment_path, evidence_dir))
+    interpreter = storage_policy.interpreter_file(Path(python_executable))
     for path in (target, evidence, interpreter):
         storage_policy.assert_no_link_components(path)
     if (target.exists() or evidence.exists() or target == evidence

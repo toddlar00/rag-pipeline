@@ -72,6 +72,21 @@ def path_is_link_like(path: Path) -> bool:
     return _is_link_like(Path(path))
 
 
+def interpreter_file(path: Path) -> Path:
+    """Return the real file behind an interpreter path.
+
+    POSIX virtual environments and many Python installations expose the
+    interpreter through symlinks. Its identity is the bytes of the real file,
+    so callers snapshot and run that file, and the link-free checks apply to
+    the resolved path. A path with no link components is returned unchanged.
+    Storage paths never go through this: they must stay link-free.
+    """
+    absolute = _absolute(path)
+    if any(_is_link_like(candidate) for candidate in (absolute, *absolute.parents)):
+        return Path(os.path.realpath(absolute))
+    return absolute
+
+
 def assert_no_link_components(path: Path, *, include_leaf: bool = True) -> None:
     """Reject symlink/junction components in one existing path prefix."""
     absolute = _absolute(path)

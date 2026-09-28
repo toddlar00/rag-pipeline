@@ -113,7 +113,7 @@ def _package_baseline(runtime: dict) -> dict:
 
 def _generation() -> dict:
     runtime = _package_baseline(_runtime_metadata())
-    executables = {name: _snapshot(Path(path).absolute(), 64 * 1024 * 1024)[1]
+    executables = {name: _snapshot(storage_policy.interpreter_file(Path(path)), 64 * 1024 * 1024)[1]
                    for name, path in (("python", sys.executable),
                                       ("base_python", getattr(sys, "_base_executable", sys.executable)))}
     return {"environment_identity_sha256": environment_identity(Path(sys.prefix)),
