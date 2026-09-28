@@ -8,7 +8,8 @@ import document_profiles
 
 def test_profile_registry_is_immutable_and_has_reviewed_default():
     assert document_profiles.profile_names() == (
-        "us-law-casebook-v1", "roman-parts-book-v1")
+        "us-law-casebook-v1", "roman-parts-book-v1",
+        "us-law-casebook-excerpt-v1", "us-law-casebook-supplement-v1")
     default = document_profiles.get_profile(
         document_profiles.DEFAULT_STRUCTURE_PROFILE)
     assert default is document_profiles.STRUCTURE_PROFILES[default.name]

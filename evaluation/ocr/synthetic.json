@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "records": [
+    {
+      "id": "synthetic-exact",
+      "reference": "The tenant did not waive notice. Rule 12 requires 30 days.",
+      "prediction": "The tenant did not waive notice. Rule 12 requires 30 days.",
+      "critical_tokens": ["not", "12", "30"]
+    },
+    {
+      "id": "synthetic-omission",
+      "reference": "The tenant did not waive notice.",
+      "prediction": "The tenant did waive notice.",
+      "critical_tokens": ["not"]
+    },
+    {
+      "id": "synthetic-number-confusion",
+      "reference": "Rule 12 requires 30 days.",
+      "prediction": "Rule I2 requires 80 days.",
+      "critical_tokens": ["12", "30"]
+    },
+    {
+      "id": "synthetic-reading-order",
+      "reference": "First determine notice. Then determine consent.",
+      "prediction": "Then determine consent. First determine notice."
+    },
+    {
+      "id": "synthetic-empty-hallucination",
+      "reference": "",
+      "prediction": "Invented text"
+    },
+    {
+      "id": "synthetic-whitespace",
+      "reference": "Section 4\nThe court retained jurisdiction.",
+      "prediction": "Section   4 The court retained\tjurisdiction."
+    }
+  ]
+}

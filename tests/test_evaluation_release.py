@@ -122,6 +122,12 @@ def test_release_policy_requires_exact_four_mode_threshold_contract(tmp_path):
      "incompatible"),
     (lambda value: value["scoring"].pop("table_retrieval_policy"),
      "fields"),
+    (lambda value: value["queries"].update(sha256="A" * 64),
+     "release policy queries SHA-256 must be a lowercase SHA-256 digest"),
+    (lambda value: value["corpus"].update(sha256="b" * 64 + "\n"),
+     "release policy corpus SHA-256 must be a lowercase SHA-256 digest"),
+    (lambda value: value["review"].update(receipt_sha256=True),
+     "release policy receipt SHA-256 must be a lowercase SHA-256 digest"),
 ])
 def test_release_policy_rejects_incomplete_or_ambiguous_contracts(
         mutate, message):

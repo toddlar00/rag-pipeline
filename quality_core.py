@@ -21,7 +21,7 @@ import retrieval_core
 import source_fidelity_core
 import table_retrieval_core
 
-QUALITY_REPORT_SCHEMA_VERSION = 12
+QUALITY_REPORT_SCHEMA_VERSION = 13
 SOURCE_LINEAGE_SCHEMA_VERSION = 5
 SOURCE_ANALYSIS_SCHEMA_VERSION = 4
 # Mirrors rag.CONVERSION_COMPLETION_SCHEMA_VERSION; this leaf cannot import
@@ -209,6 +209,19 @@ def _nearest_rank(values: Sequence[int], percentile: int) -> int | None:
     ordered = sorted(values)
     rank = max(1, (len(ordered) * percentile + 99) // 100)
     return ordered[min(rank, len(ordered)) - 1]
+
+
+def _token_percentiles(values: Sequence[int]) -> tuple[int | None, ...] | None:
+    """Sort native counts once; defer subclasses to the original field calls."""
+    if any(type(value) is not int for value in values):
+        return None
+    if not values:
+        return None, None, None
+    ordered = sorted(values)
+    return tuple(
+        ordered[(len(ordered) * percentile + 99) // 100 - 1]
+        for percentile in (50, 95, 99)
+    )
 
 
 def _is_nonnegative_int(value: object) -> bool:
@@ -474,12 +487,6 @@ def _item_pages(item: dict) -> tuple[int, ...]:
     return tuple(dict.fromkeys(pages))
 
 
-def _source_spans(item: dict) -> list[dict]:
-    """Serialize source provenance exactly as ``rag`` serializes lineage."""
-    spans, _ = source_fidelity_core.provenance_spans(item)
-    return spans
-
-
 def _relationship_ref(value: object) -> str:
     if not isinstance(value, dict):
         return ""
@@ -695,9 +702,11 @@ def running_page_number_furniture_refs(document: dict) -> set[str]:
 def _source_exclusion_reason(
         item: dict, *, structural_ranges: Sequence[tuple[int, int]],
         page_footer_frequencies: Counter[str] | None = None,
-        substantive_picture: bool = False) -> str | None:
+        substantive_picture: bool = False,
+        source_oracle_bound: bool = False) -> str | None:
     label = _label(item.get("label"))
-    text = str(item.get("text") or item.get("orig") or "").strip()
+    raw_text = str(item.get("text") or item.get("orig") or "")
+    text = raw_text.strip()
     canonical = _canonical_text(text)
     substantive_page_footer = (
         label == "page_footer"
@@ -724,6 +733,10 @@ def _source_exclusion_reason(
     if (label == "text"
             and _SINGLE_LETTER_SECTION_MARKER_RE.fullmatch(text)):
         return "section_marker"
+    if (label == "text" and not source_oracle_bound
+            and chunking_core.normalization_erases_decorative_squares(
+                raw_text)):
+        return "decorative_glyph"
     if _EMPHASIS_BOILERPLATE_RE.fullmatch(text):
         return "editorial_boilerplate"
     if "This and other authors' explanations draw" in text:
@@ -734,6 +747,7 @@ def _source_exclusion_reason(
 def source_inventory(
         document: dict, *,
         structural_ranges: Iterable[tuple[int, int]],
+        source_oracle_refs: Iterable[str] = (),
 ) -> tuple[
         dict[str, dict], dict[str, dict], dict[str, int],
         dict[str, list[object]],
@@ -745,6 +759,7 @@ def source_inventory(
     source object silently disappears during chunk preparation or deduplication.
     """
     ranges = tuple(sorted(set(structural_ranges)))
+    oracle_refs = frozenset(source_oracle_refs)
     all_items: dict[str, dict] = {}
     raw_items: dict[str, dict] = {}
     item_locations: dict[str, str] = {}
@@ -828,7 +843,8 @@ def source_inventory(
                 else _source_exclusion_reason(
                     item, structural_ranges=ranges,
                     page_footer_frequencies=page_footer_frequencies,
-                    substantive_picture=ref in substantive_picture_refs)
+                    substantive_picture=ref in substantive_picture_refs,
+                    source_oracle_bound=ref in oracle_refs)
             )
             if reason is None:
                 eligible[ref] = descriptor
@@ -1569,7 +1585,8 @@ def build_quality_report(
     ranges = tuple(sorted(set(structural_ranges)))
     (all_items, eligible_items, exclusion_counts,
      source_inventory_issues) = source_inventory(
-        document, structural_ranges=ranges)
+        document, structural_ranges=ranges,
+        source_oracle_refs=trusted_source_oracles)
 
     represented_refs: set[str] = set()
     chunks_without_lineage = []
@@ -1626,24 +1643,14 @@ def build_quality_report(
                     "fields": mismatched_fields,
                 })
 
-        scoped_spans_by_entry = [
-            [
-                span for span in entry["spans"]
-                if span["provenance_index"] in set(
-                    source_fidelity_core.lineage_scope_indexes(entry) or ())
-            ]
+        lineage_pages_by_entry = [
+            source_fidelity_core.lineage_scope_pages(entry) or frozenset()
             for entry in lineage_entries
         ]
-        lineage_pages = {
-            span["page"]
-            for spans in scoped_spans_by_entry
-            for span in spans
-        }
+        lineage_pages = set().union(*lineage_pages_by_entry)
         lineage_structural_leak = any(
-            spans
-            and all(_inside_ranges(span["page"], ranges)
-                    for span in spans)
-            for spans in scoped_spans_by_entry
+            pages and all(_inside_ranges(page, ranges) for page in pages)
+            for pages in lineage_pages_by_entry
         )
 
         page_start = metadata.get("page_start")
@@ -1933,6 +1940,8 @@ def build_quality_report(
         else "pass"
     eligible_count = len(eligible_refs)
     represented_eligible_count = eligible_count - len(missing_refs)
+    raw_percentiles = _token_percentiles(raw_counts)
+    input_percentiles = _token_percentiles(embedding_counts)
 
     return {
         "schema_version": QUALITY_REPORT_SCHEMA_VERSION,
@@ -1957,15 +1966,21 @@ def build_quality_report(
             "limit": embedding_limit,
             "raw_token_min": min(raw_counts) if raw_counts else None,
             "raw_token_max": max(raw_counts) if raw_counts else None,
-            "raw_token_p50": _nearest_rank(raw_counts, 50),
-            "raw_token_p95": _nearest_rank(raw_counts, 95),
-            "raw_token_p99": _nearest_rank(raw_counts, 99),
+            "raw_token_p50": (raw_percentiles[0] if raw_percentiles is not None
+                              else _nearest_rank(raw_counts, 50)),
+            "raw_token_p95": (raw_percentiles[1] if raw_percentiles is not None
+                              else _nearest_rank(raw_counts, 95)),
+            "raw_token_p99": (raw_percentiles[2] if raw_percentiles is not None
+                              else _nearest_rank(raw_counts, 99)),
             "raw_token_count": len(raw_counts),
             "input_token_min": min(embedding_counts) if embedding_counts else None,
             "input_token_max": max(embedding_counts) if embedding_counts else None,
-            "input_token_p50": _nearest_rank(embedding_counts, 50),
-            "input_token_p95": _nearest_rank(embedding_counts, 95),
-            "input_token_p99": _nearest_rank(embedding_counts, 99),
+            "input_token_p50": (input_percentiles[0] if input_percentiles is not None
+                                else _nearest_rank(embedding_counts, 50)),
+            "input_token_p95": (input_percentiles[1] if input_percentiles is not None
+                                else _nearest_rank(embedding_counts, 95)),
+            "input_token_p99": (input_percentiles[2] if input_percentiles is not None
+                                else _nearest_rank(embedding_counts, 99)),
             "inputs_over_limit": len(over_limit),
         },
         "source_lineage": {
@@ -2525,18 +2540,26 @@ def validate_quality_report(
                        for value in input_counts)):
             raise ValueError(
                 "corpus quality report token summaries are invalid")
+        raw_percentiles = _token_percentiles(raw_counts)
+        input_percentiles = _token_percentiles(input_counts)
         expected_embedding = {
             "raw_token_min": min(raw_counts),
             "raw_token_max": max(raw_counts),
-            "raw_token_p50": _nearest_rank(raw_counts, 50),
-            "raw_token_p95": _nearest_rank(raw_counts, 95),
-            "raw_token_p99": _nearest_rank(raw_counts, 99),
+            "raw_token_p50": (raw_percentiles[0] if raw_percentiles is not None
+                              else _nearest_rank(raw_counts, 50)),
+            "raw_token_p95": (raw_percentiles[1] if raw_percentiles is not None
+                              else _nearest_rank(raw_counts, 95)),
+            "raw_token_p99": (raw_percentiles[2] if raw_percentiles is not None
+                              else _nearest_rank(raw_counts, 99)),
             "raw_token_count": len(raw_counts),
             "input_token_min": min(input_counts),
             "input_token_max": max(input_counts),
-            "input_token_p50": _nearest_rank(input_counts, 50),
-            "input_token_p95": _nearest_rank(input_counts, 95),
-            "input_token_p99": _nearest_rank(input_counts, 99),
+            "input_token_p50": (input_percentiles[0] if input_percentiles is not None
+                                else _nearest_rank(input_counts, 50)),
+            "input_token_p95": (input_percentiles[1] if input_percentiles is not None
+                                else _nearest_rank(input_counts, 95)),
+            "input_token_p99": (input_percentiles[2] if input_percentiles is not None
+                                else _nearest_rank(input_counts, 99)),
             "inputs_over_limit": (
                 sum(value > embedding["limit"] for value in input_counts)
                 if embedding["limit"] is not None else 0),
@@ -2566,7 +2589,8 @@ def validate_quality_report(
             raise ValueError(
                 "corpus quality report source analysis does not match source")
         (_, expected_eligible, _, _) = source_inventory(
-            document, structural_ranges=ranges)
+            document, structural_ranges=ranges,
+            source_oracle_refs=trusted_source_oracles)
         expected_fidelity = source_fidelity_core.audit_source_fidelity(
             records=records, document=document,
             eligible_refs=set(expected_eligible),

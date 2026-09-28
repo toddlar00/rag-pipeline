@@ -7,17 +7,21 @@ fresh-process repetitions.
 
 ## Provenance
 
-Both current reports were generated from the clean Task 0.8
-static-security source checkpoint
-`8891e1b27c04213fea6d59cd6b93e85051f00817` (tree
-`5a2c632ea1df5661c580c815c8904519b531393d`). That source contains the
-activated deterministic CI promotion workflow, the hardened security-owned
-fixture, all five integrated dependency-domain upgrades, the Task 0.6
-Node supply-chain gate, the Task 0.7 secret scanner, and the Task 0.8
-slice: the pinned thirteen-rule static-security gate
-(`tools/check_static_security.py`, `static-security-policy.json`) and
-the dedicated unfiltered `.github/workflows/static-security.yml`
-workflow. No dependency or model lock changed. The executing
+Both current reports were generated from the clean OCR-program and
+casebook-excerpt source checkpoint
+`29ea76bdcfc7184dfb1d600a860c56d6514722d9` (tree
+`6ac5d6d674aa638619385f36865084006db915c2`). That source contains everything through the Task 0.8
+static-security merge `e34103f` plus the local OCR accuracy, retry and
+guided-review program, opt-in AI evidence search, the passive cleanup
+audits, the LLM transport and worker-launch repairs, the casebook
+excerpt/supplement pipeline (including the opt-in OCR angle-classifier
+and interleaved-region-merge flags, the footnote placement replay, the
+split-item duplicate retraction and quality schema 13), three reviewed
+architecture-inventory refreshes, the POSIX symlinked-interpreter identity
+fix, an LF attribute for top-level test fixtures, dependency-light
+test guards, a Python 3.10/3.11-tolerant import-guard test and a
+60-minute Windows unit-lane timeout. No dependency or model lock
+changed. The executing
 environments were
 synchronized with repository-pinned uv 0.12.5 against the exact CPU
 application/test lock union plus its retained bootstrapper:
@@ -30,13 +34,13 @@ The Windows environment used a temporary direct, uv-managed CPython
 interpreter rather than a virtual-environment redirector so supervised-child
 parent identities remained exact. The Linux environment used a direct POSIX
 virtual-environment interpreter. `uv pip sync --strict --torch-backend cpu
---require-hashes` and `uv pip check` passed for 189 Windows and 187 Linux
+--require-hashes` and `uv pip check` passed for 191 Windows and 189 Linux
 marker-resolved distributions before generation.
 
 | Platform | Runtime | Report | Bytes | File SHA-256 | Embedded report SHA-256 |
 |---|---:|---|---:|---|---|
-| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 50,392 | `15cb2bbaeaaa94ea492935180a22994b1b7e32f383f2ef39b55090d2d38e6db4` | `831f737cf4aa9fc76bf2c7670f3e360bb748e1e37bcd5503df890793eb12728b` |
-| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 49,801 | `922eda3321fbf86e52e4f836824e07c3ea59611ef08185f82e71dc6f307097d3` | `ea2832a70e7cba1438968ec8b5e213df30614ec3fc4404b1f4caaa3e307ef792` |
+| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,086 | `8e8829e3ea4d05419f5aff31bef4172ca13e3d3770df7ed147a516716860e7da` | `2dae9eded99a0d8895ca0917a9bdfc2d680d03bb9e70b699f0a48e828a7bed39` |
+| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,487 | `3a6e9437de61b7772562185456324b37c7645d413e2132f12844a936da89ba03` | `a4f77e4fe0bc590f4c9dbd4d4976f601a3502b503c4addb6f62c8473bf138b37` |
 
 The reports attest the same source commit, clean-worktree state, tracked-diff
 digest, eight LF and `HEAD`-identical dependency/model-lock inputs, authoritative
@@ -153,12 +157,33 @@ passed the hosted full lane with retained artifacts, received the
 external exact-SHA record on
 [#106](https://github.com/toddlar00/rag-pipeline/pull/106), and merged
 through history-preserving `376277c`. The Task 0.8 static-security
-checkpoint `8891e1b` then changed Python gate source and workflows (no
-lock change), superseding the `e055bd0` pair. The current reports above
-bind that exact clean Task 0.8 source and each passes an independent
-complete same-platform 9×5 comparison. No hosted result for this
-replacement pair is claimed here yet; its hosted checks and external
-exact-SHA record remain pending.
+checkpoint `8891e1b` repeated the cycle: its gate-only child `1533164`
+passed the hosted CI lane, including both Phase A0 cells, received the
+external exact-SHA record on
+[#107](https://github.com/toddlar00/rag-pipeline/pull/107), and merged
+through history-preserving `e34103f` (the separate networked supply-chain
+vulnerability/SBOM jobs failed at that head). The OCR-program and
+casebook-excerpt checkpoint `1ae8502` then changed Python source (no lock
+change), superseding the `8891e1b` pair; its gate-only child `766feaf`
+passed both hosted Phase A0 cells on [PR #116](https://github.com/toddlar00/rag-pipeline/pull/116), but that head's
+dependency-light unit lanes failed at collection. Source `a15232d`
+(test guards for those lanes and the casebook fixes, still no lock
+change) superseded it before promotion. Source `a15232d` then passed both
+hosted Phase A0 cells on [PR
+#116](https://github.com/toddlar00/rag-pipeline/pull/116) as well, but its
+Python 3.10/3.11 unit lanes each failed one import-guard test and its
+Windows unit lane exceeded the workflow's 20-minute timeout; the test-only
+source `8aa08b2` superseded it before promotion. Source `8aa08b2` fixed
+those lanes, and its hosted run passed every CI lane except the Windows unit
+lane, which again reached the 20-minute timeout with no test failure. On the
+owner's decision, source `29ea76b` raises that limit to 60 minutes (the live
+workflow, its reviewed fixture and the two pinned workflow hashes) and
+supersedes the `8aa08b2` pair before promotion. The current reports above
+bind
+that exact clean source and each passes an independent complete
+same-platform 9×5 comparison. No hosted result for this replacement pair
+is claimed here yet; its hosted checks and external exact-SHA record
+remain pending.
 
 ## Checking
 

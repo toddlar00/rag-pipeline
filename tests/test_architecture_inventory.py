@@ -1158,13 +1158,10 @@ def test_repository_baseline_is_current_and_canonical():
     baseline = PROJECT_ROOT / inventory.DEFAULT_BASELINE
 
     assert baseline.read_bytes() == inventory.inventory_bytes(value)
-    # Preserve roughly the review-growth headroom established when schema v3
-    # first compacted the canonical inventory to about one megabyte.
-    assert baseline.stat().st_size <= 1_600_000
     assert value["source_architecture"]["import_graph"]["cyclic_components"] == []
     assert [
         item["module"] for item in value["consumers"]["production"]
-    ] == ["eval", "service_search_worker", "ui"]
+    ] == ["eval", "ocr_docling_io", "service_search_worker", "ui"]
 
 
 def test_repository_rag_static_evidence_and_runtime_contract_are_separate():

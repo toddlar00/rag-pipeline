@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "kind": "ocr_recovery_review",
+  "source_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "evidence_sha256": null,
+  "page_count": 2,
+  "selection": {
+    "requested_pages": [1, 2],
+    "max_pages": 2,
+    "min_chars": 40,
+    "order": "requested_then_page_number"
+  },
+  "retry_configuration": {
+    "dpi": 300,
+    "max_pixels": 25000000,
+    "max_side": 6000,
+    "attempts_per_page": 1
+  },
+  "pages": [
+    {
+      "page_number": 1,
+      "reasons": ["requested", "extraction_unavailable"],
+      "original_text": null,
+      "original_error": "native_extraction_failed",
+      "baseline_kind": "pdf_native",
+      "low_grade": null,
+      "original_ocr_confidence": null,
+      "status": "review_required",
+      "candidate": {
+        "text": "The tenant did waive notice.",
+        "lines": [{
+          "text": "The tenant did waive notice.",
+          "score": 0.95,
+          "box": [[0, 0], [100, 0], [100, 20], [0, 20]]
+        }],
+        "mean_confidence": 0.95,
+        "raster": {"width": 100, "height": 100, "dpi": 300, "coordinate_system": "rendered_image_pixels"},
+        "engine": {"name": "rapidocr", "version": "synthetic-fixture", "min_score": 0.0, "max_side": 6000}
+      },
+      "error_code": null
+    },
+    {
+      "page_number": 2,
+      "reasons": ["requested", "extraction_unavailable"],
+      "original_text": null,
+      "original_error": "native_extraction_failed",
+      "baseline_kind": "pdf_native",
+      "low_grade": null,
+      "original_ocr_confidence": null,
+      "status": "review_required",
+      "candidate": {
+        "text": "Rule 12 requires 30 days.",
+        "lines": [{
+          "text": "Rule 12 requires 30 days.",
+          "score": 0.99,
+          "box": [[0, 0], [100, 0], [100, 20], [0, 20]]
+        }],
+        "mean_confidence": 0.99,
+        "raster": {"width": 100, "height": 100, "dpi": 300, "coordinate_system": "rendered_image_pixels"},
+        "engine": {"name": "rapidocr", "version": "synthetic-fixture", "min_score": 0.0, "max_side": 6000}
+      },
+      "error_code": null
+    }
+  ],
+  "deferred_pages": [],
+  "summary": {"inspected": 2, "selected": 2, "deferred": 0, "failed": 0, "empty": 0, "review_required": 2},
+  "canonical_extraction_modified": false,
+  "accuracy_verified": false,
+  "reading_order": "OCR engine order; not validated layout or table structure"
+}

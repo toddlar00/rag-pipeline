@@ -7,7 +7,9 @@ import hmac
 import ipaddress
 import re
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
+from contextvars import copy_context
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
 from uuid import uuid4
@@ -819,39 +821,74 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        try:
-            await asyncio.to_thread(runtime.start)
-        except Exception:
-            raise RuntimeError("local service startup failed") from None
-        stop = asyncio.Event()
+        # Instance leases are thread-affine. Separate default-executor calls
+        # can run on different threads when a search/readiness check is busy.
+        executor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="service-lifecycle")
+        loop = asyncio.get_running_loop()
+        started = False
 
-        async def reconcile_loop():
+        async def drain(future):
+            """Finish owned work before propagating task cancellation."""
+            cancellation = None
             while True:
                 try:
-                    await asyncio.wait_for(stop.wait(), timeout=interval)
-                    return
-                except asyncio.TimeoutError:
-                    try:
-                        await asyncio.to_thread(runtime.reconcile_jobs)
-                    except http_binding.runtime_error_type as exc:
-                        if exc.fatal:
-                            runtime.mark_unhealthy()
-                    except Exception:
-                        runtime.mark_unhealthy()
+                    result = await asyncio.shield(future)
+                    break
+                except asyncio.CancelledError as exc:
+                    cancellation = exc
+                    if future.done():
+                        # A cancellation originating inside the operation must
+                        # propagate too; never retry or silently call it done.
+                        result = future.result()
+                        break
+            if cancellation is not None:
+                raise cancellation
+            return result
 
-        task = asyncio.create_task(reconcile_loop())
+        def start():
+            nonlocal started
+            runtime.start()
+            started = True
+
         try:
-            yield
-        finally:
-            stop.set()
             try:
-                await task
+                await drain(loop.run_in_executor(executor, copy_context().run, start))
+            except Exception:
+                raise RuntimeError("local service startup failed") from None
+            stop = asyncio.Event()
+
+            async def reconcile_loop():
+                while True:
+                    try:
+                        await asyncio.wait_for(stop.wait(), timeout=interval)
+                        return
+                    except asyncio.TimeoutError:
+                        try:
+                            await asyncio.to_thread(runtime.reconcile_jobs)
+                        except http_binding.runtime_error_type as exc:
+                            if exc.fatal:
+                                runtime.mark_unhealthy()
+                        except Exception:
+                            runtime.mark_unhealthy()
+
+            task = asyncio.create_task(reconcile_loop())
+            try:
+                yield
             finally:
-                try:
-                    await asyncio.to_thread(runtime.close)
-                except Exception:
-                    raise RuntimeError(
-                        "local service shutdown failed") from None
+                stop.set()
+                await drain(task)
+        finally:
+            try:
+                if started:
+                    try:
+                        await drain(loop.run_in_executor(executor, copy_context().run, runtime.close))
+                    except Exception:
+                        raise RuntimeError("local service shutdown failed") from None
+            finally:
+                # Every submitted call has finished; this only joins the idle
+                # owner thread, never waits for unfinished work on the loop.
+                executor.shutdown(wait=True)
 
     app = FastAPI(
         title="RAG Pipeline Local Service",

@@ -87,6 +87,37 @@ that supervision belongs in the facade.
 
 ## Evidence and history
 
+### Windows virtual-environment worker identity repair (2026-09-06)
+
+Local full-lock CPython 3.12 verification exposed the Windows venv executable's
+redirector process: the PID returned by `Popen` differed from the Python worker's
+own PID. That violated existing registration and exact-ready-handshake contracts.
+The shared `python_worker_launch` helper now selects the current CPython base
+executable and supplies the current virtual-environment executable through a
+child-only `__PYVENV_LAUNCHER__`, matching the mechanism in
+[CPython 3.12 multiprocessing](https://github.com/python/cpython/blob/v3.12.10/Lib/multiprocessing/popen_spawn_win32.py).
+The child retains its virtual-environment executable, prefix and package search
+environment; the returned process owns the actual worker PID.
+
+This is a deliberate platform correctness repair, not an ownership extraction.
+Caller environments are copied, never reconstructed from ambient variables;
+Windows caller-supplied launcher overrides are removed case-insensitively. The
+base executable comes only from the running interpreter, and an unavailable or
+non-absolute base identity fails closed. Non-Windows launch behavior and frozen
+or non-CPython executable selection remain unchanged. Startup gates, containment,
+PID/birth/nonce handshakes, failure sanitization and cleanup confirmation are not
+relaxed. The isolated benchmark's controlled descendant uses the same helper;
+its ambient-environment scrub and exact parent/descendant checks remain intact.
+
+The initial full-suite failures and passing local repair qualification are
+recorded in the live roadmap and
+[qualification evidence](../../evidence/2026-09-06-ocr-local-qualification.md).
+Focused tests cover helper environment copying, reserved-key handling, invalid
+base identities and actual worker PID/interpreter/package identity. The reviewed
+architecture snapshot and replacement full frozen-source Windows run passed
+with 6,871 tests passing and seven platform-specific skips; this is not a hosted
+cross-platform or release qualification.
+
 - Direct failure-injection coverage:
   [`tests/test_process_supervision_module.py`](../../../tests/test_process_supervision_module.py)
 - Real-process facade characterization:

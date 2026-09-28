@@ -15,6 +15,7 @@ import tempfile
 import threading
 from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Callable, Mapping, Sequence
 
 import job_coordination
@@ -23,6 +24,7 @@ import job_runtime
 import release_security
 import retention
 import service_contracts
+import service_evidence_contracts
 import service_runtime_binding
 import storage_policy
 
@@ -277,6 +279,17 @@ def load_corpus_registry(path: Path) -> dict[str, service_contracts.CorpusConfig
         storage_policy.assert_no_link_components(config.chunks_path)
         registry[corpus_id] = config
     return registry
+
+
+def load_evidence_registry(
+        path: Path, corpora: Mapping[str, service_contracts.CorpusConfig],
+) -> dict[str, service_evidence_contracts.EvidenceCorpusConfig]:
+    """Load an explicit private evidence allowlist without opening its sources."""
+    path = Path(os.path.abspath(Path(path)))
+    storage_policy.enforce_private_path(path, directory=False)
+    payload = _read_private_json(path, max_bytes=MAX_SERVICE_CONFIG_BYTES)
+    return service_evidence_contracts.parse_evidence_registry(
+        payload, base=path.parent, corpora=corpora)
 
 
 def _search_request_payload(
@@ -558,6 +571,9 @@ class RagApplicationService:
                 service_contracts.SearchRequest, str], dict[str, Any]
             ] = supervised_search,
             launcher: Callable[..., object] | object = _LAUNCHER_UNSET,
+            evidence_configs: Mapping[
+                str, service_evidence_contracts.EvidenceCorpusConfig] | None = None,
+            evidence_runner: Callable | None = None,
     ):
         if (not isinstance(corpora, Mapping) or not corpora
                 or len(corpora) > MAX_CORPORA):
@@ -568,6 +584,24 @@ class RagApplicationService:
                     or key != config.corpus_id or key in checked):
                 raise service_contracts.ServiceContractError()
             checked[key] = config
+        # Validate the whole opt-in capability before creating service files or
+        # resolving any physical model.  Copy both mappings for this generation.
+        if evidence_configs is not None:
+            if (not isinstance(evidence_configs, Mapping)
+                    or not evidence_configs or not callable(evidence_runner)
+                    or len(evidence_configs) > MAX_CORPORA):
+                raise service_contracts.ServiceContractError()
+            evidence_checked = {}
+            for key, evidence in evidence_configs.items():
+                if (not isinstance(evidence, service_evidence_contracts.EvidenceCorpusConfig)
+                        or key != evidence.corpus_id or key not in checked):
+                    raise service_contracts.ServiceContractError()
+                evidence_checked[key] = (checked[key], evidence)
+        else:
+            if evidence_runner is not None:
+                raise service_contracts.ServiceContractError()
+            evidence_checked = {}
+        self._evidence_configs = MappingProxyType(evidence_checked)
         self.security_policy = (
             security_policy or release_security.ReleaseSecurityPolicy())
         if not isinstance(
@@ -667,6 +701,17 @@ class RagApplicationService:
                     runtime_binding=self._runtime_binding))
         else:
             self._search_runner = search_runner
+        # The injected runner and its policy/path/binding snapshot must not be
+        # mixed with a replacement generation while a request is running.
+        self._evidence_runner = None
+        if evidence_runner is not None:
+            policy = self.security_policy
+            temporary_root = self.search_temporary_root
+            binding = self._runtime_binding
+            self._evidence_runner = lambda config, evidence, request, request_id: (
+                evidence_runner(config, evidence, request, request_id,
+                                temporary_root=temporary_root, security_policy=policy,
+                                runtime_binding=binding))
         self._launcher = (
             self._job_coordination.launch_detached
             if launcher is _LAUNCHER_UNSET else launcher)
@@ -974,6 +1019,49 @@ class RagApplicationService:
             # violation, an exhausted temporary root — are retryable. Poisoning
             # health here would take the service down until restart for a
             # condition that resolves on its own.
+            raise ServiceRuntimeError("service_unavailable") from exc
+        except BaseException as exc:
+            self.mark_unhealthy()
+            raise ServiceRuntimeError("service_unavailable") from exc
+        finally:
+            if acquired:
+                self._search_slots.release()
+            self._end_search()
+
+    def search_evidence(
+            self, corpus_id: str, request: service_contracts.SearchRequest,
+            request_id: str) -> dict[str, Any]:
+        """Opt-in search shares ordinary search capacity, readiness and close."""
+        self._require_started()
+        service_contracts.validate_corpus_id(corpus_id)
+        if (not isinstance(request, service_contracts.SearchRequest)
+                or not isinstance(request.filters, service_contracts.SearchFilters)):
+            raise service_contracts.ServiceContractError()
+        request = service_contracts.parse_search_request({
+            "query": request.query, "limit": request.limit, "mode": request.mode,
+            "filters": request.filters.as_dict()})
+        service_contracts.validate_request_id(request_id)
+        if corpus_id not in self._evidence_configs:
+            raise ServiceRuntimeError("not_found")
+        config, evidence = self._evidence_configs[corpus_id]
+        self._begin_search()
+        acquired = False
+        try:
+            if not self._search_slots.acquire(blocking=False):
+                raise ServiceRuntimeError("concurrency_limited")
+            acquired = True
+            result = self._evidence_runner(config, evidence, request, request_id)
+            try:
+                return service_evidence_contracts.validate_public_evidence_search_response(
+                    result, expected_corpus_id=corpus_id, expected_request_id=request_id,
+                    expected_request=request)
+            except service_contracts.ServiceContractError as exc:
+                raise ServiceRuntimeError("service_unavailable", fatal=True) from exc
+        except ServiceRuntimeError as exc:
+            if exc.fatal:
+                self.mark_unhealthy()
+            raise
+        except (OSError, storage_policy.StoragePolicyError) as exc:
             raise ServiceRuntimeError("service_unavailable") from exc
         except BaseException as exc:
             self.mark_unhealthy()

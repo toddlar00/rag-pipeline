@@ -42,7 +42,8 @@ def create_app(
         reconcile_interval_seconds: float =
         DEFAULT_RECONCILE_INTERVAL_SECONDS,
         max_http_concurrency: int = 64,
-        enforce_peer_loopback: bool = True) -> FastAPI:
+        enforce_peer_loopback: bool = True,
+        evidence_enabled: bool = False) -> FastAPI:
     """Preserve the established embedded-app surface through composition."""
     return application_composition.create_service_http_app(
         runtime,
@@ -51,6 +52,7 @@ def create_app(
         reconcile_interval_seconds=reconcile_interval_seconds,
         max_http_concurrency=max_http_concurrency,
         enforce_peer_loopback=enforce_peer_loopback,
+        **({"evidence_enabled": evidence_enabled} if evidence_enabled is not False else {}),
     )
 
 
@@ -214,6 +216,8 @@ def _parser() -> argparse.ArgumentParser:
     serve = actions.add_parser(
         "serve", help="Run one local ASGI service", allow_abbrev=False)
     serve.add_argument("--config", type=Path, required=True)
+    serve.add_argument("--evidence-config", type=Path, default=None,
+                       help="Opt in to reader-only source evidence using a private allowlist")
     serve.add_argument("--reader-token-file", type=Path, required=True)
     serve.add_argument("--admin-token-file", type=Path, required=True)
     serve.add_argument("--host", type=_loopback_host, default=DEFAULT_HOST)
@@ -257,6 +261,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             print("Created owner-only reader and admin token files.")
             return 0
         registry = service_runtime.load_corpus_registry(args.config)
+        evidence_options = {}
+        if args.evidence_config is not None:
+            evidence_options["evidence_configs"] = service_runtime.load_evidence_registry(
+                args.evidence_config, registry)
         security_policy = release_security.ReleaseSecurityPolicy.from_values(
             profile=args.security_profile,
             network_policy=args.network_policy,
@@ -281,6 +289,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             security_policy=security_policy,
             host=args.host,
             reconcile_interval_seconds=args.reconcile_interval,
+            **evidence_options,
         )
     except (OSError, service_contracts.ServiceContractError,
             service_runtime.ServiceRuntimeError,

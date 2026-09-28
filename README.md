@@ -17,6 +17,89 @@ findings and their disposition are recorded in
 [`INTEGRATION_AUDIT.md`](INTEGRATION_AUDIT.md). The maintained documentation
 map is [`docs/README.md`](docs/README.md).
 
+For OCR troubleshooting, see [OCR accuracy measurement and targeted retries](docs/ocr-accuracy.md):
+an offline CER/WER benchmark and bounded 300/400-DPI page candidates that preserve
+the original extraction and source provenance. Source-bound comparisons flag
+page and critical-token regressions even when average error rates improve.
+Opt-in deskew/contrast experiments preserve the original scan and record their
+coordinate transforms for review.
+Use `compare_ocr.py --baseline-recovery ... --recovery ...` to compare two runs'
+candidate text directly on one fixed reference cohort, with two-sided coverage
+and configuration-difference notices.
+For native-call stalls, opt into a contained retry worker with
+`retry_ocr.py --timeout-seconds 600 ...`; inspect output after interruption.
+Build a fixed eight-page synthetic scan challenge with
+`python tools/build_ocr_challenge.py --output-dir output/pdf/ocr-challenge-v1`
+(existing parent, new output directory); compare all modes against its fixed
+references with `--pages 1 2 3 4 5 6 7 8 --max-pages 8`.
+For known interleaved columns, `tools/reorder_ocr.py` creates a separate review
+from saved line boxes and an explicit report-bound region plan; it preserves
+all original lines and does not infer tables or change default OCR order.
+Opt-in [column suggestions](docs/ocr-column-suggestions.md) infer unconfirmed
+body/gutter bounds from saved boxes. The editor separates prose confirmation,
+order preview and export, and rejects stale reading-order review requests.
+The [Phase 6 local checkpoint](docs/evidence/2026-09-07-ocr-column-review-qualification.md)
+passed; suggestions do not prove prose structure, complete transcription or
+representative accuracy.
+The [local visual editor](docs/ocr-review.md) draws source-bound crop/layout
+plans and reviewed references without hand-entered hashes; region retries keep
+crop-local and original-page coordinates in separate review artifacts.
+Source-bound drafts can resume unfinished review. [Docling suggestions](docs/ocr-docling.md)
+and [explicit line assignments](docs/ocr-layout-assignment.md) support visual
+resolution of unmatched lines and region order without dropping or rewriting OCR.
+[Omission checks](docs/ocr-omissions.md) flag missing or ambiguous saved-region
+line geometry, with partial assessments retained in v3 editor drafts; they do
+not prove complete scan coverage. [Cleanup audits](docs/cleanup-audit.md) record
+the existing core normalizer's exact rule-level changes on selected OCR spans,
+without altering canonical text or claiming to cover all pipeline cleanup.
+[Independent source-pixel inspection](docs/ocr-scan-inspection.md) adds bounded
+ink hypotheses and a separate original-scan crop-review panel. Its
+[Phase 7 local checkpoint](docs/evidence/2026-09-07-ocr-scan-review-qualification.md)
+passed, including annotation-context safeguards; hypotheses do not certify
+text, complete coverage or representative accuracy.
+The opt-in `--recipe spatial-v2` dense-page extension has a separate
+[Phase 8 local checkpoint](docs/evidence/2026-09-07-ocr-spatial-scan-qualification.md):
+8,960 passing tests and all nine local gates, plus generated native/CLI/replay
+checks. Legacy remains default; reduced grouping work and newly available
+dense pages do not establish better OCR or fewer non-text false alarms.
+[Stage diagnostics](docs/ocr-stage-diagnostics.md) observe detector-only boxes,
+full-page output and recognition-only gold-line crops separately, with bounded
+native image expansion and source-bound execution evidence. They distinguish
+geometry/order and transcription observations without claiming a causal error
+decomposition or automatically changing extraction.
+[Context-sensitive checks](docs/ocr-context-evaluation.md) distinguish swapped
+numbers and moved negations that token counts alone cannot detect.
+[Hard-scan retries](docs/ocr-hardscan.md) add separately reviewed orientation,
+limited bow correction and illumination normalization. [Execution receipts](docs/ocr-execution.md)
+record actual local engine calls and effective sessions against installation evidence.
+[Shared engine safeguards](docs/ocr-engine-allocation.md) bound selected internal
+image/crop/tensor allocations and keep setup failures outside actual-call counts.
+Their [Phase 9 local checkpoint](docs/evidence/2026-09-07-ocr-engine-guard-qualification.md)
+passed 9,387 tests and all nine gates, with unchanged generated native candidates.
+A completed raw call is not necessarily an accepted candidate; these safeguards
+do not guarantee total process memory or representative OCR accuracy.
+[Same-call missing-text diagnostics](docs/ocr-detection-disposition.md) trace
+observed detections through blank, filtered, retained and unresolved outcomes.
+Their separate [Phase 10 local checkpoint](docs/evidence/2026-09-07-ocr-disposition-qualification.md)
+passed 9,958 tests and all nine gates. Generated retained-bundle verification
+preserves all 12 candidates; the earlier failed outer comparison remains recorded.
+Accounting does not establish complete or accurate text, or adopt corrections.
+[Page execution checkpoints](docs/ocr-checkpoints.md) add explicit `--checkpoint`
+and `--resume` modes that retain committed results and their originating worker
+evidence; interrupted starts stay visibly failed instead of becoming blank text.
+[Structural scoring and runtime inspection](docs/ocr-benchmark.md) add
+family-separated cohort contracts, missing-region/order/table-cell metrics and
+explicit dependency-version mismatch reports. These are not representative
+held-out accuracy or locked-runtime qualification by themselves.
+For agents, the [reader-only JSON client](docs/ai-pipeline-access.md) uses the
+existing authenticated loopback service without admin routes or implicit cloud
+disclosure. [Opt-in evidence search](docs/ai-evidence-access.md) adds exact
+record/source scope and explicit unknown OCR state. Generated native integration
+and local frozen-source qualification passed; this does not grant scan or
+correction-publication authority or establish representative OCR accuracy.
+The [full OCR improvement program](docs/ocr-improvement-program.md)
+tracks remaining implementation and evidence requirements.
+
 ## Architecture
 
 ```
@@ -101,7 +184,10 @@ the published lexical tokens: every eligible source token must be represented,
 every published token must be source-owned, and declared list markers are
 mandatory source tokens rather than optional Markdown decoration. Numeric page
 furniture is removed only through its exact source-bound classification, and
-footnotes retain their source page and order before endnote serialization.
+footnotes retain their source page and order before endnote serialization. A
+`text` item whose every line is blank or holds only U+25A0 black squares
+with spaces, tabs or no-break spaces, which normalization erases, is excluded
+as a typed `decorative_glyph` unless a source oracle binds a repair of it.
 
 Same-page reading order is checked from each item's first and last published
 token positions. Typed `container_alias` ownership permits a table or picture
@@ -1244,6 +1330,14 @@ and stops fallback, with the contract violation exposed in the run report.
 Gemini receives the configured timeout and has SDK retries disabled, so its
 transport count remains explicit.
 
+LLM failures include a fixed error category and an actionable explanation.
+For example, `authentication_error` points to credentials and model access;
+`configuration_error` points to the endpoint and model settings;
+`rate_limited` points to provider quota; and `budget_exceeded` points to the
+configured LLM limits. Strict-mode exceptions retain the request ID and
+structured result for diagnosis. Messages never include raw provider errors,
+response bodies, or credentials. Unknown categories receive a generic message.
+
 ### Cloud-provider configuration
 
 The shorter LLM option names and the existing cloud option names are aliases:
@@ -1323,6 +1417,23 @@ The pipeline automatically handles API rate limits (429 errors) with an adaptive
 throttle. Starting at `--llm-workers` (default 10), it halves active workers on
 each 429, adds cooldown delays, and gradually recovers after 20 consecutive
 successes. No manual intervention needed.
+
+OpenAI-compatible generation also retries temporary gateway failures (HTTP
+502, 503, and 504). Each call makes at most two transport attempts, including
+rate-limit retries, and every additional attempt must pass the configured
+transport budget. Connections and worker slots are released before the retry
+wait. `Retry-After` supports both seconds and an HTTP date, as specified in
+[HTTP Semantics](https://www.rfc-editor.org/rfc/rfc9110.html#name-retry-after);
+the local wait remains capped at five seconds, with a two-second fallback for
+missing or invalid values. Other errors follow the existing provider fallback
+policy. Cancellation releases occupied slots and closes responses.
+Logging failures do not prevent waiting workers from continuing.
+
+Malformed response choices and usage details are rejected with
+`invalid_response`. An explicit provider refusal or content-filter result is
+reported as `content_filtered`, including when the provider also returned
+partial text. Ordinary empty text retains its usage accounting and follows
+the runtime's existing empty-response handling.
 
 ```bash
 # Start with 10 parallel workers (default)
@@ -1746,8 +1857,8 @@ before work begins, publish the JSONL via atomic replacement, and retain the
 vector lease until the matching index commits. A crash therefore exposes
 neither partial JSONL nor an apparently clean old index paired with a new
 corpus. Before any vector-client mutation, indexing validates the adjacent
-quality report against one exact chunks snapshot; schema-v9 manifests bind the
-validated schema-v12 report SHA-256 and attest the row-child count used to select
+quality report against one exact chunks snapshot; schema-v10 manifests bind the
+validated schema-v13 report SHA-256 and attest the row-child count used to select
 a safe candidate depth. Chroma hybrid search and opt-in neighbor
 assembly compare both the chunks and quality-report SHA-256 values with the
 manifest, parse and hash one exact file-handle snapshot, and refuse
@@ -1817,7 +1928,7 @@ an existing manifest.
 
 The real-vector-client release rehearsal recreates the exact schema-5 manifest
 field set emitted by the last integrated release, upgrades only the selected
-collection to schema 9, and verifies exact IDs and hashes, sibling collection
+collection to schema 10, and verifies exact IDs and hashes, sibling collection
 and manifest preservation, a subsequent no-op, successful queries against both
 collections, clean recovery-marker state, and immediate database-directory
 removal on Windows and Linux for both Chroma and Qdrant.
@@ -1971,8 +2082,8 @@ validating their artifacts as follows:
 |-------|-----------|
 | Convert | Schema-v2 immutable original/effective PDF binding, config/model lock, and exact JSON/Markdown/derived-PDF output hashes |
 | Chunk | Schema-v7 exact Docling/conversion/recovery inputs, immutable structure-profile receipt, output hash, and strict JSONL schema |
-| Quality | Schema-v12 chunk-input provenance plus exact Docling/chunks/parameters/retrieval-linkage/table-family binding and every required PASS check |
-| Index | Clean schema-v9 manifest plus schema-v12 report binding, physical IDs/count, row-child count, and chunk hashes |
+| Quality | Schema-v13 chunk-input provenance plus exact Docling/chunks/parameters/retrieval-linkage/table-family binding and every required PASS check |
+| Index | Clean schema-v10 manifest plus schema-v13 report binding, physical IDs/count, row-child count, and chunk hashes |
 | Export | Source/config completion and output hash |
 | Chapter export | Exact manifested chapter-file set and hashes |
 | RAPTOR | Source/config-bound tree schema and statistics |
@@ -1994,10 +2105,16 @@ Legacy completion and quality files can be retained as migration inputs, but
 they are not verified resume evidence unless every current validator accepts
 their exact artifact generation. A corpus carrying quality evidence, source
 lineage, opaque source oracles, or table-family metadata requires the current
-schema-v12 quality report for indexing. Current indexing writes a schema-v9
-manifest bound to that schema-v12 report. Migrate the whole artifact chain in
-order, using the same processing flags, embedding model, and explicit structure
-profile as the original run:
+schema-v13 quality report for indexing. Current indexing writes a schema-v10
+manifest bound to that schema-v13 report. Schema v13 changed only which source
+items are eligible, so a schema-v9 manifest keeps its previous query checks.
+Ordinary queries accept it bound to a schema-v12 report or without a quality
+binding. Context assembly accepts it only without a quality binding, because
+it also validates the corpus quality report, which must now be schema v13.
+Corpus-pinned evaluation, publication, AI project export and the service
+evidence companion require the current chain. Migrate the whole artifact
+chain in order, using the same processing flags, embedding model, and explicit
+structure profile as the original run:
 
 ```bash
 # Rebuild conversion, chunks, and quality evidence when needed, then reconcile
@@ -2012,7 +2129,7 @@ python rag.py full --pdf Book.pdf --resume --full-reindex \
 
 Do not query or export the old collection until this command finishes. Resume
 keeps valid schema-v2 conversion evidence, rebuilds stale chunk evidence under
-schema v7 and chunking policy v79, regenerates the schema-v12 quality report
+schema v7 and chunking policy v79, regenerates the schema-v13 quality report
 from the exact chunk-completion inputs, and then reconciles or
 rebuilds an index whose
 prior quality binding is incompatible. The chunk receipt records the selected
@@ -2643,6 +2760,37 @@ handshake deadline.
 - **Overrides**: `--ocr` forces OCR and `--no-ocr` disables it. Disabling OCR on
   a weak text layer emits a warning. `--no-preprocess` skips background-image
   stripping but does not disable automatic OCR selection.
+  `--ocr-no-angle-classifier` (`convert`, `full`, `batch`) turns off RapidOCR's
+  text-direction classifier whenever OCR runs. Use it only for a scan whose
+  lines are all upright but whose OCR text comes out garbled, because the
+  classifier can flip clean upright lines. It does not enable OCR, and
+  `--no-ocr` overrides it. The conversion parameters digest records the
+  choice, and the conversion manifest records it as
+  `"ocr_angle_classifier": false`, so resume and publication are bound to it.
+  Docling OCR retry proposals (`tools/propose_ocr_layout.py`) refuse such
+  conversions; service evidence search still binds them because it splices
+  no OCR text. Apply the flag to one PDF at a
+  time and never to a batch rebuild. The flag is recorded as requested even
+  when OCR does not run, so a batch-wide flag would rewrite every text-layer
+  run's conversion receipt and force reconversion on resume.
+  `--ocr-merge-interleaved-regions` (`convert`, `full`, `batch`) repairs one
+  scan defect whenever OCR runs. Docling's layout model sometimes splits one
+  paragraph into two regions with the same label that overlap by several
+  lines. Each OCR line then goes to whichever region covers more of it, so
+  lines in the overlap jump a line or two out of order, and no quality gate
+  can see it. With the flag, two text, list-item or footnote regions merge
+  when their typical lines share one column and at least 80% of a line in one
+  lies inside the other. The merged region reads its lines in OCR line order,
+  which is top to bottom within a single column. A touch of a few points never
+  merges, a line read across a column gutter does not join two columns, and
+  pictures, tables and regions with children are left alone. It is meant for
+  single-column scans. It
+  does not enable OCR, `--no-ocr` overrides it, and it composes with
+  `--ocr-full-page` and `--ocr-no-angle-classifier`. The parameters digest
+  records it, and the conversion manifest records it as
+  `"ocr_merge_interleaved_regions": true`. Docling OCR retry proposals refuse
+  such conversions, because retry OCR never merges regions. Apply it one PDF
+  at a time, for the same reason as the angle-classifier flag.
 
 ```bash
 # Default: inspect text quality and choose OCR automatically
@@ -2651,6 +2799,12 @@ python rag.py convert --pdf book.pdf
 # Explicit overrides
 python rag.py convert --pdf scanned_book.pdf --ocr
 python rag.py convert --pdf born_digital_book.pdf --no-ocr
+
+# Per PDF only: an upright scan whose OCR lines come out garbled
+python rag.py convert --pdf upright_scan.pdf --ocr-no-angle-classifier
+
+# Per PDF only: a scan whose paragraph lines come out a line or two out of order
+python rag.py convert --pdf scan.pdf --ocr-merge-interleaved-regions
 ```
 
 ### Text Cleaning

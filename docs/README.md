@@ -19,6 +19,77 @@ material. When documents disagree, use the authority order below.
 Runtime source and executable tests establish observed behavior and expose
 drift. They cannot override an owner decision or authorize work.
 
+## OCR troubleshooting
+
+- [OCR accuracy measurement and targeted retries](ocr-accuracy.md) — standalone
+  transcription metrics, source-bound review candidates, direct run comparisons,
+  limits, a reproducible eight-page synthetic scan challenge, and explicit
+  column-order reviews; no automatic changes to canonical extraction.
+- [Visual review and region retries](ocr-review.md) — authenticated local scan
+  annotation, resumable source-bound drafts, explicit plan/reference exports
+  and bounded crop candidates.
+- [Same-crop comparison API](ocr-crop-comparison.md) — exact crop-occurrence
+  references, paired metrics, browser authoring and private manual Save/Open;
+  [detail/feedback copied-source qualification](evidence/2026-09-08-ocr-crop-detail-qualification.md)
+  passed. Canonical publication, reference uncertainty, late-failure image cleanup
+  and representative accuracy remain pending.
+- [Docling layout proposals](ocr-docling.md) and [manual line assignments](ocr-layout-assignment.md)
+  — saved region/table suggestions, explicit unmatched-line resolution and
+  exact original-line-preserving reading order.
+- [Unconfirmed column suggestions](ocr-column-suggestions.md) — source-bound
+  geometry hypotheses with complete requested-page accounting and explicit
+  prose/source review; independent focused/browser review and the
+  [Phase 6 local checkpoint](evidence/2026-09-07-ocr-column-review-qualification.md)
+  passed. No automatic text adoption or representative accuracy claim.
+- [Saved-region omission checks](ocr-omissions.md) — conservative geometry
+  warnings, explicit unavailable coverage and partial editor assessments;
+  not independent scan-ink or complete-source verification.
+- [Independent source-pixel inspection](ocr-scan-inspection.md) — bounded
+  model-free ink hypotheses, source-bound bundles and a separate original-scan
+  crop-review panel; the [Phase 7 local checkpoint](evidence/2026-09-07-ocr-scan-review-qualification.md)
+  passed, not verified transcription or representative completeness evidence.
+  The explicit dense-page `spatial-v2` recipe has separate
+  [Phase 8 local qualification](evidence/2026-09-07-ocr-spatial-scan-qualification.md);
+  legacy remains default and generated availability/work gains are not accuracy.
+- [OCR stage diagnostics](ocr-stage-diagnostics.md) — contained detector-only,
+  full-page and gold-line recognition observations on the same source rasters;
+  separate coverage, geometry, order and transcription metrics, not accuracy
+  certification or automatic correction.
+- [Core cleanup audit](cleanup-audit.md) — exact rule-level before/after evidence
+  on selected saved OCR spans, without changing default normalization or
+  claiming coverage of the source-aware wrappers and chunk transformations.
+- [Context-sensitive critical checks](ocr-context-evaluation.md) — reviewed
+  occurrence-bound numbers, units, negations, names and footnote identifiers;
+  no inferred semantic correctness or automatic correction.
+- [Hard-scan recovery](ocr-hardscan.md) — opt-in orientation, limited bow
+  correction and illumination normalization with bounded source mapping.
+- [Shared OCR allocation safeguards](ocr-engine-allocation.md) — internal
+  image/crop/tensor preflight across the readers, with
+  [Phase 9 local qualification](evidence/2026-09-07-ocr-engine-guard-qualification.md);
+  explicit conservative abstentions, not a total process-memory or accuracy
+  guarantee. The later diagnostic changes have separate qualification below.
+- [Same-call missing-text diagnostics](ocr-detection-disposition.md) — observed
+  detections linked to blank, filtered, retained or unresolved outcomes across
+  page, region and hard-scan retries, with
+  [Phase 10 local qualification](evidence/2026-09-07-ocr-disposition-qualification.md).
+  The original failed outer comparison and separate generated posthoc evidence
+  remain distinct; no claim of complete text capture, accuracy or automatic correction.
+- [Actual OCR execution evidence](ocr-execution.md) — isolated hash-lock
+  installation and contained runtime receipts; not accuracy certification.
+- [Resumable page execution](ocr-checkpoints.md) — private per-page commits,
+  exact-generation resume and originating-worker evidence; region and hard-scan
+  checkpoint adapters remain pending.
+- [OCR cohorts, structure and runtime evidence](ocr-benchmark.md) — separated
+  families, structural metrics and honest runtime-version/artifact boundaries.
+- [AI pipeline access](ai-pipeline-access.md) — reader-only machine client over
+  the existing local API; no implicit admin capability or cloud disclosure.
+- [Opt-in AI evidence search](ai-evidence-access.md) — generated native and local
+  frozen-source checks passed; exact record scope and explicit OCR uncertainty.
+- [AI scan/adoption design](ai-evidence-access-design.md) — separately authorized
+  scan-region access and occurrence-level correction adoption remain pending.
+- [Full OCR improvement program](ocr-improvement-program.md) — the complete
+  requested scope, pending outcomes and validation requirements.
+
 ## Architecture decisions
 
 - [Release security policy](architecture/decisions/release-security-policy.md)

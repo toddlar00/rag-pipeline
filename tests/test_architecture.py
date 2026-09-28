@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import ast
 import importlib.util
+from collections.abc import Mapping, Set
 from pathlib import Path
 import subprocess
 import sys
+from types import MappingProxyType
 
 import pytest
 
@@ -19,7 +21,8 @@ REQUIRES_SERVICE_HTTP = pytest.mark.skipif(
 )
 
 
-def _application_modules() -> dict[str, Path]:
+@pytest.fixture(scope="module", name="application_modules")
+def _application_modules() -> Mapping[str, Path]:
     modules: dict[str, Path] = {}
     for relative in tracked_python_paths(PROJECT_ROOT):
         if relative.parts[0] == "tests":
@@ -30,7 +33,7 @@ def _application_modules() -> dict[str, Path]:
             module = ".".join((*relative.parent.parts, relative.stem))
         assert module and module not in modules, module
         modules[module] = PROJECT_ROOT / relative
-    return modules
+    return MappingProxyType(modules)
 
 
 def _known_prefixes(name: str, known: set[str]) -> set[str]:
@@ -83,8 +86,11 @@ def _import_targets(
     return targets
 
 
-def _first_party_import_graph() -> dict[str, set[str]]:
-    modules = _application_modules()
+@pytest.fixture(scope="module", name="first_party_import_graph")
+def _first_party_import_graph(
+        application_modules: Mapping[str, Path],
+) -> Mapping[str, frozenset[str]]:
+    modules = application_modules
     known = set(modules)
     graph = {module: set() for module in modules}
     for module, path in modules.items():
@@ -93,10 +99,10 @@ def _first_party_import_graph() -> dict[str, set[str]]:
             if isinstance(node, (ast.Import, ast.ImportFrom)):
                 graph[module].update(
                     _import_targets(module, path, node, known))
-    return graph
+    return MappingProxyType({module: frozenset(edges) for module, edges in graph.items()})
 
 
-def _cyclic_components(graph: dict[str, set[str]]) -> set[frozenset[str]]:
+def _cyclic_components(graph: Mapping[str, Set[str]]) -> set[frozenset[str]]:
     index = 0
     indices: dict[str, int] = {}
     lowlinks: dict[str, int] = {}
@@ -136,7 +142,7 @@ def _cyclic_components(graph: dict[str, set[str]]) -> set[frozenset[str]]:
 
 
 def _transitive_dependencies(
-        graph: dict[str, set[str]], module: str,
+        graph: Mapping[str, Set[str]], module: str,
 ) -> set[str]:
     result: set[str] = set()
     pending = list(graph[module])
@@ -169,7 +175,7 @@ def _run_isolated(source: str) -> subprocess.CompletedProcess[str]:
         f"{source}"
     )
     return subprocess.run(
-        [sys.executable, "-I", "-c", program],
+        [sys.executable, "-I", "-B", "-c", program],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -179,14 +185,14 @@ def _run_isolated(source: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def test_first_party_import_graph_is_acyclic():
-    graph = _first_party_import_graph()
+def test_first_party_import_graph_is_acyclic(first_party_import_graph):
+    graph = first_party_import_graph
 
     assert _cyclic_components(graph) == set()
 
 
-def test_inventory_static_edges_exactly_match_independent_ast_graph():
-    expected = _first_party_import_graph()
+def test_inventory_static_edges_exactly_match_independent_ast_graph(first_party_import_graph):
+    expected = first_party_import_graph
     value = architecture_inventory.build_inventory(PROJECT_ROOT)
     observed = {
         module["module"]: {
@@ -200,8 +206,8 @@ def test_inventory_static_edges_exactly_match_independent_ast_graph():
     assert observed == expected
 
 
-def test_job_coordination_depends_inward_and_manager_is_only_a_facade():
-    graph = _first_party_import_graph()
+def test_job_coordination_depends_inward_and_manager_is_only_a_facade(application_modules, first_party_import_graph):
+    graph = first_party_import_graph
 
     assert graph["job_application"] == {
         "job_coordination", "job_coordination_contracts", "job_runtime"}
@@ -225,7 +231,7 @@ def test_job_coordination_depends_inward_and_manager_is_only_a_facade():
     assert "runtime_supervision" in graph["rag"]
     assert "rag" not in _transitive_dependencies(
         graph, "runtime_supervision")
-    runtime_path = _application_modules()["runtime_supervision"]
+    runtime_path = application_modules["runtime_supervision"]
     assert _raw_import_roots(runtime_path) == {
         "cli_policy", "collections", "dataclasses", "math", "pathlib",
         "process_supervision", "run_telemetry", "sys", "threading",
@@ -255,8 +261,8 @@ def test_job_application_import_is_inward_and_facade_order_independent():
         assert result.returncode == 0, result.stderr
 
 
-def test_service_runtime_uses_inward_binding_without_loading_rag():
-    graph = _first_party_import_graph()
+def test_service_runtime_uses_inward_binding_without_loading_rag(first_party_import_graph):
+    graph = first_party_import_graph
 
     assert graph["service_runtime"] == {
         "job_coordination",
@@ -265,6 +271,7 @@ def test_service_runtime_uses_inward_binding_without_loading_rag():
         "release_security",
         "retention",
         "service_contracts",
+        "service_evidence_contracts",
         "service_runtime_binding",
         "storage_policy",
     }
@@ -286,8 +293,8 @@ def test_service_runtime_uses_inward_binding_without_loading_rag():
     assert result.returncode == 0, result.stderr
 
 
-def test_service_http_and_outer_root_have_exact_one_way_dependencies():
-    graph = _first_party_import_graph()
+def test_service_http_and_outer_root_have_exact_one_way_dependencies(first_party_import_graph):
+    graph = first_party_import_graph
     inbound = {
         dependency: {
             module for module, dependencies in graph.items()
@@ -299,6 +306,8 @@ def test_service_http_and_outer_root_have_exact_one_way_dependencies():
     assert graph["service_http"] == {"service_contracts"}
     assert graph["application_composition"] == {
         "job_coordination",
+        "service_evidence_http",
+        "service_evidence_runtime",
         "service_http",
         "service_runtime",
         "service_runtime_binding",
@@ -322,16 +331,17 @@ def test_service_http_and_outer_root_have_exact_one_way_dependencies():
                     graph, "application_composition"))
 
 
-def test_service_http_root_and_facade_raw_imports_are_pinned():
-    modules = _application_modules()
+def test_service_http_root_and_facade_raw_imports_are_pinned(application_modules):
+    modules = application_modules
 
     assert _raw_import_roots(modules["service_http"]) == {
-        "asyncio", "contextlib", "dataclasses", "fastapi", "hmac",
+        "asyncio", "concurrent", "contextlib", "contextvars", "dataclasses", "fastapi", "hmac",
         "ipaddress", "re", "service_contracts", "starlette",
         "threading", "typing", "uuid",
     }
     assert _raw_import_roots(modules["application_composition"]) == {
         "collections", "dataclasses", "job_coordination",
+        "service_evidence_http", "service_evidence_runtime",
         "service_http", "service_runtime", "service_runtime_binding",
         "threading", "typing",
     }
@@ -343,30 +353,67 @@ def test_service_http_root_and_facade_raw_imports_are_pinned():
     }
 
 
-def test_service_search_worker_is_the_only_rag_service_composition_shell():
-    graph = _first_party_import_graph()
+def test_service_search_worker_is_the_only_rag_service_composition_shell(first_party_import_graph):
+    graph = first_party_import_graph
 
     composition_shells = {
         module for module, dependencies in graph.items()
         if {"rag", "service_runtime"} <= dependencies
     }
     assert composition_shells == {"service_search_worker"}
-    assert graph["service_search_worker"] == {"rag", "service_runtime"}
+    assert graph["service_search_worker"] == {
+        "rag", "service_runtime", "service_evidence_runtime", "service_evidence_search"}
     for host in ("rag", "service_runtime"):
         assert "service_search_worker" not in graph[host]
         assert "service_search_worker" not in _transitive_dependencies(
             graph, host)
 
 
-def test_service_runtime_boundary_raw_imports_are_pinned():
-    modules = _application_modules()
+def test_opt_in_evidence_uses_one_way_host_and_worker_boundaries(first_party_import_graph):
+    graph = first_party_import_graph
+    assert graph["service_evidence_contracts"] == {"service_contracts"}
+    assert graph["service_evidence_http"] == {"service_contracts", "service_evidence_contracts"}
+    assert graph["service_evidence_runtime"] == {
+        "release_security", "service_contracts", "service_evidence_contracts",
+        "service_runtime", "service_runtime_binding", "storage_policy"}
+    assert graph["service_evidence_search"] == {
+        "artifact_io", "document_profiles", "evaluation_inputs", "index_state",
+        "ocr_recovery_comparison", "quality_core", "release_security", "service_contracts",
+        "service_evidence_contracts", "source_fidelity_core", "storage_policy", "table_retrieval_core"}
+    inbound = {dependency: {module for module, dependencies in graph.items() if dependency in dependencies}
+               for dependency in graph}
+    assert inbound["service_evidence_http"] == {"application_composition"}
+    assert inbound["service_evidence_runtime"] == {"application_composition", "service_search_worker"}
+    assert inbound["service_evidence_search"] == {"service_search_worker"}
+    for host in ("service_runtime", "service_evidence_runtime", "application_composition"):
+        assert not {"rag", "job_manager", "service_evidence_search"} & _transitive_dependencies(graph, host)
+
+
+def test_shared_ocr_allocation_policy_stays_inward_of_readers_and_stage_adapter(application_modules, first_party_import_graph):
+    graph = first_party_import_graph
+    assert graph["ocr_engine_limits"] == set()
+    assert graph["ocr_disposition_observer"] == set()
+    assert graph["ocr_engine_guard"] == {"ocr_engine_limits", "ocr_disposition_observer"}
+    assert _transitive_dependencies(graph, "ocr_engine_guard") == {
+        "ocr_engine_limits", "ocr_disposition_observer"}
+    for reader in ("ocr_recovery_runtime", "ocr_region_runtime", "ocr_hardscan_runtime", "ocr_stage_runtime"):
+        assert "ocr_engine_limits" in graph[reader]
+    assert "ocr_engine_guard" in graph["ocr_recovery_runtime"]
+    assert "ocr_stage_runtime" not in _transitive_dependencies(graph, "ocr_recovery_runtime")
+    modules = application_modules
+    assert _raw_import_roots(modules["ocr_engine_limits"]) <= {
+        "__future__", "collections", "dataclasses", "math", "numbers"}
+
+
+def test_service_runtime_boundary_raw_imports_are_pinned(application_modules):
+    modules = application_modules
 
     assert _raw_import_roots(modules["service_runtime"]) == {
         "dataclasses", "hashlib", "job_coordination",
         "job_coordination_contracts", "job_runtime", "json", "os",
         "pathlib", "release_security", "retention",
-        "service_contracts", "service_runtime_binding", "stat",
-        "storage_policy", "tempfile", "threading", "typing",
+        "service_contracts", "service_evidence_contracts", "service_runtime_binding", "stat",
+        "storage_policy", "tempfile", "threading", "types", "typing",
     }
     assert _raw_import_roots(modules["job_coordination_contracts"]) == {
         "collections", "dataclasses",
@@ -381,7 +428,7 @@ def test_service_runtime_boundary_raw_imports_are_pinned():
     }
     assert _raw_import_roots(modules["service_search_worker"]) == {
         "collections", "logging", "os", "pathlib", "rag",
-        "service_runtime", "sys",
+        "service_runtime", "service_evidence_runtime", "service_evidence_search", "sys",
     }
     assert _raw_import_roots(modules["embedding_policy"]) == set()
     assert _raw_import_roots(modules["resource_lease"]) == {
@@ -530,8 +577,8 @@ def test_import_resolver_tracks_package_initializers_and_known_prefixes():
     ) == {"pkg", "pkg.sibling"}
 
 
-def test_release_input_contract_has_one_way_dependency_direction():
-    graph = _first_party_import_graph()
+def test_release_input_contract_has_one_way_dependency_direction(application_modules, first_party_import_graph):
+    graph = first_party_import_graph
 
     assert "evaluation_inputs" in graph
     assert graph["evaluation_inputs"] == {"artifact_io", "storage_policy"}
@@ -548,14 +595,14 @@ def test_release_input_contract_has_one_way_dependency_direction():
         "evaluation_release" not in component
         for component in _cyclic_components(graph)
     )
-    input_path = _application_modules()["evaluation_inputs"]
+    input_path = application_modules["evaluation_inputs"]
     assert _raw_import_roots(input_path) == {
         "artifact_io", "json", "math", "pathlib", "re", "storage_policy",
     }
 
 
-def test_evaluation_query_domain_dissolves_the_application_cycle():
-    graph = _first_party_import_graph()
+def test_evaluation_query_domain_dissolves_the_application_cycle(application_modules, first_party_import_graph):
+    graph = first_party_import_graph
 
     assert graph["evaluation_queries"] == {
         "evaluation_contract", "retrieval_core", "table_retrieval_core",
@@ -568,8 +615,379 @@ def test_evaluation_query_domain_dissolves_the_application_cycle():
     assert "eval" not in graph["evaluation_review"]
     assert "eval" not in _transitive_dependencies(
         graph, "evaluation_review")
-    query_path = _application_modules()["evaluation_queries"]
+    query_path = application_modules["evaluation_queries"]
     assert _raw_import_roots(query_path) == {
         "evaluation_contract", "math", "re", "retrieval_core",
         "table_retrieval_core",
     }
+
+
+def test_guided_ocr_review_has_exact_inward_and_host_only_boundaries(first_party_import_graph):
+    graph = first_party_import_graph
+    expected = {
+        "ocr_context_authoring": {"ocr_context_evaluation"},
+        "ocr_review_context_ui": {
+            "ocr_context_authoring", "ocr_context_evaluation", "ocr_review", "ocr_review_runtime",
+        },
+        "ocr_crop_comparison": {
+            "ocr_comparison", "ocr_evaluation", "ocr_hardscan_io",
+            "ocr_recovery_comparison", "ocr_regions",
+        },
+        "ocr_crop_review_runtime": {
+            "artifact_io", "ocr_crop_comparison", "ocr_crop_raster_view", "ocr_review_runtime", "storage_policy",
+        },
+        "ocr_crop_preview_worker": {
+            "ocr_crop_comparison", "ocr_crop_raster_view", "ocr_crop_review_runtime", "storage_policy",
+        },
+        "ocr_crop_preview_supervision": {
+            "ocr_crop_preview_worker", "ocr_crop_review_runtime", "ocr_review_runtime",
+            "process_supervision", "storage_policy",
+        },
+        "ocr_review_crop_ui": {
+            "ocr_crop_comparison", "ocr_crop_review_pack_io", "ocr_crop_review_runtime", "ocr_review_crop_preview_ui",
+            "ocr_review_crop_ui_common", "ocr_review_crop_uncertainty_live_ui",
+        },
+        # Optional presentation depends inward on the fixed profile/bounds
+        # contract; it does not add a renderer or execution composition root.
+        "ocr_review_crop_preview_ui": {"ocr_crop_review_runtime"},
+        "ocr_review_execution_ui": {
+            "ocr_hardscan", "ocr_preprocessing", "ocr_review", "ocr_review_crop_ui",
+        },
+        "ocr_review_execution": {
+            "evaluation_inputs", "ocr_crop_comparison", "ocr_crop_preview_supervision",
+            "ocr_crop_review_pack", "ocr_crop_review_runtime",
+            "ocr_crop_uncertainty_comparison", "ocr_crop_uncertainty_journal",
+            "ocr_detection_disposition_io", "ocr_hardscan",
+            "ocr_recovery", "ocr_recovery_comparison", "ocr_regions",
+            "ocr_review_runtime", "process_supervision", "resource_lease", "storage_policy",
+        },
+        "ocr_disposition_archive": {
+            "evaluation_inputs", "model_artifacts", "ocr_checkpoint", "ocr_detection_disposition",
+            "ocr_disposition_geometry", "ocr_execution_receipt", "ocr_experiment_runtime",
+            "ocr_hardscan", "ocr_hardscan_io", "ocr_recovery_comparison", "ocr_regions",
+        },
+        "ocr_crop_review_pack": {"evaluation_inputs", "ocr_crop_comparison", "ocr_disposition_archive"},
+        "ocr_crop_review_pack_io": {
+            "evaluation_inputs", "ocr_crop_review_pack", "ocr_crop_uncertainty_pack",
+            "ocr_recovery", "resource_lease", "storage_policy",
+        },
+        "ocr_review_crop_packs": {
+            "ocr_crop_comparison", "ocr_crop_preview_supervision", "ocr_crop_review_pack",
+            "ocr_crop_review_pack_io", "ocr_crop_review_runtime", "ocr_review_runtime",
+            "ocr_crop_uncertainty_comparison", "ocr_crop_uncertainty_journal", "ocr_crop_uncertainty_pack",
+        },
+        "ocr_review_crop_archive_ui": {
+            "ocr_crop_comparison", "ocr_crop_raster_view", "ocr_crop_review_runtime", "ocr_review_crop_preview_ui",
+            "ocr_review_crop_ui_common", "ocr_review_crop_uncertainty", "ocr_review_crop_uncertainty_editor",
+            "ocr_review_save_feedback", "ocr_crop_advice",
+        },
+        "ocr_crop_raster_view": {"ocr_crop_comparison"},
+        "ocr_crop_quality": {"ocr_crop_comparison", "ocr_crop_raster_view"},
+        "ocr_crop_advice": {"ocr_crop_comparison", "ocr_crop_quality", "ocr_crop_raster_view"},
+        "ocr_crop_uncertainty_journal": {"ocr_crop_comparison", "ocr_crop_raster_view", "ocr_evaluation"},
+        "ocr_crop_uncertainty_comparison": {
+            "ocr_crop_comparison", "ocr_crop_raster_view", "ocr_crop_uncertainty_journal",
+        },
+        "ocr_crop_uncertainty_pack": {
+            "ocr_crop_comparison", "ocr_crop_raster_view", "ocr_crop_review_pack",
+            "ocr_crop_uncertainty_comparison", "ocr_crop_uncertainty_journal",
+        },
+        "ocr_review_crop_uncertainty": {"ocr_crop_raster_view", "ocr_crop_uncertainty_journal", "ocr_evaluation"},
+        "ocr_review_crop_uncertainty_editor": {"ocr_review_crop_preview_ui"},
+        "ocr_review_crop_uncertainty_live_ui": {
+            "ocr_crop_comparison", "ocr_crop_raster_view", "ocr_crop_review_runtime", "ocr_review_crop_preview_ui",
+            "ocr_review_crop_ui_common", "ocr_review_crop_uncertainty", "ocr_review_crop_uncertainty_editor",
+            "ocr_review_save_feedback", "ocr_crop_advice",
+        },
+        "ocr_review_crop_ui_common": {"ocr_crop_comparison"},
+        "ocr_review_save_feedback": set(),
+        "ocr_spot_audit": {"ocr_evaluation", "ocr_review"},
+        "ocr_spot_audit_ui": {"ocr_review_crop_ui_common", "ocr_spot_audit"},
+        "ocr_review_ui": {
+            "ocr_omission", "ocr_recovery", "ocr_review", "ocr_review_context_ui", "ocr_review_crop_archive_ui",
+            "ocr_review_drafts", "ocr_review_execution_ui", "ocr_review_runtime",
+            "ocr_spot_audit_ui",
+        },
+        "tools.review_ocr": {
+            "ocr_review_crop_packs", "ocr_review_crop_preview_ui", "ocr_review_execution",
+            "ocr_review_runtime", "ocr_review_ui", "storage_policy",
+        },
+    }
+    # Do not silently supplement the authoritative tracked-source graph with
+    # working-tree files: qualification must explicitly admit the new cohort.
+    assert set(expected) <= set(graph), f"untracked or missing guided-review modules: {sorted(set(expected) - set(graph))}"
+    inbound = {
+        dependency: {module for module, dependencies in graph.items() if dependency in dependencies}
+        for dependency in expected
+    }
+    assert inbound == {
+        "ocr_context_authoring": {"ocr_review_context_ui", "ocr_review_drafts", "ocr_review_runtime"},
+        "ocr_review_context_ui": {"ocr_review_ui"},
+        "ocr_crop_comparison": {
+            "ocr_crop_preview_worker", "ocr_crop_review_pack", "ocr_crop_review_runtime",
+            "ocr_review_crop_archive_ui", "ocr_review_crop_packs", "ocr_review_crop_ui", "ocr_review_execution",
+            "ocr_crop_raster_view", "ocr_crop_uncertainty_comparison", "ocr_crop_uncertainty_journal",
+            "ocr_crop_uncertainty_pack", "ocr_review_crop_ui_common", "ocr_review_crop_uncertainty_live_ui",
+            "ocr_crop_quality", "ocr_crop_advice",
+        },
+        "ocr_crop_review_runtime": {
+            "ocr_crop_preview_supervision", "ocr_crop_preview_worker", "ocr_review_crop_packs",
+            "ocr_review_crop_archive_ui", "ocr_review_crop_preview_ui", "ocr_review_crop_ui", "ocr_review_execution",
+            "ocr_review_crop_uncertainty_live_ui",
+        },
+        "ocr_crop_preview_worker": {"ocr_crop_preview_supervision"},
+        "ocr_crop_preview_supervision": {"ocr_review_crop_packs", "ocr_review_execution"},
+        "ocr_review_crop_ui": {"ocr_review_execution_ui"},
+        "ocr_review_crop_preview_ui": {
+            "ocr_review_crop_archive_ui", "ocr_review_crop_ui", "ocr_review_crop_uncertainty_editor",
+            "ocr_review_crop_uncertainty_live_ui", "tools.review_ocr",
+        },
+        "ocr_review_execution": {"tools.review_ocr"},
+        "ocr_review_execution_ui": {"ocr_review_ui"},
+        "ocr_disposition_archive": {"ocr_crop_review_pack"},
+        "ocr_crop_review_pack": {
+            "ocr_crop_review_pack_io", "ocr_crop_uncertainty_pack", "ocr_review_crop_packs", "ocr_review_execution",
+        },
+        "ocr_crop_review_pack_io": {"ocr_review_crop_packs", "ocr_review_crop_ui"},
+        "ocr_review_crop_packs": {"tools.review_ocr"},
+        "ocr_review_crop_archive_ui": {"ocr_review_ui"},
+        "ocr_crop_raster_view": {
+            "ocr_crop_preview_worker", "ocr_crop_review_runtime", "ocr_crop_uncertainty_comparison",
+            "ocr_crop_uncertainty_journal", "ocr_crop_uncertainty_pack", "ocr_review_crop_archive_ui",
+            "ocr_review_crop_uncertainty", "ocr_review_crop_uncertainty_live_ui",
+            "ocr_crop_quality", "ocr_crop_advice",
+        },
+        "ocr_crop_quality": {"ocr_crop_advice"},
+        "ocr_crop_advice": {"ocr_review_crop_archive_ui", "ocr_review_crop_uncertainty_live_ui"},
+        "ocr_crop_uncertainty_journal": {
+            "ocr_crop_uncertainty_comparison", "ocr_crop_uncertainty_pack", "ocr_review_crop_packs",
+            "ocr_review_crop_uncertainty", "ocr_review_execution",
+        },
+        "ocr_crop_uncertainty_comparison": {"ocr_crop_uncertainty_pack", "ocr_review_crop_packs", "ocr_review_execution"},
+        "ocr_crop_uncertainty_pack": {"ocr_crop_review_pack_io", "ocr_review_crop_packs"},
+        "ocr_review_crop_uncertainty": {"ocr_review_crop_archive_ui", "ocr_review_crop_uncertainty_live_ui"},
+        "ocr_review_crop_uncertainty_editor": {"ocr_review_crop_archive_ui", "ocr_review_crop_uncertainty_live_ui"},
+        "ocr_review_crop_uncertainty_live_ui": {"ocr_review_crop_ui"},
+        "ocr_review_crop_ui_common": {
+            "ocr_review_crop_archive_ui", "ocr_review_crop_ui", "ocr_review_crop_uncertainty_live_ui",
+            "ocr_spot_audit_ui",
+        },
+        "ocr_review_save_feedback": {"ocr_review_crop_archive_ui", "ocr_review_crop_uncertainty_live_ui"},
+        "ocr_spot_audit": {"ocr_review_runtime", "ocr_spot_audit_ui"},
+        "ocr_spot_audit_ui": {"ocr_review_ui"},
+        "ocr_review_ui": {"tools.review_ocr"},
+        "tools.review_ocr": set(),
+    }
+    forbidden = {
+        "rag", "job_manager", "job_application", "application_composition",
+        "ai_pipeline_client", "service_api", "service_runtime",
+        "service_evidence_http", "service_evidence_runtime", "service_evidence_search",
+    }
+    for module, dependencies in expected.items():
+        assert graph[module] == dependencies
+        assert not forbidden & _transitive_dependencies(graph, module)
+    # Validator reuse gives comparison a transitive IO graph. This pins its
+    # existing layering, not a false claim that comparison is a dependency leaf.
+    assert "ocr_hardscan_io" in _transitive_dependencies(graph, "ocr_crop_comparison")
+    # Historical validation reuses pure entrypoints in existing IO/runtime
+    # modules. Pin that honest static closure, not a false dependency-leaf claim.
+    assert {"ocr_hardscan_io", "ocr_experiment_runtime"} <= _transitive_dependencies(graph, "ocr_disposition_archive")
+    for archive in ("ocr_disposition_archive", "ocr_crop_review_pack", "ocr_crop_review_pack_io",
+                    "ocr_crop_raster_view", "ocr_crop_uncertainty_journal",
+                    "ocr_crop_uncertainty_comparison", "ocr_crop_uncertainty_pack", "ocr_spot_audit",
+                    "ocr_crop_quality", "ocr_crop_advice", "ocr_context_authoring"):
+        assert not {
+            "ocr_review_execution", "ocr_review_crop_packs", "ocr_review_crop_archive_ui",
+            "ocr_review_ui", "tools.review_ocr", "ocr_crop_preview_supervision",
+            "ocr_detection_disposition_io", "ocr_detection_disposition_runtime",
+            "ocr_review_crop_ui", "ocr_review_crop_ui_common", "ocr_review_crop_preview_ui",
+            "ocr_review_crop_uncertainty", "ocr_review_crop_uncertainty_editor", "ocr_review_crop_uncertainty_live_ui",
+            "ocr_review_save_feedback", "ocr_spot_audit_ui", "ocr_review_context_ui",
+        } & _transitive_dependencies(graph, archive)
+    # The shared UI state/field seam is inward. Neither a lazy import nor a
+    # compatibility alias permits it to reach a panel or live host again.
+    assert not {
+        "ocr_review_crop_ui", "ocr_review_crop_archive_ui", "ocr_review_crop_uncertainty_live_ui",
+        "ocr_review_execution", "ocr_review_crop_packs", "ocr_review_ui", "tools.review_ocr",
+        "ocr_review_save_feedback", "ocr_spot_audit_ui", "ocr_review_context_ui",
+    } & _transitive_dependencies(graph, "ocr_review_crop_ui_common")
+
+
+@pytest.mark.parametrize("module", (
+    "ocr_crop_comparison", "ocr_crop_review_runtime", "ocr_crop_preview_worker",
+    "ocr_crop_preview_supervision", "ocr_review_crop_ui", "ocr_review_crop_preview_ui",
+    "ocr_review_execution", "ocr_review_execution_ui", "ocr_review_ui", "tools.review_ocr",
+    "ocr_disposition_archive", "ocr_crop_review_pack", "ocr_crop_review_pack_io",
+    "ocr_review_crop_packs", "ocr_review_crop_archive_ui",
+    "ocr_crop_raster_view", "ocr_crop_uncertainty_journal", "ocr_crop_uncertainty_comparison",
+    "ocr_crop_uncertainty_pack", "ocr_review_crop_uncertainty", "ocr_review_crop_uncertainty_editor",
+    "ocr_review_crop_uncertainty_live_ui", "ocr_review_crop_ui_common",
+    "ocr_review_save_feedback", "ocr_spot_audit", "ocr_spot_audit_ui",
+    "ocr_crop_quality", "ocr_crop_advice",
+    "ocr_context_authoring", "ocr_review_context_ui", "ocr_review_runtime", "ocr_review_drafts",
+))
+def test_guided_ocr_review_imports_without_attempting_heavy_backends(module):
+    result = _run_isolated(f'''
+forbidden = {{
+    "gradio", "pymupdf", "fitz", "PIL", "rapidocr", "cv2", "numpy",
+    "onnxruntime", "torch", "transformers", "docling", "chromadb", "qdrant_client",
+    "fastapi", "starlette", "rag", "job_manager", "service_api", "service_runtime",
+    "application_composition",
+}}
+assert not forbidden.intersection(name.split(".", 1)[0] for name in sys.modules)
+attempts = []
+class RefuseHeavyImports:
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.split(".", 1)[0] in forbidden:
+            attempts.append(fullname)
+            raise ImportError("heavy imports forbidden in isolated architecture check")
+sys.meta_path.insert(0, RefuseHeavyImports())
+__import__({module!r})
+assert not attempts, attempts
+assert not forbidden.intersection(name.split(".", 1)[0] for name in sys.modules)
+''')
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("module,first_party,standard_library,optional", (
+    ("ocr_context_evaluation", set(), {"math", "re"}, set()),
+    ("ocr_context_authoring", {"ocr_context_evaluation"}, {"copy"}, set()),
+    ("ocr_review_context_ui", {
+        "ocr_context_authoring", "ocr_context_evaluation", "ocr_review", "ocr_review_runtime",
+    }, {"copy", "hashlib", "json", "uuid"}, set()),
+    ("ocr_review_drafts", {
+        "evaluation_inputs", "ocr_context_authoring", "ocr_docling", "ocr_layout_assignment",
+        "ocr_omission", "ocr_regions", "ocr_review",
+    }, {"copy"}, set()),
+    ("ocr_review_runtime", {
+        "evaluation_inputs", "ocr_column_suggestions", "ocr_context_authoring", "ocr_context_evaluation",
+        "ocr_context_evaluation_io", "ocr_docling", "ocr_layout", "ocr_layout_assignment", "ocr_omission",
+        "ocr_recovery", "ocr_recovery_comparison", "ocr_regions", "ocr_review", "ocr_review_drafts",
+        "ocr_scan_review", "ocr_spot_audit", "resource_lease", "storage_policy",
+    }, {"copy", "dataclasses", "json", "math", "pathlib", "re", "stat", "uuid"}, {"PIL", "cv2", "numpy", "pymupdf"}),
+    ("ocr_disposition_archive", {
+        "evaluation_inputs", "model_artifacts", "ocr_checkpoint", "ocr_detection_disposition",
+        "ocr_disposition_geometry", "ocr_execution_receipt", "ocr_experiment_runtime",
+        "ocr_hardscan", "ocr_hardscan_io", "ocr_recovery_comparison", "ocr_regions",
+    }, {"hashlib", "json", "math", "re", "types"}, set()),
+    ("ocr_crop_review_pack", {"evaluation_inputs", "ocr_crop_comparison", "ocr_disposition_archive"},
+     {"hashlib", "json", "types"}, set()),
+    ("ocr_crop_review_pack_io", {
+        "evaluation_inputs", "ocr_crop_review_pack", "ocr_crop_uncertainty_pack",
+        "ocr_recovery", "resource_lease", "storage_policy",
+    }, {"dataclasses", "hashlib", "os", "pathlib", "re", "stat", "threading", "uuid"}, set()),
+    ("ocr_review_crop_packs", {
+        "ocr_crop_comparison", "ocr_crop_preview_supervision", "ocr_crop_review_pack",
+        "ocr_crop_review_pack_io", "ocr_crop_review_runtime", "ocr_review_runtime",
+        "ocr_crop_uncertainty_comparison", "ocr_crop_uncertainty_journal", "ocr_crop_uncertainty_pack",
+    }, {"functools", "json", "math", "pathlib", "threading", "time"}, set()),
+    ("ocr_review_crop_archive_ui", {
+        "ocr_crop_comparison", "ocr_crop_raster_view", "ocr_crop_review_runtime", "ocr_review_crop_preview_ui",
+        "ocr_review_crop_ui_common", "ocr_review_crop_uncertainty", "ocr_review_crop_uncertainty_editor",
+        "ocr_review_save_feedback", "ocr_crop_advice",
+    },
+     {"copy", "hashlib", "json", "re", "threading", "uuid"}, {"PIL", "gradio"}),
+    ("ocr_review_crop_preview_ui", {"ocr_crop_review_runtime"}, set(), {"PIL", "gradio"}),
+    ("ocr_crop_raster_view", {"ocr_crop_comparison"}, {"hashlib", "math", "struct"}, set()),
+    ("ocr_crop_quality", {"ocr_crop_comparison", "ocr_crop_raster_view"},
+     {"hashlib", "json", "math"}, set()),
+    ("ocr_crop_advice", {"ocr_crop_comparison", "ocr_crop_quality", "ocr_crop_raster_view"},
+     {"fractions", "hashlib", "math"}, set()),
+    ("ocr_crop_uncertainty_journal", {"ocr_crop_comparison", "ocr_crop_raster_view", "ocr_evaluation"},
+     {"hashlib", "json", "math", "re"}, set()),
+    ("ocr_crop_uncertainty_comparison", {
+        "ocr_crop_comparison", "ocr_crop_raster_view", "ocr_crop_uncertainty_journal",
+    }, {"hashlib", "json"}, set()),
+    ("ocr_crop_uncertainty_pack", {
+        "ocr_crop_comparison", "ocr_crop_raster_view", "ocr_crop_review_pack",
+        "ocr_crop_uncertainty_comparison", "ocr_crop_uncertainty_journal",
+    }, {"json"}, set()),
+    ("ocr_review_crop_uncertainty", {"ocr_crop_raster_view", "ocr_crop_uncertainty_journal", "ocr_evaluation"},
+     {"hashlib", "json"}, set()),
+    ("ocr_review_crop_uncertainty_editor", {"ocr_review_crop_preview_ui"},
+     {"json", "math", "re"}, {"gradio"}),
+    ("ocr_review_crop_uncertainty_live_ui", {
+        "ocr_crop_comparison", "ocr_crop_raster_view", "ocr_crop_review_runtime", "ocr_review_crop_preview_ui",
+        "ocr_review_crop_ui_common", "ocr_review_crop_uncertainty", "ocr_review_crop_uncertainty_editor",
+        "ocr_review_save_feedback", "ocr_crop_advice",
+    }, {"copy", "hashlib", "json", "uuid"}, {"PIL", "gradio"}),
+    ("ocr_review_save_feedback", set(), {"json"}, {"gradio"}),
+    ("ocr_spot_audit", {"ocr_evaluation", "ocr_review"},
+     {"copy", "hashlib", "json", "math", "re"}, set()),
+    ("ocr_spot_audit_ui", {"ocr_review_crop_ui_common", "ocr_spot_audit"},
+     {"copy", "hashlib", "json", "secrets", "sys", "threading"}, {"gradio"}),
+    ("ocr_review_crop_ui_common", {"ocr_crop_comparison"},
+     {"hashlib", "re", "struct", "threading", "uuid"}, {"PIL"}),
+    ("ocr_review_crop_ui", {
+        "ocr_crop_comparison", "ocr_crop_review_pack_io", "ocr_crop_review_runtime", "ocr_review_crop_preview_ui",
+        "ocr_review_crop_ui_common", "ocr_review_crop_uncertainty_live_ui",
+    }, {"hashlib", "json", "re", "uuid"}, {"gradio"}),
+))
+def test_crop_pack_direct_imports_have_only_explicit_stdlib_and_lazy_ui_dependencies(
+        module, first_party, standard_library, optional):
+    # Fixed-path import checks may inspect a development file before it is
+    # tracked; the exact graph test above independently refuses that cohort.
+    assert standard_library <= sys.stdlib_module_names
+    assert _raw_import_roots(PROJECT_ROOT / f"{module}.py") == first_party | standard_library | optional
+
+
+@pytest.mark.parametrize("module", (
+    "ocr_disposition_archive", "ocr_crop_review_pack", "ocr_crop_review_pack_io",
+    "ocr_crop_raster_view", "ocr_crop_uncertainty_journal", "ocr_crop_uncertainty_comparison",
+    "ocr_crop_uncertainty_pack", "ocr_review_crop_uncertainty",
+    "ocr_spot_audit", "ocr_context_authoring",
+    "ocr_crop_quality", "ocr_crop_advice",
+))
+def test_crop_pack_archive_import_does_not_attempt_live_host_or_dispatch(module):
+    result = _run_isolated(f'''
+forbidden = {{
+    "ocr_review_execution", "ocr_review_crop_packs", "ocr_review_crop_archive_ui",
+    "ocr_review_crop_ui", "ocr_review_execution_ui", "ocr_review_ui", "ocr_review_runtime",
+    "ocr_crop_preview_supervision", "ocr_crop_preview_worker",
+    "ocr_detection_disposition_io", "ocr_detection_disposition_runtime", "tools.review_ocr",
+    "ocr_review_crop_ui_common", "ocr_review_crop_preview_ui",
+    "ocr_review_crop_uncertainty_editor", "ocr_review_crop_uncertainty_live_ui",
+    "ocr_review_save_feedback", "ocr_spot_audit_ui", "ocr_review_context_ui",
+}}
+def denied(name):
+    return any(name == item or name.startswith(item + ".") for item in forbidden)
+assert not [name for name in sys.modules if denied(name)]
+attempts = []
+class RefuseLiveCropHost:
+    def find_spec(self, fullname, path=None, target=None):
+        if denied(fullname):
+            attempts.append(fullname)
+            raise ImportError("live host imports forbidden in historical architecture check")
+sys.meta_path.insert(0, RefuseLiveCropHost())
+__import__({module!r})
+assert not attempts, attempts
+assert not [name for name in sys.modules if denied(name)]
+''')
+    assert result.returncode == 0, result.stderr
+
+
+def test_shared_crop_ui_import_does_not_attempt_a_panel_or_live_host():
+    result = _run_isolated('''
+forbidden = {
+    "ocr_review_crop_ui", "ocr_review_crop_archive_ui", "ocr_review_crop_uncertainty_live_ui",
+    "ocr_review_crop_uncertainty_editor", "ocr_review_crop_preview_ui",
+    "ocr_review_execution", "ocr_review_execution_ui", "ocr_review_crop_packs",
+    "ocr_review_runtime", "ocr_crop_review_runtime", "ocr_review_ui", "tools.review_ocr",
+    "ocr_crop_preview_supervision", "ocr_crop_preview_worker",
+    "ocr_review_save_feedback", "ocr_spot_audit_ui", "ocr_review_context_ui",
+}
+def denied(name):
+    return any(name == item or name.startswith(item + ".") for item in forbidden)
+assert not [name for name in sys.modules if denied(name)]
+attempts = []
+class RefuseCropPanels:
+    def find_spec(self, fullname, path=None, target=None):
+        if denied(fullname):
+            attempts.append(fullname)
+            raise ImportError("outward UI imports forbidden in shared-helper architecture check")
+sys.meta_path.insert(0, RefuseCropPanels())
+__import__("ocr_review_crop_ui_common")
+assert not attempts, attempts
+assert not [name for name in sys.modules if denied(name)]
+''')
+    assert result.returncode == 0, result.stderr

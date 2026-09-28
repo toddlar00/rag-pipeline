@@ -42,6 +42,7 @@ class _Response:
         self._payload = payload
         self.status_code = status
         self.closed = False
+        self.close_count = 0
         self._body = (
             b'{"malformed":' if isinstance(payload, BaseException)
             else json.dumps(payload).encode("utf-8")
@@ -68,6 +69,7 @@ class _Response:
 
     def close(self):
         self.closed = True
+        self.close_count += 1
 
 
 class _CountingThrottle:
@@ -169,6 +171,229 @@ def test_openai_structured_response_parses_native_usage(monkeypatch):
     assert isinstance(observed["auth"], rag._llm_adapters._BearerAuth)
 
 
+@pytest.mark.parametrize(("usage_fields", "expected_counts"), [
+    pytest.param({}, (None, None, None, None), id="missing-usage"),
+    pytest.param({"usage": None}, (None, None, None, None), id="null-usage"),
+    pytest.param({"usage": {}}, (None, None, None, None), id="empty-usage"),
+    pytest.param(
+        {"usage": {"total_tokens": 22}}, (None, None, None, None),
+        id="total-only-usage"),
+    pytest.param(
+        {"usage": {"prompt_tokens": 0, "completion_tokens": 0}},
+        (0, 0, None, None), id="zero-counts-without-total"),
+    pytest.param(
+        {"usage": {
+            "prompt_tokens": 17, "completion_tokens": 5,
+            "prompt_cache_hit_tokens": 0,
+            "prompt_tokens_details": {"cached_tokens": "ignored"},
+            "completion_tokens_details": {"reasoning_tokens": 2},
+        }}, (17, 5, 0, 2), id="direct-cache-count-precedes-details"),
+    pytest.param(
+        {"usage": {
+            "prompt_tokens": 17, "completion_tokens": 5,
+            "prompt_cache_hit_tokens": None,
+            "prompt_tokens_details": {"cached_tokens": 7},
+        }}, (17, 5, 7, None), id="null-direct-cache-count-uses-details"),
+])
+def test_openai_optional_usage_characterization(
+        monkeypatch, usage_fields, expected_counts):
+    response = _Response({
+        "choices": [{"message": {"content": " final answer "}}],
+        **usage_fields,
+    })
+    throttle = _CountingThrottle()
+    monkeypatch.setattr(
+        rag.requests, "post", lambda *_args, **_kwargs: response)
+    monkeypatch.setattr(rag, "_get_throttle", lambda _workers: throttle)
+
+    result = rag._call_openai_compatible_result(
+        "prompt", base_url="https://provider.test/v1",
+        model="model", api_key="secret")
+
+    assert result.text == "final answer"
+    assert (
+        result.prompt_tokens, result.completion_tokens,
+        result.cached_prompt_tokens, result.reasoning_tokens,
+    ) == expected_counts
+    assert result.transport_attempts == 1
+    assert result.transient_error_categories == ()
+    assert response.closed
+    assert (throttle.acquired, throttle.ok,
+            throttle.rate_limited, throttle.errors) == (1, 1, 0, 0)
+
+
+@pytest.mark.parametrize(("body", "category"), [
+    pytest.param([], "invalid_response", id="non-object-body"),
+    pytest.param({}, "invalid_response", id="missing-choices"),
+    pytest.param({"choices": {}}, "invalid_response", id="non-list-choices"),
+    pytest.param({"choices": [None]}, "invalid_response", id="null-first-choice"),
+    pytest.param({"choices": [7]}, "invalid_response", id="integer-first-choice"),
+    pytest.param({"choices": [{}]}, "invalid_response", id="missing-message"),
+    pytest.param(
+        {"choices": [{"message": []}]}, "invalid_response",
+        id="non-object-message"),
+    pytest.param(
+        {"choices": [{"message": {"content": None}}]}, "invalid_response",
+        id="null-content"),
+    pytest.param(
+        _openai_body() | {"usage": []}, "invalid_response",
+        id="non-object-usage"),
+    pytest.param(
+        _openai_body() | {"usage": {"prompt_tokens": 17}}, "invalid_response",
+        id="missing-completion-count"),
+    pytest.param(
+        _openai_body() | {"usage": {"completion_tokens": 5}}, "invalid_response",
+        id="missing-prompt-count"),
+    pytest.param(
+        _openai_body() | {"usage": {
+            "prompt_tokens": True, "completion_tokens": 5,
+        }}, "invalid_response", id="boolean-count"),
+    pytest.param(
+        _openai_body() | {"usage": {
+            "prompt_tokens": 17, "completion_tokens": -1,
+        }}, "invalid_response", id="negative-count"),
+    pytest.param(
+        _openai_body() | {"usage": {
+            "prompt_tokens": 17.0, "completion_tokens": 5,
+        }}, "invalid_response", id="non-integer-count"),
+    pytest.param(
+        _openai_body() | {"usage": {
+            "prompt_tokens": 17, "completion_tokens": 5, "total_tokens": 23,
+        }}, "invalid_response", id="inconsistent-total"),
+    pytest.param(
+        _openai_body() | {"usage": {"prompt_cache_hit_tokens": 0}},
+        "invalid_response", id="cache-count-without-native-counts"),
+    pytest.param(
+        _openai_body() | {"usage": {
+            "completion_tokens_details": {"reasoning_tokens": 0},
+        }}, "invalid_response", id="reasoning-count-without-native-counts"),
+    pytest.param(
+        _openai_body() | {"usage": {
+            "prompt_tokens": 17, "completion_tokens": 5,
+            "prompt_tokens_details": {"cached_tokens": 18},
+        }}, "invalid_response", id="cache-count-exceeds-prompt-count"),
+    pytest.param(
+        _openai_body() | {"usage": {
+            "prompt_tokens": 17, "completion_tokens": 5,
+            "completion_tokens_details": {"reasoning_tokens": 6},
+        }}, "invalid_response", id="reasoning-count-exceeds-completion-count"),
+])
+@pytest.mark.parametrize("attempts", [1, 2])
+def test_openai_invalid_body_characterization(
+        monkeypatch, body, category, attempts):
+    responses = [
+        *[_Response(status=429, headers={"Retry-After": "0"})
+          for _ in range(attempts - 1)],
+        _Response(body),
+    ]
+    response_iterator = iter(responses)
+    throttle = _CountingThrottle()
+    monkeypatch.setattr(
+        rag.requests, "post", lambda *_args, **_kwargs: next(response_iterator))
+    monkeypatch.setattr(rag, "_get_throttle", lambda _workers: throttle)
+    monkeypatch.setattr(rag.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(ProviderCallError) as error:
+        rag._call_openai_compatible_result(
+            "prompt", base_url="https://provider.test/v1",
+            model="model", api_key="secret")
+
+    assert error.value.category == category
+    assert error.value.transport_attempts == attempts
+    assert all(response.closed for response in responses)
+    assert (throttle.acquired, throttle.ok,
+            throttle.rate_limited, throttle.errors) == (
+                attempts, 0, attempts - 1, 1)
+
+
+@pytest.mark.parametrize(("message", "finish_reason", "category"), [
+    pytest.param({"content": None, "refusal": "declined"}, None,
+                 "content_filtered", id="null-content-refusal"),
+    pytest.param({"content": "partial", "refusal": "declined"}, "stop",
+                 "content_filtered", id="nonempty-content-refusal"),
+    pytest.param({"content": None}, "content_filter",
+                 "content_filtered", id="null-content-filtered"),
+    pytest.param({"content": "partial"}, "content_filter",
+                 "content_filtered", id="nonempty-content-filtered"),
+    pytest.param({"content": "answer", "refusal": False}, None,
+                 "invalid_response", id="non-text-refusal"),
+    pytest.param({"content": "answer"}, False,
+                 "invalid_response", id="non-text-finish-reason"),
+])
+def test_openai_rejects_refusals_and_invalid_completion_metadata(
+        monkeypatch, message, finish_reason, category):
+    response = _Response({"choices": [{
+        "message": message, "finish_reason": finish_reason,
+    }]})
+    throttle = _CountingThrottle()
+    monkeypatch.setattr(
+        rag.requests, "post", lambda *_args, **_kwargs: response)
+    monkeypatch.setattr(rag, "_get_throttle", lambda _workers: throttle)
+
+    with pytest.raises(ProviderCallError) as error:
+        rag._call_openai_compatible_result(
+            "prompt", base_url="https://provider.test/v1",
+            model="model", api_key="secret")
+
+    assert error.value.category == category
+    assert error.value.transport_attempts == 1
+    assert response.close_count == 1
+    assert (throttle.acquired, throttle.ok,
+            throttle.rate_limited, throttle.errors) == (1, 0, 0, 1)
+    assert "partial" not in str(error.value)
+    assert "declined" not in str(error.value)
+
+
+@pytest.mark.parametrize("text", ["answer", "", " \t\r\n"])
+@pytest.mark.parametrize("refusal", [None, ""])
+def test_openai_unfiltered_text_preserves_native_usage(
+        monkeypatch, text, refusal):
+    body = _openai_body(text)
+    body["choices"][0]["message"]["refusal"] = refusal
+    body["choices"][0]["finish_reason"] = "stop"
+    response = _Response(body)
+    throttle = _CountingThrottle()
+    monkeypatch.setattr(
+        rag.requests, "post", lambda *_args, **_kwargs: response)
+    monkeypatch.setattr(rag, "_get_throttle", lambda _workers: throttle)
+
+    result = rag._call_openai_compatible_result(
+        "prompt", base_url="https://provider.test/v1",
+        model="model", api_key="secret")
+
+    assert result == ProviderResponse(
+        text=text.strip(), prompt_tokens=17, completion_tokens=5,
+        cached_prompt_tokens=7, reasoning_tokens=2)
+    assert response.close_count == 1
+    assert (throttle.acquired, throttle.ok,
+            throttle.rate_limited, throttle.errors) == (1, 1, 0, 0)
+
+
+@pytest.mark.parametrize("field", [
+    "prompt_tokens_details", "completion_tokens_details",
+])
+@pytest.mark.parametrize("details", [[], "unexpected", False])
+def test_openai_rejects_malformed_usage_details(monkeypatch, field, details):
+    body = _openai_body()
+    body["usage"]["prompt_cache_hit_tokens"] = 3
+    body["usage"][field] = details
+    response = _Response(body)
+    throttle = _CountingThrottle()
+    monkeypatch.setattr(
+        rag.requests, "post", lambda *_args, **_kwargs: response)
+    monkeypatch.setattr(rag, "_get_throttle", lambda _workers: throttle)
+
+    with pytest.raises(ProviderCallError) as error:
+        rag._call_openai_compatible_result(
+            "prompt", base_url="https://provider.test/v1",
+            model="model", api_key="secret")
+
+    assert error.value.category == "invalid_response"
+    assert response.close_count == 1
+    assert (throttle.acquired, throttle.ok,
+            throttle.rate_limited, throttle.errors) == (1, 0, 0, 1)
+
+
 def test_explicit_bearer_auth_prevents_ambient_netrc_replacement(monkeypatch):
     netrc_calls = []
     monkeypatch.setattr(
@@ -230,14 +455,204 @@ def test_openai_429_retry_reports_transport_attempts(monkeypatch):
     assert all(response.closed for response in response_items)
 
 
+@pytest.mark.parametrize("status", [429, 502, 503, 504])
+@pytest.mark.parametrize("header_name", ["Retry-After", "retry-after"])
+def test_openai_temporary_http_failure_retries_after_cleanup_and_admission(
+        monkeypatch, status, header_name):
+    events = []
+    throttle = _CountingThrottle()
+
+    class ObservedResponse(_Response):
+        def close(self):
+            super().close()
+            events.append(("close", self.status_code))
+
+    responses = [
+        ObservedResponse(status=status, headers={header_name: "0.25"}),
+        ObservedResponse(_openai_body()),
+    ]
+    response_iterator = iter(responses)
+
+    def post(*_args, **_kwargs):
+        response = next(response_iterator)
+        events.append(("post", response.status_code))
+        return response
+
+    def sleep(delay):
+        assert responses[0].close_count == 1
+        assert throttle.acquired == (
+            throttle.ok + throttle.errors + throttle.rate_limited)
+        events.append(("sleep", delay))
+
+    def admit():
+        assert events[-1] == ("sleep", 0.25)
+        events.append(("admit",))
+
+    monkeypatch.setattr(rag.requests, "post", post)
+    monkeypatch.setattr(rag, "_get_throttle", lambda _workers: throttle)
+    monkeypatch.setattr(rag.time, "sleep", sleep)
+
+    result = rag._call_openai_compatible_result(
+        "prompt", base_url="https://provider.test/v1",
+        model="model", api_key="secret", _admit_retry=admit)
+
+    assert result.transport_attempts == 2
+    assert result.transient_error_categories == (
+        "rate_limited" if status == 429 else "server_error",)
+    assert events == [
+        ("post", status), ("close", status), ("sleep", 0.25),
+        ("admit",), ("post", 200), ("close", 200),
+    ]
+    assert [response.close_count for response in responses] == [1, 1]
+    assert (throttle.acquired, throttle.ok,
+            throttle.rate_limited, throttle.errors) == (
+                2, 1, int(status == 429), int(status != 429))
+
+
+@pytest.mark.parametrize("status", [429, 502, 503, 504])
+def test_openai_temporary_http_failure_exhausts_two_attempt_limit(
+        monkeypatch, status):
+    responses = []
+    sleeps = []
+    admissions = []
+    throttle = _CountingThrottle()
+
+    def post(*_args, **_kwargs):
+        response = _Response(status=status, headers={"Retry-After": "0"})
+        responses.append(response)
+        return response
+
+    monkeypatch.setattr(rag.requests, "post", post)
+    monkeypatch.setattr(rag, "_get_throttle", lambda _workers: throttle)
+    monkeypatch.setattr(rag.time, "sleep", sleeps.append)
+
+    with pytest.raises(ProviderCallError) as error:
+        rag._call_openai_compatible_result(
+            "prompt", base_url="https://provider.test/v1",
+            model="model", api_key="secret",
+            _admit_retry=lambda: admissions.append("admitted"))
+
+    assert error.value.category == (
+        "rate_limited" if status == 429 else "server_error")
+    assert error.value.transport_attempts == 2
+    assert len(responses) == 2
+    assert [response.close_count for response in responses] == [1, 1]
+    assert sleeps == [0]
+    assert admissions == ["admitted"]
+    assert (throttle.acquired, throttle.ok,
+            throttle.rate_limited, throttle.errors) == (
+                2, 0, 2 if status == 429 else 0, 0 if status == 429 else 2)
+
+
+@pytest.mark.parametrize("status", [429, 503])
+def test_openai_temporary_failure_with_failed_cleanup_does_not_retry(
+        monkeypatch, status):
+    class CloseFailure(_Response):
+        def close(self):
+            super().close()
+            raise RuntimeError("SECRET_CLOSE_CANARY")
+
+    response = CloseFailure(status=status)
+    throttle = _CountingThrottle()
+    post_calls = []
+    monkeypatch.setattr(
+        rag.requests, "post",
+        lambda *_a, **_kw: post_calls.append("post") or response)
+    monkeypatch.setattr(rag, "_get_throttle", lambda _workers: throttle)
+    monkeypatch.setattr(
+        rag.time, "sleep", lambda _: pytest.fail("must not retry"))
+
+    with pytest.raises(ProviderCallError) as error:
+        rag._call_openai_compatible_result(
+            "prompt", base_url="https://provider.test/v1",
+            model="model", api_key="secret")
+
+    assert error.value.category == "connection_error"
+    assert error.value.transport_attempts == 1
+    assert "SECRET_CLOSE_CANARY" not in str(error.value)
+    assert post_calls == ["post"]
+    assert response.close_count == 1
+    assert (throttle.acquired, throttle.ok,
+            throttle.rate_limited, throttle.errors) == (
+                1, 0, int(status == 429), int(status != 429))
+
+
+@pytest.mark.parametrize("failure_type", [KeyboardInterrupt, RuntimeError])
+def test_openai_retry_sleep_failure_leaves_no_owned_resources(
+        monkeypatch, failure_type):
+    failure = failure_type("SECRET_SLEEP_CANARY")
+    response = _Response(status=503)
+    throttle = _CountingThrottle()
+    post_calls = []
+
+    def fail_sleep(_delay):
+        assert response.close_count == 1
+        assert throttle.errors == throttle.acquired == 1
+        raise failure
+
+    monkeypatch.setattr(
+        rag.requests, "post",
+        lambda *_a, **_kw: post_calls.append("post") or response)
+    monkeypatch.setattr(rag, "_get_throttle", lambda _workers: throttle)
+    monkeypatch.setattr(rag.time, "sleep", fail_sleep)
+
+    expected = KeyboardInterrupt if failure_type is KeyboardInterrupt else (
+        ProviderCallError)
+    with pytest.raises(expected) as error:
+        rag._call_openai_compatible_result(
+            "prompt", base_url="https://provider.test/v1",
+            model="model", api_key="secret",
+            _admit_retry=lambda: pytest.fail("must not admit a retry"))
+
+    if failure_type is KeyboardInterrupt:
+        assert error.value is failure
+    else:
+        assert error.value.category == "provider_error"
+        assert error.value.transport_attempts == 1
+        assert "SECRET_SLEEP_CANARY" not in str(error.value)
+    assert post_calls == ["post"]
+    assert response.close_count == 1
+    assert (throttle.acquired, throttle.ok,
+            throttle.rate_limited, throttle.errors) == (1, 0, 0, 1)
+
+
+@pytest.mark.parametrize("status", [400, 401, 403, 408, 500, 501])
+def test_openai_other_http_failures_are_not_retried(monkeypatch, status):
+    responses = []
+    throttle = _CountingThrottle()
+
+    def post(*_args, **_kwargs):
+        response = _Response(status=status)
+        responses.append(response)
+        return response
+
+    monkeypatch.setattr(rag.requests, "post", post)
+    monkeypatch.setattr(rag, "_get_throttle", lambda _workers: throttle)
+    monkeypatch.setattr(
+        rag.time, "sleep", lambda _: pytest.fail("must not retry"))
+
+    with pytest.raises(ProviderCallError) as error:
+        rag._call_openai_compatible_result(
+            "prompt", base_url="https://provider.test/v1",
+            model="model", api_key="secret",
+            _admit_retry=lambda: pytest.fail("must not admit a retry"))
+
+    assert error.value.transport_attempts == 1
+    assert len(responses) == 1
+    assert responses[0].close_count == 1
+    assert (throttle.acquired, throttle.ok,
+            throttle.rate_limited, throttle.errors) == (1, 0, 0, 1)
+
+
+@pytest.mark.parametrize("status", [429, 503])
 def test_runtime_transport_budget_blocks_openai_retry_without_second_post(
-        monkeypatch, tmp_path):
+        monkeypatch, tmp_path, status):
     post_calls = 0
 
     def rate_limited_post(*_args, **_kwargs):
         nonlocal post_calls
         post_calls += 1
-        return _Response(status=429, headers={"Retry-After": "0"})
+        return _Response(status=status, headers={"Retry-After": "0"})
 
     throttle = _CountingThrottle()
     runtime = LLMRuntime(LLMRuntimeConfig(
@@ -258,7 +673,7 @@ def test_runtime_transport_budget_blocks_openai_retry_without_second_post(
     assert post_calls == 1
     assert throttle.acquired == (
         throttle.ok + throttle.rate_limited + throttle.errors)
-    assert throttle.rate_limited == 1
+    assert throttle.rate_limited == (1 if status == 429 else 0)
     assert counts["provider_calls"] == 1
     assert counts["transport_admissions"] == 1
     assert counts["transport_attempts"] == 1
@@ -325,6 +740,166 @@ def test_openai_cleanup_failure_is_safe_and_releases_throttle(monkeypatch):
     assert "SECRET_CLOSE_CANARY" not in str(error.value)
     assert throttle.acquired == 1
     assert throttle.errors == 1
+
+
+@pytest.mark.parametrize(("field", "value"), [
+    ("status_code", None), ("status_code", True), ("status_code", "429"),
+    ("status_code", 99), ("status_code", 600),
+    ("headers", None), ("headers", []),
+])
+def test_openai_malformed_http_metadata_closes_and_releases(
+        monkeypatch, field, value):
+    response = _Response(status=429)
+    setattr(response, field, value)
+    throttle = _CountingThrottle()
+    monkeypatch.setattr(
+        rag.requests, "post", lambda *_args, **_kwargs: response)
+    monkeypatch.setattr(rag, "_get_throttle", lambda _workers: throttle)
+    monkeypatch.setattr(
+        rag.time, "sleep", lambda _: pytest.fail("must not retry"))
+
+    with pytest.raises(ProviderCallError) as error:
+        rag._call_openai_compatible_result(
+            "prompt", base_url="https://provider.test/v1",
+            model="model", api_key="secret")
+
+    assert error.value.category == "invalid_response"
+    assert error.value.transport_attempts == 1
+    assert response.close_count == 1
+    assert throttle.acquired == 1
+    assert throttle.ok == 0
+    assert throttle.rate_limited + throttle.errors == 1
+
+
+@pytest.mark.parametrize("field", ["status_code", "headers"])
+def test_openai_http_metadata_getter_failure_is_safe(monkeypatch, field):
+    class GetterFailure(_Response):
+        def __getattribute__(self, name):
+            if name == field:
+                raise RuntimeError("SECRET_METADATA_CANARY")
+            return super().__getattribute__(name)
+
+    response = GetterFailure(status=429)
+    throttle = _CountingThrottle()
+    monkeypatch.setattr(
+        rag.requests, "post", lambda *_args, **_kwargs: response)
+    monkeypatch.setattr(rag, "_get_throttle", lambda _workers: throttle)
+
+    with pytest.raises(ProviderCallError) as error:
+        rag._call_openai_compatible_result(
+            "prompt", base_url="https://provider.test/v1",
+            model="model", api_key="secret")
+
+    assert error.value.category == "provider_error"
+    assert error.value.transport_attempts == 1
+    assert "SECRET_METADATA_CANARY" not in str(error.value)
+    assert response.close_count == 1
+    assert throttle.acquired == 1
+    assert throttle.ok == 0
+    assert throttle.rate_limited + throttle.errors == 1
+
+
+@pytest.mark.parametrize("phase", [
+    "post", "status_code", "headers", "raise_for_status", "body", "close",
+])
+def test_openai_cancellation_closes_owned_response_and_releases_slot(
+        monkeypatch, phase):
+    interrupted = KeyboardInterrupt("cancelled")
+
+    class InterruptedResponse(_Response):
+        def __getattribute__(self, name):
+            if name == phase and phase in {"status_code", "headers"}:
+                raise interrupted
+            return super().__getattribute__(name)
+
+        def raise_for_status(self):
+            if phase == "raise_for_status":
+                raise interrupted
+            super().raise_for_status()
+
+        def iter_content(self, *, chunk_size):
+            if phase == "body":
+                raise interrupted
+            yield from super().iter_content(chunk_size=chunk_size)
+
+        def close(self):
+            super().close()
+            if phase == "close":
+                raise interrupted
+
+    response = InterruptedResponse(_openai_body())
+    throttle = _CountingThrottle()
+
+    def post(*_args, **_kwargs):
+        if phase == "post":
+            raise interrupted
+        return response
+
+    monkeypatch.setattr(rag.requests, "post", post)
+    monkeypatch.setattr(rag, "_get_throttle", lambda _workers: throttle)
+
+    with pytest.raises(KeyboardInterrupt) as error:
+        rag._call_openai_compatible_result(
+            "prompt", base_url="https://provider.test/v1",
+            model="model", api_key="secret")
+
+    assert error.value is interrupted
+    assert response.close_count == (0 if phase == "post" else 1)
+    assert (throttle.acquired, throttle.ok,
+            throttle.rate_limited, throttle.errors) == (1, 0, 0, 1)
+
+
+@pytest.mark.parametrize("phase", ["raise_for_status", "body"])
+def test_openai_cleanup_failure_does_not_replace_cancellation(
+        monkeypatch, phase):
+    interrupted = KeyboardInterrupt("cancelled")
+
+    class DoubleFailure(_Response):
+        def raise_for_status(self):
+            if phase == "raise_for_status":
+                raise interrupted
+            super().raise_for_status()
+
+        def iter_content(self, *, chunk_size):
+            raise interrupted
+            yield
+
+        def close(self):
+            super().close()
+            raise RuntimeError("SECRET_CLOSE_CANARY")
+
+    response = DoubleFailure(_openai_body())
+    throttle = _CountingThrottle()
+    monkeypatch.setattr(
+        rag.requests, "post", lambda *_args, **_kwargs: response)
+    monkeypatch.setattr(rag, "_get_throttle", lambda _workers: throttle)
+
+    with pytest.raises(KeyboardInterrupt) as error:
+        rag._call_openai_compatible_result(
+            "prompt", base_url="https://provider.test/v1",
+            model="model", api_key="secret")
+
+    assert error.value is interrupted
+    assert response.close_count == 1
+    assert (throttle.acquired, throttle.ok,
+            throttle.rate_limited, throttle.errors) == (1, 0, 0, 1)
+
+
+@pytest.mark.parametrize("timeout", [0, -1, True, "30", None, float("inf"),
+                                     float("nan")])
+def test_openai_invalid_timeout_does_not_acquire_or_post(monkeypatch, timeout):
+    monkeypatch.setattr(
+        rag.requests, "post", lambda *_a, **_kw: pytest.fail("must not post"))
+    monkeypatch.setattr(
+        rag, "_get_throttle", lambda _: pytest.fail("must not acquire"))
+
+    with pytest.raises(ProviderCallError) as error:
+        rag._call_openai_compatible_result(
+            "prompt", base_url="https://provider.test/v1",
+            model="model", api_key="secret", timeout=timeout)
+
+    assert error.value.category == "configuration_error"
+    assert error.value.transport_attempts == 0
 
 
 @pytest.mark.parametrize("status", [301, 302, 303, 307, 308])

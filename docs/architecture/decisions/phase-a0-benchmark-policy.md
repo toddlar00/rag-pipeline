@@ -1,9 +1,9 @@
 # Phase A0 Benchmark Policy
 
 - **Status:** A0a integrated; the latest completed hosted A0b technical
-  checkpoint passed at Task 0.7 evidence head `32153e9` and merged
-  through `376277c`; the Task 0.8 static-security replacement pair at
-  source `8891e1b` is local-only pending hosted promotion; exact-head
+  checkpoint passed at Task 0.8 evidence head `1533164` and merged
+  through `e34103f`; the OCR-program and casebook-excerpt replacement pair
+  at source `29ea76b` is pending hosted promotion on PR #116; exact-head
   human review and separate R8 owner authorization are not recorded
 - **Milestone:** R10 prerequisite for the R8 pipeline-ownership move
 - **Report schema:** `phase-a0` v3
@@ -132,14 +132,29 @@ gate-only child `344e873` and merge `893c4a0`
 Task 0.7 secret-scan pair at source `e055bd0` repeated it through
 gate-only child `32153e9` and merge `376277c`
 ([PR #106](https://github.com/toddlar00/rag-pipeline/pull/106)). The
-current replacement pair uses the clean Task 0.8 static-security source
-`8891e1b27c04213fea6d59cd6b93e85051f00817` (tree
-`5a2c632ea1df5661c580c815c8904519b531393d`), which changed Python gate
-source and workflows but no dependency or model lock. Its Windows and
+Task 0.8 static-security pair at source `8891e1b` repeated it through
+gate-only child `1533164` and merge `e34103f`
+([PR #107](https://github.com/toddlar00/rag-pipeline/pull/107)). The
+current replacement pair uses the clean OCR-program and casebook-excerpt
+source `29ea76bdcfc7184dfb1d600a860c56d6514722d9` (tree
+`6ac5d6d674aa638619385f36865084006db915c2`), which changed Python source and
+`.gitattributes` but no dependency or model lock. It supersedes the
+earlier `1ae8502` pair, whose child `766feaf` passed both hosted Phase A0
+cells but whose dependency-light unit lanes failed at collection. Source
+`a15232d` then passed both hosted Phase A0 cells on [PR
+#116](https://github.com/toddlar00/rag-pipeline/pull/116) as well, but its
+Python 3.10/3.11 unit lanes each failed one import-guard test and its
+Windows unit lane exceeded the workflow's 20-minute timeout; the test-only
+source `8aa08b2` superseded it before promotion. Source `8aa08b2` fixed
+those lanes, and its hosted run passed every CI lane except the Windows unit
+lane, which again reached the 20-minute timeout with no test failure. On the
+owner's decision, source `29ea76b` raises that limit to 60 minutes (the live
+workflow, its reviewed fixture and the two pinned workflow hashes) and
+supersedes the `8aa08b2` pair before promotion. Its Windows and
 Linux CPython 3.12.13 reports were
 generated after the same strict hash-locked synchronization and
-dependency-consistency checks: 189 marker-resolved distributions on
-Windows and 187 on Linux. They bind that one clean source, the same eight
+dependency-consistency checks: 191 marker-resolved distributions on
+Windows and 189 on Linux. They bind that one clean source, the same eight
 LF and `HEAD`-identical dependency/model inputs, and the complete 9×5
 scenario contract. Each passes an independent complete local same-platform
 comparison. The direct gate-only evidence child contains only the reports
@@ -295,14 +310,22 @@ Task 0.7 secret-scan source `e055bd0` repeated the cycle: its child
 `32153e9` passed the hosted full lane with retained artifacts and merged
 through `376277c`
 ([PR #106](https://github.com/toddlar00/rag-pipeline/pull/106)). The
-Task 0.8 static-security source `8891e1b` supersedes that pair in turn.
-Its Windows report is 50,392 bytes (file SHA-256
-`15cb2bbaeaaa94ea492935180a22994b1b7e32f383f2ef39b55090d2d38e6db4`;
+Task 0.8 static-security source `8891e1b` repeated the cycle: its child
+`1533164` passed the hosted CI lane, including both Phase A0 cells, and
+merged through `e34103f` ([PR #107](https://github.com/toddlar00/rag-pipeline/pull/107); the separate
+networked supply-chain vulnerability/SBOM jobs failed at that head). The
+OCR-program and casebook-excerpt source `1ae8502` superseded that pair,
+and its own pair was superseded before promotion by source `a15232d`
+(dependency-light test guards and the casebook fixes), whose pair was in
+turn superseded by the test-only source `8aa08b2` and then by the
+Windows-timeout source `29ea76b`. Its Windows report
+is 51,086 bytes (file SHA-256
+`8e8829e3ea4d05419f5aff31bef4172ca13e3d3770df7ed147a516716860e7da`;
 embedded report SHA-256
-`831f737cf4aa9fc76bf2c7670f3e360bb748e1e37bcd5503df890793eb12728b`).
-Its Linux report is 49,801 bytes (file SHA-256
-`922eda3321fbf86e52e4f836824e07c3ea59611ef08185f82e71dc6f307097d3`;
+`2dae9eded99a0d8895ca0917a9bdfc2d680d03bb9e70b699f0a48e828a7bed39`).
+Its Linux report is 50,487 bytes (file SHA-256
+`3a6e9437de61b7772562185456324b37c7645d413e2132f12844a936da89ba03`;
 embedded report SHA-256
-`ea2832a70e7cba1438968ec8b5e213df30614ec3fc4404b1f4caaa3e307ef792`).
+`a4f77e4fe0bc590f4c9dbd4d4976f601a3502b503c4addb6f62c8473bf138b37`).
 Both use CPython 3.12.13 and pass their complete local same-platform 9×5
 comparisons. Hosted promotion remains pending.

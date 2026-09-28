@@ -106,6 +106,11 @@ Uvicorn.
 
 ## Compatibility and consequences
 
+The local 2026-09-06 [evidence companion extension](service-evidence-companion.md)
+adds an optional complete composition triple and separate adapter while retaining
+the v1 boundary. It also records an intentional thread-owned lifecycle repair
+found during concurrent-search testing; that repair is not a pure extraction.
+
 The authenticated routes, response schemas and headers, embedded app factory,
 direct `RagApplicationService` construction, credential type, token commands,
 flat service command, Uvicorn options, and service child processes remain

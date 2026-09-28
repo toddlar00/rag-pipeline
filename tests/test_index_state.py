@@ -335,7 +335,8 @@ def test_manifest_reuse_rejects_old_or_stale_embedding_input_policy(
         source_record_count=1)
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if manifest_age == "old":
-        manifest["schema_version"] = rag.INDEX_MANIFEST_SCHEMA_VERSION - 1
+        # Manifest 9 keeps a query binding to quality 12; 8 has none.
+        manifest["schema_version"] = 8
     if policy_state == "missing":
         manifest.pop("embedding_input_policy_version")
     elif policy_state == "different":

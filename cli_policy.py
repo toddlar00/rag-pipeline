@@ -140,6 +140,11 @@ def _build_resume_cmd(
         parts.append("--ocr")
     elif ocr is False:
         parts.append("--no-ocr")
+    if getattr(args, "ocr_no_angle_classifier", False) and ocr is not False:
+        parts.append("--ocr-no-angle-classifier")
+    if (getattr(args, "ocr_merge_interleaved_regions", False)
+            and ocr is not False):
+        parts.append("--ocr-merge-interleaved-regions")
 
     embedding_model = getattr(
         args, "embedding_model", defaults.embedding_model)

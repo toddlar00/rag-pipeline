@@ -402,11 +402,12 @@ def test_explicit_ocr_alone_forces_full_page_rapidocr(
         pass
 
     def capture_options(options, *, include_ocr, ocr_full_page,
-                        security_policy):
+                        ocr_angle_classifier, security_policy):
         observed.update(
             do_ocr=options.do_ocr,
             include_ocr=include_ocr,
             ocr_full_page=ocr_full_page,
+            ocr_angle_classifier=ocr_angle_classifier,
         )
         raise OptionsCaptured
 
@@ -434,6 +435,7 @@ def test_explicit_ocr_alone_forces_full_page_rapidocr(
         "do_ocr": expected_enabled,
         "include_ocr": expected_enabled,
         "ocr_full_page": expected_full_page,
+        "ocr_angle_classifier": True,
     }
 
 

@@ -1,5 +1,6 @@
 import subprocess
 import sys
+from email.utils import formatdate
 
 import endpoint_policy
 import llm_adapters
@@ -262,6 +263,50 @@ def test_throttle_factory_keeps_mutable_state_and_sleep_hook_in_rag(
 
     assert rag._api_throttle is throttle
     assert sleeps == [0.25]
+
+
+@pytest.mark.parametrize(("value", "expected"), [
+    (None, 2.0), (True, 2.0), (False, 2.0), ({}, 2.0),
+    ("malformed", 2.0), ("", 2.0), ("-1", 2.0), (-1, 2.0),
+    (float("nan"), 2.0), (float("inf"), 2.0), ("1e999", 2.0),
+    (0, 0.0), (" 0.25 ", 0.25), (3, 3.0), ("30", 5.0),
+    pytest.param(10 ** 5000, 2.0, id="integer-overflow"),
+    pytest.param("x" * 513, 2.0, id="overlong-value"),
+])
+def test_retry_after_seconds_has_bounded_safe_defaults(value, expected):
+    assert llm_adapters._retry_after_seconds(value) == expected
+
+
+@pytest.mark.parametrize(("delta", "expected"), [
+    (-30, 0.0), (0, 0.0), (3, 3.0), (90, 5.0),
+])
+def test_retry_after_http_date_uses_current_clock(monkeypatch, delta, expected):
+    now = 1_700_000_000
+    monkeypatch.setattr(llm_adapters.time, "time", lambda: now)
+
+    assert llm_adapters._retry_after_seconds(
+        formatdate(now + delta, usegmt=True)) == expected
+
+
+@pytest.mark.parametrize("failure_type", [KeyboardInterrupt, RuntimeError])
+def test_throttle_cooldown_failure_returns_reserved_slot(failure_type):
+    failure = failure_type("cancelled cooldown")
+
+    def fail_sleep(_delay):
+        raise failure
+
+    throttle = llm_adapters._AdaptiveThrottle(1, sleep_fn=fail_sleep)
+    throttle._cooldown = 0.25
+
+    with pytest.raises(failure_type) as error:
+        throttle.acquire()
+
+    assert error.value is failure
+    assert throttle._active == 0
+    throttle._cooldown = 0
+    throttle.acquire()
+    throttle.release_ok()
+    assert throttle._active == 0
 
 
 def test_runtime_composition_still_resolves_current_rag_text_facade(

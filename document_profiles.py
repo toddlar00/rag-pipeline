@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import Mapping
 
@@ -29,6 +29,12 @@ _DIVISION_CONTEXTS = frozenset({
     "cross_reference",
 })
 _NUMBER_STYLES = frozenset({"arabic", "roman", "word"})
+_SCAFFOLD_SOURCES = frozenset({"toc", "source_headings"})
+EXCERPT_STRUCTURE_PROFILE = "us-law-casebook-excerpt-v1"
+SUPPLEMENT_STRUCTURE_PROFILE = "us-law-casebook-supplement-v1"
+_CASEBOOK_FAMILY = frozenset({
+    DEFAULT_STRUCTURE_PROFILE, EXCERPT_STRUCTURE_PROFILE,
+    SUPPLEMENT_STRUCTURE_PROFILE})
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,6 +89,9 @@ class StructureProfile:
     allowed_number_styles: tuple[str, ...]
     maximum_division_ordinal: int
     unknown_layout_policy: str = "error"
+    # "toc" derives the book scaffold from a recognized Contents section;
+    # "source_headings" derives hierarchy only from in-document headings.
+    scaffold_source: str = "toc"
 
 
 @dataclass(frozen=True, slots=True)
@@ -190,7 +199,7 @@ def parse_division_ordinal(
 
 
 def _profile_payload(profile: StructureProfile) -> dict:
-    return {
+    payload = {
         "schema_version": profile.schema_version,
         "name": profile.name,
         "revision": profile.revision,
@@ -226,6 +235,10 @@ def _profile_payload(profile: StructureProfile) -> dict:
         "maximum_division_ordinal": profile.maximum_division_ordinal,
         "unknown_layout_policy": profile.unknown_layout_policy,
     }
+    # Omitting the default keeps every TOC profile's digest byte-identical.
+    if profile.scaffold_source != "toc":
+        payload["scaffold_source"] = profile.scaffold_source
+    return payload
 
 
 def profile_sha256(profile: StructureProfile) -> str:
@@ -261,6 +274,8 @@ def _validate_profile(profile: StructureProfile) -> None:
         raise ValueError("structure-profile description must not be empty")
     if profile.unknown_layout_policy != "error":
         raise ValueError("unsupported unknown-layout policy")
+    if profile.scaffold_source not in _SCAFFOLD_SOURCES:
+        raise ValueError("unsupported scaffold source")
     styles = tuple(profile.allowed_number_styles)
     if (not styles or len(set(styles)) != len(styles)
             or not set(styles).issubset(_NUMBER_STYLES)):
@@ -286,8 +301,14 @@ def _validate_profile(profile: StructureProfile) -> None:
     section_keys = [rule.key for rule in profile.section_rules]
     if len(section_keys) != len(set(section_keys)):
         raise ValueError("duplicate structure-profile section key")
-    if not any(rule.toc_seed for rule in profile.section_rules):
-        raise ValueError("structure profile requires a TOC seed rule")
+    if profile.scaffold_source == "toc":
+        if not any(rule.toc_seed for rule in profile.section_rules):
+            raise ValueError("structure profile requires a TOC seed rule")
+    elif profile.section_rules:
+        # Front/back-matter rules would silently exclude pages from a short
+        # excerpt; a source-heading profile publishes every excerpt page.
+        raise ValueError(
+            "source-heading profile must not declare section rules")
     for rule in profile.section_rules:
         if not re.fullmatch(r"[a-z][a-z0-9_]*", rule.key):
             raise ValueError("invalid structure-profile section key")
@@ -491,8 +512,41 @@ _ROMAN_PART_PROFILE = StructureProfile(
 )
 
 
+# Page-bounded course readings share the casebook division vocabulary but have
+# no Contents section and no front/back matter of their own.
+_LEGAL_EXCERPT_PROFILE = replace(
+    _LEGAL_PROFILE,
+    name=EXCERPT_STRUCTURE_PROFILE,
+    revision=1,
+    document_description=(
+        "Page-bounded excerpts of United States law-school casebooks with no "
+        "table of contents; hierarchy comes only from in-excerpt headings"),
+    section_rules=(),
+    scaffold_source="source_headings",
+)
+
+
+# Standalone casebook updates follow the excerpt policy (source headings, no
+# excluded page ranges) but are not excerpts of one casebook: each lettered
+# update section carries a pointer to its place in the main casebook.  The
+# excerpt payload is bound by published receipts and stays unchanged.
+_LEGAL_SUPPLEMENT_PROFILE = replace(
+    _LEGAL_EXCERPT_PROFILE,
+    name=SUPPLEMENT_STRUCTURE_PROFILE,
+    revision=1,
+    document_description=(
+        "Standalone supplements to United States law-school casebooks: "
+        "lettered update sections, each with a pointer heading to its place "
+        "in the main casebook; hierarchy comes only from in-document "
+        "headings"),
+)
+
+
 def _build_registry() -> Mapping[str, StructureProfile]:
-    profiles = (_LEGAL_PROFILE, _ROMAN_PART_PROFILE)
+    profiles = (
+        _LEGAL_PROFILE, _ROMAN_PART_PROFILE, _LEGAL_EXCERPT_PROFILE,
+        _LEGAL_SUPPLEMENT_PROFILE,
+    )
     registry: dict[str, StructureProfile] = {}
     for profile in profiles:
         _validate_profile(profile)
@@ -669,6 +723,16 @@ def section_rule_for_heading(
                for pattern in rule.patterns):
             return rule
     return None
+
+
+def requires_toc(profile: StructureProfile) -> bool:
+    """Return whether the profile's scaffold comes from a Contents section."""
+    return profile.scaffold_source == "toc"
+
+
+def casebook_family(profile: StructureProfile) -> bool:
+    """Return whether casebook heading and classification conventions apply."""
+    return profile.name in _CASEBOOK_FAMILY
 
 
 def toc_seed_keys(profile: StructureProfile) -> tuple[str, ...]:

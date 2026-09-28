@@ -1204,13 +1204,21 @@ def _read_index_artifact_snapshot_once(
         if max_bytes is not None and int(before_stat.st_size) > max_bytes:
             raise ValueError(f"Artifact exceeds {max_bytes} bytes: {path}")
         raw = handle.read() if max_bytes is None else handle.read(max_bytes + 1)
+        if max_bytes is not None and len(raw) > max_bytes:
+            raise ValueError(f"Artifact exceeds {max_bytes} bytes: {path}")
         digest = hashlib.sha256(raw)
         if os.name == "nt":
             handle.seek(0)
             verification_digest = hashlib.sha256()
             verification_size = 0
-            for block in iter(
-                    lambda: handle.read(_FILE_STREAM_CHUNK_SIZE), b""):
+            # One extra byte proves growth; verification must not follow a
+            # concurrently growing file to EOF, even for an unlimited capture.
+            while verification_size <= len(raw):
+                block = handle.read(min(
+                    _FILE_STREAM_CHUNK_SIZE,
+                    len(raw) + 1 - verification_size))
+                if not block:
+                    break
                 verification_size += len(block)
                 verification_digest.update(block)
             if (verification_size != len(raw)
@@ -1218,9 +1226,6 @@ def _read_index_artifact_snapshot_once(
                 raise RuntimeError(
                     f"Artifact changed while it was being read: {path}")
         after_stat = os.fstat(handle.fileno())
-
-    if max_bytes is not None and len(raw) > max_bytes:
-        raise ValueError(f"Artifact exceeds {max_bytes} bytes: {path}")
 
     before = _artifact_content_identity(before_stat)
     after = _artifact_content_identity(after_stat)

@@ -69,6 +69,8 @@ import retrieval_core as _retrieval_core
 import run_telemetry as _run_telemetry
 import runtime_supervision as _runtime_supervision
 import source_fidelity_core as _source_fidelity_core
+import source_cleanup_audit as _source_cleanup_audit
+import chunk_dedup_audit as _chunk_dedup_audit
 import storage_policy as _storage_policy
 import table_retrieval_core as _table_retrieval_core
 import vector_lifecycle as _vector_lifecycle
@@ -84,6 +86,9 @@ from llm_runtime import (
     ProviderResponse,
     ProviderSpec,
 )
+
+_SOURCE_CLEANUP_CORE_NORMALIZE = _chunking_core._normalize_text
+_CHUNK_DEDUP_CORE = _chunking_core._deduplicate_chunks
 
 # Runtime ML/database libraries are never allowed to emit auxiliary analytics
 # or version-check traffic from this private-data process. Provider calls are
@@ -324,12 +329,15 @@ _EMBEDDING_HEADING_CHAR_LIMIT = 256
 
 # Incremental vector-index metadata. Bump this whenever the indexed payload or
 # vector layout changes in a way that requires rebuilding existing collections.
-INDEX_MANIFEST_SCHEMA_VERSION = 9
+INDEX_MANIFEST_SCHEMA_VERSION = 10
 # Bump when document-side embedding input construction changes, including
 # contextual prefixes, task prefixes, or truncation/bounding semantics.
 EMBEDDING_INPUT_POLICY_VERSION = 1
-_LEGACY_QUERY_SCHEMA_BINDINGS = ((6, 2), (7, 3))
-_CONTEXT_QUERY_SCHEMA_BINDINGS = ((7, 3),)
+_LEGACY_QUERY_SCHEMA_BINDINGS = ((6, 2), (7, 3), (9, 12))
+_CONTEXT_QUERY_SCHEMA_BINDINGS = ((7, 3), (9, 12))
+# Manifest 10 changed only its quality binding (12 -> 13), so a manifest-9
+# query keeps the current payload checks and its table-family depth.
+_CURRENT_PAYLOAD_LEGACY_MANIFEST_VERSIONS = (9,)
 
 # Content type labels for LLM classification prompt
 _CONTENT_LABELS = (
@@ -2565,6 +2573,15 @@ def _identify_book_sections(
     must never widen the TOC across intervening chapters.
     """
     profile = _document_profiles.get_profile(structure_profile)
+    if not _document_profiles.requires_toc(profile):
+        # An excerpt has no front/back matter of its own. Deriving front
+        # matter from its first division heading would silently drop pages,
+        # and every later recomputation must agree on the same empty result.
+        if emit_log:
+            log.info(
+                "Source-heading profile %s: no front/back-matter ranges",
+                profile.name)
+        return {"front_matter": None}
     texts = doc.get("texts", [])
     tables = doc.get("tables", [])
     section_pages: dict[str, list[int]] = {
@@ -5062,6 +5079,10 @@ def _build_chapter_map_from_document(
     """Build chapter ranges from one already-captured document mapping."""
 
     profile = _document_profiles.get_profile(structure_profile)
+    if not _document_profiles.requires_toc(profile):
+        # Running heads are page furniture: a chapter known only from them
+        # has no in-excerpt heading occurrence a section path may bind to.
+        return {}
     texts = doc.get("texts", [])
     if not texts:
         return {}
@@ -6402,8 +6423,8 @@ def _normalize_text(
     Handles: non-breaking spaces (\\xa0), smart quotes, en/em dashes,
     ligatures (fi, fl, ff, ffi, ffl), and stray control characters.
     """
-    return _chunking_core._normalize_text(
-        text,
+    return _source_cleanup_audit._call_core(
+        _chunking_core._normalize_text, _SOURCE_CLEANUP_CORE_NORMALIZE, text,
         strip_headers_footers_fn=_strip_headers_footers,
         dedup_nearby_lines_fn=(
             _dedup_nearby_lines
@@ -6422,10 +6443,12 @@ _SOURCE_APOSTROPHE_TOKEN_RE = re.compile(
 def _restore_source_apostrophe_typography(
         source_text: str, normalized_text: str) -> str:
     """Restore only source-attested in-word curly apostrophes one for one."""
+    before_restoration = normalized_text
     source_matches = list(_SOURCE_APOSTROPHE_TOKEN_RE.finditer(source_text))
     normalized_matches = list(
         _SOURCE_APOSTROPHE_TOKEN_RE.finditer(normalized_text))
     if len(source_matches) != len(normalized_matches):
+        _source_cleanup_audit._value("figure.decision", "token_count_mismatch")
         return normalized_text
     replacements = []
     for source_match, normalized_match in zip(
@@ -6438,12 +6461,15 @@ def _restore_source_apostrophe_typography(
         if (len(source_token) != len(normalized_token)
                 or source_token.translate(str.maketrans("\u2018\u2019", "''"))
                 != normalized_token):
+            _source_cleanup_audit._value("figure.decision", "token_correspondence_mismatch")
             return normalized_text
         replacements.append((
             normalized_match.start(), normalized_match.end(), source_token))
     for start, end, replacement in reversed(replacements):
         normalized_text = (
             normalized_text[:start] + replacement + normalized_text[end:])
+    _source_cleanup_audit._value("figure.decision", "correspondence_accepted")
+    _source_cleanup_audit._step("source_apostrophe_restore", before_restoration, normalized_text)
     return normalized_text
 
 
@@ -6452,6 +6478,7 @@ def _normalize_source_markdown_text(
         dedup_nearby_lines_fn: Callable[[str], str] | None = None) -> str:
     """Normalize source Markdown without flattening or deduping list rows."""
     if _SOURCE_MARKDOWN_LIST_LINE_RE.search(text) is None:
+        _source_cleanup_audit._value("markdown.decision", "no_list")
         return _normalize_text(
             text, dedup_nearby_lines_fn=dedup_nearby_lines_fn)
     sentinels = [
@@ -6459,9 +6486,13 @@ def _normalize_source_markdown_text(
         if chr(code) not in text
     ][:2]
     if len(sentinels) != 2:
+        _source_cleanup_audit._value("markdown.decision", "sentinels_exhausted")
         return _normalize_text(
             text, dedup_nearby_lines_fn=dedup_nearby_lines_fn)
     indent_sentinel, row_sentinel = sentinels
+    _source_cleanup_audit._value("markdown.decision", "protected")
+    _source_cleanup_audit._value("markdown.indent_sentinel", indent_sentinel)
+    _source_cleanup_audit._value("markdown.row_sentinel", row_sentinel)
     row_index = 0
 
     def protect_list_row(match: re.Match[str]) -> str:
@@ -6476,11 +6507,14 @@ def _normalize_source_markdown_text(
         )
 
     protected = _SOURCE_MARKDOWN_LIST_LINE_RE.sub(protect_list_row, text)
-    return (_normalize_text(
-                protected,
-                dedup_nearby_lines_fn=dedup_nearby_lines_fn)
-            .replace(indent_sentinel, " ")
-            .replace(row_sentinel, ""))
+    _source_cleanup_audit._step("markdown_protect", text, protected)
+    normalized = _normalize_text(
+        protected, dedup_nearby_lines_fn=dedup_nearby_lines_fn)
+    unindented = normalized.replace(indent_sentinel, " ")
+    _source_cleanup_audit._step("markdown_restore_indent", normalized, unindented)
+    restored = unindented.replace(row_sentinel, "")
+    _source_cleanup_audit._step("markdown_remove_row_identity", unindented, restored)
+    return restored
 
 
 def _source_attested_duplicate_line_allowances(
@@ -6497,58 +6531,94 @@ def _source_attested_duplicate_line_allowances(
     repeated appearances of one source reference do not.
     """
     refs_by_line: dict[str, set[str]] = {}
-    for item in source_items or []:
+    one_line_source_text_by_ref: dict[str, str] = {}
+    first_items = source_items or []
+    _source_cleanup_audit._value("source_items.first_selected", first_items is source_items)
+    for item in first_items:
+        _source_cleanup_audit._value("source_item.begin", None)
         label = _doc_item_label(item)
         if label not in {"text", "list_item", "footnote", "caption", "code"}:
+            _source_cleanup_audit._value("source_item.decision", "unsupported_label")
             continue
-        ref = str(getattr(item, "self_ref", "") or "")
+        ref = _source_cleanup_audit._value("source_item.ref", str(
+            _source_cleanup_audit._value("source_item.ref_raw", getattr(item, "self_ref", "")) or ""))
         source_text = _source_item_text(item)
         if not ref or not source_text.strip():
+            _source_cleanup_audit._value("source_item.decision", "empty_ref_or_text")
             continue
-        normalized = _chunking_core._normalize_text(
-            source_text,
-            strip_headers_footers_fn=lambda value: value,
-            dedup_nearby_lines_fn=lambda value: value,
-        )
+        with _source_cleanup_audit._pass_scope("source_line", "auxiliary", source_text) as attempt:
+            normalized = _source_cleanup_audit._call_core(
+                _chunking_core._normalize_text, _SOURCE_CLEANUP_CORE_NORMALIZE, source_text,
+                strip_headers_footers_fn=lambda value: value,
+                dedup_nearby_lines_fn=lambda value: value,
+            )
+            attempt.finish(normalized, "auxiliary")
         lines = [line.strip() for line in normalized.splitlines()
                  if line.strip()]
         if len(lines) != 1:
+            _source_cleanup_audit._value("source_item.decision", "not_one_line")
             continue
         refs_by_line.setdefault(lines[0], set()).add(ref)
+        one_line_source_text_by_ref.setdefault(ref, source_text)
+        _source_cleanup_audit._value("source_item.accepted_line", lines[0])
     allowances = {
         line: len(refs)
         for line, refs in refs_by_line.items()
         if len(refs) > 1
     }
+    _source_cleanup_audit._mapping("allowances.distinct_refs", allowances)
+    second_items = source_items or []
+    _source_cleanup_audit._value("source_items.second_selected", second_items is source_items)
     unique_items = {
-        str(getattr(item, "self_ref", "") or ""): item
-        for item in source_items or []
-        if getattr(item, "self_ref", "")
+        _source_cleanup_audit._value("unique.ref_key", str(
+            _source_cleanup_audit._value("unique.ref_key_raw", getattr(item, "self_ref", "")) or "")): item
+        for item in second_items
+        if _source_cleanup_audit._value("unique.ref_filter_raw", getattr(item, "self_ref", ""))
     }
+    _source_cleanup_audit._value("unique.count", len(unique_items))
     if len(unique_items) != 1:
+        _source_cleanup_audit._value("canonical.decision", "not_one_unique_item")
         return allowances
     ref, item = next(iter(unique_items.items()))
     label = _doc_item_label(item)
-    override = (canonical_text_overrides or {}).get(ref, "")
-    if (ref not in text_rebuild_refs
-            or label not in {"text", "list_item", "footnote", "caption", "code"}
-            or not fragment_text.strip() or not override.strip()):
+    _source_cleanup_audit._value("canonical.lookup_key", ref)
+    override = _source_cleanup_audit._value("canonical.lookup_value", (canonical_text_overrides or {}).get(ref, ""))
+    rebuild_denied = _source_cleanup_audit._value(
+        "canonical.rebuild_denied", ref not in text_rebuild_refs)
+    if (rebuild_denied and not override.strip()
+            and ref in one_line_source_text_by_ref):
+        # With no native override, the one-line Docling text is this ref's
+        # exact fidelity oracle ("plain" transform), so every line break in
+        # the fragment was introduced by token-bounded splitting.
+        override = _source_cleanup_audit._value(
+            "canonical.plain_source_oracle", one_line_source_text_by_ref[ref])
+        rebuild_denied = False
+    if (rebuild_denied
+            or _source_cleanup_audit._value("canonical.label_denied", label not in {"text", "list_item", "footnote", "caption", "code"})
+            or _source_cleanup_audit._value("canonical.fragment_empty", not fragment_text.strip())
+            or _source_cleanup_audit._value("canonical.override_empty", not override.strip())):
+        _source_cleanup_audit._value("canonical.decision", "ineligible")
         return allowances
     fragment_tokens = _source_fidelity_core.lexical_tokens(fragment_text)
     override_tokens = _source_fidelity_core.lexical_tokens(override)
     width = len(fragment_tokens)
-    if (not width or not any(
+    _source_cleanup_audit._value("canonical.fragment_token_count", width)
+    if (not width or not _source_cleanup_audit._value("canonical.window_match", any(
             override_tokens[start:start + width] == fragment_tokens
-            for start in range(0, len(override_tokens) - width + 1))):
+            for start in range(0, len(override_tokens) - width + 1)))):
         # A rebuild designation alone does not prove that an arbitrary raw
         # chunk is canonical. Only an exact lexical window of the bound native
         # override can authorize its authored duplicate-line multiplicity.
+        _source_cleanup_audit._value("canonical.decision", "window_denied")
         return allowances
-    normalized_fragment = _chunking_core._normalize_text(
-        fragment_text,
-        strip_headers_footers_fn=lambda value: value,
-        dedup_nearby_lines_fn=lambda value: value,
-    )
+    _source_cleanup_audit._value("canonical.decision", "window_accepted")
+    with _source_cleanup_audit._pass_scope("canonical_fragment", "auxiliary", fragment_text) as attempt:
+        normalized_fragment = _source_cleanup_audit._call_core(
+            _chunking_core._normalize_text, _SOURCE_CLEANUP_CORE_NORMALIZE, fragment_text,
+            strip_headers_footers_fn=lambda value: value,
+            dedup_nearby_lines_fn=lambda value: value,
+        )
+        attempt.finish(normalized_fragment, "auxiliary")
     fragment_counts = Counter(
         line.strip() for line in normalized_fragment.splitlines()
         if line.strip())
@@ -6563,12 +6633,16 @@ def _source_attested_duplicate_line_allowances(
             override_tokens[start:start + line_width] == line_tokens
             for start in range(
                 0, len(override_tokens) - line_width + 1))
+        _source_cleanup_audit._value("canonical.repeated_line", line)
+        _source_cleanup_audit._value("canonical.fragment_occurrences", count)
+        _source_cleanup_audit._value("canonical.source_occurrences", source_occurrences)
         if source_occurrences >= count:
             # Token-bounded splitting can introduce line breaks that do not
             # exist in a one-line native-PDF oracle.  Preserve a repeated
             # rendered line only when its complete lexical sequence occurs at
             # least that many times in the exact canonical source window.
             allowances[line] = max(allowances.get(line, 1), count)
+    _source_cleanup_audit._mapping("allowances.canonical", allowances)
     return allowances
 
 
@@ -6600,39 +6674,52 @@ def _normalize_source_chunk_text(
         canonical_text_overrides: dict[str, str] | None = None,
         text_rebuild_refs: set[str] | frozenset[str] = frozenset()) -> str:
     """Preserve source-bound numeric text without retaining page furniture."""
-    duplicate_line_allowances = _source_attested_duplicate_line_allowances(
-        source_items, fragment_text=text,
-        canonical_text_overrides=canonical_text_overrides,
-        text_rebuild_refs=text_rebuild_refs)
-    dedup_fn = (
-        (lambda value: _dedup_nearby_lines_with_source_allowances(
-            value, duplicate_line_allowances))
-        if duplicate_line_allowances else _dedup_nearby_lines
-    )
-    if (content_source == "footnote"
-            and _SOURCE_FOOTNOTE_MARKER_ONLY_RE.fullmatch(text)):
-        return _chunking_core._normalize_text(
-            text,
-            strip_headers_footers_fn=lambda value: value,
-            dedup_nearby_lines_fn=dedup_fn,
+    with _source_cleanup_audit._invocation(text) as observation:
+        _source_cleanup_audit._value("wrapper.content_source", content_source)
+        _source_cleanup_audit._value("wrapper.preserve_source_identity", preserve_source_identity)
+        duplicate_line_allowances = _source_attested_duplicate_line_allowances(
+            source_items, fragment_text=text,
+            canonical_text_overrides=canonical_text_overrides,
+            text_rebuild_refs=text_rebuild_refs)
+        _source_cleanup_audit._mapping("allowances.final", duplicate_line_allowances)
+        dedup_fn = (
+            (lambda value: _dedup_nearby_lines_with_source_allowances(
+                value, duplicate_line_allowances))
+            if duplicate_line_allowances else _dedup_nearby_lines
         )
-    normalized = _normalize_source_markdown_text(
-        text, dedup_nearby_lines_fn=dedup_fn)
-    if content_source == "figure":
-        normalized = _restore_source_apostrophe_typography(text, normalized)
-    if (normalized.strip() or not preserve_source_identity
-            or not text.strip()):
-        return normalized
-    # Lineage preparation deliberately emits every publishable source object.
-    # A standalone numeric label nested in a picture (for example a year) can
-    # resemble a page number even though its source label is body text.  Retry
-    # only when the generic cleaner erased the entire source-bound fragment;
-    # actual page headers/footers are excluded before this point.
-    return _chunking_core._normalize_text(
-        text,
-        strip_headers_footers_fn=lambda value: value,
-        dedup_nearby_lines_fn=dedup_fn,
-    )
+        if (content_source == "footnote"
+                and _SOURCE_FOOTNOTE_MARKER_ONLY_RE.fullmatch(text)):
+            with _source_cleanup_audit._pass_scope("footnote", "output", text) as attempt:
+                normalized = _source_cleanup_audit._call_core(
+                    _chunking_core._normalize_text, _SOURCE_CLEANUP_CORE_NORMALIZE, text,
+                    strip_headers_footers_fn=lambda value: value,
+                    dedup_nearby_lines_fn=dedup_fn,
+                )
+                attempt.finish(normalized, "committed")
+                return normalized if observation is None else observation.finish(normalized, attempt)
+        with _source_cleanup_audit._pass_scope("ordinary", "output", text) as attempt:
+            normalized = _normalize_source_markdown_text(
+                text, dedup_nearby_lines_fn=dedup_fn)
+            if content_source == "figure":
+                normalized = _restore_source_apostrophe_typography(text, normalized)
+            if (normalized.strip() or not preserve_source_identity
+                    or not text.strip()):
+                attempt.finish(normalized, "committed")
+                return normalized if observation is None else observation.finish(normalized, attempt)
+            attempt.finish(normalized, "discarded")
+        # Lineage preparation deliberately emits every publishable source object.
+        # A standalone numeric label nested in a picture (for example a year) can
+        # resemble a page number even though its source label is body text. Retry
+        # only when the generic cleaner erased the entire source-bound fragment;
+        # actual page headers/footers are excluded before this point.
+        with _source_cleanup_audit._pass_scope("numeric_rescue", "output", text) as attempt:
+            normalized = _source_cleanup_audit._call_core(
+                _chunking_core._normalize_text, _SOURCE_CLEANUP_CORE_NORMALIZE, text,
+                strip_headers_footers_fn=lambda value: value,
+                dedup_nearby_lines_fn=dedup_fn,
+            )
+            attempt.finish(normalized, "committed")
+            return normalized if observation is None else observation.finish(normalized, attempt)
 
 
 def _strip_headers_footers(text: str) -> str:
@@ -6711,7 +6798,8 @@ def _deduplicate_chunks(chunks: list[dict],
             and candidate.get("text") == kept.get("text")
         )
 
-    return _chunking_core._deduplicate_chunks(
+    return _chunk_dedup_audit._call_core(
+        _chunking_core._deduplicate_chunks, _CHUNK_DEDUP_CORE,
         chunks,
         threshold,
         text_fingerprint_fn=_text_fingerprint,
@@ -7170,12 +7258,14 @@ def _conversion_parameters(*, batch_size_override: int | None,
                            backend: str, auto_preprocess: bool,
                            ocr: bool | None,
                            ocr_full_page: bool = False,
+                           ocr_angle_classifier: bool = True,
+                           ocr_merge_interleaved_regions: bool = False,
                            watermark: re.Pattern | None) -> dict:
     # Full-page OCR is meaningless once OCR itself is disabled; normalize it
     # away so a disabled-OCR receipt hashes identically regardless of the
     # (ignored) --ocr-full-page flag's value.
     ocr_full_page = ocr_full_page and ocr is not False
-    return {
+    parameters = {
         "batch_size_override": batch_size_override,
         "backend": backend,
         "auto_preprocess": auto_preprocess,
@@ -7188,6 +7278,15 @@ def _conversion_parameters(*, batch_size_override: int | None,
         "watermark_flags": watermark.flags if watermark else None,
         "model_artifact_lock_sha256": _model_artifact_lock_sha256(),
     }
+    # The RapidOCR angle-classifier override is opt-in.  The key is absent by
+    # default so every existing receipt keeps its digest, and it is normalized
+    # away with --no-ocr exactly like --ocr-full-page.
+    if not ocr_angle_classifier and ocr is not False:
+        parameters["ocr_angle_classifier"] = False
+    # The interleaved OCR region merge follows the same opt-in rule.
+    if ocr_merge_interleaved_regions and ocr is not False:
+        parameters["ocr_merge_interleaved_regions"] = True
+    return parameters
 
 
 def _pin_docling_layout_revision(pipeline_options) -> str | None:
@@ -7207,6 +7306,7 @@ def _pin_docling_layout_revision(pipeline_options) -> str | None:
 def _configure_docling_model_artifacts(
         pipeline_options, *, include_ocr: bool,
         ocr_full_page: bool = False,
+        ocr_angle_classifier: bool = True,
         security_policy: (
             _release_security.ReleaseSecurityPolicy | None) = None,
 ) -> Path:
@@ -7238,7 +7338,12 @@ def _configure_docling_model_artifacts(
     if include_ocr:
         mode = (OcrMode.FULL_PAGE if ocr_full_page
                 else OcrMode.PDF_AWARE_LAYOUT_REGIONS)
+        # Unset use_cls keeps RapidOCR's configured default (classifier on).
+        # The opt-in override assumes upright lines: the classifier can flip
+        # clean upright book lines by 180 degrees before recognition.
+        overrides = {} if ocr_angle_classifier else {"use_cls": False}
         pipeline_options.ocr_options = RapidOcrOptions(
+            **overrides,
             backend="onnxruntime",
             lang=["english"],
             mode=mode,
@@ -7256,6 +7361,186 @@ def _configure_docling_model_artifacts(
             font_path=None,
         )
     return root
+
+
+# Running-prose layout labels whose same-label regions may interleave.
+_INTERLEAVED_REGION_LABELS = frozenset({"text", "list_item", "footnote"})
+
+
+def _layout_label(cluster) -> str:
+    return getattr(cluster.label, "value", cluster.label)
+
+
+def _cell_inside_region(cell, region_bbox) -> bool:
+    """True when at least 80% of a cell's positive area lies in a region."""
+    box = cell.rect.to_bounding_box()
+    area = (box.r - box.l) * (box.b - box.t)
+    if area <= 0:
+        return False
+    width = min(box.r, region_bbox.r) - max(box.l, region_bbox.l)
+    height = min(box.b, region_bbox.b) - max(box.t, region_bbox.t)
+    return width > 0 and height > 0 and width * height / area >= 0.8
+
+
+def _layout_column_span(cluster) -> tuple[float, float] | None:
+    """Return the median left and right edges of a region's OCR lines."""
+    boxes = [box for cell in cluster.cells
+             if ((box := cell.rect.to_bounding_box()).r > box.l
+                 and box.b > box.t)]
+    if not boxes:
+        return None
+    lefts = sorted(box.l for box in boxes)
+    rights = sorted(box.r for box in boxes)
+    middle = len(boxes) // 2
+    if len(boxes) % 2:
+        return lefts[middle], rights[middle]
+    return ((lefts[middle - 1] + lefts[middle]) / 2,
+            (rights[middle - 1] + rights[middle]) / 2)
+
+
+def _layout_columns_agree(first, second) -> bool:
+    """True when two regions' typical lines share one column.
+
+    One line OCR reads across a column gutter widens its region over the
+    neighbouring column; the regions' median line extents still lie in
+    different columns, so the columns are never merged line by line.
+    """
+    first_span = _layout_column_span(first)
+    second_span = _layout_column_span(second)
+    if first_span is None or second_span is None:
+        return False
+    narrower = min(first_span[1] - first_span[0],
+                   second_span[1] - second_span[0])
+    overlap = (min(first_span[1], second_span[1])
+               - max(first_span[0], second_span[0]))
+    return narrower > 0 and overlap >= 0.8 * narrower
+
+
+def _layout_regions_interleave(first, second) -> bool:
+    return _layout_columns_agree(first, second) and (
+        any(_cell_inside_region(cell, second.bbox)
+            for cell in first.cells)
+        or any(_cell_inside_region(cell, first.bbox)
+               for cell in second.cells))
+
+
+def _layout_reading_key(cluster) -> tuple:
+    # Docling's LayoutPostprocessor._sort_clusters(mode="id") key.
+    return (min((cell.index for cell in cluster.cells), default=sys.maxsize),
+            cluster.bbox.t, cluster.bbox.l)
+
+
+def _merge_interleaved_ocr_regions(clusters):
+    """Merge same-label prose regions whose OCR lines interleave.
+
+    Docling's layout model can propose two same-label regions for one scanned
+    paragraph that overlap by several lines.  Its postprocessor gives each OCR
+    line to the region covering most of it (ties go to the first), so lines in
+    the overlap alternate between the regions and each region reads out of
+    order.  Two final clusters interleave when they share a label in
+    _INTERLEAVED_REGION_LABELS, neither has children, their typical lines
+    share one column (_layout_columns_agree), and at least 80% of a line
+    assigned to one lies inside the other's box; a few points of edge contact
+    never qualify.  Groups close transitively.  Each group keeps the
+    member whose first line comes first (its id, label and confidence), with
+    the union box and every member's lines once each in line-index order.
+
+    Boxes are Docling's TOPLEFT page coordinates at this stage; any other
+    orientation has no positive line area and never merges.  Clusters that are
+    not merged are returned as the same objects, re-sorted by Docling's own
+    reading key; with nothing to merge the input sequence itself is returned.
+    """
+    eligible = [position for position, cluster in enumerate(clusters)
+                if _layout_label(cluster) in _INTERLEAVED_REGION_LABELS
+                and not cluster.children]
+    parent = {position: position for position in eligible}
+
+    def root(position):
+        while parent[position] != position:
+            position = parent[position]
+        return position
+
+    for offset, first in enumerate(eligible):
+        for second in eligible[offset + 1:]:
+            if (_layout_label(clusters[first])
+                    == _layout_label(clusters[second])
+                    and _layout_regions_interleave(
+                        clusters[first], clusters[second])):
+                parent[root(second)] = root(first)
+    groups: dict[int, list[int]] = {}
+    for position in eligible:
+        groups.setdefault(root(position), []).append(position)
+    merged_away: set[int] = set()
+    for group in groups.values():
+        if len(group) < 2:
+            continue
+        members = [clusters[position] for position in group]
+        base = min(members, key=_layout_reading_key)
+        cells: dict = {}
+        for member in [base, *(m for m in members if m is not base)]:
+            for cell in member.cells:
+                cells.setdefault(cell.index, cell)
+        bounds = {
+            "l": min(member.bbox.l for member in members),
+            "t": min(member.bbox.t for member in members),
+            "r": max(member.bbox.r for member in members),
+            "b": max(member.bbox.b for member in members),
+        }
+        base.bbox = (base.bbox.model_copy(update=bounds)
+                     if hasattr(base.bbox, "model_copy")
+                     else type(base.bbox)(**bounds))
+        base.cells = [cells[index] for index in sorted(cells)]
+        merged_away.update(
+            position for position in group if clusters[position] is not base)
+    if not merged_away:
+        return clusters
+    return sorted(
+        (cluster for position, cluster in enumerate(clusters)
+         if position not in merged_away),
+        key=_layout_reading_key)
+
+
+def _interleaved_region_merge_pipeline_cls():
+    """Docling's default PDF pipeline with interleaved OCR regions merged.
+
+    Only each pipeline instance's layout postprocessing model is wrapped, so
+    Docling's own classes and every other stage stay untouched.
+    """
+    from docling.datamodel.pipeline_options import (
+        BaseLayoutPostprocessorOptions,
+    )
+    from docling.models.base_layout_postprocessing_model import (
+        BaseLayoutPostprocessingModel,
+    )
+    from docling.pipeline.standard_pdf_pipeline import StandardPdfPipeline
+
+    class InterleavedRegionMergeModel(BaseLayoutPostprocessingModel):
+        """Pass another model's final layout clusters through the merge."""
+
+        def __init__(self, inner) -> None:
+            self.inner = inner
+
+        @classmethod
+        def get_options_type(cls):
+            return BaseLayoutPostprocessorOptions
+
+        def postprocess_layout(self, conv_res, pages):
+            predictions = []
+            for prediction in self.inner.postprocess_layout(conv_res, pages):
+                clusters = _merge_interleaved_ocr_regions(
+                    prediction.clusters)
+                predictions.append(
+                    prediction if clusters is prediction.clusters
+                    else prediction.model_copy(update={"clusters": clusters}))
+            return predictions
+
+    class InterleavedRegionMergePipeline(StandardPdfPipeline):
+        def __init__(self, pipeline_options) -> None:
+            super().__init__(pipeline_options)
+            self.layout_postprocessing_model = InterleavedRegionMergeModel(
+                self.layout_postprocessing_model)
+
+    return InterleavedRegionMergePipeline
 
 
 def _converted_outputs_complete(
@@ -7304,7 +7589,11 @@ def _converted_outputs_complete_locked(
                 or os.path.normcase(binding.source_name)
                 != os.path.normcase(Path(pdf_path).name)
                 or binding.source_sha256 != source_generation.sha256
-                or binding.source_size != source_generation.size):
+                or binding.source_size != source_generation.size
+                or binding.ocr_angle_classifier
+                != parameters.get("ocr_angle_classifier", True)
+                or binding.ocr_merge_interleaved_regions
+                != parameters.get("ocr_merge_interleaved_regions", False)):
             return False
         outputs = {
             "docling_json": doc_output,
@@ -7345,6 +7634,8 @@ def convert_pdf(pdf_path: Path, doc_output: Path, *,
                 auto_preprocess: bool = True,
                 ocr: bool | None = None,
                 ocr_full_page: bool = False,
+                ocr_angle_classifier: bool = True,
+                ocr_merge_interleaved_regions: bool = False,
                 preprocessed_output: Path | None = None,
                 markdown_output: Path | None = None,
                 security_policy: (
@@ -7374,6 +7665,8 @@ def convert_pdf(pdf_path: Path, doc_output: Path, *,
             backend=backend, force=force, watermark=watermark,
             auto_preprocess=auto_preprocess, ocr=ocr,
             ocr_full_page=ocr_full_page,
+            ocr_angle_classifier=ocr_angle_classifier,
+            ocr_merge_interleaved_regions=ocr_merge_interleaved_regions,
             preprocessed_output=preprocessed_output,
             markdown_output=markdown_output,
             security_policy=security_policy,
@@ -7388,6 +7681,8 @@ def _convert_pdf_locked(pdf_path: Path, doc_output: Path, *,
                 auto_preprocess: bool = True,
                 ocr: bool | None = None,
                 ocr_full_page: bool = False,
+                ocr_angle_classifier: bool = True,
+                ocr_merge_interleaved_regions: bool = False,
                 preprocessed_output: Path | None = None,
                 markdown_output: Path | None = None,
                 security_policy: (
@@ -7404,7 +7699,10 @@ def _convert_pdf_locked(pdf_path: Path, doc_output: Path, *,
     completion_parameters = _conversion_parameters(
         batch_size_override=batch_size_override, backend=backend,
         auto_preprocess=auto_preprocess, ocr=ocr,
-        ocr_full_page=ocr_full_page, watermark=watermark)
+        ocr_full_page=ocr_full_page,
+        ocr_angle_classifier=ocr_angle_classifier,
+        ocr_merge_interleaved_regions=ocr_merge_interleaved_regions,
+        watermark=watermark)
 
     if (not force and _converted_outputs_complete_locked(
             source_pdf_path, doc_output, md_path,
@@ -7428,6 +7726,8 @@ def _convert_pdf_locked(pdf_path: Path, doc_output: Path, *,
             force=force, watermark=watermark,
             auto_preprocess=auto_preprocess, ocr=ocr,
             ocr_full_page=ocr_full_page,
+            ocr_angle_classifier=ocr_angle_classifier,
+            ocr_merge_interleaved_regions=ocr_merge_interleaved_regions,
             preprocessed_output=preprocessed_path,
             markdown_output=markdown_output,
             security_policy=security_policy,
@@ -7481,6 +7781,13 @@ def _convert_pdf_locked(pdf_path: Path, doc_output: Path, *,
                 "size": effective_input.size,
                 "sha256": effective_input.sha256,
             },
+            # Readable record of the opt-in override; the digest binds it
+            # too.  Default manifests keep the legacy root field set.
+            **({"ocr_angle_classifier": False}
+               if "ocr_angle_classifier" in completion_parameters else {}),
+            **({"ocr_merge_interleaved_regions": True}
+               if "ocr_merge_interleaved_regions" in completion_parameters
+               else {}),
         })
     if _cached_artifact_sha256(source_pdf_path) != source_snapshot.sha256:
         raise RuntimeError(
@@ -7525,6 +7832,8 @@ def _convert_pdf_generation(
                 auto_preprocess: bool = True,
                 ocr: bool | None = None,
                 ocr_full_page: bool = False,
+                ocr_angle_classifier: bool = True,
+                ocr_merge_interleaved_regions: bool = False,
                 preprocessed_output: Path | None = None,
                 markdown_output: Path | None = None,
                 security_policy: (
@@ -7657,6 +7966,19 @@ def _convert_pdf_generation(
         ocr_mode = "enabled (automatic)"
     else:
         ocr_mode = "disabled"
+    if effective_ocr and not ocr_angle_classifier:
+        ocr_mode += ", angle classifier disabled"
+    elif not ocr_angle_classifier:
+        log.warning(
+            "--ocr-no-angle-classifier has no effect because OCR is not "
+            "running for this PDF.")
+    merge_interleaved_regions = effective_ocr and ocr_merge_interleaved_regions
+    if merge_interleaved_regions:
+        ocr_mode += ", interleaved regions merged"
+    elif ocr_merge_interleaved_regions:
+        log.warning(
+            "--ocr-merge-interleaved-regions has no effect because OCR is not "
+            "running for this PDF.")
     log.info(f"OCR: {ocr_mode}")
 
     if use_gpu:
@@ -7678,12 +8000,18 @@ def _convert_pdf_generation(
     artifacts_root = _configure_docling_model_artifacts(
         pipeline_opts, include_ocr=effective_ocr,
         ocr_full_page=force_full_page_ocr,
+        ocr_angle_classifier=ocr_angle_classifier,
         security_policy=security_policy)
     log.info(f"Docling verified model artifacts: {artifacts_root}")
 
+    # Without the opt-in merge, Docling keeps its own default pipeline class.
+    format_option = {"pipeline_options": pipeline_opts}
+    if merge_interleaved_regions:
+        format_option["pipeline_cls"] = (
+            _interleaved_region_merge_pipeline_cls())
     converter = DocumentConverter(
         format_options={
-            InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_opts),
+            InputFormat.PDF: PdfFormatOption(**format_option),
         },
     )
 
@@ -7843,7 +8171,7 @@ def classify_content_type(
     profile = _document_profiles.get_profile(structure_profile)
 
     def structural_content(value: str, values: list[str] | None) -> bool:
-        if profile.name == DEFAULT_STRUCTURE_PROFILE:
+        if _document_profiles.casebook_family(profile):
             return _is_structural_content(value, values)
         return _chunking_core._is_structural_content(
             value, values,
@@ -8118,6 +8446,85 @@ def _filter_same_page_future_headings(
     return filtered
 
 
+# Case captions, citation lines, casebook panels and other unmarked headings
+# sit below every numbered or lettered marker.
+_SOURCE_HEADING_LEAF_LEVEL = 6
+
+
+def _source_heading_stack_level(value: str) -> tuple[int, bool]:
+    """Return a source-heading stack level for heading lineage.
+
+    The numbering mirrors heading lineage's marker defaults. Division and
+    ``§ N.NN`` headings keep lineage's own authoritative, attested levels, so
+    the later audit (which has no overrides) reproduces the same stack. Every
+    other level is reported unattested, so consecutive headings with no
+    intervening body content nest instead of displacing one another: OCR
+    splits a caption from its citation line, and opinions place ``III.``
+    directly above ``A.``. ``I.``, ``V.`` and ``X.`` are Roman siblings of
+    ``II.``; other single capitals, including ``C.`` and ``D.``, are casebook
+    section letters.
+    """
+    text = re.sub(r"\s+", " ", value).strip().strip("*_ ")
+    if re.match(r"^(?:Chapter|Part|Unit)\s+", text, re.IGNORECASE):
+        return 1, True
+    if re.match(r"^§\s*(?:[1-9]|1[0-9])\.\d{2}\b", text):
+        return 2, True
+    if (re.match(r"^(?:[IVX]|[IVXLCDM]{2,})\.(?:\s+|$)", text)
+            or re.match(r"^\d+[.)](?:\s+|$)", text)):
+        level = 4
+    elif re.match(r"^[A-Z]\.(?:\s+|$)", text):
+        level = 3
+    elif (re.match(r"^[a-z][.)](?:\s+|$)", text)
+          or re.match(r"^[ivxlcdm]+\.(?:\s+|$)", text)):
+        level = 5
+    else:
+        level = _SOURCE_HEADING_LEAF_LEVEL
+    return level, False
+
+
+def _assign_source_heading_paths(
+        doc_dict: dict, records: list[dict], *,
+        structural_ranges: set[tuple[int, int]],
+        excluded_heading_refs: set[str],
+) -> None:
+    """Derive each record's section path from its exact source scope.
+
+    Heading lineage computes the occurrence stack that owns every record's
+    source items; the displayed path is exactly that stack, so no component
+    can come from a TOC, running header or file name. Content before the
+    excerpt's first heading keeps an empty path. A lettered title proven by
+    a following casebook-supplement pointer is a section letter, so a proven
+    ``I.``, ``V.`` or ``X.`` is a peer of the preceding section rather than
+    a Roman numeral nested below it.
+    """
+    items = {
+        item.get("self_ref"): item for item in doc_dict.get("texts", [])
+        if isinstance(item, dict) and item.get("self_ref")
+    }
+    pointer_sections = {
+        run[0] for run in _heading_lineage._casebook_pointer_runs(
+            doc_dict, structural_ranges=structural_ranges,
+            excluded_heading_refs=excluded_heading_refs).values()
+    }
+    overrides = {
+        ref: ((3, False) if ref in pointer_sections
+              else _source_heading_stack_level(str(item.get("text") or "")))
+        for ref, item in items.items()
+        if item.get("label") == "section_header"
+    }
+    expected = _heading_lineage.expected_heading_bindings(
+        doc_dict, records, structural_ranges=structural_ranges,
+        excluded_heading_refs=excluded_heading_refs,
+        level_overrides=overrides)
+    for record, scope in zip(records, expected["source_scope_paths"]):
+        displays = [
+            re.sub(r"\s+", " ", str(items[ref].get("text") or "")).strip()
+            for ref in scope
+        ]
+        record["metadata"]["section_path"] = " → ".join(displays)
+        record["metadata"]["headings"] = displays
+
+
 def _source_heading_level_hint(
         value: str, profile: _document_profiles.StructureProfile, *,
         heading_levels: dict[str, int] | None = None,
@@ -8126,17 +8533,17 @@ def _source_heading_level_hint(
     """Return a source-attested or narrowly inferred hierarchy level."""
     cleaned = _chunking_core.clean_heading_text(value)
     identity = _source_heading_identity(cleaned)
-    if (profile.name == DEFAULT_STRUCTURE_PROFILE
+    if (_document_profiles.casebook_family(profile)
             and re.match(r"^(?:Chapter|Part|Unit)\s+\d+\b", cleaned,
                          re.IGNORECASE)):
         return 1
     # In the legal profile, a numbered section is a direct child of the
     # chapter.  TOC typography can otherwise give it the generic level 3 and
     # leave an earlier lettered subsection attached as a stale parent.
-    if (profile.name == DEFAULT_STRUCTURE_PROFILE
+    if (_document_profiles.casebook_family(profile)
             and re.match(r"^§\s*\d+(?:\.\d+)+\b", cleaned)):
         return 2
-    if profile.name == DEFAULT_STRUCTURE_PROFILE:
+    if _document_profiles.casebook_family(profile):
         # Numbered casebook sections own the familiar A / 1 / a hierarchy.
         # TOC indentation is not reliable enough to override these authored
         # markers: doing so previously made ``A.`` replace ``§ 2.02`` and
@@ -8156,7 +8563,7 @@ def _source_heading_level_hint(
     # These recurring casebook panels are siblings below the active numbered
     # section.  Source text is authoritative even when a TOC OCR typo prevents
     # an exact identity match (for example ``Confli t`` versus ``Conflict``).
-    if (profile.name == DEFAULT_STRUCTURE_PROFILE
+    if (_document_profiles.casebook_family(profile)
             and re.match(
                 r"^(?:Notes\s*&\s*Questions|Ethics Note\b|"
                 r"Accomplishment Note\b)", cleaned, re.IGNORECASE)):
@@ -8320,7 +8727,7 @@ def _reconcile_scaffold_path_with_source_headings(
                 chapter_number = int(chapter_match.group(1))
             section_match = re.match(
                 r"^§\s*(\d+)\.\d+\b", heading)
-            if (profile.name == DEFAULT_STRUCTURE_PROFILE
+            if (_document_profiles.casebook_family(profile)
                     and chapter_number is not None and section_match
                     and int(section_match.group(1)) != chapter_number):
                 skipped_mismatched_section = True
@@ -8332,7 +8739,7 @@ def _reconcile_scaffold_path_with_source_headings(
                         re.IGNORECASE)):
                 continue
             skipped_mismatched_section = False
-            if (profile.name == DEFAULT_STRUCTURE_PROFILE
+            if (_document_profiles.casebook_family(profile)
                     and chapter_number is not None
                     and section_match
                     and int(section_match.group(1)) == chapter_number):
@@ -8592,14 +8999,47 @@ def _merge_enriched_chunk_group(
     return merged
 
 
+def _opening_list_marker_ref(
+        record: dict, right_body: str, list_markers: dict[str, str],
+) -> str | None:
+    """Return the list item whose punctuation marker opens ``right_body``.
+
+    ``list_markers`` maps source list item refs to their canonical
+    punctuation marker (``_source_punctuation_list_marker``), which the
+    fidelity audit requires at line start.  Only the record's first lineage
+    item is considered, and only when the body starts with its marker.
+    """
+    items = (record.get("metadata") or {}).get("source_items") or []
+    ref = items[0].get("ref") if items and isinstance(items[0], dict) else None
+    marker = list_markers.get(ref) if isinstance(ref, str) else None
+    if marker is None or re.match(
+            rf"{re.escape(marker)}(?=[^\S\r\n]|$)",
+            right_body.lstrip()) is None:
+        return None
+    return ref
+
+
 def _coalesce_chunk_boundaries(
         records: list[dict], token_counter: Callable[[str], int],
         max_tokens: int, *, hard_max_tokens: int | None = None,
         structure_profile: (
             str | _document_profiles.StructureProfile
         ) = DEFAULT_STRUCTURE_PROFILE,
+        list_markers: dict[str, str] | None = None,
+        inline_list_joins: set[str] | None = None,
+        separated_list_refs: frozenset[str] = frozenset(),
 ) -> list[dict]:
-    """Repair split sentences and alternating rule/explanation layout lanes."""
+    """Repair split sentences and alternating rule/explanation layout lanes.
+
+    A continuation joins inline, so a record that opens with a source list
+    item's punctuation marker (``_opening_list_marker_ref`` over
+    ``list_markers``) has that marker placed mid-line.  Each such performed
+    join adds the item's ref to ``inline_list_joins`` (when given); that
+    observation never changes the output.  Only a gate-driven replay passes
+    ``separated_list_refs``: a continuation opened by one of those items is
+    joined as a separate block instead, keeping its marker line-initial, and
+    must still satisfy every other join condition.
+    """
     if len(records) < 2:
         return records
 
@@ -8699,10 +9139,13 @@ def _coalesce_chunk_boundaries(
                 or right_core[0] in ",.;:)]}'\"’”"
                 or left_core.endswith(("-", "–", "—", ",", ";", ":")))
 
-    def _join_continued_boundary(left: str, right: str) -> str:
+    def _join_continued_boundary(
+            left: str, right: str, *, separate: bool = False) -> str:
         """Join one visible continuation without retaining PDF line wrap."""
         left_core = left.rstrip()
         right_core = right.lstrip()
+        if separate:
+            return f"{left_core}\n\n{right_core}".strip()
         # A lowercase fragment after a terminal ASCII hyphen is a PDF
         # discretionary line wrap (``ques-`` + ``tion``), not punctuation.
         # Uppercase continuations are deliberately excluded: dialogue can use
@@ -8732,17 +9175,31 @@ def _coalesce_chunk_boundaries(
             previous["text"], leading=False)
         right_body, leading_footnotes = _edge_footnotes(
             record["text"], leading=True)
-        reordered_text = _join_continued_boundary(left_body, right_body)
+        list_ref = (
+            _opening_list_marker_ref(record, right_body, list_markers)
+            if list_markers else None)
+        separate = list_ref is not None and list_ref in separated_list_refs
+        reordered_text = _join_continued_boundary(
+            left_body, right_body, separate=separate)
         boundary_footnotes = trailing_footnotes + leading_footnotes
         if boundary_footnotes:
             reordered_text += "\n\n" + "\n".join(boundary_footnotes)
         combined_limit = max_tokens + max(128, max_tokens // 4)
         if hard_max_tokens is not None:
             combined_limit = min(combined_limit, hard_max_tokens)
+        # Relocating edge lines would reorder a source-bound record's text
+        # against its lineage (a numbered list line is not a footnote there),
+        # which the fidelity audit rejects; keep such records separate.
+        source_bound = any(
+            item["metadata"].get("source_items") for item in (previous, record))
         if (same_heading and mergeable_body
+                and not (source_bound and boundary_footnotes)
                 and _pages_touch(previous, record)
                 and _continues_sentence(left_body, right_body)
                 and token_counter(reordered_text) <= combined_limit):
+            if (list_ref is not None and not separate
+                    and inline_list_joins is not None):
+                inline_list_joins.add(list_ref)
             previous_copy = {
                 "text": reordered_text,
                 "metadata": dict(previous["metadata"]),
@@ -8840,10 +9297,27 @@ def _retain_source_bound_structural_text(
     otherwise resemble furniture and be dropped after its source identity was
     already captured. Retain only labels that the lineage inventory itself
     treats as publishable; standalone section/page headers remain excluded.
+
+    A contents-outline row whose lineage binds its exact cell text (see
+    ``_contents_outline_row_overrides``) is otherwise dropped here, leaving an
+    eligible source item unrepresented.  Such a row is retained, and publishes
+    exactly its bound text, only when it is its chunk's sole source item;
+    any other chunk shape fails closed.  Only the text is replaced: metadata
+    the caller derived from the chunker's serialization of the row (its raw
+    token count, case names and cross-references) is left as derived.
     """
     metadata = record.get("metadata") or {}
     if metadata.get("content_type") != "structural":
         return False
+    contents_rows = _bound_contents_outline_rows(metadata, doc_items)
+    if contents_rows:
+        chunk_refs = {
+            str(getattr(item, "self_ref", "")) for item in doc_items or []
+        } | _record_source_refs(record)
+        if len(contents_rows) != 1 or chunk_refs != set(contents_rows):
+            raise RuntimeError(
+                "A bound contents outline row must be its chunk's only "
+                f"source item: {sorted(chunk_refs)}")
     labels = {
         _doc_item_label(item) for item in (doc_items or [])
         if _doc_item_label(item)
@@ -8871,13 +9345,43 @@ def _retain_source_bound_structural_text(
             and not labels.intersection({
                 "text", "list_item", "footnote", "caption", "code",
                 "table"})):
-        return False
+        if not contents_rows:
+            return False
+        record["text"] = next(iter(contents_rows.values()))
     metadata["content_type"] = {
         "table": "table",
         "footnote": "footnote",
         "figure": "figure",
     }.get(metadata.get("content_source"), "author_narrative")
     return True
+
+
+def _bound_contents_outline_rows(
+        metadata: dict, doc_items: list | None,
+) -> dict[str, str]:
+    """Return chunk rows whose lineage binds their exact contents text.
+
+    Only a contents-outline row recovered by
+    ``_recover_incomplete_table_markdown`` carries a ``table`` oracle whose
+    digest is the row's own cell text; the lineage entry proves the binding.
+    """
+    lineage = {
+        entry["ref"]: entry
+        for entry in (metadata.get("source_items") or [])
+        if isinstance(entry, dict) and isinstance(entry.get("ref"), str)
+    }
+    rows: dict[str, str] = {}
+    for item in doc_items or []:
+        ref = str(getattr(item, "self_ref", ""))
+        entry = lineage.get(ref)
+        if (_doc_item_label(item) != "document_index" or entry is None
+                or entry.get("transform") != "table"):
+            continue
+        text = _contents_outline_row_text(item)
+        if text and entry.get("oracle_text_sha256") == (
+                _source_fidelity_core.text_sha256(text)):
+            rows[ref] = text
+    return rows
 
 
 def _record_source_refs(record: dict) -> set[str]:
@@ -8973,6 +9477,33 @@ def _record_scoped_source_box(
     )
 
 
+def _record_observed_source_box(
+        record: dict, page: int,
+) -> tuple[float, float, float, float] | None:
+    """Return the page box of only the lineage the fidelity audit observes.
+
+    The audit registers page occurrences for entries with source tokens and
+    for zero-width opaque recoveries.  A plain tokenless entry, such as an
+    ornament row, registers none, so it cannot constrain reading order.
+    ``None`` means the audit does not observe the record on the page;
+    malformed lineage also yields ``None``.
+    """
+    metadata = record.get("metadata")
+    values = metadata.get("source_items") if isinstance(metadata, dict) else None
+    if not isinstance(values, list) or any(
+            not isinstance(entry, dict) for entry in values):
+        return None
+    observed = [
+        entry for entry in values
+        if (isinstance(count := entry.get("oracle_lexical_count"), int)
+            and not isinstance(count, bool) and count > 0)
+        or entry.get("transform") in _source_fidelity_core.OPAQUE_TRANSFORMS]
+    if not observed:
+        return None
+    return _record_scoped_source_box(
+        {"metadata": {"source_items": observed}}, page)
+
+
 def _source_boxes_horizontally_overlap(
         first: tuple[float, float, float, float],
         second: tuple[float, float, float, float],
@@ -8982,8 +9513,101 @@ def _source_boxes_horizontally_overlap(
     return minimum_width > 0 and overlap >= max(2.0, minimum_width * 0.20)
 
 
-def _reorder_footnote_sidecars(records: list[dict]) -> list[dict]:
-    """Move footnotes after body flow while retaining source-page order."""
+def _footnote_slot_boxes(
+        record: dict) -> list[tuple[int, tuple[float, float, float, float]]]:
+    """Return the page boxes of lineage entries the fidelity audit observes.
+
+    Only entries with source tokens register page occurrences in the audit, so
+    only they may constrain order. Malformed lineage yields no constraint.
+    """
+    metadata = record.get("metadata")
+    values = metadata.get("source_items") if isinstance(metadata, dict) else None
+    boxes: list[tuple[int, tuple[float, float, float, float]]] = []
+    for entry in values if isinstance(values, list) else ():
+        count = entry.get("oracle_lexical_count") if isinstance(entry, dict) else None
+        if not isinstance(count, int) or isinstance(count, bool) or count <= 0:
+            continue
+        pages = sorted({
+            span.get("page") for span in entry.get("spans") or ()
+            if isinstance(span, dict) and isinstance(span.get("page"), int)})
+        for page in pages:
+            box = _record_scoped_source_box({"metadata": {"source_items": [entry]}}, page)
+            if box is not None:
+                boxes.append((page, box))
+    return boxes
+
+
+def _order_footnote_slot_by_source_geometry(slot: list[dict]) -> list[dict]:
+    """Order one sidecar slot by the fidelity audit's same-page geometry.
+
+    Fragments recovered as one group can be emitted ahead of notes printed
+    above them. A stable topological order over the audit's own edge rule
+    (horizontal overlap and a 0.5pt vertical gap) repairs that; an order that
+    already satisfies every edge is returned unchanged. Records move only
+    among positions sharing a start page. A group containing a page-order
+    reason, two-way edges or a cycle is left as it is and stays reportable.
+    """
+    if len(slot) < 2:
+        return slot
+    groups: dict[object, list[int]] = {}
+    for position, record in enumerate(slot):
+        groups.setdefault((record.get("metadata") or {}).get("page_start"), []).append(
+            position)
+    ordered = list(slot)
+    for positions in groups.values():
+        members = [slot[position] for position in positions]
+        if len(members) < 2 or any(
+                (member.get("metadata") or {}).get(
+                    _quality_core.PAGE_ORDER_REASON_FIELD)
+                for member in members):
+            continue
+        boxes = [_footnote_slot_boxes(member) for member in members]
+        edges: set[tuple[int, int]] = set()
+        for first in range(len(members)):
+            for second in range(len(members)):
+                if first == second:
+                    continue
+                if any(page == other_page
+                       and _source_boxes_horizontally_overlap(box, other)
+                       and box[3] <= other[1] - 0.5
+                       for page, box in boxes[first]
+                       for other_page, other in boxes[second]):
+                    edges.add((first, second))
+        if not edges or any((second, first) in edges for first, second in edges):
+            continue
+        incoming = {index: 0 for index in range(len(members))}
+        for _first, second in edges:
+            incoming[second] += 1
+        remaining = set(incoming)
+        order: list[int] = []
+        while remaining:
+            ready = [index for index in remaining if incoming[index] == 0]
+            if not ready:
+                break
+            chosen = min(ready)
+            order.append(chosen)
+            remaining.remove(chosen)
+            for first, second in edges:
+                if first == chosen:
+                    incoming[second] -= 1
+        if len(order) != len(members):
+            continue
+        for position, index in zip(positions, order):
+            ordered[position] = members[index]
+    return ordered
+
+
+def _reorder_footnote_sidecars(
+        records: list[dict], *,
+        observed_geometry_pages: frozenset[int] = frozenset(),
+) -> list[dict]:
+    """Move footnotes after body flow while retaining source-page order.
+
+    On ``observed_geometry_pages`` (only ever a gate-driven replay's), a
+    footnote is placed by the lineage the fidelity audit observes: tokenless
+    entries are dropped from both boxes, and a body record the audit does not
+    observe on that page does not constrain the placement.
+    """
     if not records:
         return records
     body = [record for record in records if not _is_footnote_record(record)]
@@ -9017,7 +9641,13 @@ def _reorder_footnote_sidecars(records: list[dict]) -> list[dict]:
                 and span[0] <= page <= span[1])
         ]
         if isinstance(page, int):
+            observed_geometry = page in observed_geometry_pages
             footnote_box = _record_scoped_source_box(footnote, page)
+            if footnote_box is not None and observed_geometry:
+                # A note the audit does not observe here keeps its full box.
+                footnote_box = (
+                    _record_observed_source_box(footnote, page)
+                    or footnote_box)
             body_candidates = [
                 index for index in candidates
                 if (body[index].get("metadata") or {}).get(
@@ -9029,6 +9659,11 @@ def _reorder_footnote_sidecars(records: list[dict]) -> list[dict]:
                 geometry_valid = True
                 for index in body_candidates:
                     body_box = _record_scoped_source_box(body[index], page)
+                    if body_box is not None and observed_geometry:
+                        body_box = _record_observed_source_box(
+                            body[index], page)
+                        if body_box is None:
+                            continue
                     if (body_box is None
                             or not _source_boxes_horizontally_overlap(
                                 body_box, footnote_box)):
@@ -9098,9 +9733,11 @@ def _reorder_footnote_sidecars(records: list[dict]) -> list[dict]:
             placements_after.setdefault(len(body) - 1, []).append(footnote)
     reordered = []
     for index, record in enumerate(body):
-        reordered.extend(placements_before.get(index, []))
+        reordered.extend(_order_footnote_slot_by_source_geometry(
+            placements_before.get(index, [])))
         reordered.append(record)
-        reordered.extend(placements_after.get(index, []))
+        reordered.extend(_order_footnote_slot_by_source_geometry(
+            placements_after.get(index, [])))
     return reordered
 
 
@@ -9516,8 +10153,9 @@ def _split_source_text_by_tokens(
 
 def _doc_item_label(item) -> str:
     """Return a stable lowercase Docling item label."""
-    label = getattr(item, "label", "")
-    return str(getattr(label, "value", label)).lower()
+    label = _source_cleanup_audit._value("item.label_raw", getattr(item, "label", ""))
+    return _source_cleanup_audit._value("item.label", str(
+        _source_cleanup_audit._value("item.label_value_raw", getattr(label, "value", label))).lower())
 
 
 def _is_editorial_boilerplate_text(text: str) -> bool:
@@ -10023,6 +10661,8 @@ class ConversionSourceBinding:
     effective_input_name: str
     effective_input_sha256: str
     effective_input_size: int
+    ocr_angle_classifier: bool = True
+    ocr_merge_interleaved_regions: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -10244,6 +10884,8 @@ class BoundSourceEnrichments:
     figure_text: dict[str, FigureTextRecovery] = field(default_factory=dict)
     page_labels: dict[int, str] = field(default_factory=dict)
     manifest_input: dict | None = None
+    # Proven multi-block groups awaiting a failed reading-order gate.
+    deferred_text_groups: tuple[SourceTextGroupRecovery, ...] = ()
 
 
 def _strict_json_object(raw: bytes, *, description: str) -> dict:
@@ -10310,8 +10952,15 @@ def _load_conversion_source_binding(
         "source_record_count", "parameters_sha256", "outputs", "source",
         "effective_input",
     }
-    if set(payload) != expected_root_fields:
+    # The only optional root fields record the opt-in OCR overrides.
+    optional_root_fields = {
+        "ocr_angle_classifier", "ocr_merge_interleaved_regions"}
+    if set(payload) - optional_root_fields != expected_root_fields:
         raise ValueError("conversion completion has an invalid field set")
+    if (payload.get("ocr_angle_classifier", False) is not False
+            or payload.get("ocr_merge_interleaved_regions", True)
+            is not True):
+        raise ValueError("conversion completion OCR override is invalid")
     if (payload.get("stage") != "conversion"
             or payload.get("source_record_count") is not None
             or not isinstance(payload.get("parameters_sha256"), str)
@@ -10391,6 +11040,9 @@ def _load_conversion_source_binding(
         effective_input_name=effective_input["name"],
         effective_input_sha256=effective_input["sha256"],
         effective_input_size=effective_input["size"],
+        ocr_angle_classifier="ocr_angle_classifier" not in payload,
+        ocr_merge_interleaved_regions=(
+            "ocr_merge_interleaved_regions" in payload),
     )
 
 
@@ -10782,8 +11434,156 @@ def _chapter_summary_outline_from_pdf_words(
     return [(depth, text) for depth, text, _ in entries]
 
 
+_CONTENTS_OUTLINE_TITLES = frozenset({"contents", "tableofcontents"})
+
+
+def _contents_outline_row_text(table) -> str:
+    """Return one contents-outline row's Docling cell text in row order.
+
+    Each cell's whitespace is collapsed, cells of one printed row are joined
+    by a space and rows by a newline, so the lexical tokens are exactly the
+    row's source cell tokens.  No line is indented, whereas a recovered
+    Summary-of-Contents outline always nests at least two levels.
+    """
+    rows: dict[int, list[tuple[int, str]]] = {}
+    for cell in getattr(
+            getattr(table, "data", None), "table_cells", None) or []:
+        value = getattr(cell, "text", "")
+        text = " ".join(value.split()) if isinstance(value, str) else ""
+        if text:
+            rows.setdefault(
+                int(getattr(cell, "start_row_offset_idx", 0) or 0), []
+            ).append((int(getattr(cell, "start_col_offset_idx", 0) or 0),
+                      text))
+    return "\n".join(
+        " ".join(text for _, text in sorted(cells))
+        for _, cells in sorted(rows.items()))
+
+
+def _docling_serialized_refs(dl_doc) -> list[str]:
+    """Flatten the live Docling body order as heading lineage does.
+
+    Groups expand in place, an item precedes its children, and refs the body
+    never reaches follow in collection order.  The live model has already
+    received the single-column wrap repair that lineage re-applies.
+    """
+    item_by_ref, _, _ = _docling_lineage_catalog(dl_doc)
+    groups = {
+        str(getattr(group, "self_ref", "")): group
+        for group in (getattr(dl_doc, "groups", None) or [])
+        if getattr(group, "self_ref", "")
+    }
+    ordered: list[str] = []
+    visited: set[str] = set()
+
+    def append(ref: str, active: frozenset[str] = frozenset()) -> None:
+        if not ref or ref in active:
+            return
+        group = groups.get(ref)
+        children = []
+        if group is not None:
+            children = list(getattr(group, "children", None) or [])
+        elif ref in item_by_ref and ref not in visited:
+            visited.add(ref)
+            ordered.append(ref)
+            children = list(getattr(item_by_ref[ref], "children", None) or [])
+        for child in children:
+            append(str(getattr(child, "cref", "")), active | {ref})
+
+    for child in getattr(getattr(dl_doc, "body", None), "children", None) or []:
+        append(str(getattr(child, "cref", "")))
+    for collection in (
+            "texts", "tables", "pictures", "key_value_items", "form_items"):
+        for item in getattr(dl_doc, collection, None) or []:
+            append(str(getattr(item, "self_ref", "")))
+    return ordered
+
+
+def _contents_outline_row_overrides(
+        dl_doc, structural_ranges: set[tuple[int, int]],
+) -> dict[str, str]:
+    """Bind contents-outline rows whose output fails the source gates today.
+
+    A row qualifies only as a ``document_index`` table that directly follows,
+    skipping only bare printed page labels, a body section header whose
+    canonical text is exactly "contents" or "table of contents"; the title
+    and every row lie outside the structural ranges.  Each row also needs
+    only empty provenance charspans, at least one lexical token, and no
+    Docling item relationship: it is no item's child, caption or footnote
+    and owns none.
+
+    Such a row is an eligible source item.  Native repairs rewrite only
+    ``texts``, only a Summary-of-Contents window gives a ``document_index``
+    a table oracle, and a visual container alias needs its owner to claim
+    the row.  An isolated row is therefore either dropped as structural
+    today, leaving it unrepresented, or published under a plain oracle whose
+    empty charspans map no token to a page.  Both fail the gates, so binding
+    its exact cell text as an opaque table oracle changes only failing
+    output.
+    """
+    item_by_ref, parent_refs_by_child, _ = _docling_lineage_catalog(dl_doc)
+    related_refs = set(parent_refs_by_child).union(
+        *parent_refs_by_child.values())
+    table_refs = {
+        str(getattr(table, "self_ref", ""))
+        for table in (getattr(dl_doc, "tables", None) or [])
+    }
+
+    def layer(item) -> str:
+        value = getattr(item, "content_layer", "")
+        return str(getattr(value, "value", value) or "").lower()
+
+    def outside_ranges(item) -> bool:
+        pages = [getattr(span, "page_no", None)
+                 for span in (getattr(item, "prov", None) or [])]
+        return bool(pages) and all(
+            isinstance(page, int) and not isinstance(page, bool)
+            and not any(start <= page <= end
+                        for start, end in structural_ranges)
+            for page in pages)
+
+    def source_text(item) -> str:
+        return str(getattr(item, "text", "") or getattr(item, "orig", "")
+                   or "")
+
+    titles = [
+        ref for ref, item in item_by_ref.items()
+        if (_doc_item_label(item) == "section_header"
+            and "furniture" not in layer(item) and outside_ranges(item)
+            and _heading_lineage.canonical_text(source_text(item))
+            in _CONTENTS_OUTLINE_TITLES)
+    ]
+    if not titles:
+        return {}
+    order = _docling_serialized_refs(dl_doc)
+    position = {ref: index for index, ref in enumerate(order)}
+    rows: dict[str, str] = {}
+    for title_ref in titles:
+        for ref in order[position[title_ref] + 1:]:
+            item = item_by_ref[ref]
+            label = _doc_item_label(item)
+            if _heading_lineage._page_label_furniture(
+                    {"label": label, "text": source_text(item)}):
+                continue
+            text = (
+                _contents_outline_row_text(item)
+                if label == "document_index" and ref in table_refs else "")
+            spans = list(getattr(item, "prov", None) or [])
+            if (not _source_fidelity_core.lexical_tokens(text)
+                    or ref in related_refs
+                    or "furniture" in layer(item)
+                    or not outside_ranges(item)
+                    or any(tuple(getattr(span, "charspan", None) or ())
+                           != (0, 0) for span in spans)):
+                break
+            rows[ref] = text
+    return rows
+
+
 def _recover_incomplete_table_markdown(
-        dl_doc, pdf_path: Path) -> dict[str, str]:
+        dl_doc, pdf_path: Path, *,
+        structural_ranges: set[tuple[int, int]] | None = None,
+) -> dict[str, str]:
     """Recover tables whose Docling cells omit text present in the source PDF.
 
     The recovery is deliberately narrow: compare token multisets inside each
@@ -10791,9 +11591,17 @@ def _recover_incomplete_table_markdown(
     proportional omission or a smaller omission that cannot be explained by
     token fusion.  Ordinary tables continue to use Docling's richer row/column
     model.
+
+    A contents-outline row outside any Summary-of-Contents window is bound to
+    its exact Docling cell text (``_contents_outline_row_overrides``).  A
+    caller that cannot supply the profile's structural ranges gets no such
+    binding, which keeps today's output.
     """
     import pymupdf
     recovered: dict[str, str] = {}
+    contents_rows = (
+        {} if structural_ranges is None
+        else _contents_outline_row_overrides(dl_doc, structural_ranges))
     text_by_ref = {
         str(getattr(item, "self_ref", "")): item
         for item in (getattr(dl_doc, "texts", None) or [])
@@ -10829,6 +11637,9 @@ def _recover_incomplete_table_markdown(
                         recovered[str(table.self_ref)] = "\n".join(
                             "  " * depth + f"- {text}"
                             for depth, text in entries)
+                elif str(table.self_ref) in contents_rows:
+                    recovered[str(table.self_ref)] = contents_rows[
+                        str(table.self_ref)]
                 continue
             pdf_text = page.get_text("text", clip=rectangle, sort=True).strip()
             cells = list(getattr(table.data, "table_cells", []) or [])
@@ -10898,8 +11709,9 @@ def _recover_incomplete_table_markdown(
 
 def _source_item_text(item) -> str:
     """Return the source-authored text exposed by one Docling item."""
-    return str(
-        getattr(item, "text", "") or getattr(item, "orig", "") or "")
+    return _source_cleanup_audit._value("item.source_text", str(
+        _source_cleanup_audit._value("item.text_raw", getattr(item, "text", ""))
+        or _source_cleanup_audit._value("item.orig_raw", getattr(item, "orig", "")) or ""))
 
 
 def _source_item_position(item) -> tuple[int, float, float] | None:
@@ -11853,8 +12665,11 @@ def _native_word_has_uniform_style(
     PyMuPDF can expose ``defense`` followed by a superscript footnote marker
     ``b`` as the single word ``defenseb``.  Joining Docling's ``defense b``
     in that case would erase a real note marker, so a candidate word must not
-    cross a material font-size or superscript boundary.
+    cross a material font-size or superscript boundary.  A content-stream
+    letter word proved one span style for its letters when it was built.
     """
+    if isinstance(word, _ContentStreamLetterWord):
+        return True
     left, top, right, bottom = (float(value) for value in word[:4])
     sizes: list[float] = []
     baselines: list[float] = []
@@ -13524,16 +14339,435 @@ def _repair_one_line_native_heading_order(
     return candidate if candidate and "\n" not in candidate else source_text
 
 
+class _ContentStreamLetterWord(tuple):
+    """A native word rebuilt from one letter-spaced content-stream word."""
+
+
+@dataclass(frozen=True, slots=True)
+class _LetterSpacedLayerRetry:
+    """One failing item's native repair recomputed with stream words."""
+
+    text: str
+    edits: tuple[tuple[str, str], ...]
+    rebuild: bool
+    source_text: str
+
+
+def _letter_run_has_uniform_style(
+        words: list[tuple], spans: list[dict]) -> bool:
+    """Every letter lies in exactly one span, and all spans share one style.
+
+    Scanner layers report word boxes taller than their line pitch, so the
+    generic bbox-overlap test reaches into adjacent lines.  Containment of
+    each letter's center is local to its own printed line.
+    """
+    styles: list[tuple[str, float, float]] = []
+    for word in words:
+        center_x = (float(word[0]) + float(word[2])) / 2
+        center_y = (float(word[1]) + float(word[3])) / 2
+        owners = [
+            span for span in spans
+            if span.get("bbox")
+            and str(word[4]) in str(span.get("text", ""))
+            and float(span["bbox"][0]) <= center_x <= float(span["bbox"][2])
+            and float(span["bbox"][1]) <= center_y <= float(span["bbox"][3])
+        ]
+        if len(owners) != 1:
+            return False
+        span = owners[0]
+        flags = span.get("flags")
+        size = span.get("size")
+        origin = span.get("origin")
+        if (not isinstance(flags, int) or isinstance(flags, bool)
+                or flags & 1
+                or not isinstance(size, (int, float))
+                or isinstance(size, bool)
+                or not isinstance(origin, (list, tuple))
+                or len(origin) < 2):
+            return False
+        styles.append((str(span.get("font")), float(size), float(origin[1])))
+    if not styles:
+        return False
+    sizes = [style[1] for style in styles]
+    baselines = [style[2] for style in styles]
+    return (len({style[0] for style in styles}) == 1
+            and max(sizes) - min(sizes) <= max(0.75, 0.08 * max(sizes))
+            and max(baselines) - min(baselines) <= 0.12 * max(sizes))
+
+
+def _content_stream_letter_words(
+        page, native_words: list[tuple],
+        page_spans: list[dict]) -> list[tuple] | None:
+    """Merge letter-spaced native words that the content stream joins.
+
+    A scanner OCR layer can position each glyph of a word separately, and
+    PyMuPDF then synthesizes a space at every positioning gap (single letters).
+    With TEXT_INHIBIT_SPACES the page yields only real space glyphs.  A run
+    of same-line single ASCII-letter words merges only when exactly one
+    stream word covers it and spells exactly its letters, every gap inside it
+    is narrower than every real word gap on that printed line, and one span
+    style owns all of its letters.  Returns None when nothing merges.
+    """
+    import pymupdf
+
+    runs: list[list[int]] = []
+    current: list[int] = []
+    for index, word in enumerate(native_words):
+        word_text = str(word[4])
+        single = (len(word) >= 7 and len(word_text) == 1
+                  and word_text.isascii() and word_text.isalpha())
+        if (single and current
+                and native_words[current[-1]][5:7] == word[5:7]):
+            current.append(index)
+            continue
+        if len(current) >= 2:
+            runs.append(current)
+        current = [index] if single else []
+    if len(current) >= 2:
+        runs.append(current)
+    if not runs:
+        return None
+
+    stream_words = page.get_text(
+        "words", sort=True,
+        flags=pymupdf.TEXTFLAGS_WORDS | pymupdf.TEXT_INHIBIT_SPACES)
+
+    def center(word: tuple) -> tuple[float, float]:
+        return ((float(word[0]) + float(word[2])) / 2,
+                (float(word[1]) + float(word[3])) / 2)
+
+    def contains(outer: tuple, point: tuple[float, float]) -> bool:
+        return (float(outer[0]) - 0.5 <= point[0] <= float(outer[2]) + 0.5
+                and float(outer[1]) - 0.5 <= point[1]
+                <= float(outer[3]) + 0.5)
+
+    merged: dict[int, tuple] = {}
+    absorbed: set[int] = set()
+    for run in runs:
+        position = 0
+        while position < len(run):
+            first = native_words[run[position]]
+            owners = [
+                stream for stream in stream_words
+                if contains(stream, center(first))
+            ]
+            if len(owners) != 1:
+                position += 1
+                continue
+            owner = owners[0]
+            span = [run[position]]
+            while (position + len(span) < len(run)
+                   and contains(owner, center(
+                       native_words[run[position + len(span)]]))):
+                span.append(run[position + len(span)])
+            words = [native_words[index] for index in span]
+            letters = "".join(str(word[4]) for word in words)
+            line_words = sorted(
+                (stream for stream in stream_words
+                 if abs(center(stream)[1] - center(owner)[1])
+                 <= (float(owner[3]) - float(owner[1])) / 2),
+                key=lambda stream: float(stream[0]))
+            word_gaps = [
+                float(right[0]) - float(left[2])
+                for left, right in zip(line_words, line_words[1:])
+            ]
+            letter_gaps = [
+                float(right[0]) - float(left[2])
+                for left, right in zip(words, words[1:])
+            ]
+            if (len(span) >= 2 and str(owner[4]) == letters
+                    and word_gaps and letter_gaps
+                    and max(letter_gaps) < min(word_gaps)
+                    and _letter_run_has_uniform_style(words, page_spans)):
+                merged[span[0]] = _ContentStreamLetterWord((
+                    min(float(word[0]) for word in words),
+                    min(float(word[1]) for word in words),
+                    max(float(word[2]) for word in words),
+                    max(float(word[3]) for word in words),
+                    letters, *first[5:],
+                ))
+                absorbed.update(span[1:])
+            position += len(span)
+    if not merged:
+        return None
+    return [
+        merged.get(index, word)
+        for index, word in enumerate(native_words)
+        if index not in absorbed
+    ]
+
+
+def _letter_spaced_layer_retry_applies(
+        item, repaired: str,
+        structural_ranges: set[tuple[int, int]] | None = None) -> bool:
+    """Return whether an item's repaired text fails quality's ocr_gibberish.
+
+    Only a single-provenance body text or list item outside the structural
+    ranges qualifies.  Quality treats such an item as eligible, and its text
+    publishes as record text, where that detector applies.  Headings and
+    furniture never reach record text.  A multi-provenance item can publish
+    as page fragments whose boundary splits a letter run, and its later
+    provenances have no native words here.  Relations that can place an item
+    in a record the detector exempts are checked separately
+    (``_letter_spaced_retry_exempt_refs``).
+    """
+    layer = str(getattr(getattr(item, "content_layer", None), "value",
+                        getattr(item, "content_layer", "body")))
+    provenance = list(getattr(item, "prov", None) or [])
+    if (_doc_item_label(item) not in {"text", "list_item"}
+            or layer != "body"
+            or len(provenance) != 1
+            or any(start <= int(provenance[0].page_no) <= end
+                   for start, end in structural_ranges or ())):
+        return False
+    return _OCR_SINGLETON_GIBBERISH_RE.search(
+        " ".join(repaired.split())) is not None
+
+
+def _letter_spaced_retry_exempt_refs(dl_doc) -> frozenset[str]:
+    """Return text refs whose letter-spaced output can pass quality today.
+
+    Quality exempts figure and table records from ``ocr_gibberish``, and a
+    record is typed that way when its items include a picture or table.  A
+    text item related to a picture or table anywhere in its ancestry (a
+    parent, an enclosing group, or a caption, footnote or child relation) can
+    share such a record.  A member of an aligned-list table publishes inside
+    a pipe table, and a running section banner never publishes.  None of
+    these is retried.  Aligned-list membership depends only on geometry, so
+    no overrides are passed; chunking later drops layouts whose items are
+    reserved, so this set covers every published pipe-table member.
+    """
+    parents: dict[str, set[str]] = {}
+    for collection in (
+            "texts", "groups", "pictures", "tables", "key_value_items",
+            "form_items"):
+        for node in getattr(dl_doc, collection, None) or []:
+            ref = str(getattr(node, "self_ref", "") or "")
+            if not ref:
+                continue
+            parent = str(getattr(
+                getattr(node, "parent", None), "cref", "") or "")
+            if parent:
+                parents.setdefault(ref, set()).add(parent)
+            for relationship in ("captions", "footnotes", "children"):
+                for reference in getattr(node, relationship, None) or []:
+                    child = str(getattr(reference, "cref", "") or "")
+                    if child:
+                        parents.setdefault(child, set()).add(ref)
+
+    def related_to_picture_or_table(ref: str) -> bool:
+        seen = {ref}
+        pending = [ref]
+        while pending:
+            for ancestor in parents.get(pending.pop(), ()):
+                if ancestor.startswith(("#/pictures/", "#/tables/")):
+                    return True
+                if ancestor not in seen:
+                    seen.add(ancestor)
+                    pending.append(ancestor)
+        return False
+
+    exempt = {
+        ref
+        for item in getattr(dl_doc, "texts", None) or []
+        if (ref := str(getattr(item, "self_ref", "") or ""))
+        and related_to_picture_or_table(ref)
+    }
+    exempt.update(
+        str(getattr(member, "self_ref", "") or "")
+        for layout in _detect_aligned_list_tables(dl_doc)
+        for member in layout.items)
+    exempt.update(_running_section_heading_refs(dl_doc))
+    return frozenset(exempt)
+
+
+def _native_lexical_key(value: str) -> str:
+    """Concatenate a text's native lexeme keys, ignoring word boundaries."""
+    return "".join(
+        _native_lexeme_key(match.group())
+        for match in _NATIVE_LEXEME_RE.finditer(value))
+
+
+def _repair_native_text_item(
+        item, source_text: str, *, pdf, page,
+        native_words: list[tuple], page_spans: list[dict],
+        overlapping_refs: set[str],
+        hard_hyphen_attestations: set[str],
+        pdf_plain_word_keys: set[str],
+        plain_native_word_keys: set[str],
+        all_hard_native_word_keys: set[str],
+        trace_cache: list[list[dict]],
+) -> tuple[str, list[tuple[str, str]], bool]:
+    """Run one item's native repair pipeline over the given native words.
+
+    Returns the repaired text, its edits, and whether the OCR fallback asks
+    for a wholesale rebuild.  ``trace_cache`` holds the page's text trace
+    once it is first needed.
+    """
+    item_edits: list[tuple[str, str]] = []
+    needs_rebuild = False
+    item_provenance = list(getattr(item, "prov", None) or [])
+    first = item_provenance[0]
+    clip = _pdf_clip_for_provenance(page, first)
+    native_text = _native_text_from_words(
+        native_words, hard_hyphen_attestations,
+        pdf_plain_word_keys)
+    native_segments = [(native_text, native_words)]
+    if (_SOURCE_SPLIT_HYPHEN_WORD_RE.search(source_text)
+            and len(item_provenance) > 1):
+        for provenance in item_provenance[1:]:
+            segment_page_number = int(provenance.page_no)
+            if not 1 <= segment_page_number <= len(pdf):
+                continue
+            segment_page = pdf[segment_page_number - 1]
+            segment_clip = _pdf_clip_for_provenance(
+                segment_page, provenance)
+            segment_words = [
+                word for word in segment_page.get_text(
+                    "words", sort=True)
+                if (segment_clip.x0 - 0.5
+                    <= (float(word[0]) + float(word[2])) / 2
+                    <= segment_clip.x1 + 0.5
+                    and segment_clip.y0 - 0.5
+                    <= (float(word[1]) + float(word[3])) / 2
+                    <= segment_clip.y1 + 0.5)
+            ]
+            native_segments.append((
+                _native_text_from_words(
+                    segment_words, hard_hyphen_attestations,
+                    pdf_plain_word_keys),
+                segment_words,
+            ))
+    ref = str(getattr(item, "self_ref", ""))
+    repaired = _repair_source_attested_split_hyphen_words(
+        source_text,
+        plain_word_keys=plain_native_word_keys,
+        hard_hyphen_keys=all_hard_native_word_keys,
+        _edits=item_edits,
+    )
+    repaired = _repair_source_split_hyphens_from_native_segments(
+        repaired,
+        native_segments=native_segments,
+        pdf_plain_word_keys=pdf_plain_word_keys,
+        hard_hyphen_keys=hard_hyphen_attestations,
+        _edits=item_edits,
+    )
+    repaired = _repair_source_attested_soft_hyphen_fragment_word(
+        repaired,
+        native_segments=native_segments,
+        pdf_plain_word_keys=pdf_plain_word_keys,
+        _edits=item_edits,
+    )
+    reordered = _repair_one_line_native_heading_order(
+        repaired, native_text, native_words,
+        is_section_header=(
+            _doc_item_label(item) == "section_header"),
+        provenance_count=len(item_provenance),
+        has_provenance_overlap=ref in overlapping_refs,
+    )
+    if reordered != repaired:
+        item_edits.append((repaired, reordered))
+    repaired = _repair_text_from_native_pdf(
+        reordered, native_text, _edits=item_edits)
+    repaired = _repair_split_words_to_fixpoint(
+        repaired, native_words, page_spans, _edits=item_edits,
+        hard_hyphen_attestations=hard_hyphen_attestations)
+    if (ref and ref not in overlapping_refs
+            and len(item_provenance) == 1):
+        candidate = _strip_native_list_prefix(
+            item, repaired, _normalize_text(native_text))
+        candidate = _join_source_attested_native_splits(
+            repaired, candidate)
+        fallback = _native_ocr_fallback(
+            repaired, candidate, native_words,
+            allow_wholesale=True)
+        if fallback is not None:
+            repaired, fallback_edits = fallback
+            item_edits.extend(fallback_edits)
+            needs_rebuild = True
+    if (len(item_provenance) == 1
+            and "http" in repaired.casefold()
+            and _SOURCE_URL_GLYPH_GAP_RE.search(repaired)):
+        if not trace_cache:
+            trace_cache.append(list(page.get_texttrace()))
+        repaired = _repair_source_attested_url_missing_glyph(
+            repaired,
+            plain_word_keys=plain_native_word_keys,
+            native_trace_spans=trace_cache[0],
+            clip=clip,
+            provenance_count=len(item_provenance),
+            _edits=item_edits,
+        )
+    repaired = _repair_source_attested_split_hyphen_words(
+        repaired,
+        plain_word_keys=plain_native_word_keys,
+        hard_hyphen_keys=all_hard_native_word_keys,
+        _edits=item_edits,
+    )
+    # Alignment and OCR fallback can reintroduce the native
+    # separator with different spacing. Reassert the same local
+    # provenance proof before serializing the final override.
+    repaired = _repair_source_split_hyphens_from_native_segments(
+        repaired,
+        native_segments=native_segments,
+        pdf_plain_word_keys=pdf_plain_word_keys,
+        hard_hyphen_keys=hard_hyphen_attestations,
+        _edits=item_edits,
+    )
+    # Use the same transactional URL parser as final chunk
+    # normalization so native-repair oracles and their serialized
+    # slices cannot disagree over extraction-spaced schemes.
+    repaired = _canonicalize_native_repair_urls(
+        repaired, source_text=source_text)
+    return repaired, item_edits, needs_rebuild
+
+
+def _apply_letter_spaced_layer_retries(
+        retries: dict[str, _LetterSpacedLayerRetry], *,
+        text_overrides: dict[str, str],
+        repair_edits: dict[str, tuple[tuple[str, str], ...]],
+        rebuild_refs: set[str],
+        claimed_refs: set[str] | frozenset[str]) -> None:
+    """Commit retries only for refs that no native group names.
+
+    The group stages decided on today's overrides.  A recovered group's
+    oracle replaces its members' overrides, so a claimed ref can pass today
+    and keeps today's repair.  A ref already in ``rebuild_refs`` stays there.
+    """
+    for ref, retry in sorted(retries.items()):
+        if ref in claimed_refs:
+            continue
+        if retry.text != retry.source_text:
+            text_overrides[ref] = retry.text
+            repair_edits[ref] = retry.edits
+        else:
+            text_overrides.pop(ref, None)
+            repair_edits.pop(ref, None)
+        if retry.rebuild:
+            rebuild_refs.add(ref)
+
+
 def _recover_native_text_repairs(
         dl_doc, pdf_path: Path, *,
         repair_edits: dict[str, tuple[tuple[str, str], ...]] | None = None,
         rebuild_refs: set[str] | None = None,
+        structural_ranges: set[tuple[int, int]] | None = None,
+        letter_spaced_retries: (
+            dict[str, _LetterSpacedLayerRetry] | None) = None,
 ) -> dict[str, str]:
-    """Repair Docling token splits using position- and style-bound PDF text."""
+    """Repair Docling token splits using position- and style-bound PDF text.
+
+    ``letter_spaced_retries``, when given, receives failing-only recomputed
+    repairs for letter-spaced text layers
+    (``_letter_spaced_layer_retry_applies``).  They are not applied here:
+    ``_recover_bound_source_enrichments`` commits them after its native group
+    stages (``_apply_letter_spaced_layer_retries``).
+    """
     import pymupdf
 
     repairs: dict[str, str] = {}
     overlapping_refs = _overlapping_provenance_refs(dl_doc)
+    exempt_refs: frozenset[str] | None = None
     page_items: dict[int, list[object]] = {}
     for item in getattr(dl_doc, "texts", []) or []:
         source_text = _source_item_text(item)
@@ -13587,10 +14821,9 @@ def _recover_native_text_repairs(
                 for line in block.get("lines", [])
                 for span in line.get("spans", [])
             ]
-            page_trace_spans: list[dict] | None = None
+            page_trace_cache: list[list[dict]] = []
             for item in items:
                 source_text = _source_item_text(item)
-                item_edits: list[tuple[str, str]] = []
                 item_provenance = list(getattr(item, "prov", None) or [])
                 first = item_provenance[0]
                 clip = _pdf_clip_for_provenance(page, first)
@@ -13602,117 +14835,53 @@ def _recover_native_text_repairs(
                         <= (float(word[1]) + float(word[3])) / 2
                         <= clip.y1 + 0.5)
                 ]
-                native_text = _native_text_from_words(
-                    native_words, hard_hyphen_attestations,
-                    pdf_plain_word_keys)
-                native_segments = [(native_text, native_words)]
-                if (_SOURCE_SPLIT_HYPHEN_WORD_RE.search(source_text)
-                        and len(item_provenance) > 1):
-                    for provenance in item_provenance[1:]:
-                        segment_page_number = int(provenance.page_no)
-                        if not 1 <= segment_page_number <= len(pdf):
-                            continue
-                        segment_page = pdf[segment_page_number - 1]
-                        segment_clip = _pdf_clip_for_provenance(
-                            segment_page, provenance)
-                        segment_words = [
-                            word for word in segment_page.get_text(
-                                "words", sort=True)
-                            if (segment_clip.x0 - 0.5
-                                <= (float(word[0]) + float(word[2])) / 2
-                                <= segment_clip.x1 + 0.5
-                                and segment_clip.y0 - 0.5
-                                <= (float(word[1]) + float(word[3])) / 2
-                                <= segment_clip.y1 + 0.5)
-                        ]
-                        native_segments.append((
-                            _native_text_from_words(
-                                segment_words, hard_hyphen_attestations,
-                                pdf_plain_word_keys),
-                            segment_words,
-                        ))
+                context = {
+                    "pdf": pdf, "page": page, "page_spans": page_spans,
+                    "overlapping_refs": overlapping_refs,
+                    "hard_hyphen_attestations": hard_hyphen_attestations,
+                    "pdf_plain_word_keys": pdf_plain_word_keys,
+                    "plain_native_word_keys": plain_native_word_keys,
+                    "all_hard_native_word_keys": all_hard_native_word_keys,
+                    "trace_cache": page_trace_cache,
+                }
+                repaired, item_edits, needs_rebuild = (
+                    _repair_native_text_item(
+                        item, source_text, native_words=native_words,
+                        **context))
                 ref = str(getattr(item, "self_ref", ""))
-                repaired = _repair_source_attested_split_hyphen_words(
-                    source_text,
-                    plain_word_keys=plain_native_word_keys,
-                    hard_hyphen_keys=all_hard_native_word_keys,
-                    _edits=item_edits,
-                )
-                repaired = _repair_source_split_hyphens_from_native_segments(
-                    repaired,
-                    native_segments=native_segments,
-                    pdf_plain_word_keys=pdf_plain_word_keys,
-                    hard_hyphen_keys=hard_hyphen_attestations,
-                    _edits=item_edits,
-                )
-                repaired = _repair_source_attested_soft_hyphen_fragment_word(
-                    repaired,
-                    native_segments=native_segments,
-                    pdf_plain_word_keys=pdf_plain_word_keys,
-                    _edits=item_edits,
-                )
-                reordered = _repair_one_line_native_heading_order(
-                    repaired, native_text, native_words,
-                    is_section_header=(
-                        _doc_item_label(item) == "section_header"),
-                    provenance_count=len(item_provenance),
-                    has_provenance_overlap=ref in overlapping_refs,
-                )
-                if reordered != repaired:
-                    item_edits.append((repaired, reordered))
-                repaired = _repair_text_from_native_pdf(
-                    reordered, native_text, _edits=item_edits)
-                repaired = _repair_split_words_to_fixpoint(
-                    repaired, native_words, page_spans, _edits=item_edits,
-                    hard_hyphen_attestations=hard_hyphen_attestations)
-                if (ref and ref not in overlapping_refs
-                        and len(item_provenance) == 1):
-                    candidate = _strip_native_list_prefix(
-                        item, repaired, _normalize_text(native_text))
-                    candidate = _join_source_attested_native_splits(
-                        repaired, candidate)
-                    fallback = _native_ocr_fallback(
-                        repaired, candidate, native_words,
-                        allow_wholesale=True)
-                    if fallback is not None:
-                        repaired, fallback_edits = fallback
-                        item_edits.extend(fallback_edits)
-                        if rebuild_refs is not None:
-                            rebuild_refs.add(ref)
-                if (len(item_provenance) == 1
-                        and "http" in repaired.casefold()
-                        and _SOURCE_URL_GLYPH_GAP_RE.search(repaired)):
-                    if page_trace_spans is None:
-                        page_trace_spans = list(page.get_texttrace())
-                    repaired = _repair_source_attested_url_missing_glyph(
-                        repaired,
-                        plain_word_keys=plain_native_word_keys,
-                        native_trace_spans=page_trace_spans,
-                        clip=clip,
-                        provenance_count=len(item_provenance),
-                        _edits=item_edits,
-                    )
-                repaired = _repair_source_attested_split_hyphen_words(
-                    repaired,
-                    plain_word_keys=plain_native_word_keys,
-                    hard_hyphen_keys=all_hard_native_word_keys,
-                    _edits=item_edits,
-                )
-                # Alignment and OCR fallback can reintroduce the native
-                # separator with different spacing. Reassert the same local
-                # provenance proof before serializing the final override.
-                repaired = _repair_source_split_hyphens_from_native_segments(
-                    repaired,
-                    native_segments=native_segments,
-                    pdf_plain_word_keys=pdf_plain_word_keys,
-                    hard_hyphen_keys=hard_hyphen_attestations,
-                    _edits=item_edits,
-                )
-                # Use the same transactional URL parser as final chunk
-                # normalization so native-repair oracles and their serialized
-                # slices cannot disagree over extraction-spaced schemes.
-                repaired = _canonicalize_native_repair_urls(
-                    repaired, source_text=source_text)
+                if (letter_spaced_retries is not None and ref
+                        and _letter_spaced_layer_retry_applies(
+                            item, repaired, structural_ranges)):
+                    # Failing-only: today's text trips ocr_gibberish.
+                    # Recompute with content-stream words; the caller commits
+                    # the result only after group recovery claimed its refs.
+                    if exempt_refs is None:
+                        exempt_refs = _letter_spaced_retry_exempt_refs(dl_doc)
+                    stream_words = (
+                        None if ref in exempt_refs
+                        else _content_stream_letter_words(
+                            page, native_words, page_spans))
+                    if stream_words is not None:
+                        retry_text, retry_edits, retry_rebuild = (
+                            _repair_native_text_item(
+                                item, source_text, native_words=stream_words,
+                                **context))
+                        if (not _letter_spaced_layer_retry_applies(
+                                item, retry_text, structural_ranges)
+                                and _native_lexical_key(retry_text)
+                                == _native_lexical_key(repaired)):
+                            localized = tuple(dict.fromkeys(
+                                edit for edit in retry_edits
+                                if edit[0] and source_text.count(edit[0]) == 1
+                            ))
+                            letter_spaced_retries[ref] = (
+                                _LetterSpacedLayerRetry(
+                                    text=retry_text, edits=localized,
+                                    rebuild=(retry_rebuild or len(localized)
+                                             != len(retry_edits)),
+                                    source_text=source_text))
+                if needs_rebuild and rebuild_refs is not None:
+                    rebuild_refs.add(ref)
                 if ref and repaired != source_text:
                     repairs[ref] = repaired
                     if repair_edits is not None:
@@ -13801,11 +14970,60 @@ def _canonicalize_native_repair_urls(
     return repaired
 
 
+def _native_blocks_form_one_ordered_run(
+        page_words: list[tuple], union) -> bool:
+    """Prove several native text blocks are one stacked, ordered text run.
+
+    A PDF text layer can split one paragraph into consecutive blocks.  Accept
+    that only when every block contributing a word lies wholly inside the
+    group's union, the text layer's own content order equals the geometric
+    reading order, and line centers strictly descend in that content order.
+    A block continuing into neighboring text, a reordered stream, and
+    side-by-side lanes all fail closed.
+    """
+    def inside(word) -> bool:
+        return (union.x0 - 0.5
+                <= (float(word[0]) + float(word[2])) / 2
+                <= union.x1 + 0.5
+                and union.y0 - 0.5
+                <= (float(word[1]) + float(word[3])) / 2
+                <= union.y1 + 0.5)
+
+    members = [word for word in page_words if inside(word)]
+    blocks = {int(word[5]) for word in members}
+    if len(blocks) < 2 or any(
+            int(word[5]) in blocks and not inside(word)
+            for word in page_words):
+        return False
+    content_order = sorted(
+        members, key=lambda word: (int(word[5]), int(word[6]), int(word[7])))
+    if content_order != members:
+        return False
+    line_extents: dict[tuple[int, int], list[float]] = {}
+    for word in members:
+        line_extents.setdefault((int(word[5]), int(word[6])), []).extend(
+            (float(word[1]), float(word[3])))
+    centers = [
+        (min(extents) + max(extents)) / 2
+        for _, extents in sorted(line_extents.items())
+    ]
+    return all(lower > upper for upper, lower in zip(centers, centers[1:]))
+
+
 def _recover_overlapping_native_text_groups(
         dl_doc, pdf_path: Path, *,
         structural_ranges: set[tuple[int, int]] | None = None,
+        reading_order_violations: frozenset[tuple[str, int]] = frozenset(),
+        deferred_groups: list[SourceTextGroupRecovery] | None = None,
 ) -> tuple[SourceTextGroupRecovery, ...]:
-    """Recover reading order only for source fragments with overlapping bboxes."""
+    """Recover reading order only for source fragments with overlapping bboxes.
+
+    A group whose union holds several native text blocks must also pass the
+    ordered-run and exact-lexeme proofs, and is returned only when
+    ``reading_order_violations`` holds ``(member ref, page)`` from a failed
+    ``same_page_reading_order`` gate.  Otherwise such a proven group is
+    appended to ``deferred_groups`` (when given) and left unrecovered.
+    """
     import difflib
     import pymupdf
 
@@ -13947,6 +15165,7 @@ def _recover_overlapping_native_text_groups(
         return ()
 
     recoveries: list[SourceTextGroupRecovery] = []
+    deferred: list[SourceTextGroupRecovery] = []
     with pymupdf.open(str(pdf_path)) as pdf:
         hard_hyphen_attestations = _native_hard_hyphen_attestations(pdf)
         for group in candidates:
@@ -13995,16 +15214,20 @@ def _recover_overlapping_native_text_groups(
             for clip in clips[1:]:
                 union |= clip
 
-            # Require exactly one native text block and no source section
-            # heading crossing the union. These gates exclude parallel lanes
-            # and mid-page section transitions.
+            # A group normally needs exactly one native text block and no
+            # source section heading crossing the union. These gates exclude
+            # parallel lanes and mid-page section transitions. Several blocks
+            # additionally need one ordered text-layer run and identical
+            # lexemes, and are admitted only by a failed reading-order gate
+            # (see below).
             native_blocks = [
                 block for block in page.get_text(
                     "blocks", clip=union, sort=True)
                 if len(block) > 6 and block[6] == 0
                 and str(block[4]).strip()
             ]
-            if len(native_blocks) != 1:
+            multiple_native_blocks = len(native_blocks) > 1
+            if not native_blocks:
                 continue
             intersects_heading = False
             for heading in texts:
@@ -14043,6 +15266,10 @@ def _recover_overlapping_native_text_groups(
                     <= (float(word[1]) + float(word[3])) / 2
                     <= union.y1 + 0.5)
             ]
+            if (multiple_native_blocks
+                    and not _native_blocks_form_one_ordered_run(
+                        page_words, union)):
+                continue
             native_text = _native_text_from_words(
                 native_words, hard_hyphen_attestations)
             source_text = " ".join(
@@ -14073,6 +15300,10 @@ def _recover_overlapping_native_text_groups(
                 and abs(len(source_tokens) - len(native_tokens))
                 <= allowed_difference
             )
+            # Several native blocks may only reorder the same lexemes; they
+            # never use the late-fragment or native-equivalence path below.
+            if multiple_native_blocks and source_counts != native_counts:
+                continue
 
             # A late Docling fragment can be genuine even when ordinary OCR
             # splits (``Th e``, ``ow n``) make the raw token multiset miss the
@@ -14156,9 +15387,23 @@ def _recover_overlapping_native_text_groups(
                 ref for item in group
                 if (ref := str(getattr(item, "self_ref", "")))
             )
-            if refs:
-                recoveries.append(SourceTextGroupRecovery(
-                    text=native_text, refs=refs, page=page_number))
+            if not refs:
+                continue
+            recovery = SourceTextGroupRecovery(
+                text=native_text, refs=refs, page=page_number)
+            # Only the published output can prove Docling's order wrong:
+            # chunk preparation may already place a detached member beside
+            # its host.  A proven group therefore waits for a failed gate
+            # edge whose ``before_ref`` it contains, keeping passing output
+            # unchanged.
+            if multiple_native_blocks and not any(
+                    (ref, page_number) in reading_order_violations
+                    for ref in refs):
+                deferred.append(recovery)
+            else:
+                recoveries.append(recovery)
+    if deferred_groups is not None:
+        deferred_groups.extend(deferred)
     return tuple(recoveries)
 
 
@@ -15367,6 +16612,7 @@ def _recover_bound_source_enrichments(
         source_pdf_path: Path | None = None,
         forbidden_output_paths: dict[str, Path] | None = None,
         structural_ranges: set[tuple[int, int]] | None = None,
+        reading_order_violations: frozenset[tuple[str, int]] = frozenset(),
 ) -> BoundSourceEnrichments:
     """Recover all PDF-derived supplements from one verified snapshot."""
     def optional_stage(name: str, operation, fallback):
@@ -15398,7 +16644,8 @@ def _recover_bound_source_enrichments(
             table_overrides = optional_stage(
                 "incomplete source tables",
                 lambda: _recover_incomplete_table_markdown(
-                    dl_doc, recovery_source.pdf.path),
+                    dl_doc, recovery_source.pdf.path,
+                    structural_ranges=structural_ranges),
                 {},
             )
             table_overrides, continuation_refs = optional_stage(
@@ -15410,19 +16657,29 @@ def _recover_bound_source_enrichments(
             native_repair_edits: dict[
                 str, tuple[tuple[str, str], ...]] = {}
             native_text_rebuild_refs: set[str] = set()
+            letter_spaced_retries: dict[str, _LetterSpacedLayerRetry] = {}
             native_text_overrides = optional_stage(
                 "native-PDF text repairs",
                 lambda: _recover_native_text_repairs(
                     dl_doc, recovery_source.pdf.path,
                     repair_edits=native_repair_edits,
-                    rebuild_refs=native_text_rebuild_refs),
-                {},
+                    rebuild_refs=native_text_rebuild_refs,
+                    structural_ranges=structural_ranges,
+                    letter_spaced_retries=letter_spaced_retries),
+                None,
             )
+            if native_text_overrides is None:
+                # A failed optional stage must not leak partial retries.
+                native_text_overrides = {}
+                letter_spaced_retries.clear()
+            deferred_text_groups: list[SourceTextGroupRecovery] = []
             text_group_recoveries = optional_stage(
                 "overlapping native-PDF text groups",
                 lambda: _recover_overlapping_native_text_groups(
                     dl_doc, recovery_source.pdf.path,
-                    structural_ranges=structural_ranges),
+                    structural_ranges=structural_ranges,
+                    reading_order_violations=reading_order_violations,
+                    deferred_groups=deferred_text_groups),
                 (),
             )
             text_group_recoveries += optional_stage(
@@ -15456,6 +16713,21 @@ def _recover_bound_source_enrichments(
                     structural_ranges=structural_ranges),
                 (),
             )
+            # Every group stage above decided on today's overrides.  A
+            # recovered group's oracle replaces its members' overrides, and a
+            # deferred group's members may be admitted by the order replay, so
+            # neither kind of member is retried.
+            _apply_letter_spaced_layer_retries(
+                letter_spaced_retries,
+                text_overrides=native_text_overrides,
+                repair_edits=native_repair_edits,
+                rebuild_refs=native_text_rebuild_refs,
+                claimed_refs={
+                    ref
+                    for recovery in (
+                        *text_group_recoveries, *deferred_text_groups)
+                    for ref in recovery.refs
+                })
             return BoundSourceEnrichments(
                 table_markdown_overrides=table_overrides,
                 table_continuation_refs=continuation_refs,
@@ -15477,6 +16749,7 @@ def _recover_bound_source_enrichments(
                     {},
                 ),
                 manifest_input=manifest_input,
+                deferred_text_groups=tuple(deferred_text_groups),
             )
     except _SourceOutputAliasError:
         raise
@@ -16978,6 +18251,39 @@ def _prepare_source_preserving_chunks(
     emitted_nested_footnotes: set[str] = set()
     emitted_verified_replay_refs: set[str] = set()
     emitted_repeated_list_markers: set[str] = set()
+    # A long item HybridChunker cites from two raw chunks is published as a
+    # chunk-local slice by an ordinary chunk, but whole by a later chunk that
+    # takes a per-item path.  Record each lone slice with source tokens so
+    # the whole publication can retract it instead of repeating it.
+    split_slice_entries: dict[
+        str, list[tuple[str, list | None, list | None, bool]]] = {}
+
+    def retract_split_slices(ref: str) -> None:
+        """Retract the recorded slices of an item about to be published whole.
+
+        The complete item repeats their source tokens, which
+        ``source_token_fidelity`` always rejects.
+        """
+        retracted = {id(entry) for entry in split_slice_entries.pop(ref, ())}
+        if retracted:
+            prepared[:] = [
+                kept for kept in prepared if id(kept) not in retracted]
+
+    def append_chunk_slice(
+            entry: tuple[str, list | None, list | None, bool]) -> None:
+        """Append one chunk's retained text, recording a lone split slice.
+
+        Only a slice with source tokens is recorded: repeating it can never
+        pass ``source_token_fidelity``, so retracting it changes only output
+        that fails today.
+        """
+        text, _headings, items, _preserve_short = entry
+        prepared.append(entry)
+        ref = (str(getattr(items[0], "self_ref", ""))
+               if items is not None and len(items) == 1 else "")
+        if (ref and raw_ref_counts.get(ref, 0) > 1
+                and _source_fidelity_core.lexical_tokens(text)):
+            split_slice_entries.setdefault(ref, []).append(entry)
 
     def source_position(item) -> tuple[int, float] | None:
         position = _source_item_position(item)
@@ -17382,7 +18688,7 @@ def _prepare_source_preserving_chunks(
             ), None)
             section_match = re.match(r"^§\s*(\d+)\.\d+\b", heading)
             major_section_reset = bool(
-                profile.name == DEFAULT_STRUCTURE_PROFILE
+                _document_profiles.casebook_family(profile)
                 and section_match
                 and (
                     int(section_match.group(1)) in casebook_chapter_numbers
@@ -18095,6 +19401,7 @@ def _prepare_source_preserving_chunks(
             ref = next(iter(chunk_refs))
             if ref not in emitted_wholesale_rebuild_refs:
                 item = item_by_ref[ref]
+                retract_split_slices(ref)
                 prepared.append((
                     item_display_text(item),
                     source_mapped_headings([item], headings),
@@ -18175,7 +19482,9 @@ def _prepare_source_preserving_chunks(
                         or ref in continuation_ref_set
                         or ref in table_caption_refs
                         or ref in figure_parent_refs
-                        or ref in picture_caption_refs):
+                        or ref in picture_caption_refs
+                        # Already published whole by its singleton chunk.
+                        or ref in emitted_wholesale_rebuild_refs):
                     continue
                 value = item_display_text(item)
                 if value:
@@ -18189,8 +19498,13 @@ def _prepare_source_preserving_chunks(
                         flush_layout_text()
                     pending_headings = item_headings
                     pending_occurrence_path = item_occurrence_path
+                    retract_split_slices(ref)
                     pending_text.append(value)
                     pending_items.append(item)
+                    if ref in wholesale_rebuild_refs:
+                        # Its complete display text is now published; a later
+                        # singleton chunk holding its tail must not repeat it.
+                        emitted_wholesale_rebuild_refs.add(ref)
             flush_layout_text()
             for item in original_items:
                 append_missing_nested_footnotes(
@@ -18259,6 +19573,7 @@ def _prepare_source_preserving_chunks(
                 source_text = item_display_text(item)
                 item_headings = source_mapped_headings([item], headings)
                 if source_text and source_text.strip():
+                    retract_split_slices(ref)
                     prepared.append((
                         source_text.strip(), item_headings,
                         [item], True,
@@ -18272,6 +19587,13 @@ def _prepare_source_preserving_chunks(
                 if str(getattr(item, "self_ref", ""))
                 not in all_footnote_refs]
             has_nested_footnotes = len(retained_items) != len(items)
+            # A native rebuild already published whole by its singleton chunk
+            # must not be claimed again by a later chunk holding its tail; as
+            # an excluded item its text is detached like any other.
+            retained_items = [
+                item for item in retained_items
+                if str(getattr(item, "self_ref", ""))
+                not in emitted_wholesale_rebuild_refs]
             picture_groups, crossing_picture_refs = (
                 split_picture_interleaved_items(retained_items))
             if len(picture_groups) > 1:
@@ -18339,7 +19661,7 @@ def _prepare_source_preserving_chunks(
                     retained_text = rebuild_source_text(
                         retained_items, original_items)
                 if retained_text:
-                    prepared.append((
+                    append_chunk_slice((
                         retained_text, headings,
                         retained_items, True,
                     ))
@@ -18396,7 +19718,7 @@ def _prepare_source_preserving_chunks(
                              != _source_fidelity_core.lexical_tokens(
                                  rebuilt_text))):
                     retained_text = rebuilt_text
-                prepared.append((
+                append_chunk_slice((
                     retained_text, headings, retained_items, False))
             for item in original_items:
                 append_missing_nested_footnotes(
@@ -18445,6 +19767,7 @@ def _prepare_source_preserving_chunks(
                     flush_text_items()
                 pending_headings = item_headings
                 pending_occurrence_path = item_occurrence_path
+                retract_split_slices(ref)
                 pending_text.append(source_text.strip())
                 pending_items.append(item)
         flush_text_items()
@@ -19213,6 +20536,32 @@ _STRUCTURAL_SECTION_NAMES = (
         _document_profiles.get_profile(DEFAULT_STRUCTURE_PROFILE)))
 
 
+def _require_structure_scaffold_evidence(
+        book_sections: dict,
+        profile: _document_profiles.StructureProfile,
+        doc_path, *, llm_scaffold: bool,
+) -> None:
+    """Fail closed unless the selected profile's scaffold input exists."""
+    if not _document_profiles.requires_toc(profile):
+        if llm_scaffold:
+            raise ValueError(
+                "--llm-scaffold reviews a TOC scaffold; structure profile "
+                f"{profile.name} derives hierarchy from source headings")
+        return
+    has_toc = any(
+        book_sections.get(name) is not None
+        for name in _document_profiles.toc_seed_keys(profile)
+    )
+    if not has_toc:
+        log.error("FATAL: No Table of Contents or Contents section found.")
+        log.error(
+            "  The selected structure profile requires a recognized "
+            "TOC/Contents section. Cannot proceed.")
+        log.error(f"  Structure profile: {profile.name}")
+        log.error(f"  Document: {doc_path}")
+        sys.exit(1)
+
+
 def _book_structural_ranges(
         book_sections: dict, *,
         structure_profile: (
@@ -19541,6 +20890,121 @@ def _recovered_table_refs_from_records(records: list[dict]) -> set[str]:
     return refs
 
 
+def _native_group_order_replay_violations(
+        report: dict,
+        deferred_groups: tuple[SourceTextGroupRecovery, ...],
+) -> frozenset[tuple[str, int]]:
+    """Return ``(member ref, page)`` for failed edges a replay may repair.
+
+    A ``same_page_reading_order`` violation's ``before_ref`` must be published
+    before its ``after_ref`` but was not: the upper item of a vertical edge,
+    or the last left-lane item of a two-column transition.  Only a deferred
+    group member named as ``before_ref`` on that group's page qualifies.
+    """
+    fidelity = (report.get("source_lineage") or {}).get("fidelity") or {}
+    deferred_members = {
+        (ref, group.page) for group in deferred_groups for ref in group.refs}
+    return frozenset(
+        (violation["before_ref"], violation["page"])
+        for violation in fidelity.get("geometry_violations") or ()
+        if isinstance(violation, dict)
+        and (violation.get("before_ref"), violation.get("page"))
+        in deferred_members
+    )
+
+
+def _list_boundary_replay_refs(
+        report: dict, inline_list_joins: frozenset[str],
+) -> frozenset[str]:
+    """Return inline-joined list items that a failed report leaves uncovered.
+
+    ``inline_list_joins`` holds the list items whose line-initial marker the
+    first pass's boundary repair placed mid-line.  Only those the published
+    report names in ``source_coverage_issues`` while failing
+    ``source_token_fidelity`` qualify.
+    """
+    if not any(
+            isinstance(check, dict)
+            and check.get("name") == "source_token_fidelity"
+            and check.get("status") == "fail"
+            for check in report.get("checks") or ()):
+        return frozenset()
+    fidelity = (report.get("source_lineage") or {}).get("fidelity") or {}
+    return inline_list_joins.intersection(
+        ref for ref in fidelity.get("source_coverage_issues") or ()
+        if isinstance(ref, str))
+
+
+def _footnote_placement_replay_pages(
+        report: dict, footnote_refs: frozenset[str],
+) -> frozenset[int]:
+    """Return pages whose failed reading order names a footnote sidecar.
+
+    ``footnote_refs`` holds the source refs the first pass published in
+    footnote sidecar records.  Only a failing ``same_page_reading_order``
+    violation that names one of them, as either ``before_ref`` or
+    ``after_ref``, names its page.
+    """
+    if not any(
+            isinstance(check, dict)
+            and check.get("name") == "same_page_reading_order"
+            and check.get("status") == "fail"
+            for check in report.get("checks") or ()):
+        return frozenset()
+    fidelity = (report.get("source_lineage") or {}).get("fidelity") or {}
+    return frozenset(
+        page for violation in fidelity.get("geometry_violations") or ()
+        if isinstance(violation, dict)
+        and isinstance(page := violation.get("page"), int)
+        and not isinstance(page, bool)
+        and any(isinstance(ref := violation.get(key), str)
+                and ref in footnote_refs
+                for key in ("before_ref", "after_ref")))
+
+
+def _publish_quality_report_or_request_order_replay(
+        publish: Callable[[list[dict]], dict],
+        deferred_groups: tuple[SourceTextGroupRecovery, ...],
+        replay_requests: list[frozenset[tuple[str, int]]] | None,
+        *,
+        inline_list_joins: frozenset[str] = frozenset(),
+        list_replay_requests: list[frozenset[str]] | None = None,
+        footnote_refs: frozenset[str] = frozenset(),
+        footnote_replay_requests: list[frozenset[int]] | None = None,
+) -> dict:
+    """Publish quality evidence, requesting a replay for a named failure.
+
+    ``publish`` appends a failed report to the list it receives before raising
+    the gate failure, which always propagates unchanged.  Only a first pass
+    passes ``replay_requests``, ``list_replay_requests`` and
+    ``footnote_replay_requests``; it then records the deferred members that
+    the failed report names, separately the inline-joined list items it names
+    (``_list_boundary_replay_refs``), and separately the pages on which it
+    names a footnote sidecar (``_footnote_placement_replay_pages``), so
+    ``chunk_document`` can replay the chunk once.
+    """
+    failed_reports: list[dict] = []
+    try:
+        return publish(failed_reports)
+    except RuntimeError:
+        if replay_requests is not None and failed_reports:
+            violations = _native_group_order_replay_violations(
+                failed_reports[0], deferred_groups)
+            if violations:
+                replay_requests.append(violations)
+        if list_replay_requests is not None and failed_reports:
+            list_refs = _list_boundary_replay_refs(
+                failed_reports[0], inline_list_joins)
+            if list_refs:
+                list_replay_requests.append(list_refs)
+        if footnote_replay_requests is not None and failed_reports:
+            pages = _footnote_placement_replay_pages(
+                failed_reports[0], footnote_refs)
+            if pages:
+                footnote_replay_requests.append(pages)
+        raise
+
+
 def _publish_corpus_quality_report(
         doc_path: Path, chunks_output: Path, *, parameters: dict,
         structural_ranges: set[tuple[int, int]] | None = None,
@@ -19570,8 +21034,13 @@ def _publish_corpus_quality_report_locked(
         structure_profile: (
             str | _document_profiles.StructureProfile | None
         ) = None,
+        failed_reports: list[dict] | None = None,
 ) -> dict:
-    """Build and atomically publish a report over exact artifact snapshots."""
+    """Build and atomically publish a report over exact artifact snapshots.
+
+    A failed report is appended to ``failed_reports`` (when given) before the
+    gate failure is raised.
+    """
     doc_path = Path(doc_path)
     chunks_output = Path(chunks_output)
     if document_snapshot is None:
@@ -19653,6 +21122,8 @@ def _publish_corpus_quality_report_locked(
             check["name"] for check in report["checks"]
             if check["status"] == "fail"
         ]
+        if failed_reports is not None:
+            failed_reports.append(report)
         raise RuntimeError(
             "Corpus quality gate failed: " + ", ".join(failed))
 
@@ -19734,7 +21205,20 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
                    ) = None,
                    telemetry: _run_telemetry.RunTelemetry | None = None
                    ) -> None:
-    """Build one complete chunk artifact set under a path-wide lease."""
+    """Build one complete chunk artifact set under a path-wide lease.
+
+    A first pass whose quality gate fails on reading-order edges naming
+    deferred native text groups is replayed once under the same lease; the
+    replay is recorded as a ``chunk_order_replay`` telemetry observation.
+    Otherwise, a first pass whose gate fails ``source_token_fidelity`` on
+    list items that its boundary repair joined inline is replayed once,
+    separating exactly those joins, and recorded as a
+    ``chunk_list_boundary_replay`` observation.  Otherwise, a first pass
+    whose gate fails ``same_page_reading_order`` on edges naming its footnote
+    sidecars is replayed once, placing footnotes on those pages by observed
+    source geometry, and recorded as a ``chunk_footnote_placement_replay``
+    observation.  No pass replays twice.
+    """
     profile = _document_profiles.get_profile(structure_profile)
     chunks_output = Path(chunks_output)
     _run_telemetry.validate_distinct_output_paths({
@@ -19750,34 +21234,101 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
             chunks_output),
         "quality report": _quality_core.quality_report_path(chunks_output),
     })
+    arguments = dict(
+        source_pdf_path=source_pdf_path,
+        embedding_model=embedding_model,
+        max_tokens=max_tokens,
+        min_words=min_words,
+        dedup_threshold=dedup_threshold,
+        watermark=watermark,
+        llm_classify=llm_classify,
+        zeroshot_classify=zeroshot_classify,
+        contextualize=contextualize,
+        ollama_url=ollama_url,
+        ollama_model=ollama_model,
+        gemini_key=gemini_key,
+        cloud_url=cloud_url,
+        cloud_model=cloud_model,
+        cloud_key=cloud_key,
+        llm_workers=llm_workers,
+        thinking=thinking,
+        reconstruct_headings=reconstruct_headings,
+        quality_score=quality_score,
+        llm_scaffold=llm_scaffold,
+        table_children=table_children,
+        structure_profile=profile,
+        security_policy=security_policy,
+    )
+    replay_requests: list[frozenset[tuple[str, int]]] = []
+    list_replay_requests: list[frozenset[str]] = []
+    footnote_replay_requests: list[frozenset[int]] = []
     with _chunk_output_lease(chunks_output):
+        try:
+            _chunk_document_locked(
+                doc_path, chunks_output, **arguments, telemetry=telemetry,
+                order_replay_requests=replay_requests,
+                list_replay_requests=list_replay_requests,
+                footnote_replay_requests=footnote_replay_requests)
+        except RuntimeError:
+            if (not replay_requests and not list_replay_requests
+                    and not footnote_replay_requests):
+                raise
+        else:
+            return
+        if replay_requests:
+            # The first pass is the unchanged pipeline, and its published
+            # output failed ``same_page_reading_order`` on edges naming
+            # deferred native groups.  Replay it once, outside that failure's
+            # handler, admitting only those groups.  This replay takes
+            # precedence and is exactly the previous one: a list or footnote
+            # request recorded beside it is dropped, because this replay may
+            # pass without it.  The first pass already recorded the
+            # deterministic telemetry; its warnings and any LLM calls repeat.
+            # The observation below is the run report's durable replay record.
+            log.info(
+                "Replaying chunking to recover %s reading-order violation(s) "
+                "from deferred native text groups",
+                len(replay_requests[0]))
+            if telemetry is not None:
+                telemetry.stage_observation(
+                    "chunk_order_replay", metrics={
+                        "reading_order_violations": len(replay_requests[0])})
+            _chunk_document_locked(
+                doc_path, chunks_output, **arguments, telemetry=None,
+                reading_order_violations=replay_requests[0])
+            return
+        if list_replay_requests:
+            # The first pass, which is the final output without this replay,
+            # failed ``source_token_fidelity`` on list items whose
+            # line-initial marker its boundary repair placed mid-line.
+            # Replay it once, outside that failure's handler, separating only
+            # those joins.  It precedes a footnote request recorded beside
+            # it, which is dropped the same way.
+            log.info(
+                "Replaying chunking to separate %s inline-joined list item(s)",
+                len(list_replay_requests[0]))
+            if telemetry is not None:
+                telemetry.stage_observation(
+                    "chunk_list_boundary_replay", metrics={
+                        "list_boundary_items": len(list_replay_requests[0])})
+            _chunk_document_locked(
+                doc_path, chunks_output, **arguments, telemetry=None,
+                separated_list_refs=list_replay_requests[0])
+            return
+        # The first pass failed ``same_page_reading_order`` on edges naming
+        # its footnote sidecars.  Replay it once, outside that failure's
+        # handler, placing the footnotes on only those pages by the lineage
+        # the fidelity audit observes.
+        log.info(
+            "Replaying chunking to place footnotes on %s page(s) by observed "
+            "source geometry", len(footnote_replay_requests[0]))
+        if telemetry is not None:
+            telemetry.stage_observation(
+                "chunk_footnote_placement_replay", metrics={
+                    "footnote_pages": len(footnote_replay_requests[0])})
         _chunk_document_locked(
-            doc_path, chunks_output,
-            source_pdf_path=source_pdf_path,
-            embedding_model=embedding_model,
-            max_tokens=max_tokens,
-            min_words=min_words,
-            dedup_threshold=dedup_threshold,
-            watermark=watermark,
-            llm_classify=llm_classify,
-            zeroshot_classify=zeroshot_classify,
-            contextualize=contextualize,
-            ollama_url=ollama_url,
-            ollama_model=ollama_model,
-            gemini_key=gemini_key,
-            cloud_url=cloud_url,
-            cloud_model=cloud_model,
-            cloud_key=cloud_key,
-            llm_workers=llm_workers,
-            thinking=thinking,
-            reconstruct_headings=reconstruct_headings,
-            quality_score=quality_score,
-            llm_scaffold=llm_scaffold,
-            table_children=table_children,
-            structure_profile=profile,
-            security_policy=security_policy,
-            telemetry=telemetry,
-        )
+            doc_path, chunks_output, **arguments, telemetry=None,
+            observed_footnote_geometry_pages=footnote_replay_requests[0])
 
 
 def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
@@ -19808,9 +21359,29 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
                    security_policy: (
                        _release_security.ReleaseSecurityPolicy | None
                    ) = None,
-                   telemetry: _run_telemetry.RunTelemetry | None = None
+                   telemetry: _run_telemetry.RunTelemetry | None = None,
+                   reading_order_violations: (
+                       frozenset[tuple[str, int]]) = frozenset(),
+                   order_replay_requests: (
+                       list[frozenset[tuple[str, int]]] | None) = None,
+                   separated_list_refs: frozenset[str] = frozenset(),
+                   list_replay_requests: (
+                       list[frozenset[str]] | None) = None,
+                   observed_footnote_geometry_pages: (
+                       frozenset[int]) = frozenset(),
+                   footnote_replay_requests: (
+                       list[frozenset[int]] | None) = None,
                    ) -> None:
-    """Load a DoclingDocument, chunk with HybridChunker, and enrich."""
+    """Load a DoclingDocument, chunk with HybridChunker, and enrich.
+
+    ``chunk_document`` passes ``order_replay_requests``,
+    ``list_replay_requests`` and ``footnote_replay_requests`` to its first
+    pass only; a failed quality gate that names deferred native groups,
+    inline-joined list items left uncovered, or footnote sidecars out of
+    reading order, is recorded there before it propagates.  Its replay passes
+    the recorded ``reading_order_violations``, ``separated_list_refs`` or
+    ``observed_footnote_geometry_pages`` instead.
+    """
     from docling_core.types import DoclingDocument
     from docling_core.transforms.chunker import HybridChunker
     from docling_core.transforms.chunker.tokenizer.huggingface import (
@@ -19876,18 +21447,8 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
         doc_dict, structure_profile=profile)
     book_sections = _identify_book_sections(
         doc_dict, structure_profile=profile)
-    has_toc = any(
-        book_sections.get(name) is not None
-        for name in _document_profiles.toc_seed_keys(profile)
-    )
-    if not has_toc:
-        log.error("FATAL: No Table of Contents or Contents section found.")
-        log.error(
-            "  The selected structure profile requires a recognized "
-            "TOC/Contents section. Cannot proceed.")
-        log.error(f"  Structure profile: {profile.name}")
-        log.error(f"  Document: {doc_path}")
-        sys.exit(1)
+    _require_structure_scaffold_evidence(
+        book_sections, profile, doc_path, llm_scaffold=llm_scaffold)
 
     structural_ranges = _book_structural_ranges(
         book_sections, structure_profile=profile)
@@ -19919,9 +21480,12 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
                       ollama_model=ollama_model, gemini_key=gemini_key,
                       llm_workers=llm_workers, thinking=thinking,
                       security_policy=security_policy)
+    # A source-heading profile has no TOC scaffold; its hierarchy is bound to
+    # exact heading occurrences just before the lineage audit.
     scaffold = _build_scaffold(
         doc_dict, book_sections, structure_profile=profile,
-        use_llm=llm_scaffold, **llm_kwargs)
+        use_llm=llm_scaffold, **llm_kwargs,
+    ) if _document_profiles.requires_toc(profile) else []
     repaired_markers = _repair_bare_scaffold_section_markers(
         scaffold, doc_dict, structure_profile=profile)
     if repaired_markers:
@@ -19994,7 +21558,8 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
             "source oracle registry": _source_oracle_registry_path(
                 chunks_output),
         },
-        structural_ranges=structural_ranges)
+        structural_ranges=structural_ranges,
+        reading_order_violations=reading_order_violations)
     table_markdown_overrides = (
         source_enrichments.table_markdown_overrides)
     table_recovery_input = source_enrichments.manifest_input
@@ -20293,6 +21858,9 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
                  f"{filtered_tiny} tiny (<{min_words} words)")
 
     before_coalescing = len(enriched)
+    # Observe which source list items an inline boundary join places
+    # mid-line; only a gate-driven replay separates those joins.
+    inline_list_joins: set[str] = set()
     enriched = _coalesce_chunk_boundaries(
         enriched,
         lambda value: int(tokenizer.count_tokens(value)),
@@ -20306,6 +21874,11 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
             ),
         ),
         structure_profile=profile,
+        list_markers={
+            ref: marker for ref, item in lineage_item_by_ref.items()
+            if (marker := _source_punctuation_list_marker(item))},
+        inline_list_joins=inline_list_joins,
+        separated_list_refs=separated_list_refs,
     )
     if len(enriched) != before_coalescing:
         log.info(
@@ -20316,7 +21889,8 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
     # resolved after coalescing has established each body's final scoped page
     # span. This keeps a page-p footnote before the first page-(p+1)-only body
     # without inventing a page regression exemption.
-    enriched = _reorder_footnote_sidecars(enriched)
+    enriched = _reorder_footnote_sidecars(
+        enriched, observed_geometry_pages=observed_footnote_geometry_pages)
 
     # --- Pass 2: Chapter assignment (team-orchestrated) ---
     # Uses the 4-tier agent team hierarchy:
@@ -21012,6 +22586,13 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
             child_count,
         )
 
+    if not _document_profiles.requires_toc(profile):
+        _assign_source_heading_paths(
+            doc_dict, enriched,
+            structural_ranges=structural_ranges,
+            excluded_heading_refs=demoted_source_heading_refs,
+        )
+
     # Bind every displayed hierarchy component to its exact Docling source
     # occurrence after all merge/dedup/table-child transformations settle.
     # This must precede publication hashes and retrieval linkage.
@@ -21138,14 +22719,25 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
                     _artifact_parameters_sha256(completion_parameters),
                     completion_parameters["structure_profile"])),
         })
-    quality_report = _publish_corpus_quality_report_locked(
-        doc_path,
-        chunks_output,
-        parameters=completion_parameters,
-        structural_ranges=structural_ranges,
-        document_snapshot=(doc_dict, source_sha256, source_size),
-        chunk_inputs=chunk_input_bindings,
-        structure_profile=profile,
+    quality_report = _publish_quality_report_or_request_order_replay(
+        lambda failed_reports: _publish_corpus_quality_report_locked(
+            doc_path,
+            chunks_output,
+            parameters=completion_parameters,
+            structural_ranges=structural_ranges,
+            document_snapshot=(doc_dict, source_sha256, source_size),
+            chunk_inputs=chunk_input_bindings,
+            structure_profile=profile,
+            failed_reports=failed_reports,
+        ),
+        source_enrichments.deferred_text_groups,
+        order_replay_requests,
+        inline_list_joins=frozenset(inline_list_joins),
+        list_replay_requests=list_replay_requests,
+        footnote_refs=frozenset(
+            ref for record in enriched if _is_footnote_record(record)
+            for ref in _record_source_refs(record)),
+        footnote_replay_requests=footnote_replay_requests,
     )
 
     # Stats
@@ -22221,7 +23813,9 @@ def _query_manifest_dimension_impl(
         load_manifest_fn=_load_index_manifest,
         compatible_schema_bindings=(
             _LEGACY_QUERY_SCHEMA_BINDINGS
-            if allow_legacy else _CONTEXT_QUERY_SCHEMA_BINDINGS))
+            if allow_legacy else _CONTEXT_QUERY_SCHEMA_BINDINGS),
+        current_payload_schema_versions=(
+            _CURRENT_PAYLOAD_LEGACY_MANIFEST_VERSIONS))
 
 
 def _query_manifest_dimension(
@@ -22241,11 +23835,13 @@ def _query_manifest_dimension(
 def _indexed_table_child_count(
         db_dir: Path, *, backend: str, collection_name: str,
 ) -> int:
-    """Return the manifested row-child count for a current index generation."""
+    """Return the manifested row-child count for a current-payload index."""
     manifest = _load_index_manifest(
         db_dir, backend=backend, collection_name=collection_name)
     if (manifest is None
-            or manifest.get("schema_version") != INDEX_MANIFEST_SCHEMA_VERSION):
+            or manifest.get("schema_version") not in (
+                INDEX_MANIFEST_SCHEMA_VERSION,
+                *_CURRENT_PAYLOAD_LEGACY_MANIFEST_VERSIONS)):
         return 0
     count = manifest.get("table_child_count")
     if isinstance(count, bool) or not isinstance(count, int) or count < 0:
@@ -29727,11 +31323,17 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
     publication_receipt: dict | None = None
     try:
         stage_started(current_stage)
+        ocr_angle_classifier = not getattr(
+            args, "ocr_no_angle_classifier", False)
+        ocr_merge_interleaved_regions = getattr(
+            args, "ocr_merge_interleaved_regions", False)
         conversion_parameters = _conversion_parameters(
             batch_size_override=args.batch_size, backend=args.backend,
             auto_preprocess=not args.no_preprocess,
             ocr=getattr(args, "ocr", None),
             ocr_full_page=getattr(args, "ocr_full_page", False),
+            ocr_angle_classifier=ocr_angle_classifier,
+            ocr_merge_interleaved_regions=ocr_merge_interleaved_regions,
             watermark=watermark)
         if resume and _converted_outputs_complete(
                 pdf_path, paths["doc"], paths["converted_markdown"],
@@ -29750,6 +31352,8 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
                 auto_preprocess=not args.no_preprocess,
                 ocr=getattr(args, "ocr", None),
                 ocr_full_page=getattr(args, "ocr_full_page", False),
+                ocr_angle_classifier=ocr_angle_classifier,
+                ocr_merge_interleaved_regions=ocr_merge_interleaved_regions,
                 preprocessed_output=paths["preprocessed"],
                 markdown_output=paths["converted_markdown"],
                 security_policy=llm_kwargs["security_policy"],
@@ -30842,6 +32446,25 @@ def main(argv: list[str] | None = None):
                  "region OCR (implies --ocr)",
         )
 
+    def add_ocr_angle_classifier_flag(p):
+        p.add_argument(
+            "--ocr-no-angle-classifier",
+            action="store_true",
+            help="Disable RapidOCR's text-direction (angle) classifier "
+                 "whenever OCR runs; assumes upright text lines. Does not "
+                 "enable OCR itself and is ignored with --no-ocr",
+        )
+
+    def add_ocr_merge_interleaved_regions_flag(p):
+        p.add_argument(
+            "--ocr-merge-interleaved-regions",
+            action="store_true",
+            help="Merge same-label text, list-item or footnote layout "
+                 "regions whose OCR lines interleave, so each reads top to "
+                 "bottom, whenever OCR runs. Does not enable OCR itself and "
+                 "is ignored with --no-ocr",
+        )
+
     def add_chunk_llm_flags(p):
         p.add_argument("--llm-classify", action="store_true",
                         help="Use LLM for content classification")
@@ -30954,6 +32577,8 @@ def main(argv: list[str] | None = None):
     add_watermark_flag(p_conv)
     add_ocr_flag(p_conv)
     add_ocr_full_page_flag(p_conv)
+    add_ocr_angle_classifier_flag(p_conv)
+    add_ocr_merge_interleaved_regions_flag(p_conv)
 
     # chunk
     p_chunk = sub.add_parser("chunk", help="DoclingDocument to enriched chunks")
@@ -31276,6 +32901,8 @@ def main(argv: list[str] | None = None):
     add_watermark_flag(p_full)
     add_ocr_flag(p_full)
     add_ocr_full_page_flag(p_full)
+    add_ocr_angle_classifier_flag(p_full)
+    add_ocr_merge_interleaved_regions_flag(p_full)
     add_chunk_llm_flags(p_full)
     add_table_retrieval_flag(p_full)
     add_markdown_validation_flag(p_full)
@@ -31321,6 +32948,8 @@ def main(argv: list[str] | None = None):
     add_watermark_flag(p_batch)
     add_ocr_flag(p_batch)
     add_ocr_full_page_flag(p_batch)
+    add_ocr_angle_classifier_flag(p_batch)
+    add_ocr_merge_interleaved_regions_flag(p_batch)
     add_chunk_llm_flags(p_batch)
     add_table_retrieval_flag(p_batch)
     add_markdown_validation_flag(p_batch)
@@ -31354,6 +32983,20 @@ def main(argv: list[str] | None = None):
             "endpoint and credential options must be written in full and "
             "with exact case")
     args = parser.parse_args(parse_argv)
+    if (getattr(args, "llm_scaffold", False)
+            and not _document_profiles.requires_toc(
+                _document_profiles.get_profile(args.structure_profile))):
+        # A fixed message: parse errors never reproduce submitted values.
+        parser.exit(2, (
+            f"{parser.prog}: error: --llm-scaffold requires a TOC-scaffold "
+            "structure profile\n"))
+    if (getattr(args, "split_chapters", False)
+            and not _document_profiles.requires_toc(
+                _document_profiles.get_profile(args.structure_profile))):
+        # Source-heading excerpts have no chapter page anchors to split on.
+        parser.exit(2, (
+            f"{parser.prog}: error: --split-chapters requires a TOC-scaffold "
+            "structure profile\n"))
     try:
         security_policy = _cli_policy._release_security_policy_from_args(args)
         if (
@@ -31493,6 +33136,10 @@ def main(argv: list[str] | None = None):
                         auto_preprocess=not args.no_preprocess,
                         ocr=getattr(args, "ocr", None),
                         ocr_full_page=getattr(args, "ocr_full_page", False),
+                        ocr_angle_classifier=not getattr(
+                            args, "ocr_no_angle_classifier", False),
+                        ocr_merge_interleaved_regions=getattr(
+                            args, "ocr_merge_interleaved_regions", False),
                         security_policy=security_policy,
                         telemetry=run_telemetry)
 

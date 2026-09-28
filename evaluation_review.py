@@ -394,11 +394,14 @@ def _diagnostic_candidates(
                 if (isinstance(rank, bool) or not isinstance(rank, int)
                         or rank < 1 or rank > candidate_depth):
                     raise ValueError("diagnostic result rank is invalid")
-                entry = candidates[query_id].setdefault(chunk_id, {
-                    "chunk_id": chunk_id,
-                    "appearances": [],
-                    "evidence": _evidence_record(records_by_id[chunk_id]),
-                })
+                entry = candidates[query_id].get(chunk_id)
+                if entry is None:
+                    entry = {
+                        "chunk_id": chunk_id,
+                        "appearances": [],
+                        "evidence": _evidence_record(records_by_id[chunk_id]),
+                    }
+                    candidates[query_id][chunk_id] = entry
                 entry["appearances"].append({
                     "mode": mode,
                     "rank": rank,

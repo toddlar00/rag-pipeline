@@ -216,18 +216,19 @@ def read_bounded_json_response(
     Requests, so the byte ceiling also applies after gzip/deflate expansion.
     No response byte or text is included in any raised diagnostic.
     """
-    if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) \
-            or max_bytes < 1:
-        raise ValueError("max_bytes must be a positive integer")
-    if isinstance(max_depth, bool) or not isinstance(max_depth, int) \
-            or max_depth < 1:
-        raise ValueError("max_depth must be a positive integer")
-    if isinstance(deadline_seconds, bool) or not isinstance(
-            deadline_seconds, (int, float)) or not math.isfinite(
-                deadline_seconds) or deadline_seconds <= 0:
-        raise ValueError("deadline_seconds must be positive")
-
+    interrupted = False
     try:
+        if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) \
+                or max_bytes < 1:
+            raise ValueError("max_bytes must be a positive integer")
+        if isinstance(max_depth, bool) or not isinstance(max_depth, int) \
+                or max_depth < 1:
+            raise ValueError("max_depth must be a positive integer")
+        if isinstance(deadline_seconds, bool) or not isinstance(
+                deadline_seconds, (int, float)) or not math.isfinite(
+                    deadline_seconds) or deadline_seconds <= 0:
+            raise ValueError("deadline_seconds must be positive")
+
         started = monotonic_fn()
         headers = getattr(response, "headers", None)
         _require_json_content_type(headers)
@@ -278,7 +279,7 @@ def read_bounded_json_response(
             raise ProviderResponseRejected(
                 "provider response length does not match Content-Length")
         try:
-            text = bytes(body).decode("utf-8-sig")
+            text = body.decode("utf-8-sig")
         except UnicodeDecodeError:
             raise ProviderResponseRejected(
                 "provider response JSON is not UTF-8") from None
@@ -294,5 +295,12 @@ def read_bounded_json_response(
         except (json.JSONDecodeError, RecursionError, UnicodeError):
             raise ProviderResponseRejected(
                 "provider response is not valid JSON") from None
+    except BaseException as exc:
+        interrupted = not isinstance(exc, Exception)
+        raise
     finally:
-        close_http_response(response)
+        try:
+            close_http_response(response)
+        except BaseException:
+            if not interrupted:
+                raise

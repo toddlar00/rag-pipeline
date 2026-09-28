@@ -14,6 +14,8 @@ import os
 import threading
 import time
 from collections.abc import Callable, Mapping
+from datetime import timezone
+from email.utils import parsedate_to_datetime
 from typing import Protocol
 from urllib.parse import urlparse
 
@@ -427,10 +429,15 @@ class _AdaptiveThrottle:
             self._active += 1
             cooldown = self._cooldown
         if cooldown > 0:
-            self._sleep_fn(cooldown)
+            try:
+                self._sleep_fn(cooldown)
+            except BaseException:
+                self.release_error()
+                raise
 
     def release_ok(self) -> None:
         """Release a slot after a successful call."""
+        message = None
         with self._condition:
             self._active = max(0, self._active - 1)
             self._consecutive_ok += 1
@@ -438,13 +445,18 @@ class _AdaptiveThrottle:
                 self._current += 1
                 self._cooldown = max(
                     self._cooldown_floor, self._cooldown - 0.1)
-                self._info_fn(
+                message = (
                     f"Rate limit recovery: workers -> {self._current}, "
                     f"cooldown -> {self._cooldown:.1f}s "
                     f"(ceiling: {self._ceiling}, "
                     f"cooldown floor: {self._cooldown_floor:.1f}s)")
                 self._consecutive_ok = 0
             self._condition.notify_all()
+        if message is not None:
+            try:
+                self._info_fn(message)
+            except Exception:
+                pass
 
     def release_429(self) -> None:
         """Release a slot and reduce concurrency after a rate limit."""
@@ -459,13 +471,17 @@ class _AdaptiveThrottle:
             self._cooldown = min(5.0, self._cooldown + 0.5)
             self._cooldown_floor = max(
                 self._cooldown_floor, self._cooldown - 0.5)
-            self._warning_fn(
+            message = (
                 f"Rate limited (429)! Workers: {old} -> {self._current}, "
                 f"cooldown: {self._cooldown:.1f}s "
                 f"(ceiling: {self._ceiling}, "
                 f"cooldown floor: {self._cooldown_floor:.1f}s, "
                 f"total 429s: {self._total_429s})")
             self._condition.notify_all()
+        try:
+            self._warning_fn(message)
+        except Exception:
+            pass
 
     def release_error(self) -> None:
         """Release a slot after a non-rate-limit error."""
@@ -485,14 +501,105 @@ class _AdaptiveThrottle:
 
 
 def _retry_after_seconds(value: object) -> float:
-    """Parse delta-seconds Retry-After safely, with a bounded default."""
+    """Parse seconds or an HTTP date, retaining the five-second wait ceiling."""
+    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+        return 2.0
+    if isinstance(value, str) and len(value) > 512:
+        return 2.0
     try:
         delay = float(value)
-    except (TypeError, ValueError):
-        return 2.0
+    except (TypeError, ValueError, OverflowError):
+        if not isinstance(value, str):
+            return 2.0
+        try:
+            retry_at = parsedate_to_datetime(value)
+            if retry_at.tzinfo is None:
+                retry_at = retry_at.replace(tzinfo=timezone.utc)
+            delay = max(0.0, retry_at.timestamp() - time.time())
+        except (TypeError, ValueError, OverflowError, OSError):
+            return 2.0
     if not math.isfinite(delay) or delay < 0:
         return 2.0
     return min(delay, 5.0)
+
+
+def _openai_response_from_body(
+        body: object, *,
+        provider_token_count_fn: ProviderTokenCountFn,
+        provider_value_fn: ProviderValueFn,
+        transport_attempts: int,
+        transient_error_categories: tuple[str, ...]) -> ProviderResponse:
+    """Decode OpenAI-compatible text and usage with supplied retry provenance."""
+    if not isinstance(body, dict):
+        raise ProviderCallError("invalid_response")
+    choices = body.get("choices")
+    if not isinstance(choices, list) or not choices:
+        raise ProviderCallError("invalid_response")
+    choice = choices[0]
+    if not isinstance(choice, dict):
+        raise ProviderCallError("invalid_response")
+    message = choice.get("message")
+    if not isinstance(message, dict):
+        raise ProviderCallError("invalid_response")
+    finish_reason = choice.get("finish_reason")
+    refusal = message.get("refusal")
+    if (finish_reason is not None and not isinstance(finish_reason, str)
+            or refusal is not None and not isinstance(refusal, str)):
+        raise ProviderCallError("invalid_response")
+    if finish_reason == "content_filter" or (refusal and refusal.strip()):
+        raise ProviderCallError("content_filtered")
+    if not isinstance(message.get("content"), str):
+        raise ProviderCallError("invalid_response")
+
+    usage = body.get("usage")
+    if usage is not None and not isinstance(usage, dict):
+        raise ProviderCallError("invalid_response")
+    if usage is not None:
+        for name in ("prompt_tokens_details", "completion_tokens_details"):
+            details = usage.get(name)
+            if details is not None and not isinstance(details, dict):
+                raise ProviderCallError("invalid_response")
+    prompt_tokens = provider_token_count_fn(usage, "prompt_tokens")
+    completion_tokens = provider_token_count_fn(
+        usage, "completion_tokens")
+    total_tokens = provider_token_count_fn(usage, "total_tokens")
+    if (prompt_tokens is None) != (completion_tokens is None):
+        raise ProviderCallError("invalid_response")
+    if (total_tokens is not None and prompt_tokens is not None
+            and total_tokens != prompt_tokens + completion_tokens):
+        raise ProviderCallError("invalid_response")
+
+    cached_tokens = provider_token_count_fn(
+        usage, "prompt_cache_hit_tokens")
+    if cached_tokens is None:
+        prompt_details = provider_value_fn(
+            usage, "prompt_tokens_details")
+        cached_tokens = provider_token_count_fn(
+            prompt_details, "cached_tokens")
+    completion_details = provider_value_fn(
+        usage, "completion_tokens_details")
+    reasoning_tokens = provider_token_count_fn(
+        completion_details, "reasoning_tokens")
+    if prompt_tokens is None and (
+            cached_tokens is not None
+            or reasoning_tokens is not None):
+        raise ProviderCallError("invalid_response")
+    if (cached_tokens is not None and prompt_tokens is not None
+            and cached_tokens > prompt_tokens):
+        raise ProviderCallError("invalid_response")
+    if (reasoning_tokens is not None
+            and completion_tokens is not None
+            and reasoning_tokens > completion_tokens):
+        raise ProviderCallError("invalid_response")
+    return ProviderResponse(
+        text=message["content"].strip(),
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        cached_prompt_tokens=cached_tokens,
+        reasoning_tokens=reasoning_tokens,
+        transport_attempts=transport_attempts,
+        transient_error_categories=transient_error_categories,
+    )
 
 
 def _call_openai_compatible_result(
@@ -520,6 +627,17 @@ def _call_openai_compatible_result(
     if not api_key:
         raise ProviderCallError(
             "missing_credentials", transport_attempts=0)
+
+    try:
+        valid_timeout = (
+            not isinstance(timeout, bool)
+            and isinstance(timeout, (int, float))
+            and math.isfinite(timeout) and timeout > 0)
+    except OverflowError:
+        valid_timeout = False
+    if not valid_timeout:
+        raise ProviderCallError(
+            "configuration_error", transport_attempts=0)
 
     throttle = get_throttle_fn(max(1, max_workers))
     is_deepseek = endpoint.provider == "deepseek"
@@ -559,131 +677,100 @@ def _call_openai_compatible_result(
 
     for attempt in range(2):
         throttle.acquire()
+        resp = None
+        owns_response = False
+        interrupted = False
+        release_slot = throttle.release_error
         try:
             if attempt > 0 and admit_retry_fn is not None:
                 admit_retry_fn()
-            resp = selected_post_fn(
-                f"{endpoint.base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}"},
-                auth=_BearerAuth(api_key),
-                json=payload,
-                timeout=timeout,
-                allow_redirects=False,
-                stream=True,
-            )
+            try:
+                resp = selected_post_fn(
+                    f"{endpoint.base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    auth=_BearerAuth(api_key),
+                    json=payload,
+                    timeout=timeout,
+                    allow_redirects=False,
+                    stream=True,
+                )
+            except LLMBudgetExceeded:
+                raise
+            except Exception as exc:
+                raise provider_call_error_fn(
+                    exc, transport_attempts=attempt + 1) from None
+            owns_response = True
+            status = resp.status_code
+            if (isinstance(status, bool) or not isinstance(status, int)
+                    or not 100 <= status <= 599):
+                raise ProviderCallError("invalid_response")
+            if 300 <= status < 400:
+                raise ProviderCallError("configuration_error")
+
+            if status in {429, 502, 503, 504}:
+                category = "rate_limited" if status == 429 else "server_error"
+                if status == 429:
+                    release_slot = throttle.release_429
+                if attempt == 1:
+                    raise ProviderCallError(category)
+                retry_after_value = provider_transport._header_value(
+                    resp.headers, "Retry-After")
+                retry_after = retry_after_fn(retry_after_value)
+                transient_errors.append(category)
+            else:
+                resp.raise_for_status()
+                # The bounded reader takes ownership and closes even if body
+                # decoding or cancellation raises. Never close it a second time.
+                owns_response = False
+                body = provider_transport.read_bounded_json_response(
+                    resp,
+                    max_bytes=provider_transport.LLM_RESPONSE_MAX_BYTES,
+                    deadline_seconds=timeout,
+                )
+                result = _openai_response_from_body(
+                    body,
+                    provider_token_count_fn=provider_token_count_fn,
+                    provider_value_fn=provider_value_fn,
+                    transport_attempts=attempt + 1,
+                    transient_error_categories=tuple(transient_errors),
+                )
+                release_slot = throttle.release_ok
+                return result
         except LLMBudgetExceeded:
-            throttle.release_error()
             raise
         except Exception as exc:
-            throttle.release_error()
-            raise provider_call_error_fn(
-                exc, transport_attempts=attempt + 1) from None
-
-        if 300 <= resp.status_code < 400:
-            cleanup_error = _close_response_error(resp)
-            throttle.release_error()
-            if cleanup_error is not None:
-                raise provider_call_error_fn(
-                    cleanup_error,
-                    transport_attempts=attempt + 1) from None
-            raise ProviderCallError(
-                "configuration_error", transport_attempts=attempt + 1)
-        if resp.status_code == 429:
-            retry_after_value = resp.headers.get("Retry-After", "2")
-            cleanup_error = _close_response_error(resp)
-            throttle.release_429()
-            if cleanup_error is not None:
-                raise provider_call_error_fn(
-                    cleanup_error,
-                    transport_attempts=attempt + 1) from None
-            retry_after = retry_after_fn(retry_after_value)
-            if attempt == 0:
-                transient_errors.append("rate_limited")
-                sleep_fn(retry_after)
-                continue
-            raise ProviderCallError(
-                "rate_limited", transport_attempts=attempt + 1)
-
-        try:
-            resp.raise_for_status()
-        except Exception as exc:
-            cleanup_error = _close_response_error(resp)
-            error = cleanup_error if cleanup_error is not None else exc
-            throttle.release_error()
-            raise provider_call_error_fn(
-                error, transport_attempts=attempt + 1) from None
-
-        try:
-            body = provider_transport.read_bounded_json_response(
-                resp,
-                max_bytes=provider_transport.LLM_RESPONSE_MAX_BYTES,
-                deadline_seconds=timeout,
-            )
-            if not isinstance(body, dict):
-                raise ProviderCallError("invalid_response")
-            choices = body.get("choices")
-            if not isinstance(choices, list) or not choices:
-                raise ProviderCallError("invalid_response")
-            message = choices[0].get("message")
-            if not isinstance(message, dict) or not isinstance(
-                    message.get("content"), str):
-                raise ProviderCallError("invalid_response")
-
-            usage = body.get("usage")
-            if usage is not None and not isinstance(usage, dict):
-                raise ProviderCallError("invalid_response")
-            prompt_tokens = provider_token_count_fn(usage, "prompt_tokens")
-            completion_tokens = provider_token_count_fn(
-                usage, "completion_tokens")
-            total_tokens = provider_token_count_fn(usage, "total_tokens")
-            if (prompt_tokens is None) != (completion_tokens is None):
-                raise ProviderCallError("invalid_response")
-            if (total_tokens is not None and prompt_tokens is not None
-                    and total_tokens != prompt_tokens + completion_tokens):
-                raise ProviderCallError("invalid_response")
-
-            cached_tokens = provider_token_count_fn(
-                usage, "prompt_cache_hit_tokens")
-            if cached_tokens is None:
-                prompt_details = provider_value_fn(
-                    usage, "prompt_tokens_details")
-                cached_tokens = provider_token_count_fn(
-                    prompt_details, "cached_tokens")
-            completion_details = provider_value_fn(
-                usage, "completion_tokens_details")
-            reasoning_tokens = provider_token_count_fn(
-                completion_details, "reasoning_tokens")
-            if prompt_tokens is None and (
-                    cached_tokens is not None
-                    or reasoning_tokens is not None):
-                raise ProviderCallError("invalid_response")
-            if (cached_tokens is not None and prompt_tokens is not None
-                    and cached_tokens > prompt_tokens):
-                raise ProviderCallError("invalid_response")
-            if (reasoning_tokens is not None
-                    and completion_tokens is not None
-                    and reasoning_tokens > completion_tokens):
-                raise ProviderCallError("invalid_response")
-            result = ProviderResponse(
-                text=message["content"].strip(),
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-                cached_prompt_tokens=cached_tokens,
-                reasoning_tokens=reasoning_tokens,
-                transport_attempts=attempt + 1,
-                transient_error_categories=tuple(transient_errors),
-            )
-        except Exception as exc:
-            throttle.release_error()
-            if isinstance(exc, (ValueError, TypeError, KeyError, IndexError)):
+            if isinstance(exc, (ValueError, TypeError, KeyError, IndexError,
+                                AttributeError)):
                 raise ProviderCallError(
                     "invalid_response",
                     transport_attempts=attempt + 1) from None
             raise provider_call_error_fn(
                 exc, transport_attempts=attempt + 1) from None
+        except BaseException:
+            interrupted = True
+            raise
+        finally:
+            try:
+                if owns_response:
+                    try:
+                        cleanup_error = _close_response_error(resp)
+                    except BaseException:
+                        if not interrupted:
+                            raise
+                    else:
+                        if cleanup_error is not None and not interrupted:
+                            raise provider_call_error_fn(
+                                cleanup_error,
+                                transport_attempts=attempt + 1) from None
+            finally:
+                release_slot()
 
-        throttle.release_ok()
-        return result
+        # Release the connection and concurrency slot before waiting to retry.
+        try:
+            sleep_fn(retry_after)
+        except Exception as exc:
+            raise provider_call_error_fn(
+                exc, transport_attempts=attempt + 1) from None
 
     raise ProviderCallError("provider_error", transport_attempts=2)
 

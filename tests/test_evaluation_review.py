@@ -394,6 +394,12 @@ def test_prepare_packet_adds_exact_unjudged_retrieval_candidates(tmp_path):
         _chunk_id(chunk) for chunk in chunks}
     assert all(len(item["appearances"]) == 4 for item in negative_candidates)
     assert all(item["evidence"]["text"] for item in negative_candidates)
+    for rank, item in enumerate(negative_candidates, 1):
+        assert item["chunk_id"] == _chunk_id(chunks[rank - 1])
+        assert item["appearances"] == [
+            {"mode": mode, "rank": rank, "reported_relevance": 0.0}
+            for mode in ("vector", "vector_reranked", "hybrid", "hybrid_reranked")
+        ]
 
     report = json.loads(diagnostic.read_text(encoding="utf-8"))
     report["configurations"][0]["configuration"]["index_snapshot"][
@@ -405,6 +411,69 @@ def test_prepare_packet_adds_exact_unjudged_retrieval_candidates(tmp_path):
             diagnostic_report_path=diagnostic,
             candidate_depth=2,
         )
+
+
+@pytest.mark.parametrize("invalid_rank", [True, 0, 3])
+def test_prepare_packet_rejects_invalid_rank_on_repeated_candidate(
+        tmp_path, invalid_rank):
+    queries_path, chunks_path, queries, chunks = _draft_fixture(tmp_path)
+    diagnostic = tmp_path / "compare.full.json"
+    _write_full_compare_report(
+        diagnostic, queries_path, chunks_path, queries, chunks)
+    report = json.loads(diagnostic.read_text(encoding="utf-8"))
+    report["configurations"][3]["query_details"][1]["results"][0][
+        "rank"] = invalid_rank
+    diagnostic.write_text(json.dumps(report), encoding="utf-8")
+    output = tmp_path / "invalid-repeated-candidate.json"
+
+    with pytest.raises(ValueError, match="diagnostic result rank is invalid"):
+        evaluation_review.prepare_review_packet(
+            queries_path, chunks_path, output,
+            diagnostic_report_path=diagnostic, candidate_depth=2)
+
+    assert not output.exists()
+
+
+def test_repeated_candidate_evidence_has_independent_mutable_ownership(tmp_path):
+    queries_path, chunks_path, queries, chunks = _draft_fixture(tmp_path)
+    queries.append({**queries[1], "query_id": "private-q3"})
+    queries_raw = _write_jsonl(queries_path, queries)
+    diagnostic = tmp_path / "compare.full.json"
+    _write_full_compare_report(
+        diagnostic, queries_path, chunks_path, queries, chunks)
+    queries_sha256 = hashlib.sha256(queries_raw).hexdigest()
+    chunks_sha256 = hashlib.sha256(chunks_path.read_bytes()).hexdigest()
+
+    candidates, binding = evaluation_review._diagnostic_candidates(
+        diagnostic, queries=queries, queries_sha256=queries_sha256,
+        records=chunks, chunks_sha256=chunks_sha256, candidate_depth=2)
+    packet = evaluation_review._build_packet(
+        queries, queries_sha256=queries_sha256,
+        records=chunks, chunks_sha256=chunks_sha256,
+        retrieval_candidates=candidates, diagnostic_binding=binding)
+    first = candidates["private-q2"][0]
+    other_query = candidates["private-q3"][0]
+    packet_first = packet["review_items"][1]["retrieval_candidates"][0]
+    assert first == other_query == packet_first
+    assert len(first["appearances"]) == 4
+
+    first["evidence"]["metadata"]["headings"].append("Candidate edit")
+    first["appearances"][0]["rank"] = 2
+    assert chunks[0]["metadata"]["headings"] == ["Owner review"]
+    assert other_query["evidence"]["metadata"]["headings"] == ["Owner review"]
+    assert packet_first["evidence"]["metadata"]["headings"] == ["Owner review"]
+    assert [item["rank"] for item in first["appearances"]] == [2, 1, 1, 1]
+    assert [item["rank"] for item in other_query["appearances"]] == [1] * 4
+    assert [item["rank"] for item in packet_first["appearances"]] == [1] * 4
+
+    chunks[0]["metadata"]["headings"].append("Source edit")
+    packet_first["evidence"]["metadata"]["source_refs"].append("#/texts/99")
+    assert first["evidence"]["metadata"]["headings"] == [
+        "Owner review", "Candidate edit"]
+    assert other_query["evidence"]["metadata"]["headings"] == ["Owner review"]
+    assert first["evidence"]["metadata"]["source_refs"] == ["#/texts/17"]
+    assert other_query["evidence"]["metadata"]["source_refs"] == ["#/texts/17"]
+    assert chunks[0]["metadata"]["source_items"] == [{"ref": "#/texts/17"}]
 
 
 def test_finalize_requires_every_explicit_decision(tmp_path):

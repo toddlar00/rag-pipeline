@@ -756,10 +756,22 @@ def _lineage_entry_valid(
         source_binding=recovery_binding)
 
 
+def _pages_outside_scope(
+        pages: frozenset[int], scoped_pages: frozenset[int]) -> bool:
+    """Return whether a token's mapped pages leave its lineage scope.
+
+    The audit's scope check and its scoped greedy realignment share this one
+    predicate, so the realignment can exclude only positions that the scope
+    check itself would reject.
+    """
+    return bool(pages) and not pages <= scoped_pages
+
+
 def _find_alignment(
         needles: Sequence[str], haystack: Sequence[tuple[str, int, str]],
         already_covered: set[tuple[str, int]],
         minimum_offsets: dict[str, int] | None = None,
+        out_of_scope: frozenset[tuple[str, int]] = frozenset(),
 ) -> list[tuple[str, int]] | None:
     if not needles:
         return []
@@ -784,7 +796,9 @@ def _find_alignment(
         return positions if novelty == len(positions) else None
 
     # Permit source-preserving omissions between cited items, but never an
-    # insertion or permutation of lexical tokens.
+    # insertion or permutation of lexical tokens.  ``out_of_scope`` positions
+    # (an omitted page view of a scoped item) are not candidates here: a
+    # greedy match there would lend that view the next cited item's token.
     positions = []
     cursor = 0
     local_minimums = dict(minimum_offsets)
@@ -793,6 +807,8 @@ def _find_alignment(
                 haystack[cursor][2] != needle
                 or (haystack[cursor][0], haystack[cursor][1])
                 in already_covered
+                or (haystack[cursor][0], haystack[cursor][1])
+                in out_of_scope
                 or (haystack[cursor][1] >= 0
                     and haystack[cursor][1] <= local_minimums.get(
                         haystack[cursor][0], -1))):
@@ -1287,6 +1303,16 @@ def _valid_exemption(value: object, catalog: dict[str, dict]) -> bool:
     return False
 
 
+# Mirrors chunking_core's standalone section-marker line erasure.
+_CHUNKER_ERASED_SECTION_MARKER_RE = re.compile(r"[ \t]*[A-J][ \t]*")
+
+
+def chunker_erases_section_marker(text: str) -> bool:
+    """Return whether the chunker deletes this whole source text as a marker."""
+    return (isinstance(text, str)
+            and _CHUNKER_ERASED_SECTION_MARKER_RE.fullmatch(text) is not None)
+
+
 def audit_source_fidelity(
         *, records: Sequence[dict], document: dict,
         eligible_refs: Iterable[str],
@@ -1296,6 +1322,13 @@ def audit_source_fidelity(
     """Audit lexical coverage and same-page geometric partial ordering."""
     catalog = _source_catalog(document)
     eligible = set(eligible_refs)
+    # An ineligible marker glyph erased from the output has no output token.
+    # Tokens compare case-insensitively, so its lineage entry could otherwise
+    # take the token of an eligible item such as a lowercase "i".
+    erased_marker_refs = frozenset(
+        ref for ref, item in catalog.items()
+        if ref not in eligible
+        and chunker_erases_section_marker(source_item_text(item)))
     source_tokens = {
         ref: lexical_tokens(source_item_text(item))
         for ref, item in catalog.items()
@@ -1455,12 +1488,24 @@ def audit_source_fidelity(
         record_opaque_refs: set[str] = set()
         record_container_alias_refs: set[str] = set()
         record_opaque_groups: defaultdict[str, set[str]] = defaultdict(set)
+        record_out_of_scope: set[tuple[str, int]] = set()
         for entry in entries:
             ref = entry["ref"]
             if entry["transform"] not in OPAQUE_TRANSFORMS:
                 haystack.extend(
                     (ref, offset, token)
                     for offset, token in source_oracle_tokens.get(ref, ()))
+                # The positions of an omitted page view: exactly those the
+                # scope check below rejects (same pages, same predicate).
+                scoped_pages = scope_pages_by_ref.get(ref)
+                if scoped_pages is not None:
+                    token_pages = source_token_pages.get(ref, {})
+                    record_out_of_scope.update(
+                        (ref, offset)
+                        for offset, _ in source_oracle_tokens.get(ref, ())
+                        if _pages_outside_scope(
+                            token_pages.get(offset, frozenset()),
+                            scoped_pages))
                 continue
             trusted = source_oracles.get(ref)
             if ref in record_opaque_refs or not isinstance(trusted, dict):
@@ -1528,9 +1573,41 @@ def audit_source_fidelity(
             # the same output token interval.
             opaque_valid = False
 
-        alignment = _find_alignment(
-            record_tokens, haystack, covered_positions,
-            last_source_offset)
+        erased_refs = {
+            entry["ref"] for entry in entries
+            if entry["transform"] not in OPAQUE_TRANSFORMS
+            and entry["ref"] in erased_marker_refs}
+
+        def align(
+                out_of_scope: frozenset[tuple[str, int]],
+        ) -> list[tuple[str, int]] | None:
+            found = _find_alignment(
+                record_tokens, haystack, covered_positions,
+                last_source_offset, out_of_scope)
+            if (found is not None and erased_refs
+                    and any(ref in erased_refs for ref, _offset in found)):
+                # Prefer an explanation that leaves erased markers unmatched.
+                # The retry keeps every other rule, so it is adopted only if
+                # it holds.
+                preferred = _find_alignment(
+                    record_tokens,
+                    [value for value in haystack
+                     if value[0] not in erased_refs],
+                    covered_positions, last_source_offset, out_of_scope)
+                if preferred is not None:
+                    found = preferred
+            return found
+
+        alignment = align(frozenset())
+        if (alignment is not None and record_out_of_scope
+                and any(position in record_out_of_scope
+                        for position in alignment)):
+            # This alignment fails the scope check below.  Realign without the
+            # omitted page views and adopt the result only if it holds, so an
+            # alignment the scope check accepts is never replaced.
+            scoped_alignment = align(frozenset(record_out_of_scope))
+            if scoped_alignment is not None:
+                alignment = scoped_alignment
         scope_alignment_valid = True
         if not opaque_valid:
             lineage_issue_records.add(record_index)
@@ -1600,12 +1677,12 @@ def audit_source_fidelity(
                         scope_alignment_valid = False
                         pages = frozenset()
                     elif not aliases:
-                        if pages and not pages <= scoped_pages:
+                        if _pages_outside_scope(pages, scoped_pages):
                             scope_alignment_valid = False
                         pages &= scoped_pages
                     elif (represented or {}).get(
                             "transform") == "container_alias":
-                        if pages and not pages <= scoped_pages:
+                        if _pages_outside_scope(pages, scoped_pages):
                             scope_alignment_valid = False
                         pages &= scoped_pages
                     aligned_ref_records[ref].add(record_index)

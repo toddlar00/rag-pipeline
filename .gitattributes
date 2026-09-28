@@ -12,3 +12,4 @@
 model-artifacts.lock.json text eol=lf
 architecture-inventory.json text eol=lf
 benchmarks/*.json text eol=lf
+tests/fixtures/*.json text eol=lf

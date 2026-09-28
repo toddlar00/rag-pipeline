@@ -79,6 +79,18 @@ def test_bounded_reader_accepts_reviewed_json_media_types(content_type):
     assert response.close_calls == 1
 
 
+@pytest.mark.parametrize("prefix", [b"", b"\xef\xbb\xbf"])
+def test_bounded_reader_decodes_split_utf8_at_exact_byte_limit(prefix):
+    expected = {"text": "caf\u00e9\u2603"}
+    body = prefix + json.dumps(expected, ensure_ascii=False).encode("utf-8")
+    response = _StreamingResponse(
+        body, chunks=[body[index:index + 1] for index in range(len(body))])
+
+    assert provider_transport.read_bounded_json_response(
+        response, max_bytes=len(body)) == expected
+    assert response.close_calls == 1
+
+
 @pytest.mark.parametrize("headers", [
     {},
     {"Content-Type": "text/html"},
@@ -163,8 +175,10 @@ def test_chunked_response_is_bounded_without_content_length():
 
 
 @pytest.mark.parametrize("body", [
+    b'',
     b'{"value":',
     b'\xff',
+    b'{"value":"\xe2\x82',
     b'{"same":1,"same":2}',
     b'{"value":NaN}',
     b'{"value":Infinity}',
@@ -219,6 +233,42 @@ def test_stream_errors_are_recategorized_without_secret_exception_text(error):
 
     assert "SECRET_TRANSPORT_CANARY" not in str(raised.value)
     assert raised.value.__cause__ is None
+    assert response.close_calls == 1
+
+
+@pytest.mark.parametrize("cleanup_failure", [
+    RuntimeError("SECRET_CLEANUP_CANARY"),
+    KeyboardInterrupt("cleanup interrupted"),
+    SystemExit("cleanup exited"),
+])
+def test_stream_cancellation_survives_cleanup_failure(cleanup_failure):
+    interrupted = KeyboardInterrupt("original cancellation")
+
+    class CleanupFailure(_StreamingResponse):
+        def close(self):
+            super().close()
+            raise cleanup_failure
+
+    response = CleanupFailure(b"", stream_error=interrupted)
+
+    with pytest.raises(KeyboardInterrupt) as error:
+        provider_transport.read_bounded_json_response(response, max_bytes=8)
+
+    assert error.value is interrupted
+    assert response.close_calls == 1
+
+
+@pytest.mark.parametrize("invalid_option", [
+    {"max_bytes": 0}, {"max_depth": 0}, {"deadline_seconds": 0},
+])
+def test_reader_invalid_configuration_still_closes_response(invalid_option):
+    response = _StreamingResponse(b"{}")
+
+    with pytest.raises(ValueError):
+        provider_transport.read_bounded_json_response(
+            response, **({"max_bytes": 8} | invalid_option))
+
+    assert response.iterated is False
     assert response.close_calls == 1
 
 

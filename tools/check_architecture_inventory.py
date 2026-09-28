@@ -3169,73 +3169,6 @@ def _validate_sha256(value: object, context: str) -> str:
     return text
 
 
-def _validate_optional_sha256(value: object, context: str) -> None:
-    if value is not None:
-        _validate_sha256(value, context)
-
-
-def _validate_signature(value: object, context: str) -> None:
-    record = _require_dict(value, {
-        "parameters", "return_annotation_sha256", "type_comment_sha256",
-    }, context)
-    parameters = _require_list(record["parameters"], f"{context}.parameters")
-    names: set[str] = set()
-    kinds: list[str] = []
-    default_seen = False
-    positional_kinds = {"positional_only", "positional_or_keyword"}
-    rank = {
-        "positional_only": 0,
-        "positional_or_keyword": 1,
-        "var_positional": 2,
-        "keyword_only": 3,
-        "var_keyword": 4,
-    }
-    for index, raw_parameter in enumerate(parameters):
-        label = f"{context}.parameters[{index}]"
-        parameter = _require_dict(raw_parameter, {
-            "annotation_sha256", "default_sha256", "has_default", "kind",
-            "name",
-        }, label)
-        name = _require_string(parameter["name"], f"{label}.name")
-        if name in names:
-            raise ArchitectureInventoryError(f"{label}.name is duplicated")
-        names.add(name)
-        kind = _require_string(parameter["kind"], f"{label}.kind")
-        if kind not in rank:
-            raise ArchitectureInventoryError(f"{label}.kind is invalid")
-        kinds.append(kind)
-        has_default = _require_bool(
-            parameter["has_default"], f"{label}.has_default"
-        )
-        _validate_optional_sha256(
-            parameter["annotation_sha256"], f"{label}.annotation_sha256"
-        )
-        _validate_optional_sha256(
-            parameter["default_sha256"], f"{label}.default_sha256"
-        )
-        if has_default != (parameter["default_sha256"] is not None):
-            raise ArchitectureInventoryError(f"{label} default fields differ")
-        if kind in {"var_positional", "var_keyword"} and has_default:
-            raise ArchitectureInventoryError(f"{label} variadic default is invalid")
-        if kind in positional_kinds:
-            if default_seen and not has_default:
-                raise ArchitectureInventoryError(
-                    f"{context} positional defaults are not trailing"
-                )
-            default_seen = default_seen or has_default
-    if kinds != sorted(kinds, key=rank.__getitem__):
-        raise ArchitectureInventoryError(f"{context} parameter kinds are unordered")
-    if kinds.count("var_positional") > 1 or kinds.count("var_keyword") > 1:
-        raise ArchitectureInventoryError(f"{context} repeats a variadic parameter")
-    _validate_optional_sha256(
-        record["return_annotation_sha256"],
-        f"{context}.return_annotation_sha256",
-    )
-    _validate_optional_sha256(
-        record["type_comment_sha256"], f"{context}.type_comment_sha256"
-    )
-
-
 def _validate_definition(
     value: object, context: str, *, function: bool,
 ) -> None:
@@ -3371,18 +3304,6 @@ def _validate_consumer(
         )
     if not record["direct_imports"] and not references:
         raise ArchitectureInventoryError(f"{context} has no facade evidence")
-
-
-def _validate_patch_occurrence(
-    value: object, context: str, tracked_test_paths: set[str],
-) -> None:
-    record = _require_dict(value, {"line", "operation", "source"}, context)
-    _require_int(record["line"], f"{context}.line", 1)
-    if record["operation"] not in {"setattr", "delattr", "patch", "patch.object"}:
-        raise ArchitectureInventoryError(f"{context}.operation is invalid")
-    source = _validate_path(record["source"], f"{context}.source")
-    if source not in tracked_test_paths:
-        raise ArchitectureInventoryError(f"{context}.source is not a tracked test")
 
 
 def _validate_tracked_sources_v2(
