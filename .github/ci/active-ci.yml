@@ -383,7 +383,7 @@ jobs:
       - name: Install test dependencies
         run: python -m pip install --require-hashes -r requirements-test.lock
       - name: Run dependency-light suite
-        run: python -m pytest -q
+        run: python -m pytest -q -n auto
 
   unit-windows:
     name: Unit tests / Python 3.12 / Windows (${{ matrix.shard }}/3)
@@ -410,7 +410,7 @@ jobs:
       - name: Install test dependencies
         run: python -m pip install --require-hashes -r requirements-test.lock
       - name: Run Windows supervision regressions
-        run: python -m pytest -q --shard ${{ matrix.shard }}/3
+        run: python -m pytest -q -n auto --shard ${{ matrix.shard }}/3
 
   service-api:
     name: Local service API / ${{ matrix.os }}
