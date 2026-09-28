@@ -10,7 +10,6 @@ from types import MappingProxyType
 
 import pytest
 
-from tools import check_architecture_inventory as architecture_inventory
 from tools.check_python_sources import tracked_python_paths
 
 
@@ -191,9 +190,10 @@ def test_first_party_import_graph_is_acyclic(first_party_import_graph):
     assert _cyclic_components(graph) == set()
 
 
-def test_inventory_static_edges_exactly_match_independent_ast_graph(first_party_import_graph):
+def test_inventory_static_edges_exactly_match_independent_ast_graph(
+        first_party_import_graph, repository_inventory):
     expected = first_party_import_graph
-    value = architecture_inventory.build_inventory(PROJECT_ROOT)
+    value = repository_inventory
     observed = {
         module["module"]: {
             edge["target"]

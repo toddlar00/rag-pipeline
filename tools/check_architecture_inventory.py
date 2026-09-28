@@ -3922,9 +3922,14 @@ def refresh_baseline(
 
 
 def check_baseline(
-    root: Path = PROJECT_ROOT, baseline: Path = DEFAULT_BASELINE,
+    root: Path = PROJECT_ROOT, baseline: Path = DEFAULT_BASELINE, *,
+    current: dict[str, object] | None = None,
 ) -> dict[str, object]:
-    """Validate *baseline* and require exact current canonical bytes."""
+    """Validate *baseline* and require exact current canonical bytes.
+
+    *current* is an inventory already built for *root*, for callers that
+    share one build; by default one is built here.
+    """
     path = _resolved_baseline(root, baseline)
     baseline_value = load_inventory(path)
     expected = inventory_bytes(baseline_value)
@@ -3942,7 +3947,8 @@ def check_baseline(
         raise ArchitectureInventoryError(
             "Architecture inventory baseline is not canonical; run with --refresh"
         )
-    current = build_inventory(root)
+    if current is None:
+        current = build_inventory(root)
     if inventory_bytes(current) != expected:
         changed_sections = [
             section
