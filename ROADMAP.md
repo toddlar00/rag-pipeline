@@ -1216,6 +1216,34 @@ version changed.
     after any sidecars of the retracted slice's chunk; the geometry gate
     fails closed if that ever misorders a page.
 
+### Test-suite time (2026-09-28, draft PRs, not integrated)
+
+The dependency-light suite has about 15,000 tests. On PR #116 the Windows
+unit lane needed 29.7 minutes (its limit was raised from 20 to 60) and the
+Linux unit lanes used 9 to 12.5 of their 15 minutes. Two stacked draft PRs
+shorten them without changing pipeline behavior.
+
+- **[PR #117](https://github.com/toddlar00/rag-pipeline/pull/117)** (on
+  #116). The repository architecture inventory is built once per test
+  session. The inventory builder indexes scope-owned AST nodes once (one
+  build 40.1 -> 27.0 s on Windows, output byte-identical). Hash-lock
+  parsing is cached by content. A new `--shard INDEX/COUNT` option selects
+  every COUNT-th test after all other deselection, and the Windows unit lane
+  runs as three shards. OCR execution receipts reuse a source file's digest
+  while its `lstat` identity is unchanged and its last change is older than
+  a 2-second racy window; the link-component refusal still runs on every
+  call. Hosted Windows shards took 7m44s to 8m47s.
+- **This PR** (on #117). pytest-xdist 3.8.0 and execnet 2.1.2 join the
+  hash-locked test toolchain (test/audit tooling domain). The Linux unit
+  matrix and the Windows shards run `python -m pytest -q -n auto`. Six
+  entrypoint-admission tests patch `__main__.__file__` with
+  `raising=False`, because an xdist worker's `__main__` has no `__file__`.
+  Locally with four workers the Linux light suite takes 88 s (about 325 s
+  serially) and the Windows light suite 585 s (about 1,515 s).
+- **Follow-ups (not done).** The full CPU environment, service and
+  vector-store lanes stay serial; per-worker model loading in the full
+  environment is unmeasured. Without psutil, `-n auto` counts logical CPUs.
+
 ### Integrated convergence
 
 - **R1:** [PR #44](https://github.com/toddlar00/rag-pipeline/pull/44)
