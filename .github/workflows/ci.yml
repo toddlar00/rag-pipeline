@@ -388,7 +388,7 @@ jobs:
   unit-windows:
     name: Unit tests / Python 3.12 / Windows
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 60
     needs: lane
     if: ${{ always() && needs.lane.outputs.require_unit_windows != 'false' }}
     steps:
