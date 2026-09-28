@@ -34,6 +34,7 @@ EXPECTED_DEPENDENCY_DOMAINS = {
         "pip-audit",
         "pip-licenses",
         "pytest",
+        "pytest-xdist",
         "ruff",
         "uv",
     ],
@@ -316,7 +317,7 @@ def test_repository_dependency_domains_cover_every_direct_input_exactly():
         for package in domain_packages
     ]
     assert len(payload["domains"]) == 6
-    assert len(packages) == len(set(packages)) == 26
+    assert len(packages) == len(set(packages)) == 27
 
 
 def test_dependency_domains_reject_unassigned_direct_package(tmp_path):

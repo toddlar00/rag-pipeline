@@ -20,7 +20,7 @@ updates:
       provider-transport:
         patterns: ["google-genai", "requests"]
       test-audit-tooling:
-        patterns: ["pip", "pip-audit", "pip-licenses", "pytest", "ruff", "uv"]
+        patterns: ["pip", "pip-audit", "pip-licenses", "pytest", "pytest-xdist", "ruff", "uv"]
     commit-message:
       prefix: deps
 
