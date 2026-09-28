@@ -381,6 +381,14 @@ def _add_legacy_sidecar(path, kind):
                          b'{"schema_version":7,"source_sha256":"wrong-generation"}')
 
 
+def _stable_identity(status):
+    # Access time is not identity: reading a symlink's target can advance
+    # its atime, and a one-second tick between the two reads flaked.
+    return (status.st_mode, status.st_ino, status.st_dev, status.st_nlink,
+            status.st_uid, status.st_gid, status.st_size,
+            status.st_mtime_ns, status.st_ctime_ns)
+
+
 @pytest.mark.parametrize("role", ["quality", "completion", "oracle"])
 @pytest.mark.parametrize("kind", ["malformed", "wrong_generation", "directory", "dangling_link", "file_link"])
 def test_legacy_present_proof_fails_before_search_without_opening_or_removing_it(
@@ -388,7 +396,7 @@ def test_legacy_present_proof_fails_before_search_without_opening_or_removing_it
     bundle = _legacy_bundle(tmp_path)
     path = _legacy_proof_paths(bundle)[role]
     _add_legacy_sidecar(path, kind)
-    before_identity = path.lstat()
+    before_identity = _stable_identity(path.lstat())
     before_inputs = {item: item.read_bytes() for item in (bundle.chunks_path, bundle.manifest_path)}
     real_capture = core._capture
 
@@ -398,7 +406,7 @@ def test_legacy_present_proof_fails_before_search_without_opening_or_removing_it
 
     monkeypatch.setattr(core, "_capture", capture)
     _expect_failure(bundle, search=lambda *_a, **_k: pytest.fail("orphaned proof reached retrieval"))
-    assert path.lstat() == before_identity
+    assert _stable_identity(path.lstat()) == before_identity
     assert {item: item.read_bytes() for item in before_inputs} == before_inputs
 
 

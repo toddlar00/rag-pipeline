@@ -16,9 +16,9 @@
   },
   "allowed_unknown_packages": {
     "FlagEmbedding": {
-      "reason": "The 1.4.0 wheel omits license metadata, while the upstream FlagOpen/FlagEmbedding repository declares the code under the MIT license.",
+      "reason": "The 1.4.2 wheel (like 1.4.0) omits license metadata, while the upstream FlagOpen/FlagEmbedding repository declares the code under the MIT license.",
       "owner": "repository owner",
-      "version": "1.4.0",
+      "version": "1.4.2",
       "expires": "2026-08-31",
       "reference": "https://github.com/FlagOpen/FlagEmbedding/blob/7ed43d67ec03fbe5c31c0992dbfa941fb1860549/LICENSE"
     }
