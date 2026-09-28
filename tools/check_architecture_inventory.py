@@ -829,9 +829,7 @@ class _ImportEdgeVisitor(ast.NodeVisitor):
         nonlocals: set[str] = set()
         if self.scope_map is None:
             raise ArchitectureInventoryError("import scope analysis is unavailable")
-        for item, owner in self.scope_map.node_scope.items():
-            if owner is not node:
-                continue
+        for item in self.scope_map.nodes_in(node):
             if isinstance(item, ast.Name) and isinstance(
                 item.ctx, (ast.Store, ast.Del)
             ):
@@ -1695,6 +1693,16 @@ class _ScopeMap(ast.NodeVisitor):
         self.parent_scope: dict[ast.AST, ast.AST | None] = {tree: None}
         self.scopes: list[ast.AST] = [tree]
         self.visit(tree)
+        self._nodes_by_scope: dict[ast.AST, list[ast.AST]] | None = None
+
+    def nodes_in(self, scope: ast.AST) -> list[ast.AST]:
+        """Return the nodes owned by *scope*, in ``node_scope`` order."""
+        if self._nodes_by_scope is None:
+            index: dict[ast.AST, list[ast.AST]] = {}
+            for node, owner in self.node_scope.items():
+                index.setdefault(owner, []).append(node)
+            self._nodes_by_scope = index
+        return self._nodes_by_scope.get(scope, [])
 
     def visit(self, node: ast.AST) -> object:
         self.node_scope.setdefault(node, self.current)
@@ -2038,9 +2046,7 @@ class _FacadeAnalysis(ast.NodeVisitor):
         bound = {argument.arg for argument in self._arguments(scope)}
         globals_: set[str] = set()
         nonlocals: set[str] = set()
-        for node, owner in self.scope_map.node_scope.items():
-            if owner is not scope:
-                continue
+        for node in self.scope_map.nodes_in(scope):
             if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
                 bound.add(node.id)
             elif isinstance(node, ast.Import):
