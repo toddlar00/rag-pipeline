@@ -1478,11 +1478,18 @@ hosted run (gate-only child `c804d7b`, [PR
 #119](https://github.com/toddlar00/rag-pipeline/pull/119)) one test in the
 Linux 3.12 unit lane failed on a one-second access-time tick in a
 whole-`lstat` comparison. The test-only source `ddbef38` compares identity
-without the access time and supersedes the `515ed91` pair.
+without the access time and supersedes the `515ed91` pair. The `ddbef38`
+pair (gate-only child `43d7a09`) passed the hosted CI promotion gate on [PR
+#119](https://github.com/toddlar00/rag-pipeline/pull/119), and #116 to #119
+merged into `main` in order (`0a04207`, `e15448b`, `3b430bf`, `ab6e159`).
+The fresh-OCR token fidelity source `e8b3205`, on that `main`, keeps source
+tokens through chunk merges and normalization and hardens the receipt digest
+cache; it changes no dependency or model lock and supersedes the `ddbef38`
+pair.
 Its Windows/Linux
 pair (independent local same-platform comparisons passed) is that branch's
-candidate; its hosted checks, and the external exact-SHA records for all
-four pull requests, are pending.
+candidate; its hosted checks and exact-SHA record are pending, and the
+four merged pull requests carry theirs as PR comments.
 
 Two operational follow-ups from the post-merge `main` push runs are open:
 a documentation-only merge passes its fast-lane pull-request run but then
