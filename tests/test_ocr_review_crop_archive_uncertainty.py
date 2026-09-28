@@ -12,6 +12,9 @@ import json
 from types import SimpleNamespace as NS
 
 import pytest
+
+pytest.importorskip("PIL")
+
 from PIL import Image
 
 import ocr_crop_comparison as crops

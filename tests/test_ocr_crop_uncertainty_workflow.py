@@ -9,8 +9,11 @@ pointer alignment and human inspection remain separate acceptance work.
 import copy
 import hashlib
 
-from PIL import Image
 import pytest
+
+pytest.importorskip("PIL")
+
+from PIL import Image
 
 import model_artifacts
 import ocr_comparison

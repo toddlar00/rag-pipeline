@@ -22,6 +22,8 @@ import time
 
 import pytest
 
+pytest.importorskip("fastapi")
+
 import ai_pipeline_client
 import application_composition
 import rag
