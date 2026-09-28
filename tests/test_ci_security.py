@@ -1210,7 +1210,7 @@ def test_ci_topology_requires_matrix_fail_fast_false():
     text = _mutated_ci(
         "      fail-fast: false\n",
         "      fail-fast: true\n",
-        count=4,
+        count=5,
     )
 
     errors = check_ci_security.validate_ci_topology(text)
