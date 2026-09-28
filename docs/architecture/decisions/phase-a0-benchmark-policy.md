@@ -3,7 +3,7 @@
 - **Status:** A0a integrated; the latest completed hosted A0b technical
   checkpoint passed at Task 0.8 evidence head `1533164` and merged
   through `e34103f`; the OCR-program and casebook-excerpt replacement pair
-  at source `1ae8502` is local-only pending hosted promotion; exact-head
+  at source `a15232d` is pending hosted promotion on PR #116; exact-head
   human review and separate R8 owner authorization are not recorded
 - **Milestone:** R10 prerequisite for the R8 pipeline-ownership move
 - **Report schema:** `phase-a0` v3
@@ -136,9 +136,11 @@ Task 0.8 static-security pair at source `8891e1b` repeated it through
 gate-only child `1533164` and merge `e34103f`
 ([PR #107](https://github.com/toddlar00/rag-pipeline/pull/107)). The
 current replacement pair uses the clean OCR-program and casebook-excerpt
-source `1ae8502a45b66aef7e6f7b75c5be0be229b99c99` (tree
-`d274a93d07d48479ab138837d59f58cf1a1cff4d`), which changed Python source and
-`.gitattributes` but no dependency or model lock. Its Windows and
+source `a15232d004dfbbce0dfa61a173f6f8c15a1e2f0f` (tree
+`7f6b0da7de56194b04988a041b2922fb9500fd52`), which changed Python source and
+`.gitattributes` but no dependency or model lock. It supersedes the
+earlier `1ae8502` pair, whose child `766feaf` passed both hosted Phase A0
+cells but whose dependency-light unit lanes failed at collection. Its Windows and
 Linux CPython 3.12.13 reports were
 generated after the same strict hash-locked synchronization and
 dependency-consistency checks: 191 marker-resolved distributions on
@@ -302,14 +304,16 @@ Task 0.8 static-security source `8891e1b` repeated the cycle: its child
 `1533164` passed the hosted CI lane, including both Phase A0 cells, and
 merged through `e34103f` ([PR #107](https://github.com/toddlar00/rag-pipeline/pull/107); the separate
 networked supply-chain vulnerability/SBOM jobs failed at that head). The
-OCR-program and casebook-excerpt source `1ae8502` supersedes that pair in
-turn. Its Windows report is 51,086 bytes (file SHA-256
-`b11ac1074c0bb78c7a54a84c660d029efff02337bbc06d5a5daf28da830e7291`;
+OCR-program and casebook-excerpt source `1ae8502` superseded that pair,
+and its own pair was superseded before promotion by source `a15232d`
+(dependency-light test guards and the casebook fixes). Its Windows report
+is 51,086 bytes (file SHA-256
+`d93941f7a82870999aee07be2335ddb589803f55aa8cd6d2ca425dbcb649088e`;
 embedded report SHA-256
-`a05dead1c73cf969bdc5aa8f37d24808d76cf4e31fa9a539873e244e3ca8c411`).
-Its Linux report is 50,484 bytes (file SHA-256
-`3de7ea4e5c8955a9c3a1550f4ead85cca282707e22c07c75c2c87e9a00eb5ae2`;
+`6ef1ec69d3f8057622cf33a0c6ace782cb0b8c77b1de2f9173d1a09e9e861d8e`).
+Its Linux report is 50,485 bytes (file SHA-256
+`a2c14e67697cb5a17b85f06c9be66001fcff1d02d575f284fefa72d912ca5f00`;
 embedded report SHA-256
-`31d1a8123054913e5fcb4b4287eb36a84c1ee75ca2595f70d8c00f631e58100b`).
+`48620c03b701ce9a4084b919d1fe5d16f6fca199a72dde972ca1b777349a9b91`).
 Both use CPython 3.12.13 and pass their complete local same-platform 9×5
 comparisons. Hosted promotion remains pending.

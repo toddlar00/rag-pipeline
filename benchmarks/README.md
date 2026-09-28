@@ -9,16 +9,17 @@ fresh-process repetitions.
 
 Both current reports were generated from the clean OCR-program and
 casebook-excerpt source checkpoint
-`1ae8502a45b66aef7e6f7b75c5be0be229b99c99` (tree
-`d274a93d07d48479ab138837d59f58cf1a1cff4d`). That source contains everything through the Task 0.8
+`a15232d004dfbbce0dfa61a173f6f8c15a1e2f0f` (tree
+`7f6b0da7de56194b04988a041b2922fb9500fd52`). That source contains everything through the Task 0.8
 static-security merge `e34103f` plus the local OCR accuracy, retry and
 guided-review program, opt-in AI evidence search, the passive cleanup
 audits, the LLM transport and worker-launch repairs, the casebook
 excerpt/supplement pipeline (including the opt-in OCR angle-classifier
-flag and quality schema 13), two reviewed architecture-inventory
-refreshes, the POSIX symlinked-interpreter identity fix and an LF
-attribute for top-level test fixtures. No dependency or model lock
-changed. The executing
+and interleaved-region-merge flags, the footnote placement replay, the
+split-item duplicate retraction and quality schema 13), three reviewed
+architecture-inventory refreshes, the POSIX symlinked-interpreter identity
+fix, an LF attribute for top-level test fixtures and dependency-light
+test guards. No dependency or model lock changed. The executing
 environments were
 synchronized with repository-pinned uv 0.12.5 against the exact CPU
 application/test lock union plus its retained bootstrapper:
@@ -36,8 +37,8 @@ marker-resolved distributions before generation.
 
 | Platform | Runtime | Report | Bytes | File SHA-256 | Embedded report SHA-256 |
 |---|---:|---|---:|---|---|
-| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,086 | `b11ac1074c0bb78c7a54a84c660d029efff02337bbc06d5a5daf28da830e7291` | `a05dead1c73cf969bdc5aa8f37d24808d76cf4e31fa9a539873e244e3ca8c411` |
-| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,484 | `3de7ea4e5c8955a9c3a1550f4ead85cca282707e22c07c75c2c87e9a00eb5ae2` | `31d1a8123054913e5fcb4b4287eb36a84c1ee75ca2595f70d8c00f631e58100b` |
+| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,086 | `d93941f7a82870999aee07be2335ddb589803f55aa8cd6d2ca425dbcb649088e` | `6ef1ec69d3f8057622cf33a0c6ace782cb0b8c77b1de2f9173d1a09e9e861d8e` |
+| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,485 | `a2c14e67697cb5a17b85f06c9be66001fcff1d02d575f284fefa72d912ca5f00` | `48620c03b701ce9a4084b919d1fe5d16f6fca199a72dde972ca1b777349a9b91` |
 
 The reports attest the same source commit, clean-worktree state, tracked-diff
 digest, eight LF and `HEAD`-identical dependency/model-lock inputs, authoritative
@@ -161,7 +162,11 @@ external exact-SHA record on
 through history-preserving `e34103f` (the separate networked supply-chain
 vulnerability/SBOM jobs failed at that head). The OCR-program and
 casebook-excerpt checkpoint `1ae8502` then changed Python source (no lock
-change), superseding the `8891e1b` pair. The current reports above bind
+change), superseding the `8891e1b` pair; its gate-only child `766feaf`
+passed both hosted Phase A0 cells on [PR #116](https://github.com/toddlar00/rag-pipeline/pull/116), but that head's
+dependency-light unit lanes failed at collection. Source `a15232d`
+(test guards for those lanes and the casebook fixes, still no lock
+change) supersedes it before promotion. The current reports above bind
 that exact clean source and each passes an independent complete
 same-platform 9×5 comparison. No hosted result for this replacement pair
 is claimed here yet; its hosted checks and external exact-SHA record

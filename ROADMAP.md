@@ -1021,7 +1021,10 @@ schema or policy version changed.
   records 7-12 on that page move: the two upper notes now follow the
   passage, before the lower notes. Every record's text and lineage is
   identical. The omission row stays a paragraph of the body record, as in
-  the first pass.
+  the first pass. The derivative was published by a `full` job with this
+  replay, and then again with `--ocr-merge-interleaved-regions` and the
+  split-item retraction below, which superseded that first run; the whole
+  course (18 excerpts and the Summer 2026 Update) is now READY.
 - **Preservation.** All 18 READY h26 runs (h01-h17 and the Summer 2026
   Update) re-chunk byte-identical to their publications: chunks, oracles,
   and quality reports with no structural change. h03 and h16 still take
@@ -1292,11 +1295,14 @@ passed the hosted CI lane, received the external exact-SHA record on
 [PR #107](https://github.com/toddlar00/rag-pipeline/pull/107), and merged
 through history-preserving `e34103f` (two networked supply-chain
 vulnerability/SBOM jobs outside CI failed at that head). The OCR-program
-and casebook-excerpt checkpoint `1ae8502` has since changed Python source
-(no dependency or model lock), so its regenerated Windows/Linux pair
-(independent local same-platform comparisons passed) supersedes the
-`8891e1b` pair as the current candidate; its hosted checks and external
-exact-SHA record are pending on that branch's pull request.
+and casebook-excerpt checkpoint `1ae8502` then changed Python source (no
+dependency or model lock); its gate-only child `766feaf` passed both hosted
+Phase A0 cells on [PR #116](https://github.com/toddlar00/rag-pipeline/pull/116), but that head's dependency-light unit lanes
+failed at collection. Source `a15232d` (their test guards and the casebook
+fixes, still no lock change) supersedes it before promotion: its
+regenerated Windows/Linux pair (independent local same-platform comparisons
+passed) is the current candidate, and its hosted checks and external
+exact-SHA record are pending on [PR #116](https://github.com/toddlar00/rag-pipeline/pull/116).
 
 Two operational follow-ups from the post-merge `main` push runs are open:
 a documentation-only merge passes its fast-lane pull-request run but then
