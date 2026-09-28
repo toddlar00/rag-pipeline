@@ -3,7 +3,8 @@
 - **Status:** A0a integrated; the latest completed hosted A0b technical
   checkpoint passed at Task 0.8 evidence head `1533164` and merged
   through `e34103f`; the OCR-program and casebook-excerpt replacement pair
-  at source `29ea76b` is pending hosted promotion on PR #116; exact-head
+  at source `29ea76b` passed hosted CI on PR #116 and the stacked
+  test-time economy pair at source `365de1c` is pending; exact-head
   human review and separate R8 owner authorization are not recorded
 - **Milestone:** R10 prerequisite for the R8 pipeline-ownership move
 - **Report schema:** `phase-a0` v3
@@ -135,10 +136,12 @@ gate-only child `32153e9` and merge `376277c`
 Task 0.8 static-security pair at source `8891e1b` repeated it through
 gate-only child `1533164` and merge `e34103f`
 ([PR #107](https://github.com/toddlar00/rag-pipeline/pull/107)). The
-current replacement pair uses the clean OCR-program and casebook-excerpt
-source `29ea76bdcfc7184dfb1d600a860c56d6514722d9` (tree
-`6ac5d6d674aa638619385f36865084006db915c2`), which changed Python source and
-`.gitattributes` but no dependency or model lock. It supersedes the
+current replacement pair uses the clean test-time economy source
+`365de1c9d9653f93262dd38c46284dd40585654a` (tree
+`e30d207e7b4d2e4ecac51252eb2321a2d3743e01`), stacked on the
+OCR-program and casebook-excerpt source `29ea76b`; together they changed
+Python source, CI configuration and `.gitattributes` but no dependency
+or model lock. It supersedes the
 earlier `1ae8502` pair, whose child `766feaf` passed both hosted Phase A0
 cells but whose dependency-light unit lanes failed at collection. Source
 `a15232d` then passed both hosted Phase A0 cells on [PR
@@ -150,7 +153,14 @@ those lanes, and its hosted run passed every CI lane except the Windows unit
 lane, which again reached the 20-minute timeout with no test failure. On the
 owner's decision, source `29ea76b` raises that limit to 60 minutes (the live
 workflow, its reviewed fixture and the two pinned workflow hashes) and
-supersedes the `8aa08b2` pair before promotion. Its Windows and
+supersedes the `8aa08b2` pair before promotion. The `29ea76b` pair
+(gate-only child `ed0a0d3`) then passed the hosted CI promotion gate on [PR
+#116](https://github.com/toddlar00/rag-pipeline/pull/116); the separate
+networked vulnerability/SBOM jobs failed at that head. The stacked test-time
+economy source `365de1c` changes Python source and CI configuration (the
+Windows unit lane runs as three shards) but no dependency or model lock, and
+supersedes that pair for its own pull request.
+Its Windows and
 Linux CPython 3.12.13 reports were
 generated after the same strict hash-locked synchronization and
 dependency-consistency checks: 191 marker-resolved distributions on
@@ -317,15 +327,16 @@ networked supply-chain vulnerability/SBOM jobs failed at that head). The
 OCR-program and casebook-excerpt source `1ae8502` superseded that pair,
 and its own pair was superseded before promotion by source `a15232d`
 (dependency-light test guards and the casebook fixes), whose pair was in
-turn superseded by the test-only source `8aa08b2` and then by the
-Windows-timeout source `29ea76b`. Its Windows report
-is 51,086 bytes (file SHA-256
-`8e8829e3ea4d05419f5aff31bef4172ca13e3d3770df7ed147a516716860e7da`;
+turn superseded by the test-only source `8aa08b2`, then by the
+Windows-timeout source `29ea76b` and then by the stacked test-time
+economy source `365de1c`. Its Windows report
+is 51,080 bytes (file SHA-256
+`660a19e58a749978c2be880721f14347af4e6740e32038efa18581d66acc49ad`;
 embedded report SHA-256
-`2dae9eded99a0d8895ca0917a9bdfc2d680d03bb9e70b699f0a48e828a7bed39`).
-Its Linux report is 50,487 bytes (file SHA-256
-`3a6e9437de61b7772562185456324b37c7645d413e2132f12844a936da89ba03`;
+`56121f9f7b9c2d04b0757d64dc2b03d522157da7a0d0edf960698829f9178ff0`).
+Its Linux report is 50,462 bytes (file SHA-256
+`ac9574ba75e6fc853a3982d7680fb18c1c190c3971bff1118a1b18fd47e5591b`;
 embedded report SHA-256
-`a4f77e4fe0bc590f4c9dbd4d4976f601a3502b503c4addb6f62c8473bf138b37`).
+`3e5706b16195dd10945f5f3aae4e135000fa909ab1da3be15dacaae61ea45beb`).
 Both use CPython 3.12.13 and pass their complete local same-platform 9×5
 comparisons. Hosted promotion remains pending.

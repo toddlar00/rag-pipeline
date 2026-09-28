@@ -7,20 +7,24 @@ fresh-process repetitions.
 
 ## Provenance
 
-Both current reports were generated from the clean OCR-program and
-casebook-excerpt source checkpoint
-`29ea76bdcfc7184dfb1d600a860c56d6514722d9` (tree
-`6ac5d6d674aa638619385f36865084006db915c2`). That source contains everything through the Task 0.8
+Both current reports were generated from the clean test-time economy
+source checkpoint
+`365de1c9d9653f93262dd38c46284dd40585654a` (tree
+`e30d207e7b4d2e4ecac51252eb2321a2d3743e01`), stacked on the OCR-program and casebook-excerpt
+checkpoint `29ea76b`. That source contains everything through the Task 0.8
 static-security merge `e34103f` plus the local OCR accuracy, retry and
 guided-review program, opt-in AI evidence search, the passive cleanup
 audits, the LLM transport and worker-launch repairs, the casebook
 excerpt/supplement pipeline (including the opt-in OCR angle-classifier
 and interleaved-region-merge flags, the footnote placement replay, the
-split-item duplicate retraction and quality schema 13), three reviewed
+split-item duplicate retraction and quality schema 13), four reviewed
 architecture-inventory refreshes, the POSIX symlinked-interpreter identity
 fix, an LF attribute for top-level test fixtures, dependency-light
-test guards, a Python 3.10/3.11-tolerant import-guard test and a
-60-minute Windows unit-lane timeout. No dependency or model lock
+test guards, a Python 3.10/3.11-tolerant import-guard test, a
+60-minute Windows unit-lane timeout and the test-time economy changes
+(a session-shared architecture inventory, an indexed inventory builder,
+cached lock-record parsing and executed-source digests, and a Windows
+unit lane split into three shards). No dependency or model lock
 changed. The executing
 environments were
 synchronized with repository-pinned uv 0.12.5 against the exact CPU
@@ -39,8 +43,8 @@ marker-resolved distributions before generation.
 
 | Platform | Runtime | Report | Bytes | File SHA-256 | Embedded report SHA-256 |
 |---|---:|---|---:|---|---|
-| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,086 | `8e8829e3ea4d05419f5aff31bef4172ca13e3d3770df7ed147a516716860e7da` | `2dae9eded99a0d8895ca0917a9bdfc2d680d03bb9e70b699f0a48e828a7bed39` |
-| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,487 | `3a6e9437de61b7772562185456324b37c7645d413e2132f12844a936da89ba03` | `a4f77e4fe0bc590f4c9dbd4d4976f601a3502b503c4addb6f62c8473bf138b37` |
+| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,080 | `660a19e58a749978c2be880721f14347af4e6740e32038efa18581d66acc49ad` | `56121f9f7b9c2d04b0757d64dc2b03d522157da7a0d0edf960698829f9178ff0` |
+| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,462 | `ac9574ba75e6fc853a3982d7680fb18c1c190c3971bff1118a1b18fd47e5591b` | `3e5706b16195dd10945f5f3aae4e135000fa909ab1da3be15dacaae61ea45beb` |
 
 The reports attest the same source commit, clean-worktree state, tracked-diff
 digest, eight LF and `HEAD`-identical dependency/model-lock inputs, authoritative
@@ -178,7 +182,14 @@ those lanes, and its hosted run passed every CI lane except the Windows unit
 lane, which again reached the 20-minute timeout with no test failure. On the
 owner's decision, source `29ea76b` raises that limit to 60 minutes (the live
 workflow, its reviewed fixture and the two pinned workflow hashes) and
-supersedes the `8aa08b2` pair before promotion. The current reports above
+supersedes the `8aa08b2` pair before promotion. The `29ea76b` pair
+(gate-only child `ed0a0d3`) then passed the hosted CI promotion gate on [PR
+#116](https://github.com/toddlar00/rag-pipeline/pull/116); the separate
+networked vulnerability/SBOM jobs failed at that head. The stacked test-time
+economy source `365de1c` changes Python source and CI configuration (the
+Windows unit lane runs as three shards) but no dependency or model lock, and
+supersedes that pair for its own pull request.
+The current reports above
 bind
 that exact clean source and each passes an independent complete
 same-platform 9×5 comparison. No hosted result for this replacement pair
