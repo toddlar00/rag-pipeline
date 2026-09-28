@@ -1026,18 +1026,28 @@ def test_frame_budget_retains_explicit_missing_coverage_without_stopping_cleanup
 
 def test_leaf_import_requires_only_standard_library_and_does_not_load_facade():
     root = Path(audit.__file__).resolve().parent
+    # A non-standard import fails like an absent module, so a standard-library
+    # probe that tolerates ImportError (Python 3.10/3.11 ``copy`` tries
+    # ``org.python.core``) still loads.  Any such import attempted outside the
+    # standard library is recorded and fails the check.
     script = """
 import builtins, sys
 sys.path.insert(0, sys.argv[1])
 original = builtins.__import__
-def guarded(name, *args, **kwargs):
+blocked = []
+def guarded(name, globals=None, locals=None, fromlist=(), level=0):
     top = name.split('.', 1)[0]
     if top not in sys.stdlib_module_names and top != 'source_cleanup_audit':
-        raise AssertionError('non-stdlib import: ' + name)
-    return original(name, *args, **kwargs)
+        importer = str((globals or {}).get('__name__', ''))
+        blocked.append((importer, name))
+        raise ImportError('non-stdlib import: ' + name)
+    return original(name, globals, locals, fromlist, level)
 builtins.__import__ = guarded
 import source_cleanup_audit
 assert 'rag' not in sys.modules
+outside = [(importer, name) for importer, name in blocked
+           if importer.split('.', 1)[0] not in sys.stdlib_module_names]
+assert not outside, outside
 """
     completed = subprocess.run([sys.executable, "-I", "-B", "-c", script, str(root)],
                                capture_output=True, text=True, timeout=10)
