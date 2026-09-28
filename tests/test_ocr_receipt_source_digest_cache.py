@@ -19,13 +19,13 @@ import ocr_execution_receipt as receipt
 def reads(monkeypatch):
     monkeypatch.setattr(receipt, "_SOURCE_DIGESTS", {})
     calls = []
-    real = receipt._read_snapshot
+    real = receipt._read_executed_source
 
-    def counting(path, **kwargs):
+    def counting(path):
         calls.append(path)
-        return real(path, **kwargs)
+        return real(path)
 
-    monkeypatch.setattr(receipt, "_read_snapshot", counting)
+    monkeypatch.setattr(receipt, "_read_executed_source", counting)
     return calls
 
 
@@ -141,3 +141,38 @@ def test_loaded_source_digests_match_the_files_on_disk(monkeypatch):
     assert first["ocr_execution_receipt"] == hashlib.sha256(
         receipt.ROOT.joinpath("ocr_execution_receipt.py").read_bytes()
     ).hexdigest()
+
+
+def test_bytes_from_a_file_swapped_in_during_the_read_are_not_cached(
+        tmp_path, reads, monkeypatch):
+    # The path is swapped out and back around the read: lstat sees the same
+    # file before and after, but the handle actually read another file.
+    source = settled(tmp_path / "module.py", "VALUE = 1\n")
+    real = receipt._read_executed_source
+
+    def swapped(path):
+        digest, fingerprint = real(path)
+        return "0" * 64, (fingerprint[0], fingerprint[1] + 1) + fingerprint[2:]
+
+    monkeypatch.setattr(receipt, "_read_executed_source", swapped)
+    assert receipt._executed_source_digest(source) == "0" * 64
+    assert source not in receipt._SOURCE_DIGESTS
+
+    monkeypatch.setattr(receipt, "_read_executed_source", real)
+    assert receipt._executed_source_digest(source) == sha256(source)
+
+
+def test_a_changed_ctime_forces_a_re_read(tmp_path, reads, monkeypatch):
+    # An in-place rewrite that restores size and mtime still changes ctime.
+    source = settled(tmp_path / "module.py", "VALUE = 1\n")
+    receipt._executed_source_digest(source)
+    real = receipt._source_identity
+
+    def later_ctime(path):
+        mode, size, mtime_ns, ctime_ns, inode, device = real(path)
+        return mode, size, mtime_ns, ctime_ns + 1, inode, device
+
+    monkeypatch.setattr(receipt, "_source_identity", later_ctime)
+    receipt._executed_source_digest(source)
+
+    assert len(reads) == 2
