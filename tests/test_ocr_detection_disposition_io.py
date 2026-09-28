@@ -313,7 +313,7 @@ def test_upstream_generation_requires_exact_pinned_bytes(tmp_path, monkeypatch):
 
 
 def test_unsupported_project_entrypoint_refuses_before_input_reads(case, monkeypatch):
-    monkeypatch.setattr(sys.modules["__main__"], "__file__", str(workflow.ROOT / "tools" / "other.py"))
+    monkeypatch.setattr(sys.modules["__main__"], "__file__", str(workflow.ROOT / "tools" / "other.py"), raising=False)
     monkeypatch.setattr(workflow, "_snapshot", lambda *_a, **_kw: pytest.fail("must refuse before input reads"))
     with pytest.raises(ValueError, match="fixed CLI"):
         _request(case)
@@ -322,7 +322,7 @@ def test_unsupported_project_entrypoint_refuses_before_input_reads(case, monkeyp
 
 @pytest.mark.parametrize("relative", ["tools/review_ocr.py", "tools/../tools/review_ocr.py"])
 def test_review_host_can_prepare_but_cannot_execute_in_process(case, monkeypatch, relative):
-    monkeypatch.setattr(sys.modules["__main__"], "__file__", str(workflow.ROOT / relative))
+    monkeypatch.setattr(sys.modules["__main__"], "__file__", str(workflow.ROOT / relative), raising=False)
     request = _request(case, requested_pages=(1,))
     assert request.payload["configuration"]["requested_pages"] == [1]
     assert not case.output.exists() and FailedReader.attempts == []
@@ -335,7 +335,7 @@ def test_review_host_can_prepare_but_cannot_execute_in_process(case, monkeypatch
 @pytest.mark.parametrize("relative", ["review_ocr.py", "tools/other.py", "tools/review_ocr_copy.py",
                                       "tools/../other.py", "tools/../tools/other.py"])
 def test_review_request_admission_does_not_admit_other_project_paths(case, monkeypatch, relative):
-    monkeypatch.setattr(sys.modules["__main__"], "__file__", str(workflow.ROOT / relative))
+    monkeypatch.setattr(sys.modules["__main__"], "__file__", str(workflow.ROOT / relative), raising=False)
     monkeypatch.setattr(workflow, "_snapshot", lambda *_a, **_kw: pytest.fail("must refuse before input reads"))
     with pytest.raises(ValueError, match="fixed CLI"):
         _request(case)
@@ -348,7 +348,7 @@ def test_review_request_admission_does_not_admit_other_project_paths(case, monke
 def test_existing_execution_hosts_remain_admitted(case, monkeypatch, host):
     entrypoint = (workflow.ROOT / "tools" / "diagnose_ocr_dispositions.py" if host == "diagnostic"
                   else case.source.parent / "external_host.py")
-    monkeypatch.setattr(sys.modules["__main__"], "__file__", str(entrypoint))
+    monkeypatch.setattr(sys.modules["__main__"], "__file__", str(entrypoint), raising=False)
     request = _request(case)
     result = _run(case)
     assert result == _read(case, request)
@@ -358,7 +358,7 @@ def test_existing_execution_hosts_remain_admitted(case, monkeypatch, host):
 def test_review_host_readback_still_checks_independently_supplied_request(case, monkeypatch):
     request = _request(case)
     _run(case)
-    monkeypatch.setattr(sys.modules["__main__"], "__file__", str(workflow.ROOT / "tools" / "review_ocr.py"))
+    monkeypatch.setattr(sys.modules["__main__"], "__file__", str(workflow.ROOT / "tools" / "review_ocr.py"), raising=False)
     assert _read(case, request) == _read(case, _request(case, readback=True))
     case.source.write_bytes(b"changed reviewed source")
     with pytest.raises(RuntimeError):
