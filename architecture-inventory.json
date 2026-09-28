@@ -63460,7 +63460,7 @@
     "top_level_function_count": 2909
   },
   "tracked_sources": {
-    "count": 484,
+    "count": 485,
     "groups": [
       {
         "count": 152,
@@ -63621,7 +63621,7 @@
         ]
       },
       {
-        "count": 289,
+        "count": 290,
         "name": "tests",
         "paths": [
           "tests/conftest.py",
@@ -63865,6 +63865,7 @@
           "tests/test_release_security.py",
           "tests/test_release_security_boundaries.py",
           "tests/test_reorder_ocr_cli.py",
+          "tests/test_reranker_runtime_compat.py",
           "tests/test_resource_lease.py",
           "tests/test_retention.py",
           "tests/test_retrieval_core.py",
