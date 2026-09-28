@@ -26373,7 +26373,7 @@
   "schema_version": 3,
   "source_architecture": {
     "class_count": 327,
-    "function_count": 4371,
+    "function_count": 4372,
     "import_graph": {
       "cyclic_components": [],
       "edge_count": 646,
@@ -33458,7 +33458,7 @@
       {
         "class_count": 0,
         "classes": [],
-        "definition_locations_sha256": "5cb900aa23526fab4d365393710cbe2111a69777e28b9899264c266186932d3a",
+        "definition_locations_sha256": "23ab6d8effa56d3e3cbabfdb0f1bacd15de38c2c5bc86f8f19a20b07bd5b9360",
         "function_count": 3,
         "functions": [
           {
@@ -33528,9 +33528,9 @@
           }
         ],
         "module": "ocr_checkpoint_runtime",
-        "non_blank_lines": 62,
+        "non_blank_lines": 63,
         "path": "ocr_checkpoint_runtime.py",
-        "physical_lines": 74,
+        "physical_lines": 75,
         "top_level_function_count": 3
       },
       {
@@ -56909,8 +56909,8 @@
             "scope": "nested"
           }
         ],
-        "definition_locations_sha256": "4fdbafd285f6df5ccd0358bcea547656a645dda0c998362d452953877aeb269e",
-        "function_count": 40,
+        "definition_locations_sha256": "ff0d2ed0b6ae2dc68aadd816b53555bf92216360a3a5ce0f058177a2acb05550",
+        "function_count": 41,
         "functions": [
           {
             "kind": "function",
@@ -57124,6 +57124,12 @@
           },
           {
             "kind": "function",
+            "name": "interpreter_file",
+            "scope": "top_level",
+            "signature_sha256": "9d2089fea209779697927e7c20b38c5c226f18f215c734c8dc02a35dc01f4dbc"
+          },
+          {
+            "kind": "function",
             "name": "jsonl_lines",
             "scope": "top_level",
             "signature_sha256": "82cb7558d8bb7bf62a8fdb435dfadea26963f9948d306ebde5ece9d2550939d2"
@@ -57155,10 +57161,10 @@
         ],
         "import_edges": [],
         "module": "storage_policy",
-        "non_blank_lines": 1147,
+        "non_blank_lines": 1159,
         "path": "storage_policy.py",
-        "physical_lines": 1264,
-        "top_level_function_count": 37
+        "physical_lines": 1279,
+        "top_level_function_count": 38
       },
       {
         "class_count": 0,
@@ -61113,7 +61119,7 @@
             "scope": "top_level"
           }
         ],
-        "definition_locations_sha256": "1aa9e7e27a7eff9fa14f2c649cda2309041cd8f292e5b2123ef4ed8e1dabb6af",
+        "definition_locations_sha256": "c9320b53869bed388665a052a7cbd2505bdef5c5e85848d177456bd7b4f3d982",
         "function_count": 8,
         "functions": [
           {
@@ -61213,9 +61219,9 @@
           }
         ],
         "module": "tools.install_ocr_environment",
-        "non_blank_lines": 178,
+        "non_blank_lines": 179,
         "path": "tools/install_ocr_environment.py",
-        "physical_lines": 204,
+        "physical_lines": 205,
         "top_level_function_count": 6
       },
       {
@@ -62759,16 +62765,16 @@
         "top_level_function_count": 2
       }
     ],
-    "physical_line_count": 129229,
+    "physical_line_count": 129246,
     "source_groups": [
       "production",
       "tools",
       "other"
     ],
-    "top_level_function_count": 2895
+    "top_level_function_count": 2896
   },
   "tracked_sources": {
-    "count": 472,
+    "count": 473,
     "groups": [
       {
         "count": 152,
@@ -62929,7 +62935,7 @@
         ]
       },
       {
-        "count": 277,
+        "count": 278,
         "name": "tests",
         "paths": [
           "tests/service_evidence_fixtures.py",
@@ -62991,6 +62997,7 @@
           "tests/test_inspect_ocr_runtime_cli.py",
           "tests/test_inspect_ocr_scan_cli.py",
           "tests/test_install_ocr_environment.py",
+          "tests/test_interpreter_file.py",
           "tests/test_job_application.py",
           "tests/test_job_coordination_contracts.py",
           "tests/test_job_manager.py",
