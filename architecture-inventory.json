@@ -828,7 +828,7 @@
         "dynamic_sites": [],
         "nested": [
           {
-            "locations_sha256": "689e7c5157d87700d3681af0163a5bf590eefadec24ae657dde024c32c9734e4",
+            "locations_sha256": "58f4fd4ada6bc240de9f7cb24349339a849c7c81db922f491b4784216507e087",
             "occurrence_count": 1,
             "operations": [
               "assign"
@@ -842,7 +842,7 @@
             "target": "operating.getenv"
           },
           {
-            "locations_sha256": "456ada43b8bcc35d8be0ed10b3ab07caa82049b7f9099c67543fda7a6de77e0d",
+            "locations_sha256": "516bb4c6dcb532d9400f489f0792af4967931f114a554d8fd26d80e304b4dd02",
             "occurrence_count": 1,
             "operations": [
               "delete"
@@ -1774,7 +1774,7 @@
             "target": "log.warning"
           },
           {
-            "locations_sha256": "db061f367d93890eb58e9efb38592f8def73e67df368cb5be4a663829fff9311",
+            "locations_sha256": "f7fc168cc6bcd06080cb6d4b216709130f83526040a534755c46927d958e5c3c",
             "occurrence_count": 2,
             "operations": [
               "setattr"
@@ -26910,10 +26910,10 @@
   "schema_version": 3,
   "source_architecture": {
     "class_count": 329,
-    "function_count": 4390,
+    "function_count": 4394,
     "import_graph": {
       "cyclic_components": [],
-      "edge_count": 646,
+      "edge_count": 647,
       "edge_policy": "first-party-all-contexts-with-provenance-v1"
     },
     "module_count": 195,
@@ -38861,8 +38861,8 @@
             "scope": "nested"
           }
         ],
-        "definition_locations_sha256": "218f2dfe2fabc001c89664dc0b71b024eba28da8a2f4096429526157876b3c5e",
-        "function_count": 18,
+        "definition_locations_sha256": "5b6ed56d84f8915eee71fab799dc8ab0ae17e8ede3cdc2706992ec86b9953f52",
+        "function_count": 20,
         "functions": [
           {
             "kind": "function",
@@ -38920,6 +38920,12 @@
           },
           {
             "kind": "function",
+            "name": "_executed_source_digest",
+            "scope": "top_level",
+            "signature_sha256": "ca3080ffafaa2685edcc74c88e53e112e098986b77b40304ab76bd3297e8b1b5"
+          },
+          {
+            "kind": "function",
             "name": "_loaded_source_digests",
             "scope": "top_level",
             "signature_sha256": "f5e8b8d16b1285e58ba870576d0b26dc373c32506e2357e56af898ece77c403d"
@@ -38935,6 +38941,12 @@
             "name": "_safe",
             "scope": "top_level",
             "signature_sha256": "89effe7c9a46561f78c2e49f7fcc1384cbe0cbde9ca4dfeeb68e02a54c03f9be"
+          },
+          {
+            "kind": "function",
+            "name": "_source_identity",
+            "scope": "top_level",
+            "signature_sha256": "9a76590e32b84b03342d31e95c4c15bbdafcc5d2c5cb7859cfcffdb8684f7364"
           },
           {
             "kind": "function",
@@ -39018,19 +39030,28 @@
               }
             ],
             "target": "ocr_experiment_runtime"
+          },
+          {
+            "evidence": [
+              {
+                "context": "runtime",
+                "origin": "static"
+              }
+            ],
+            "target": "storage_policy"
           }
         ],
         "module": "ocr_execution_receipt",
-        "non_blank_lines": 357,
+        "non_blank_lines": 386,
         "path": "ocr_execution_receipt.py",
-        "physical_lines": 400,
-        "top_level_function_count": 10
+        "physical_lines": 436,
+        "top_level_function_count": 12
       },
       {
         "class_count": 0,
         "classes": [],
-        "definition_locations_sha256": "475d7402b3979840649662941eaed308eb722a7c4a480cd2d854ee5511a9677b",
-        "function_count": 13,
+        "definition_locations_sha256": "ea938a844a870147904c0fa03d8178e50e321fb30453034b0ab4eb73d76ffa9c",
+        "function_count": 14,
         "functions": [
           {
             "kind": "function",
@@ -39100,6 +39121,12 @@
           },
           {
             "kind": "function",
+            "name": "_parsed_lock_records",
+            "scope": "top_level",
+            "signature_sha256": "c0bb895193b3380fd80daec3700799aa1a73f292ba59108b49f90af57ed5f402"
+          },
+          {
+            "kind": "function",
             "name": "_safe",
             "scope": "top_level",
             "signature_sha256": "cfd106886e46b582870636a9cb63317edd6214c58cb48686b27233272a187b70"
@@ -39123,10 +39150,10 @@
           }
         ],
         "module": "ocr_experiment_runtime",
-        "non_blank_lines": 263,
+        "non_blank_lines": 272,
         "path": "ocr_experiment_runtime.py",
-        "physical_lines": 294,
-        "top_level_function_count": 10
+        "physical_lines": 306,
+        "top_level_function_count": 11
       },
       {
         "class_count": 0,
@@ -58831,8 +58858,8 @@
             "scope": "nested"
           }
         ],
-        "definition_locations_sha256": "8ffa78c6db3d0d46f4b7360b422c4058c8cc85259cad4e29ed04692f3d783848",
-        "function_count": 207,
+        "definition_locations_sha256": "f5d675de405bcd53fd7b6b49e160d4a59a92abd5f9448cd8f67a443e5054a0cf",
+        "function_count": 208,
         "functions": [
           {
             "kind": "function",
@@ -59448,6 +59475,12 @@
           },
           {
             "kind": "function",
+            "name": "_ScopeMap.nodes_in",
+            "scope": "class",
+            "signature_sha256": "bc2f23ae459978c2af26d5f6a8e5deeab2962701f4d817d2163b23e62d588b39"
+          },
+          {
+            "kind": "function",
             "name": "_ScopeMap.visit",
             "scope": "class",
             "signature_sha256": "1cd6dc85b84812b7b7128dbe578c8eab5bf4b49d7d70dd4e222a83f3b193742e"
@@ -60044,7 +60077,7 @@
             "kind": "function",
             "name": "check_baseline",
             "scope": "top_level",
-            "signature_sha256": "7945da8ece22956e4fbee166cf45566951e28e8be3cfbff53f5e71d932583a61"
+            "signature_sha256": "a5c97ccdb994feb850c933e4e0732b010498da962855f160516c4d9c87dc1bc9"
           },
           {
             "kind": "function",
@@ -60107,9 +60140,9 @@
           }
         ],
         "module": "tools.check_architecture_inventory",
-        "non_blank_lines": 3709,
+        "non_blank_lines": 3719,
         "path": "tools/check_architecture_inventory.py",
-        "physical_lines": 4057,
+        "physical_lines": 4069,
         "top_level_function_count": 73
       },
       {
@@ -60124,7 +60157,7 @@
             "scope": "top_level"
           }
         ],
-        "definition_locations_sha256": "42703a7448d618b6d67ee4532af25f3d8914665ff82c5148848763c365ec6b17",
+        "definition_locations_sha256": "92e01c839a4603dc890a521e14dcbfb4a8d9fba0941f0b36d14fc67a34007f35",
         "function_count": 41,
         "functions": [
           {
@@ -60376,9 +60409,9 @@
         ],
         "import_edges": [],
         "module": "tools.check_ci_security",
-        "non_blank_lines": 1829,
+        "non_blank_lines": 1834,
         "path": "tools/check_ci_security.py",
-        "physical_lines": 1955,
+        "physical_lines": 1960,
         "top_level_function_count": 40
       },
       {
@@ -63418,16 +63451,16 @@
         "top_level_function_count": 2
       }
     ],
-    "physical_line_count": 129642,
+    "physical_line_count": 129707,
     "source_groups": [
       "production",
       "tools",
       "other"
     ],
-    "top_level_function_count": 2906
+    "top_level_function_count": 2909
   },
   "tracked_sources": {
-    "count": 479,
+    "count": 484,
     "groups": [
       {
         "count": 152,
@@ -63588,9 +63621,10 @@
         ]
       },
       {
-        "count": 284,
+        "count": 289,
         "name": "tests",
         "paths": [
+          "tests/conftest.py",
           "tests/service_evidence_fixtures.py",
           "tests/test_ai_pipeline_client.py",
           "tests/test_ai_project_export.py",
@@ -63598,6 +63632,7 @@
           "tests/test_application_composition.py",
           "tests/test_architecture.py",
           "tests/test_architecture_inventory.py",
+          "tests/test_architecture_inventory_scope_index.py",
           "tests/test_artifact_io.py",
           "tests/test_artifact_snapshot_bounds.py",
           "tests/test_attempt_reporting.py",
@@ -63741,10 +63776,12 @@
           "tests/test_ocr_layout_assignment.py",
           "tests/test_ocr_layout_assignment_io.py",
           "tests/test_ocr_layout_io.py",
+          "tests/test_ocr_lock_records_cache.py",
           "tests/test_ocr_omission.py",
           "tests/test_ocr_omission_io.py",
           "tests/test_ocr_preprocessing.py",
           "tests/test_ocr_preprocessing_integration.py",
+          "tests/test_ocr_receipt_source_digest_cache.py",
           "tests/test_ocr_recovery.py",
           "tests/test_ocr_recovery_comparison.py",
           "tests/test_ocr_recovery_runtime.py",
@@ -63871,6 +63908,7 @@
           "tests/test_support_utilities.py",
           "tests/test_sync_model_artifacts.py",
           "tests/test_table_retrieval_core.py",
+          "tests/test_test_sharding.py",
           "tests/test_ui.py",
           "tests/test_vector_lifecycle.py",
           "tests/test_vector_store_concurrency.py",
