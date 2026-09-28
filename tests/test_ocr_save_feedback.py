@@ -280,6 +280,7 @@ def test_archive_reviewed_declaration_is_detached_before_pending_yield(archive_u
 
 def test_actual_pending_status_postprocess_failure_cannot_reach_publication(case, monkeypatch):
     """Retain/close the original iterator explicitly; no framework cleanup claim."""
+    pytest.importorskip("gradio")
     from gradio.exceptions import ComponentProcessingError
 
     ui = case.ui
@@ -321,7 +322,7 @@ def test_actual_pending_status_postprocess_failure_cannot_reach_publication(case
 
 
 def test_save_wiring_progress_is_blank_separate_private_and_not_a_button_disable(case):
-    import gradio as gr
+    gr = pytest.importorskip("gradio")
 
     ui = case.ui
     for reviewed in (False, True):
@@ -343,13 +344,15 @@ def test_save_wiring_progress_is_blank_separate_private_and_not_a_button_disable
 
 @pytest.mark.parametrize("panel", [None, True, 1, [], "LIVE", "unknown"])
 def test_feedback_target_allowlist_is_exact(panel):
+    # build_save_feedback imports gradio before it validates the panel.
+    pytest.importorskip("gradio")
     with pytest.raises(ValueError, match="invalid Save feedback panel"):
         feedback.build_save_feedback(panel)
 
 
 @pytest.mark.parametrize("panel", ["live", "archive"])
 def test_feedback_template_is_escaped_and_live_region_is_not_progress(panel):
-    import gradio as gr
+    gr = pytest.importorskip("gradio")
 
     with gr.Blocks() as app:
         status, progress, script = feedback.build_save_feedback(panel)
@@ -370,7 +373,7 @@ def test_feedback_template_is_escaped_and_live_region_is_not_progress(panel):
 
 @pytest.mark.parametrize("panel", ["live", "archive"])
 def test_actual_client_hook_preserves_each_argument_identity_and_only_fixed_panel_text(panel):
-    import gradio as gr
+    gr = pytest.importorskip("gradio")
 
     with gr.Blocks() as app:
         status, _progress, script = feedback.build_save_feedback(panel)

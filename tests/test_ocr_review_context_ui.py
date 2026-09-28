@@ -242,7 +242,7 @@ def button(ui, label):
 
 
 def test_real_gradio_selectdata_injection_and_private_shared_queue(ui):
-    import gradio as gr
+    gr = pytest.importorskip("gradio")
     from gradio.helpers import special_args
 
     selected = [block for block in ui.app.fns.values() if block.fn and block.fn.__name__ == "context_selection"]
@@ -287,7 +287,7 @@ def test_real_queue_rejects_captured_old_context_save_after_switch(ui):
 
 
 def test_candidate_unchanged_or_stale_input_is_noop_and_current_edit_restores_saved_text(ui):
-    import gradio as gr
+    gr = pytest.importorskip("gradio")
 
     controller = ContextAuthoring(ui.workspace)
     state = step(controller, ui.state, "new_context")
@@ -354,7 +354,7 @@ def test_pending_source_fields_survive_switch_and_corners_then_revoke_completed_
 
 
 def test_real_render_preserves_unfinished_source_controls_and_clears_page_and_deleted_context(ui, monkeypatch):
-    import gradio as gr
+    gr = pytest.importorskip("gradio")
 
     Image = pytest.importorskip("PIL.Image")
     monkeypatch.setattr(ui.workspace, "render_original_page", lambda _page: Image.new("RGB", (100, 80), "white"))
@@ -432,7 +432,7 @@ def test_invalid_pending_source_fields_are_rejected_without_fabricating_geometry
     ("Saved candidate text for context selection", [1, 1], "", False, True),
 ])
 def test_native_caret_and_no_check_events_leave_pending_form_and_session_untouched(ui, monkeypatch, label, index, value, no_check, stale):
-    import gradio as gr
+    gr = pytest.importorskip("gradio")
 
     controller = ContextAuthoring(ui.workspace)
     state = step(controller, ui.state, "new_context")
@@ -474,7 +474,7 @@ def test_native_caret_and_no_check_events_leave_pending_form_and_session_untouch
     ("Saved candidate text for context selection", [0, 1], "Z", True),
 ])
 def test_actionable_or_malformed_text_selection_keeps_existing_refusal_guards(ui, label, index, value, stale):
-    import gradio as gr
+    gr = pytest.importorskip("gradio")
 
     controller = ContextAuthoring(ui.workspace)
     state = step(controller, ui.state, "new_context")
@@ -499,7 +499,7 @@ def test_actionable_or_malformed_text_selection_keeps_existing_refusal_guards(ui
 
 
 def test_native_source_image_zero_coordinates_still_store_first_corner(ui, monkeypatch):
-    import gradio as gr
+    gr = pytest.importorskip("gradio")
 
     Image = pytest.importorskip("PIL.Image")
     monkeypatch.setattr(ui.workspace, "render_original_page", lambda _page: Image.new("RGB", (100, 80), "white"))
@@ -663,7 +663,7 @@ def navigation(ui, label):
 
 
 def test_navigation_echoes_preserve_pending_forms_without_source_checks_or_state_copies(ui, monkeypatch):
-    import gradio as gr
+    gr = pytest.importorskip("gradio")
 
     controller = ContextAuthoring(ui.workspace)
     state = step(controller, ui.state, "new_context")
@@ -762,7 +762,7 @@ def test_real_queue_same_target_navigation_rejects_an_old_capture_after_switch(u
 def test_dropdown_switch_preserves_reference_binding_and_repeated_result_focus(editor, monkeypatch):
     from types import SimpleNamespace
 
-    import gradio as gr
+    gr = pytest.importorskip("gradio")
     import ocr_context_evaluation_io
     from ocr_review_context_ui import mount_context_authoring
     from test_ocr_review_columns import _configure_download_cache
@@ -864,7 +864,7 @@ def test_duplicate_candidate_selection_keeps_reviews_exports_and_required_valida
 def test_duplicate_candidate_callback_skips_outputs_without_staling_captured_review(editor, monkeypatch):
     from types import SimpleNamespace
 
-    import gradio as gr
+    gr = pytest.importorskip("gradio")
     import ocr_review_context_ui as context_ui
     from test_ocr_review_columns import _configure_download_cache
 

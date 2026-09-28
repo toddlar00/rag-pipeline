@@ -42,6 +42,7 @@ def score_inputs(ui):
 def test_actual_queued_old_action_cannot_consume_same_image_fresh_authority(
         ui, monkeypatch, tmp_path, policy, fresh_state, old_action):
     from fastapi import Request
+    pytest.importorskip("gradio")
     from gradio.data_classes import PredictBodyInternal
 
     if policy == "unresolved":
