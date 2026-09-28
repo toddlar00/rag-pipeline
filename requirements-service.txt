@@ -3,4 +3,4 @@ fastapi==0.141.1
 qdrant-client==1.19.0
 requests==2.34.2
 tqdm==4.70.0
-uvicorn==0.52.4
+uvicorn==0.54.0
