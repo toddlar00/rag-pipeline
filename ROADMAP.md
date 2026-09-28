@@ -1322,8 +1322,11 @@ source was read correctly. No schema or policy version changed.
 - **Fused-term spellings.** Normalization rewrote `threejudge` as
   `three-judge` even in source-bound text whose OCR item read `threejudge`.
   `chunking_core._normalize_text` gains `repair_fused_terms` (default on).
-  The source-bound wrapper turns it off through a context variable, so no
-  patchable normalization seam changes its signature. A replacement core
+  The source-bound chunk normalizer (`_normalize_source_chunk_text`,
+  including its duplicate-line allowance keys) turns it off through a
+  context variable, so no patchable normalization seam changes its
+  signature. The variable holds a per-call scope that closes on return,
+  so a context copied during the call cannot revive it. A replacement core
   with the established signature keeps working.
 - **Publication checks.** The structural publication check and the
   quality report's `normalization_invariants` both rejected every known
@@ -1336,13 +1339,18 @@ source was read correctly. No schema or policy version changed.
   mtime) matches the `lstat` identity observed before the read. The `lstat`
   identity also includes ctime, which is compared only between `lstat`
   calls because Windows `lstat` and `fstat` report different ctime
-  semantics.
-- **Evidence.** `tests/test_ocr_token_fidelity_fixes.py` (11 tests; the
-  behavioural ones fail on the base code) and two new receipt-cache
-  tests. All 19 READY h26 runs re-chunk byte-identical: chunks, oracles and
-  quality reports. The previously failing excerpt with the merge join now
-  fails only on its folio item. The fused-term excerpt now passes all five
-  publication gates.
+  semantics. A read whose handle is not the observed file is retried, and
+  after three such reads the receipt fails instead of binding other
+  bytes.
+- **Evidence.** `tests/test_ocr_token_fidelity_fixes.py` (13 tests; the
+  behavioural ones fail on the base code) and three new receipt-cache tests.
+  An independent review found that the allowance keys still used the
+  repaired spelling, which dropped a source-attested repeated line; that
+  case, the copied-context revival and the retry now have tests that fail on
+  the reviewed head. All 19 READY h26 runs re-chunk byte-identical: chunks,
+  oracles and quality reports. The previously failing excerpt with the merge
+  join now fails only on its folio item. The fused-term excerpt now passes
+  all five publication gates.
 - **Follow-ups (not fixed).**
   - A folio misread by OCR (here `4` read as `1`) and labeled body text is
     stripped as a page number, so `source_token_fidelity` fails on it. The
@@ -1355,6 +1363,15 @@ source was read correctly. No schema or policy version changed.
     hybrid order and exits 0.
   - `build_save_feedback` imports gradio before it validates its panel
     argument, so that argument's validation test needs gradio.
+  - Two other source-bound paths still apply the fused-term spellings: the
+    chapter summary-of-contents table and the native-edit fallback in
+    chunk text repair. Both fail closed at fidelity.
+  - `normalization_invariants` changed meaning without a quality schema
+    bump. A verifier older than this change rejects a READY report whose
+    source-bound text keeps an attested fused spelling, so such runs
+    belong to this code or later.
+  - No test covers one source item that the chunker splits at a line-end
+    hyphen and whose two slices a merge joins again.
 
 ### Integrated convergence
 

@@ -143,23 +143,40 @@ def test_loaded_source_digests_match_the_files_on_disk(monkeypatch):
     ).hexdigest()
 
 
-def test_bytes_from_a_file_swapped_in_during_the_read_are_not_cached(
+def test_bytes_from_a_file_swapped_in_during_the_read_are_read_again(
         tmp_path, reads, monkeypatch):
-    # The path is swapped out and back around the read: lstat sees the same
-    # file before and after, but the handle actually read another file.
+    # The path is swapped out and back around the first read: lstat sees the
+    # same file before and after, but the handle read another file.
+    source = settled(tmp_path / "module.py", "VALUE = 1\n")
+    real = receipt._read_executed_source
+    calls = []
+
+    def swapped_once(path):
+        calls.append(path)
+        digest, fingerprint = real(path)
+        if len(calls) == 1:
+            return "0" * 64, (fingerprint[0], fingerprint[1] + 1) + fingerprint[2:]
+        return digest, fingerprint
+
+    monkeypatch.setattr(receipt, "_read_executed_source", swapped_once)
+
+    assert receipt._executed_source_digest(source) == sha256(source)
+    assert len(calls) == 2
+
+
+def test_a_read_that_never_matches_the_file_fails(tmp_path, reads, monkeypatch):
     source = settled(tmp_path / "module.py", "VALUE = 1\n")
     real = receipt._read_executed_source
 
-    def swapped(path):
+    def always_swapped(path):
         digest, fingerprint = real(path)
         return "0" * 64, (fingerprint[0], fingerprint[1] + 1) + fingerprint[2:]
 
-    monkeypatch.setattr(receipt, "_read_executed_source", swapped)
-    assert receipt._executed_source_digest(source) == "0" * 64
-    assert source not in receipt._SOURCE_DIGESTS
+    monkeypatch.setattr(receipt, "_read_executed_source", always_swapped)
 
-    monkeypatch.setattr(receipt, "_read_executed_source", real)
-    assert receipt._executed_source_digest(source) == sha256(source)
+    with pytest.raises(RuntimeError, match="changed while it was read"):
+        receipt._executed_source_digest(source)
+    assert source not in receipt._SOURCE_DIGESTS
 
 
 def test_a_changed_ctime_forces_a_re_read(tmp_path, reads, monkeypatch):

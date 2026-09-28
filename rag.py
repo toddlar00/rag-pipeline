@@ -6439,9 +6439,20 @@ def _normalize_text(
 # attest, so it must not apply the known fused-term spellings
 # (``threejudge`` -> ``three-judge``), which split one token into two.  The
 # flag travels in a context variable so that no patchable normalization
-# seam changes its signature.
-_SOURCE_BOUND_NORMALIZATION = contextvars.ContextVar(
-    "rag_source_bound_normalization", default=False)
+# seam changes its signature.  The variable holds one scope per call, closed
+# when the call returns, so a context copied inside the call cannot revive it.
+class _SourceBoundScope:
+    """One active source-bound normalization call."""
+
+    __slots__ = ("active",)
+
+    def __init__(self) -> None:
+        self.active = True
+
+
+_SOURCE_BOUND_NORMALIZATION: contextvars.ContextVar[
+    _SourceBoundScope | None] = contextvars.ContextVar(
+        "rag_source_bound_normalization", default=None)
 
 
 def _core_fused_term_kwargs(core) -> dict:
@@ -6450,7 +6461,8 @@ def _core_fused_term_kwargs(core) -> dict:
     A replacement core with the established signature keeps working and
     keeps its own behaviour; only the genuine core accepts the option.
     """
-    if (not _SOURCE_BOUND_NORMALIZATION.get()
+    scope = _SOURCE_BOUND_NORMALIZATION.get()
+    if (scope is None or not scope.active
             or core is not _SOURCE_CLEANUP_CORE_NORMALIZE):
         return {}
     return {"repair_fused_terms": False}
@@ -6571,10 +6583,14 @@ def _source_attested_duplicate_line_allowances(
             _source_cleanup_audit._value("source_item.decision", "empty_ref_or_text")
             continue
         with _source_cleanup_audit._pass_scope("source_line", "auxiliary", source_text) as attempt:
+            # Allowance keys must be normalized exactly as the output is, or a
+            # source-attested repeated line would lose its allowance.
+            core = _chunking_core._normalize_text
             normalized = _source_cleanup_audit._call_core(
-                _chunking_core._normalize_text, _SOURCE_CLEANUP_CORE_NORMALIZE, source_text,
+                core, _SOURCE_CLEANUP_CORE_NORMALIZE, source_text,
                 strip_headers_footers_fn=lambda value: value,
                 dedup_nearby_lines_fn=lambda value: value,
+                **_core_fused_term_kwargs(core),
             )
             attempt.finish(normalized, "auxiliary")
         lines = [line.strip() for line in normalized.splitlines()
@@ -6637,10 +6653,12 @@ def _source_attested_duplicate_line_allowances(
         return allowances
     _source_cleanup_audit._value("canonical.decision", "window_accepted")
     with _source_cleanup_audit._pass_scope("canonical_fragment", "auxiliary", fragment_text) as attempt:
+        core = _chunking_core._normalize_text
         normalized_fragment = _source_cleanup_audit._call_core(
-            _chunking_core._normalize_text, _SOURCE_CLEANUP_CORE_NORMALIZE, fragment_text,
+            core, _SOURCE_CLEANUP_CORE_NORMALIZE, fragment_text,
             strip_headers_footers_fn=lambda value: value,
             dedup_nearby_lines_fn=lambda value: value,
+            **_core_fused_term_kwargs(core),
         )
         attempt.finish(normalized_fragment, "auxiliary")
     fragment_counts = Counter(
@@ -6698,7 +6716,8 @@ def _normalize_source_chunk_text(
         canonical_text_overrides: dict[str, str] | None = None,
         text_rebuild_refs: set[str] | frozenset[str] = frozenset()) -> str:
     """Preserve source-bound numeric text without retaining page furniture."""
-    token = _SOURCE_BOUND_NORMALIZATION.set(True)
+    scope = _SourceBoundScope()
+    token = _SOURCE_BOUND_NORMALIZATION.set(scope)
     try:
         return _normalize_source_bound_chunk_text(
             text, content_source,
@@ -6707,6 +6726,7 @@ def _normalize_source_chunk_text(
             canonical_text_overrides=canonical_text_overrides,
             text_rebuild_refs=text_rebuild_refs)
     finally:
+        scope.active = False
         _SOURCE_BOUND_NORMALIZATION.reset(token)
 
 

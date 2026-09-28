@@ -17,6 +17,9 @@ Source-bound text now keeps both tokens and attested spellings; text without
 lineage keeps the established behaviour. All text is synthetic.
 """
 
+import contextvars
+from types import SimpleNamespace
+
 import pytest
 
 import chunking_core
@@ -135,8 +138,42 @@ def test_the_source_bound_flag_does_not_outlive_its_call(monkeypatch):
     monkeypatch.setattr(rag, "_normalize_source_bound_chunk_text", failing)
     with pytest.raises(RuntimeError, match="synthetic failure"):
         rag._normalize_source_chunk_text("a threejudge court", "body")
-    assert rag._SOURCE_BOUND_NORMALIZATION.get() is False
+    assert rag._SOURCE_BOUND_NORMALIZATION.get() is None
     assert rag._normalize_text("a threejudge court") == "a three-judge court"
+
+
+def test_a_context_copied_during_the_call_cannot_revive_the_skip(monkeypatch):
+    saved = []
+    real = rag._dedup_nearby_lines
+
+    def remember_context(text):
+        saved.append(contextvars.copy_context())
+        return real(text)
+
+    monkeypatch.setattr(rag, "_dedup_nearby_lines", remember_context)
+    rag._normalize_source_chunk_text("a threejudge court", "body")
+
+    assert saved
+    assert (saved[0].run(rag._normalize_text, "a threejudge court")
+            == "a three-judge court")
+
+
+def _source_item(text, ref):
+    return SimpleNamespace(
+        self_ref=ref, label=SimpleNamespace(value="text"), text=text, orig=text)
+
+
+def test_an_attested_repeated_fused_line_keeps_its_allowance():
+    # Two distinct source objects each read "a threejudge panel"; both lines
+    # are attested, so nearby-line deduplication must keep the repeat.
+    fragment = "a threejudge panel\na threejudge panel"
+    items = [_source_item("a threejudge panel", "#/texts/1"),
+             _source_item("a threejudge panel", "#/texts/2")]
+
+    normalized = rag._normalize_source_chunk_text(
+        fragment, "body", preserve_source_identity=True, source_items=items)
+
+    assert normalized == fragment
 
 
 def _validate(record):

@@ -168,22 +168,28 @@ def _executed_source_digest(path: Path) -> str:
     restored file's identity. ctime is compared only between ``lstat``
     calls: Windows ``lstat`` and ``fstat`` can report different ctime
     semantics for the same file. POSIX updates ctime on every write, so an
-    in-place rewrite that restores the mtime is re-read there.
+    in-place rewrite that restores the mtime is re-read there. A read whose
+    handle is not the observed file is retried, and after three such reads
+    the receipt fails rather than bind another file's bytes.
     """
     storage_policy.assert_no_link_components(path)
-    before = _source_identity(path)
-    cached = _SOURCE_DIGESTS.get(path)
-    if cached is not None and cached[0] == before:
-        return cached[1]
-    digest, fingerprint = _read_executed_source(path)
-    mode, size, mtime_ns, ctime_ns, inode, device = before
-    read_matches = fingerprint[:4] == (device, inode, size, mtime_ns)
-    if (read_matches and _source_identity(path) == before
-            and time.time_ns() - mtime_ns > _RACY_WINDOW_NS):
-        _SOURCE_DIGESTS[path] = (before, digest)
-    else:
-        _SOURCE_DIGESTS.pop(path, None)
-    return digest
+    for _ in range(3):
+        before = _source_identity(path)
+        cached = _SOURCE_DIGESTS.get(path)
+        if cached is not None and cached[0] == before:
+            return cached[1]
+        digest, fingerprint = _read_executed_source(path)
+        mode, size, mtime_ns, ctime_ns, inode, device = before
+        if fingerprint[:4] != (device, inode, size, mtime_ns):
+            _SOURCE_DIGESTS.pop(path, None)
+            continue
+        if (_source_identity(path) == before
+                and time.time_ns() - mtime_ns > _RACY_WINDOW_NS):
+            _SOURCE_DIGESTS[path] = (before, digest)
+        else:
+            _SOURCE_DIGESTS.pop(path, None)
+        return digest
+    raise RuntimeError(f"executed project source changed while it was read: {path}")
 
 
 def _loaded_source_digests() -> dict[str, str]:
