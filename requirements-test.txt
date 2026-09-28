@@ -4,10 +4,10 @@ PyMuPDF==1.28.2
 # Universal runtime resolution selects wheel-compatible NumPy lines by Python.
 numpy==2.2.6; python_version < "3.11"
 numpy==2.4.6; python_version >= "3.11" and python_version < "3.12"
-numpy==2.5.2; python_version >= "3.12"
+numpy==2.5.3; python_version >= "3.12"
 pytest==9.1.1
 pytest-xdist==3.8.0
 rank-bm25==0.2.2
 requests==2.34.2
 ruff==0.16.3
-tqdm==4.70.0
+tqdm==4.70.1
