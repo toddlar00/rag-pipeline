@@ -126,6 +126,7 @@ _HEAVY_JOB_OUTPUTS = {
 }
 _MATRIX_JOBS = frozenset({
     "unit-linux",
+    "unit-windows",
     "service-api",
     "phase-a0",
     "vector-store-smoke",
@@ -191,6 +192,10 @@ _EXPECTED_MATRIX_BLOCKS = {
         "matrix:",
         f"python-version: {_UNIT_LINUX_MATRIX}",
     ),
+    "unit-windows": (
+        "matrix:",
+        "shard: [1, 2, 3]",
+    ),
     "service-api": (
         "matrix:",
         "os: [ubuntu-24.04, windows-latest]",
@@ -219,10 +224,10 @@ _ACTIVE_PROMOTION_SHA256 = (
     "3d944775fbaf16ce791513f824173a55f384bc94c38159ddb411e0d53066d2b2"
 )
 _ACTIVE_WORKFLOW_SHA256 = (
-    "a0477d59757780e6cb175d2c5fd26556eda4f4066d0c1e59ae17e49d1717d53d"
+    "5caa86262cf8ee37c5f24f1f687376c28c4142435f92afa92f9d5adb0340ca57"
 )
 _BOOTSTRAP_WORKFLOW_SHA256 = (
-    "a38fa19c346a35b6f8d7c8b27790e9d961288dc56fd2979f929b8d48fe52f324"
+    "229915b0a264afe0c78b36eb6777b40cf8ee169ff9874968e8cbab04138d93e0"
 )
 
 

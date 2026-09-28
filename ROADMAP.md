@@ -1310,9 +1310,16 @@ lane, which again reached the 20-minute timeout with no test failure. On the
 owner's decision, source `29ea76b` raises that limit to 60 minutes (the live
 workflow, its reviewed fixture and the two pinned workflow hashes) and
 supersedes the `8aa08b2` pair before promotion.
-The `29ea76b` Windows/Linux pair (independent local same-platform
-comparisons passed) is the current candidate, and its hosted checks and
-external exact-SHA record are pending on [PR #116](https://github.com/toddlar00/rag-pipeline/pull/116).
+The `29ea76b` pair (gate-only child `ed0a0d3`) then passed the hosted CI
+promotion gate on [PR
+#116](https://github.com/toddlar00/rag-pipeline/pull/116); the separate
+networked vulnerability/SBOM jobs failed at that head. The stacked test-time
+economy source `365de1c` changes Python source and CI configuration (the
+Windows unit lane runs as three shards) but no dependency or model lock, and
+supersedes that pair for its own pull request. Its Windows/Linux pair
+(independent local same-platform comparisons passed) is that branch's
+candidate; its hosted checks, and the external exact-SHA records for both
+pull requests, are pending.
 
 Two operational follow-ups from the post-merge `main` push runs are open:
 a documentation-only merge passes its fast-lane pull-request run but then

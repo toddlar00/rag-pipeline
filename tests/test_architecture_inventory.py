@@ -310,6 +310,28 @@ def test_refresh_check_and_drift_detection(tmp_path):
     assert inventory.check_baseline(root, baseline) == updated
 
 
+def test_check_reuses_a_prebuilt_inventory_and_still_detects_drift(
+        tmp_path, monkeypatch):
+    root = _example_repository(tmp_path)
+    baseline = Path("inventory.json")
+    refreshed = inventory.refresh_baseline(root, baseline)
+    with (root / "rag.py").open("a", encoding="utf-8") as handle:
+        handle.write("\n")
+    stale = inventory.build_inventory(root)
+
+    def rebuilt(_root):
+        raise AssertionError("a prebuilt inventory must not be rebuilt")
+
+    monkeypatch.setattr(inventory, "build_inventory", rebuilt)
+
+    assert inventory.check_baseline(root, baseline, current=refreshed) is refreshed
+    with pytest.raises(
+        inventory.ArchitectureInventoryError,
+        match="differs from the committed baseline",
+    ):
+        inventory.check_baseline(root, baseline, current=stale)
+
+
 def test_check_rejects_noncanonical_or_tampered_baseline(tmp_path):
     root = _example_repository(tmp_path)
     baseline = Path("inventory.json")
@@ -1153,8 +1175,8 @@ def test_cli_report_refresh_and_check_modes(tmp_path, capsys):
     assert checked.err == ""
 
 
-def test_repository_baseline_is_current_and_canonical():
-    value = inventory.check_baseline(PROJECT_ROOT)
+def test_repository_baseline_is_current_and_canonical(repository_inventory):
+    value = inventory.check_baseline(PROJECT_ROOT, current=repository_inventory)
     baseline = PROJECT_ROOT / inventory.DEFAULT_BASELINE
 
     assert baseline.read_bytes() == inventory.inventory_bytes(value)
@@ -1164,8 +1186,9 @@ def test_repository_baseline_is_current_and_canonical():
     ] == ["eval", "ocr_docling_io", "service_search_worker", "ui"]
 
 
-def test_repository_rag_static_evidence_and_runtime_contract_are_separate():
-    value = inventory.build_inventory(PROJECT_ROOT)
+def test_repository_rag_static_evidence_and_runtime_contract_are_separate(
+        repository_inventory):
+    value = repository_inventory
     variants = set(value["rag_runtime_contract"]["interpreter_variant_exclusions"])
     runtime_names = sorted(
         name for name in vars(rag) if name not in variants

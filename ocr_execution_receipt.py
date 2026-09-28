@@ -19,6 +19,7 @@ import sys
 import time
 
 from evaluation_inputs import _hex_digest, _read_snapshot, _strict_json_bytes
+import storage_policy
 from ocr_experiment_runtime import _name as normalize_package, capture_runtime_manifest
 from ocr_disposition_observer import DispatchBinding
 
@@ -134,6 +135,41 @@ def _elapsed(value: object) -> float:
     return float(value)
 
 
+# Executed-source digests, reused only while a file's identity is unchanged.
+# A file modified within the racy window before its read is never cached:
+# coarse file timestamps could otherwise hide a same-size rewrite.
+_SOURCE_DIGESTS: dict[Path, tuple[tuple[int, int, int, int, int], str]] = {}
+_RACY_WINDOW_NS = 2_000_000_000
+
+
+def _source_identity(path: Path) -> tuple[int, int, int, int, int]:
+    status = os.lstat(path)
+    return (status.st_mode, status.st_size, status.st_mtime_ns,
+            status.st_ino, status.st_dev)
+
+
+def _executed_source_digest(path: Path) -> str:
+    """Return one executed source file's SHA-256, reading it only when needed.
+
+    Every call still refuses link components; only the bounded content read
+    is reused, for an unchanged ``lstat`` identity (mode, size, mtime,
+    inode, device) whose modification is older than the racy window.
+    """
+    storage_policy.assert_no_link_components(path)
+    before = _source_identity(path)
+    cached = _SOURCE_DIGESTS.get(path)
+    if cached is not None and cached[0] == before:
+        return cached[1]
+    digest = _read_snapshot(
+        path, label="executed project source", max_bytes=4 * 1024 * 1024)[1]
+    if (_source_identity(path) == before
+            and time.time_ns() - before[2] > _RACY_WINDOW_NS):
+        _SOURCE_DIGESTS[path] = (before, digest)
+    else:
+        _SOURCE_DIGESTS.pop(path, None)
+    return digest
+
+
 def _loaded_source_digests() -> dict[str, str]:
     result = {}
     for name, module in list(sys.modules.items()):
@@ -146,7 +182,7 @@ def _loaded_source_digests() -> dict[str, str]:
         key = "entrypoint" if name == "__main__" else name
         if _SAFE.fullmatch(key) is None:
             continue
-        result[key] = _read_snapshot(path, label="executed project source", max_bytes=4 * 1024 * 1024)[1]
+        result[key] = _executed_source_digest(path)
         if len(result) > 256:
             raise ValueError("executed project source inventory exceeds bounds")
     return dict(sorted(result.items()))
