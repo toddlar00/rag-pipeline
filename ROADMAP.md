@@ -1344,10 +1344,16 @@ promotion gate on [PR
 networked vulnerability/SBOM jobs failed at that head. The stacked test-time
 economy source `365de1c` changes Python source and CI configuration (the
 Windows unit lane runs as three shards) but no dependency or model lock, and
-supersedes that pair for its own pull request. Its Windows/Linux pair
-(independent local same-platform comparisons passed) is that branch's
-candidate; its hosted checks, and the external exact-SHA records for both
-pull requests, are pending.
+supersedes that pair for its own pull request. The `365de1c` pair (gate-only
+child `b33a433`) passed the hosted CI promotion gate on [PR
+#117](https://github.com/toddlar00/rag-pipeline/pull/117). The stacked
+pytest-xdist source `c31f4c9` adds pytest-xdist 3.8.0 and execnet 2.1.2 to
+`requirements-test.lock` and `requirements-smoke.lock` (test/audit tooling
+domain) and runs the dependency-light unit lanes with `-n auto`; it
+supersedes the `365de1c` pair for its own pull request. Its Windows/Linux
+pair (independent local same-platform comparisons passed) is that branch's
+candidate; its hosted checks, and the external exact-SHA records for all
+three pull requests, are pending.
 
 Two operational follow-ups from the post-merge `main` push runs are open:
 a documentation-only merge passes its fast-lane pull-request run but then
