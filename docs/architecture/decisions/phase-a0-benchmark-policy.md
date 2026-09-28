@@ -3,7 +3,7 @@
 - **Status:** A0a integrated; the latest completed hosted A0b technical
   checkpoint passed at Task 0.8 evidence head `1533164` and merged
   through `e34103f`; the OCR-program and casebook-excerpt replacement pair
-  at source `8aa08b2` is pending hosted promotion on PR #116; exact-head
+  at source `29ea76b` is pending hosted promotion on PR #116; exact-head
   human review and separate R8 owner authorization are not recorded
 - **Milestone:** R10 prerequisite for the R8 pipeline-ownership move
 - **Report schema:** `phase-a0` v3
@@ -136,8 +136,8 @@ Task 0.8 static-security pair at source `8891e1b` repeated it through
 gate-only child `1533164` and merge `e34103f`
 ([PR #107](https://github.com/toddlar00/rag-pipeline/pull/107)). The
 current replacement pair uses the clean OCR-program and casebook-excerpt
-source `8aa08b2d2bdd51f4b5dd8b95107a93e28e42b883` (tree
-`bf364930f5253d30486767ca4150d038cd94cac9`), which changed Python source and
+source `29ea76bdcfc7184dfb1d600a860c56d6514722d9` (tree
+`6ac5d6d674aa638619385f36865084006db915c2`), which changed Python source and
 `.gitattributes` but no dependency or model lock. It supersedes the
 earlier `1ae8502` pair, whose child `766feaf` passed both hosted Phase A0
 cells but whose dependency-light unit lanes failed at collection. Source
@@ -145,7 +145,12 @@ cells but whose dependency-light unit lanes failed at collection. Source
 #116](https://github.com/toddlar00/rag-pipeline/pull/116) as well, but its
 Python 3.10/3.11 unit lanes each failed one import-guard test and its
 Windows unit lane exceeded the workflow's 20-minute timeout; the test-only
-source `8aa08b2` supersedes it before promotion. Its Windows and
+source `8aa08b2` superseded it before promotion. Source `8aa08b2` fixed
+those lanes, and its hosted run passed every CI lane except the Windows unit
+lane, which again reached the 20-minute timeout with no test failure. On the
+owner's decision, source `29ea76b` raises that limit to 60 minutes (the live
+workflow, its reviewed fixture and the two pinned workflow hashes) and
+supersedes the `8aa08b2` pair before promotion. Its Windows and
 Linux CPython 3.12.13 reports were
 generated after the same strict hash-locked synchronization and
 dependency-consistency checks: 191 marker-resolved distributions on
@@ -312,14 +317,15 @@ networked supply-chain vulnerability/SBOM jobs failed at that head). The
 OCR-program and casebook-excerpt source `1ae8502` superseded that pair,
 and its own pair was superseded before promotion by source `a15232d`
 (dependency-light test guards and the casebook fixes), whose pair was in
-turn superseded by the test-only source `8aa08b2`. Its Windows report
-is 51,084 bytes (file SHA-256
-`94f05ad4d59f934991ed442e36a7d6bc28e5beb8be0c628a0502d54d007c6522`;
+turn superseded by the test-only source `8aa08b2` and then by the
+Windows-timeout source `29ea76b`. Its Windows report
+is 51,086 bytes (file SHA-256
+`8e8829e3ea4d05419f5aff31bef4172ca13e3d3770df7ed147a516716860e7da`;
 embedded report SHA-256
-`75a10033a12be28266899ed93a5bf98b2a9a0ddd788cfe6c4b933f079efd6adc`).
-Its Linux report is 50,479 bytes (file SHA-256
-`2472bf0267be1a9d3ca0014ebbe225a33aa5435918f9d3096bf8538d4fd9eca7`;
+`2dae9eded99a0d8895ca0917a9bdfc2d680d03bb9e70b699f0a48e828a7bed39`).
+Its Linux report is 50,487 bytes (file SHA-256
+`3a6e9437de61b7772562185456324b37c7645d413e2132f12844a936da89ba03`;
 embedded report SHA-256
-`fde1b6dfcb9aa541b57bb4421baaca31c7bedc6297c36dcc354f1fe4862fcea8`).
+`a4f77e4fe0bc590f4c9dbd4d4976f601a3502b503c4addb6f62c8473bf138b37`).
 Both use CPython 3.12.13 and pass their complete local same-platform 9×5
 comparisons. Hosted promotion remains pending.

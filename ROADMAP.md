@@ -1304,8 +1304,13 @@ fixes, still no lock change) superseded it before promotion. Source
 #116](https://github.com/toddlar00/rag-pipeline/pull/116) as well, but its
 Python 3.10/3.11 unit lanes each failed one import-guard test and its
 Windows unit lane exceeded the workflow's 20-minute timeout; the test-only
-source `8aa08b2` supersedes it before promotion.
-The `8aa08b2` Windows/Linux pair (independent local same-platform
+source `8aa08b2` superseded it before promotion. Source `8aa08b2` fixed
+those lanes, and its hosted run passed every CI lane except the Windows unit
+lane, which again reached the 20-minute timeout with no test failure. On the
+owner's decision, source `29ea76b` raises that limit to 60 minutes (the live
+workflow, its reviewed fixture and the two pinned workflow hashes) and
+supersedes the `8aa08b2` pair before promotion.
+The `29ea76b` Windows/Linux pair (independent local same-platform
 comparisons passed) is the current candidate, and its hosted checks and
 external exact-SHA record are pending on [PR #116](https://github.com/toddlar00/rag-pipeline/pull/116).
 
