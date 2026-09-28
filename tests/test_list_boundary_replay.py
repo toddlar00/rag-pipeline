@@ -183,6 +183,7 @@ def test_list_request_replays_once_separating_only_those_joins(
     assert first.pop("telemetry") is telemetry
     assert first.pop("order_replay_requests") == []
     assert first.pop("list_replay_requests") == [TWO_REFS]
+    assert first.pop("footnote_replay_requests") == []
     # The replay has no sink, so no pass can request a second replay.
     assert replay.pop("telemetry") is None
     assert replay.pop("separated_list_refs") == TWO_REFS
@@ -254,7 +255,8 @@ def test_order_request_takes_precedence_and_replays_exactly_as_before(
         telemetry=telemetry)
 
     first, replay = calls
-    for key in ("telemetry", "order_replay_requests", "list_replay_requests"):
+    for key in ("telemetry", "order_replay_requests", "list_replay_requests",
+                "footnote_replay_requests"):
         first.pop(key)
     assert replay.pop("telemetry") is None
     assert replay.pop("reading_order_violations") == NAMED

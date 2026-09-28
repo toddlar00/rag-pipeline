@@ -9269,6 +9269,33 @@ def _record_scoped_source_box(
     )
 
 
+def _record_observed_source_box(
+        record: dict, page: int,
+) -> tuple[float, float, float, float] | None:
+    """Return the page box of only the lineage the fidelity audit observes.
+
+    The audit registers page occurrences for entries with source tokens and
+    for zero-width opaque recoveries.  A plain tokenless entry, such as an
+    ornament row, registers none, so it cannot constrain reading order.
+    ``None`` means the audit does not observe the record on the page;
+    malformed lineage also yields ``None``.
+    """
+    metadata = record.get("metadata")
+    values = metadata.get("source_items") if isinstance(metadata, dict) else None
+    if not isinstance(values, list) or any(
+            not isinstance(entry, dict) for entry in values):
+        return None
+    observed = [
+        entry for entry in values
+        if (isinstance(count := entry.get("oracle_lexical_count"), int)
+            and not isinstance(count, bool) and count > 0)
+        or entry.get("transform") in _source_fidelity_core.OPAQUE_TRANSFORMS]
+    if not observed:
+        return None
+    return _record_scoped_source_box(
+        {"metadata": {"source_items": observed}}, page)
+
+
 def _source_boxes_horizontally_overlap(
         first: tuple[float, float, float, float],
         second: tuple[float, float, float, float],
@@ -9362,8 +9389,17 @@ def _order_footnote_slot_by_source_geometry(slot: list[dict]) -> list[dict]:
     return ordered
 
 
-def _reorder_footnote_sidecars(records: list[dict]) -> list[dict]:
-    """Move footnotes after body flow while retaining source-page order."""
+def _reorder_footnote_sidecars(
+        records: list[dict], *,
+        observed_geometry_pages: frozenset[int] = frozenset(),
+) -> list[dict]:
+    """Move footnotes after body flow while retaining source-page order.
+
+    On ``observed_geometry_pages`` (only ever a gate-driven replay's), a
+    footnote is placed by the lineage the fidelity audit observes: tokenless
+    entries are dropped from both boxes, and a body record the audit does not
+    observe on that page does not constrain the placement.
+    """
     if not records:
         return records
     body = [record for record in records if not _is_footnote_record(record)]
@@ -9397,7 +9433,13 @@ def _reorder_footnote_sidecars(records: list[dict]) -> list[dict]:
                 and span[0] <= page <= span[1])
         ]
         if isinstance(page, int):
+            observed_geometry = page in observed_geometry_pages
             footnote_box = _record_scoped_source_box(footnote, page)
+            if footnote_box is not None and observed_geometry:
+                # A note the audit does not observe here keeps its full box.
+                footnote_box = (
+                    _record_observed_source_box(footnote, page)
+                    or footnote_box)
             body_candidates = [
                 index for index in candidates
                 if (body[index].get("metadata") or {}).get(
@@ -9409,6 +9451,11 @@ def _reorder_footnote_sidecars(records: list[dict]) -> list[dict]:
                 geometry_valid = True
                 for index in body_candidates:
                     body_box = _record_scoped_source_box(body[index], page)
+                    if body_box is not None and observed_geometry:
+                        body_box = _record_observed_source_box(
+                            body[index], page)
+                        if body_box is None:
+                            continue
                     if (body_box is None
                             or not _source_boxes_horizontally_overlap(
                                 body_box, footnote_box)):
@@ -20636,6 +20683,33 @@ def _list_boundary_replay_refs(
         if isinstance(ref, str))
 
 
+def _footnote_placement_replay_pages(
+        report: dict, footnote_refs: frozenset[str],
+) -> frozenset[int]:
+    """Return pages whose failed reading order names a footnote sidecar.
+
+    ``footnote_refs`` holds the source refs the first pass published in
+    footnote sidecar records.  Only a failing ``same_page_reading_order``
+    violation that names one of them, as either ``before_ref`` or
+    ``after_ref``, names its page.
+    """
+    if not any(
+            isinstance(check, dict)
+            and check.get("name") == "same_page_reading_order"
+            and check.get("status") == "fail"
+            for check in report.get("checks") or ()):
+        return frozenset()
+    fidelity = (report.get("source_lineage") or {}).get("fidelity") or {}
+    return frozenset(
+        page for violation in fidelity.get("geometry_violations") or ()
+        if isinstance(violation, dict)
+        and isinstance(page := violation.get("page"), int)
+        and not isinstance(page, bool)
+        and any(isinstance(ref := violation.get(key), str)
+                and ref in footnote_refs
+                for key in ("before_ref", "after_ref")))
+
+
 def _publish_quality_report_or_request_order_replay(
         publish: Callable[[list[dict]], dict],
         deferred_groups: tuple[SourceTextGroupRecovery, ...],
@@ -20643,14 +20717,18 @@ def _publish_quality_report_or_request_order_replay(
         *,
         inline_list_joins: frozenset[str] = frozenset(),
         list_replay_requests: list[frozenset[str]] | None = None,
+        footnote_refs: frozenset[str] = frozenset(),
+        footnote_replay_requests: list[frozenset[int]] | None = None,
 ) -> dict:
     """Publish quality evidence, requesting a replay for a named failure.
 
     ``publish`` appends a failed report to the list it receives before raising
     the gate failure, which always propagates unchanged.  Only a first pass
-    passes ``replay_requests`` and ``list_replay_requests``; it then records
-    the deferred members that the failed report names, and separately the
-    inline-joined list items it names (``_list_boundary_replay_refs``), so
+    passes ``replay_requests``, ``list_replay_requests`` and
+    ``footnote_replay_requests``; it then records the deferred members that
+    the failed report names, separately the inline-joined list items it names
+    (``_list_boundary_replay_refs``), and separately the pages on which it
+    names a footnote sidecar (``_footnote_placement_replay_pages``), so
     ``chunk_document`` can replay the chunk once.
     """
     failed_reports: list[dict] = []
@@ -20667,6 +20745,11 @@ def _publish_quality_report_or_request_order_replay(
                 failed_reports[0], inline_list_joins)
             if list_refs:
                 list_replay_requests.append(list_refs)
+        if footnote_replay_requests is not None and failed_reports:
+            pages = _footnote_placement_replay_pages(
+                failed_reports[0], footnote_refs)
+            if pages:
+                footnote_replay_requests.append(pages)
         raise
 
 
@@ -20878,7 +20961,11 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
     Otherwise, a first pass whose gate fails ``source_token_fidelity`` on
     list items that its boundary repair joined inline is replayed once,
     separating exactly those joins, and recorded as a
-    ``chunk_list_boundary_replay`` observation.  No pass replays twice.
+    ``chunk_list_boundary_replay`` observation.  Otherwise, a first pass
+    whose gate fails ``same_page_reading_order`` on edges naming its footnote
+    sidecars is replayed once, placing footnotes on those pages by observed
+    source geometry, and recorded as a ``chunk_footnote_placement_replay``
+    observation.  No pass replays twice.
     """
     profile = _document_profiles.get_profile(structure_profile)
     chunks_output = Path(chunks_output)
@@ -20922,14 +21009,17 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
     )
     replay_requests: list[frozenset[tuple[str, int]]] = []
     list_replay_requests: list[frozenset[str]] = []
+    footnote_replay_requests: list[frozenset[int]] = []
     with _chunk_output_lease(chunks_output):
         try:
             _chunk_document_locked(
                 doc_path, chunks_output, **arguments, telemetry=telemetry,
                 order_replay_requests=replay_requests,
-                list_replay_requests=list_replay_requests)
+                list_replay_requests=list_replay_requests,
+                footnote_replay_requests=footnote_replay_requests)
         except RuntimeError:
-            if not replay_requests and not list_replay_requests:
+            if (not replay_requests and not list_replay_requests
+                    and not footnote_replay_requests):
                 raise
         else:
             return
@@ -20938,11 +21028,11 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
             # output failed ``same_page_reading_order`` on edges naming
             # deferred native groups.  Replay it once, outside that failure's
             # handler, admitting only those groups.  This replay takes
-            # precedence and is exactly the previous one: a list request
-            # recorded beside it is dropped, because this replay may pass
-            # without it.  The first pass already recorded the deterministic
-            # telemetry; its warnings and any LLM calls repeat.  The
-            # observation below is the run report's durable replay record.
+            # precedence and is exactly the previous one: a list or footnote
+            # request recorded beside it is dropped, because this replay may
+            # pass without it.  The first pass already recorded the
+            # deterministic telemetry; its warnings and any LLM calls repeat.
+            # The observation below is the run report's durable replay record.
             log.info(
                 "Replaying chunking to recover %s reading-order violation(s) "
                 "from deferred native text groups",
@@ -20955,20 +21045,38 @@ def chunk_document(doc_path: Path, chunks_output: Path, *,
                 doc_path, chunks_output, **arguments, telemetry=None,
                 reading_order_violations=replay_requests[0])
             return
-        # The first pass, which is the final output without this replay,
-        # failed ``source_token_fidelity`` on list items whose line-initial
-        # marker its boundary repair placed mid-line.  Replay it once,
-        # outside that failure's handler, separating only those joins.
+        if list_replay_requests:
+            # The first pass, which is the final output without this replay,
+            # failed ``source_token_fidelity`` on list items whose
+            # line-initial marker its boundary repair placed mid-line.
+            # Replay it once, outside that failure's handler, separating only
+            # those joins.  It precedes a footnote request recorded beside
+            # it, which is dropped the same way.
+            log.info(
+                "Replaying chunking to separate %s inline-joined list item(s)",
+                len(list_replay_requests[0]))
+            if telemetry is not None:
+                telemetry.stage_observation(
+                    "chunk_list_boundary_replay", metrics={
+                        "list_boundary_items": len(list_replay_requests[0])})
+            _chunk_document_locked(
+                doc_path, chunks_output, **arguments, telemetry=None,
+                separated_list_refs=list_replay_requests[0])
+            return
+        # The first pass failed ``same_page_reading_order`` on edges naming
+        # its footnote sidecars.  Replay it once, outside that failure's
+        # handler, placing the footnotes on only those pages by the lineage
+        # the fidelity audit observes.
         log.info(
-            "Replaying chunking to separate %s inline-joined list item(s)",
-            len(list_replay_requests[0]))
+            "Replaying chunking to place footnotes on %s page(s) by observed "
+            "source geometry", len(footnote_replay_requests[0]))
         if telemetry is not None:
             telemetry.stage_observation(
-                "chunk_list_boundary_replay", metrics={
-                    "list_boundary_items": len(list_replay_requests[0])})
+                "chunk_footnote_placement_replay", metrics={
+                    "footnote_pages": len(footnote_replay_requests[0])})
         _chunk_document_locked(
             doc_path, chunks_output, **arguments, telemetry=None,
-            separated_list_refs=list_replay_requests[0])
+            observed_footnote_geometry_pages=footnote_replay_requests[0])
 
 
 def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
@@ -21007,15 +21115,20 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
                    separated_list_refs: frozenset[str] = frozenset(),
                    list_replay_requests: (
                        list[frozenset[str]] | None) = None,
+                   observed_footnote_geometry_pages: (
+                       frozenset[int]) = frozenset(),
+                   footnote_replay_requests: (
+                       list[frozenset[int]] | None) = None,
                    ) -> None:
     """Load a DoclingDocument, chunk with HybridChunker, and enrich.
 
-    ``chunk_document`` passes ``order_replay_requests`` and
-    ``list_replay_requests`` to its first pass only; a failed quality gate
-    that names deferred native groups, or inline-joined list items left
-    uncovered, is recorded there before it propagates.  Its replay passes
-    the recorded ``reading_order_violations`` or ``separated_list_refs``
-    instead.
+    ``chunk_document`` passes ``order_replay_requests``,
+    ``list_replay_requests`` and ``footnote_replay_requests`` to its first
+    pass only; a failed quality gate that names deferred native groups,
+    inline-joined list items left uncovered, or footnote sidecars out of
+    reading order, is recorded there before it propagates.  Its replay passes
+    the recorded ``reading_order_violations``, ``separated_list_refs`` or
+    ``observed_footnote_geometry_pages`` instead.
     """
     from docling_core.types import DoclingDocument
     from docling_core.transforms.chunker import HybridChunker
@@ -21524,7 +21637,8 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
     # resolved after coalescing has established each body's final scoped page
     # span. This keeps a page-p footnote before the first page-(p+1)-only body
     # without inventing a page regression exemption.
-    enriched = _reorder_footnote_sidecars(enriched)
+    enriched = _reorder_footnote_sidecars(
+        enriched, observed_geometry_pages=observed_footnote_geometry_pages)
 
     # --- Pass 2: Chapter assignment (team-orchestrated) ---
     # Uses the 4-tier agent team hierarchy:
@@ -22368,6 +22482,10 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
         order_replay_requests,
         inline_list_joins=frozenset(inline_list_joins),
         list_replay_requests=list_replay_requests,
+        footnote_refs=frozenset(
+            ref for record in enriched if _is_footnote_record(record)
+            for ref in _record_source_refs(record)),
+        footnote_replay_requests=footnote_replay_requests,
     )
 
     # Stats
