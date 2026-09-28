@@ -1,9 +1,9 @@
 # Phase A0 Benchmark Policy
 
 - **Status:** A0a integrated; the latest completed hosted A0b technical
-  checkpoint passed at Task 0.7 evidence head `32153e9` and merged
-  through `376277c`; the Task 0.8 static-security replacement pair at
-  source `8891e1b` is local-only pending hosted promotion; exact-head
+  checkpoint passed at Task 0.8 evidence head `1533164` and merged
+  through `e34103f`; the OCR-program and casebook-excerpt replacement pair
+  at source `1ae8502` is local-only pending hosted promotion; exact-head
   human review and separate R8 owner authorization are not recorded
 - **Milestone:** R10 prerequisite for the R8 pipeline-ownership move
 - **Report schema:** `phase-a0` v3
@@ -132,14 +132,17 @@ gate-only child `344e873` and merge `893c4a0`
 Task 0.7 secret-scan pair at source `e055bd0` repeated it through
 gate-only child `32153e9` and merge `376277c`
 ([PR #106](https://github.com/toddlar00/rag-pipeline/pull/106)). The
-current replacement pair uses the clean Task 0.8 static-security source
-`8891e1b27c04213fea6d59cd6b93e85051f00817` (tree
-`5a2c632ea1df5661c580c815c8904519b531393d`), which changed Python gate
-source and workflows but no dependency or model lock. Its Windows and
+Task 0.8 static-security pair at source `8891e1b` repeated it through
+gate-only child `1533164` and merge `e34103f`
+([PR #107](https://github.com/toddlar00/rag-pipeline/pull/107)). The
+current replacement pair uses the clean OCR-program and casebook-excerpt
+source `1ae8502a45b66aef7e6f7b75c5be0be229b99c99` (tree
+`d274a93d07d48479ab138837d59f58cf1a1cff4d`), which changed Python source and
+`.gitattributes` but no dependency or model lock. Its Windows and
 Linux CPython 3.12.13 reports were
 generated after the same strict hash-locked synchronization and
-dependency-consistency checks: 189 marker-resolved distributions on
-Windows and 187 on Linux. They bind that one clean source, the same eight
+dependency-consistency checks: 191 marker-resolved distributions on
+Windows and 189 on Linux. They bind that one clean source, the same eight
 LF and `HEAD`-identical dependency/model inputs, and the complete 9×5
 scenario contract. Each passes an independent complete local same-platform
 comparison. The direct gate-only evidence child contains only the reports
@@ -295,14 +298,18 @@ Task 0.7 secret-scan source `e055bd0` repeated the cycle: its child
 `32153e9` passed the hosted full lane with retained artifacts and merged
 through `376277c`
 ([PR #106](https://github.com/toddlar00/rag-pipeline/pull/106)). The
-Task 0.8 static-security source `8891e1b` supersedes that pair in turn.
-Its Windows report is 50,392 bytes (file SHA-256
-`15cb2bbaeaaa94ea492935180a22994b1b7e32f383f2ef39b55090d2d38e6db4`;
+Task 0.8 static-security source `8891e1b` repeated the cycle: its child
+`1533164` passed the hosted CI lane, including both Phase A0 cells, and
+merged through `e34103f` ([PR #107](https://github.com/toddlar00/rag-pipeline/pull/107); the separate
+networked supply-chain vulnerability/SBOM jobs failed at that head). The
+OCR-program and casebook-excerpt source `1ae8502` supersedes that pair in
+turn. Its Windows report is 51,086 bytes (file SHA-256
+`b11ac1074c0bb78c7a54a84c660d029efff02337bbc06d5a5daf28da830e7291`;
 embedded report SHA-256
-`831f737cf4aa9fc76bf2c7670f3e360bb748e1e37bcd5503df890793eb12728b`).
-Its Linux report is 49,801 bytes (file SHA-256
-`922eda3321fbf86e52e4f836824e07c3ea59611ef08185f82e71dc6f307097d3`;
+`a05dead1c73cf969bdc5aa8f37d24808d76cf4e31fa9a539873e244e3ca8c411`).
+Its Linux report is 50,484 bytes (file SHA-256
+`3de7ea4e5c8955a9c3a1550f4ead85cca282707e22c07c75c2c87e9a00eb5ae2`;
 embedded report SHA-256
-`ea2832a70e7cba1438968ec8b5e213df30614ec3fc4404b1f4caaa3e307ef792`).
+`31d1a8123054913e5fcb4b4287eb36a84c1ee75ca2595f70d8c00f631e58100b`).
 Both use CPython 3.12.13 and pass their complete local same-platform 9×5
 comparisons. Hosted promotion remains pending.

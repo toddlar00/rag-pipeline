@@ -35,7 +35,7 @@ publish a release.
 ### Local OCR development qualification (2026-09-06)
 
 The user-requested [OCR and AI-access improvement program](docs/ocr-improvement-program.md)
-remains active on a local, unpushed branch; it does not supersede the integrated
+remains active on a draft-PR branch; it does not supersede the integrated
 milestones or grant release/private-corpus approval. A frozen Windows CPython
 3.12.10 full-lock run observed 6,841 passing tests, seven skips and eight failures.
 One failure was a stale architecture consumer expectation; the other seven
@@ -137,10 +137,10 @@ representative accuracy or source-completeness claim follows. Unified guided
 review, approved reference inputs, adaptive retries, independent-engine checks,
 AI scan evidence and correction publication/rollback remain active work.
 
-### Casebook excerpts and source-order fixes (2026-09-25, local branch, not integrated)
+### Casebook excerpts and source-order fixes (2026-09-25, draft PR, not integrated)
 
 A private 18-excerpt casebook course corpus (page-bounded scans with no table
-of contents) exposed these gaps. The work is on a local, unpushed branch only;
+of contents) exposed these gaps. The work is on a draft-PR branch only;
 it has no PR, hosted CI or independent release review, so it is not
 "Implemented (draft)".
 
@@ -184,11 +184,11 @@ it has no PR, hosted CI or independent release review, so it is not
   replay unless the order replay takes precedence, see "Bullet list after a
   lead-in at boundary merge" below); the token splitter breaks after `v.`;
   duplicate-line allowances do not cover multi-item entries; the architecture
-  inventory needs a reviewed `--refresh`.
+  inventory was refreshed with review in `b8fd9cc` and `0e399d2`.
 
-### Casebook supplement, audit scope and OCR findings (2026-09-26, local branch, not integrated)
+### Casebook supplement, audit scope and OCR findings (2026-09-26, draft PR, not integrated)
 
-Same status as the section above: local unpushed branch only, no PR or hosted
+Same status as the section above: draft-PR branch only, no completed hosted
 CI. Each change was independently and adversarially reviewed and changes only
 output that fails the gates today; no schema or policy version changed.
 
@@ -241,7 +241,7 @@ output that fails the gates today; no schema or policy version changed.
   rows are caught only by the gate; a printed range across a page-label gap
   renders as one span (h07 `pp.535-559`).
 
-### OCR angle-classifier override (2026-09-26, local branch, not integrated)
+### OCR angle-classifier override (2026-09-26, draft PR, not integrated)
 
 This has the same status as the sections above. It implements the first
 owner-approved follow-up above. No schema or policy version changed.
@@ -270,10 +270,10 @@ owner-approved follow-up above. No schema or policy version changed.
   - Code from before this change rejects a flagged manifest.
   - The OCR retry and disposition tools have no no-classifier route.
   - h04 keeps its 3 accepted gate-silent scrambles (pp.4/6/7).
-  - No end-to-end `full` publish of the flagged h04 has run yet.
-  - The architecture inventory needs a reviewed `--refresh`.
+  - The flagged h04 has since been published end to end by a `full` job.
+  - The architecture inventory was refreshed with review in `b8fd9cc`.
 
-### Multi-block overlapping-group recovery (2026-09-26, local branch, not integrated)
+### Multi-block overlapping-group recovery (2026-09-26, draft PR, not integrated)
 
 This has the same status as the sections above. It implements the
 owner-approved h03 recovery-gate fix. No schema or policy version changed.
@@ -417,9 +417,9 @@ owner-approved h03 recovery-gate fix. No schema or policy version changed.
   - The architecture inventory drift now also covers the two new private
     replay helpers, the new keyword parameters of
     `_publish_corpus_quality_report_locked` and `_chunk_document_locked`, and
-    one test patch target. It needs a reviewed `--refresh`.
+    one test patch target. It was refreshed with review in `b8fd9cc`.
 
-### Bullet list after a lead-in at boundary merge (2026-09-27, local branch, not integrated)
+### Bullet list after a lead-in at boundary merge (2026-09-27, draft PR, not integrated)
 
 This has the same status as the sections above. It implements the
 owner-approved h16 list-join fix (`#/texts/57`) as a gate-driven replay. No
@@ -555,11 +555,11 @@ schema or policy version changed.
     helpers, the new keyword parameters of `_coalesce_chunk_boundaries`,
     `_publish_quality_report_or_request_order_replay` and
     `_chunk_document_locked`, and the three new test modules and their patch
-    targets. It needs a reviewed `--refresh`.
+    targets. It was refreshed with review in `b8fd9cc`.
   - h16 is still blocked on the glyph fix. The p19 fix is in the next
     section; the glyph fix is in "Decorative square glyph exclusion" below.
 
-### Letter-spaced text-layer retry (2026-09-27, local branch, not integrated)
+### Letter-spaced text-layer retry (2026-09-27, draft PR, not integrated)
 
 This has the same status as the sections above. It implements the
 owner-approved h16 p19 fix (`#/texts/179`, record 49). No schema or policy
@@ -751,7 +751,7 @@ one-dispatcher rule above does not apply to it.
     `_native_lexical_key`, `_repair_native_text_item`,
     `_apply_letter_spaced_layer_retries`), the two new keyword parameters of
     `_recover_native_text_repairs`, and, once tracked, the two new test
-    modules and their patch targets. It needs a reviewed `--refresh`.
+    modules and their patch targets. It was refreshed with review in `b8fd9cc`.
   - Footnote items are not retried; nothing in the corpus needs it.
   - The merge proofs depend on PyMuPDF 1.28.2's `TEXT_INHIBIT_SPACES` word
     segmentation and on its span splitting and superscript flag; the
@@ -763,7 +763,7 @@ one-dispatcher rule above does not apply to it.
     splits from the text layer (for example `#/texts/173`). An owner decision
     is needed before h16 publishes at this text quality.
 
-### Decorative square glyph exclusion (2026-09-27, local branch, not integrated)
+### Decorative square glyph exclusion (2026-09-27, draft PR, not integrated)
 
 This has the same status as the sections above. It implements the
 owner-approved h16 `#/texts/14` fix as a typed quality exclusion. It is the
@@ -964,7 +964,7 @@ change.
     `index_state._query_manifest_dimension_impl(current_payload_schema_versions)`,
     the new `rag` binding `_CURRENT_PAYLOAD_LEGACY_MANIFEST_VERSIONS`, the
     changed version and binding values, and, once tracked, the two new test
-    modules. It needs a reviewed `--refresh`.
+    modules. It was refreshed with review in `b8fd9cc`.
   - `validate_quality_report` still does not recompute
     `excluded_items_by_reason`. The gap predates this change; the counts are
     informational, and eligibility stays bound through the fidelity
@@ -1046,11 +1046,16 @@ through history-preserving `893c4a0`. The Task 0.7 secret-scan checkpoint
 hosted full lane, received the external exact-SHA record on
 [PR #106](https://github.com/toddlar00/rag-pipeline/pull/106), and merged
 through history-preserving `376277c`. The Task 0.8 static-security
-checkpoint `8891e1b` has since changed Python gate source and workflows
+checkpoint `8891e1b` completed the same cycle: gate-only child `1533164`
+passed the hosted CI lane, received the external exact-SHA record on
+[PR #107](https://github.com/toddlar00/rag-pipeline/pull/107), and merged
+through history-preserving `e34103f` (two networked supply-chain
+vulnerability/SBOM jobs outside CI failed at that head). The OCR-program
+and casebook-excerpt checkpoint `1ae8502` has since changed Python source
 (no dependency or model lock), so its regenerated Windows/Linux pair
 (independent local same-platform comparisons passed) supersedes the
-`e055bd0` pair as the current candidate; its hosted checks and external
-exact-SHA record are pending on the Task 0.8 pull request.
+`8891e1b` pair as the current candidate; its hosted checks and external
+exact-SHA record are pending on that branch's pull request.
 
 Two operational follow-ups from the post-merge `main` push runs are open:
 a documentation-only merge passes its fast-lane pull-request run but then
