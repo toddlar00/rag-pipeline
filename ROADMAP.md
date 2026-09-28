@@ -1239,7 +1239,10 @@ shorten them without changing pipeline behavior.
   entrypoint-admission tests patch `__main__.__file__` with
   `raising=False`, because an xdist worker's `__main__` has no `__file__`.
   Locally with four workers the Linux light suite takes 88 s (about 325 s
-  serially) and the Windows light suite 585 s (about 1,515 s).
+  serially) and the Windows light suite 585 s (about 1,515 s). Hosted on
+  #118, the Linux unit lanes took 3m43s to 4m34s and the Windows shards
+  4m09s to 4m39s. Seven OCR review test modules now skip without gradio,
+  which the dependency workflow's core-lock job exposed.
 - **Follow-ups (not done).** The full CPU environment, service and
   vector-store lanes stay serial; per-worker model loading in the full
   environment is unmeasured. Without psutil, `-n auto` counts logical CPUs.
@@ -1350,7 +1353,13 @@ child `b33a433`) passed the hosted CI promotion gate on [PR
 pytest-xdist source `c31f4c9` adds pytest-xdist 3.8.0 and execnet 2.1.2 to
 `requirements-test.lock` and `requirements-smoke.lock` (test/audit tooling
 domain) and runs the dependency-light unit lanes with `-n auto`; it
-supersedes the `365de1c` pair for its own pull request. Its Windows/Linux
+supersedes the `365de1c` pair for its own pull request. The `c31f4c9` pair
+(gate-only child `52a400c`) passed the hosted CI promotion gate on [PR
+#118](https://github.com/toddlar00/rag-pipeline/pull/118). Its lock change
+also triggered the dependency workflow's core-lock job, which failed because
+seven OCR review test modules imported gradio unconditionally. The test-only
+source `ff5e64f` guards those imports and supersedes the `c31f4c9` pair.
+Its Windows/Linux
 pair (independent local same-platform comparisons passed) is that branch's
 candidate; its hosted checks, and the external exact-SHA records for all
 three pull requests, are pending.
