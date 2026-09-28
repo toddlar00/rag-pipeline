@@ -1004,7 +1004,8 @@ def _normalize_text(
         text: str, *,
         strip_headers_footers_fn: TextTransformFn | None = None,
         dedup_nearby_lines_fn: TextTransformFn | None = None,
-        audit_hook: NormalizationAuditHook | None = None) -> str:
+        audit_hook: NormalizationAuditHook | None = None,
+        repair_fused_terms: bool = True) -> str:
     """Fix common encoding artifacts from PDF extraction.
 
     Handles: non-breaking spaces (\xa0), smart quotes, en/em dashes,
@@ -1014,6 +1015,8 @@ def _normalize_text(
     strings. It does not replace transformations; its errors propagate. Callback
     boundaries attribute the injected callback as a whole, not its internals.
     With no observer the established output and callback/error behavior remain.
+    ``repair_fused_terms=False`` skips the known fused-term spellings: they
+    change a word's lexical tokens, which source-bound text must keep.
     """
     if not text:
         return ""
@@ -1075,8 +1078,9 @@ def _normalize_text(
     text = observed("spaced_url", text, _repair_spaced_url_candidates(text))
     text = observed("spaced_hyphen", text, _SPACED_HYPHEN_RE.sub("-", text))
     text = observed("bracketed_contraction", text, _BRACKETED_CONTRACTION_RE.sub(r"\1", text))
-    text = observed("known_fused_term", text, _FUSED_TERM_RE.sub(
-        lambda match: _FUSED_TERM_REPLACEMENTS[match.group(0).lower()], text))
+    if repair_fused_terms:
+        text = observed("known_fused_term", text, _FUSED_TERM_RE.sub(
+            lambda match: _FUSED_TERM_REPLACEMENTS[match.group(0).lower()], text))
 
     def restore_sentence_space(match: re.Match[str]) -> str:
         """Add a missing sentence space, except inside URL-like tokens."""
