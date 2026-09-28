@@ -14,7 +14,7 @@ def pytest_addoption(parser):
     parser.addoption(
         "--shard", default=None, metavar="INDEX/COUNT",
         help=("run only shard INDEX of COUNT (1-based): every COUNT-th test "
-              "in collection order, after all other deselection"),
+              "in collection order, after -k, -m and --deselect"),
     )
 
 
