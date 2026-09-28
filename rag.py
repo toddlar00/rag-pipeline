@@ -7259,6 +7259,7 @@ def _conversion_parameters(*, batch_size_override: int | None,
                            ocr: bool | None,
                            ocr_full_page: bool = False,
                            ocr_angle_classifier: bool = True,
+                           ocr_merge_interleaved_regions: bool = False,
                            watermark: re.Pattern | None) -> dict:
     # Full-page OCR is meaningless once OCR itself is disabled; normalize it
     # away so a disabled-OCR receipt hashes identically regardless of the
@@ -7282,6 +7283,9 @@ def _conversion_parameters(*, batch_size_override: int | None,
     # away with --no-ocr exactly like --ocr-full-page.
     if not ocr_angle_classifier and ocr is not False:
         parameters["ocr_angle_classifier"] = False
+    # The interleaved OCR region merge follows the same opt-in rule.
+    if ocr_merge_interleaved_regions and ocr is not False:
+        parameters["ocr_merge_interleaved_regions"] = True
     return parameters
 
 
@@ -7359,6 +7363,150 @@ def _configure_docling_model_artifacts(
     return root
 
 
+# Running-prose layout labels whose same-label regions may interleave.
+_INTERLEAVED_REGION_LABELS = frozenset({"text", "list_item", "footnote"})
+
+
+def _layout_label(cluster) -> str:
+    return getattr(cluster.label, "value", cluster.label)
+
+
+def _cell_inside_region(cell, region_bbox) -> bool:
+    """True when at least 80% of a cell's positive area lies in a region."""
+    box = cell.rect.to_bounding_box()
+    area = (box.r - box.l) * (box.b - box.t)
+    if area <= 0:
+        return False
+    width = min(box.r, region_bbox.r) - max(box.l, region_bbox.l)
+    height = min(box.b, region_bbox.b) - max(box.t, region_bbox.t)
+    return width > 0 and height > 0 and width * height / area >= 0.8
+
+
+def _layout_regions_interleave(first, second) -> bool:
+    return (any(_cell_inside_region(cell, second.bbox)
+                for cell in first.cells)
+            or any(_cell_inside_region(cell, first.bbox)
+                   for cell in second.cells))
+
+
+def _layout_reading_key(cluster) -> tuple:
+    # Docling's LayoutPostprocessor._sort_clusters(mode="id") key.
+    return (min((cell.index for cell in cluster.cells), default=sys.maxsize),
+            cluster.bbox.t, cluster.bbox.l)
+
+
+def _merge_interleaved_ocr_regions(clusters):
+    """Merge same-label prose regions whose OCR lines interleave.
+
+    Docling's layout model can propose two same-label regions for one scanned
+    paragraph that overlap by several lines.  Its postprocessor gives each OCR
+    line to the region covering most of it (ties go to the first), so lines in
+    the overlap alternate between the regions and each region reads out of
+    order.  Two final clusters interleave when they share a label in
+    _INTERLEAVED_REGION_LABELS, neither has children, and at least 80% of a
+    line assigned to one lies inside the other's box; a few points of edge
+    contact never qualify.  Groups close transitively.  Each group keeps the
+    member whose first line comes first (its id, label and confidence), with
+    the union box and every member's lines once each in line-index order.
+
+    Boxes are Docling's TOPLEFT page coordinates at this stage; any other
+    orientation has no positive line area and never merges.  Clusters that are
+    not merged are returned as the same objects, re-sorted by Docling's own
+    reading key; with nothing to merge the input sequence itself is returned.
+    """
+    eligible = [position for position, cluster in enumerate(clusters)
+                if _layout_label(cluster) in _INTERLEAVED_REGION_LABELS
+                and not cluster.children]
+    parent = {position: position for position in eligible}
+
+    def root(position):
+        while parent[position] != position:
+            position = parent[position]
+        return position
+
+    for offset, first in enumerate(eligible):
+        for second in eligible[offset + 1:]:
+            if (_layout_label(clusters[first])
+                    == _layout_label(clusters[second])
+                    and _layout_regions_interleave(
+                        clusters[first], clusters[second])):
+                parent[root(second)] = root(first)
+    groups: dict[int, list[int]] = {}
+    for position in eligible:
+        groups.setdefault(root(position), []).append(position)
+    merged_away: set[int] = set()
+    for group in groups.values():
+        if len(group) < 2:
+            continue
+        members = [clusters[position] for position in group]
+        base = min(members, key=_layout_reading_key)
+        cells: dict = {}
+        for member in [base, *(m for m in members if m is not base)]:
+            for cell in member.cells:
+                cells.setdefault(cell.index, cell)
+        bounds = {
+            "l": min(member.bbox.l for member in members),
+            "t": min(member.bbox.t for member in members),
+            "r": max(member.bbox.r for member in members),
+            "b": max(member.bbox.b for member in members),
+        }
+        base.bbox = (base.bbox.model_copy(update=bounds)
+                     if hasattr(base.bbox, "model_copy")
+                     else type(base.bbox)(**bounds))
+        base.cells = [cells[index] for index in sorted(cells)]
+        merged_away.update(
+            position for position in group if clusters[position] is not base)
+    if not merged_away:
+        return clusters
+    return sorted(
+        (cluster for position, cluster in enumerate(clusters)
+         if position not in merged_away),
+        key=_layout_reading_key)
+
+
+def _interleaved_region_merge_pipeline_cls():
+    """Docling's default PDF pipeline with interleaved OCR regions merged.
+
+    Only each pipeline instance's layout postprocessing model is wrapped, so
+    Docling's own classes and every other stage stay untouched.
+    """
+    from docling.datamodel.pipeline_options import (
+        BaseLayoutPostprocessorOptions,
+    )
+    from docling.models.base_layout_postprocessing_model import (
+        BaseLayoutPostprocessingModel,
+    )
+    from docling.pipeline.standard_pdf_pipeline import StandardPdfPipeline
+
+    class InterleavedRegionMergeModel(BaseLayoutPostprocessingModel):
+        """Pass another model's final layout clusters through the merge."""
+
+        def __init__(self, inner) -> None:
+            self.inner = inner
+
+        @classmethod
+        def get_options_type(cls):
+            return BaseLayoutPostprocessorOptions
+
+        def postprocess_layout(self, conv_res, pages):
+            predictions = []
+            for prediction in self.inner.postprocess_layout(conv_res, pages):
+                clusters = _merge_interleaved_ocr_regions(
+                    prediction.clusters)
+                predictions.append(
+                    prediction if clusters is prediction.clusters
+                    else prediction.model_copy(update={"clusters": clusters}))
+            return predictions
+
+    class InterleavedRegionMergePipeline(StandardPdfPipeline):
+        def __init__(self, pipeline_options) -> None:
+            super().__init__(pipeline_options)
+            self.layout_postprocessing_model = InterleavedRegionMergeModel(
+                self.layout_postprocessing_model)
+
+    return InterleavedRegionMergePipeline
+
+
 def _converted_outputs_complete(
         pdf_path: Path, doc_output: Path, markdown_output: Path, *,
         parameters: dict,
@@ -7407,7 +7555,9 @@ def _converted_outputs_complete_locked(
                 or binding.source_sha256 != source_generation.sha256
                 or binding.source_size != source_generation.size
                 or binding.ocr_angle_classifier
-                != parameters.get("ocr_angle_classifier", True)):
+                != parameters.get("ocr_angle_classifier", True)
+                or binding.ocr_merge_interleaved_regions
+                != parameters.get("ocr_merge_interleaved_regions", False)):
             return False
         outputs = {
             "docling_json": doc_output,
@@ -7449,6 +7599,7 @@ def convert_pdf(pdf_path: Path, doc_output: Path, *,
                 ocr: bool | None = None,
                 ocr_full_page: bool = False,
                 ocr_angle_classifier: bool = True,
+                ocr_merge_interleaved_regions: bool = False,
                 preprocessed_output: Path | None = None,
                 markdown_output: Path | None = None,
                 security_policy: (
@@ -7479,6 +7630,7 @@ def convert_pdf(pdf_path: Path, doc_output: Path, *,
             auto_preprocess=auto_preprocess, ocr=ocr,
             ocr_full_page=ocr_full_page,
             ocr_angle_classifier=ocr_angle_classifier,
+            ocr_merge_interleaved_regions=ocr_merge_interleaved_regions,
             preprocessed_output=preprocessed_output,
             markdown_output=markdown_output,
             security_policy=security_policy,
@@ -7494,6 +7646,7 @@ def _convert_pdf_locked(pdf_path: Path, doc_output: Path, *,
                 ocr: bool | None = None,
                 ocr_full_page: bool = False,
                 ocr_angle_classifier: bool = True,
+                ocr_merge_interleaved_regions: bool = False,
                 preprocessed_output: Path | None = None,
                 markdown_output: Path | None = None,
                 security_policy: (
@@ -7511,7 +7664,9 @@ def _convert_pdf_locked(pdf_path: Path, doc_output: Path, *,
         batch_size_override=batch_size_override, backend=backend,
         auto_preprocess=auto_preprocess, ocr=ocr,
         ocr_full_page=ocr_full_page,
-        ocr_angle_classifier=ocr_angle_classifier, watermark=watermark)
+        ocr_angle_classifier=ocr_angle_classifier,
+        ocr_merge_interleaved_regions=ocr_merge_interleaved_regions,
+        watermark=watermark)
 
     if (not force and _converted_outputs_complete_locked(
             source_pdf_path, doc_output, md_path,
@@ -7536,6 +7691,7 @@ def _convert_pdf_locked(pdf_path: Path, doc_output: Path, *,
             auto_preprocess=auto_preprocess, ocr=ocr,
             ocr_full_page=ocr_full_page,
             ocr_angle_classifier=ocr_angle_classifier,
+            ocr_merge_interleaved_regions=ocr_merge_interleaved_regions,
             preprocessed_output=preprocessed_path,
             markdown_output=markdown_output,
             security_policy=security_policy,
@@ -7593,6 +7749,9 @@ def _convert_pdf_locked(pdf_path: Path, doc_output: Path, *,
             # too.  Default manifests keep the legacy root field set.
             **({"ocr_angle_classifier": False}
                if "ocr_angle_classifier" in completion_parameters else {}),
+            **({"ocr_merge_interleaved_regions": True}
+               if "ocr_merge_interleaved_regions" in completion_parameters
+               else {}),
         })
     if _cached_artifact_sha256(source_pdf_path) != source_snapshot.sha256:
         raise RuntimeError(
@@ -7638,6 +7797,7 @@ def _convert_pdf_generation(
                 ocr: bool | None = None,
                 ocr_full_page: bool = False,
                 ocr_angle_classifier: bool = True,
+                ocr_merge_interleaved_regions: bool = False,
                 preprocessed_output: Path | None = None,
                 markdown_output: Path | None = None,
                 security_policy: (
@@ -7776,6 +7936,13 @@ def _convert_pdf_generation(
         log.warning(
             "--ocr-no-angle-classifier has no effect because OCR is not "
             "running for this PDF.")
+    merge_interleaved_regions = effective_ocr and ocr_merge_interleaved_regions
+    if merge_interleaved_regions:
+        ocr_mode += ", interleaved regions merged"
+    elif ocr_merge_interleaved_regions:
+        log.warning(
+            "--ocr-merge-interleaved-regions has no effect because OCR is not "
+            "running for this PDF.")
     log.info(f"OCR: {ocr_mode}")
 
     if use_gpu:
@@ -7801,9 +7968,14 @@ def _convert_pdf_generation(
         security_policy=security_policy)
     log.info(f"Docling verified model artifacts: {artifacts_root}")
 
+    # Without the opt-in merge, Docling keeps its own default pipeline class.
+    format_option = {"pipeline_options": pipeline_opts}
+    if merge_interleaved_regions:
+        format_option["pipeline_cls"] = (
+            _interleaved_region_merge_pipeline_cls())
     converter = DocumentConverter(
         format_options={
-            InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_opts),
+            InputFormat.PDF: PdfFormatOption(**format_option),
         },
     )
 
@@ -10454,6 +10626,7 @@ class ConversionSourceBinding:
     effective_input_sha256: str
     effective_input_size: int
     ocr_angle_classifier: bool = True
+    ocr_merge_interleaved_regions: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -10743,10 +10916,14 @@ def _load_conversion_source_binding(
         "source_record_count", "parameters_sha256", "outputs", "source",
         "effective_input",
     }
-    # The only optional root field records the opt-in RapidOCR override.
-    if set(payload) - {"ocr_angle_classifier"} != expected_root_fields:
+    # The only optional root fields record the opt-in OCR overrides.
+    optional_root_fields = {
+        "ocr_angle_classifier", "ocr_merge_interleaved_regions"}
+    if set(payload) - optional_root_fields != expected_root_fields:
         raise ValueError("conversion completion has an invalid field set")
-    if payload.get("ocr_angle_classifier", False) is not False:
+    if (payload.get("ocr_angle_classifier", False) is not False
+            or payload.get("ocr_merge_interleaved_regions", True)
+            is not True):
         raise ValueError("conversion completion OCR override is invalid")
     if (payload.get("stage") != "conversion"
             or payload.get("source_record_count") is not None
@@ -10828,6 +11005,8 @@ def _load_conversion_source_binding(
         effective_input_sha256=effective_input["sha256"],
         effective_input_size=effective_input["size"],
         ocr_angle_classifier="ocr_angle_classifier" not in payload,
+        ocr_merge_interleaved_regions=(
+            "ocr_merge_interleaved_regions" in payload),
     )
 
 
@@ -31073,12 +31252,15 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
         stage_started(current_stage)
         ocr_angle_classifier = not getattr(
             args, "ocr_no_angle_classifier", False)
+        ocr_merge_interleaved_regions = getattr(
+            args, "ocr_merge_interleaved_regions", False)
         conversion_parameters = _conversion_parameters(
             batch_size_override=args.batch_size, backend=args.backend,
             auto_preprocess=not args.no_preprocess,
             ocr=getattr(args, "ocr", None),
             ocr_full_page=getattr(args, "ocr_full_page", False),
             ocr_angle_classifier=ocr_angle_classifier,
+            ocr_merge_interleaved_regions=ocr_merge_interleaved_regions,
             watermark=watermark)
         if resume and _converted_outputs_complete(
                 pdf_path, paths["doc"], paths["converted_markdown"],
@@ -31098,6 +31280,7 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
                 ocr=getattr(args, "ocr", None),
                 ocr_full_page=getattr(args, "ocr_full_page", False),
                 ocr_angle_classifier=ocr_angle_classifier,
+                ocr_merge_interleaved_regions=ocr_merge_interleaved_regions,
                 preprocessed_output=paths["preprocessed"],
                 markdown_output=paths["converted_markdown"],
                 security_policy=llm_kwargs["security_policy"],
@@ -32199,6 +32382,16 @@ def main(argv: list[str] | None = None):
                  "enable OCR itself and is ignored with --no-ocr",
         )
 
+    def add_ocr_merge_interleaved_regions_flag(p):
+        p.add_argument(
+            "--ocr-merge-interleaved-regions",
+            action="store_true",
+            help="Merge same-label text, list-item or footnote layout "
+                 "regions whose OCR lines interleave, so each reads top to "
+                 "bottom, whenever OCR runs. Does not enable OCR itself and "
+                 "is ignored with --no-ocr",
+        )
+
     def add_chunk_llm_flags(p):
         p.add_argument("--llm-classify", action="store_true",
                         help="Use LLM for content classification")
@@ -32312,6 +32505,7 @@ def main(argv: list[str] | None = None):
     add_ocr_flag(p_conv)
     add_ocr_full_page_flag(p_conv)
     add_ocr_angle_classifier_flag(p_conv)
+    add_ocr_merge_interleaved_regions_flag(p_conv)
 
     # chunk
     p_chunk = sub.add_parser("chunk", help="DoclingDocument to enriched chunks")
@@ -32635,6 +32829,7 @@ def main(argv: list[str] | None = None):
     add_ocr_flag(p_full)
     add_ocr_full_page_flag(p_full)
     add_ocr_angle_classifier_flag(p_full)
+    add_ocr_merge_interleaved_regions_flag(p_full)
     add_chunk_llm_flags(p_full)
     add_table_retrieval_flag(p_full)
     add_markdown_validation_flag(p_full)
@@ -32681,6 +32876,7 @@ def main(argv: list[str] | None = None):
     add_ocr_flag(p_batch)
     add_ocr_full_page_flag(p_batch)
     add_ocr_angle_classifier_flag(p_batch)
+    add_ocr_merge_interleaved_regions_flag(p_batch)
     add_chunk_llm_flags(p_batch)
     add_table_retrieval_flag(p_batch)
     add_markdown_validation_flag(p_batch)
@@ -32869,6 +33065,8 @@ def main(argv: list[str] | None = None):
                         ocr_full_page=getattr(args, "ocr_full_page", False),
                         ocr_angle_classifier=not getattr(
                             args, "ocr_no_angle_classifier", False),
+                        ocr_merge_interleaved_regions=getattr(
+                            args, "ocr_merge_interleaved_regions", False),
                         security_policy=security_policy,
                         telemetry=run_telemetry)
 

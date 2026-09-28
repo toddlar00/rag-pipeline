@@ -43,6 +43,10 @@ def load_conversion_binding(docling_path: Path, *, document_sha256: str, documen
         # Retry OCR always runs RapidOCR's angle classifier; its text must not
         # be spliced into a conversion that was made without it.
         raise ValueError("conversions made without the OCR angle classifier are unsupported")
+    if binding.ocr_merge_interleaved_regions:
+        # Retry OCR never merges layout regions; its text must not be spliced
+        # into a conversion whose interleaved regions were merged.
+        raise ValueError("conversions made with merged OCR regions are unsupported")
     return binding
 
 

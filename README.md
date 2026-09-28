@@ -2773,6 +2773,21 @@ handshake deadline.
   time and never to a batch rebuild. The flag is recorded as requested even
   when OCR does not run, so a batch-wide flag would rewrite every text-layer
   run's conversion receipt and force reconversion on resume.
+  `--ocr-merge-interleaved-regions` (`convert`, `full`, `batch`) repairs one
+  scan defect whenever OCR runs. Docling's layout model sometimes splits one
+  paragraph into two regions with the same label that overlap by several
+  lines. Each OCR line then goes to whichever region covers more of it, so
+  lines in the overlap jump a line or two out of order, and no quality gate
+  can see it. With the flag, two text, list-item or footnote regions merge
+  when at least 80% of a line in one lies inside the other. The merged region
+  reads its lines in OCR order, top to bottom. A touch of a few points never
+  merges, and pictures, tables and regions with children are left alone. It
+  does not enable OCR, `--no-ocr` overrides it, and it composes with
+  `--ocr-full-page` and `--ocr-no-angle-classifier`. The parameters digest
+  records it, and the conversion manifest records it as
+  `"ocr_merge_interleaved_regions": true`. Docling OCR retry proposals refuse
+  such conversions, because retry OCR never merges regions. Apply it one PDF
+  at a time, for the same reason as the angle-classifier flag.
 
 ```bash
 # Default: inspect text quality and choose OCR automatically
@@ -2784,6 +2799,9 @@ python rag.py convert --pdf born_digital_book.pdf --no-ocr
 
 # Per PDF only: an upright scan whose OCR lines come out garbled
 python rag.py convert --pdf upright_scan.pdf --ocr-no-angle-classifier
+
+# Per PDF only: a scan whose paragraph lines come out a line or two out of order
+python rag.py convert --pdf scan.pdf --ocr-merge-interleaved-regions
 ```
 
 ### Text Cleaning

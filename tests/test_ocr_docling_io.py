@@ -117,6 +117,16 @@ def test_conversion_without_the_angle_classifier_rejected(files):
     assert not files["output"].exists()
 
 
+def test_conversion_with_merged_ocr_regions_rejected(files):
+    # Retry OCR regions are never merged; never splice them into a merged document.
+    value = json.loads(files["manifest"].read_bytes())
+    value["ocr_merge_interleaved_regions"] = True
+    files["manifest"].write_text(json.dumps(value), encoding="utf-8")
+    with pytest.raises(ValueError, match="merged OCR regions"):
+        run(files)
+    assert not files["output"].exists()
+
+
 def test_missing_completion_rejected(files):
     files["manifest"].unlink()
     with pytest.raises(FileNotFoundError):

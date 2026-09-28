@@ -925,11 +925,14 @@ def test_conversion_resume_rechecks_source_after_output_validation(
 
 
 @pytest.mark.parametrize(
-    "recorded", [{}, {"ocr_angle_classifier": False}],
-    ids=["alone", "beside-override"])
+    "recorded", [{}, {"ocr_angle_classifier": False},
+                 {"ocr_merge_interleaved_regions": True},
+                 {"ocr_angle_classifier": False,
+                  "ocr_merge_interleaved_regions": True}],
+    ids=["alone", "beside-override", "beside-merge", "beside-both"])
 def test_conversion_manifest_rejects_unknown_root_fields(tmp_path, recorded):
-    # The OCR override is the only optional root field; any other extra field
-    # stays an invalid field set, alone or beside the override.
+    # The OCR overrides are the only optional root fields; any other extra
+    # field stays an invalid field set, alone or beside the overrides.
     source = tmp_path / "book.pdf"
     document = tmp_path / "book.json"
     markdown = tmp_path / "book_docling.md"

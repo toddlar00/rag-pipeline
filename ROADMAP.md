@@ -1061,6 +1061,87 @@ schema or policy version changed.
   - The architecture inventory drift covers the new helpers, the new
     keyword parameters and the new test modules.
 
+### OCR interleaved-region merge (2026-09-27, draft PR, not integrated)
+
+This has the same status as the sections above. It adds an opt-in conversion
+setting for a gate-silent reading-order defect in scanned excerpts. No schema
+or policy version changed.
+
+- **Defect.** Docling 2.121's layout model can split a scanned excerpt's
+  paragraph into two overlapping layout regions with the same label (`text`,
+  `list_item` or `footnote`), overlapping by several lines. OCR reads each
+  line once, and line indexes run top to bottom. But
+  `LayoutPostprocessor._assign_cells_to_clusters` gives each line to the
+  region that covers most of it (ties go to the first), and
+  `_remove_overlapping_clusters` merges only above 0.8 IoU or containment. So
+  lines in the overlap go to whichever region wins, each region sorts its own
+  lines, and a line jumps one or two lines in the published text. No quality
+  gate sees it, because the OCR text is its own fidelity oracle. h18 has 7
+  such pairs (PDF pages 7, 9, 11, 15, 18, 19 and 21; 26-97 pt of overlap).
+- **Setting.** `--ocr-merge-interleaved-regions` (`convert`, `full`,
+  `batch`, off by default) applies whenever OCR runs. It does not enable OCR,
+  `--no-ocr` normalizes it away, and it composes with `--ocr-full-page` and
+  `--ocr-no-angle-classifier`. Only when it is set does
+  `"ocr_merge_interleaved_regions": true` enter the parameters digest and the
+  v3 conversion manifest. The strict loader accepts that field only as JSON
+  `true`, alone or beside `"ocr_angle_classifier": false`.
+  `ConversionSourceBinding` carries it. Resume refuses a manifest whose record
+  contradicts its digest, and the resume command keeps the flag. OCR Docling
+  retry proposals refuse flagged conversions, because retry OCR never merges
+  regions.
+- **Wiring.** With the flag off, the converter is built exactly as before,
+  with no `pipeline_cls`. With it on, `PdfFormatOption` gets a subclass of
+  Docling's default `StandardPdfPipeline`, built by
+  `_interleaved_region_merge_pipeline_cls()`. After `super().__init__`, it
+  wraps that instance's layout postprocessing model. The wrapper passes each
+  page's final clusters through `_merge_interleaved_ocr_regions`, a
+  dependency-light function that operates on duck-typed clusters. Nothing is
+  monkeypatched globally. A page with nothing to merge keeps its original
+  prediction object. The page `layout_score` is computed before the merge
+  and is unchanged.
+- **Scope.** Two clusters interleave when they share one of the three
+  labels, neither has children, and at least 80% of a line assigned to one
+  lies inside the other's box. Zero-area lines are skipped. Groups close
+  transitively. A group keeps the member whose first line index is lowest
+  (its id, label and confidence). It gets the union box and every member's
+  lines, deduplicated and sorted by index. Clusters are then re-sorted by
+  Docling's own `_sort_clusters(mode="id")` key. Pictures, tables, wrappers,
+  other labels and edge touches of a few points never merge. Clusters that
+  are not merged come back as the same objects.
+- **Evidence.**
+  - `tests/test_ocr_region_merge.py` has 91 tests, all on synthetic geometry.
+    One more is in `tests/test_ocr_docling_io.py`, and two new cases are in
+    the unknown-root-field test of `tests/test_source_snapshot_integrity.py`.
+    On the pre-change sources, 88 of these 94 fail. The 6 that pass are
+    characterizations: resume commands and background argv without the
+    flag, and unknown root fields rejected beside the new field.
+  - The mutants are killed: a strict `> 0.8`, no label check, a one-way
+    containment check, no re-sort, the first member as base, children
+    allowed, merging without OCR, and no resume check. Removing the zero-area
+    guard is an equivalent mutant: a zero-area line has no positive overlap.
+  - Default digests are pinned by the angle-classifier goldens, with the
+    setting unset and set to `False`. A flag-off conversion of h18
+    (`--ocr-no-angle-classifier` only) with this tree is byte-identical to
+    the 2026-09-26 trial (JSON, Markdown, and manifest `bc09538b…`).
+  - A flagged h18 conversion (`--ocr-no-angle-classifier
+    --ocr-merge-interleaved-regions`) merged the 7 pairs: 201 items became
+    194, and no same-label pair overlaps by more than 8 pt. The 10 edge
+    touches (0.3-5.7 pt) are unchanged. The body text keeps the same
+    multiset of 10,258 whitespace tokens, and every other-label item is
+    identical. A recording rerun reproduced the JSON byte for byte. It showed
+    each merged region's 5-32 OCR lines in non-decreasing top order. In each,
+    the lines of the two source regions interleave in 4 to 6 runs.
+- **Follow-ups (not fixed).**
+  - Code from before this change rejects a flagged manifest.
+  - The merge applies to every page of a conversion that runs OCR. A page
+    whose lines come from a text layer is ordered by content-stream index,
+    not position. h18 is image-only, so no such page exists there.
+  - The flagged h18 is not chunked or published here. Its chunking needs a
+    separate fix.
+  - The architecture inventory needs a reviewed `--refresh`: the new private
+    helpers, the changed signatures and the new test module drift from it.
+  - The OCR retry and disposition tools have no merged-region route.
+
 ### Integrated convergence
 
 - **R1:** [PR #44](https://github.com/toddlar00/rag-pipeline/pull/44)
