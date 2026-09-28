@@ -9,8 +9,8 @@ fresh-process repetitions.
 
 Both current reports were generated from the clean FlagEmbedding source
 checkpoint
-`515ed913d1e6b1eb33841e49f82eab26fcfb43ce` (tree
-`f1051d6c016e2b36a8565e6c5d82fb4c9f3d8f0e`), stacked on the pytest-xdist checkpoint
+`ddbef38cff0528a97e01c3016fa53df6e74bb09a` (tree
+`cd4837b62a65e5fe4f9b1ae5c7b13c2dcd9af93c`), stacked on the pytest-xdist checkpoint
 `ff5e64f`, the test-time economy checkpoint `365de1c` and the
 OCR-program and casebook-excerpt checkpoint `29ea76b`.
 That source contains everything through the Task 0.8
@@ -50,8 +50,8 @@ marker-resolved distributions before generation.
 
 | Platform | Runtime | Report | Bytes | File SHA-256 | Embedded report SHA-256 |
 |---|---:|---|---:|---|---|
-| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,086 | `83ef0e7f09a3a44584548f4d1ac4f6dbae7fb107105b4b45651b9726c838b943` | `cddbb1d4660f819c6709336970397f8b7864c402467dffa6fabb789696ebf12d` |
-| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,461 | `e73b039bdb5615f08864abcc39c497f66c790e3fc84f28660e93400b1f73d2d9` | `b1fc090d197dff4e696a342442056a568f2ac6b9750b58e1673c27335cf6dfa2` |
+| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,088 | `bcfebbd026ee1cc45a9bf0d3b676fc26fede37a32fe4319db57354c02aafb9a5` | `b046b3ff6f31173b33144faace13b8dc415d06d38b6c18ad9f4abb2c955bd227` |
+| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,462 | `cb313a19f064bf79335678b8900f9468189bcd13a1226fe6d7202a2673246c03` | `7a0d6565cbeaf4069e13df40c83752ec602be1c33c1398fe1d4f5c373ab76018` |
 
 The reports attest the same source commit, clean-worktree state, tracked-diff
 digest, eight LF and `HEAD`-identical dependency/model-lock inputs, authoritative
@@ -212,7 +212,12 @@ gate on [PR #118](https://github.com/toddlar00/rag-pipeline/pull/118). The
 stacked FlagEmbedding source `515ed91` (ML/runtime domain) moves
 FlagEmbedding from 1.4.0 to 1.4.2 in `requirements-core.lock` and
 `requirements-full.lock`, so local reranking works with Transformers 5, and
-supersedes the `ff5e64f` pair for its own pull request.
+supersedes the `ff5e64f` pair for its own pull request. On that pair's
+hosted run (gate-only child `c804d7b`, [PR
+#119](https://github.com/toddlar00/rag-pipeline/pull/119)) one test in the
+Linux 3.12 unit lane failed on a one-second access-time tick in a
+whole-`lstat` comparison. The test-only source `ddbef38` compares identity
+without the access time and supersedes the `515ed91` pair.
 The current reports above
 bind
 that exact clean source and each passes an independent complete

@@ -6,7 +6,7 @@
   at source `29ea76b` passed hosted CI on PR #116, the stacked
   test-time economy pair at `365de1c` passed on PR #117, the
   pytest-xdist pair at `ff5e64f` passed on PR #118, and the
-  FlagEmbedding pair at source `515ed91` is pending; exact-head
+  FlagEmbedding pair at source `ddbef38` is pending; exact-head
   human review and separate R8 owner authorization are not recorded
 - **Milestone:** R10 prerequisite for the R8 pipeline-ownership move
 - **Report schema:** `phase-a0` v3
@@ -139,8 +139,8 @@ Task 0.8 static-security pair at source `8891e1b` repeated it through
 gate-only child `1533164` and merge `e34103f`
 ([PR #107](https://github.com/toddlar00/rag-pipeline/pull/107)). The
 current replacement pair uses the clean FlagEmbedding source
-`515ed913d1e6b1eb33841e49f82eab26fcfb43ce` (tree
-`f1051d6c016e2b36a8565e6c5d82fb4c9f3d8f0e`), stacked on the pytest-xdist
+`ddbef38cff0528a97e01c3016fa53df6e74bb09a` (tree
+`cd4837b62a65e5fe4f9b1ae5c7b13c2dcd9af93c`), stacked on the pytest-xdist
 source `ff5e64f`, the test-time economy source `365de1c` and the
 OCR-program and casebook-excerpt source `29ea76b`; together they changed
 Python source, CI configuration, `.gitattributes`, two test-tooling locks
@@ -181,7 +181,12 @@ gate on [PR #118](https://github.com/toddlar00/rag-pipeline/pull/118). The
 stacked FlagEmbedding source `515ed91` (ML/runtime domain) moves
 FlagEmbedding from 1.4.0 to 1.4.2 in `requirements-core.lock` and
 `requirements-full.lock`, so local reranking works with Transformers 5, and
-supersedes the `ff5e64f` pair for its own pull request.
+supersedes the `ff5e64f` pair for its own pull request. On that pair's
+hosted run (gate-only child `c804d7b`, [PR
+#119](https://github.com/toddlar00/rag-pipeline/pull/119)) one test in the
+Linux 3.12 unit lane failed on a one-second access-time tick in a
+whole-`lstat` comparison. The test-only source `ddbef38` compares identity
+without the access time and supersedes the `515ed91` pair.
 Its Windows and
 Linux CPython 3.12.13 reports were
 generated after the same strict hash-locked synchronization and
@@ -352,16 +357,16 @@ and its own pair was superseded before promotion by source `a15232d`
 turn superseded by the test-only source `8aa08b2`, then by the
 Windows-timeout source `29ea76b`, the stacked test-time economy
 source `365de1c`, the stacked pytest-xdist source `c31f4c9`, its
-test-only successor `ff5e64f` and then the stacked FlagEmbedding source
-`515ed91`.
+test-only successor `ff5e64f`, the stacked FlagEmbedding source
+`515ed91` and then its test-only successor `ddbef38`.
 Its Windows report
-is 51,086 bytes (file SHA-256
-`83ef0e7f09a3a44584548f4d1ac4f6dbae7fb107105b4b45651b9726c838b943`;
+is 51,088 bytes (file SHA-256
+`bcfebbd026ee1cc45a9bf0d3b676fc26fede37a32fe4319db57354c02aafb9a5`;
 embedded report SHA-256
-`cddbb1d4660f819c6709336970397f8b7864c402467dffa6fabb789696ebf12d`).
-Its Linux report is 50,461 bytes (file SHA-256
-`e73b039bdb5615f08864abcc39c497f66c790e3fc84f28660e93400b1f73d2d9`;
+`b046b3ff6f31173b33144faace13b8dc415d06d38b6c18ad9f4abb2c955bd227`).
+Its Linux report is 50,462 bytes (file SHA-256
+`cb313a19f064bf79335678b8900f9468189bcd13a1226fe6d7202a2673246c03`;
 embedded report SHA-256
-`b1fc090d197dff4e696a342442056a568f2ac6b9750b58e1673c27335cf6dfa2`).
+`7a0d6565cbeaf4069e13df40c83752ec602be1c33c1398fe1d4f5c373ab76018`).
 Both use CPython 3.12.13 and pass their complete local same-platform 9×5
 comparisons. Hosted promotion remains pending.

@@ -1421,7 +1421,12 @@ gate on [PR #118](https://github.com/toddlar00/rag-pipeline/pull/118). The
 stacked FlagEmbedding source `515ed91` (ML/runtime domain) moves
 FlagEmbedding from 1.4.0 to 1.4.2 in `requirements-core.lock` and
 `requirements-full.lock`, so local reranking works with Transformers 5, and
-supersedes the `ff5e64f` pair for its own pull request.
+supersedes the `ff5e64f` pair for its own pull request. On that pair's
+hosted run (gate-only child `c804d7b`, [PR
+#119](https://github.com/toddlar00/rag-pipeline/pull/119)) one test in the
+Linux 3.12 unit lane failed on a one-second access-time tick in a
+whole-`lstat` comparison. The test-only source `ddbef38` compares identity
+without the access time and supersedes the `515ed91` pair.
 Its Windows/Linux
 pair (independent local same-platform comparisons passed) is that branch's
 candidate; its hosted checks, and the external exact-SHA records for all
