@@ -972,6 +972,95 @@ change.
   - A square-only caption, which the chunker can also erase, still fails
     closed; none exists in the scanned conversions.
 
+### Footnote placement by observed geometry (2026-09-27, draft PR, not integrated)
+
+This has the same status as the sections above. It adds a third
+gate-driven replay to the one dispatcher, for the image-only h18 route. No
+schema or policy version changed.
+
+- **h18 route.** The page-labeled h18 is one scanned image per page under
+  an invisible, badly misread scanner text layer. A private image-only
+  derivative (only that render-mode-3 layer removed; page count, labels,
+  image streams and 1x/2x renders verified identical) converts with
+  `--ocr-no-angle-classifier`, as h04 does, with perfect source fidelity
+  (10,325/10,325 tokens). Its one gate failure was
+  `same_page_reading_order` on one page.
+- **Defect.** Sidecar placement compares a footnote's page box with each
+  body record's. A text-free omission row printed among that page's notes
+  was chunked into the body record that continues onto the next page. Its
+  tokenless entry widened the record's box into the upper notes, so their
+  geometry was declared invalid. The semantic fallback then applied the
+  page-continuation rule and placed them after the next page's body, and
+  after the lower notes. The fidelity audit registers no occurrence for a
+  plain tokenless entry, so placement disagreed with the audit's own
+  geometry.
+- **Trigger.** The publication failure sink records a footnote request only
+  when the first pass's report fails `same_page_reading_order` with a
+  violation naming, as `before_ref` or `after_ref`, a string ref the first
+  pass published in a footnote sidecar (`_footnote_placement_replay_pages`).
+  The request is the set of those violations' pages. The unchanged gate
+  failure then propagates.
+- **Replay.** `chunk_document` replays the chunk once, under the same lease
+  and outside the failure's handler, after recording a
+  `chunk_footnote_placement_replay` observation (`footnote_pages`). Only on
+  the named pages, `_reorder_footnote_sidecars` builds boxes from the
+  lineage the audit observes (`_record_observed_source_box`: entries with
+  source tokens and zero-width opaque recoveries). A body record the audit
+  does not observe on that page no longer constrains the placement; a note
+  it does not observe keeps its full box; malformed lineage still fails
+  closed to the semantic fallback. The replay gets no sink and raises the
+  plain, unchained gate `RuntimeError` when it fails.
+- **Precedence (limitation).** The order replay, then the list replay, take
+  precedence. A footnote request beside either is dropped, so a document
+  that needs two repairs stays failing (fail-closed; none exists in h26).
+- **Scope.** Output changes only when the unchanged first pass fails
+  `same_page_reading_order` naming a footnote sidecar and names no deferred
+  group or uncovered list join. With no named page, placement runs the
+  previous code path.
+- **h18.** The replay passes every gate. Against the first pass, only
+  records 7-12 on that page move: the two upper notes now follow the
+  passage, before the lower notes. Every record's text and lineage is
+  identical. The omission row stays a paragraph of the body record, as in
+  the first pass.
+- **Preservation.** All 18 READY h26 runs (h01-h17 and the Summer 2026
+  Update) re-chunk byte-identical to their publications: chunks, oracles,
+  and quality reports with no structural change. h03 and h16 still take
+  their own replays.
+- **Evidence.**
+  - `tests/test_footnote_placement_geometry.py` (27 tests) pins the
+    placement: the unchanged first pass, the replay on named pages only, a
+    one-token entry, a note's own tokenless row, an unobserved body and
+    note, zero-width opaque entries, and three malformed-lineage cases.
+  - `tests/test_footnote_placement_replay.py` (21 tests) pins the trigger
+    (including malformed and unhashable refs), the publication hook, the
+    dispatcher, precedence, the lease and the observation.
+  - `tests/test_footnote_placement_replay_locked.py` (5 tests) drives the
+    real locked pass: a synthetic two-page document whose first pass alone
+    fails exactly as h18 did, its replay passing, a single pass without the
+    row, and injected failures showing that only refs published in footnote
+    sidecars request a replay. The replay tests fail on the pre-change
+    code, where the behavioural failure is the propagated gate error.
+  - `tests/test_list_boundary_replay.py` and
+    `tests/test_native_group_order_replay.py` pop the new first-pass sink.
+  - An independent review found no path that changes a passing document;
+    its 30 mutants left 6 non-equivalent survivors, all now killed (with 2
+    more), and one equivalent (the check-name filter). A 780-variant
+    malformed-shape fuzz found no replay-only exception.
+- **Follow-ups (not fixed).**
+  - The omission row belongs to a footnote's quoted text but stays in body
+    flow: no note on that page opens with a number (OCR dropped the
+    markers), so no footnote lane is established. It carries no words.
+  - `_footnote_slot_boxes` also ignores zero-width opaque entries, which
+    the audit registers; at worst a slot is left in its order and stays
+    reportable.
+  - The OCR text of h18 has gate-silent defects of its own (the fidelity
+    oracle is the OCR): a page-by-page audit of this route found 7
+    line-level reading-order swaps, all from pairs of same-label layout
+    regions overlapping by several lines, ~9 word misreads and ~40
+    run-together words. See "OCR interleaved-region merge" for the swaps.
+  - The architecture inventory drift covers the new helpers, the new
+    keyword parameters and the new test modules.
+
 ### Integrated convergence
 
 - **R1:** [PR #44](https://github.com/toddlar00/rag-pipeline/pull/44)
