@@ -120,7 +120,7 @@ def test_readback_admission_never_creates_or_resumes_directory(setup):
 
 
 def test_wrong_first_party_launcher_rejected_before_ocr(setup, monkeypatch):
-    monkeypatch.setattr(sys.modules["__main__"], "__file__", str(workflow.ROOT / "other.py"))
+    monkeypatch.setattr(sys.modules["__main__"], "__file__", str(workflow.ROOT / "other.py"), raising=False)
     with pytest.raises(ValueError):
         request(setup)
     assert not setup.observed_calls and not setup.output.exists()

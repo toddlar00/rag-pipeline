@@ -1216,6 +1216,37 @@ version changed.
     after any sidecars of the retracted slice's chunk; the geometry gate
     fails closed if that ever misorders a page.
 
+### Test-suite time (2026-09-28, draft PRs, not integrated)
+
+The dependency-light suite has about 15,000 tests. On PR #116 the Windows
+unit lane needed 29.7 minutes (its limit was raised from 20 to 60) and the
+Linux unit lanes used 9 to 12.5 of their 15 minutes. Two stacked draft PRs
+shorten them without changing pipeline behavior.
+
+- **[PR #117](https://github.com/toddlar00/rag-pipeline/pull/117)** (on
+  #116). The repository architecture inventory is built once per test
+  session. The inventory builder indexes scope-owned AST nodes once (one
+  build 40.1 -> 27.0 s on Windows, output byte-identical). Hash-lock
+  parsing is cached by content. A new `--shard INDEX/COUNT` option selects
+  every COUNT-th test after all other deselection, and the Windows unit lane
+  runs as three shards. OCR execution receipts reuse a source file's digest
+  while its `lstat` identity is unchanged and its last change is older than
+  a 2-second racy window; the link-component refusal still runs on every
+  call. Hosted Windows shards took 7m44s to 8m47s.
+- **This PR** (on #117). pytest-xdist 3.8.0 and execnet 2.1.2 join the
+  hash-locked test toolchain (test/audit tooling domain). The Linux unit
+  matrix and the Windows shards run `python -m pytest -q -n auto`. Six
+  entrypoint-admission tests patch `__main__.__file__` with
+  `raising=False`, because an xdist worker's `__main__` has no `__file__`.
+  Locally with four workers the Linux light suite takes 88 s (about 325 s
+  serially) and the Windows light suite 585 s (about 1,515 s). Hosted on
+  #118, the Linux unit lanes took 3m43s to 4m34s and the Windows shards
+  4m09s to 4m39s. Seven OCR review test modules now skip without gradio,
+  which the dependency workflow's core-lock job exposed.
+- **Follow-ups (not done).** The full CPU environment, service and
+  vector-store lanes stay serial; per-worker model loading in the full
+  environment is unmeasured. Without psutil, `-n auto` counts logical CPUs.
+
 ### Integrated convergence
 
 - **R1:** [PR #44](https://github.com/toddlar00/rag-pipeline/pull/44)
@@ -1316,10 +1347,22 @@ promotion gate on [PR
 networked vulnerability/SBOM jobs failed at that head. The stacked test-time
 economy source `365de1c` changes Python source and CI configuration (the
 Windows unit lane runs as three shards) but no dependency or model lock, and
-supersedes that pair for its own pull request. Its Windows/Linux pair
-(independent local same-platform comparisons passed) is that branch's
-candidate; its hosted checks, and the external exact-SHA records for both
-pull requests, are pending.
+supersedes that pair for its own pull request. The `365de1c` pair (gate-only
+child `b33a433`) passed the hosted CI promotion gate on [PR
+#117](https://github.com/toddlar00/rag-pipeline/pull/117). The stacked
+pytest-xdist source `c31f4c9` adds pytest-xdist 3.8.0 and execnet 2.1.2 to
+`requirements-test.lock` and `requirements-smoke.lock` (test/audit tooling
+domain) and runs the dependency-light unit lanes with `-n auto`; it
+supersedes the `365de1c` pair for its own pull request. The `c31f4c9` pair
+(gate-only child `52a400c`) passed the hosted CI promotion gate on [PR
+#118](https://github.com/toddlar00/rag-pipeline/pull/118). Its lock change
+also triggered the dependency workflow's core-lock job, which failed because
+seven OCR review test modules imported gradio unconditionally. The test-only
+source `ff5e64f` guards those imports and supersedes the `c31f4c9` pair.
+Its Windows/Linux
+pair (independent local same-platform comparisons passed) is that branch's
+candidate; its hosted checks, and the external exact-SHA records for all
+three pull requests, are pending.
 
 Two operational follow-ups from the post-merge `main` push runs are open:
 a documentation-only merge passes its fast-lane pull-request run but then

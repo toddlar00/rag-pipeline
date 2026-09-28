@@ -7,11 +7,12 @@ fresh-process repetitions.
 
 ## Provenance
 
-Both current reports were generated from the clean test-time economy
-source checkpoint
-`365de1c9d9653f93262dd38c46284dd40585654a` (tree
-`e30d207e7b4d2e4ecac51252eb2321a2d3743e01`), stacked on the OCR-program and casebook-excerpt
-checkpoint `29ea76b`. That source contains everything through the Task 0.8
+Both current reports were generated from the clean pytest-xdist source
+checkpoint
+`ff5e64f929701cdd3388c60d82a7d5f9412ce76d` (tree
+`c393869ac911dfcd7d43ccbe4fd6363aec72d71c`), stacked on the test-time economy checkpoint
+`365de1c` and the OCR-program and casebook-excerpt checkpoint `29ea76b`.
+That source contains everything through the Task 0.8
 static-security merge `e34103f` plus the local OCR accuracy, retry and
 guided-review program, opt-in AI evidence search, the passive cleanup
 audits, the LLM transport and worker-launch repairs, the casebook
@@ -24,7 +25,10 @@ test guards, a Python 3.10/3.11-tolerant import-guard test, a
 60-minute Windows unit-lane timeout and the test-time economy changes
 (a session-shared architecture inventory, an indexed inventory builder,
 cached lock-record parsing and executed-source digests, and a Windows
-unit lane split into three shards). No dependency or model lock
+unit lane split into three shards), pytest-xdist for the unit lanes and
+gradio import guards in seven OCR review test modules.
+The only lock change adds pytest-xdist 3.8.0 and execnet 2.1.2 to
+`requirements-test.lock` and `requirements-smoke.lock`; no model lock
 changed. The executing
 environments were
 synchronized with repository-pinned uv 0.12.5 against the exact CPU
@@ -38,13 +42,13 @@ The Windows environment used a temporary direct, uv-managed CPython
 interpreter rather than a virtual-environment redirector so supervised-child
 parent identities remained exact. The Linux environment used a direct POSIX
 virtual-environment interpreter. `uv pip sync --strict --torch-backend cpu
---require-hashes` and `uv pip check` passed for 191 Windows and 189 Linux
+--require-hashes` and `uv pip check` passed for 193 Windows and 191 Linux
 marker-resolved distributions before generation.
 
 | Platform | Runtime | Report | Bytes | File SHA-256 | Embedded report SHA-256 |
 |---|---:|---|---:|---|---|
-| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,080 | `660a19e58a749978c2be880721f14347af4e6740e32038efa18581d66acc49ad` | `56121f9f7b9c2d04b0757d64dc2b03d522157da7a0d0edf960698829f9178ff0` |
-| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,462 | `ac9574ba75e6fc853a3982d7680fb18c1c190c3971bff1118a1b18fd47e5591b` | `3e5706b16195dd10945f5f3aae4e135000fa909ab1da3be15dacaae61ea45beb` |
+| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,080 | `8f0732fddfd69e2cd6c4f31f5c9fe145a522c469f5ed570ada6ccedff91866a0` | `11a4cfd4acc7e39accf62b6324b5c400a1394f6b243be246983bbe6e33513c02` |
+| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,463 | `e0bd8b33d45f7e9eddea009df1158df2618fdb71867ed0df40dcb9fda826e373` | `26e44ea4f99771a11586c5bc9e3257e824e456a8bff2ec8bfa26eb0f61b6d246` |
 
 The reports attest the same source commit, clean-worktree state, tracked-diff
 digest, eight LF and `HEAD`-identical dependency/model-lock inputs, authoritative
@@ -188,7 +192,18 @@ supersedes the `8aa08b2` pair before promotion. The `29ea76b` pair
 networked vulnerability/SBOM jobs failed at that head. The stacked test-time
 economy source `365de1c` changes Python source and CI configuration (the
 Windows unit lane runs as three shards) but no dependency or model lock, and
-supersedes that pair for its own pull request.
+supersedes that pair for its own pull request. The `365de1c` pair (gate-only
+child `b33a433`) passed the hosted CI promotion gate on [PR
+#117](https://github.com/toddlar00/rag-pipeline/pull/117). The stacked
+pytest-xdist source `c31f4c9` adds pytest-xdist 3.8.0 and execnet 2.1.2 to
+`requirements-test.lock` and `requirements-smoke.lock` (test/audit tooling
+domain) and runs the dependency-light unit lanes with `-n auto`; it
+supersedes the `365de1c` pair for its own pull request. The `c31f4c9` pair
+(gate-only child `52a400c`) passed the hosted CI promotion gate on [PR
+#118](https://github.com/toddlar00/rag-pipeline/pull/118). Its lock change
+also triggered the dependency workflow's core-lock job, which failed because
+seven OCR review test modules imported gradio unconditionally. The test-only
+source `ff5e64f` guards those imports and supersedes the `c31f4c9` pair.
 The current reports above
 bind
 that exact clean source and each passes an independent complete

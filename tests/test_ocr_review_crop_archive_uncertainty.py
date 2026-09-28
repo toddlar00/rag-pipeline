@@ -42,7 +42,7 @@ def reports():
 @pytest.fixture
 def ui(monkeypatch, reports):
     monkeypatch.setenv("GRADIO_ANALYTICS_ENABLED", "False")
-    import gradio as gr
+    gr = pytest.importorskip("gradio")
 
     before, after = copy.deepcopy(reports)
     scope = crops.crop_scope(before, region_id="a")
@@ -575,7 +575,7 @@ def test_duplicate_selection_and_recovery_never_reset_current_journal(ui):
 
 
 def test_actual_failed_image_postprocess_cannot_mint_delivery_via_current_edit_or_prepare(ui, monkeypatch):
-    import gradio as gr
+    gr = pytest.importorskip("gradio")
 
     selected(ui)
     event_fn = ui.functions["open_crop_archive"]
@@ -682,7 +682,7 @@ def test_wrong_host_comparison_identity_cannot_display_or_save(ui, path, bad):
 @pytest.mark.parametrize("journey", ["regions", "hardscan"], indirect=True)
 def test_actual_archive_store_service_process_api_unresolved_save_reopen_resolve_score(journey, monkeypatch):
     """Real historical validators/store/host; only source and raster port inert."""
-    import gradio as gr
+    gr = pytest.importorskip("gradio")
 
     monkeypatch.setenv("GRADIO_ANALYTICS_ENABLED", "False")
     service = journey["service"]

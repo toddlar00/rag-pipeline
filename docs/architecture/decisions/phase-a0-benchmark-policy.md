@@ -3,8 +3,9 @@
 - **Status:** A0a integrated; the latest completed hosted A0b technical
   checkpoint passed at Task 0.8 evidence head `1533164` and merged
   through `e34103f`; the OCR-program and casebook-excerpt replacement pair
-  at source `29ea76b` passed hosted CI on PR #116 and the stacked
-  test-time economy pair at source `365de1c` is pending; exact-head
+  at source `29ea76b` passed hosted CI on PR #116, the stacked
+  test-time economy pair at `365de1c` passed on PR #117, and the
+  pytest-xdist pair at source `ff5e64f` is pending; exact-head
   human review and separate R8 owner authorization are not recorded
 - **Milestone:** R10 prerequisite for the R8 pipeline-ownership move
 - **Report schema:** `phase-a0` v3
@@ -136,12 +137,14 @@ gate-only child `32153e9` and merge `376277c`
 Task 0.8 static-security pair at source `8891e1b` repeated it through
 gate-only child `1533164` and merge `e34103f`
 ([PR #107](https://github.com/toddlar00/rag-pipeline/pull/107)). The
-current replacement pair uses the clean test-time economy source
-`365de1c9d9653f93262dd38c46284dd40585654a` (tree
-`e30d207e7b4d2e4ecac51252eb2321a2d3743e01`), stacked on the
-OCR-program and casebook-excerpt source `29ea76b`; together they changed
-Python source, CI configuration and `.gitattributes` but no dependency
-or model lock. It supersedes the
+current replacement pair uses the clean pytest-xdist source
+`ff5e64f929701cdd3388c60d82a7d5f9412ce76d` (tree
+`c393869ac911dfcd7d43ccbe4fd6363aec72d71c`), stacked on the test-time
+economy source `365de1c` and the OCR-program and casebook-excerpt source
+`29ea76b`; together they changed Python source, CI configuration,
+`.gitattributes` and two test-tooling locks (pytest-xdist and execnet in
+`requirements-test.lock` and `requirements-smoke.lock`) but no model
+lock. It supersedes the
 earlier `1ae8502` pair, whose child `766feaf` passed both hosted Phase A0
 cells but whose dependency-light unit lanes failed at collection. Source
 `a15232d` then passed both hosted Phase A0 cells on [PR
@@ -159,12 +162,23 @@ supersedes the `8aa08b2` pair before promotion. The `29ea76b` pair
 networked vulnerability/SBOM jobs failed at that head. The stacked test-time
 economy source `365de1c` changes Python source and CI configuration (the
 Windows unit lane runs as three shards) but no dependency or model lock, and
-supersedes that pair for its own pull request.
+supersedes that pair for its own pull request. The `365de1c` pair (gate-only
+child `b33a433`) passed the hosted CI promotion gate on [PR
+#117](https://github.com/toddlar00/rag-pipeline/pull/117). The stacked
+pytest-xdist source `c31f4c9` adds pytest-xdist 3.8.0 and execnet 2.1.2 to
+`requirements-test.lock` and `requirements-smoke.lock` (test/audit tooling
+domain) and runs the dependency-light unit lanes with `-n auto`; it
+supersedes the `365de1c` pair for its own pull request. The `c31f4c9` pair
+(gate-only child `52a400c`) passed the hosted CI promotion gate on [PR
+#118](https://github.com/toddlar00/rag-pipeline/pull/118). Its lock change
+also triggered the dependency workflow's core-lock job, which failed because
+seven OCR review test modules imported gradio unconditionally. The test-only
+source `ff5e64f` guards those imports and supersedes the `c31f4c9` pair.
 Its Windows and
 Linux CPython 3.12.13 reports were
 generated after the same strict hash-locked synchronization and
-dependency-consistency checks: 191 marker-resolved distributions on
-Windows and 189 on Linux. They bind that one clean source, the same eight
+dependency-consistency checks: 193 marker-resolved distributions on
+Windows and 191 on Linux. They bind that one clean source, the same eight
 LF and `HEAD`-identical dependency/model inputs, and the complete 9×5
 scenario contract. Each passes an independent complete local same-platform
 comparison. The direct gate-only evidence child contains only the reports
@@ -328,15 +342,17 @@ OCR-program and casebook-excerpt source `1ae8502` superseded that pair,
 and its own pair was superseded before promotion by source `a15232d`
 (dependency-light test guards and the casebook fixes), whose pair was in
 turn superseded by the test-only source `8aa08b2`, then by the
-Windows-timeout source `29ea76b` and then by the stacked test-time
-economy source `365de1c`. Its Windows report
+Windows-timeout source `29ea76b`, the stacked test-time economy
+source `365de1c`, the stacked pytest-xdist source `c31f4c9` and then
+its test-only successor `ff5e64f`.
+Its Windows report
 is 51,080 bytes (file SHA-256
-`660a19e58a749978c2be880721f14347af4e6740e32038efa18581d66acc49ad`;
+`8f0732fddfd69e2cd6c4f31f5c9fe145a522c469f5ed570ada6ccedff91866a0`;
 embedded report SHA-256
-`56121f9f7b9c2d04b0757d64dc2b03d522157da7a0d0edf960698829f9178ff0`).
-Its Linux report is 50,462 bytes (file SHA-256
-`ac9574ba75e6fc853a3982d7680fb18c1c190c3971bff1118a1b18fd47e5591b`;
+`11a4cfd4acc7e39accf62b6324b5c400a1394f6b243be246983bbe6e33513c02`).
+Its Linux report is 50,463 bytes (file SHA-256
+`e0bd8b33d45f7e9eddea009df1158df2618fdb71867ed0df40dcb9fda826e373`;
 embedded report SHA-256
-`3e5706b16195dd10945f5f3aae4e135000fa909ab1da3be15dacaae61ea45beb`).
+`26e44ea4f99771a11586c5bc9e3257e824e456a8bff2ec8bfa26eb0f61b6d246`).
 Both use CPython 3.12.13 and pass their complete local same-platform 9×5
 comparisons. Hosted promotion remains pending.

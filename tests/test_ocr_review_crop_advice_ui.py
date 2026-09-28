@@ -301,7 +301,7 @@ def test_actual_image_postprocess_failure_does_not_make_advice_into_image_author
         with pytest.raises(ui.gr.Error):
             live.prepare(ui)
     else:
-        import gradio as gr
+        gr = pytest.importorskip("gradio")
 
         api_state = ui.app.state_holder["advice-unseen-archive"]
         entry = ui.functions["open_crop_archive"]

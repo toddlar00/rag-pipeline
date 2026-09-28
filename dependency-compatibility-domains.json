@@ -36,6 +36,7 @@
       "pip-audit",
       "pip-licenses",
       "pytest",
+      "pytest-xdist",
       "ruff",
       "uv"
     ]

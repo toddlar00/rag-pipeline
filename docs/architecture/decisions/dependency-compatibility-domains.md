@@ -38,7 +38,7 @@ input manifests belongs to exactly one declared compatibility domain:
 | ML/runtime | `einops`, `flagembedding`, `numpy`, `rank-bm25`, `sentence-transformers`, `torch`, `torchvision`, `tqdm` |
 | Service/UI | `fastapi`, `gradio`, `uvicorn` |
 | Provider transport | `google-genai`, `requests` |
-| Test/audit tooling | `pip`, `pip-audit`, `pip-licenses`, `pytest`, `ruff`, `uv` |
+| Test/audit tooling | `pip`, `pip-audit`, `pip-licenses`, `pytest`, `pytest-xdist`, `ruff`, `uv` |
 
 [`dependency-compatibility-domains.json`](../../../dependency-compatibility-domains.json)
 is the canonical mapping. The pip groups in
