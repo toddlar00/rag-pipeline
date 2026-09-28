@@ -1153,10 +1153,65 @@ or policy version changed.
     whose lines come from a text layer is ordered by content-stream index,
     not position. h18 is image-only, so no such page exists there.
   - Chunking the flagged h18 exposed a chunk-preparation duplicate; see
-    "Split item beside a synthetic layout" below.
+    "Split item beside a per-item whole publication" below.
   - The architecture inventory needs a reviewed `--refresh`: the new private
     helpers, the changed signatures and the new test module drift from it.
   - The OCR retry and disposition tools have no merged-region route.
+
+### Split item beside a per-item whole publication (2026-09-27, draft PR, not integrated)
+
+This has the same status as the sections above. It fixes a chunk-preparation
+duplicate that the flagged h18 conversion exposed. No schema or policy
+version changed.
+
+- **Defect.** HybridChunker can cite one long source item from two or more
+  raw chunks. In `_prepare_source_preserving_chunks`, an ordinary raw chunk
+  that holds only that item publishes its chunk-local slice (both the source
+  rebuild and the retained-text paths keep the slice for a split item). A
+  later raw chunk that takes a per-item path (one also holding a
+  synthetic-layout item or a source table, one crossing a heading or
+  structural boundary, or a wholesale native rebuild) publishes the item
+  whole. The whole item then repeated the slices, and the fidelity audit
+  rejects repeated source tokens, so `source_token_fidelity` failed. The
+  flagged h18 hit it on the one list item the merge lengthened past the chunk
+  budget, beside a synthetic layout.
+- **Fix.** `append_chunk_slice` appends both slice paths' entries and records
+  a lone split item's slice when it has source tokens. Each of the four
+  whole-item paths calls `retract_split_slices(ref)` first, which removes
+  that item's recorded slices from `prepared` by identity, inside the main
+  loop and before any post-loop reordering. The whole item takes the later
+  chunk's place.
+- **Scope.** The retraction fires only when the previous output held both a
+  slice with at least one source token and the whole item. The audit's
+  alignment claims each source position once and moves forward, so such a
+  repeat fails `source_token_fidelity`; an independent review found only
+  contrived exceptions (orphan recovery detaching a slice whose exact text is
+  another unrepresented item). A later slice of an item already published
+  whole does not occur in the reproductions and is unchanged.
+- **Evidence.**
+  - `tests/test_split_item_layout_duplicate.py` (6 tests) drives the real
+    locked pass with a stubbed layout detector: a note split in two and in
+    three beside a layout item, a note beside a source table, a second split
+    note outside any layout keeping its slices, and two characterizations
+    where the note never shares a raw chunk with the layout. The 4
+    behavioural tests fail on the pre-change code with the propagated gate
+    error; the characterizations pass on both.
+  - Mutation (review plus follow-up): retracting only the first or last
+    slice, retracting every ref, and dropping the retraction on the layout or
+    table path are killed. Dropping the lexical-token or single-item guard
+    survives: where either would matter, the output fails the gate either
+    way. Plain recording on the source-rebuild slice path survives: no
+    synthetic document reaches it with a later whole publication.
+  - All 19 READY h26 runs re-chunk byte-identical (chunks, oracles, quality
+    reports), including `h18-agency-inaction_3` against its derived input.
+  - The flagged h18 now passes every gate: 63 records, the long note split
+    once, no repeat.
+- **Follow-ups (not fixed).**
+  - The heading-crossing and wholesale-rebuild call sites are covered by
+    inspection only.
+  - A split item's whole publication lands at the later chunk's position,
+    after any sidecars of the retracted slice's chunk; the geometry gate
+    fails closed if that ever misorders a page.
 
 ### Integrated convergence
 

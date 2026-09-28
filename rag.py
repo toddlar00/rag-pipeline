@@ -18251,6 +18251,39 @@ def _prepare_source_preserving_chunks(
     emitted_nested_footnotes: set[str] = set()
     emitted_verified_replay_refs: set[str] = set()
     emitted_repeated_list_markers: set[str] = set()
+    # A long item HybridChunker cites from two raw chunks is published as a
+    # chunk-local slice by an ordinary chunk, but whole by a later chunk that
+    # takes a per-item path.  Record each lone slice with source tokens so
+    # the whole publication can retract it instead of repeating it.
+    split_slice_entries: dict[
+        str, list[tuple[str, list | None, list | None, bool]]] = {}
+
+    def retract_split_slices(ref: str) -> None:
+        """Retract the recorded slices of an item about to be published whole.
+
+        The complete item repeats their source tokens, which
+        ``source_token_fidelity`` always rejects.
+        """
+        retracted = {id(entry) for entry in split_slice_entries.pop(ref, ())}
+        if retracted:
+            prepared[:] = [
+                kept for kept in prepared if id(kept) not in retracted]
+
+    def append_chunk_slice(
+            entry: tuple[str, list | None, list | None, bool]) -> None:
+        """Append one chunk's retained text, recording a lone split slice.
+
+        Only a slice with source tokens is recorded: repeating it can never
+        pass ``source_token_fidelity``, so retracting it changes only output
+        that fails today.
+        """
+        text, _headings, items, _preserve_short = entry
+        prepared.append(entry)
+        ref = (str(getattr(items[0], "self_ref", ""))
+               if items is not None and len(items) == 1 else "")
+        if (ref and raw_ref_counts.get(ref, 0) > 1
+                and _source_fidelity_core.lexical_tokens(text)):
+            split_slice_entries.setdefault(ref, []).append(entry)
 
     def source_position(item) -> tuple[int, float] | None:
         position = _source_item_position(item)
@@ -19368,6 +19401,7 @@ def _prepare_source_preserving_chunks(
             ref = next(iter(chunk_refs))
             if ref not in emitted_wholesale_rebuild_refs:
                 item = item_by_ref[ref]
+                retract_split_slices(ref)
                 prepared.append((
                     item_display_text(item),
                     source_mapped_headings([item], headings),
@@ -19464,6 +19498,7 @@ def _prepare_source_preserving_chunks(
                         flush_layout_text()
                     pending_headings = item_headings
                     pending_occurrence_path = item_occurrence_path
+                    retract_split_slices(ref)
                     pending_text.append(value)
                     pending_items.append(item)
                     if ref in wholesale_rebuild_refs:
@@ -19538,6 +19573,7 @@ def _prepare_source_preserving_chunks(
                 source_text = item_display_text(item)
                 item_headings = source_mapped_headings([item], headings)
                 if source_text and source_text.strip():
+                    retract_split_slices(ref)
                     prepared.append((
                         source_text.strip(), item_headings,
                         [item], True,
@@ -19625,7 +19661,7 @@ def _prepare_source_preserving_chunks(
                     retained_text = rebuild_source_text(
                         retained_items, original_items)
                 if retained_text:
-                    prepared.append((
+                    append_chunk_slice((
                         retained_text, headings,
                         retained_items, True,
                     ))
@@ -19682,7 +19718,7 @@ def _prepare_source_preserving_chunks(
                              != _source_fidelity_core.lexical_tokens(
                                  rebuilt_text))):
                     retained_text = rebuilt_text
-                prepared.append((
+                append_chunk_slice((
                     retained_text, headings, retained_items, False))
             for item in original_items:
                 append_missing_nested_footnotes(
@@ -19731,6 +19767,7 @@ def _prepare_source_preserving_chunks(
                     flush_text_items()
                 pending_headings = item_headings
                 pending_occurrence_path = item_occurrence_path
+                retract_split_slices(ref)
                 pending_text.append(source_text.strip())
                 pending_items.append(item)
         flush_text_items()
