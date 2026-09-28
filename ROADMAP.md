@@ -1299,10 +1299,15 @@ and casebook-excerpt checkpoint `1ae8502` then changed Python source (no
 dependency or model lock); its gate-only child `766feaf` passed both hosted
 Phase A0 cells on [PR #116](https://github.com/toddlar00/rag-pipeline/pull/116), but that head's dependency-light unit lanes
 failed at collection. Source `a15232d` (their test guards and the casebook
-fixes, still no lock change) supersedes it before promotion: its
-regenerated Windows/Linux pair (independent local same-platform comparisons
-passed) is the current candidate, and its hosted checks and external
-exact-SHA record are pending on [PR #116](https://github.com/toddlar00/rag-pipeline/pull/116).
+fixes, still no lock change) superseded it before promotion. Source
+`a15232d` then passed both hosted Phase A0 cells on [PR
+#116](https://github.com/toddlar00/rag-pipeline/pull/116) as well, but its
+Python 3.10/3.11 unit lanes each failed one import-guard test and its
+Windows unit lane exceeded the workflow's 20-minute timeout; the test-only
+source `8aa08b2` supersedes it before promotion.
+The `8aa08b2` Windows/Linux pair (independent local same-platform
+comparisons passed) is the current candidate, and its hosted checks and
+external exact-SHA record are pending on [PR #116](https://github.com/toddlar00/rag-pipeline/pull/116).
 
 Two operational follow-ups from the post-merge `main` push runs are open:
 a documentation-only merge passes its fast-lane pull-request run but then

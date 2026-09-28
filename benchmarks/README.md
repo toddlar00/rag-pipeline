@@ -9,8 +9,8 @@ fresh-process repetitions.
 
 Both current reports were generated from the clean OCR-program and
 casebook-excerpt source checkpoint
-`a15232d004dfbbce0dfa61a173f6f8c15a1e2f0f` (tree
-`7f6b0da7de56194b04988a041b2922fb9500fd52`). That source contains everything through the Task 0.8
+`8aa08b2d2bdd51f4b5dd8b95107a93e28e42b883` (tree
+`bf364930f5253d30486767ca4150d038cd94cac9`). That source contains everything through the Task 0.8
 static-security merge `e34103f` plus the local OCR accuracy, retry and
 guided-review program, opt-in AI evidence search, the passive cleanup
 audits, the LLM transport and worker-launch repairs, the casebook
@@ -18,8 +18,9 @@ excerpt/supplement pipeline (including the opt-in OCR angle-classifier
 and interleaved-region-merge flags, the footnote placement replay, the
 split-item duplicate retraction and quality schema 13), three reviewed
 architecture-inventory refreshes, the POSIX symlinked-interpreter identity
-fix, an LF attribute for top-level test fixtures and dependency-light
-test guards. No dependency or model lock changed. The executing
+fix, an LF attribute for top-level test fixtures, dependency-light
+test guards and a Python 3.10/3.11-tolerant import-guard test. No
+dependency or model lock changed. The executing
 environments were
 synchronized with repository-pinned uv 0.12.5 against the exact CPU
 application/test lock union plus its retained bootstrapper:
@@ -37,8 +38,8 @@ marker-resolved distributions before generation.
 
 | Platform | Runtime | Report | Bytes | File SHA-256 | Embedded report SHA-256 |
 |---|---:|---|---:|---|---|
-| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,086 | `d93941f7a82870999aee07be2335ddb589803f55aa8cd6d2ca425dbcb649088e` | `6ef1ec69d3f8057622cf33a0c6ace782cb0b8c77b1de2f9173d1a09e9e861d8e` |
-| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,485 | `a2c14e67697cb5a17b85f06c9be66001fcff1d02d575f284fefa72d912ca5f00` | `48620c03b701ce9a4084b919d1fe5d16f6fca199a72dde972ca1b777349a9b91` |
+| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,084 | `94f05ad4d59f934991ed442e36a7d6bc28e5beb8be0c628a0502d54d007c6522` | `75a10033a12be28266899ed93a5bf98b2a9a0ddd788cfe6c4b933f079efd6adc` |
+| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,479 | `2472bf0267be1a9d3ca0014ebbe225a33aa5435918f9d3096bf8538d4fd9eca7` | `fde1b6dfcb9aa541b57bb4421baaca31c7bedc6297c36dcc354f1fe4862fcea8` |
 
 The reports attest the same source commit, clean-worktree state, tracked-diff
 digest, eight LF and `HEAD`-identical dependency/model-lock inputs, authoritative
@@ -166,7 +167,13 @@ change), superseding the `8891e1b` pair; its gate-only child `766feaf`
 passed both hosted Phase A0 cells on [PR #116](https://github.com/toddlar00/rag-pipeline/pull/116), but that head's
 dependency-light unit lanes failed at collection. Source `a15232d`
 (test guards for those lanes and the casebook fixes, still no lock
-change) supersedes it before promotion. The current reports above bind
+change) superseded it before promotion. Source `a15232d` then passed both
+hosted Phase A0 cells on [PR
+#116](https://github.com/toddlar00/rag-pipeline/pull/116) as well, but its
+Python 3.10/3.11 unit lanes each failed one import-guard test and its
+Windows unit lane exceeded the workflow's 20-minute timeout; the test-only
+source `8aa08b2` supersedes it before promotion. The current reports above
+bind
 that exact clean source and each passes an independent complete
 same-platform 9×5 comparison. No hosted result for this replacement pair
 is claimed here yet; its hosted checks and external exact-SHA record
