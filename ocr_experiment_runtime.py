@@ -8,6 +8,7 @@ and explicitly caller-observed execution details, without importing OCR engines.
 
 from __future__ import annotations
 
+import functools
 import importlib.metadata
 import math
 import os
@@ -130,6 +131,17 @@ def _marker_applies(expression: str, environment: dict) -> bool:
 
 
 def _lock_records(raw: bytes) -> dict[str, list[tuple[str, str]]]:
+    """Parse a hash lock into ``{package: [(version, marker), ...]}``.
+
+    Parsing is a pure function of the bytes, so it is cached by content;
+    every caller still receives its own dict and lists.
+    """
+    return {name: list(items) for name, items in _parsed_lock_records(bytes(raw))}
+
+
+@functools.lru_cache(maxsize=16)
+def _parsed_lock_records(
+        raw: bytes) -> tuple[tuple[str, tuple[tuple[str, str], ...]], ...]:
     try:
         lines = raw.decode("utf-8-sig").splitlines()
     except UnicodeError:
@@ -155,7 +167,7 @@ def _lock_records(raw: bytes) -> dict[str, list[tuple[str, str]]]:
         pending = ""
     if pending or not records:
         raise ValueError("runtime lock is incomplete or empty")
-    return records
+    return tuple((name, tuple(items)) for name, items in records.items())
 
 
 def _effective(payload: object) -> dict | None:
