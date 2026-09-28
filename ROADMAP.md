@@ -1247,6 +1247,63 @@ shorten them without changing pipeline behavior.
   vector-store lanes stay serial; per-worker model loading in the full
   environment is unmeasured. Without psutil, `-n auto` counts logical CPUs.
 
+### Corpus audit follow-ups (2026-09-28, draft PR, not integrated)
+
+An independent, read-only audit of the private h26 casebook corpus compared
+every page of its 19 published runs (382 pages) with the page scans. It
+verified 202 substantive defects. Every publication gate still passed,
+because the gates' source oracle is the converted text itself. Excerpts
+published from a scanner OCR text layer averaged about one substantive
+defect per 1.4 pages. `h18-agency-inaction` had none in 21 pages; it was
+read by fresh layout-aware OCR of an image-only derivative, using
+`--ocr-no-angle-classifier --ocr-merge-interleaved-regions`.
+
+- **Fixed here: `--rerank` in the locked environment.** FlagEmbedding
+  1.4.0 scores pairs through `tokenizer.prepare_for_model`, which the
+  locked Transformers 5.8.1 tokenizers lack. Reranking therefore logged a
+  failure, kept the hybrid order and still exited 0. This PR raises
+  FlagEmbedding to 1.4.2, which ships a Transformers v4/v5 compatibility
+  layer, and adds a full-environment guard test.
+- **Corpus outcome (private data, not in this repository).** 17 other
+  excerpts were re-read by the h18 route, and 7 of them again with
+  whole-page OCR. 11 now publish fresh-OCR runs: they are READY, the drop
+  check below finds nothing missing, and no audited defect scores worse. On
+  those 11, 81 of 99 text-measurable audited defects now match the scan,
+  against 2 before. The other 6 keep their scanner-layer runs for the two
+  reasons below.
+- **Follow-ups (not fixed).**
+  - *Silent OCR text loss.* On curved or skewed page areas, fresh OCR can
+    return no text for lines that no layout region (region OCR) or no OCR
+    detection (whole-page OCR) covers. 4 of 17 re-read excerpts lost 7 to
+    27 printed lines on one or two pages, yet every gate passed. A
+    geometric check found them by comparing each scanner-layer line box
+    with the conversion's region boxes. An OCR coverage gate should compare
+    printed-line geometry from an independent detector, or from an existing
+    text layer, with the conversion regions and fail closed on uncovered
+    text.
+  - *Cross-item hyphen joins on OCR input.* Layout detection often gives a
+    paragraph's indented first line its own region. When one item ends in a
+    line-end hyphen, the join drops the hyphen, because an image-only input
+    has no native hard-hyphen attestation. `source_token_fidelity` then
+    fails closed (2 of 17 re-read excerpts, with both OCR modes).
+  - *Printed-page discontinuities.* A chunk can join text across a gap
+    between two excerpt ranges. It then cites a span that includes the
+    missing pages and inherits the earlier chapter's heading path. A
+    non-consecutive printed label should end the chunk and the inherited
+    heading context.
+  - *Query layer.* There is no corpus-wide query mode. Hybrid RRF scores
+    and the vector-only fallback's cosine scores, which are used silently
+    when BM25 finds nothing, are not comparable across runs. Search does not
+    check READY or superseded status. Opening a Chroma run rewrites its
+    SQLite file, and the persisted HNSW index is empty until first open.
+  - *Run and job bindings.* `_pipeline_run_is_ready(output_root, ...)`
+    resolves artifact paths from the module-level output root, not its
+    argument, so a different root reads as not READY (fail-closed).
+    Durable-job input bindings hash the input path, not the input bytes.
+  - *Born-digital structure.* The born-digital supplement shows the same
+    heading and opinion attribution errors, so attribution is a structure
+    problem, not only an OCR one.
+
 ### Integrated convergence
 
 - **R1:** [PR #44](https://github.com/toddlar00/rag-pipeline/pull/44)
