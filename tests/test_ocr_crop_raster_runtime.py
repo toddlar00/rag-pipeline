@@ -33,6 +33,7 @@ def scope_from_raw(raw, bbox=(.073, .121, .813, .857)):
 @pytest.fixture(scope="module", params=[(rotation, cropped) for rotation in (0, 90, 180, 270)
                                        for cropped in (False, True)])
 def native_case(request):
+    pytest.importorskip("PIL")
     rotation, cropped = request.param
     raw = existing._source(rotation=rotation, cropped=cropped, annotations=True)
     return raw, scope_from_raw(raw)
@@ -40,12 +41,14 @@ def native_case(request):
 
 @pytest.fixture(scope="module")
 def small_native():
+    pytest.importorskip("PIL")
     raw = existing._source(cropped=False, width=72, height=72)
     return raw, scope_from_raw(raw, (0., 0., 1., 1.))
 
 
 @pytest.fixture(scope="module")
 def wide_native():
+    pytest.importorskip("PIL")
     raw = existing._source(cropped=False, width=2048, height=1024)
     return raw, scope_from_raw(raw, (.0001, .0003, .83, .94))
 

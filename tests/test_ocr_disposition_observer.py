@@ -154,6 +154,7 @@ def test_installed_recipe_requires_all_fixed_file_bytes(monkeypatch):
 @pytest.mark.parametrize("dtype", ["float32", "float64"])
 def test_dtype_faithful_nonidentity_remap_matches_actual_pinned_helper(dtype):
     np = pytest.importorskip("numpy")
+    pytest.importorskip("rapidocr")
     from rapidocr.utils.process_img import map_boxes_to_original
     assert observer.verified_recipe()
     _, _, frame = _frame()

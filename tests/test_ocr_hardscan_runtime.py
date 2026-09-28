@@ -40,6 +40,7 @@ def recipe(angle=0, bow=0.):
 def test_real_pdf_crop_and_recipe_rotation_preserve_distinct_physical_quadrants(
         document, monkeypatch, intrinsic, correction):
     np = pytest.importorskip("numpy")
+    pytest.importorskip("cv2")
     document[1][0].set_rotation(intrinsic)
     reader = reader_for(document, 300)
     seen = []
@@ -83,6 +84,7 @@ def test_bow_geometry_abstention_never_loads_engine_or_renders(document, monkeyp
 
 
 def test_bow_on_large_flat_color_abstains_without_engine(document, monkeypatch):
+    pytest.importorskip("cv2")
     reader = reader_for(document, 300)
     monkeypatch.setattr(reader, "_load_engine", lambda: pytest.fail("engine loaded"))
     result = reader.retry_hardscan(1, [.1, .1, .4, .4], recipe(0, .02))
@@ -99,6 +101,7 @@ def test_implicit_old_preprocessing_or_filtering_is_not_allowed(document, settin
 
 @pytest.mark.parametrize("oversized", ["lines", "text"])
 def test_engine_output_budget_precedes_general_array_copy_and_join(document, monkeypatch, oversized):
+    pytest.importorskip("cv2")
     reader = reader_for(document, 300)
     raw = (SimpleNamespace(txts=["x"]*1001, scores=[.9]*1001, boxes=[[]]*1001) if oversized == "lines" else
            SimpleNamespace(txts=["x"*100001], scores=[.9], boxes=[[]]))

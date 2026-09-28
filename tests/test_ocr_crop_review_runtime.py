@@ -88,6 +88,7 @@ def workspace(tmp_path):
                                             (180, (255, 255, 0)), (270, (0, 255, 0))])
 @pytest.mark.parametrize("cropped", [False, True])
 def test_intrinsic_rotation_and_cropbox_select_original_display_quadrant(tmp_path, rotation, color, cropped):
+    pytest.importorskip("PIL")
     workspace = _workspace(tmp_path, rotation=rotation, cropped=cropped)
     scope = _scope(workspace)
     before = workspace.pdf_path.read_bytes(), workspace.recovery_path.read_bytes(), copy.deepcopy(scope)
@@ -104,6 +105,8 @@ def test_intrinsic_rotation_and_cropbox_select_original_display_quadrant(tmp_pat
                                        ((.1, .6, .4, .9), (0, 0, 255)),
                                        ((.6, .6, .9, .9), (255, 255, 0))])
 def test_requested_crop_not_whole_page_or_processed_candidate(workspace, monkeypatch, bbox, color):
+    pytest.importorskip("PIL")
+
     def forbidden(*args, **kwargs):
         pytest.fail("candidate/preprocessed renderer must not be used")
 
@@ -114,6 +117,7 @@ def test_requested_crop_not_whole_page_or_processed_candidate(workspace, monkeyp
 
 
 def test_large_original_page_preflights_small_preview_before_native_allocation(tmp_path, monkeypatch):
+    pytest.importorskip("PIL")
     workspace = _workspace(tmp_path, cropped=False, width=14400, height=7200)
     pymupdf = pytest.importorskip("pymupdf")
     original = pymupdf.Page.get_pixmap
@@ -133,6 +137,7 @@ def test_large_original_page_preflights_small_preview_before_native_allocation(t
 
 
 def test_second_physical_page_supported(tmp_path):
+    pytest.importorskip("PIL")
     workspace = _workspace(tmp_path, pages=2, rotation=90)
     image = runtime.render_crop_scope(workspace, _scope(workspace, number=2))
     assert image.getpixel((10, 10)) == (0, 0, 255)
@@ -140,6 +145,7 @@ def test_second_physical_page_supported(tmp_path):
 
 def test_each_render_opens_fresh_document_from_immutable_bytes(workspace, monkeypatch):
     pymupdf = pytest.importorskip("pymupdf")
+    pytest.importorskip("PIL")
     scope = _scope(workspace)
     original = pymupdf.open
     opened = []
@@ -249,6 +255,7 @@ def test_hardlinked_source_refuses(workspace):
 
 def test_preflight_pixel_cap_refuses_before_native_allocation(workspace, monkeypatch):
     pymupdf = pytest.importorskip("pymupdf")
+    pytest.importorskip("PIL")
     scope = _scope(workspace)
     monkeypatch.setattr(runtime, "MAX_PREVIEW_PIXELS", 1)
     monkeypatch.setattr(pymupdf.Page, "get_pixmap", lambda *_a, **_k: pytest.fail("overbudget native allocation"))
@@ -270,6 +277,9 @@ def test_unrepresentably_thin_scope_refuses_before_native_allocation(workspace, 
     ("x", -99, "geometry_mismatch"), ("y", -99, "geometry_mismatch")])
 def test_actual_pixmap_metadata_checked_before_copy(workspace, monkeypatch, field, value, code):
     pymupdf = pytest.importorskip("pymupdf")
+    # Every check runs after the renderer's optional PIL import; without PIL
+    # the n/stride cases would pass on the missing import alone.
+    pytest.importorskip("PIL")
     scope = _scope(workspace)
 
     def bad_map(_page, **kwargs):
@@ -311,6 +321,7 @@ def test_actual_sample_size_checked_before_image_copy(workspace, monkeypatch):
 @pytest.mark.parametrize("failure", [KeyboardInterrupt, SystemExit])
 def test_cancellation_propagates_and_document_closes(workspace, monkeypatch, failure):
     pymupdf = pytest.importorskip("pymupdf")
+    pytest.importorskip("PIL")
     scope = _scope(workspace)
     original = pymupdf.open
     opened = []
@@ -333,6 +344,7 @@ def test_cancellation_propagates_and_document_closes(workspace, monkeypatch, fai
 
 def test_normal_native_failure_is_static_and_closes_document(workspace, monkeypatch):
     pymupdf = pytest.importorskip("pymupdf")
+    pytest.importorskip("PIL")
     scope = _scope(workspace)
     original = pymupdf.open
     opened = []
@@ -369,6 +381,7 @@ def test_workspace_document_replacement_during_render_refuses(workspace, monkeyp
 
 
 def test_actual_page_count_mismatch_refuses_before_raster(tmp_path, monkeypatch):
+    pytest.importorskip("PIL")
     workspace = _workspace(tmp_path, pages=2)
     value = report()
     value["source_sha256"] = workspace.document.source_sha256
@@ -417,6 +430,7 @@ def test_output_directory_generation_recheck_is_preserved(workspace, monkeypatch
 
 
 def test_scope_detached_before_render(workspace, monkeypatch):
+    pytest.importorskip("PIL")
     scope = _scope(workspace)
     original = runtime._render_pdf
 
@@ -431,6 +445,7 @@ def test_scope_detached_before_render(workspace, monkeypatch):
 
 
 def test_final_check_cancellation_not_converted_to_preview_error(workspace, monkeypatch):
+    pytest.importorskip("PIL")
     scope = _scope(workspace)
     original = workspace.verify_inputs
     count = 0
@@ -450,6 +465,7 @@ def test_final_check_cancellation_not_converted_to_preview_error(workspace, monk
 
 
 def test_directory_change_during_final_snapshot_refuses(workspace, monkeypatch):
+    pytest.importorskip("PIL")
     scope = _scope(workspace)
     original = runtime._snapshot
     count = 0
@@ -599,6 +615,7 @@ def test_actual_pdf_decode_failure_has_render_stage(workspace, monkeypatch):
 
 def test_valid_declared_scope_with_different_actual_cropbox_is_geometry_mismatch(workspace, monkeypatch):
     pymupdf = pytest.importorskip("pymupdf")
+    pytest.importorskip("PIL")
     scope = _scope(workspace)
     scope["page_geometry"]["cropbox_points"] = [21., 10., 181., 110.]
     _rehash(scope)
@@ -664,6 +681,7 @@ def test_private_renderer_validates_profile_before_optional_native_import(monkey
 def test_profile_matches_independent_original_pdf_raster_geometry(tmp_path, rotation, cropped, profile, scale):
     """Actual generated PDF raster comparison, not OCR or visual-browser proof."""
     pymupdf = pytest.importorskip("pymupdf")
+    pytest.importorskip("PIL")
     workspace = _workspace(tmp_path, rotation=rotation, cropped=cropped, annotations=True)
     scope = _scope(workspace, bbox=(.073, .121, .813, .857))
     before = workspace.pdf_path.read_bytes(), workspace.recovery_path.read_bytes(), copy.deepcopy(scope)
@@ -690,6 +708,7 @@ def test_profile_matches_independent_original_pdf_raster_geometry(tmp_path, rota
 @pytest.mark.parametrize("profile,pixels", [("fit", 144), ("dpi288", 288), ("dpi576", 576)])
 def test_72_point_source_crop_uses_requested_exact_resolution(tmp_path, monkeypatch, profile, pixels):
     pymupdf = pytest.importorskip("pymupdf")
+    pytest.importorskip("PIL")
     workspace = _workspace(tmp_path, cropped=False, width=72, height=72)
     scope = _scope(workspace, bbox=(0., 0., 1., 1.))
     original = pymupdf.Page.get_pixmap
@@ -707,6 +726,7 @@ def test_72_point_source_crop_uses_requested_exact_resolution(tmp_path, monkeypa
 @pytest.mark.parametrize("profile,scale", [("dpi288", 4), ("dpi576", 8)])
 def test_detail_uses_projected_irect_cap_without_downscaling_or_native_attempt(tmp_path, monkeypatch, profile, scale):
     pymupdf = pytest.importorskip("pymupdf")
+    pytest.importorskip("PIL")
     workspace = _workspace(tmp_path, cropped=False, width=400, height=40)
     # The nominal width fits; outward rounding of the nonzero origin adds the
     # disallowed pixel. A nominal-width-only check would wrongly admit this.
@@ -722,6 +742,7 @@ def test_detail_uses_projected_irect_cap_without_downscaling_or_native_attempt(t
 
 @pytest.mark.parametrize("profile,scale", [("dpi288", 4), ("dpi576", 8)])
 def test_detail_exact_1400_boundary_is_admitted(tmp_path, profile, scale):
+    pytest.importorskip("PIL")
     workspace = _workspace(tmp_path, cropped=False, width=1400 / scale, height=20)
     image = runtime.render_crop_scope(workspace, _scope(workspace, bbox=(0., 0., 1., 1.)),
                                       preview_profile=profile)
@@ -731,6 +752,7 @@ def test_detail_exact_1400_boundary_is_admitted(tmp_path, profile, scale):
 @pytest.mark.parametrize("profile", ["dpi288", "dpi576"])
 def test_detail_pixel_budget_preflight_has_no_native_attempt(workspace, monkeypatch, profile):
     pymupdf = pytest.importorskip("pymupdf")
+    pytest.importorskip("PIL")
     scope = _scope(workspace)
     monkeypatch.setattr(runtime, "MAX_PREVIEW_PIXELS", 1)
     monkeypatch.setattr(pymupdf.Page, "get_pixmap", lambda *_a, **_k: pytest.fail("overbudget native allocation"))

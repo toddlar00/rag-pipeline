@@ -123,6 +123,7 @@ def test_linked_audit_path_refused(workspace, monkeypatch):
 
 def rendered_workspace(tmp_path, *, rotation=0, width=100, height=60, crop=False):
     pymupdf = pytest.importorskip("pymupdf")
+    pytest.importorskip("PIL")
     with pymupdf.open() as pdf:
         page = pdf.new_page(width=width, height=height)
         page.draw_rect(pymupdf.Rect(0, 0, width / 2, height / 2), color=(1, 0, 0), fill=(1, 0, 0))
@@ -199,6 +200,7 @@ def test_original_preview_pixels_independent_of_candidate_data(tmp_path):
 
 
 def test_late_source_change_closes_untransferred_image(tmp_path, monkeypatch):
+    pytest.importorskip("PIL")
     from PIL import Image
 
     workspace = rendered_workspace(tmp_path)
@@ -226,6 +228,7 @@ def test_late_source_change_closes_untransferred_image(tmp_path, monkeypatch):
 
 
 def test_late_valid_workspace_swap_cannot_relabel_old_pixels(tmp_path, monkeypatch):
+    pytest.importorskip("PIL")
     from PIL import Image
 
     workspace = rendered_workspace(tmp_path)
@@ -257,6 +260,7 @@ def test_late_valid_workspace_swap_cannot_relabel_old_pixels(tmp_path, monkeypat
 
 @pytest.mark.parametrize("secondary", [RuntimeError("close"), KeyboardInterrupt(), SystemExit()])
 def test_secondary_close_failure_preserves_primary_identity(tmp_path, monkeypatch, secondary):
+    pytest.importorskip("PIL")
     from PIL import Image
 
     workspace = rendered_workspace(tmp_path)

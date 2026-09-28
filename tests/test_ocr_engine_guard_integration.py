@@ -107,6 +107,8 @@ class _PreparedEngine:
 def test_admitted_input_prepared_before_recorded_call_and_original_candidate_preserved(
         monkeypatch, route, reader_type):
     pytest.importorskip("numpy")
+    if route == "hardscan":
+        pytest.importorskip("cv2")
     engine = _PreparedEngine()
 
     def load(reader):
@@ -134,6 +136,8 @@ def test_admitted_input_prepared_before_recorded_call_and_original_candidate_pre
 @pytest.mark.parametrize("route,reader_type", ROUTES)
 def test_preparation_failure_is_not_recorded_as_an_actual_ocr_call(monkeypatch, route, reader_type):
     pytest.importorskip("numpy")
+    if route == "hardscan":
+        pytest.importorskip("cv2")
     engine = _PreparedEngine(fail_prepare=True)
 
     def load(reader):

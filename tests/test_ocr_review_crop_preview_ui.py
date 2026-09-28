@@ -33,6 +33,8 @@ def test_profile_choices_and_ids_are_fixed():
 @pytest.mark.parametrize("profile", ["fit", "dpi288", "dpi576"])
 @pytest.mark.parametrize("size", [(311, 28), (28, 311), (1400, 1400), (1, 1)])
 def test_update_preserves_original_rgb_pixels_and_uses_only_fixed_classes(profile, size):
+    pytest.importorskip("PIL")
+    pytest.importorskip("gradio")
     from PIL import Image
 
     image = Image.new("RGB", size, (13, 97, 211))
@@ -45,6 +47,7 @@ def test_update_preserves_original_rgb_pixels_and_uses_only_fixed_classes(profil
 
 @pytest.mark.parametrize("profile", ["fit", "dpi288", "dpi576"])
 def test_null_image_clears_detail_mode(profile):
+    pytest.importorskip("gradio")
     assert preview.preview_image_update(None, profile) == {"__type__": "update", "value": None, "elem_classes": []}
 
 
@@ -62,12 +65,14 @@ def test_invalid_profile_is_rejected_before_touching_image(profile):
 
 @pytest.mark.parametrize("image", ["private.png", "https://example.invalid/image", Path("private.png"), b"RGB", {}, []])
 def test_paths_urls_and_other_image_providers_are_not_admitted(image):
+    pytest.importorskip("PIL")
     with pytest.raises(CropPreviewError, match="original crop preview unavailable or inputs changed"):
         preview.preview_image_update(image, "dpi288")
 
 
 @pytest.mark.parametrize("mode", ["L", "RGBA", "P", "CMYK"])
 def test_update_never_implicitly_converts_image_modes(mode):
+    pytest.importorskip("PIL")
     from PIL import Image
 
     with pytest.raises(CropPreviewError):
@@ -76,6 +81,7 @@ def test_update_never_implicitly_converts_image_modes(mode):
 
 @pytest.mark.parametrize("size", [(0, 1), (1, 0), (1401, 1), (1, 1401)])
 def test_update_refuses_outside_raster_bounds_without_downscaling(size):
+    pytest.importorskip("PIL")
     from PIL import Image
 
     with pytest.raises(CropPreviewError) as result:
@@ -86,6 +92,7 @@ def test_update_refuses_outside_raster_bounds_without_downscaling(size):
 @pytest.mark.parametrize("image_id", [preview.LIVE_PREVIEW_ID, preview.ARCHIVE_PREVIEW_ID])
 @pytest.mark.parametrize("profile", ["fit", "dpi288", "dpi576"])
 def test_real_image_postprocessing_keeps_pixels_and_private_output_configuration(tmp_path, monkeypatch, image_id, profile):
+    pytest.importorskip("gradio")
     import gradio as gr
     from PIL import Image
 
@@ -118,6 +125,7 @@ def test_real_image_postprocessing_keeps_pixels_and_private_output_configuration
 
 
 def test_failed_real_image_postprocess_does_not_return_update_or_companion_token(tmp_path, monkeypatch):
+    pytest.importorskip("gradio")
     import gradio as gr
     from PIL import Image
 

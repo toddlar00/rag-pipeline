@@ -154,6 +154,7 @@ def test_unknown_image_targets_refuse(identifier):
 
 @pytest.mark.parametrize("identifier", [editor.LIVE_PREVIEW_ID, editor.ARCHIVE_PREVIEW_ID])
 def test_actual_component_config_and_private_process_api(tmp_path, monkeypatch, identifier):
+    pytest.importorskip("gradio")
     import gradio as gr
 
     monkeypatch.setenv("GRADIO_TEMP_DIR", str(tmp_path))
@@ -186,6 +187,7 @@ def test_actual_component_config_and_private_process_api(tmp_path, monkeypatch, 
 
 
 def test_image_postprocess_failure_does_not_return_numeric_image_token(tmp_path, monkeypatch):
+    pytest.importorskip("gradio")
     import gradio as gr
     from PIL import Image
 
@@ -348,6 +350,7 @@ def test_component_script_survives_skip_props_before_lazy_mount(tmp_path, monkey
     This models a value delivered after an HTML prop update while its Tab is
     unmounted. It is not a browser lifecycle or native OCR acceptance test.
     """
+    pytest.importorskip("gradio")
     import gradio as gr
 
     node = shutil.which("node")

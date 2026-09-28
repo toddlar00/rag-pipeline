@@ -474,6 +474,7 @@ def test_v2_defaults_and_pil_admission_do_not_inherit_annotation_numeric_domain(
 def test_actual_generated_v3_child_matches_direct_metadata_and_legacy_rgb(tmp_path, rotation, profile):
     """Real contained decoder/render; generated shapes only, no OCR/model calls."""
     pytest.importorskip("pymupdf")
+    pytest.importorskip("PIL")
     from test_ocr_crop_review_runtime import _scope, _workspace
     directory = tmp_path / "generated-review"
     directory.mkdir()

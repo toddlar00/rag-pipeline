@@ -520,6 +520,7 @@ def test_close_timeout_has_fixed_strict_bound(case, value):
 @pytest.mark.parametrize("rotation", [0, 90, 180, 270])
 def test_actual_fixed_child_matches_existing_generated_crop_pixels(tmp_path, rotation):
     pytest.importorskip("pymupdf")
+    pytest.importorskip("PIL")
     from test_ocr_crop_review_runtime import _workspace, _scope
     output = tmp_path / "generated-review"
     output.mkdir()
@@ -636,6 +637,7 @@ def test_controller_refuses_mixed_profile_result_before_rgb_allocation(case, mon
 def test_actual_detail_child_matches_generated_direct_source_raster(tmp_path, rotation, profile):
     """Real contained generated PDF rendering; no OCR/model inference."""
     pytest.importorskip("pymupdf")
+    pytest.importorskip("PIL")
     from test_ocr_crop_review_runtime import _workspace, _scope
     output = tmp_path / "generated-detail-review"
     output.mkdir()
