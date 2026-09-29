@@ -715,9 +715,9 @@ docling==2.121.0 \
     --hash=sha256:c8970cbd3907892db218c7f342ff62db5b393ca3cf568db50c8f2384e248a22d \
     --hash=sha256:d1577ac7660ac6cb3ac7e213f1541f8bed1990ff8da4274d94b5bfc91e0fec55
     # via -r requirements.txt
-docling-core==2.92.0 \
-    --hash=sha256:33fd25e38c199336447a21925374400aca13a6b9316a032f111972c2dc0f085c \
-    --hash=sha256:726d89c23197e53be2f7192bb4c00108ff545830cf9ab7b981fb014fa92b5c02
+docling-core==2.99.0 \
+    --hash=sha256:2ce0bae815de8139e8c0dc93736ba613609db777c3cbe392d9ec76bfabec6104 \
+    --hash=sha256:bff91f3313cc092f0255743f708cb86b4efec41532b3c60aae3b790ef1f2a71a
     # via
     #   -r requirements.txt
     #   docling-ibm-models
@@ -3487,6 +3487,7 @@ requests==2.34.2 \
     # via
     #   -r requirements.txt
     #   datasets
+    #   docling-core
     #   docling-slim
     #   google-auth
     #   google-genai
