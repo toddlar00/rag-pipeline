@@ -10,4 +10,4 @@ pytest-xdist==3.8.0
 rank-bm25==0.2.2
 requests==2.34.2
 ruff==0.16.9
-tqdm==4.70.0
+tqdm==4.70.1

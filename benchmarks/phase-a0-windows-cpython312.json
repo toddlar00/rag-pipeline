@@ -7,14 +7,14 @@
       "sha256": "4b40e1730d5afa7612309bd726607a5134e728a93e1d2579ae86c5631d4cbdbd"
     },
     {
-      "bytes": 354205,
+      "bytes": 355225,
       "name": "requirements-core.lock",
-      "sha256": "3fcaf0471979e74e003a89084cfa567d65932e8cb1be4f1d6408dc6c59bafd7a"
+      "sha256": "9365af1df8dde3926459552dedfabeb99a73d41187ce2fe5e6b25bdc75b6df71"
     },
     {
-      "bytes": 385366,
+      "bytes": 386386,
       "name": "requirements-full.lock",
-      "sha256": "fc69ac969aede49e61c9b44fa88f2d66c68554536ef5412f99ca0719fe92203b"
+      "sha256": "ac1574c2e770b1852007f9e186573cb11a328e475246d9fccc4a1ebc309b14b0"
     },
     {
       "bytes": 1928,
@@ -29,17 +29,17 @@
     {
       "bytes": 47669,
       "name": "requirements-service.lock",
-      "sha256": "454f33f51ce650adc8d4c341ec392dc1bdc28ea49148bf8bafd36c9fbc894a2c"
+      "sha256": "9dbd2b3ee6cb1c899b419cca47e264a91f181665a3bb11b433d940c788d20801"
     },
     {
       "bytes": 220224,
       "name": "requirements-smoke.lock",
-      "sha256": "6adbbb115f6516ebcb8298e856e4b94d3f1e74087bd33c609c89e117aa5fa73a"
+      "sha256": "1129635b65a4e07c16d7ac1ea64002e76d8ffdc92b5896d24faa8b595549c85d"
     },
     {
       "bytes": 35268,
       "name": "requirements-test.lock",
-      "sha256": "70e91313ff157d80bfb8e86df2d50dd18bcdca8d229b4516aa1c42e14402a961"
+      "sha256": "a930657a73ab105b389802c3cf7432d2d97da8298338b44ec030faa235757e88"
     }
   ],
   "profile": {
@@ -50,7 +50,7 @@
     "python_major_minor": "3.12"
   },
   "repetitions": 5,
-  "report_sha256": "9bfd38a84998c1413894e342b0d6d0b4731b41051345e4ee4fae2df1418b1b46",
+  "report_sha256": "5d8cd4751a89ef3e8a6440b5c5aa501d6676fb294ec207fa25d9db7c1f517acf",
   "runtime": {
     "implementation": "CPython",
     "pointer_bits": 64,
@@ -141,10 +141,10 @@
         "output": null,
         "peak_rss_bytes": {
           "available": true,
-          "maximum": 117223424,
-          "median": 117133312,
-          "minimum": 116350976,
-          "p95": 117223424,
+          "maximum": 117153792,
+          "median": 116551680,
+          "minimum": 115998720,
+          "p95": 117153792,
           "scope": "process_only_excludes_descendants"
         },
         "stdlib_loaded_count": {
@@ -277,10 +277,10 @@
         ],
         "third_party_loaded_sha256": "b1285ec0d2e4ea22465cb6bfe542c6236fcb703c5e4e20254547c3a92d5c433e",
         "wall_time_ms": {
-          "maximum": 1171.53,
-          "median": 1153.149,
-          "minimum": 1125.431,
-          "p95": 1171.53
+          "maximum": 1083.26,
+          "median": 1065.808,
+          "minimum": 1042.021,
+          "p95": 1083.26
         }
       },
       "name": "cold_import_rag",
@@ -368,10 +368,10 @@
         },
         "peak_rss_bytes": {
           "available": true,
-          "maximum": 118886400,
-          "median": 118345728,
-          "minimum": 117805056,
-          "p95": 118886400,
+          "maximum": 119230464,
+          "median": 118312960,
+          "minimum": 117968896,
+          "p95": 119230464,
           "scope": "process_only_excludes_descendants"
         },
         "stdlib_loaded_count": {
@@ -504,10 +504,10 @@
         ],
         "third_party_loaded_sha256": "b1285ec0d2e4ea22465cb6bfe542c6236fcb703c5e4e20254547c3a92d5c433e",
         "wall_time_ms": {
-          "maximum": 1232.695,
-          "median": 1199.134,
-          "minimum": 1150.52,
-          "p95": 1232.695
+          "maximum": 1104.416,
+          "median": 1056.944,
+          "minimum": 1039.731,
+          "p95": 1104.416
         }
       },
       "name": "cli_help",
@@ -564,10 +564,10 @@
         },
         "peak_rss_bytes": {
           "available": true,
-          "maximum": 27598848,
-          "median": 27172864,
-          "minimum": 26439680,
-          "p95": 27598848,
+          "maximum": 27414528,
+          "median": 27258880,
+          "minimum": 26517504,
+          "p95": 27414528,
           "scope": "process_only_excludes_descendants"
         },
         "stdlib_loaded_count": {
@@ -664,10 +664,10 @@
         ],
         "third_party_loaded_sha256": "a757c8aea456ab56dddab71852924acc569e4b3f834cbdb5ef9695ddfcce0a5a",
         "wall_time_ms": {
-          "maximum": 2390.055,
-          "median": 2366.203,
-          "minimum": 2328.045,
-          "p95": 2390.055
+          "maximum": 2242.921,
+          "median": 2194.578,
+          "minimum": 2175.931,
+          "p95": 2242.921
         }
       },
       "name": "cli_info_empty",
@@ -724,10 +724,10 @@
         "output": null,
         "peak_rss_bytes": {
           "available": true,
-          "maximum": 50200576,
-          "median": 49844224,
-          "minimum": 49627136,
-          "p95": 50200576,
+          "maximum": 49954816,
+          "median": 49692672,
+          "minimum": 49459200,
+          "p95": 49954816,
           "scope": "process_only_excludes_descendants"
         },
         "stdlib_loaded_count": {
@@ -866,10 +866,10 @@
         ],
         "third_party_loaded_sha256": "12ea7e9a2d80aef71b45444a9c1525cbf17122e2dc917d113fef8d984b611d2c",
         "wall_time_ms": {
-          "maximum": 454.293,
-          "median": 437.401,
-          "minimum": 428.661,
-          "p95": 454.293
+          "maximum": 420.845,
+          "median": 417.959,
+          "minimum": 406.725,
+          "p95": 420.845
         }
       },
       "name": "service_composition",
@@ -948,10 +948,10 @@
         "output": null,
         "peak_rss_bytes": {
           "available": true,
-          "maximum": 117735424,
-          "median": 117309440,
-          "minimum": 117047296,
-          "p95": 117735424,
+          "maximum": 118034432,
+          "median": 117420032,
+          "minimum": 116547584,
+          "p95": 118034432,
           "scope": "process_only_excludes_descendants"
         },
         "stdlib_loaded_count": {
@@ -1084,10 +1084,10 @@
         ],
         "third_party_loaded_sha256": "b1285ec0d2e4ea22465cb6bfe542c6236fcb703c5e4e20254547c3a92d5c433e",
         "wall_time_ms": {
-          "maximum": 1195.445,
-          "median": 1170.211,
-          "minimum": 1158.309,
-          "p95": 1195.445
+          "maximum": 1096.237,
+          "median": 1095.244,
+          "minimum": 1072.316,
+          "p95": 1096.237
         }
       },
       "name": "worker_imports",
@@ -1141,10 +1141,10 @@
         "output": null,
         "peak_rss_bytes": {
           "available": true,
-          "maximum": 27525120,
-          "median": 27082752,
-          "minimum": 26611712,
-          "p95": 27525120,
+          "maximum": 27045888,
+          "median": 26963968,
+          "minimum": 26406912,
+          "p95": 27045888,
           "scope": "process_only_excludes_descendants"
         },
         "stdlib_loaded_count": {
@@ -1245,10 +1245,10 @@
         ],
         "third_party_loaded_sha256": "a757c8aea456ab56dddab71852924acc569e4b3f834cbdb5ef9695ddfcce0a5a",
         "wall_time_ms": {
-          "maximum": 2520.112,
-          "median": 2476.321,
-          "minimum": 2449.577,
-          "p95": 2520.112
+          "maximum": 2249.851,
+          "median": 2235.919,
+          "minimum": 2208.729,
+          "p95": 2249.851
         }
       },
       "name": "worker_entrypoints",
@@ -1288,10 +1288,10 @@
         "output": null,
         "peak_rss_bytes": {
           "available": true,
-          "maximum": 27742208,
-          "median": 27340800,
-          "minimum": 27107328,
-          "p95": 27742208,
+          "maximum": 27676672,
+          "median": 26849280,
+          "minimum": 26669056,
+          "p95": 27676672,
           "scope": "process_only_excludes_descendants"
         },
         "stdlib_loaded_count": {
@@ -1388,10 +1388,10 @@
         ],
         "third_party_loaded_sha256": "a757c8aea456ab56dddab71852924acc569e4b3f834cbdb5ef9695ddfcce0a5a",
         "wall_time_ms": {
-          "maximum": 314.696,
-          "median": 301.702,
-          "minimum": 294.712,
-          "p95": 314.696
+          "maximum": 296.488,
+          "median": 275.587,
+          "minimum": 273.243,
+          "p95": 296.488
         }
       },
       "name": "isolation_guard",
@@ -1583,10 +1583,10 @@
         "output": null,
         "peak_rss_bytes": {
           "available": true,
-          "maximum": 117309440,
-          "median": 116908032,
-          "minimum": 116346880,
-          "p95": 117309440,
+          "maximum": 117243904,
+          "median": 117207040,
+          "minimum": 116482048,
+          "p95": 117243904,
           "scope": "process_only_excludes_descendants"
         },
         "stdlib_loaded_count": {
@@ -1719,10 +1719,10 @@
         ],
         "third_party_loaded_sha256": "b1285ec0d2e4ea22465cb6bfe542c6236fcb703c5e4e20254547c3a92d5c433e",
         "wall_time_ms": {
-          "maximum": 4491.396,
-          "median": 4351.045,
-          "minimum": 4298.609,
-          "p95": 4491.396
+          "maximum": 4081.979,
+          "median": 3976.18,
+          "minimum": 3931.102,
+          "p95": 4081.979
         }
       },
       "name": "noop_resume",
@@ -1796,10 +1796,10 @@
         "output": null,
         "peak_rss_bytes": {
           "available": true,
-          "maximum": 117362688,
-          "median": 117018624,
-          "minimum": 116678656,
-          "p95": 117362688,
+          "maximum": 117477376,
+          "median": 117075968,
+          "minimum": 116150272,
+          "p95": 117477376,
           "scope": "process_only_excludes_descendants"
         },
         "stdlib_loaded_count": {
@@ -1932,10 +1932,10 @@
         ],
         "third_party_loaded_sha256": "b1285ec0d2e4ea22465cb6bfe542c6236fcb703c5e4e20254547c3a92d5c433e",
         "wall_time_ms": {
-          "maximum": 1206.47,
-          "median": 1155.471,
-          "minimum": 1131.673,
-          "p95": 1206.47
+          "maximum": 1067.909,
+          "median": 1058.36,
+          "minimum": 1028.294,
+          "p95": 1067.909
         }
       },
       "name": "offline_export_retrieval",
@@ -1944,7 +1944,7 @@
   ],
   "schema_version": 3,
   "source": {
-    "commit": "c11099b569da9f6e35790e49721170dfb3079bd1",
+    "commit": "e579090fd58cf94f8aca64df84065622ea78dae0",
     "tracked_diff_sha256": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d",
     "worktree_clean": true
   },

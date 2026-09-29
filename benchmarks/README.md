@@ -7,28 +7,28 @@ fresh-process repetitions.
 
 ## Provenance
 
-Both current reports were generated from the clean test-audit tooling
-dependency source checkpoint `c11099b569da9f6e35790e49721170dfb3079bd1`
-(tree `8b2736a4db1da93178fa2ec44612ca27baa40c92`), the third of a stacked
-series of one-domain dependency updates on `main` after the
-history-preserving merge of #121 (`602bec1`). That source contains
-everything through the Task 0.8 static-security merge `e34103f` plus the
-local OCR accuracy, retry and guided-review program, opt-in AI evidence
-search, the passive cleanup audits, the LLM transport and worker-launch
-repairs, the casebook excerpt/supplement pipeline (including the opt-in OCR
-angle-classifier and interleaved-region-merge flags, the footnote placement
-replay, the split-item duplicate retraction and quality schema 13), four
-reviewed architecture-inventory refreshes, the POSIX symlinked-interpreter
-identity fix, an LF attribute for top-level test fixtures, dependency-light
-test guards, a Python 3.10/3.11-tolerant import-guard test, a 60-minute
-Windows unit-lane timeout and the test-time economy changes (a
-session-shared architecture inventory, an indexed inventory builder, cached
-lock-record parsing and executed-source digests, and a Windows unit lane
-split into three shards), pytest-xdist for the unit lanes, gradio import
-guards in seven OCR review test modules, FlagEmbedding 1.4.2 for
-Transformers 5 reranking and the fresh-OCR token fidelity fixes, followed by
-stacked one-domain dependency updates for vector stores, Service/UI and
-test-audit tooling. The lock changes add pytest-xdist 3.8.0 and execnet
+Both current reports were generated from the clean ML/runtime dependency
+source checkpoint `e579090fd58cf94f8aca64df84065622ea78dae0` (tree
+`5c04298f1153e4990d76576c99ff27a315eb8f76`), the fourth of a stacked series
+of one-domain dependency updates on `main` after the history-preserving
+merge of #121 (`602bec1`). That source contains everything through the Task
+0.8 static-security merge `e34103f` plus the local OCR accuracy, retry and
+guided-review program, opt-in AI evidence search, the passive cleanup
+audits, the LLM transport and worker-launch repairs, the casebook
+excerpt/supplement pipeline (including the opt-in OCR angle-classifier and
+interleaved-region-merge flags, the footnote placement replay, the
+split-item duplicate retraction and quality schema 13), four reviewed
+architecture-inventory refreshes, the POSIX symlinked-interpreter identity
+fix, an LF attribute for top-level test fixtures, dependency-light test
+guards, a Python 3.10/3.11-tolerant import-guard test, a 60-minute Windows
+unit-lane timeout and the test-time economy changes (a session-shared
+architecture inventory, an indexed inventory builder, cached lock-record
+parsing and executed-source digests, and a Windows unit lane split into
+three shards), pytest-xdist for the unit lanes, gradio import guards in
+seven OCR review test modules, FlagEmbedding 1.4.2 for Transformers 5
+reranking and the fresh-OCR token fidelity fixes, followed by stacked
+one-domain dependency updates for vector stores, Service/UI, test-audit
+tooling and ML/runtime. The lock changes add pytest-xdist 3.8.0 and execnet
 2.1.2 to `requirements-test.lock` and `requirements-smoke.lock` and move
 FlagEmbedding from 1.4.0 to 1.4.2 in `requirements-core.lock` and
 `requirements-full.lock`; the stacked vector-stores update moves
@@ -36,10 +36,11 @@ qdrant-client from 1.19.0 to 1.19.1 and onnxruntime from 1.29.0 to 1.30.0
 (CPython 3.11+) in its mapped locks; the stacked Service/UI update moves
 gradio from 6.25.0 to 6.28.0 (with gradio-client 2.7.1) and uvicorn from
 0.52.4 to 0.54.0; the stacked test-audit tooling update moves uv from 0.12.5
-to 0.12.20 and ruff from 0.16.3 to 0.16.9; no model lock changed. The
-executing environments were synchronized with repository-pinned uv 0.12.20
-against the exact CPU application/test lock union plus its retained
-bootstrapper:
+to 0.12.20 and ruff from 0.16.3 to 0.16.9; the stacked ML/runtime update
+moves torch to 2.14.0, torchvision to 0.29.0, sentence-transformers to 6.1.0
+and tqdm to 4.70.1; no model lock changed. The executing environments were
+synchronized with repository-pinned uv 0.12.20 against the exact CPU
+application/test lock union plus its retained bootstrapper:
 
 - `requirements-full.lock`
 - `requirements-test.lock`
@@ -54,8 +55,8 @@ marker-resolved distributions before generation.
 
 | Platform | Runtime | Report | Bytes | File SHA-256 | Embedded report SHA-256 |
 |---|---:|---|---:|---|---|
-| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,083 | `bfc3839950cd075ea5ac77c45d71ce27b01cd7330cc16edfabc48a37d6d7edd1` | `9bfd38a84998c1413894e342b0d6d0b4731b41051345e4ee4fae2df1418b1b46` |
-| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,482 | `24947d4d1cb979ccc697acb2121f2e0dd53220e83a2cf10d251b6a0bb63265ca` | `6c3bcace97931204da1d07a712f97e056c2f2657e77feab6e2d41a6b164bc09d` |
+| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,084 | `577746ea6980725ab4ce01df6800cebbc41632947ca6b15b7bec70ef4fd96f67` | `5d8cd4751a89ef3e8a6440b5c5aa501d6676fb294ec207fa25d9db7c1f517acf` |
+| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,476 | `98a24ad1fb0e7cb7e350bdeaf635522e2c14526235d850a474dd3dfc973e2117` | `e3b0636ed8960784828c8b94bc4cee9e1c9b43c20f0903686c16db3162f56319` |
 
 The reports attest the same source commit, clean-worktree state, tracked-diff
 digest, eight LF and `HEAD`-identical dependency/model-lock inputs, authoritative
@@ -256,6 +257,16 @@ Dependabot #111: uv 0.12.20, the pinned lock resolver, and ruff 0.16.9)
 moves the OCR installer's uv check, its documentation and the
 static-security ruff pin with the locks, and supersedes the `eccc146` pair
 for its own pull request.
+The `c11099b` pair (gate-only child `f113e00`) passed the hosted CI
+promotion gate on [PR
+#124](https://github.com/toddlar00/rag-pipeline/pull/124). A PDF/Docling
+checkpoint (Dependabot #108: docling 2.130.0) passed its suites and pair but
+was withdrawn before promotion because re-converting audited private
+readings with it worsened their reading order; docling stays at 2.121.0. The
+stacked ML/runtime dependency source `e579090` (superseding Dependabot #120:
+torch 2.14.0, torchvision 0.29.0, sentence-transformers 6.1.0 and tqdm
+4.70.1) keeps numpy at 2.5.2, which the OCR disposition observer's verified
+recipe requires, and supersedes the `c11099b` pair for its own pull request.
 The current reports above
 bind
 that exact clean source and each passes an independent complete

@@ -23,7 +23,7 @@ docling-core[chunking]>=2.91.0,<3
 pypdfium2>=5.13.0,<6
 
 # Embedding models (nomic, legal-bert, etc.)
-sentence-transformers>=5.7.0,<6
+sentence-transformers>=6.1.0,<7
 # Reviewed Nomic remote-code module imports einops directly.
 einops>=0.7,<1
 
@@ -41,7 +41,7 @@ FlagEmbedding>=1.4.2,<2
 rank-bm25>=0.2,<0.3
 
 # Progress bars
-tqdm>=4.70.0,<5
+tqdm>=4.70.1,<5
 
 # HTTP clients used by cloud embedding and LLM backends
 requests>=2.31,<3
