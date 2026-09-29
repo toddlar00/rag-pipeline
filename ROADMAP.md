@@ -1683,6 +1683,15 @@ splits table-of-contents chapter rows whose dot leaders were extracted as
 control characters or U+FFFD, only when the ordinary parse leaves a fused
 chapter title; it changes no dependency or lock and supersedes the `da13c4c`
 pair.
+The `e7b60cd` pair (gate-only child `2643774`) passed the hosted CI
+promotion gate on [PR
+#138](https://github.com/toddlar00/rag-pipeline/pull/138), which merged into
+`main` as `a2c5629`. The job-heartbeat hardening source `da6540d` rebases
+the reviewed heartbeat change of [PR
+#137](https://github.com/toddlar00/rag-pipeline/pull/137) (an independent
+review approved it with nits, all addressed) onto that merge; it tolerates
+transient Windows replace failures of the advisory heartbeat for a bounded
+time, changes no dependency or lock and supersedes the `e7b60cd` pair.
 Its Windows/Linux
 pair (independent local same-platform comparisons passed) is that branch's
 candidate; its hosted checks and exact-SHA record are pending, and the
