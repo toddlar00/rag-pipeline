@@ -7,11 +7,12 @@ fresh-process repetitions.
 
 ## Provenance
 
-Both current reports were generated from the clean supply-chain renewal
-source checkpoint `01adb4f59933b8a5ca6975b6930974f8c60aea58` (tree
-`ca81fcf4df0a808f416a1a10b101712b943267e8`), the last of a stacked series of
-one-domain dependency updates on `main` after the history-preserving merge
-of #121 (`602bec1`). That source contains everything through the Task 0.8
+Both current reports were generated from the clean post-merge documentation
+source checkpoint `da13c4c38b6f8851facb4d6b9a4c601d08356179` (tree
+`76a446f3f25a2dd0bd50a799e41fe5acbc7f0716`), the documentation follow-up to
+a series of one-domain dependency updates on `main` after the
+history-preserving merges of #121 (`602bec1`) and of that series, #122 to
+#130 (`1cffc58`). That source contains everything through the Task 0.8
 static-security merge `e34103f` plus the local OCR accuracy, retry and
 guided-review program, opt-in AI evidence search, the passive cleanup
 audits, the LLM transport and worker-launch repairs, the casebook
@@ -44,9 +45,10 @@ and tqdm to 4.70.1; the stacked docling-core update moves docling-core from
 transformers to 5.16.1 (tokenizers 0.23.2), datasets to 5.0.1 and aiohttp to
 3.14.3; the stacked h2 promotion moves h2 from 4.3.0 to 4.4.1; the stacked
 cryptography promotion moves cryptography from 49.0.0 to 50.0.1; the stacked
-supply-chain renewal changes no lock; no model lock changed. The executing
-environments were synchronized with repository-pinned uv 0.12.20 against the
-exact CPU application/test lock union plus its retained bootstrapper:
+supply-chain renewal changes no lock; the post-merge documentation changes
+no lock; no model lock changed. The executing environments were synchronized
+with repository-pinned uv 0.12.20 against the exact CPU application/test
+lock union plus its retained bootstrapper:
 
 - `requirements-full.lock`
 - `requirements-test.lock`
@@ -61,8 +63,8 @@ marker-resolved distributions before generation.
 
 | Platform | Runtime | Report | Bytes | File SHA-256 | Embedded report SHA-256 |
 |---|---:|---|---:|---|---|
-| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,086 | `8a9d2e6de78828ccb3188a15d403fbacc28b45949f0cd3cd3a153f7f288eea54` | `724bd7ff87f7624a73999ef07c119b02b53ee4f578b80df5d189932502e5e3f5` |
-| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,478 | `54950e0b67170f2cb9b2f2db07560cb92f03ffabd0043634138e72095ecff3a0` | `c7679769067e0368c00e548ff9cfbe84b932c75a4298201b937fe838529f0b00` |
+| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,086 | `dff11dedf4a9c020a19717fbf000b0a84efa3c97078dcae5a1718a304680fce7` | `d95185bd04f5b32ca5050d40bd3a7f62a8817f1cff34f64d9a374ba549e24c28` |
+| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,488 | `f9f4012299023db3fbe39abb59e9fcac37348e9dba55a69d89c8ed89483ed312` | `9d088bac54375f190c2184a44cb98d9c08ce5088042fa050debc552a97b4cadd` |
 
 The reports attest the same source commit, clean-worktree state, tracked-diff
 digest, eight LF and `HEAD`-identical dependency/model-lock inputs, authoritative
@@ -300,6 +302,13 @@ The stacked supply-chain renewal source `01adb4f` (owner-authorized on
 2026-12-27, records time-boxed acceptances for the unpatched accelerate and
 chromadb advisories, changes no dependency or lock, and supersedes the
 `3e23b50` pair for its own pull request.
+The `01adb4f` pair (gate-only child `125cb6a`) passed every hosted check on
+[PR #130](https://github.com/toddlar00/rag-pipeline/pull/130), including
+both networked supply-chain jobs, and #122 to #130 merged into `main` in
+order (`e8b7e41`, `ac997dc`, `94c2c47`, `049a57e`, `0a3b7f1`, `ca9c6df`,
+`a18e7fc`, `18e9221`, `1cffc58`). The post-merge documentation source
+`da13c4c` records the integrated series and its follow-ups in the README and
+ROADMAP, changes no dependency or lock, and supersedes the `01adb4f` pair.
 The current reports above
 bind
 that exact clean source and each passes an independent complete

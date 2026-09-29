@@ -3201,19 +3201,25 @@ python tools/check_model_artifacts.py --verify-hub \
 python tools/refresh_model_artifacts.py
 ```
 
-As of 2026-07-21, every published ChromaDB 1.x release is affected by
-`PYSEC-2026-311`/`CVE-2026-45829`, a critical pre-authentication code-injection
-issue in Chroma's HTTP server, and no patched release exists. This pipeline uses
-only the embedded, filesystem-local `chromadb.PersistentClient`; it does not
-launch that HTTP server or accept remote collection model configuration. A
-documented exception in `dependency-vulnerability-policy.json` expires on
-2026-08-31 and makes that deployment constraint explicit. Do not expose a
-Chroma server from this environment; use Qdrant for networked deployments and
-remove the exception as soon as a fixed Chroma release is available.
+As of 2026-09-28, no patched ChromaDB release exists for four advisories that
+affect the locked 1.5.9: `PYSEC-2026-311`/`CVE-2026-45829`, a critical
+pre-authentication code-injection issue in Chroma's HTTP server, and
+`PYSEC-2026-3813`, `-3814` and `-3815`, authorization and code-injection flaws
+in that server's multi-tenant API. This pipeline uses only the embedded,
+filesystem-local `chromadb.PersistentClient`; it does not launch that HTTP
+server or its authorization providers, or accept remote collection model
+configuration. Documented exceptions in `dependency-vulnerability-policy.json`
+expire on 2026-12-27 and make that deployment constraint explicit. Do not
+expose a Chroma server from this environment; use Qdrant for networked
+deployments and remove the exceptions as soon as a fixed Chroma release is
+available. A time-boxed exception with the same expiry covers Accelerate's
+unpatched `PYSEC-2026-3804` (a sharded-checkpoint index path traversal): the
+pipeline loads models only from byte-verified locked artifacts and never calls
+the affected loaders.
 
 PyMuPDF is dual-licensed under AGPL-3.0 or a commercial Artifex license. Its
 time-bounded policy exception permits only private, filesystem-local evaluation
-through 2026-08-31; no commercial basis has been recorded. This repository also
+through 2026-12-27; no commercial basis has been recorded. This repository also
 has no repository-wide `LICENSE` file. Distribution or hosted/network use is a
 release blocker until the owner selects and records the applicable PyMuPDF and
 repository licensing basis.

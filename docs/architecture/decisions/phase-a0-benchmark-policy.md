@@ -7,8 +7,9 @@
   at `365de1c` passed on PR #117, the pytest-xdist pair at `ff5e64f` passed
   on PR #118, the FlagEmbedding pair at `ddbef38` passed on PR #119 (all
   four merged through `ab6e159`), and the fresh-OCR fidelity pair at
-  `1ba9415` passed on PR #121 (merged through `602bec1`); the stacked
-  one-domain dependency pair at source `01adb4f` (supply-chain renewal) is
+  `1ba9415` passed on PR #121 (merged through `602bec1`); the dependency
+  series pairs passed hosted CI on PRs #122 to #130 (merged through
+  `1cffc58`), and the post-merge documentation pair at source `da13c4c` is
   pending; exact-head human review and separate R8 owner authorization are
   not recorded
 - **Milestone:** R10 prerequisite for the R8 pipeline-ownership move
@@ -141,21 +142,21 @@ gate-only child `32153e9` and merge `376277c`
 Task 0.8 static-security pair at source `8891e1b` repeated it through
 gate-only child `1533164` and merge `e34103f`
 ([PR #107](https://github.com/toddlar00/rag-pipeline/pull/107)). The
-current replacement pair uses the clean supply-chain renewal source
-`01adb4f59933b8a5ca6975b6930974f8c60aea58` (tree
-`ca81fcf4df0a808f416a1a10b101712b943267e8`), the last of a stacked series of
-one-domain dependency updates, on `main` after the merges of the fresh-OCR
-fidelity source `1ba9415`, the FlagEmbedding source `ddbef38`, the
-pytest-xdist source `ff5e64f`, the test-time economy source `365de1c` and
-the OCR-program and casebook-excerpt source `29ea76b`; together they changed
-Python source, CI configuration, `.gitattributes`, two test-tooling locks
-(pytest-xdist and execnet in `requirements-test.lock` and
-`requirements-smoke.lock`) and the FlagEmbedding record of
-`requirements-core.lock` and `requirements-full.lock`; the stacked
-dependency updates also change the vector-stores, Service/UI, test-audit
-tooling, ML/runtime, PDF/Docling (docling-core), promoted ML/runtime,
-promoted h2 and promoted cryptography records of their mapped locks, but no
-model lock. It supersedes the
+current replacement pair uses the clean post-merge documentation source
+`da13c4c38b6f8851facb4d6b9a4c601d08356179` (tree
+`76a446f3f25a2dd0bd50a799e41fe5acbc7f0716`), the documentation follow-up to
+a series of one-domain dependency updates, on `main` after the merges of the
+dependency series #122 to #130 (`1cffc58`), the fresh-OCR fidelity source
+`1ba9415`, the FlagEmbedding source `ddbef38`, the pytest-xdist source
+`ff5e64f`, the test-time economy source `365de1c` and the OCR-program and
+casebook-excerpt source `29ea76b`; together they changed Python source, CI
+configuration, `.gitattributes`, two test-tooling locks (pytest-xdist and
+execnet in `requirements-test.lock` and `requirements-smoke.lock`) and the
+FlagEmbedding record of `requirements-core.lock` and
+`requirements-full.lock`; the stacked dependency updates also change the
+vector-stores, Service/UI, test-audit tooling, ML/runtime, PDF/Docling
+(docling-core), promoted ML/runtime, promoted h2 and promoted cryptography
+records of their mapped locks, but no model lock. It supersedes the
 earlier `1ae8502` pair, whose child `766feaf` passed both hosted Phase A0
 cells but whose dependency-light unit lanes failed at collection. Source
 `a15232d` then passed both hosted Phase A0 cells on [PR
@@ -267,6 +268,13 @@ The stacked supply-chain renewal source `01adb4f` (owner-authorized on
 2026-12-27, records time-boxed acceptances for the unpatched accelerate and
 chromadb advisories, changes no dependency or lock, and supersedes the
 `3e23b50` pair for its own pull request.
+The `01adb4f` pair (gate-only child `125cb6a`) passed every hosted check on
+[PR #130](https://github.com/toddlar00/rag-pipeline/pull/130), including
+both networked supply-chain jobs, and #122 to #130 merged into `main` in
+order (`e8b7e41`, `ac997dc`, `94c2c47`, `049a57e`, `0a3b7f1`, `ca9c6df`,
+`a18e7fc`, `18e9221`, `1cffc58`). The post-merge documentation source
+`da13c4c` records the integrated series and its follow-ups in the README and
+ROADMAP, changes no dependency or lock, and supersedes the `01adb4f` pair.
 Its Windows and
 Linux CPython 3.12.13 reports were
 generated after the same strict hash-locked synchronization and
@@ -449,15 +457,16 @@ then the stacked docling-core dependency source `13f3b5d`,
 then the stacked ML/runtime advisory-promotion source `8c12135`,
 then the stacked vector-stores h2-promotion source `21d66eb`,
 then the stacked provider-transport cryptography-promotion source `3e23b50`,
-then the stacked supply-chain renewal source `01adb4f`.
+then the stacked supply-chain renewal source `01adb4f`,
+then the stacked post-merge documentation source `da13c4c`.
 Its Windows report
 is 51,086 bytes (file SHA-256
-`8a9d2e6de78828ccb3188a15d403fbacc28b45949f0cd3cd3a153f7f288eea54`;
+`dff11dedf4a9c020a19717fbf000b0a84efa3c97078dcae5a1718a304680fce7`;
 embedded report SHA-256
-`724bd7ff87f7624a73999ef07c119b02b53ee4f578b80df5d189932502e5e3f5`).
-Its Linux report is 50,478 bytes (file SHA-256
-`54950e0b67170f2cb9b2f2db07560cb92f03ffabd0043634138e72095ecff3a0`;
+`d95185bd04f5b32ca5050d40bd3a7f62a8817f1cff34f64d9a374ba549e24c28`).
+Its Linux report is 50,488 bytes (file SHA-256
+`f9f4012299023db3fbe39abb59e9fcac37348e9dba55a69d89c8ed89483ed312`;
 embedded report SHA-256
-`c7679769067e0368c00e548ff9cfbe84b932c75a4298201b937fe838529f0b00`).
+`9d088bac54375f190c2184a44cb98d9c08ce5088042fa050debc552a97b4cadd`).
 Both use CPython 3.12.13 and pass their complete local same-platform 9×5
 comparisons. Hosted promotion remains pending.
