@@ -7,6 +7,9 @@
 
 # Qdrant vector DB backend (native hybrid search)
 qdrant-client>=1.19.1,<2
+# Promoted from qdrant-client's httpx[http2] so the PYSEC-2026-3628 fix
+# (h2 4.4.1) can be selected under the dependency-domain policy.
+h2>=4.4.1,<5
 
 # LLM classification + contextual retrieval
 google-genai>=1.68,<2      # Gemini fallback; per-request timeout/retry controls

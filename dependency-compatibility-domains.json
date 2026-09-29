@@ -9,6 +9,7 @@
     ],
     "vector-stores": [
       "chromadb",
+      "h2",
       "onnxruntime",
       "qdrant-client"
     ],
