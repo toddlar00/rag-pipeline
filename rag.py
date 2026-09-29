@@ -3951,6 +3951,20 @@ def _toc_visual_subrows(cells: list[dict]) -> list[list[dict]]:
     return output
 
 
+# Some text layers encode TOC dot leaders in a symbol font that extraction
+# returns as control characters or U+FFFD. A one-cell "title<glyphs>page" row
+# then yields no page, is parked as a pending chapter label, and fuses with the
+# next row into a chapter title that can never bind to a source heading.
+_TOC_LEADER_GLYPH = "[\\x00-\\x08\\x0b\\x0c\\x0e-\\x1f\\ufffd]"
+# A leader is a run of at least three glyphs; one stray glyph before a number
+# (a statute section or a year) never qualifies.
+_TOC_GLYPH_LEADER_RUN = rf"(?:{_TOC_LEADER_GLYPH}\s*){{3,}}"
+_TOC_GLYPH_LEADER_ROW = re.compile(
+    rf"(?P<title>.*?\S)\s*{_TOC_GLYPH_LEADER_RUN}(?P<page>\d{{1,4}})\s*")
+_TOC_FUSED_GLYPH_TITLE = re.compile(
+    rf"{_TOC_GLYPH_LEADER_RUN}\d{{1,4}}\s+\S")
+
+
 def _parse_toc_tables(
         doc: dict, toc_start: int, toc_end: int, *,
         structure_profile: (
@@ -3970,7 +3984,37 @@ def _parse_toc_tables(
     Strategy: reconstruct full rows from cells, then extract title + page
     from each row as a unit.  This avoids the old single-cell / multi-column
     split that produced wrong results when cells partially matched.
+
+    Only when that parse leaves a chapter title fused across a glyph-leader
+    row (a run of at least three glyphs, a page number, then more text) is
+    the TOC parsed a second time, in which every row that would be parked as
+    a chapter label and reads "title<glyph leaders>page" becomes its own
+    entry instead. Every other TOC parses exactly as the first pass does.
     """
+    entries = _parse_toc_tables_once(
+        doc, toc_start, toc_end, structure_profile=structure_profile,
+        summary_span=summary_span, split_glyph_leaders=False)
+    if any(entry["level"] == 1
+           and _TOC_FUSED_GLYPH_TITLE.search(entry["title"])
+           for entry in entries):
+        entries = _parse_toc_tables_once(
+            doc, toc_start, toc_end, structure_profile=structure_profile,
+            summary_span=summary_span, split_glyph_leaders=True)
+    if entries:
+        log.info(f"Table-parsed TOC: {len(entries)} entries, "
+                 f"pages {entries[0]['page']}-{entries[-1]['page']}")
+    return entries
+
+
+def _parse_toc_tables_once(
+        doc: dict, toc_start: int, toc_end: int, *,
+        structure_profile: (
+            str | _document_profiles.StructureProfile
+        ),
+        summary_span: tuple[int, int] | None,
+        split_glyph_leaders: bool,
+) -> list[dict]:
+    """Run one TOC table parse; see ``_parse_toc_tables``."""
     profile = _document_profiles.get_profile(structure_profile)
     tables = doc.get("tables", [])
     if not tables:
@@ -4137,6 +4181,21 @@ def _parse_toc_tables(
                                    and not row_division.title)
                 no_page_in_row = (page_num is None or page_num == 0)
                 if is_narrow_label or (no_page_in_row and len(row) == 1):
+                    glyph_row = (
+                        _TOC_GLYPH_LEADER_ROW.fullmatch(row_text_bare.strip())
+                        if split_glyph_leaders else None)
+                    if glyph_row is not None:
+                        # "title<glyph leaders>page" is a complete entry,
+                        # not a label for the next row.
+                        row_queue.insert(0, [
+                            {"text": glyph_row.group("title"),
+                             "start_col_offset_idx": 0,
+                             "end_col_offset_idx": 1},
+                            {"text": glyph_row.group("page"),
+                             "start_col_offset_idx": 1,
+                             "end_col_offset_idx": 2},
+                        ])
+                        continue
                     pending_chapter = row_text_bare.strip()
                     continue
             # If previous row was a pending chapter label, prepend it
@@ -4270,12 +4329,7 @@ def _parse_toc_tables(
                     continue
                 primary_divisions.add(division_key)
         unique_primaries.append(entry)
-    entries = unique_primaries
-
-    if entries:
-        log.info(f"Table-parsed TOC: {len(entries)} entries, "
-                 f"pages {entries[0]['page']}-{entries[-1]['page']}")
-    return entries
+    return unique_primaries
 
 
 def _merge_page_numbers(scaffold: list[dict],
