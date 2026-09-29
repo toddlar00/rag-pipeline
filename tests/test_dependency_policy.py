@@ -31,7 +31,7 @@ EXPECTED_DEPENDENCY_DOMAINS = {
         "transformers",
     ],
     "service-ui": ["fastapi", "gradio", "uvicorn"],
-    "provider-transport": ["google-genai", "requests"],
+    "provider-transport": ["cryptography", "google-genai", "requests"],
     "test-audit-tooling": [
         "pip",
         "pip-audit",
@@ -320,7 +320,7 @@ def test_repository_dependency_domains_cover_every_direct_input_exactly():
         for package in domain_packages
     ]
     assert len(payload["domains"]) == 6
-    assert len(packages) == len(set(packages)) == 31
+    assert len(packages) == len(set(packages)) == 32
 
 
 def test_dependency_domains_reject_unassigned_direct_package(tmp_path):

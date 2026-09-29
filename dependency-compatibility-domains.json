@@ -32,6 +32,7 @@
       "uvicorn"
     ],
     "provider-transport": [
+      "cryptography",
       "google-genai",
       "requests"
     ],

@@ -18,7 +18,7 @@ updates:
       service-ui:
         patterns: ["fastapi", "gradio", "uvicorn"]
       provider-transport:
-        patterns: ["google-genai", "requests"]
+        patterns: ["cryptography", "google-genai", "requests"]
       test-audit-tooling:
         patterns: ["pip", "pip-audit", "pip-licenses", "pytest", "pytest-xdist", "ruff", "uv"]
     commit-message:
