@@ -1342,7 +1342,7 @@ source was read correctly. No schema or policy version changed.
   semantics. A read whose handle is not the observed file is retried, and
   after three such reads the receipt fails instead of binding other
   bytes.
-- **Evidence.** `tests/test_ocr_token_fidelity_fixes.py` (13 tests; the
+- **Evidence.** `tests/test_ocr_token_fidelity_fixes.py` (14 tests; the
   behavioural ones fail on the base code) and three new receipt-cache tests.
   An independent review found that the allowance keys still used the
   repaired spelling, which dropped a source-attested repeated line; that
@@ -1372,6 +1372,10 @@ source was read correctly. No schema or policy version changed.
     belong to this code or later.
   - No test covers one source item that the chunker splits at a line-end
     hyphen and whose two slices a merge joins again.
+  - The fused-term skip follows the call path, not the record's lineage: a
+    record whose computed lineage is empty keeps an OCR fused spelling and
+    is then rejected by the lineage-free check (fail-closed; such records
+    already fail `chunks_have_source_lineage`).
 
 ### Integrated convergence
 

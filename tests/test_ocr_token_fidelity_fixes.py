@@ -207,3 +207,16 @@ def test_quality_invariant_matches_the_publication_check():
     issues = quality_core._normalization_issues([attested, lineage_free])
 
     assert issues == {"known_fused_term": [1]}
+
+
+def test_a_split_one_line_source_keeps_its_fused_repeat():
+    # The canonical-fragment branch: one source item on one line, split by
+    # the chunker into two identical lines.
+    source = "a threejudge panel a threejudge panel"
+    fragment = "a threejudge panel" + chr(10) + "a threejudge panel"
+
+    normalized = rag._normalize_source_chunk_text(
+        fragment, "body", preserve_source_identity=True,
+        source_items=[_source_item(source, "#/texts/1")])
+
+    assert normalized == fragment
