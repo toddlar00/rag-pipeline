@@ -1,7 +1,8 @@
 """Occurrence-bound heading lineage for serialized Docling documents.
 
-The module is deliberately standard-library-only.  Heading identity is an
-exact Docling ``self_ref``; normalized text is never used as an identifier.
+The module depends only on the standard library and the standard-library-only
+``source_fidelity_core``.  Heading identity is an exact Docling ``self_ref``;
+normalized text is never used as an identifier.
 """
 
 from __future__ import annotations
@@ -9,7 +10,9 @@ from __future__ import annotations
 import math
 import re
 from collections import Counter, defaultdict
-from typing import Iterable, Mapping, Sequence
+from typing import Iterable, Mapping, NamedTuple, Sequence
+
+import source_fidelity_core
 
 
 HEADING_LINEAGE_SCHEMA_VERSION = 3
@@ -166,6 +169,103 @@ def _clean_marker(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip().strip("*_ ")
 
 
+class WrapRunItem(NamedTuple):
+    """One source item that a positioned wrap-run body child places."""
+
+    label: str
+    text: str
+    # One ``left, top, right, bottom`` box per provenance span, in the
+    # top-origin order space shared with ``source_fidelity_core``.
+    boxes: tuple[tuple[float, float, float, float], ...]
+
+
+class WrapRunNode(NamedTuple):
+    """One positioned body child of a single-wrap page run."""
+
+    # ``left, top, right, bottom`` of the child's single-page union box.
+    box: tuple[float, float, float, float]
+    # True only for a source item without children (never for a group).
+    childless_item: bool
+    # The item itself, or every source item a group places.
+    items: tuple[WrapRunItem, ...]
+
+
+def _tokenless_glyph(node: WrapRunNode) -> bool:
+    """A childless plain-text item that carries no lexical token."""
+    return bool(
+        node.childless_item and len(node.items) == 1
+        and node.items[0].label == "text"
+        and not source_fidelity_core.lexical_tokens(node.items[0].text))
+
+
+def _observable_boxes(
+        nodes: Sequence[WrapRunNode],
+) -> list[tuple[float, float, float, float]]:
+    return [
+        box for node in nodes for item in node.items
+        if item.label in {"text", "list_item"}
+        and source_fidelity_core.lexical_tokens(item.text)
+        for box in item.boxes
+    ]
+
+
+def tokenless_glyph_rotation_admitted(
+        prefix: Sequence[WrapRunNode], late: Sequence[WrapRunNode],
+) -> bool:
+    """Return whether only late-run tokenless glyphs block an intact rotation.
+
+    Both the pre-chunking repair in ``rag`` and ``_ordered_source_refs``
+    consult this only after the ordinary run-disjointness proof and the
+    short-label insertion have both declined a single-wrap page.  Every page
+    either of them already decided therefore keeps its decision by
+    construction; only a page they left unrepaired can change.
+
+    A childless plain-text item with no lexical token (a line-final soft
+    hyphen emitted as its own item, for example) registers no page
+    occurrence for reading-order fidelity, yet its box alone can break the
+    disjointness proof.  Only such a glyph captured in the late run is set
+    aside; a prefix-run glyph stays in the proof.  The rotation is admitted
+    only when all hold:
+
+    * the proof holds without the late-run glyphs, and the late run keeps at
+      least one other child;
+    * a token-bearing text/list item of the late run horizontally overlaps
+      one of the prefix run and ends at least 0.5 pt above its top, so the
+      captured order inverts a pair that same-page reading order checks; and
+    * every late-run glyph vertically overlaps a token-bearing prefix
+      text/list item without the fidelity horizontal overlap, so it sits
+      beside the lower half rather than in the upper-half flow.
+
+    Glyphs stay in their captured run; no placement is invented.  That the
+    admitted pages previously failed publication is evidenced by corpus
+    scans, not proven: a later pass can still reorder chunk entries.  An
+    output published before this rule that the lineage re-audit now
+    rotates differently fails closed, never silently.
+    """
+    excluded = [node for node in late if _tokenless_glyph(node)]
+    observable_late = [node for node in late if not _tokenless_glyph(node)]
+    # The inverted-pair proof below also implies a token-bearing child in
+    # each run; checking first keeps the extrema below total.
+    if not excluded or not prefix or not observable_late:
+        return False
+    if max(node.box[3] for node in observable_late) > (
+            min(node.box[1] for node in prefix) + 4.0):
+        return False
+    prefix_boxes = _observable_boxes(prefix)
+    late_boxes = _observable_boxes(observable_late)
+    if not any(
+            source_fidelity_core._horizontal_overlap(lower, upper)
+            and upper[3] <= lower[1] - 0.5
+            for lower in prefix_boxes for upper in late_boxes):
+        return False
+    return all(
+        any(min(lower[3], glyph.box[3]) - max(lower[1], glyph.box[1]) > 0
+            and not source_fidelity_core._horizontal_overlap(
+                lower, glyph.box)
+            for lower in prefix_boxes)
+        for glyph in excluded)
+
+
 def _ordered_source_refs(
         document: dict, items: dict[str, dict], groups: dict[str, dict],
         ranges: Sequence[tuple[int, int]],
@@ -175,7 +275,9 @@ def _ordered_source_refs(
     Only one strongly attested vertical wrap is repaired on a page, and only
     when the runs are horizontally aligned (or begin with a centered outline
     marker).  This mirrors the mutation applied to the live Docling model
-    before chunking while retaining true multi-column order.
+    before chunking while retaining true multi-column order.  Both apply the
+    same ``tokenless_glyph_rotation_admitted`` proof to pages they would
+    otherwise leave unrepaired.
     """
     body = document.get("body") if isinstance(document, dict) else None
     children = list(body.get("children") or []) if isinstance(body, dict) else []
@@ -226,6 +328,30 @@ def _ordered_source_refs(
         )
         descriptors[ref] = result
         return result
+
+    def wrap_items(
+            ref: str, active: frozenset[str] = frozenset(),
+    ) -> tuple[WrapRunItem, ...]:
+        item = items.get(ref)
+        if item is not None:
+            return (WrapRunItem(_label(item), _text(item), tuple(
+                (box[3], box[1], box[4], box[2])
+                for box in _provenance_boxes(item))),)
+        if not ref or ref in active:
+            return ()
+        return tuple(
+            member for child in (groups.get(ref) or {}).get("children") or []
+            for member in wrap_items(
+                _child_ref(child), active | frozenset((ref,))))
+
+    def wrap_node(value: tuple) -> WrapRunNode:
+        ref = _child_ref(value[1])
+        item = items.get(ref)
+        box = value[2]
+        return WrapRunNode(
+            (box[3], box[1], box[4], box[2]),
+            item is not None and not item.get("children"),
+            wrap_items(ref))
 
     by_page: defaultdict[int, list[tuple[int, dict, tuple]]] = defaultdict(list)
     for index, child in enumerate(children):
@@ -286,6 +412,10 @@ def _ordered_source_refs(
                     if (existing[2][1], existing[2][3], existing[0]) > key
                 ), len(ordered))
                 ordered.insert(insert_at, value)
+        elif tokenless_glyph_rotation_admitted(
+                [wrap_node(value) for value in prefix],
+                [wrap_node(value) for value in late]):
+            ordered = [*late, *prefix]
         else:
             continue
         for (target, _, _), (_, replacement, _) in zip(nodes, ordered):

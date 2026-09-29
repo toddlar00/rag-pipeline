@@ -1318,10 +1318,21 @@ read by fresh layout-aware OCR of an image-only derivative, using
       before a roman-numbered row, stays discarded unless the gate fires.
     - The remaining 6 issues come from a separate reading-order defect on
       one page. Docling put the page's lower block before its upper block,
-      and the existing source reading-order repair does not recover it.
-      The likely reasons are a one-character right-margin item that makes
-      the blocks overlap, and a late block with more items than the
-      fallback accepts.
+      and the existing source reading-order repair did not recover it. A
+      detached soft hyphen (one item with zero lexical tokens) sat beside
+      a lower-block paragraph but was captured with the upper block, and
+      that made the blocks overlap. A follow-up pull request addresses
+      it. When only such glyphs captured with the upper block stop the
+      rotation, both the repair and its lineage mirror now rotate the page
+      intact. The captured order must also invert a horizontally
+      overlapping pair of text items. Only that page changes in the book,
+      its 6 records bind, and the 19 READY h26 runs are unchanged.
+      With the rotation fixed, the casebook's chunking reaches the corpus
+      quality gate. That gate surfaces two separate defects the rotation
+      had masked, and both are follow-ups. One is source-token fidelity on
+      PDF pp. 389–390, with two uncovered source items and one output
+      record. The other is a table's source-native row-count mismatch on
+      PDF pp. 678–679, across two table records.
   - *Durable-job manager writes on Windows.* The advisory heartbeat now
     tolerates transient replace failures (WinError 5, 32 or 33) for up to
     60 seconds. The manager's other writes still fail on the first such
@@ -1725,6 +1736,14 @@ promotion gate on [PR
 oauthlib a governed direct input and moves it from 3.3.1 to 4.0.0
 (CVE-2026-49264 and CVE-2026-49265) in the core, full and smoke locks, and
 supersedes the `8e0b2a6` pair.
+The `0333947` pair (gate-only child `63b22e2`) passed the hosted CI
+promotion gate on [PR
+#139](https://github.com/toddlar00/rag-pipeline/pull/139), which merged into
+`main` as `123bedb`. The tokenless-glyph rotation fix source `c2d7b57` lets
+the single-wrap reading-order repair and its lineage mirror rotate a page
+intact when only detached zero-token glyphs captured with the upper block
+break the run-disjointness proof; it changes no dependency or lock and
+supersedes the `0333947` pair.
 Its Windows/Linux
 pair (independent local same-platform comparisons passed) is that branch's
 candidate; its hosted checks and exact-SHA record are pending, and the

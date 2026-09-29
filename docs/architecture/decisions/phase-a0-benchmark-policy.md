@@ -13,9 +13,10 @@
   through `9eb6f94`), the TOC glyph-leader fix pair passed on PR #138
   (merged through `a2c5629`), the job-heartbeat hardening pair passed on PR
   #137 (merged through `634c38b`), the Nomic contract-test pair passed on PR
-  #136 (merged through `2f07510`), and the oauthlib promotion pair at source
-  `0333947` is pending; exact-head human review and separate R8 owner
-  authorization are not recorded
+  #136 (merged through `2f07510`), the oauthlib promotion pair passed on PR
+  #139 (merged through `123bedb`), and the tokenless-glyph rotation fix pair
+  at source `c2d7b57` is pending; exact-head human review and separate R8
+  owner authorization are not recorded
 - **Milestone:** R10 prerequisite for the R8 pipeline-ownership move
 - **Report schema:** `phase-a0` v3
 
@@ -146,18 +147,19 @@ gate-only child `32153e9` and merge `376277c`
 Task 0.8 static-security pair at source `8891e1b` repeated it through
 gate-only child `1533164` and merge `e34103f`
 ([PR #107](https://github.com/toddlar00/rag-pipeline/pull/107)). The
-current replacement pair uses the clean oauthlib promotion source
-`0333947f3dac3b641bd3735c047e17158818d7e9` (tree
-`6739285c29c88d1795808419e31a1341e8f44628`), a one-domain supply-chain
-remediation after a series of one-domain dependency updates, on `main` after
-the merges of the Nomic contract test #136 (`2f07510`), the job-heartbeat
-hardening #137 (`634c38b`), the TOC glyph-leader fix #138 (`a2c5629`), the
-documentation follow-up #135 (`9eb6f94`), the dependency series #122 to #130
-(`1cffc58`), the fresh-OCR fidelity source `1ba9415`, the FlagEmbedding
-source `ddbef38`, the pytest-xdist source `ff5e64f`, the test-time economy
-source `365de1c` and the OCR-program and casebook-excerpt source `29ea76b`;
-together they changed Python source, CI configuration, `.gitattributes`, two
-test-tooling locks (pytest-xdist and execnet in `requirements-test.lock` and
+current replacement pair uses the clean tokenless-glyph rotation fix source
+`c2d7b57fcbbbb1b7ed33b568f481659f679adc26` (tree
+`04c75f7e92fe20572805aa9f3f391585e1ab2485`), a reading-order fix after a
+series of one-domain dependency updates, on `main` after the merges of the
+oauthlib promotion #139 (`123bedb`), the Nomic contract test #136
+(`2f07510`), the job-heartbeat hardening #137 (`634c38b`), the TOC
+glyph-leader fix #138 (`a2c5629`), the documentation follow-up #135
+(`9eb6f94`), the dependency series #122 to #130 (`1cffc58`), the fresh-OCR
+fidelity source `1ba9415`, the FlagEmbedding source `ddbef38`, the
+pytest-xdist source `ff5e64f`, the test-time economy source `365de1c` and
+the OCR-program and casebook-excerpt source `29ea76b`; together they changed
+Python source, CI configuration, `.gitattributes`, two test-tooling locks
+(pytest-xdist and execnet in `requirements-test.lock` and
 `requirements-smoke.lock`) and the FlagEmbedding record of
 `requirements-core.lock` and `requirements-full.lock`; the stacked
 dependency updates also change the vector-stores, Service/UI, test-audit
@@ -321,6 +323,14 @@ promotion gate on [PR
 oauthlib a governed direct input and moves it from 3.3.1 to 4.0.0
 (CVE-2026-49264 and CVE-2026-49265) in the core, full and smoke locks, and
 supersedes the `8e0b2a6` pair.
+The `0333947` pair (gate-only child `63b22e2`) passed the hosted CI
+promotion gate on [PR
+#139](https://github.com/toddlar00/rag-pipeline/pull/139), which merged into
+`main` as `123bedb`. The tokenless-glyph rotation fix source `c2d7b57` lets
+the single-wrap reading-order repair and its lineage mirror rotate a page
+intact when only detached zero-token glyphs captured with the upper block
+break the run-disjointness proof; it changes no dependency or lock and
+supersedes the `0333947` pair.
 Its Windows and
 Linux CPython 3.12.13 reports were
 generated after the same strict hash-locked synchronization and
@@ -509,15 +519,16 @@ then the stacked TOC glyph-leader fix source `e7b60cd`,
 then the stacked job-heartbeat hardening source `da6540d`,
 then the stacked Nomic contract-test source `28ba800`,
 then the stacked Nomic contract-test source `8e0b2a6`,
-then the stacked oauthlib promotion source `0333947`.
+then the stacked oauthlib promotion source `0333947`,
+then the stacked tokenless-glyph rotation fix source `c2d7b57`.
 Its Windows report
-is 51,088 bytes (file SHA-256
-`f0fb2e3350d8f3db1107e81501d1e7746f86825a809f890f5f4096ecbcf6fe0b`;
+is 51,086 bytes (file SHA-256
+`f704630ea525797f3a500d0390af4f68982de44839e62fb5d4165e5ff432d949`;
 embedded report SHA-256
-`5cfd85f98d74a195a63bae107bc6f13ea813fb546d9bb6ac411b81bad7ac9018`).
-Its Linux report is 50,488 bytes (file SHA-256
-`627d9b72cbf981ab5ce6c805d5c012c1ea848aece178ddd7fb7bcb571fd1f3da`;
+`1c3b25ed617a8883a9650b27eb1599688ecdd41f7254efdc5a6572c1a3bacec5`).
+Its Linux report is 50,483 bytes (file SHA-256
+`7419aafd59db48799ca20c9aa0f5945e504111d86d2e5a064884089a5cdc69ed`;
 embedded report SHA-256
-`3a3f98b7f43173c90bf5b7f0a49d263d793a3469e638da878b1ed334f8896f97`).
+`5a19ad9f16ff419cbb3a31a3607083ebca76724bae9f7c59d9387471f78be888`).
 Both use CPython 3.12.13 and pass their complete local same-platform 9×5
 comparisons. Hosted promotion remains pending.
