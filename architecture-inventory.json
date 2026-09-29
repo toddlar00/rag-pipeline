@@ -63647,7 +63647,7 @@
     "top_level_function_count": 2912
   },
   "tracked_sources": {
-    "count": 486,
+    "count": 487,
     "groups": [
       {
         "count": 152,
@@ -63808,7 +63808,7 @@
         ]
       },
       {
-        "count": 291,
+        "count": 292,
         "name": "tests",
         "paths": [
           "tests/conftest.py",
@@ -63847,6 +63847,7 @@
           "tests/test_diagnose_ocr_stages_cli.py",
           "tests/test_document_profiles.py",
           "tests/test_embedding_policy.py",
+          "tests/test_embedding_runtime_compat.py",
           "tests/test_endpoint_policy.py",
           "tests/test_eval.py",
           "tests/test_eval_bootstrap.py",
