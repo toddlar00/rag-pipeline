@@ -50,7 +50,7 @@ _NEGATIVE_SOURCES = {
 def _policy(**overrides):
     policy = {
         "schema_version": 1,
-        "ruff_version": "0.16.3",
+        "ruff_version": "0.16.9",
         "blocking_rules": [
             "S102", "S104", "S301", "S302", "S307", "S324", "S501",
             "S506", "S602", "S604", "S605", "S606", "S608",
@@ -222,7 +222,7 @@ def test_repository_policy_is_valid_and_narrow():
         Path("static-security-policy.json")
     )
 
-    assert policy["ruff_version"] == "0.16.3"
+    assert policy["ruff_version"] == "0.16.9"
     assert "S101" not in policy["blocking_rules"]
     assert "S603" not in policy["blocking_rules"]
     assert len(policy["suppressions"]) == 1
@@ -256,14 +256,14 @@ def test_normalize_relativizes_and_orders(tmp_path):
 
 def _pinned_ruff_available() -> bool:
     try:
-        return check_static_security._ruff_version() == "0.16.3"
+        return check_static_security._ruff_version() == "0.16.9"
     except ValueError:
         return False
 
 
 @pytest.mark.skipif(
     not _pinned_ruff_available(),
-    reason="requires the hash-locked ruff 0.16.3",
+    reason="requires the hash-locked ruff 0.16.9",
 )
 def test_repository_tree_passes_with_committed_policy(tmp_path, capsys):
     envelope_path = tmp_path / "envelope.json"

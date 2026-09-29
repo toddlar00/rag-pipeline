@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "ruff_version": "0.16.3",
+  "ruff_version": "0.16.9",
   "blocking_rules": [
     "S102",
     "S104",
