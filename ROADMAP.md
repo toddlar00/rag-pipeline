@@ -1534,6 +1534,16 @@ Dependabot #111: uv 0.12.20, the pinned lock resolver, and ruff 0.16.9)
 moves the OCR installer's uv check, its documentation and the
 static-security ruff pin with the locks, and supersedes the `eccc146` pair
 for its own pull request.
+The `c11099b` pair (gate-only child `f113e00`) passed the hosted CI
+promotion gate on [PR
+#124](https://github.com/toddlar00/rag-pipeline/pull/124). A PDF/Docling
+checkpoint (Dependabot #108: docling 2.130.0) passed its suites and pair but
+was withdrawn before promotion because re-converting audited private
+readings with it worsened their reading order; docling stays at 2.121.0. The
+stacked ML/runtime dependency source `e579090` (superseding Dependabot #120:
+torch 2.14.0, torchvision 0.29.0, sentence-transformers 6.1.0 and tqdm
+4.70.1) keeps numpy at 2.5.2, which the OCR disposition observer's verified
+recipe requires, and supersedes the `c11099b` pair for its own pull request.
 Its Windows/Linux
 pair (independent local same-platform comparisons passed) is that branch's
 candidate; its hosted checks and exact-SHA record are pending, and the
