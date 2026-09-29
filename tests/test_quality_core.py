@@ -1272,6 +1272,143 @@ def test_headerless_single_row_table_shape_is_source_attested():
         "source_native_row_count_mismatch"] == [0]
 
 
+def _table_cell(row: int, col: int, text: str, *, header: bool = False,
+                cols: int = 1, row_header: bool = False) -> dict:
+    return {
+        "start_row_offset_idx": row, "end_row_offset_idx": row + 1,
+        "start_col_offset_idx": col, "end_col_offset_idx": col + cols,
+        "row_span": 1, "col_span": cols, "text": text,
+        "column_header": header, "row_header": row_header,
+    }
+
+
+_WORKSHEET_LABELS = ("1.", "Base"), ("2.", "Stress")
+
+
+def _stacked_header_worksheet(data_rows: int) -> dict:
+    """A synthetic 8-column worksheet whose column headers span two rows."""
+    cells = [
+        _table_cell(0, 0, "Scenario", header=True, cols=2),
+        _table_cell(0, 2, "Year 1", header=True, cols=2),
+        _table_cell(0, 4, "Year 2", header=True, cols=2),
+        _table_cell(0, 6, "Year 3", header=True, cols=2),
+        _table_cell(1, 0, "Label", header=True, cols=2),
+    ] + [_table_cell(1, col, ("Low", "High")[col % 2], header=True)
+         for col in range(2, 8)]
+    for offset, labels in enumerate(_WORKSHEET_LABELS[:data_rows]):
+        row = 2 + offset
+        cells += [_table_cell(row, col, text, row_header=True)
+                  for col, text in enumerate(labels)]
+        cells += [_table_cell(row, col, "$____") for col in range(2, 8)]
+    table = _source_item("#/tables/0", 3, label="table", text="")
+    table["data"] = {
+        "num_rows": 2 + data_rows, "num_cols": 8, "table_cells": cells}
+    return table
+
+
+def _worksheet_record(data_rows: int, *, flattened: bool = True) -> dict:
+    """docling-core >= 2.99 joins both header bands into one Markdown row."""
+    if flattened:
+        header = ["Scenario - Label"] * 2 + [
+            f"Year {year} - {band}" for year in (1, 2, 3)
+            for band in ("Low", "High")]
+        rows = []
+    else:  # docling-core < 2.99 published the second band as data.
+        header = ["Scenario"] * 2 + [
+            f"Year {year}" for year in (1, 2, 3) for _band in (0, 1)]
+        rows = [["Label", "Label"] + ["Low", "High"] * 3]
+    rows += [[*labels] + ["$____"] * 6
+             for labels in _WORKSHEET_LABELS[:data_rows]]
+    text = "\n".join(
+        "| " + " | ".join(cells) + " |"
+        for cells in (header, ["---"] * 8, *rows))
+    record = _record(
+        0, "#/tables/0", 3, text=text,
+        content_type="table", content_source="table")
+    record["metadata"].update(table_rows=len(rows), table_cols=8)
+    return record
+
+
+@pytest.mark.parametrize(
+    "data_rows", (2, 1), ids=("worksheet", "page-break-continuation"))
+def test_stacked_column_header_rows_are_not_native_data_rows(data_rows):
+    report = _build(
+        [_worksheet_record(data_rows)],
+        {"tables": [_stacked_header_worksheet(data_rows)]})
+
+    assert report["status"] == "pass"
+    assert report["table_retrieval"]["issues"] == {}
+
+
+@pytest.mark.parametrize(
+    "data_rows", (2, 1), ids=("worksheet", "page-break-continuation"))
+def test_stacked_header_band_published_as_data_row_is_rejected(data_rows):
+    report = _build(
+        [_worksheet_record(data_rows, flattened=False)],
+        {"tables": [_stacked_header_worksheet(data_rows)]})
+
+    assert report["status"] == "fail"
+    assert report["table_retrieval"]["issues"] == {
+        "source_native_row_count_mismatch": [0]}
+
+
+def _flagged(row: int, *texts: str) -> list[dict]:
+    return [_table_cell(row, col, text, header=True)
+            for col, text in enumerate(texts)]
+
+
+def _unflagged(row: int, *texts: str) -> list[dict]:
+    return [_table_cell(row, col, text) for col, text in enumerate(texts)]
+
+
+_TITLE = [_table_cell(0, 0, "Title", cols=2)]
+_FLAGGED_TITLE = [_table_cell(0, 0, "Title", header=True, cols=2)]
+_BODY = _unflagged(2, "1", "2") + _unflagged(3, "3", "4")
+
+
+@pytest.mark.parametrize(("num_rows", "num_cols", "cells", "expected"), [
+    # One Markdown header row (H == 1): the established rule, unchanged.
+    (4, 2, _flagged(0, "Low", "High") + _unflagged(1, "0", "0") + _BODY,
+     (3, 2)),
+    (4, 2, _unflagged(0, "Low", "High") + _unflagged(1, "0", "0") + _BODY,
+     (3, 2)),
+    (1, 3, _unflagged(0, "Interview", "Research", "Investigation"), (1, 3)),
+    (4, 2, _TITLE + _unflagged(1, "Low", "High") + _BODY, (2, 2)),
+    (4, 2, _FLAGGED_TITLE + _unflagged(1, "Low", "High") + _BODY, (2, 2)),
+    # Cells docling-core's TableCell would reject keep the established rule.
+    (4, 2, [{"column_header": True}] * 2 + _flagged(1, "Low", "High"),
+     (3, 2)),
+    # Stacked headers (H >= 2): only the joined rows are excluded.
+    (4, 8, _stacked_header_worksheet(2)["data"]["table_cells"], (2, 8)),
+    (3, 8, _stacked_header_worksheet(1)["data"]["table_cells"], (1, 8)),
+    (5, 2, _flagged(0, "Plan", "Plan") + _flagged(1, "Low", "High")
+     + _flagged(2, "Min", "Max") + _unflagged(3, "1", "2")
+     + _unflagged(4, "3", "4"), (2, 2)),
+    # A flagged title over flagged sub-headers: old and new values coincide.
+    (4, 2, _FLAGGED_TITLE + _flagged(1, "Low", "High") + _BODY, (2, 2)),
+    # Flags starting below row 0 (H == 0): a blank header over every row.
+    (4, 2, _unflagged(0, "Note", "Detail") + _flagged(1, "Low", "High")
+     + _BODY, (4, 2)),
+    (4, 2, _TITLE + _flagged(1, "Low", "High") + _BODY, (4, 2)),
+], ids=(
+    "one-header-row", "no-flags", "headerless-single-row",
+    "full-width-title", "flagged-full-width-title", "malformed-cells",
+    "worksheet", "page-break-continuation", "three-stacked-rows",
+    "flagged-title-over-sub-headers", "flags-start-below-row-0",
+    "title-over-flagged-row",
+))
+def test_source_table_dimensions_exclude_docling_header_rows(
+        num_rows, num_cols, cells, expected):
+    document = {"tables": [{
+        "self_ref": "#/tables/0",
+        "data": {"num_rows": num_rows, "num_cols": num_cols,
+                 "table_cells": copy.deepcopy(cells)},
+    }]}
+
+    assert quality_core._source_table_dimensions(document) == {
+        "#/tables/0": expected}
+
+
 def test_page_regression_is_a_hard_failure():
     document = {"texts": [
         _source_item("#/texts/0", 2, text="First"),
