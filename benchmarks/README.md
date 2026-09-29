@@ -7,9 +7,10 @@ fresh-process repetitions.
 
 ## Provenance
 
-Both current reports were generated from the clean docling-core dependency
-source checkpoint `13f3b5d777518e5cbd102580231a55684a68785f` (tree
-`559f33ec824dd6ac989d07c63c426f42f55bcab5`), the fifth of a stacked series
+Both current reports were generated from the clean ML/runtime
+advisory-promotion source checkpoint
+`8c12135621caff4d4dea6829e3943ca245d28f1e` (tree
+`1098ecb3065794cffbe8f095f11f31b00614c5d3`), the sixth of a stacked series
 of one-domain dependency updates on `main` after the history-preserving
 merge of #121 (`602bec1`). That source contains everything through the Task
 0.8 static-security merge `e34103f` plus the local OCR accuracy, retry and
@@ -28,9 +29,9 @@ three shards), pytest-xdist for the unit lanes, gradio import guards in
 seven OCR review test modules, FlagEmbedding 1.4.2 for Transformers 5
 reranking and the fresh-OCR token fidelity fixes, followed by stacked
 one-domain dependency updates for vector stores, Service/UI, test-audit
-tooling, ML/runtime and docling-core. The lock changes add pytest-xdist
-3.8.0 and execnet 2.1.2 to `requirements-test.lock` and
-`requirements-smoke.lock` and move FlagEmbedding from 1.4.0 to 1.4.2 in
+tooling, ML/runtime, docling-core and ML advisory promotions. The lock
+changes add pytest-xdist 3.8.0 and execnet 2.1.2 to `requirements-test.lock`
+and `requirements-smoke.lock` and move FlagEmbedding from 1.4.0 to 1.4.2 in
 `requirements-core.lock` and `requirements-full.lock`; the stacked
 vector-stores update moves qdrant-client from 1.19.0 to 1.19.1 and
 onnxruntime from 1.29.0 to 1.30.0 (CPython 3.11+) in its mapped locks; the
@@ -39,10 +40,12 @@ gradio-client 2.7.1) and uvicorn from 0.52.4 to 0.54.0; the stacked
 test-audit tooling update moves uv from 0.12.5 to 0.12.20 and ruff from
 0.16.3 to 0.16.9; the stacked ML/runtime update moves torch to 2.14.0,
 torchvision to 0.29.0, sentence-transformers to 6.1.0 and tqdm to 4.70.1;
-the stacked docling-core update moves docling-core from 2.92.0 to 2.99.0; no
-model lock changed. The executing environments were synchronized with
-repository-pinned uv 0.12.20 against the exact CPU application/test lock
-union plus its retained bootstrapper:
+the stacked docling-core update moves docling-core from 2.92.0 to 2.99.0;
+the stacked ML/runtime advisory promotion moves transformers to 5.16.1
+(tokenizers 0.23.2), datasets to 5.0.1 and aiohttp to 3.14.3; no model lock
+changed. The executing environments were synchronized with repository-pinned
+uv 0.12.20 against the exact CPU application/test lock union plus its
+retained bootstrapper:
 
 - `requirements-full.lock`
 - `requirements-test.lock`
@@ -57,8 +60,8 @@ marker-resolved distributions before generation.
 
 | Platform | Runtime | Report | Bytes | File SHA-256 | Embedded report SHA-256 |
 |---|---:|---|---:|---|---|
-| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,085 | `6041e82a6557c2191f65c96b7093b578e393a112f6d103adc9eb879b75f1deeb` | `3c6e9d62a7b2d8747c52a40efbb6d9610c43e6e8054c8560a145d283701af5bc` |
-| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,474 | `76cb7521ffb77b1ed46a46ba420850c6f156903a87569bd2d85e7c8f66492a7c` | `cb2272d455e345d01fed939df74d3155fd5633a522f7a0758db083f604193066` |
+| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,082 | `c560f04452041049d212eecb5968fe52d0456591ef59ed2d6bbd068cfcdb0f4d` | `dbe60540f15dcfd63c841fd6690c7d2c2a5bb7764ffdbde3f048c7fc0344e158` |
+| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,478 | `48ae6802382a3d7b17740553326fa0aeead22b8203e60823ca0dc3cf9b085093` | `4a7f5d633589bff45ba1e7c6bc419ae204441d802797c46daa42a26e9fdb655c` |
 
 The reports attest the same source commit, clean-worktree state, tracked-diff
 digest, eight LF and `HEAD`-identical dependency/model-lock inputs, authoritative
@@ -276,6 +279,15 @@ docling-core dependency source `13f3b5d` moves docling-core alone from
 2.92.0 to 2.99.0 (docling stays at 2.121.0), lifting the macOS transformers
 cap that blocks the transformers advisory fix, and supersedes the `e579090`
 pair for its own pull request.
+The `13f3b5d` pair (gate-only child `d0800ea`) passed the hosted CI
+promotion gate on [PR
+#126](https://github.com/toddlar00/rag-pipeline/pull/126). The stacked
+ML/runtime advisory-promotion source `8c12135` promotes transformers,
+datasets and aiohttp to governed direct inputs to take their advisory fixes
+(transformers 5.16.1, capped below 5.17 because 5.17 removed a helper the
+pinned Nomic embedding code calls; datasets 5.0.1; aiohttp 3.14.3), adds a
+guard test and refreshes the inventory, and supersedes the `13f3b5d` pair
+for its own pull request.
 The current reports above
 bind
 that exact clean source and each passes an independent complete

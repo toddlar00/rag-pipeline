@@ -1551,6 +1551,15 @@ docling-core dependency source `13f3b5d` moves docling-core alone from
 2.92.0 to 2.99.0 (docling stays at 2.121.0), lifting the macOS transformers
 cap that blocks the transformers advisory fix, and supersedes the `e579090`
 pair for its own pull request.
+The `13f3b5d` pair (gate-only child `d0800ea`) passed the hosted CI
+promotion gate on [PR
+#126](https://github.com/toddlar00/rag-pipeline/pull/126). The stacked
+ML/runtime advisory-promotion source `8c12135` promotes transformers,
+datasets and aiohttp to governed direct inputs to take their advisory fixes
+(transformers 5.16.1, capped below 5.17 because 5.17 removed a helper the
+pinned Nomic embedding code calls; datasets 5.0.1; aiohttp 3.14.3), adds a
+guard test and refreshes the inventory, and supersedes the `13f3b5d` pair
+for its own pull request.
 Its Windows/Linux
 pair (independent local same-platform comparisons passed) is that branch's
 candidate; its hosted checks and exact-SHA record are pending, and the

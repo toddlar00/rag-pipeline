@@ -14,7 +14,7 @@ updates:
       vector-stores:
         patterns: ["chromadb", "onnxruntime", "qdrant-client"]
       ml-runtime:
-        patterns: ["einops", "flagembedding", "numpy", "rank-bm25", "sentence-transformers", "torch", "torchvision", "tqdm"]
+        patterns: ["aiohttp", "datasets", "einops", "flagembedding", "numpy", "rank-bm25", "sentence-transformers", "torch", "torchvision", "tqdm", "transformers"]
       service-ui:
         patterns: ["fastapi", "gradio", "uvicorn"]
       provider-transport:
