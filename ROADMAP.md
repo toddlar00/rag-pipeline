@@ -1642,6 +1642,13 @@ The stacked supply-chain renewal source `01adb4f` (owner-authorized on
 2026-12-27, records time-boxed acceptances for the unpatched accelerate and
 chromadb advisories, changes no dependency or lock, and supersedes the
 `3e23b50` pair for its own pull request.
+The `01adb4f` pair (gate-only child `125cb6a`) passed every hosted check on
+[PR #130](https://github.com/toddlar00/rag-pipeline/pull/130), including
+both networked supply-chain jobs, and #122 to #130 merged into `main` in
+order (`e8b7e41`, `ac997dc`, `94c2c47`, `049a57e`, `0a3b7f1`, `ca9c6df`,
+`a18e7fc`, `18e9221`, `1cffc58`). The post-merge documentation source
+`da13c4c` records the integrated series and its follow-ups in the README and
+ROADMAP, changes no dependency or lock, and supersedes the `01adb4f` pair.
 Its Windows/Linux
 pair (independent local same-platform comparisons passed) is that branch's
 candidate; its hosted checks and exact-SHA record are pending, and the
