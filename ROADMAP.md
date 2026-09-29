@@ -1363,6 +1363,25 @@ read by fresh layout-aware OCR of an image-only derivative, using
     in the tort-law casebook (PDF p.881) would therefore fail the row
     check. For now it is published as body text, so the check does not
     run on it.
+  - *Soft-hyphen item seam (private tort-law casebook).* The native text
+    layer spells some line-end hyphens as U+002D U+00AD. Where Docling
+    ended a list item there and the next paragraph continued the word,
+    the chunker joined the two items with a line break. Source-bound
+    normalization's `spaced_hyphen` rule joins a plain `x-` line-break `y`
+    item seam as `x-y`, but the soft hyphen blocked it. The fidelity audit
+    then deleted the soft hyphen and dehyphenated across the break, reading
+    one token that neither item owns: 1 output and 2 source coverage
+    issues. `_join_soft_hyphen_item_seams` now rewrites exactly such a
+    seam between consecutive text-bearing items to `x-y`, keeping both
+    tokens. It is failing-only: it fires only when the fused token is not
+    a token of any source text, marker or oracle in the document, and it
+    skips a pair that shares one recovery oracle. The book has one other
+    item that ends this way, and a native recovery group already rebuilds
+    its pair; no READY h26 run has one.
+    - Follow-up: `_SPACED_HYPHEN_RE` matches only ASCII letters and digits,
+      but the audit dehyphenates between any Unicode letters. A plain item
+      seam between non-ASCII letters (`é-` line-break `y`) would therefore
+      fail the same way. Neither h26 nor the casebook has one.
   - *Durable-job manager writes on Windows.* The advisory heartbeat now
     tolerates transient replace failures (WinError 5, 32 or 33) for up to
     60 seconds. The manager's other writes still fail on the first such
