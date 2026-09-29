@@ -1712,6 +1712,12 @@ contract test of [PR
 it pins the Transformers names the pinned Nomic embedding code uses in
 `tests/test_embedding_runtime_compat.py`, changes no dependency or lock, and
 supersedes the `da6540d` pair.
+An independent review of the `28ba800` pair's pull request
+([#136](https://github.com/toddlar00/rag-pipeline/pull/136)) approved it
+with nits. The review-fix source `8e0b2a6` makes the contract derivation
+fail closed on module imports and computed attribute names, tracks
+definitions per class, re-derives over every pinned remote-code file, adds a
+dependency-free derivation test, and supersedes the `28ba800` pair.
 Its Windows/Linux
 pair (independent local same-platform comparisons passed) is that branch's
 candidate; its hosted checks and exact-SHA record are pending, and the

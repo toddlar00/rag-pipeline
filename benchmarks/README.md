@@ -8,8 +8,8 @@ fresh-process repetitions.
 ## Provenance
 
 Both current reports were generated from the clean Nomic contract-test
-source checkpoint `28ba800e3aed2f0931af5aea6e1e538f57921344` (tree
-`a801eb7f1630703bf278705c28da522ec5997134`), a test-only follow-up to a
+source checkpoint `8e0b2a673face5c9a8c20485e3d83d27ab488a60` (tree
+`e0c8424d8753bd1a12d9c30d4384e6bfdc9b1e48`), a test-only follow-up to a
 series of one-domain dependency updates on `main` after the
 history-preserving merges of #121 (`602bec1`), of that series, #122 to #130
 (`1cffc58`), of its documentation follow-up #135 (`9eb6f94`), of the TOC
@@ -67,8 +67,8 @@ marker-resolved distributions before generation.
 
 | Platform | Runtime | Report | Bytes | File SHA-256 | Embedded report SHA-256 |
 |---|---:|---|---:|---|---|
-| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,084 | `c7601ed1ef92b07382776acb696c5bc85de6f42c99c9946fd2c972d7f8481ef5` | `cdbd8208febad3875e0d4e45f39afc8702bca3bf2796004a3865a9270359907a` |
-| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,477 | `c17ce7db3cf21362f6eafdb794a8b73fb71263114694d5d9f41a31064ed2428b` | `4a8be7cd0f41a7a1b27d4e5a7b12eed5d9b54b0fbe77ef1655cee2f2ec7bfa3e` |
+| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,082 | `ed6f327e2dd92ff3399f3ef8c5873121fac43977fa239e04ef097984ca19aace` | `85ae8d4d05c40860f8d87dd762257c506b810956eabf9763177cf2709ec3c740` |
+| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,479 | `9203b6fc46f6ae82a7c0af4eee9455debc41ce5936dcbcd38b19888c02629fcd` | `f171582f752e1b3971a66f27c79a080d546450be287f38d73584ed9cbb8156c9` |
 
 The reports attest the same source commit, clean-worktree state, tracked-diff
 digest, eight LF and `HEAD`-identical dependency/model-lock inputs, authoritative
@@ -339,6 +339,12 @@ contract test of [PR
 it pins the Transformers names the pinned Nomic embedding code uses in
 `tests/test_embedding_runtime_compat.py`, changes no dependency or lock, and
 supersedes the `da6540d` pair.
+An independent review of the `28ba800` pair's pull request
+([#136](https://github.com/toddlar00/rag-pipeline/pull/136)) approved it
+with nits. The review-fix source `8e0b2a6` makes the contract derivation
+fail closed on module imports and computed attribute names, tracks
+definitions per class, re-derives over every pinned remote-code file, adds a
+dependency-free derivation test, and supersedes the `28ba800` pair.
 The current reports above
 bind
 that exact clean source and each passes an independent complete
