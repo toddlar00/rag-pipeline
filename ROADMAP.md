@@ -1469,11 +1469,13 @@ history-preserving, in order, through `1cffc58`.
   - The unit suites never load real models or convert real PDFs, so an ML or
     PDF dependency change also needs a real-model query check and a
     re-conversion check.
-    - `tests/test_embedding_runtime_compat.py` now pins the whole
-      Transformers contract of the pinned Nomic code: every name it imports
-      and every `PreTrainedModel` helper it calls. Wherever the pinned file
-      is in the local model cache, the test re-derives that contract from
-      the byte-verified file.
+    - `tests/test_embedding_runtime_compat.py` now pins the Transformers
+      names the pinned Nomic code uses: every name its remote-code files
+      import and every inherited `PreTrainedModel` helper they call. It pins
+      names only, not call signatures or output fields. Wherever the pinned
+      files are in the local model cache, the test re-derives that list from
+      the byte-verified files, and the derivation fails on module imports and
+      computed attribute names it cannot resolve.
     - A CI job that downloads the pinned models and runs a real embed,
       query and conversion is still an owner decision. It means about 2 GB
       of model downloads or cache, plus changes to the security-pinned
@@ -1707,7 +1709,7 @@ promotion gate on [PR
 `main` as `634c38b`. The test-only source `28ba800` rebases the Nomic
 contract test of [PR
 #136](https://github.com/toddlar00/rag-pipeline/pull/136) onto that merge;
-it pins the pinned Nomic embedding code's whole Transformers contract in
+it pins the Transformers names the pinned Nomic embedding code uses in
 `tests/test_embedding_runtime_compat.py`, changes no dependency or lock, and
 supersedes the `da6540d` pair.
 Its Windows/Linux

@@ -336,7 +336,7 @@ promotion gate on [PR
 `main` as `634c38b`. The test-only source `28ba800` rebases the Nomic
 contract test of [PR
 #136](https://github.com/toddlar00/rag-pipeline/pull/136) onto that merge;
-it pins the pinned Nomic embedding code's whole Transformers contract in
+it pins the Transformers names the pinned Nomic embedding code uses in
 `tests/test_embedding_runtime_compat.py`, changes no dependency or lock, and
 supersedes the `da6540d` pair.
 The current reports above
