@@ -6843,6 +6843,119 @@ def _normalize_source_bound_chunk_text(
             return normalized if observation is None else observation.finish(normalized, attempt)
 
 
+# An item seam whose line-end hyphen a native text layer spelled U+002D
+# U+00AD.  ASCII letters on both sides: ``spaced_hyphen`` joins only ASCII,
+# and the fidelity audit dehyphenates only between letters.
+_SOFT_HYPHEN_ITEM_SEAM_RE = re.compile(
+    r"(?<=[A-Za-z])-\u00ad+[^\S\n]*\n\s*(?=[A-Za-z])")
+_SOFT_HYPHEN_ITEM_END_RE = re.compile(r"[A-Za-z]-\u00ad+\s*\Z")
+_SOFT_HYPHEN_ITEM_START_RE = re.compile(r"\A\s*[A-Za-z]")
+# Labels that keep a chunk published: never tiny, and retained through the
+# text-dependent structural filter.
+_SOFT_HYPHEN_SEAM_LABELS = frozenset(
+    {"text", "list_item", "footnote", "caption"})
+
+
+def _lazy_source_lexical_vocabulary(
+        item_by_ref: dict[str, object],
+        fidelity_oracles: dict[str, dict],
+) -> Callable[[], frozenset[str]]:
+    """Return a memoized reader of every lexical token a source supplies.
+
+    The union of every item's text and list-marker tokens and every fidelity
+    oracle's tokens contains each token the fidelity audit can align an
+    output token with.  It is built once, on first use; only a qualifying
+    soft-hyphen item seam reads it.
+    """
+    lock = _threading.Lock()
+    built: list[frozenset[str]] = []
+
+    def vocabulary() -> frozenset[str]:
+        with lock:
+            if not built:
+                tokens: set[str] = set()
+                for oracle in fidelity_oracles.values():
+                    tokens.update(oracle.get("oracle_lexical_tokens") or ())
+                for item in item_by_ref.values():
+                    tokens.update(_source_fidelity_core.lexical_tokens(
+                        _source_fidelity_item_text(item)))
+                    tokens.update(_source_fidelity_core.lexical_tokens(
+                        str(getattr(item, "marker", "") or "")))
+                built.append(frozenset(tokens))
+            return built[0]
+
+    return vocabulary
+
+
+def _join_soft_hyphen_item_seams(
+        text: str, items: list | None, *,
+        item_text: Callable[[object], str],
+        fidelity_oracles: dict[str, dict],
+        source_vocabulary: Callable[[], frozenset[str]],
+) -> str:
+    """Join an item seam whose line-end hyphen is followed by a soft hyphen.
+
+    Docling's peer merge joins consecutive source items with a line break.
+    Source-bound normalization joins a plain ``x-`` newline ``y`` seam as
+    ``x-y`` (``spaced_hyphen``), which keeps both source tokens, but a soft
+    hyphen after the hyphen blocks that rule.  The fidelity audit deletes the
+    soft hyphen and then dehyphenates across the line break, so it reads one
+    fused token that neither item owns.
+
+    For consecutive text-bearing items with distinct oracles, where the first
+    item's text ends in a letter, a hyphen and soft hyphens and the second's
+    begins with a letter, the only place in ``text`` where the first item's
+    last token meets the second's first token across that seam becomes
+    ``-``.  That is what ``spaced_hyphen`` produces without the soft hyphen.
+
+    Failing-only: the audit fuses every such seam, and the rewrite is made
+    only when the fused token is not a lexical token of any source item,
+    marker or oracle in the document, so no alignment of the record exists
+    today.  The item labels keep the chunk published, so that record is
+    emitted today.  A pair that shares one recovery oracle, a break inside
+    one item and an ambiguous seam are left unchanged.
+    """
+    if "\u00ad" not in text:
+        return text
+    entries = [
+        (str(getattr(item, "self_ref", "") or ""), item)
+        for item in (items or ())
+    ]
+    vocabulary: frozenset[str] | None = None
+    for (left_ref, left), (right_ref, right) in zip(entries, entries[1:]):
+        left_oracle = fidelity_oracles.get(left_ref)
+        right_oracle = fidelity_oracles.get(right_ref)
+        if (left_oracle is None or right_oracle is None
+                or left_ref == right_ref
+                or _doc_item_label(left) not in _SOFT_HYPHEN_SEAM_LABELS
+                or _doc_item_label(right) not in _SOFT_HYPHEN_SEAM_LABELS
+                or left_oracle.get("oracle_group_sha256")
+                == right_oracle.get("oracle_group_sha256")):
+            # A shared recovery oracle owns the pair's text as one unit.
+            continue
+        left_text, right_text = item_text(left), item_text(right)
+        if (_SOFT_HYPHEN_ITEM_END_RE.search(left_text) is None
+                or _SOFT_HYPHEN_ITEM_START_RE.match(right_text) is None):
+            continue
+        last = _source_fidelity_core.lexical_tokens(left_text)[-1:]
+        first = _source_fidelity_core.lexical_tokens(right_text)[:1]
+        seams = [
+            match for match in _SOFT_HYPHEN_ITEM_SEAM_RE.finditer(text)
+            if (_source_fidelity_core.lexical_tokens(
+                    text[:match.start()])[-1:] == last
+                and _source_fidelity_core.lexical_tokens(
+                    text[match.end():])[:1] == first)
+        ]
+        if len(seams) != 1:
+            continue
+        if vocabulary is None:
+            vocabulary = source_vocabulary()
+        if last[0] + first[0] in vocabulary:
+            continue
+        text = text[:seams[0].start()] + "-" + text[seams[0].end():]
+    return text
+
+
 def _strip_headers_footers(text: str) -> str:
     """Remove likely page headers and footers from chunk text.
 
@@ -21811,6 +21924,8 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
      lineage_caption_refs) = _docling_lineage_catalog(dl_doc)
     lineage_fidelity_oracles = _source_fidelity_oracles(
         dl_doc, source_enrichments, prepared_chunks=prepared_chunks)
+    source_lexical_vocabulary = _lazy_source_lexical_vocabulary(
+        lineage_item_by_ref, lineage_fidelity_oracles)
     opaque_fidelity_oracles = {
         ref: dict(oracle)
         for ref, oracle in lineage_fidelity_oracles.items()
@@ -21923,6 +22038,15 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
             source_items=doc_items,
             canonical_text_overrides=source_enrichments.text_overrides,
             text_rebuild_refs=source_enrichments.text_rebuild_refs,
+        )
+        clean = _join_soft_hyphen_item_seams(
+            clean, list(doc_items or []),
+            item_text=lambda item: source_enrichments.text_overrides.get(
+                str(getattr(item, "self_ref", "")),
+                _source_item_text(item),
+            ),
+            fidelity_oracles=lineage_fidelity_oracles,
+            source_vocabulary=source_lexical_vocabulary,
         )
         clean = _restore_source_list_item_markdown_indents(
             clean,
