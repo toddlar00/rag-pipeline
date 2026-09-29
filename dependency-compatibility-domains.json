@@ -13,6 +13,8 @@
       "qdrant-client"
     ],
     "ml-runtime": [
+      "aiohttp",
+      "datasets",
       "einops",
       "flagembedding",
       "numpy",
@@ -20,7 +22,8 @@
       "sentence-transformers",
       "torch",
       "torchvision",
-      "tqdm"
+      "tqdm",
+      "transformers"
     ],
     "service-ui": [
       "fastapi",

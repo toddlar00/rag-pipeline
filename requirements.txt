@@ -37,6 +37,15 @@ onnxruntime>=1.30.0,<2; python_version >= "3.11"
 # Cross-encoder reranker
 FlagEmbedding>=1.4.2,<2
 
+# Transitive ML packages promoted to governed direct inputs so their
+# advisory fixes can be selected: transformers 5.10.0 (PYSEC-2026-3929),
+# datasets 5.0.1 (PYSEC-2026-3716) and aiohttp 3.14.3 (PYSEC-2026-3545).
+# Transformers 5.17 removed PreTrainedModel.get_extended_attention_mask,
+# which the pinned Nomic embedding code calls (tests/test_embedding_runtime_compat.py).
+transformers>=5.10.0,<5.17
+datasets>=5.0.1,<6
+aiohttp>=3.14.3,<4
+
 # BM25 keyword search (hybrid mode)
 rank-bm25>=0.2,<0.3
 

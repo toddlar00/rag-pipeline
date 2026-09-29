@@ -18,6 +18,8 @@ EXPECTED_DEPENDENCY_DOMAINS = {
     "pdf-docling": ["docling", "docling-core", "pymupdf", "pypdfium2"],
     "vector-stores": ["chromadb", "onnxruntime", "qdrant-client"],
     "ml-runtime": [
+        "aiohttp",
+        "datasets",
         "einops",
         "flagembedding",
         "numpy",
@@ -26,6 +28,7 @@ EXPECTED_DEPENDENCY_DOMAINS = {
         "torch",
         "torchvision",
         "tqdm",
+        "transformers",
     ],
     "service-ui": ["fastapi", "gradio", "uvicorn"],
     "provider-transport": ["google-genai", "requests"],
@@ -317,7 +320,7 @@ def test_repository_dependency_domains_cover_every_direct_input_exactly():
         for package in domain_packages
     ]
     assert len(payload["domains"]) == 6
-    assert len(packages) == len(set(packages)) == 27
+    assert len(packages) == len(set(packages)) == 30
 
 
 def test_dependency_domains_reject_unassigned_direct_package(tmp_path):
