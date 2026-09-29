@@ -7,16 +7,17 @@ fresh-process repetitions.
 
 ## Provenance
 
-Both current reports were generated from the clean job-heartbeat hardening
-source checkpoint `da6540d143dadb8c4be0a007cebdb3b4f0d14749` (tree
-`ae7af01aa824b6287423e3848ead7675895163af`), a job-manager hardening
-follow-up to a series of one-domain dependency updates on `main` after the
+Both current reports were generated from the clean Nomic contract-test
+source checkpoint `8e0b2a673face5c9a8c20485e3d83d27ab488a60` (tree
+`e0c8424d8753bd1a12d9c30d4384e6bfdc9b1e48`), a test-only follow-up to a
+series of one-domain dependency updates on `main` after the
 history-preserving merges of #121 (`602bec1`), of that series, #122 to #130
-(`1cffc58`), of its documentation follow-up #135 (`9eb6f94`), and of the TOC
-glyph-leader fix #138 (`a2c5629`). That source contains everything through
-the Task 0.8 static-security merge `e34103f` plus the local OCR accuracy,
-retry and guided-review program, opt-in AI evidence search, the passive
-cleanup audits, the LLM transport and worker-launch repairs, the casebook
+(`1cffc58`), of its documentation follow-up #135 (`9eb6f94`), of the TOC
+glyph-leader fix #138 (`a2c5629`) and of the job-heartbeat hardening #137
+(`634c38b`). That source contains everything through the Task 0.8
+static-security merge `e34103f` plus the local OCR accuracy, retry and
+guided-review program, opt-in AI evidence search, the passive cleanup
+audits, the LLM transport and worker-launch repairs, the casebook
 excerpt/supplement pipeline (including the opt-in OCR angle-classifier and
 interleaved-region-merge flags, the footnote placement replay, the
 split-item duplicate retraction and quality schema 13), four reviewed
@@ -48,9 +49,10 @@ transformers to 5.16.1 (tokenizers 0.23.2), datasets to 5.0.1 and aiohttp to
 cryptography promotion moves cryptography from 49.0.0 to 50.0.1; the stacked
 supply-chain renewal changes no lock; the post-merge documentation changes
 no lock; the TOC glyph-leader fix changes no lock; the job-heartbeat
-hardening changes no lock; no model lock changed. The executing environments
-were synchronized with repository-pinned uv 0.12.20 against the exact CPU
-application/test lock union plus its retained bootstrapper:
+hardening changes no lock; the Nomic contract test changes no lock; no model
+lock changed. The executing environments were synchronized with
+repository-pinned uv 0.12.20 against the exact CPU application/test lock
+union plus its retained bootstrapper:
 
 - `requirements-full.lock`
 - `requirements-test.lock`
@@ -65,8 +67,8 @@ marker-resolved distributions before generation.
 
 | Platform | Runtime | Report | Bytes | File SHA-256 | Embedded report SHA-256 |
 |---|---:|---|---:|---|---|
-| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,083 | `30e7cd0d4bba0773765349c93feb98f7278704f5c35f90eeb4f9f630479005b7` | `076ae7c7c434fad43c8ab1e69b354d7780ed13582e5c3498571b765f2ea7efb4` |
-| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,480 | `614b9e2859868fefab020fa837f9f297bb490b63a167db8004ad4582b7bb39b0` | `0d7ad9d15b3092a626d9e696dcab5cc234c23a6f7f7d18014e986d665d41e3bf` |
+| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,082 | `ed6f327e2dd92ff3399f3ef8c5873121fac43977fa239e04ef097984ca19aace` | `85ae8d4d05c40860f8d87dd762257c506b810956eabf9763177cf2709ec3c740` |
+| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,479 | `9203b6fc46f6ae82a7c0af4eee9455debc41ce5936dcbcd38b19888c02629fcd` | `f171582f752e1b3971a66f27c79a080d546450be287f38d73584ed9cbb8156c9` |
 
 The reports attest the same source commit, clean-worktree state, tracked-diff
 digest, eight LF and `HEAD`-identical dependency/model-lock inputs, authoritative
@@ -328,6 +330,21 @@ the reviewed heartbeat change of [PR
 review approved it with nits, all addressed) onto that merge; it tolerates
 transient Windows replace failures of the advisory heartbeat for a bounded
 time, changes no dependency or lock and supersedes the `e7b60cd` pair.
+The `da6540d` pair (gate-only child `92c92cf`) passed the hosted CI
+promotion gate on [PR
+#137](https://github.com/toddlar00/rag-pipeline/pull/137), which merged into
+`main` as `634c38b`. The test-only source `28ba800` rebases the Nomic
+contract test of [PR
+#136](https://github.com/toddlar00/rag-pipeline/pull/136) onto that merge;
+it pins the Transformers names the pinned Nomic embedding code uses in
+`tests/test_embedding_runtime_compat.py`, changes no dependency or lock, and
+supersedes the `da6540d` pair.
+An independent review of the `28ba800` pair's pull request
+([#136](https://github.com/toddlar00/rag-pipeline/pull/136)) approved it
+with nits. The review-fix source `8e0b2a6` makes the contract derivation
+fail closed on module imports and computed attribute names, tracks
+definitions per class, re-derives over every pinned remote-code file, adds a
+dependency-free derivation test, and supersedes the `28ba800` pair.
 The current reports above
 bind
 that exact clean source and each passes an independent complete

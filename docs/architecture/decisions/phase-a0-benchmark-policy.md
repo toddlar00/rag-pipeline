@@ -11,8 +11,9 @@
   series pairs passed hosted CI on PRs #122 to #130 (merged through
   `1cffc58`), the post-merge documentation pair passed on PR #135 (merged
   through `9eb6f94`), the TOC glyph-leader fix pair passed on PR #138
-  (merged through `a2c5629`), and the job-heartbeat hardening pair at source
-  `da6540d` is pending; exact-head human review and separate R8 owner
+  (merged through `a2c5629`), the job-heartbeat hardening pair passed on PR
+  #137 (merged through `634c38b`), and the Nomic contract-test pair at
+  source `8e0b2a6` is pending; exact-head human review and separate R8 owner
   authorization are not recorded
 - **Milestone:** R10 prerequisite for the R8 pipeline-ownership move
 - **Report schema:** `phase-a0` v3
@@ -144,23 +145,23 @@ gate-only child `32153e9` and merge `376277c`
 Task 0.8 static-security pair at source `8891e1b` repeated it through
 gate-only child `1533164` and merge `e34103f`
 ([PR #107](https://github.com/toddlar00/rag-pipeline/pull/107)). The
-current replacement pair uses the clean job-heartbeat hardening source
-`da6540d143dadb8c4be0a007cebdb3b4f0d14749` (tree
-`ae7af01aa824b6287423e3848ead7675895163af`), a job-manager hardening
-follow-up to a series of one-domain dependency updates, on `main` after the
-merges of the TOC glyph-leader fix #138 (`a2c5629`), the documentation
-follow-up #135 (`9eb6f94`), the dependency series #122 to #130 (`1cffc58`),
-the fresh-OCR fidelity source `1ba9415`, the FlagEmbedding source `ddbef38`,
-the pytest-xdist source `ff5e64f`, the test-time economy source `365de1c`
-and the OCR-program and casebook-excerpt source `29ea76b`; together they
-changed Python source, CI configuration, `.gitattributes`, two test-tooling
-locks (pytest-xdist and execnet in `requirements-test.lock` and
-`requirements-smoke.lock`) and the FlagEmbedding record of
-`requirements-core.lock` and `requirements-full.lock`; the stacked
-dependency updates also change the vector-stores, Service/UI, test-audit
-tooling, ML/runtime, PDF/Docling (docling-core), promoted ML/runtime,
-promoted h2 and promoted cryptography records of their mapped locks, but no
-model lock. It supersedes the
+current replacement pair uses the clean Nomic contract-test source
+`8e0b2a673face5c9a8c20485e3d83d27ab488a60` (tree
+`e0c8424d8753bd1a12d9c30d4384e6bfdc9b1e48`), a test-only follow-up to a
+series of one-domain dependency updates, on `main` after the merges of the
+job-heartbeat hardening #137 (`634c38b`), the TOC glyph-leader fix #138
+(`a2c5629`), the documentation follow-up #135 (`9eb6f94`), the dependency
+series #122 to #130 (`1cffc58`), the fresh-OCR fidelity source `1ba9415`,
+the FlagEmbedding source `ddbef38`, the pytest-xdist source `ff5e64f`, the
+test-time economy source `365de1c` and the OCR-program and casebook-excerpt
+source `29ea76b`; together they changed Python source, CI configuration,
+`.gitattributes`, two test-tooling locks (pytest-xdist and execnet in
+`requirements-test.lock` and `requirements-smoke.lock`) and the
+FlagEmbedding record of `requirements-core.lock` and
+`requirements-full.lock`; the stacked dependency updates also change the
+vector-stores, Service/UI, test-audit tooling, ML/runtime, PDF/Docling
+(docling-core), promoted ML/runtime, promoted h2 and promoted cryptography
+records of their mapped locks, but no model lock. It supersedes the
 earlier `1ae8502` pair, whose child `766feaf` passed both hosted Phase A0
 cells but whose dependency-light unit lanes failed at collection. Source
 `a15232d` then passed both hosted Phase A0 cells on [PR
@@ -296,6 +297,21 @@ the reviewed heartbeat change of [PR
 review approved it with nits, all addressed) onto that merge; it tolerates
 transient Windows replace failures of the advisory heartbeat for a bounded
 time, changes no dependency or lock and supersedes the `e7b60cd` pair.
+The `da6540d` pair (gate-only child `92c92cf`) passed the hosted CI
+promotion gate on [PR
+#137](https://github.com/toddlar00/rag-pipeline/pull/137), which merged into
+`main` as `634c38b`. The test-only source `28ba800` rebases the Nomic
+contract test of [PR
+#136](https://github.com/toddlar00/rag-pipeline/pull/136) onto that merge;
+it pins the Transformers names the pinned Nomic embedding code uses in
+`tests/test_embedding_runtime_compat.py`, changes no dependency or lock, and
+supersedes the `da6540d` pair.
+An independent review of the `28ba800` pair's pull request
+([#136](https://github.com/toddlar00/rag-pipeline/pull/136)) approved it
+with nits. The review-fix source `8e0b2a6` makes the contract derivation
+fail closed on module imports and computed attribute names, tracks
+definitions per class, re-derives over every pinned remote-code file, adds a
+dependency-free derivation test, and supersedes the `28ba800` pair.
 Its Windows and
 Linux CPython 3.12.13 reports were
 generated after the same strict hash-locked synchronization and
@@ -481,15 +497,17 @@ then the stacked provider-transport cryptography-promotion source `3e23b50`,
 then the stacked supply-chain renewal source `01adb4f`,
 then the stacked post-merge documentation source `da13c4c`,
 then the stacked TOC glyph-leader fix source `e7b60cd`,
-then the stacked job-heartbeat hardening source `da6540d`.
+then the stacked job-heartbeat hardening source `da6540d`,
+then the stacked Nomic contract-test source `28ba800`,
+then the stacked Nomic contract-test source `8e0b2a6`.
 Its Windows report
-is 51,083 bytes (file SHA-256
-`30e7cd0d4bba0773765349c93feb98f7278704f5c35f90eeb4f9f630479005b7`;
+is 51,082 bytes (file SHA-256
+`ed6f327e2dd92ff3399f3ef8c5873121fac43977fa239e04ef097984ca19aace`;
 embedded report SHA-256
-`076ae7c7c434fad43c8ab1e69b354d7780ed13582e5c3498571b765f2ea7efb4`).
-Its Linux report is 50,480 bytes (file SHA-256
-`614b9e2859868fefab020fa837f9f297bb490b63a167db8004ad4582b7bb39b0`;
+`85ae8d4d05c40860f8d87dd762257c506b810956eabf9763177cf2709ec3c740`).
+Its Linux report is 50,479 bytes (file SHA-256
+`9203b6fc46f6ae82a7c0af4eee9455debc41ce5936dcbcd38b19888c02629fcd`;
 embedded report SHA-256
-`0d7ad9d15b3092a626d9e696dcab5cc234c23a6f7f7d18014e986d665d41e3bf`).
+`f171582f752e1b3971a66f27c79a080d546450be287f38d73584ed9cbb8156c9`).
 Both use CPython 3.12.13 and pass their complete local same-platform 9×5
 comparisons. Hosted promotion remains pending.

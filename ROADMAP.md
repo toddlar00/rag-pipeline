@@ -1468,7 +1468,18 @@ history-preserving, in order, through `1cffc58`.
     remove each before then.
   - The unit suites never load real models or convert real PDFs, so an ML or
     PDF dependency change also needs a real-model query check and a
-    re-conversion check. CI has neither yet.
+    re-conversion check.
+    - `tests/test_embedding_runtime_compat.py` now pins the Transformers
+      names the pinned Nomic code uses: every name its remote-code files
+      import and every inherited `PreTrainedModel` helper they call. It pins
+      names only, not call signatures or output fields. Wherever the pinned
+      files are in the local model cache, the test re-derives that list from
+      the byte-verified files, and the derivation fails on module imports and
+      computed attribute names it cannot resolve.
+    - A CI job that downloads the pinned models and runs a real embed,
+      query and conversion is still an owner decision. It means about 2 GB
+      of model downloads or cache, plus changes to the security-pinned
+      workflows.
   - Before #123, the Linux Phase A0 environments were synchronized with uv
     0.11.31 rather than the pinned uv. The hash-locked lock union alone
     determines the installed set; pairs from #123 on use the pinned uv on
@@ -1692,6 +1703,21 @@ the reviewed heartbeat change of [PR
 review approved it with nits, all addressed) onto that merge; it tolerates
 transient Windows replace failures of the advisory heartbeat for a bounded
 time, changes no dependency or lock and supersedes the `e7b60cd` pair.
+The `da6540d` pair (gate-only child `92c92cf`) passed the hosted CI
+promotion gate on [PR
+#137](https://github.com/toddlar00/rag-pipeline/pull/137), which merged into
+`main` as `634c38b`. The test-only source `28ba800` rebases the Nomic
+contract test of [PR
+#136](https://github.com/toddlar00/rag-pipeline/pull/136) onto that merge;
+it pins the Transformers names the pinned Nomic embedding code uses in
+`tests/test_embedding_runtime_compat.py`, changes no dependency or lock, and
+supersedes the `da6540d` pair.
+An independent review of the `28ba800` pair's pull request
+([#136](https://github.com/toddlar00/rag-pipeline/pull/136)) approved it
+with nits. The review-fix source `8e0b2a6` makes the contract derivation
+fail closed on module imports and computed attribute names, tracks
+definitions per class, re-derives over every pinned remote-code file, adds a
+dependency-free derivation test, and supersedes the `28ba800` pair.
 Its Windows/Linux
 pair (independent local same-platform comparisons passed) is that branch's
 candidate; its hosted checks and exact-SHA record are pending, and the
