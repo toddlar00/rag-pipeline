@@ -84,7 +84,7 @@ def _commands(target: Path, interpreter: Path) -> dict[str, list[str]]:
     return {
         "create_environment": [str(interpreter), "-c", "import sys,venv; assert sys.version_info[:2] == (3,12); venv.EnvBuilder(with_pip=True).create(sys.argv[1])", str(target)],
         "bootstrap": [str(python), "-m", "pip", "--isolated", "install", "--require-hashes", "-r", str(ROOT / LOCKS[2])],
-        "verify_installer": [str(python), "-c", "import importlib.metadata as m; assert m.version('uv') == '0.12.5'; print('uv 0.12.5')"],
+        "verify_installer": [str(python), "-c", "import importlib.metadata as m; assert m.version('uv') == '0.12.20'; print('uv 0.12.20')"],
         "sync": [str(uv), "--no-config", "pip", "sync", "--python", str(python), "--strict", "--torch-backend", "cpu",
                  "--require-hashes", "--link-mode", "copy", "--no-python-downloads", *(str(ROOT / name) for name in LOCKS)],
         "check": [str(uv), "--no-config", "pip", "check", "--python", str(python)],

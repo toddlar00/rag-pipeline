@@ -7,37 +7,39 @@ fresh-process repetitions.
 
 ## Provenance
 
-Both current reports were generated from the clean Service/UI dependency
-source checkpoint `eccc146f9da19e5dfdbbb209de3a319e0109d2b1` (tree
-`3d91e22d481a04c663d5694d5a9ed8733105d232`), the second of a stacked series
-of one-domain dependency updates on `main` after the history-preserving
-merge of #121 (`602bec1`). That source contains everything through the Task
-0.8 static-security merge `e34103f` plus the local OCR accuracy, retry and
-guided-review program, opt-in AI evidence search, the passive cleanup
-audits, the LLM transport and worker-launch repairs, the casebook
-excerpt/supplement pipeline (including the opt-in OCR angle-classifier and
-interleaved-region-merge flags, the footnote placement replay, the
-split-item duplicate retraction and quality schema 13), four reviewed
-architecture-inventory refreshes, the POSIX symlinked-interpreter identity
-fix, an LF attribute for top-level test fixtures, dependency-light test
-guards, a Python 3.10/3.11-tolerant import-guard test, a 60-minute Windows
-unit-lane timeout and the test-time economy changes (a session-shared
-architecture inventory, an indexed inventory builder, cached lock-record
-parsing and executed-source digests, and a Windows unit lane split into
-three shards), pytest-xdist for the unit lanes, gradio import guards in
-seven OCR review test modules, FlagEmbedding 1.4.2 for Transformers 5
-reranking and the fresh-OCR token fidelity fixes, followed by stacked
-one-domain dependency updates for vector stores and Service/UI. The lock
-changes add pytest-xdist 3.8.0 and execnet 2.1.2 to `requirements-test.lock`
-and `requirements-smoke.lock` and move FlagEmbedding from 1.4.0 to 1.4.2 in
-`requirements-core.lock` and `requirements-full.lock`; the stacked
-vector-stores update moves qdrant-client from 1.19.0 to 1.19.1 and
-onnxruntime from 1.29.0 to 1.30.0 (CPython 3.11+) in its mapped locks; the
-stacked Service/UI update moves gradio from 6.25.0 to 6.28.0 (with
-gradio-client 2.7.1) and uvicorn from 0.52.4 to 0.54.0; no model lock
-changed. The executing environments were synchronized with repository-pinned
-uv 0.12.5 against the exact CPU application/test lock union plus its
-retained bootstrapper:
+Both current reports were generated from the clean test-audit tooling
+dependency source checkpoint `c11099b569da9f6e35790e49721170dfb3079bd1`
+(tree `8b2736a4db1da93178fa2ec44612ca27baa40c92`), the third of a stacked
+series of one-domain dependency updates on `main` after the
+history-preserving merge of #121 (`602bec1`). That source contains
+everything through the Task 0.8 static-security merge `e34103f` plus the
+local OCR accuracy, retry and guided-review program, opt-in AI evidence
+search, the passive cleanup audits, the LLM transport and worker-launch
+repairs, the casebook excerpt/supplement pipeline (including the opt-in OCR
+angle-classifier and interleaved-region-merge flags, the footnote placement
+replay, the split-item duplicate retraction and quality schema 13), four
+reviewed architecture-inventory refreshes, the POSIX symlinked-interpreter
+identity fix, an LF attribute for top-level test fixtures, dependency-light
+test guards, a Python 3.10/3.11-tolerant import-guard test, a 60-minute
+Windows unit-lane timeout and the test-time economy changes (a
+session-shared architecture inventory, an indexed inventory builder, cached
+lock-record parsing and executed-source digests, and a Windows unit lane
+split into three shards), pytest-xdist for the unit lanes, gradio import
+guards in seven OCR review test modules, FlagEmbedding 1.4.2 for
+Transformers 5 reranking and the fresh-OCR token fidelity fixes, followed by
+stacked one-domain dependency updates for vector stores, Service/UI and
+test-audit tooling. The lock changes add pytest-xdist 3.8.0 and execnet
+2.1.2 to `requirements-test.lock` and `requirements-smoke.lock` and move
+FlagEmbedding from 1.4.0 to 1.4.2 in `requirements-core.lock` and
+`requirements-full.lock`; the stacked vector-stores update moves
+qdrant-client from 1.19.0 to 1.19.1 and onnxruntime from 1.29.0 to 1.30.0
+(CPython 3.11+) in its mapped locks; the stacked Service/UI update moves
+gradio from 6.25.0 to 6.28.0 (with gradio-client 2.7.1) and uvicorn from
+0.52.4 to 0.54.0; the stacked test-audit tooling update moves uv from 0.12.5
+to 0.12.20 and ruff from 0.16.3 to 0.16.9; no model lock changed. The
+executing environments were synchronized with repository-pinned uv 0.12.20
+against the exact CPU application/test lock union plus its retained
+bootstrapper:
 
 - `requirements-full.lock`
 - `requirements-test.lock`
@@ -52,8 +54,8 @@ marker-resolved distributions before generation.
 
 | Platform | Runtime | Report | Bytes | File SHA-256 | Embedded report SHA-256 |
 |---|---:|---|---:|---|---|
-| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,086 | `5286f0f8ed700920656df46e64d884b0bc927bd9e1b9e8a237a3164d8c6a0f34` | `ed8ac3b3f39fede8b7f2ba69025c4ab617427e5c7ab71d18f2e1039c5fd8981b` |
-| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,478 | `96675a9caa9520582ac1baa2b56d7bec7ee3f039920ba81331695ce650b6983e` | `a8774f71db6df605db0e023bab1374c1569c2cfae7232d17b303d6602947c7a8` |
+| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,083 | `bfc3839950cd075ea5ac77c45d71ce27b01cd7330cc16edfabc48a37d6d7edd1` | `9bfd38a84998c1413894e342b0d6d0b4731b41051345e4ee4fae2df1418b1b46` |
+| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,482 | `24947d4d1cb979ccc697acb2121f2e0dd53220e83a2cf10d251b6a0bb63265ca` | `6c3bcace97931204da1d07a712f97e056c2f2657e77feab6e2d41a6b164bc09d` |
 
 The reports attest the same source commit, clean-worktree state, tracked-diff
 digest, eight LF and `HEAD`-identical dependency/model-lock inputs, authoritative
@@ -249,6 +251,11 @@ gradio 6.28.0 and uvicorn 0.54.0) adapts two test harness assumptions to
 Gradio 6.28 (an event id for streamed `process_api` runs and decoded file
 URLs), synchronizes both platforms with the pinned uv 0.12.5, and supersedes
 the `db030f1` pair for its own pull request.
+The stacked test-audit tooling dependency source `c11099b` (superseding
+Dependabot #111: uv 0.12.20, the pinned lock resolver, and ruff 0.16.9)
+moves the OCR installer's uv check, its documentation and the
+static-security ruff pin with the locks, and supersedes the `eccc146` pair
+for its own pull request.
 The current reports above
 bind
 that exact clean source and each passes an independent complete

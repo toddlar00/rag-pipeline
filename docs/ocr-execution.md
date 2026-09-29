@@ -21,7 +21,7 @@ python tools/install_ocr_environment.py --python C:/path/to/python312/python.exe
 ```
 
 The fixed recipe creates a private environment, bootstraps the unchanged
-hash-locked lock tools, checks `uv==0.12.5`, and runs `uv --no-config pip sync`
+hash-locked lock tools, checks `uv==0.12.20`, and runs `uv --no-config pip sync`
 with `--strict --torch-backend cpu --require-hashes --link-mode copy` against
 all three committed full, test, and lock-tool locks. It then runs dependency
 consistency checking and records the complete installed distribution inventory.

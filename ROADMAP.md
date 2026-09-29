@@ -1529,6 +1529,11 @@ gradio 6.28.0 and uvicorn 0.54.0) adapts two test harness assumptions to
 Gradio 6.28 (an event id for streamed `process_api` runs and decoded file
 URLs), synchronizes both platforms with the pinned uv 0.12.5, and supersedes
 the `db030f1` pair for its own pull request.
+The stacked test-audit tooling dependency source `c11099b` (superseding
+Dependabot #111: uv 0.12.20, the pinned lock resolver, and ruff 0.16.9)
+moves the OCR installer's uv check, its documentation and the
+static-security ruff pin with the locks, and supersedes the `eccc146` pair
+for its own pull request.
 Its Windows/Linux
 pair (independent local same-platform comparisons passed) is that branch's
 candidate; its hosted checks and exact-SHA record are pending, and the
