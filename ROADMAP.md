@@ -1318,10 +1318,16 @@ read by fresh layout-aware OCR of an image-only derivative, using
       before a roman-numbered row, stays discarded unless the gate fires.
     - The remaining 6 issues come from a separate reading-order defect on
       one page. Docling put the page's lower block before its upper block,
-      and the existing source reading-order repair does not recover it.
-      The likely reasons are a one-character right-margin item that makes
-      the blocks overlap, and a late block with more items than the
-      fallback accepts.
+      and the existing source reading-order repair did not recover it. A
+      detached soft hyphen (one item with zero lexical tokens) sat beside
+      a lower-block paragraph but was captured with the upper block, and
+      that made the blocks overlap. Branch
+      `agent/p954-tokenless-glyph-rotation` addresses it. When only such
+      tokenless glyphs block the rotation, both the repair and its lineage
+      mirror now rotate the page intact. The page must still provably fail
+      reading order without the repair. In memory, only that page changes
+      in the book, its 6 records bind, and the 19 READY h26 runs are
+      unchanged.
   - *Durable-job manager writes on Windows.* The advisory heartbeat now
     tolerates transient replace failures (WinError 5, 32 or 33) for up to
     60 seconds. The manager's other writes still fail on the first such
