@@ -7,13 +7,12 @@ fresh-process repetitions.
 
 ## Provenance
 
-Both current reports were generated from the clean provider-transport
-cryptography-promotion source checkpoint
-`3e23b50887eaa227f3e3caaa1ada540659f74d4a` (tree
-`e2418cb5c1edf871847d98a979d9742ffcf9a5ae`), the eighth of a stacked series
-of one-domain dependency updates on `main` after the history-preserving
-merge of #121 (`602bec1`). That source contains everything through the Task
-0.8 static-security merge `e34103f` plus the local OCR accuracy, retry and
+Both current reports were generated from the clean supply-chain renewal
+source checkpoint `01adb4f59933b8a5ca6975b6930974f8c60aea58` (tree
+`ca81fcf4df0a808f416a1a10b101712b943267e8`), the last of a stacked series of
+one-domain dependency updates on `main` after the history-preserving merge
+of #121 (`602bec1`). That source contains everything through the Task 0.8
+static-security merge `e34103f` plus the local OCR accuracy, retry and
 guided-review program, opt-in AI evidence search, the passive cleanup
 audits, the LLM transport and worker-launch repairs, the casebook
 excerpt/supplement pipeline (including the opt-in OCR angle-classifier and
@@ -29,10 +28,10 @@ three shards), pytest-xdist for the unit lanes, gradio import guards in
 seven OCR review test modules, FlagEmbedding 1.4.2 for Transformers 5
 reranking and the fresh-OCR token fidelity fixes, followed by stacked
 one-domain dependency updates for vector stores, Service/UI, test-audit
-tooling, ML/runtime, docling-core, ML advisory promotions, h2 and
-cryptography. The lock changes add pytest-xdist 3.8.0 and execnet 2.1.2 to
-`requirements-test.lock` and `requirements-smoke.lock` and move
-FlagEmbedding from 1.4.0 to 1.4.2 in `requirements-core.lock` and
+tooling, ML/runtime, docling-core, ML advisory promotions, h2, cryptography
+and supply-chain policy renewals. The lock changes add pytest-xdist 3.8.0
+and execnet 2.1.2 to `requirements-test.lock` and `requirements-smoke.lock`
+and move FlagEmbedding from 1.4.0 to 1.4.2 in `requirements-core.lock` and
 `requirements-full.lock`; the stacked vector-stores update moves
 qdrant-client from 1.19.0 to 1.19.1 and onnxruntime from 1.29.0 to 1.30.0
 (CPython 3.11+) in its mapped locks; the stacked Service/UI update moves
@@ -44,10 +43,10 @@ and tqdm to 4.70.1; the stacked docling-core update moves docling-core from
 2.92.0 to 2.99.0; the stacked ML/runtime advisory promotion moves
 transformers to 5.16.1 (tokenizers 0.23.2), datasets to 5.0.1 and aiohttp to
 3.14.3; the stacked h2 promotion moves h2 from 4.3.0 to 4.4.1; the stacked
-cryptography promotion moves cryptography from 49.0.0 to 50.0.1; no model
-lock changed. The executing environments were synchronized with
-repository-pinned uv 0.12.20 against the exact CPU application/test lock
-union plus its retained bootstrapper:
+cryptography promotion moves cryptography from 49.0.0 to 50.0.1; the stacked
+supply-chain renewal changes no lock; no model lock changed. The executing
+environments were synchronized with repository-pinned uv 0.12.20 against the
+exact CPU application/test lock union plus its retained bootstrapper:
 
 - `requirements-full.lock`
 - `requirements-test.lock`
@@ -62,8 +61,8 @@ marker-resolved distributions before generation.
 
 | Platform | Runtime | Report | Bytes | File SHA-256 | Embedded report SHA-256 |
 |---|---:|---|---:|---|---|
-| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,083 | `852ca5bfc52b62fa7ab38f287c95b04004211b3fcd31474f767eb0f2ae5e2fb8` | `99cc577a7c654bfa142116f5e06214858d6cb18cd82569f80d5dce930239a8e3` |
-| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,475 | `0ac853b6b1364130caedcaa8f868343aeff7040e4c15faa8c2ff58e3fee15302` | `26b31092d5d6cf66f77df9a329e44e3b3986875e55a515abdda89d142aaad65f` |
+| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,086 | `8a9d2e6de78828ccb3188a15d403fbacc28b45949f0cd3cd3a153f7f288eea54` | `724bd7ff87f7624a73999ef07c119b02b53ee4f578b80df5d189932502e5e3f5` |
+| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,478 | `54950e0b67170f2cb9b2f2db07560cb92f03ffabd0043634138e72095ecff3a0` | `c7679769067e0368c00e548ff9cfbe84b932c75a4298201b937fe838529f0b00` |
 
 The reports attest the same source commit, clean-worktree state, tracked-diff
 digest, eight LF and `HEAD`-identical dependency/model-lock inputs, authoritative
@@ -296,6 +295,11 @@ governed direct input to take its advisory fix (4.4.1) and supersedes the
 The stacked provider-transport cryptography-promotion source `3e23b50`
 promotes cryptography to a governed direct input to take its advisory fix
 (50.0.1) and supersedes the `21d66eb` pair for its own pull request.
+The stacked supply-chain renewal source `01adb4f` (owner-authorized on
+2026-09-28) renews the expired license and vulnerability exceptions through
+2026-12-27, records time-boxed acceptances for the unpatched accelerate and
+chromadb advisories, changes no dependency or lock, and supersedes the
+`3e23b50` pair for its own pull request.
 The current reports above
 bind
 that exact clean source and each passes an independent complete
