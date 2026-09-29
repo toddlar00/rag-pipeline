@@ -8,9 +8,9 @@
   on PR #118, the FlagEmbedding pair at `ddbef38` passed on PR #119 (all
   four merged through `ab6e159`), and the fresh-OCR fidelity pair at
   `1ba9415` passed on PR #121 (merged through `602bec1`); the stacked
-  one-domain dependency pair at source `3e23b50` (provider-transport
-  cryptography-promotion) is pending; exact-head human review and separate
-  R8 owner authorization are not recorded
+  one-domain dependency pair at source `01adb4f` (supply-chain renewal) is
+  pending; exact-head human review and separate R8 owner authorization are
+  not recorded
 - **Milestone:** R10 prerequisite for the R8 pipeline-ownership move
 - **Report schema:** `phase-a0` v3
 
@@ -141,11 +141,11 @@ gate-only child `32153e9` and merge `376277c`
 Task 0.8 static-security pair at source `8891e1b` repeated it through
 gate-only child `1533164` and merge `e34103f`
 ([PR #107](https://github.com/toddlar00/rag-pipeline/pull/107)). The
-current replacement pair uses the clean provider-transport
-cryptography-promotion source `3e23b50887eaa227f3e3caaa1ada540659f74d4a`
-(tree `e2418cb5c1edf871847d98a979d9742ffcf9a5ae`), the eighth of a stacked
-series of one-domain dependency updates, on `main` after the merges of the
-fresh-OCR fidelity source `1ba9415`, the FlagEmbedding source `ddbef38`, the
+current replacement pair uses the clean supply-chain renewal source
+`01adb4f59933b8a5ca6975b6930974f8c60aea58` (tree
+`ca81fcf4df0a808f416a1a10b101712b943267e8`), the last of a stacked series of
+one-domain dependency updates, on `main` after the merges of the fresh-OCR
+fidelity source `1ba9415`, the FlagEmbedding source `ddbef38`, the
 pytest-xdist source `ff5e64f`, the test-time economy source `365de1c` and
 the OCR-program and casebook-excerpt source `29ea76b`; together they changed
 Python source, CI configuration, `.gitattributes`, two test-tooling locks
@@ -262,6 +262,11 @@ governed direct input to take its advisory fix (4.4.1) and supersedes the
 The stacked provider-transport cryptography-promotion source `3e23b50`
 promotes cryptography to a governed direct input to take its advisory fix
 (50.0.1) and supersedes the `21d66eb` pair for its own pull request.
+The stacked supply-chain renewal source `01adb4f` (owner-authorized on
+2026-09-28) renews the expired license and vulnerability exceptions through
+2026-12-27, records time-boxed acceptances for the unpatched accelerate and
+chromadb advisories, changes no dependency or lock, and supersedes the
+`3e23b50` pair for its own pull request.
 Its Windows and
 Linux CPython 3.12.13 reports were
 generated after the same strict hash-locked synchronization and
@@ -443,15 +448,16 @@ then the stacked ML/runtime dependency source `e579090`,
 then the stacked docling-core dependency source `13f3b5d`,
 then the stacked ML/runtime advisory-promotion source `8c12135`,
 then the stacked vector-stores h2-promotion source `21d66eb`,
-then the stacked provider-transport cryptography-promotion source `3e23b50`.
+then the stacked provider-transport cryptography-promotion source `3e23b50`,
+then the stacked supply-chain renewal source `01adb4f`.
 Its Windows report
-is 51,083 bytes (file SHA-256
-`852ca5bfc52b62fa7ab38f287c95b04004211b3fcd31474f767eb0f2ae5e2fb8`;
+is 51,086 bytes (file SHA-256
+`8a9d2e6de78828ccb3188a15d403fbacc28b45949f0cd3cd3a153f7f288eea54`;
 embedded report SHA-256
-`99cc577a7c654bfa142116f5e06214858d6cb18cd82569f80d5dce930239a8e3`).
-Its Linux report is 50,475 bytes (file SHA-256
-`0ac853b6b1364130caedcaa8f868343aeff7040e4c15faa8c2ff58e3fee15302`;
+`724bd7ff87f7624a73999ef07c119b02b53ee4f578b80df5d189932502e5e3f5`).
+Its Linux report is 50,478 bytes (file SHA-256
+`54950e0b67170f2cb9b2f2db07560cb92f03ffabd0043634138e72095ecff3a0`;
 embedded report SHA-256
-`26b31092d5d6cf66f77df9a329e44e3b3986875e55a515abdda89d142aaad65f`).
+`c7679769067e0368c00e548ff9cfbe84b932c75a4298201b937fe838529f0b00`).
 Both use CPython 3.12.13 and pass their complete local same-platform 9×5
 comparisons. Hosted promotion remains pending.
