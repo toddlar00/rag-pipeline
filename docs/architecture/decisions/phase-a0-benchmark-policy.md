@@ -8,9 +8,9 @@
   on PR #118, the FlagEmbedding pair at `ddbef38` passed on PR #119 (all
   four merged through `ab6e159`), and the fresh-OCR fidelity pair at
   `1ba9415` passed on PR #121 (merged through `602bec1`); the stacked
-  one-domain dependency pair at source `13f3b5d` (docling-core dependency)
-  is pending; exact-head human review and separate R8 owner authorization
-  are not recorded
+  one-domain dependency pair at source `8c12135` (ML/runtime
+  advisory-promotion) is pending; exact-head human review and separate R8
+  owner authorization are not recorded
 - **Milestone:** R10 prerequisite for the R8 pipeline-ownership move
 - **Report schema:** `phase-a0` v3
 
@@ -141,9 +141,9 @@ gate-only child `32153e9` and merge `376277c`
 Task 0.8 static-security pair at source `8891e1b` repeated it through
 gate-only child `1533164` and merge `e34103f`
 ([PR #107](https://github.com/toddlar00/rag-pipeline/pull/107)). The
-current replacement pair uses the clean docling-core dependency source
-`13f3b5d777518e5cbd102580231a55684a68785f` (tree
-`559f33ec824dd6ac989d07c63c426f42f55bcab5`), the fifth of a stacked series
+current replacement pair uses the clean ML/runtime advisory-promotion source
+`8c12135621caff4d4dea6829e3943ca245d28f1e` (tree
+`1098ecb3065794cffbe8f095f11f31b00614c5d3`), the sixth of a stacked series
 of one-domain dependency updates, on `main` after the merges of the
 fresh-OCR fidelity source `1ba9415`, the FlagEmbedding source `ddbef38`, the
 pytest-xdist source `ff5e64f`, the test-time economy source `365de1c` and
@@ -153,8 +153,8 @@ Python source, CI configuration, `.gitattributes`, two test-tooling locks
 `requirements-smoke.lock`) and the FlagEmbedding record of
 `requirements-core.lock` and `requirements-full.lock`; the stacked
 dependency updates also change the vector-stores, Service/UI, test-audit
-tooling, ML/runtime and PDF/Docling (docling-core) records of their mapped
-locks, but no model lock. It supersedes the
+tooling, ML/runtime, PDF/Docling (docling-core) and promoted ML/runtime
+records of their mapped locks, but no model lock. It supersedes the
 earlier `1ae8502` pair, whose child `766feaf` passed both hosted Phase A0
 cells but whose dependency-light unit lanes failed at collection. Source
 `a15232d` then passed both hosted Phase A0 cells on [PR
@@ -246,6 +246,15 @@ docling-core dependency source `13f3b5d` moves docling-core alone from
 2.92.0 to 2.99.0 (docling stays at 2.121.0), lifting the macOS transformers
 cap that blocks the transformers advisory fix, and supersedes the `e579090`
 pair for its own pull request.
+The `13f3b5d` pair (gate-only child `d0800ea`) passed the hosted CI
+promotion gate on [PR
+#126](https://github.com/toddlar00/rag-pipeline/pull/126). The stacked
+ML/runtime advisory-promotion source `8c12135` promotes transformers,
+datasets and aiohttp to governed direct inputs to take their advisory fixes
+(transformers 5.16.1, capped below 5.17 because 5.17 removed a helper the
+pinned Nomic embedding code calls; datasets 5.0.1; aiohttp 3.14.3), adds a
+guard test and refreshes the inventory, and supersedes the `13f3b5d` pair
+for its own pull request.
 Its Windows and
 Linux CPython 3.12.13 reports were
 generated after the same strict hash-locked synchronization and
@@ -424,15 +433,16 @@ then the stacked vector-stores dependency source `db030f1`,
 then the stacked Service/UI dependency source `eccc146`,
 then the stacked test-audit tooling dependency source `c11099b`,
 then the stacked ML/runtime dependency source `e579090`,
-then the stacked docling-core dependency source `13f3b5d`.
+then the stacked docling-core dependency source `13f3b5d`,
+then the stacked ML/runtime advisory-promotion source `8c12135`.
 Its Windows report
-is 51,085 bytes (file SHA-256
-`6041e82a6557c2191f65c96b7093b578e393a112f6d103adc9eb879b75f1deeb`;
+is 51,082 bytes (file SHA-256
+`c560f04452041049d212eecb5968fe52d0456591ef59ed2d6bbd068cfcdb0f4d`;
 embedded report SHA-256
-`3c6e9d62a7b2d8747c52a40efbb6d9610c43e6e8054c8560a145d283701af5bc`).
-Its Linux report is 50,474 bytes (file SHA-256
-`76cb7521ffb77b1ed46a46ba420850c6f156903a87569bd2d85e7c8f66492a7c`;
+`dbe60540f15dcfd63c841fd6690c7d2c2a5bb7764ffdbde3f048c7fc0344e158`).
+Its Linux report is 50,478 bytes (file SHA-256
+`48ae6802382a3d7b17740553326fa0aeead22b8203e60823ca0dc3cf9b085093`;
 embedded report SHA-256
-`cb2272d455e345d01fed939df74d3155fd5633a522f7a0758db083f604193066`).
+`4a7f5d633589bff45ba1e7c6bc419ae204441d802797c46daa42a26e9fdb655c`).
 Both use CPython 3.12.13 and pass their complete local same-platform 9×5
 comparisons. Hosted promotion remains pending.
