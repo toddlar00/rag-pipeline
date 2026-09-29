@@ -12113,9 +12113,10 @@ def _repair_single_column_body_child_order(
     is too late.  Reorder only a page with a large upward jump whose adjacent
     blocks overlap horizontally (or whose new top block is a centered outline
     marker).  A true two-column transition normally fails both gates.  A
-    detached zero-token glyph alone cannot block an otherwise proven intact
+    zero-token glyph captured in the late run cannot alone block an intact
     rotation; ``heading_lineage.tokenless_glyph_rotation_admitted`` holds that
-    proof for this pass and its validator mirror alike.
+    rule for this pass and its validator mirror alike, and is consulted only
+    for pages both earlier branches leave unrepaired.
 
     Direct body children may be list groups.  Treat each group as an atomic
     node positioned by the union of its single-page descendants; never split
@@ -12326,9 +12327,9 @@ def _repair_single_column_body_child_order(
         elif _heading_lineage.tokenless_glyph_rotation_admitted(
                 [wrap_node(value) for value in prefix],
                 [wrap_node(value) for value in late]):
-            # Only a detached zero-token glyph broke the disjointness proof,
-            # and the captured order provably fails reading order.  Rotate
-            # intact: the glyph keeps its captured run.
+            # Only late-run zero-token glyphs broke the disjointness proof;
+            # the shared rule states its evidence and its limits.  Rotate
+            # intact: each glyph keeps its captured run.
             ordered = [*late, *prefix]
         else:
             continue

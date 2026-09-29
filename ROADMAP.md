@@ -1321,13 +1321,18 @@ read by fresh layout-aware OCR of an image-only derivative, using
       and the existing source reading-order repair did not recover it. A
       detached soft hyphen (one item with zero lexical tokens) sat beside
       a lower-block paragraph but was captured with the upper block, and
-      that made the blocks overlap. Branch
-      `agent/p954-tokenless-glyph-rotation` addresses it. When only such
-      tokenless glyphs block the rotation, both the repair and its lineage
-      mirror now rotate the page intact. The page must still provably fail
-      reading order without the repair. In memory, only that page changes
-      in the book, its 6 records bind, and the 19 READY h26 runs are
-      unchanged.
+      that made the blocks overlap. A follow-up pull request addresses
+      it. When only such glyphs captured with the upper block stop the
+      rotation, both the repair and its lineage mirror now rotate the page
+      intact. The captured order must also invert a horizontally
+      overlapping pair of text items. Only that page changes in the book,
+      its 6 records bind, and the 19 READY h26 runs are unchanged.
+      With the rotation fixed, the casebook's chunking reaches the corpus
+      quality gate. That gate surfaces two separate defects the rotation
+      had masked, and both are follow-ups. One is source-token fidelity on
+      printed pp. 389–390, where two source items share one output record.
+      The other is a table's source-native row-count mismatch on
+      pp. 678–679, which spans two table records.
   - *Durable-job manager writes on Windows.* The advisory heartbeat now
     tolerates transient replace failures (WinError 5, 32 or 33) for up to
     60 seconds. The manager's other writes still fail on the first such

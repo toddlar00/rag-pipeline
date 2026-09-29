@@ -6,8 +6,9 @@ validator mirror ``heading_lineage._ordered_source_refs``) rotates such a page
 intact only when the two captured runs are vertically disjoint.  A line-final
 soft hyphen emitted as its own zero-token text item can sit beside a
 lower-half paragraph yet be captured in the upper-half run, which alone broke
-that proof.  The relaxation ignores such glyphs only when the unrepaired order
-provably fails same-page reading order, and every near miss still refuses.
+that proof.  The relaxation sets aside only such late-run glyphs, only when
+the captured order inverts a token-bearing pair that same-page reading order
+checks, and every near miss (including each boundary) still refuses.
 
 Every fixture is synthetic.
 """
@@ -22,7 +23,7 @@ import rag
 
 
 PAGE = 7
-SOFT_HYPHEN = "­"
+SOFT_HYPHEN = "\N{SOFT HYPHEN}"
 GROUP = "#/groups/0"
 
 
@@ -31,10 +32,12 @@ def _t(index):
 
 
 HDR, A, B, C, D, E, L1, L2, L3, F, G, H, S = (_t(i) for i in range(13))
+NOTE = _t(14)
 # Captured order: prefix run (lower half), then late run (upper half).
 PREFIX = [A, B, C, D]
 LATE = [E, GROUP, F, G, H, S]
 LATE_TEXT = [E, L1, F, G, H, S]
+CAPTURED = [HDR, A, B, C, D, E, L1, L2, L3, F, G, H, S]
 ROTATED = [HDR, E, L1, L2, L3, F, G, H, S, A, B, C, D]
 
 
@@ -176,12 +179,49 @@ def _unexplained_second_glyph(document):
     document["body"]["children"].append({"cref": _t(13)})
 
 
+def _late_item_crosses_prefix_top(document):
+    # A token-bearing late item reaches into the prefix band: the runs are
+    # not disjoint even without the glyph.
+    _bbox(document, L3).update(b=205.0)
+
+
+def _tokenless_heading(document):
+    # Only a plain-text item can be set aside, never a heading.
+    _texts(document)[S]["label"] = "section_header"
+
+
+def _glyph_with_children(document):
+    # Only a childless item can be set aside.
+    _texts(document)[S]["children"] = [{"cref": _t(77)}]
+
+
+def _prefix_run_glyph(document):
+    # A glyph captured with the lower half that reaches above it stays in the
+    # proof, so the ordinary refusal stands.
+    _bbox(document, S).update(t=320.0, b=190.0)
+    document["body"]["children"] = [
+        {"cref": ref} for ref in [HDR, A, S, B, C, D, E, GROUP, F, G, H]]
+
+
+def _glyphs_in_both_runs(document):
+    # The diagnosed late-run glyph stays, but a second glyph captured with
+    # the lower half reaches above it; that one still blocks the proof.
+    document["texts"].append(_item(
+        _t(13), "text", SOFT_HYPHEN, 477.0, 479.4, 320.0, 190.0))
+    document["body"]["children"].insert(2, {"cref": _t(13)})
+
+
 NEAR_MISSES = {
     "observable-glyph": _observable_glyph,
     "glyph-overlaps-paragraph": _glyph_overlaps_paragraph,
     "no-inverted-observable-pair": _no_inverted_observable_pair,
     "late-run-only-glyphs": _late_run_only_glyphs,
     "unexplained-second-glyph": _unexplained_second_glyph,
+    "late-item-crosses-prefix-top": _late_item_crosses_prefix_top,
+    "tokenless-heading": _tokenless_heading,
+    "glyph-with-children": _glyph_with_children,
+    "prefix-run-glyph": _prefix_run_glyph,
+    "glyphs-in-both-runs": _glyphs_in_both_runs,
 }
 
 
@@ -230,6 +270,85 @@ def test_near_misses_still_refuse_in_both_mirrors(change):
 
     assert result == (0, 0)
     assert [child.cref for child in view.body.children] == captured
+    assert _mirror_order(document) == repaired
+
+
+def test_group_members_alone_prove_the_inversion_in_both_mirrors():
+    # With the centred remark moved aside, only list-group members overlap a
+    # prefix paragraph, so each mirror must look inside the group.
+    document = _document()
+    _bbox(document, H).update(l=20.0, r=100.0)
+
+    result, repaired, _ = _repaired_order(document)
+
+    assert result == (1, 10)
+    assert repaired == ROTATED
+    assert _mirror_order(document) == ROTATED
+
+
+def _single_pair_page(clearance):
+    """Only NOTE, ``clearance`` pt above A's top, can prove the inversion.
+
+    The late list and remark move to the margin and B and D start right of
+    A's column, so NOTE over A is the page's one horizontally overlapping
+    token-bearing pair.
+    """
+    document = _document()
+    _no_inverted_observable_pair(document)
+    for ref in (B, D):
+        _bbox(document, ref).update(l=200.0)
+    bottom = _bbox(document, A)["t"] + clearance
+    document["texts"].append(_item(
+        NOTE, "text", "A short synthetic note.", 117.0, 180.9, 220.0, bottom))
+    document["body"]["children"].insert(-1, {"cref": NOTE})
+    return document
+
+
+@pytest.mark.parametrize(("clearance", "admitted"), [
+    (0.4, False), (0.5, True),
+], ids=["0.4pt-refuses", "0.5pt-admits"])
+def test_the_inverted_pair_needs_half_a_point_of_clearance(
+        clearance, admitted):
+    document = _single_pair_page(clearance)
+    captured = [*CAPTURED[:-1], NOTE, S]
+    rotated = [HDR, E, L1, L2, L3, F, G, H, NOTE, S, A, B, C, D]
+
+    result, repaired, _ = _repaired_order(document)
+
+    assert result == ((1, 11) if admitted else (0, 0))
+    assert repaired == (rotated if admitted else captured)
+    assert _mirror_order(document) == repaired
+
+
+@pytest.mark.parametrize(("reach", "admitted"), [
+    (4.0, True), (4.1, False),
+], ids=["4.0pt-admits", "4.1pt-refuses"])
+def test_late_items_may_reach_the_ordinary_tolerance_into_the_prefix(
+        reach, admitted):
+    # The disjointness proof without the glyph keeps the ordinary 4 pt
+    # tolerance: the late list may end at most that far below A's top.
+    document = _document()
+    _bbox(document, L3).update(b=_bbox(document, A)["t"] - reach)
+
+    result, repaired, _ = _repaired_order(document)
+
+    assert result == ((1, 10) if admitted else (0, 0))
+    assert repaired == (ROTATED if admitted else CAPTURED)
+    assert _mirror_order(document) == repaired
+
+
+@pytest.mark.parametrize(("top", "admitted"), [
+    (144.4, True), (144.3, False), (144.0, False),
+], ids=["overlap-0.1pt-admits", "touching-refuses", "gap-0.3pt-refuses"])
+def test_the_glyph_must_overlap_a_prefix_item_vertically(top, admitted):
+    # B's bottom edge is at 144.3; the glyph sits just below it.
+    document = _document()
+    _bbox(document, S).update(t=top, b=top - 9.5)
+
+    result, repaired, _ = _repaired_order(document)
+
+    assert result == ((1, 10) if admitted else (0, 0))
+    assert repaired == (ROTATED if admitted else CAPTURED)
     assert _mirror_order(document) == repaired
 
 

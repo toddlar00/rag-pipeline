@@ -212,40 +212,46 @@ def _observable_boxes(
 def tokenless_glyph_rotation_admitted(
         prefix: Sequence[WrapRunNode], late: Sequence[WrapRunNode],
 ) -> bool:
-    """Return whether only detached tokenless glyphs block an intact rotation.
+    """Return whether only late-run tokenless glyphs block an intact rotation.
 
     Both the pre-chunking repair in ``rag`` and ``_ordered_source_refs``
     consult this only after the ordinary run-disjointness proof and the
-    short-label insertion have both declined a single-wrap page, so every
-    page either of them already decided keeps its decision.
+    short-label insertion have both declined a single-wrap page.  Every page
+    either of them already decided therefore keeps its decision by
+    construction; only a page they left unrepaired can change.
 
     A childless plain-text item with no lexical token (a line-final soft
     hyphen emitted as its own item, for example) registers no page
     occurrence for reading-order fidelity, yet its box alone can break the
-    disjointness proof.  The rotation is admitted only when all hold:
+    disjointness proof.  Only such a glyph captured in the late run is set
+    aside; a prefix-run glyph stays in the proof.  The rotation is admitted
+    only when all hold:
 
-    * the proof holds over the order-observable children, and each run keeps
-      at least one of them;
-    * an order-observable text/list item of the late run horizontally
-      overlaps one of the prefix run and lies strictly above it, so the
-      captured order provably fails same-page reading order; and
-    * every excluded glyph vertically overlaps an order-observable prefix
-      text/list item without the fidelity horizontal overlap, so it is a
-      detached sidecar of the lower half that no lane repair can place.
+    * the proof holds without the late-run glyphs, and the late run keeps at
+      least one other child;
+    * a token-bearing text/list item of the late run horizontally overlaps
+      one of the prefix run and ends at least 0.5 pt above its top, so the
+      captured order inverts a pair that same-page reading order checks; and
+    * every late-run glyph vertically overlaps a token-bearing prefix
+      text/list item without the fidelity horizontal overlap, so it sits
+      beside the lower half rather than in the upper-half flow.
 
-    Excluded glyphs stay in their captured run; no placement is invented.
+    Glyphs stay in their captured run; no placement is invented.  That the
+    admitted pages previously failed publication is evidenced by corpus
+    scans, not proven: a later pass can still reorder chunk entries.  An
+    output published before this rule that the lineage re-audit now
+    rotates differently fails closed, never silently.
     """
-    excluded = [node for node in (*prefix, *late) if _tokenless_glyph(node)]
-    observable_prefix = [node for node in prefix if not _tokenless_glyph(node)]
+    excluded = [node for node in late if _tokenless_glyph(node)]
     observable_late = [node for node in late if not _tokenless_glyph(node)]
-    # The inverted-pair proof below also implies an observable child in each
-    # run; checking first keeps the extrema below total.
-    if not excluded or not observable_prefix or not observable_late:
+    # The inverted-pair proof below also implies a token-bearing child in
+    # each run; checking first keeps the extrema below total.
+    if not excluded or not prefix or not observable_late:
         return False
     if max(node.box[3] for node in observable_late) > (
-            min(node.box[1] for node in observable_prefix) + 4.0):
+            min(node.box[1] for node in prefix) + 4.0):
         return False
-    prefix_boxes = _observable_boxes(observable_prefix)
+    prefix_boxes = _observable_boxes(prefix)
     late_boxes = _observable_boxes(observable_late)
     if not any(
             source_fidelity_core._horizontal_overlap(lower, upper)
