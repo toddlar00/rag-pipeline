@@ -1506,7 +1506,11 @@ merged into `main` in order (`0a04207`, `e15448b`, `3b430bf`, `ab6e159`).
 The fresh-OCR token fidelity source `e8b3205`, on that `main`, keeps source
 tokens through chunk merges and normalization and hardens the receipt digest
 cache; it changes no dependency or model lock and supersedes the `ddbef38`
-pair.
+pair. An independent review of the `e8b3205` pair's pull request
+([#121](https://github.com/toddlar00/rag-pipeline/pull/121)) found that
+duplicate-line allowance keys still used the repaired fused spelling; the
+review-fix source `1ba9415` corrects that, closes the per-call scope and
+retries mismatched receipt reads, and supersedes the `e8b3205` pair.
 Its Windows/Linux
 pair (independent local same-platform comparisons passed) is that branch's
 candidate; its hosted checks and exact-SHA record are pending, and the

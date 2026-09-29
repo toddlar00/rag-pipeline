@@ -9,8 +9,8 @@ fresh-process repetitions.
 
 Both current reports were generated from the clean fresh-OCR fidelity
 source checkpoint
-`e8b320518628d8d64f387ec08e66c95c0a766608` (tree
-`0e27ebca933488fe96f912724b7e608630d715df`), on `main` after the
+`1ba9415e16bc8f4108b26970b3114b7eb5ac9a7c` (tree
+`1871b92b32c06317b2f40de37b5632da990c8079`), on `main` after the
 history-preserving merges of #116 to #119 (`ab6e159`).
 That source contains everything through the Task 0.8
 static-security merge `e34103f` plus the local OCR accuracy, retry and
@@ -50,8 +50,8 @@ marker-resolved distributions before generation.
 
 | Platform | Runtime | Report | Bytes | File SHA-256 | Embedded report SHA-256 |
 |---|---:|---|---:|---|---|
-| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,083 | `a0013b5d52b84243d16323ad2e879c97a067b428964fa5915c8137ff95a635a4` | `da93d4d4bc3bcb038d328110534d4be527b6d1d7b98640793700e239f2296b8c` |
-| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,478 | `9b71db4578f056722da2fb771890510bce6fc9484ffc4649fc27fcc5d42b039d` | `40d0c4fc6b3d412cdb6586b0797507101fb6a98b468a6b9c62284672f1005ecf` |
+| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,086 | `f59793349a00ba11a93961897c0edf98e4418e5e760a930eadb537eeb2a1bf7e` | `0cd5c45c58254c6656ccfb12bbc75a5a3e622f3962c48dd75b7e3696fa9506d3` |
+| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,480 | `404e9d9eb35fe5497f8258f7ea2e30c47143da7683bad0896e3b80fa21a4c64b` | `35d31778c1c9c4c95e9844bab56671774a96e113634202933483e74c8ccee707` |
 
 The reports attest the same source commit, clean-worktree state, tracked-diff
 digest, eight LF and `HEAD`-identical dependency/model-lock inputs, authoritative
@@ -224,7 +224,11 @@ merged into `main` in order (`0a04207`, `e15448b`, `3b430bf`, `ab6e159`).
 The fresh-OCR token fidelity source `e8b3205`, on that `main`, keeps source
 tokens through chunk merges and normalization and hardens the receipt digest
 cache; it changes no dependency or model lock and supersedes the `ddbef38`
-pair.
+pair. An independent review of the `e8b3205` pair's pull request
+([#121](https://github.com/toddlar00/rag-pipeline/pull/121)) found that
+duplicate-line allowance keys still used the repaired fused spelling; the
+review-fix source `1ba9415` corrects that, closes the per-call scope and
+retries mismatched receipt reads, and supersedes the `e8b3205` pair.
 The current reports above
 bind
 that exact clean source and each passes an independent complete
