@@ -1308,7 +1308,10 @@ read by fresh layout-aware OCR of an image-only derivative, using
     heading and opinion attribution errors, so attribution is a structure
     problem, not only an OCR one.
 
-### Fresh-OCR token fidelity (2026-09-28, draft PR, not integrated)
+### Fresh-OCR token fidelity (2026-09-28, integrated)
+
+Merged through [PR #121](https://github.com/toddlar00/rag-pipeline/pull/121)
+at `602bec1`.
 
 The corpus audit's re-read showed three places where the pipeline changed
 the lexical tokens of fresh-OCR text. Each failed publication, although the
@@ -1376,6 +1379,74 @@ source was read correctly. No schema or policy version changed.
     record whose computed lineage is empty keeps an OCR fused spelling and
     is then rejected by the lineage-free check (fail-closed; such records
     already fail `chunks_have_source_lineage`).
+
+### Dependency and supply-chain series (2026-09-29, integrated)
+
+Nine stacked one-domain pull requests superseded Dependabot #111, #114, #115
+and #120 (and part of #108) and cleared the networked supply-chain jobs. Each
+regenerated its locks with `tools/refresh_locks.py`, passed the full locked
+suites on Windows and Linux and its own Phase A0 pair, and they merged
+history-preserving, in order, through `1cffc58`.
+
+- [#122](https://github.com/toddlar00/rag-pipeline/pull/122): qdrant-client
+  1.19.1, and onnxruntime 1.30.0 on CPython 3.11+.
+- [#123](https://github.com/toddlar00/rag-pipeline/pull/123): gradio 6.28.0
+  and uvicorn 0.54.0. Gradio 6.28 keeps streaming diff state only for calls
+  that carry an event id and percent-encodes file URLs, so two OCR-review test
+  harnesses were adapted without weakening their assertions.
+- [#124](https://github.com/toddlar00/rag-pipeline/pull/124): uv 0.12.20 (the
+  pinned lock resolver) and ruff 0.16.9.
+- [#125](https://github.com/toddlar00/rag-pipeline/pull/125): torch 2.14.0,
+  torchvision 0.29.0, sentence-transformers 6.1.0 and tqdm 4.70.1.
+- [#126](https://github.com/toddlar00/rag-pipeline/pull/126): docling-core
+  2.99.0 alone, which lifts a macOS transformers cap.
+- [#127](https://github.com/toddlar00/rag-pipeline/pull/127),
+  [#128](https://github.com/toddlar00/rag-pipeline/pull/128) and
+  [#129](https://github.com/toddlar00/rag-pipeline/pull/129): transformers
+  5.16.1, datasets 5.0.1 and aiohttp 3.14.3 (ML/runtime), h2 4.4.1 (vector
+  stores) and cryptography 50.0.1 (provider transport) became governed direct
+  inputs to take their advisory fixes.
+- [#130](https://github.com/toddlar00/rag-pipeline/pull/130): the expired
+  license and vulnerability exceptions were renewed through 2026-12-27, and
+  four unpatched advisories were accepted until then. Both supply-chain jobs
+  pass at `1cffc58`.
+- Beyond the unit suites, the ML and PDF changes were checked against private
+  READY runs: fixed queries (plain and reranked) returned identical results,
+  and re-converting three audited readings reproduced their chunk text
+  exactly.
+- **Held back.**
+  - *docling 2.130 (#108).* Its checkpoint passed the suites and pair, but
+    re-converting audited private readings changed their text: 9 measurable
+    audit findings got worse and 1 better, mostly reading order. docling
+    stays at 2.121.0 until the owner accepts or rejects that change.
+  - *numpy 2.5.3.* `ocr_disposition_observer.verified_recipe` activates only
+    on rapidocr 3.9.2 with numpy 2.5.2; on 2.5.3, 229 of its tests error.
+    Moving numpy first needs that recipe re-verified.
+  - *transformers 5.17+.* 5.17.0 removed
+    `PreTrainedModel.get_extended_attention_mask`, which the pinned Nomic
+    embedding code calls; the unit suites passed while every real embedding
+    failed. The requirement is capped `<5.17`, and
+    `tests/test_embedding_runtime_compat.py` guards it. Lifting the cap needs
+    a Nomic code revision, or a reviewed runtime transform, that no longer
+    calls the helper.
+  - *Google GenAI 2 (#88)* stays parked on its recorded owner decision.
+- **Follow-ups (not fixed).**
+  - On macOS only (Tier 3), the universal locks pair docling-ibm-models 3.13.2
+    with transformers 5.16.1; 3.13.3 caps transformers below 5.9 on darwin for
+    an MPS issue.
+  - Accelerate PYSEC-2026-3804 has no fix: both upstream fix pull requests were
+    closed unmerged, and 1.15.0 leaves the loader unchanged. OSV marks 1.14.0 as
+    the last affected release, so a bump to 1.15.0 would silence pip-audit
+    without remediating anything.
+  - Every renewed or accepted exception expires on 2026-12-27. Renew or
+    remove each before then.
+  - The unit suites never load real models or convert real PDFs, so an ML or
+    PDF dependency change also needs a real-model query check and a
+    re-conversion check. CI has neither yet.
+  - Before #123, the Linux Phase A0 environments were synchronized with uv
+    0.11.31 rather than the pinned uv. The hash-locked lock union alone
+    determines the installed set; pairs from #123 on use the pinned uv on
+    both platforms.
 
 ### Integrated convergence
 
