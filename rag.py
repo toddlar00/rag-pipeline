@@ -12112,7 +12112,10 @@ def _repair_single_column_body_child_order(
     That corrupts both chunk grouping and heading scope, so a final chunk sort
     is too late.  Reorder only a page with a large upward jump whose adjacent
     blocks overlap horizontally (or whose new top block is a centered outline
-    marker).  A true two-column transition normally fails both gates.
+    marker).  A true two-column transition normally fails both gates.  A
+    detached zero-token glyph alone cannot block an otherwise proven intact
+    rotation; ``heading_lineage.tokenless_glyph_rotation_admitted`` holds that
+    proof for this pass and its validator mirror alike.
 
     Direct body children may be list groups.  Treat each group as an atomic
     node positioned by the union of its single-page descendants; never split
@@ -12131,6 +12134,7 @@ def _repair_single_column_body_child_order(
     ranges = set(structural_ranges or ())
     descriptor_cache: dict[
         str, tuple[int, float, float, float, float, str] | None] = {}
+    span_boxes: dict[str, tuple[tuple[float, float, float, float], ...]] = {}
 
     def descriptor(
             ref: str, active: frozenset[str] = frozenset(),
@@ -12182,6 +12186,8 @@ def _repair_single_column_body_child_order(
                 _source_item_text(item),
             )
             descriptor_cache[ref] = result
+            span_boxes[ref] = tuple(
+                (value[3], value[1], value[4], value[2]) for value in boxes)
             return result
         group = groups.get(ref)
         if group is None:
@@ -12214,6 +12220,35 @@ def _repair_single_column_body_child_order(
         )
         descriptor_cache[ref] = result
         return result
+
+    def wrap_items(
+            ref: str, active: frozenset[str] = frozenset(),
+    ) -> tuple[_heading_lineage.WrapRunItem, ...]:
+        # Only positioned children reach this, so every item's descriptor
+        # (text) and per-span boxes are already cached.
+        item = item_by_ref.get(ref)
+        if item is not None:
+            value = descriptor(ref)
+            return (_heading_lineage.WrapRunItem(
+                _doc_item_label(item), value[5] if value else "",
+                span_boxes.get(ref, ())),)
+        if not ref or ref in active:
+            return ()
+        return tuple(
+            member
+            for child in (getattr(groups.get(ref), "children", None) or [])
+            for member in wrap_items(
+                str(getattr(child, "cref", "")), active | frozenset((ref,))))
+
+    def wrap_node(value: tuple) -> _heading_lineage.WrapRunNode:
+        ref = str(getattr(value[1], "cref", ""))
+        item = item_by_ref.get(ref)
+        box = value[2]
+        return _heading_lineage.WrapRunNode(
+            (box[3], box[1], box[4], box[2]),
+            item is not None
+            and not list(getattr(item, "children", None) or []),
+            wrap_items(ref))
 
     by_page: defaultdict[int, list[tuple[int, object, tuple]]] = defaultdict(
         list)
@@ -12288,6 +12323,13 @@ def _repair_single_column_body_child_order(
                     if (existing[2][1], existing[2][3], existing[0]) > key
                 ), len(ordered))
                 ordered.insert(insert_at, value)
+        elif _heading_lineage.tokenless_glyph_rotation_admitted(
+                [wrap_node(value) for value in prefix],
+                [wrap_node(value) for value in late]):
+            # Only a detached zero-token glyph broke the disjointness proof,
+            # and the captured order provably fails reading order.  Rotate
+            # intact: the glyph keeps its captured run.
+            ordered = [*late, *prefix]
         else:
             continue
         if [value[1] for value in ordered] == [value[1] for value in nodes]:
