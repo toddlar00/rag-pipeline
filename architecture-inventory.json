@@ -10166,9 +10166,9 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "cd4bc5af7ed6d71189d7b174078a1a5700251aeed5b24a1290a4218c651efb0a",
+          "locations_sha256": "e55cf818df8614a46b15c1acd20d8eb8880a3f05b87d7d1fd34a888a370f41e6",
           "name": "_normalize_source_chunk_text",
-          "occurrence_count": 58,
+          "occurrence_count": 59,
           "paths": [
             "_normalize_source_chunk_text"
           ],
@@ -10178,7 +10178,7 @@
               "path": "tests/test_excerpt_quality_fixes.py"
             },
             {
-              "count": 6,
+              "count": 7,
               "path": "tests/test_ocr_token_fidelity_fixes.py"
             },
             {
