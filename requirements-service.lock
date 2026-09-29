@@ -586,9 +586,9 @@ pywin32==312 ; sys_platform == 'win32' \
     --hash=sha256:dab4f65ac9c4e48400a2a0530c46c3c579cd5905ecd11b80692373915269208b \
     --hash=sha256:dc90147579a905b8635e1b0ec6514967dcb07e6e0d9c42f1477feef14cac23bb
     # via portalocker
-qdrant-client==1.19.0 \
-    --hash=sha256:13602a2b3478a95ecdf42f97b93d7f703b63a3361cd912a04495a33a5ac14121 \
-    --hash=sha256:365395a04b0a26c309b25b7d8b1c99ef2071ec9a2b74bc8a5fd3b7a3642fe963
+qdrant-client==1.19.1 \
+    --hash=sha256:8f1d851a8463ce8cc11cf39ed8a9c9fb4b5f9de60e9a096ff56da42d1f074907 \
+    --hash=sha256:fca1a96c3f90f5fff853f6ee6877838a5768a04c963df9891a655a63313af8a0
     # via -r requirements-service.txt
 requests==2.34.2 \
     --hash=sha256:2a0d60c172f83ac6ab31e4554906c0f3b3588d37b5cb939b1c061f4907e278e0 \

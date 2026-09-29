@@ -7,35 +7,35 @@ fresh-process repetitions.
 
 ## Provenance
 
-Both current reports were generated from the clean fresh-OCR fidelity
-source checkpoint
-`1ba9415e16bc8f4108b26970b3114b7eb5ac9a7c` (tree
-`1871b92b32c06317b2f40de37b5632da990c8079`), on `main` after the
-history-preserving merges of #116 to #119 (`ab6e159`).
-That source contains everything through the Task 0.8
-static-security merge `e34103f` plus the local OCR accuracy, retry and
+Both current reports were generated from the clean vector-stores dependency
+source checkpoint `db030f1c68d26328f98d6c4ef3001c07a8ca0f21` (tree
+`c1afaf39b28160f847c29b090f01c746e858053b`), the first of a stacked series
+of one-domain dependency updates on `main` after the history-preserving
+merge of #121 (`602bec1`). That source contains everything through the Task
+0.8 static-security merge `e34103f` plus the local OCR accuracy, retry and
 guided-review program, opt-in AI evidence search, the passive cleanup
 audits, the LLM transport and worker-launch repairs, the casebook
-excerpt/supplement pipeline (including the opt-in OCR angle-classifier
-and interleaved-region-merge flags, the footnote placement replay, the
+excerpt/supplement pipeline (including the opt-in OCR angle-classifier and
+interleaved-region-merge flags, the footnote placement replay, the
 split-item duplicate retraction and quality schema 13), four reviewed
 architecture-inventory refreshes, the POSIX symlinked-interpreter identity
-fix, an LF attribute for top-level test fixtures, dependency-light
-test guards, a Python 3.10/3.11-tolerant import-guard test, a
-60-minute Windows unit-lane timeout and the test-time economy changes
-(a session-shared architecture inventory, an indexed inventory builder,
-cached lock-record parsing and executed-source digests, and a Windows
-unit lane split into three shards), pytest-xdist for the unit lanes,
-gradio import guards in seven OCR review test modules, FlagEmbedding
-1.4.2 for Transformers 5 reranking and the fresh-OCR token fidelity
-fixes. The lock changes add pytest-xdist
-3.8.0 and execnet 2.1.2 to `requirements-test.lock` and
+fix, an LF attribute for top-level test fixtures, dependency-light test
+guards, a Python 3.10/3.11-tolerant import-guard test, a 60-minute Windows
+unit-lane timeout and the test-time economy changes (a session-shared
+architecture inventory, an indexed inventory builder, cached lock-record
+parsing and executed-source digests, and a Windows unit lane split into
+three shards), pytest-xdist for the unit lanes, gradio import guards in
+seven OCR review test modules, FlagEmbedding 1.4.2 for Transformers 5
+reranking and the fresh-OCR token fidelity fixes, followed by stacked
+one-domain dependency updates for vector stores. The lock changes add
+pytest-xdist 3.8.0 and execnet 2.1.2 to `requirements-test.lock` and
 `requirements-smoke.lock` and move FlagEmbedding from 1.4.0 to 1.4.2 in
-`requirements-core.lock` and `requirements-full.lock`; no model lock
-changed. The executing
-environments were
-synchronized with repository-pinned uv 0.12.5 against the exact CPU
-application/test lock union plus its retained bootstrapper:
+`requirements-core.lock` and `requirements-full.lock`; the stacked
+vector-stores update moves qdrant-client from 1.19.0 to 1.19.1 and
+onnxruntime from 1.29.0 to 1.30.0 (CPython 3.11+) in its mapped locks; no
+model lock changed. The executing environments were synchronized with
+repository-pinned uv 0.12.5 against the exact CPU application/test lock
+union plus its retained bootstrapper:
 
 - `requirements-full.lock`
 - `requirements-test.lock`
@@ -50,8 +50,8 @@ marker-resolved distributions before generation.
 
 | Platform | Runtime | Report | Bytes | File SHA-256 | Embedded report SHA-256 |
 |---|---:|---|---:|---|---|
-| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,086 | `f59793349a00ba11a93961897c0edf98e4418e5e760a930eadb537eeb2a1bf7e` | `0cd5c45c58254c6656ccfb12bbc75a5a3e622f3962c48dd75b7e3696fa9506d3` |
-| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,480 | `404e9d9eb35fe5497f8258f7ea2e30c47143da7683bad0896e3b80fa21a4c64b` | `35d31778c1c9c4c95e9844bab56671774a96e113634202933483e74c8ccee707` |
+| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,079 | `d7020a5dc09e3c122fdbde4c1e0f5a236f1280c1e58f06e24435d3e459766103` | `fd0bd54b33db064cf8aa0941aa67ee09fc65a51fbb977fdec2b81995f73cc577` |
+| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,486 | `eaaab892f6244549ec54da706c8147153d78e89003b000c60e61d97dadcb810d` | `ed647bb2db2e94236464882eef1fb3c63d744b84e1cef7f86384e45d62a4996f` |
 
 The reports attest the same source commit, clean-worktree state, tracked-diff
 digest, eight LF and `HEAD`-identical dependency/model-lock inputs, authoritative
@@ -229,6 +229,14 @@ pair. An independent review of the `e8b3205` pair's pull request
 duplicate-line allowance keys still used the repaired fused spelling; the
 review-fix source `1ba9415` corrects that, closes the per-call scope and
 retries mismatched receipt reads, and supersedes the `e8b3205` pair.
+The `1ba9415` pair (gate-only child `6be805d`) passed the hosted CI
+promotion gate on [PR
+#121](https://github.com/toddlar00/rag-pipeline/pull/121), which merged into
+`main` as `602bec1`. On that `main`, the stacked vector-stores dependency
+source `db030f1` (superseding Dependabot #114: qdrant-client 1.19.1, and
+onnxruntime 1.30.0 for CPython 3.11+) opens a series of one-domain
+dependency pull requests and supersedes the `1ba9415` pair for its own pull
+request.
 The current reports above
 bind
 that exact clean source and each passes an independent complete

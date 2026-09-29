@@ -1,15 +1,16 @@
 # Phase A0 Benchmark Policy
 
 - **Status:** A0a integrated; the latest completed hosted A0b technical
-  checkpoint passed at Task 0.8 evidence head `1533164` and merged
-  through `e34103f`; the OCR-program and casebook-excerpt replacement pair
-  at source `29ea76b` passed hosted CI on PR #116, the stacked
-  test-time economy pair at `365de1c` passed on PR #117, the
-  pytest-xdist pair at `ff5e64f` passed on PR #118, the FlagEmbedding
-  pair at `ddbef38` passed on PR #119 (all four merged through
-  `ab6e159`), and the fresh-OCR fidelity pair at source `1ba9415` is
-  pending; exact-head
-  human review and separate R8 owner authorization are not recorded
+  checkpoint passed at Task 0.8 evidence head `1533164` and merged through
+  `e34103f`; the OCR-program and casebook-excerpt replacement pair at source
+  `29ea76b` passed hosted CI on PR #116, the stacked test-time economy pair
+  at `365de1c` passed on PR #117, the pytest-xdist pair at `ff5e64f` passed
+  on PR #118, the FlagEmbedding pair at `ddbef38` passed on PR #119 (all
+  four merged through `ab6e159`), and the fresh-OCR fidelity pair at
+  `1ba9415` passed on PR #121 (merged through `602bec1`); the stacked
+  one-domain dependency pair at source `db030f1` (vector-stores dependency)
+  is pending; exact-head human review and separate R8 owner authorization
+  are not recorded
 - **Milestone:** R10 prerequisite for the R8 pipeline-ownership move
 - **Report schema:** `phase-a0` v3
 
@@ -140,16 +141,19 @@ gate-only child `32153e9` and merge `376277c`
 Task 0.8 static-security pair at source `8891e1b` repeated it through
 gate-only child `1533164` and merge `e34103f`
 ([PR #107](https://github.com/toddlar00/rag-pipeline/pull/107)). The
-current replacement pair uses the clean fresh-OCR fidelity source
-`1ba9415e16bc8f4108b26970b3114b7eb5ac9a7c` (tree
-`1871b92b32c06317b2f40de37b5632da990c8079`), on `main` after the merges of the
-FlagEmbedding source `ddbef38`, the pytest-xdist source `ff5e64f`, the
-test-time economy source `365de1c` and the OCR-program and
-casebook-excerpt source `29ea76b`; together they changed
+current replacement pair uses the clean vector-stores dependency source
+`db030f1c68d26328f98d6c4ef3001c07a8ca0f21` (tree
+`c1afaf39b28160f847c29b090f01c746e858053b`), the first of a stacked series
+of one-domain dependency updates, on `main` after the merges of the
+fresh-OCR fidelity source `1ba9415`, the FlagEmbedding source `ddbef38`, the
+pytest-xdist source `ff5e64f`, the test-time economy source `365de1c` and
+the OCR-program and casebook-excerpt source `29ea76b`; together they changed
 Python source, CI configuration, `.gitattributes`, two test-tooling locks
 (pytest-xdist and execnet in `requirements-test.lock` and
 `requirements-smoke.lock`) and the FlagEmbedding record of
-`requirements-core.lock` and `requirements-full.lock`, but no model lock. It supersedes the
+`requirements-core.lock` and `requirements-full.lock`; the stacked
+dependency updates also change the vector-stores records of their mapped
+locks, but no model lock. It supersedes the
 earlier `1ae8502` pair, whose child `766feaf` passed both hosted Phase A0
 cells but whose dependency-light unit lanes failed at collection. Source
 `a15232d` then passed both hosted Phase A0 cells on [PR
@@ -201,6 +205,14 @@ pair. An independent review of the `e8b3205` pair's pull request
 duplicate-line allowance keys still used the repaired fused spelling; the
 review-fix source `1ba9415` corrects that, closes the per-call scope and
 retries mismatched receipt reads, and supersedes the `e8b3205` pair.
+The `1ba9415` pair (gate-only child `6be805d`) passed the hosted CI
+promotion gate on [PR
+#121](https://github.com/toddlar00/rag-pipeline/pull/121), which merged into
+`main` as `602bec1`. On that `main`, the stacked vector-stores dependency
+source `db030f1` (superseding Dependabot #114: qdrant-client 1.19.1, and
+onnxruntime 1.30.0 for CPython 3.11+) opens a series of one-domain
+dependency pull requests and supersedes the `1ba9415` pair for its own pull
+request.
 Its Windows and
 Linux CPython 3.12.13 reports were
 generated after the same strict hash-locked synchronization and
@@ -374,15 +386,16 @@ source `365de1c`, the stacked pytest-xdist source `c31f4c9`, its
 test-only successor `ff5e64f`, the stacked FlagEmbedding source
 `515ed91`, its test-only successor `ddbef38` and then the fresh-OCR
 fidelity source `e8b3205` on `main` and then its review-fix successor
-`1ba9415`.
+`1ba9415`,
+then the stacked vector-stores dependency source `db030f1`.
 Its Windows report
-is 51,086 bytes (file SHA-256
-`f59793349a00ba11a93961897c0edf98e4418e5e760a930eadb537eeb2a1bf7e`;
+is 51,079 bytes (file SHA-256
+`d7020a5dc09e3c122fdbde4c1e0f5a236f1280c1e58f06e24435d3e459766103`;
 embedded report SHA-256
-`0cd5c45c58254c6656ccfb12bbc75a5a3e622f3962c48dd75b7e3696fa9506d3`).
-Its Linux report is 50,480 bytes (file SHA-256
-`404e9d9eb35fe5497f8258f7ea2e30c47143da7683bad0896e3b80fa21a4c64b`;
+`fd0bd54b33db064cf8aa0941aa67ee09fc65a51fbb977fdec2b81995f73cc577`).
+Its Linux report is 50,486 bytes (file SHA-256
+`eaaab892f6244549ec54da706c8147153d78e89003b000c60e61d97dadcb810d`;
 embedded report SHA-256
-`35d31778c1c9c4c95e9844bab56671774a96e113634202933483e74c8ccee707`).
+`ed647bb2db2e94236464882eef1fb3c63d744b84e1cef7f86384e45d62a4996f`).
 Both use CPython 3.12.13 and pass their complete local same-platform 9×5
 comparisons. Hosted promotion remains pending.
