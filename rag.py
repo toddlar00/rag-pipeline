@@ -3956,11 +3956,13 @@ def _toc_visual_subrows(cells: list[dict]) -> list[list[dict]]:
 # then yields no page, is parked as a pending chapter label, and fuses with the
 # next row into a chapter title that can never bind to a source heading.
 _TOC_LEADER_GLYPH = "[\\x00-\\x08\\x0b\\x0c\\x0e-\\x1f\\ufffd]"
+# A leader is a run of at least three glyphs; one stray glyph before a number
+# (a statute section or a year) never qualifies.
+_TOC_GLYPH_LEADER_RUN = rf"(?:{_TOC_LEADER_GLYPH}\s*){{3,}}"
 _TOC_GLYPH_LEADER_ROW = re.compile(
-    rf"(?P<title>.*?\S)\s*{_TOC_LEADER_GLYPH}"
-    rf"(?:{_TOC_LEADER_GLYPH}|\s)*(?P<page>\d{{1,4}})\s*")
+    rf"(?P<title>.*?\S)\s*{_TOC_GLYPH_LEADER_RUN}(?P<page>\d{{1,4}})\s*")
 _TOC_FUSED_GLYPH_TITLE = re.compile(
-    rf"{_TOC_LEADER_GLYPH}(?:{_TOC_LEADER_GLYPH}|\s)*\d{{1,4}}\s+\S")
+    rf"{_TOC_GLYPH_LEADER_RUN}\d{{1,4}}\s+\S")
 
 
 def _parse_toc_tables(
@@ -3984,9 +3986,10 @@ def _parse_toc_tables(
     split that produced wrong results when cells partially matched.
 
     Only when that parse leaves a chapter title fused across a glyph-leader
-    row (glyphs, a page number, then more text) is the TOC parsed a second
-    time with glyph-leader rows split; every other TOC parses exactly as the
-    first pass does.
+    row (a run of at least three glyphs, a page number, then more text) is
+    the TOC parsed a second time, in which every row that would be parked as
+    a chapter label and reads "title<glyph leaders>page" becomes its own
+    entry instead. Every other TOC parses exactly as the first pass does.
     """
     entries = _parse_toc_tables_once(
         doc, toc_start, toc_end, structure_profile=structure_profile,
@@ -4178,24 +4181,22 @@ def _parse_toc_tables_once(
                                    and not row_division.title)
                 no_page_in_row = (page_num is None or page_num == 0)
                 if is_narrow_label or (no_page_in_row and len(row) == 1):
+                    glyph_row = (
+                        _TOC_GLYPH_LEADER_ROW.fullmatch(row_text_bare.strip())
+                        if split_glyph_leaders else None)
+                    if glyph_row is not None:
+                        # "title<glyph leaders>page" is a complete entry,
+                        # not a label for the next row.
+                        row_queue.insert(0, [
+                            {"text": glyph_row.group("title"),
+                             "start_col_offset_idx": 0,
+                             "end_col_offset_idx": 1},
+                            {"text": glyph_row.group("page"),
+                             "start_col_offset_idx": 1,
+                             "end_col_offset_idx": 2},
+                        ])
+                        continue
                     pending_chapter = row_text_bare.strip()
-                    continue
-            # A parked label that is really "title<glyph leaders>page" is a
-            # complete entry: re-queue it as its own row, then this row.
-            if (split_glyph_leaders and pending_chapter
-                    and title and page_num and page_num > 0):
-                glyph_row = _TOC_GLYPH_LEADER_ROW.fullmatch(pending_chapter)
-                if glyph_row is not None:
-                    page_col = max(max_col, 1)
-                    row_queue[0:0] = [[
-                        {"text": glyph_row.group("title"),
-                         "start_col_offset_idx": 0,
-                         "end_col_offset_idx": page_col},
-                        {"text": glyph_row.group("page"),
-                         "start_col_offset_idx": page_col,
-                         "end_col_offset_idx": page_col + 1},
-                    ], row_cells]
-                    pending_chapter = None
                     continue
             # If previous row was a pending chapter label, prepend it
             if pending_chapter:

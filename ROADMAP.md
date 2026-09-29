@@ -1304,6 +1304,24 @@ read by fresh layout-aware OCR of an image-only derivative, using
     resolves artifact paths from the module-level output root, not its
     argument, so a different root reads as not READY (fail-closed).
     Durable-job input bindings hash the input path, not the input bytes.
+  - *TOC glyph leaders (private tort-law casebook).* The casebook's table
+    of contents has dot leaders that extraction returned as a control
+    character plus a run of U+FFFD. `_parse_toc_tables` now splits those
+    "title<glyph leaders>page" chapter rows in a second parse. That parse
+    runs only when the ordinary one leaves a fused chapter title (at least
+    three glyphs, a page number, then more text), and it takes the book
+    from 2,753 lineage issues to 6.
+    - Once the split runs, a summary-table chapter entry can carry an
+      earlier or equal page than the detailed-contents entry, and so win
+      primary dedup with its wording.
+    - A glyph chapter row that the ordinary parse discards, for example
+      before a roman-numbered row, stays discarded unless the gate fires.
+    - The remaining 6 issues come from a separate reading-order defect on
+      one page. Docling put the page's lower block before its upper block,
+      and the existing source reading-order repair does not recover it.
+      The likely reasons are a one-character right-margin item that makes
+      the blocks overlap, and a late block with more items than the
+      fallback accepts.
   - *Born-digital structure.* The born-digital supplement shows the same
     heading and opinion attribution errors, so attribution is a structure
     problem, not only an OCR one.
