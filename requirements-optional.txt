@@ -12,7 +12,7 @@ qdrant-client>=1.19.1,<2
 h2>=4.4.1,<5
 
 # LLM classification + contextual retrieval
-google-genai>=1.68,<2      # Gemini fallback; per-request timeout/retry controls
+google-genai>=2.25.0,<3      # Gemini fallback; per-request timeout/retry controls
 # Promoted from google-genai's google-auth so the PYSEC-2026-3552 fix
 # (cryptography 50.0.0) can be selected under the dependency-domain policy.
 cryptography>=50.0.0,<51
