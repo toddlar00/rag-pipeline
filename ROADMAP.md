@@ -1468,7 +1468,16 @@ history-preserving, in order, through `1cffc58`.
     remove each before then.
   - The unit suites never load real models or convert real PDFs, so an ML or
     PDF dependency change also needs a real-model query check and a
-    re-conversion check. CI has neither yet.
+    re-conversion check.
+    - `tests/test_embedding_runtime_compat.py` now pins the whole
+      Transformers contract of the pinned Nomic code: every name it imports
+      and every `PreTrainedModel` helper it calls. Wherever the pinned file
+      is in the local model cache, the test re-derives that contract from
+      the byte-verified file.
+    - A CI job that downloads the pinned models and runs a real embed,
+      query and conversion is still an owner decision. It means about 2 GB
+      of model downloads or cache, plus changes to the security-pinned
+      workflows.
   - Before #123, the Linux Phase A0 environments were synchronized with uv
     0.11.31 rather than the pinned uv. The hash-locked lock union alone
     determines the installed set; pairs from #123 on use the pinned uv on
