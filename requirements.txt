@@ -25,7 +25,7 @@ pypdfium2>=5.13.0,<6
 # Embedding models (nomic, legal-bert, etc.)
 sentence-transformers>=6.1.0,<7
 # Reviewed Nomic remote-code module imports einops directly.
-einops>=0.7,<1
+einops>=0.8.2,<1
 
 # Vector store (default backend)
 chromadb>=1.5.2,<2
@@ -46,7 +46,7 @@ FlagEmbedding>=1.4.2,<2
 # datasets 5.0.1 (PYSEC-2026-3716) and aiohttp 3.14.3 (PYSEC-2026-3545).
 # Transformers 5.17 removed PreTrainedModel.get_extended_attention_mask,
 # which the pinned Nomic embedding code calls (tests/test_embedding_runtime_compat.py).
-transformers>=5.10.0,<5.17
+transformers>=5.17.0,<5.18
 datasets>=5.0.1,<6
 aiohttp>=3.14.3,<4
 
@@ -60,4 +60,4 @@ tqdm>=4.70.1,<5
 requests>=2.31,<3
 
 # Numerical operations used by RAPTOR clustering
-numpy>=1.26,<3
+numpy>=2.5.3,<3
