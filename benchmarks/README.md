@@ -7,12 +7,11 @@ fresh-process repetitions.
 
 ## Provenance
 
-Both current reports were generated from the clean FlagEmbedding source
-checkpoint
-`ddbef38cff0528a97e01c3016fa53df6e74bb09a` (tree
-`cd4837b62a65e5fe4f9b1ae5c7b13c2dcd9af93c`), stacked on the pytest-xdist checkpoint
-`ff5e64f`, the test-time economy checkpoint `365de1c` and the
-OCR-program and casebook-excerpt checkpoint `29ea76b`.
+Both current reports were generated from the clean fresh-OCR fidelity
+source checkpoint
+`1ba9415e16bc8f4108b26970b3114b7eb5ac9a7c` (tree
+`1871b92b32c06317b2f40de37b5632da990c8079`), on `main` after the
+history-preserving merges of #116 to #119 (`ab6e159`).
 That source contains everything through the Task 0.8
 static-security merge `e34103f` plus the local OCR accuracy, retry and
 guided-review program, opt-in AI evidence search, the passive cleanup
@@ -27,8 +26,9 @@ test guards, a Python 3.10/3.11-tolerant import-guard test, a
 (a session-shared architecture inventory, an indexed inventory builder,
 cached lock-record parsing and executed-source digests, and a Windows
 unit lane split into three shards), pytest-xdist for the unit lanes,
-gradio import guards in seven OCR review test modules and FlagEmbedding
-1.4.2 for Transformers 5 reranking. The lock changes add pytest-xdist
+gradio import guards in seven OCR review test modules, FlagEmbedding
+1.4.2 for Transformers 5 reranking and the fresh-OCR token fidelity
+fixes. The lock changes add pytest-xdist
 3.8.0 and execnet 2.1.2 to `requirements-test.lock` and
 `requirements-smoke.lock` and move FlagEmbedding from 1.4.0 to 1.4.2 in
 `requirements-core.lock` and `requirements-full.lock`; no model lock
@@ -50,8 +50,8 @@ marker-resolved distributions before generation.
 
 | Platform | Runtime | Report | Bytes | File SHA-256 | Embedded report SHA-256 |
 |---|---:|---|---:|---|---|
-| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,088 | `bcfebbd026ee1cc45a9bf0d3b676fc26fede37a32fe4319db57354c02aafb9a5` | `b046b3ff6f31173b33144faace13b8dc415d06d38b6c18ad9f4abb2c955bd227` |
-| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,462 | `cb313a19f064bf79335678b8900f9468189bcd13a1226fe6d7202a2673246c03` | `7a0d6565cbeaf4069e13df40c83752ec602be1c33c1398fe1d4f5c373ab76018` |
+| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,086 | `f59793349a00ba11a93961897c0edf98e4418e5e760a930eadb537eeb2a1bf7e` | `0cd5c45c58254c6656ccfb12bbc75a5a3e622f3962c48dd75b7e3696fa9506d3` |
+| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,480 | `404e9d9eb35fe5497f8258f7ea2e30c47143da7683bad0896e3b80fa21a4c64b` | `35d31778c1c9c4c95e9844bab56671774a96e113634202933483e74c8ccee707` |
 
 The reports attest the same source commit, clean-worktree state, tracked-diff
 digest, eight LF and `HEAD`-identical dependency/model-lock inputs, authoritative
@@ -217,7 +217,18 @@ hosted run (gate-only child `c804d7b`, [PR
 #119](https://github.com/toddlar00/rag-pipeline/pull/119)) one test in the
 Linux 3.12 unit lane failed on a one-second access-time tick in a
 whole-`lstat` comparison. The test-only source `ddbef38` compares identity
-without the access time and supersedes the `515ed91` pair.
+without the access time and supersedes the `515ed91` pair. The `ddbef38`
+pair (gate-only child `43d7a09`) passed the hosted CI promotion gate on [PR
+#119](https://github.com/toddlar00/rag-pipeline/pull/119), and #116 to #119
+merged into `main` in order (`0a04207`, `e15448b`, `3b430bf`, `ab6e159`).
+The fresh-OCR token fidelity source `e8b3205`, on that `main`, keeps source
+tokens through chunk merges and normalization and hardens the receipt digest
+cache; it changes no dependency or model lock and supersedes the `ddbef38`
+pair. An independent review of the `e8b3205` pair's pull request
+([#121](https://github.com/toddlar00/rag-pipeline/pull/121)) found that
+duplicate-line allowance keys still used the repaired fused spelling; the
+review-fix source `1ba9415` corrects that, closes the per-call scope and
+retries mismatched receipt reads, and supersedes the `e8b3205` pair.
 The current reports above
 bind
 that exact clean source and each passes an independent complete

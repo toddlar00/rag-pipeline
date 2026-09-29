@@ -5,8 +5,10 @@
   through `e34103f`; the OCR-program and casebook-excerpt replacement pair
   at source `29ea76b` passed hosted CI on PR #116, the stacked
   test-time economy pair at `365de1c` passed on PR #117, the
-  pytest-xdist pair at `ff5e64f` passed on PR #118, and the
-  FlagEmbedding pair at source `ddbef38` is pending; exact-head
+  pytest-xdist pair at `ff5e64f` passed on PR #118, the FlagEmbedding
+  pair at `ddbef38` passed on PR #119 (all four merged through
+  `ab6e159`), and the fresh-OCR fidelity pair at source `1ba9415` is
+  pending; exact-head
   human review and separate R8 owner authorization are not recorded
 - **Milestone:** R10 prerequisite for the R8 pipeline-ownership move
 - **Report schema:** `phase-a0` v3
@@ -138,11 +140,12 @@ gate-only child `32153e9` and merge `376277c`
 Task 0.8 static-security pair at source `8891e1b` repeated it through
 gate-only child `1533164` and merge `e34103f`
 ([PR #107](https://github.com/toddlar00/rag-pipeline/pull/107)). The
-current replacement pair uses the clean FlagEmbedding source
-`ddbef38cff0528a97e01c3016fa53df6e74bb09a` (tree
-`cd4837b62a65e5fe4f9b1ae5c7b13c2dcd9af93c`), stacked on the pytest-xdist
-source `ff5e64f`, the test-time economy source `365de1c` and the
-OCR-program and casebook-excerpt source `29ea76b`; together they changed
+current replacement pair uses the clean fresh-OCR fidelity source
+`1ba9415e16bc8f4108b26970b3114b7eb5ac9a7c` (tree
+`1871b92b32c06317b2f40de37b5632da990c8079`), on `main` after the merges of the
+FlagEmbedding source `ddbef38`, the pytest-xdist source `ff5e64f`, the
+test-time economy source `365de1c` and the OCR-program and
+casebook-excerpt source `29ea76b`; together they changed
 Python source, CI configuration, `.gitattributes`, two test-tooling locks
 (pytest-xdist and execnet in `requirements-test.lock` and
 `requirements-smoke.lock`) and the FlagEmbedding record of
@@ -186,7 +189,18 @@ hosted run (gate-only child `c804d7b`, [PR
 #119](https://github.com/toddlar00/rag-pipeline/pull/119)) one test in the
 Linux 3.12 unit lane failed on a one-second access-time tick in a
 whole-`lstat` comparison. The test-only source `ddbef38` compares identity
-without the access time and supersedes the `515ed91` pair.
+without the access time and supersedes the `515ed91` pair. The `ddbef38`
+pair (gate-only child `43d7a09`) passed the hosted CI promotion gate on [PR
+#119](https://github.com/toddlar00/rag-pipeline/pull/119), and #116 to #119
+merged into `main` in order (`0a04207`, `e15448b`, `3b430bf`, `ab6e159`).
+The fresh-OCR token fidelity source `e8b3205`, on that `main`, keeps source
+tokens through chunk merges and normalization and hardens the receipt digest
+cache; it changes no dependency or model lock and supersedes the `ddbef38`
+pair. An independent review of the `e8b3205` pair's pull request
+([#121](https://github.com/toddlar00/rag-pipeline/pull/121)) found that
+duplicate-line allowance keys still used the repaired fused spelling; the
+review-fix source `1ba9415` corrects that, closes the per-call scope and
+retries mismatched receipt reads, and supersedes the `e8b3205` pair.
 Its Windows and
 Linux CPython 3.12.13 reports were
 generated after the same strict hash-locked synchronization and
@@ -358,15 +372,17 @@ turn superseded by the test-only source `8aa08b2`, then by the
 Windows-timeout source `29ea76b`, the stacked test-time economy
 source `365de1c`, the stacked pytest-xdist source `c31f4c9`, its
 test-only successor `ff5e64f`, the stacked FlagEmbedding source
-`515ed91` and then its test-only successor `ddbef38`.
+`515ed91`, its test-only successor `ddbef38` and then the fresh-OCR
+fidelity source `e8b3205` on `main` and then its review-fix successor
+`1ba9415`.
 Its Windows report
-is 51,088 bytes (file SHA-256
-`bcfebbd026ee1cc45a9bf0d3b676fc26fede37a32fe4319db57354c02aafb9a5`;
+is 51,086 bytes (file SHA-256
+`f59793349a00ba11a93961897c0edf98e4418e5e760a930eadb537eeb2a1bf7e`;
 embedded report SHA-256
-`b046b3ff6f31173b33144faace13b8dc415d06d38b6c18ad9f4abb2c955bd227`).
-Its Linux report is 50,462 bytes (file SHA-256
-`cb313a19f064bf79335678b8900f9468189bcd13a1226fe6d7202a2673246c03`;
+`0cd5c45c58254c6656ccfb12bbc75a5a3e622f3962c48dd75b7e3696fa9506d3`).
+Its Linux report is 50,480 bytes (file SHA-256
+`404e9d9eb35fe5497f8258f7ea2e30c47143da7683bad0896e3b80fa21a4c64b`;
 embedded report SHA-256
-`7a0d6565cbeaf4069e13df40c83752ec602be1c33c1398fe1d4f5c373ab76018`).
+`35d31778c1c9c4c95e9844bab56671774a96e113634202933483e74c8ccee707`).
 Both use CPython 3.12.13 and pass their complete local same-platform 9×5
 comparisons. Hosted promotion remains pending.

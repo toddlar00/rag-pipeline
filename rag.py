@@ -17,6 +17,7 @@ Usage:
 import argparse
 from collections import Counter, defaultdict
 from contextlib import ExitStack, contextmanager
+import contextvars
 import copy
 import gc
 from getpass import getpass
@@ -6423,13 +6424,48 @@ def _normalize_text(
     Handles: non-breaking spaces (\\xa0), smart quotes, en/em dashes,
     ligatures (fi, fl, ff, ffi, ffl), and stray control characters.
     """
+    core = _chunking_core._normalize_text
     return _source_cleanup_audit._call_core(
-        _chunking_core._normalize_text, _SOURCE_CLEANUP_CORE_NORMALIZE, text,
+        core, _SOURCE_CLEANUP_CORE_NORMALIZE, text,
         strip_headers_footers_fn=_strip_headers_footers,
         dedup_nearby_lines_fn=(
             _dedup_nearby_lines
             if dedup_nearby_lines_fn is None else dedup_nearby_lines_fn),
+        **_core_fused_term_kwargs(core),
     )
+
+
+# Source-bound normalization keeps every lexical token its source items
+# attest, so it must not apply the known fused-term spellings
+# (``threejudge`` -> ``three-judge``), which split one token into two.  The
+# flag travels in a context variable so that no patchable normalization
+# seam changes its signature.  The variable holds one scope per call, closed
+# when the call returns, so a context copied inside the call cannot revive it.
+class _SourceBoundScope:
+    """One active source-bound normalization call."""
+
+    __slots__ = ("active",)
+
+    def __init__(self) -> None:
+        self.active = True
+
+
+_SOURCE_BOUND_NORMALIZATION: contextvars.ContextVar[
+    _SourceBoundScope | None] = contextvars.ContextVar(
+        "rag_source_bound_normalization", default=None)
+
+
+def _core_fused_term_kwargs(core) -> dict:
+    """Request the fused-term skip only from the genuine normalization core.
+
+    A replacement core with the established signature keeps working and
+    keeps its own behaviour; only the genuine core accepts the option.
+    """
+    scope = _SOURCE_BOUND_NORMALIZATION.get()
+    if (scope is None or not scope.active
+            or core is not _SOURCE_CLEANUP_CORE_NORMALIZE):
+        return {}
+    return {"repair_fused_terms": False}
 
 
 _SOURCE_FOOTNOTE_MARKER_ONLY_RE = re.compile(
@@ -6547,10 +6583,14 @@ def _source_attested_duplicate_line_allowances(
             _source_cleanup_audit._value("source_item.decision", "empty_ref_or_text")
             continue
         with _source_cleanup_audit._pass_scope("source_line", "auxiliary", source_text) as attempt:
+            # Allowance keys must be normalized exactly as the output is, or a
+            # source-attested repeated line would lose its allowance.
+            core = _chunking_core._normalize_text
             normalized = _source_cleanup_audit._call_core(
-                _chunking_core._normalize_text, _SOURCE_CLEANUP_CORE_NORMALIZE, source_text,
+                core, _SOURCE_CLEANUP_CORE_NORMALIZE, source_text,
                 strip_headers_footers_fn=lambda value: value,
                 dedup_nearby_lines_fn=lambda value: value,
+                **_core_fused_term_kwargs(core),
             )
             attempt.finish(normalized, "auxiliary")
         lines = [line.strip() for line in normalized.splitlines()
@@ -6613,10 +6653,12 @@ def _source_attested_duplicate_line_allowances(
         return allowances
     _source_cleanup_audit._value("canonical.decision", "window_accepted")
     with _source_cleanup_audit._pass_scope("canonical_fragment", "auxiliary", fragment_text) as attempt:
+        core = _chunking_core._normalize_text
         normalized_fragment = _source_cleanup_audit._call_core(
-            _chunking_core._normalize_text, _SOURCE_CLEANUP_CORE_NORMALIZE, fragment_text,
+            core, _SOURCE_CLEANUP_CORE_NORMALIZE, fragment_text,
             strip_headers_footers_fn=lambda value: value,
             dedup_nearby_lines_fn=lambda value: value,
+            **_core_fused_term_kwargs(core),
         )
         attempt.finish(normalized_fragment, "auxiliary")
     fragment_counts = Counter(
@@ -6674,6 +6716,27 @@ def _normalize_source_chunk_text(
         canonical_text_overrides: dict[str, str] | None = None,
         text_rebuild_refs: set[str] | frozenset[str] = frozenset()) -> str:
     """Preserve source-bound numeric text without retaining page furniture."""
+    scope = _SourceBoundScope()
+    token = _SOURCE_BOUND_NORMALIZATION.set(scope)
+    try:
+        return _normalize_source_bound_chunk_text(
+            text, content_source,
+            preserve_source_identity=preserve_source_identity,
+            source_items=source_items,
+            canonical_text_overrides=canonical_text_overrides,
+            text_rebuild_refs=text_rebuild_refs)
+    finally:
+        scope.active = False
+        _SOURCE_BOUND_NORMALIZATION.reset(token)
+
+
+def _normalize_source_bound_chunk_text(
+        text: str, content_source: str | None, *,
+        preserve_source_identity: bool,
+        source_items: list | None,
+        canonical_text_overrides: dict[str, str] | None,
+        text_rebuild_refs: set[str] | frozenset[str]) -> str:
+    """Normalize one source-bound fragment; see _normalize_source_chunk_text."""
     with _source_cleanup_audit._invocation(text) as observation:
         _source_cleanup_audit._value("wrapper.content_source", content_source)
         _source_cleanup_audit._value("wrapper.preserve_source_identity", preserve_source_identity)
@@ -6690,10 +6753,12 @@ def _normalize_source_chunk_text(
         if (content_source == "footnote"
                 and _SOURCE_FOOTNOTE_MARKER_ONLY_RE.fullmatch(text)):
             with _source_cleanup_audit._pass_scope("footnote", "output", text) as attempt:
+                core = _chunking_core._normalize_text
                 normalized = _source_cleanup_audit._call_core(
-                    _chunking_core._normalize_text, _SOURCE_CLEANUP_CORE_NORMALIZE, text,
+                    core, _SOURCE_CLEANUP_CORE_NORMALIZE, text,
                     strip_headers_footers_fn=lambda value: value,
                     dedup_nearby_lines_fn=dedup_fn,
+                    **_core_fused_term_kwargs(core),
                 )
                 attempt.finish(normalized, "committed")
                 return normalized if observation is None else observation.finish(normalized, attempt)
@@ -6713,10 +6778,12 @@ def _normalize_source_chunk_text(
         # only when the generic cleaner erased the entire source-bound fragment;
         # actual page headers/footers are excluded before this point.
         with _source_cleanup_audit._pass_scope("numeric_rescue", "output", text) as attempt:
+            core = _chunking_core._normalize_text
             normalized = _source_cleanup_audit._call_core(
-                _chunking_core._normalize_text, _SOURCE_CLEANUP_CORE_NORMALIZE, text,
+                core, _SOURCE_CLEANUP_CORE_NORMALIZE, text,
                 strip_headers_footers_fn=lambda value: value,
                 dedup_nearby_lines_fn=dedup_fn,
+                **_core_fused_term_kwargs(core),
             )
             attempt.finish(normalized, "committed")
             return normalized if observation is None else observation.finish(normalized, attempt)
@@ -9140,7 +9207,8 @@ def _coalesce_chunk_boundaries(
                 or left_core.endswith(("-", "–", "—", ",", ";", ":")))
 
     def _join_continued_boundary(
-            left: str, right: str, *, separate: bool = False) -> str:
+            left: str, right: str, *, separate: bool = False,
+            keep_terminal_hyphen: bool = False) -> str:
         """Join one visible continuation without retaining PDF line wrap."""
         left_core = left.rstrip()
         right_core = right.lstrip()
@@ -9152,6 +9220,13 @@ def _coalesce_chunk_boundaries(
         # the same extracted glyph as an interruption dash (``Boomer- We``).
         if (re.search(r"[A-Za-z0-9]-$", left_core)
                 and re.match(r"[a-z]", right_core)):
+            # Between two source-bound records the hyphen ends one source
+            # item and the fragment starts another.  Removing it fuses two
+            # source tokens (``Cabinet-`` + ``level``) into one that no
+            # source item contains, which the fidelity audit rejects; keeping
+            # it preserves both tokens and a hard hyphen's spelling.
+            if keep_terminal_hyphen:
+                return left_core + right_core
             return left_core[:-1] + right_core
         return f"{left_core} {right_core}".strip()
 
@@ -9179,8 +9254,11 @@ def _coalesce_chunk_boundaries(
             _opening_list_marker_ref(record, right_body, list_markers)
             if list_markers else None)
         separate = list_ref is not None and list_ref in separated_list_refs
+        source_bound = any(
+            item["metadata"].get("source_items") for item in (previous, record))
         reordered_text = _join_continued_boundary(
-            left_body, right_body, separate=separate)
+            left_body, right_body, separate=separate,
+            keep_terminal_hyphen=source_bound)
         boundary_footnotes = trailing_footnotes + leading_footnotes
         if boundary_footnotes:
             reordered_text += "\n\n" + "\n".join(boundary_footnotes)
@@ -9190,8 +9268,6 @@ def _coalesce_chunk_boundaries(
         # Relocating edge lines would reorder a source-bound record's text
         # against its lineage (a numbered list line is not a footnote there),
         # which the fidelity audit rejects; keep such records separate.
-        source_bound = any(
-            item["metadata"].get("source_items") for item in (previous, record))
         if (same_heading and mergeable_body
                 and not (source_bound and boundary_footnotes)
                 and _pages_touch(previous, record)
@@ -9903,7 +9979,10 @@ def _validate_chunk_structure_for_publication(
             issues.append(f"chunk {index} retains a split URL")
         if "This and other authors' explanations draw" in text:
             issues.append(f"chunk {index} retains editorial boilerplate")
-        if re.search(
+        # A source-bound record may keep a fused spelling only when its source
+        # item attests it (OCR can read ``three-judge`` as ``threejudge``);
+        # the fidelity audit rejects any token the pipeline itself fuses.
+        if not metadata.get("source_items") and re.search(
                 r"\b(?:clientlawyer|lawyerclient|plaintiffdefendant|"
                 r"threejudge|Aconcluding)\b", text, re.I):
             issues.append(f"chunk {index} retains a known fused term")

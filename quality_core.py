@@ -284,7 +284,10 @@ def _normalization_issues(records: Sequence[dict]) -> dict[str, list[int]]:
             issues["split_url"].append(index)
         if "This and other authors' explanations draw" in text:
             issues["editorial_boilerplate"].append(index)
-        if re.search(
+        # A source-bound record keeps a fused spelling only when its source
+        # item attests it; source_token_fidelity rejects any fused token the
+        # pipeline itself introduced.
+        if not metadata.get("source_items") and re.search(
                 r"\b(?:clientlawyer|lawyerclient|plaintiffdefendant|"
                 r"threejudge|Aconcluding)\b", text, re.I):
             issues["known_fused_term"].append(index)

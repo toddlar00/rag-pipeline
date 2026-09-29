@@ -18,6 +18,7 @@ import re
 import sys
 import time
 
+import artifact_io
 from evaluation_inputs import _hex_digest, _read_snapshot, _strict_json_bytes
 import storage_policy
 from ocr_experiment_runtime import _name as normalize_package, capture_runtime_manifest
@@ -138,14 +139,21 @@ def _elapsed(value: object) -> float:
 # Executed-source digests, reused only while a file's identity is unchanged.
 # A file modified within the racy window before its read is never cached:
 # coarse file timestamps could otherwise hide a same-size rewrite.
-_SOURCE_DIGESTS: dict[Path, tuple[tuple[int, int, int, int, int], str]] = {}
+_SOURCE_DIGESTS: dict[Path, tuple[tuple[int, int, int, int, int, int], str]] = {}
 _RACY_WINDOW_NS = 2_000_000_000
 
 
-def _source_identity(path: Path) -> tuple[int, int, int, int, int]:
+def _source_identity(path: Path) -> tuple[int, int, int, int, int, int]:
     status = os.lstat(path)
     return (status.st_mode, status.st_size, status.st_mtime_ns,
-            status.st_ino, status.st_dev)
+            status.st_ctime_ns, status.st_ino, status.st_dev)
+
+
+def _read_executed_source(path: Path) -> tuple[str, tuple[int, int, int, int, int]]:
+    """Return one bounded read's SHA-256 and its opened handle's fingerprint."""
+    _, digest, fingerprint = artifact_io._read_index_artifact_snapshot(
+        path, max_bytes=4 * 1024 * 1024)
+    return digest, fingerprint
 
 
 def _executed_source_digest(path: Path) -> str:
@@ -153,21 +161,35 @@ def _executed_source_digest(path: Path) -> str:
 
     Every call still refuses link components; only the bounded content read
     is reused, for an unchanged ``lstat`` identity (mode, size, mtime,
-    inode, device) whose modification is older than the racy window.
+    ctime, inode, device) whose modification is older than the racy window.
+    A digest is cached only when the opened handle's ``fstat`` content
+    identity (device, inode, size, mtime) is that same file, so bytes read
+    from a file swapped in during the read are never remembered under the
+    restored file's identity. ctime is compared only between ``lstat``
+    calls: Windows ``lstat`` and ``fstat`` can report different ctime
+    semantics for the same file. POSIX updates ctime on every write, so an
+    in-place rewrite that restores the mtime is re-read there. A read whose
+    handle is not the observed file is retried, and after three such reads
+    the receipt fails rather than bind another file's bytes.
     """
     storage_policy.assert_no_link_components(path)
-    before = _source_identity(path)
-    cached = _SOURCE_DIGESTS.get(path)
-    if cached is not None and cached[0] == before:
-        return cached[1]
-    digest = _read_snapshot(
-        path, label="executed project source", max_bytes=4 * 1024 * 1024)[1]
-    if (_source_identity(path) == before
-            and time.time_ns() - before[2] > _RACY_WINDOW_NS):
-        _SOURCE_DIGESTS[path] = (before, digest)
-    else:
-        _SOURCE_DIGESTS.pop(path, None)
-    return digest
+    for _ in range(3):
+        before = _source_identity(path)
+        cached = _SOURCE_DIGESTS.get(path)
+        if cached is not None and cached[0] == before:
+            return cached[1]
+        digest, fingerprint = _read_executed_source(path)
+        mode, size, mtime_ns, ctime_ns, inode, device = before
+        if fingerprint[:4] != (device, inode, size, mtime_ns):
+            _SOURCE_DIGESTS.pop(path, None)
+            continue
+        if (_source_identity(path) == before
+                and time.time_ns() - mtime_ns > _RACY_WINDOW_NS):
+            _SOURCE_DIGESTS[path] = (before, digest)
+        else:
+            _SOURCE_DIGESTS.pop(path, None)
+        return digest
+    raise RuntimeError(f"executed project source changed while it was read: {path}")
 
 
 def _loaded_source_digests() -> dict[str, str]:
