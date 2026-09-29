@@ -12,7 +12,7 @@ updates:
       pdf-docling:
         patterns: ["docling", "docling-core", "pymupdf", "pypdfium2"]
       vector-stores:
-        patterns: ["chromadb", "onnxruntime", "qdrant-client"]
+        patterns: ["chromadb", "h2", "onnxruntime", "qdrant-client"]
       ml-runtime:
         patterns: ["aiohttp", "datasets", "einops", "flagembedding", "numpy", "rank-bm25", "sentence-transformers", "torch", "torchvision", "tqdm", "transformers"]
       service-ui:

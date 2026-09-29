@@ -1560,6 +1560,9 @@ datasets and aiohttp to governed direct inputs to take their advisory fixes
 pinned Nomic embedding code calls; datasets 5.0.1; aiohttp 3.14.3), adds a
 guard test and refreshes the inventory, and supersedes the `13f3b5d` pair
 for its own pull request.
+The stacked vector-stores h2-promotion source `21d66eb` promotes h2 to a
+governed direct input to take its advisory fix (4.4.1) and supersedes the
+`8c12135` pair for its own pull request.
 Its Windows/Linux
 pair (independent local same-platform comparisons passed) is that branch's
 candidate; its hosted checks and exact-SHA record are pending, and the

@@ -34,7 +34,7 @@ input manifests belongs to exactly one declared compatibility domain:
 | Domain | Direct packages |
 | --- | --- |
 | PDF/Docling | `docling`, `docling-core`, `pymupdf`, `pypdfium2` |
-| Vector stores | `chromadb`, `onnxruntime`, `qdrant-client` |
+| Vector stores | `chromadb`, `h2`, `onnxruntime`, `qdrant-client` |
 | ML/runtime | `aiohttp`, `datasets`, `einops`, `flagembedding`, `numpy`, `rank-bm25`, `sentence-transformers`, `torch`, `torchvision`, `tqdm`, `transformers` |
 | Service/UI | `fastapi`, `gradio`, `uvicorn` |
 | Provider transport | `google-genai`, `requests` |
