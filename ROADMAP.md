@@ -1330,9 +1330,9 @@ read by fresh layout-aware OCR of an image-only derivative, using
       With the rotation fixed, the casebook's chunking reaches the corpus
       quality gate. That gate surfaces two separate defects the rotation
       had masked, and both are follow-ups. One is source-token fidelity on
-      printed pp. 389–390, where two source items share one output record.
-      The other is a table's source-native row-count mismatch on
-      pp. 678–679, which spans two table records.
+      PDF pp. 389–390, with two uncovered source items and one output
+      record. The other is a table's source-native row-count mismatch on
+      PDF pp. 678–679, across two table records.
   - *Durable-job manager writes on Windows.* The advisory heartbeat now
     tolerates transient replace failures (WinError 5, 32 or 33) for up to
     60 seconds. The manager's other writes still fail on the first such
