@@ -10,6 +10,7 @@
     "vector-stores": [
       "chromadb",
       "h2",
+      "oauthlib",
       "onnxruntime",
       "qdrant-client"
     ],

@@ -16,7 +16,7 @@ from tools import (
 
 EXPECTED_DEPENDENCY_DOMAINS = {
     "pdf-docling": ["docling", "docling-core", "pymupdf", "pypdfium2"],
-    "vector-stores": ["chromadb", "h2", "onnxruntime", "qdrant-client"],
+    "vector-stores": ["chromadb", "h2", "oauthlib", "onnxruntime", "qdrant-client"],
     "ml-runtime": [
         "aiohttp",
         "datasets",
@@ -320,7 +320,7 @@ def test_repository_dependency_domains_cover_every_direct_input_exactly():
         for package in domain_packages
     ]
     assert len(payload["domains"]) == 6
-    assert len(packages) == len(set(packages)) == 32
+    assert len(packages) == len(set(packages)) == 33
 
 
 def test_dependency_domains_reject_unassigned_direct_package(tmp_path):

@@ -1718,6 +1718,13 @@ with nits. The review-fix source `8e0b2a6` makes the contract derivation
 fail closed on module imports and computed attribute names, tracks
 definitions per class, re-derives over every pinned remote-code file, adds a
 dependency-free derivation test, and supersedes the `28ba800` pair.
+The `8e0b2a6` pair (gate-only child `3062ab3`) passed the hosted CI
+promotion gate on [PR
+#136](https://github.com/toddlar00/rag-pipeline/pull/136), which merged into
+`main` as `2f07510`. The vector-stores promotion source `0333947` makes
+oauthlib a governed direct input and moves it from 3.3.1 to 4.0.0
+(CVE-2026-49264 and CVE-2026-49265) in the core, full and smoke locks, and
+supersedes the `8e0b2a6` pair.
 Its Windows/Linux
 pair (independent local same-platform comparisons passed) is that branch's
 candidate; its hosted checks and exact-SHA record are pending, and the
