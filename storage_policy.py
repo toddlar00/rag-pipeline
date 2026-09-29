@@ -623,13 +623,16 @@ def _transient_replace_error(error: OSError) -> bool:
 
 
 def is_transient_replace_error(error: BaseException) -> bool:
-    """Return whether a replace failed on transient Windows interference.
+    """Return whether a replace itself failed on transient Windows interference.
 
-    Access-denied, sharing and lock violations come from another process
-    briefly holding the destination (a scanner, an indexer or a sync client);
-    identity and policy failures never qualify.
+    Only a failed rename names both paths (``filename2``). Its access-denied,
+    sharing or lock violation comes from another process briefly holding the
+    destination (a scanner, an indexer or a sync client). Identity, policy and
+    permission-inspection failures never qualify.
     """
-    return isinstance(error, OSError) and _transient_replace_error(error)
+    return (isinstance(error, OSError)
+            and getattr(error, "filename2", None) is not None
+            and _transient_replace_error(error))
 
 
 def _replace_with_revalidated_retry(

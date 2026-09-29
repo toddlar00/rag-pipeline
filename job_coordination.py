@@ -1059,9 +1059,11 @@ def run_job(
             except OSError as exc:
                 if not storage_policy.is_transient_replace_error(exc):
                     raise
+                # The budget is elapsed time, immune to wall-clock changes.
+                failed_at = time.monotonic()
                 if heartbeat_failing_since is None:
-                    heartbeat_failing_since = now_heartbeat
-                if (now_heartbeat - heartbeat_failing_since
+                    heartbeat_failing_since = failed_at
+                if (failed_at - heartbeat_failing_since
                         >= _HEARTBEAT_TRANSIENT_FAILURE_BUDGET):
                     raise
                 # The next heartbeat writes the newer runtime again.

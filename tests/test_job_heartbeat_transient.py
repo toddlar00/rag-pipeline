@@ -19,36 +19,42 @@ import job_runtime
 import storage_policy
 from test_job_manager import _write_worker
 
-SLEEPING_WORKER = """
+
+def _worker(seconds):
+    return f"""
 import time
-time.sleep(1.5)
+time.sleep({seconds})
 print("worker finished")
 """
 
 
-def _windows_error(winerror, error_type=PermissionError):
-    error = error_type(13, "Access is denied")
+def _replace_error(winerror, error_type=PermissionError):
+    # os.replace names both paths; the classifier requires filename2.
+    error = error_type(13, "Access is denied", "runtime.json.tmp", None, "runtime.json")
     error.winerror = winerror
     return error
 
 
 def _from_heartbeat():
-    return any(frame.function == "heartbeat" for frame in inspect.stack())
+    return any(frame.function == "heartbeat" for frame in inspect.stack(0))
 
 
-def _run(tmp_path, monkeypatch, failure, *, fail_count=None):
+def _run(tmp_path, monkeypatch, failure, *, should_fail, seconds=1.5):
     real_write = job_manager._write_runtime
     raised = []
+    heartbeats = []
 
     def flaky_write(path, runtime):
-        if _from_heartbeat() and (fail_count is None or len(raised) < fail_count):
-            raised.append(failure)
-            raise failure
+        if _from_heartbeat():
+            heartbeats.append(None)
+            if should_fail(len(heartbeats)):
+                raised.append(failure)
+                raise failure
         return real_write(path, runtime)
 
     monkeypatch.setattr(job_manager, "_HEARTBEAT_INTERVAL", 0.0)
     monkeypatch.setattr(job_manager, "_write_runtime", flaky_write)
-    worker = _write_worker(tmp_path / "sleeping_worker.py", SLEEPING_WORKER)
+    worker = _write_worker(tmp_path / "sleeping_worker.py", _worker(seconds))
     store = job_runtime.JobStore(tmp_path / "jobs")
     submitted = store.submit_job("full", [], timeout_seconds=20)
     result = job_manager.run_job(store, submitted.job_id, script_path=worker)
@@ -58,40 +64,61 @@ def _run(tmp_path, monkeypatch, failure, *, fail_count=None):
 @pytest.mark.parametrize("winerror", [5, 32, 33])
 def test_transient_heartbeat_replace_failures_do_not_fail_a_healthy_job(
         tmp_path, monkeypatch, winerror):
-    result, raised = _run(tmp_path, monkeypatch, _windows_error(winerror),
-                          fail_count=3)
+    result, raised = _run(tmp_path, monkeypatch, _replace_error(winerror),
+                          should_fail=lambda count: count <= 3)
 
     assert len(raised) == 3
     assert result.status == "succeeded"
     assert result.exit_code == 0
 
 
-def test_heartbeat_failures_beyond_the_tolerance_still_fail_the_job(
+def test_persistent_heartbeat_failures_fail_the_job_after_the_budget(
         tmp_path, monkeypatch):
-    monkeypatch.setattr(job_manager, "_HEARTBEAT_TRANSIENT_FAILURE_BUDGET", 0.0)
+    monkeypatch.setattr(job_manager, "_HEARTBEAT_TRANSIENT_FAILURE_BUDGET", 0.5)
 
-    result, raised = _run(tmp_path, monkeypatch, _windows_error(5))
+    result, raised = _run(tmp_path, monkeypatch, _replace_error(5),
+                          should_fail=lambda count: True, seconds=5)
 
-    assert raised
+    assert len(raised) > 1  # tolerated within the budget, then propagated
     assert result.status == "failed"
+
+
+def test_a_successful_heartbeat_resets_the_failure_budget(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(job_manager, "_HEARTBEAT_TRANSIENT_FAILURE_BUDGET", 0.5)
+
+    result, raised = _run(tmp_path, monkeypatch, _replace_error(32),
+                          should_fail=lambda count: count % 4 != 0, seconds=2)
+
+    assert len(raised) > 3
+    assert result.status == "succeeded"
 
 
 def test_non_transient_heartbeat_failures_still_fail_the_job(
         tmp_path, monkeypatch):
     result, raised = _run(tmp_path, monkeypatch,
-                          storage_policy.StoragePolicyError("identity changed"))
+                          storage_policy.StoragePolicyError("identity changed"),
+                          should_fail=lambda count: True)
 
     assert len(raised) == 1
     assert result.status == "failed"
 
 
 @pytest.mark.parametrize(("error", "transient"), [
-    (_windows_error(5), True),
-    (_windows_error(32, OSError), True),
-    (_windows_error(33, OSError), True),
-    (_windows_error(2, OSError), False),
+    (_replace_error(5), True),
+    (_replace_error(32, OSError), True),
+    (_replace_error(33, OSError), True),
+    (_replace_error(2, OSError), False),
     (PermissionError(13, "denied"), False),
     (storage_policy.StoragePolicyError("changed"), False),
 ])
 def test_transient_replace_error_classification(error, transient):
     assert storage_policy.is_transient_replace_error(error) is transient
+
+
+def test_a_permission_inspection_error_is_not_a_transient_replace():
+    # An access error while reading a file's DACL names one path, not two.
+    error = PermissionError(13, "Access is denied", "runtime.json")
+    error.winerror = 5
+
+    assert storage_policy.is_transient_replace_error(error) is False

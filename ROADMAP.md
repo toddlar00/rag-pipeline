@@ -1322,6 +1322,14 @@ read by fresh layout-aware OCR of an image-only derivative, using
       The likely reasons are a one-character right-margin item that makes
       the blocks overlap, and a late block with more items than the
       fallback accepts.
+  - *Durable-job manager writes on Windows.* The advisory heartbeat now
+    tolerates transient replace failures (WinError 5, 32 or 33) for up to
+    60 seconds. The manager's other writes still fail on the first such
+    error: the child-started and cancellation runtime writes, the attempt
+    report, the ready marker, and the terminal runtime write. When a
+    handle is held across worker exit, the terminal write's
+    `PermissionError` escapes `run_job` after the store has recorded
+    `succeeded`, and reconciliation repairs the report later.
   - *Born-digital structure.* The born-digital supplement shows the same
     heading and opinion attribution errors, so attribution is a structure
     problem, not only an OCR one.
