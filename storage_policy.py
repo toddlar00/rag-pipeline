@@ -622,6 +622,19 @@ def _transient_replace_error(error: OSError) -> bool:
         error, "winerror", None) in _TRANSIENT_WINDOWS_REPLACE_ERRORS
 
 
+def is_transient_replace_error(error: BaseException) -> bool:
+    """Return whether a replace itself failed on transient Windows interference.
+
+    Only a failed rename names both paths (``filename2``). Its access-denied,
+    sharing or lock violation comes from another process briefly holding the
+    destination (a scanner, an indexer or a sync client). Identity, policy and
+    permission-inspection failures never qualify.
+    """
+    return (isinstance(error, OSError)
+            and getattr(error, "filename2", None) is not None
+            and _transient_replace_error(error))
+
+
 def _replace_with_revalidated_retry(
         source: Path, destination: Path, *, replace: ReplaceFn,
         parent_identity: tuple[int, int],

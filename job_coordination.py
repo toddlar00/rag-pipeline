@@ -59,6 +59,11 @@ _MAX_MANAGER_JSON_BYTES = 64 * 1024
 _MAX_RUN_REPORT_BYTES = 8 * 1024 * 1024
 _MAX_WORKER_LOG_BYTES = 8 * 1024 * 1024
 _HEARTBEAT_INTERVAL = 1.0
+# The heartbeat only refreshes advisory runtime metadata; no reader judges
+# liveness from heartbeat_at. On Windows a scanner or indexer can hold
+# runtime.json longer than the atomic-replace retry window, so transient
+# replace failures are tolerated until this long without a successful write.
+_HEARTBEAT_TRANSIENT_FAILURE_BUDGET = 60.0
 _RECOVERY_TERMINATE_GRACE = 3.0
 _GENERIC_BACKGROUND_TIMEOUT = 4 * 60 * 60.0
 _TERMINAL_TELEMETRY = frozenset({
@@ -969,6 +974,7 @@ def run_job(
         worker_birth: str | None = None
         cancel_observed = False
         last_heartbeat = 0.0
+        heartbeat_failing_since: float | None = None
         exit_code: int | None = None
         manager_error = False
         supervisor_cleanup_unconfirmed = False
@@ -1038,7 +1044,7 @@ def run_job(
             return requested
 
         def heartbeat(_process) -> None:
-            nonlocal last_heartbeat, runtime
+            nonlocal last_heartbeat, runtime, heartbeat_failing_since
             now_heartbeat = time.time()
             if now_heartbeat - last_heartbeat < _HEARTBEAT_INTERVAL:
                 return
@@ -1048,7 +1054,21 @@ def run_job(
             runtime = replace(
                 runtime, heartbeat_at=now_heartbeat,
                 updated_at=now_heartbeat)
-            _write_runtime(paths.runtime, runtime)
+            try:
+                _write_runtime(paths.runtime, runtime)
+            except OSError as exc:
+                if not storage_policy.is_transient_replace_error(exc):
+                    raise
+                # The budget is elapsed time, immune to wall-clock changes.
+                failed_at = time.monotonic()
+                if heartbeat_failing_since is None:
+                    heartbeat_failing_since = failed_at
+                if (failed_at - heartbeat_failing_since
+                        >= _HEARTBEAT_TRANSIENT_FAILURE_BUDGET):
+                    raise
+                # The next heartbeat writes the newer runtime again.
+                return
+            heartbeat_failing_since = None
 
         worker_argv = _inject_telemetry_arguments(
             execution, paths, run_id)

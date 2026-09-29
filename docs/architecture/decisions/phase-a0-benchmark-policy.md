@@ -10,9 +10,10 @@
   `1ba9415` passed on PR #121 (merged through `602bec1`); the dependency
   series pairs passed hosted CI on PRs #122 to #130 (merged through
   `1cffc58`), the post-merge documentation pair passed on PR #135 (merged
-  through `9eb6f94`), and the TOC glyph-leader fix pair at source `e7b60cd`
-  is pending; exact-head human review and separate R8 owner authorization
-  are not recorded
+  through `9eb6f94`), the TOC glyph-leader fix pair passed on PR #138
+  (merged through `a2c5629`), and the job-heartbeat hardening pair at source
+  `da6540d` is pending; exact-head human review and separate R8 owner
+  authorization are not recorded
 - **Milestone:** R10 prerequisite for the R8 pipeline-ownership move
 - **Report schema:** `phase-a0` v3
 
@@ -143,22 +144,23 @@ gate-only child `32153e9` and merge `376277c`
 Task 0.8 static-security pair at source `8891e1b` repeated it through
 gate-only child `1533164` and merge `e34103f`
 ([PR #107](https://github.com/toddlar00/rag-pipeline/pull/107)). The
-current replacement pair uses the clean TOC glyph-leader fix source
-`e7b60cd8459c2158df28a1a9fd3d7b30e2c4c3b2` (tree
-`ecb5bbf849fc3027871a8ad9a46e13dfc5a8beaf`), a failing-only pipeline fix
-after a series of one-domain dependency updates, on `main` after the merges
-of the documentation follow-up #135 (`9eb6f94`), the dependency series #122
-to #130 (`1cffc58`), the fresh-OCR fidelity source `1ba9415`, the
-FlagEmbedding source `ddbef38`, the pytest-xdist source `ff5e64f`, the
-test-time economy source `365de1c` and the OCR-program and casebook-excerpt
-source `29ea76b`; together they changed Python source, CI configuration,
-`.gitattributes`, two test-tooling locks (pytest-xdist and execnet in
-`requirements-test.lock` and `requirements-smoke.lock`) and the
-FlagEmbedding record of `requirements-core.lock` and
-`requirements-full.lock`; the stacked dependency updates also change the
-vector-stores, Service/UI, test-audit tooling, ML/runtime, PDF/Docling
-(docling-core), promoted ML/runtime, promoted h2 and promoted cryptography
-records of their mapped locks, but no model lock. It supersedes the
+current replacement pair uses the clean job-heartbeat hardening source
+`da6540d143dadb8c4be0a007cebdb3b4f0d14749` (tree
+`ae7af01aa824b6287423e3848ead7675895163af`), a job-manager hardening
+follow-up to a series of one-domain dependency updates, on `main` after the
+merges of the TOC glyph-leader fix #138 (`a2c5629`), the documentation
+follow-up #135 (`9eb6f94`), the dependency series #122 to #130 (`1cffc58`),
+the fresh-OCR fidelity source `1ba9415`, the FlagEmbedding source `ddbef38`,
+the pytest-xdist source `ff5e64f`, the test-time economy source `365de1c`
+and the OCR-program and casebook-excerpt source `29ea76b`; together they
+changed Python source, CI configuration, `.gitattributes`, two test-tooling
+locks (pytest-xdist and execnet in `requirements-test.lock` and
+`requirements-smoke.lock`) and the FlagEmbedding record of
+`requirements-core.lock` and `requirements-full.lock`; the stacked
+dependency updates also change the vector-stores, Service/UI, test-audit
+tooling, ML/runtime, PDF/Docling (docling-core), promoted ML/runtime,
+promoted h2 and promoted cryptography records of their mapped locks, but no
+model lock. It supersedes the
 earlier `1ae8502` pair, whose child `766feaf` passed both hosted Phase A0
 cells but whose dependency-light unit lanes failed at collection. Source
 `a15232d` then passed both hosted Phase A0 cells on [PR
@@ -285,6 +287,15 @@ splits table-of-contents chapter rows whose dot leaders were extracted as
 control characters or U+FFFD, only when the ordinary parse leaves a fused
 chapter title; it changes no dependency or lock and supersedes the `da13c4c`
 pair.
+The `e7b60cd` pair (gate-only child `2643774`) passed the hosted CI
+promotion gate on [PR
+#138](https://github.com/toddlar00/rag-pipeline/pull/138), which merged into
+`main` as `a2c5629`. The job-heartbeat hardening source `da6540d` rebases
+the reviewed heartbeat change of [PR
+#137](https://github.com/toddlar00/rag-pipeline/pull/137) (an independent
+review approved it with nits, all addressed) onto that merge; it tolerates
+transient Windows replace failures of the advisory heartbeat for a bounded
+time, changes no dependency or lock and supersedes the `e7b60cd` pair.
 Its Windows and
 Linux CPython 3.12.13 reports were
 generated after the same strict hash-locked synchronization and
@@ -469,15 +480,16 @@ then the stacked vector-stores h2-promotion source `21d66eb`,
 then the stacked provider-transport cryptography-promotion source `3e23b50`,
 then the stacked supply-chain renewal source `01adb4f`,
 then the stacked post-merge documentation source `da13c4c`,
-then the stacked TOC glyph-leader fix source `e7b60cd`.
+then the stacked TOC glyph-leader fix source `e7b60cd`,
+then the stacked job-heartbeat hardening source `da6540d`.
 Its Windows report
-is 51,087 bytes (file SHA-256
-`03212e9c7265a47f9fbe23c5b3b44f4a7c79281f3046d5c9a00b8f2283cb8de2`;
+is 51,083 bytes (file SHA-256
+`30e7cd0d4bba0773765349c93feb98f7278704f5c35f90eeb4f9f630479005b7`;
 embedded report SHA-256
-`3a2deb53a9aa144f6899d6abb028d310822f84b0eaaf43b93eba91e0c7de2fea`).
-Its Linux report is 50,478 bytes (file SHA-256
-`587a9e9949247a2285305ea8eb82334328e83ea81f6e9b1d6d2802a2acaa4388`;
+`076ae7c7c434fad43c8ab1e69b354d7780ed13582e5c3498571b765f2ea7efb4`).
+Its Linux report is 50,480 bytes (file SHA-256
+`614b9e2859868fefab020fa837f9f297bb490b63a167db8004ad4582b7bb39b0`;
 embedded report SHA-256
-`a9e3412a7d849334367eb609b2702a9824c9e53ae436b404c5a8a05d014ba198`).
+`0d7ad9d15b3092a626d9e696dcab5cc234c23a6f7f7d18014e986d665d41e3bf`).
 Both use CPython 3.12.13 and pass their complete local same-platform 9×5
 comparisons. Hosted promotion remains pending.

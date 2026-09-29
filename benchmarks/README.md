@@ -7,49 +7,50 @@ fresh-process repetitions.
 
 ## Provenance
 
-Both current reports were generated from the clean TOC glyph-leader fix
-source checkpoint `e7b60cd8459c2158df28a1a9fd3d7b30e2c4c3b2` (tree
-`ecb5bbf849fc3027871a8ad9a46e13dfc5a8beaf`), a failing-only pipeline fix
-after a series of one-domain dependency updates on `main` after the
+Both current reports were generated from the clean job-heartbeat hardening
+source checkpoint `da6540d143dadb8c4be0a007cebdb3b4f0d14749` (tree
+`ae7af01aa824b6287423e3848ead7675895163af`), a job-manager hardening
+follow-up to a series of one-domain dependency updates on `main` after the
 history-preserving merges of #121 (`602bec1`), of that series, #122 to #130
-(`1cffc58`), and of its documentation follow-up #135 (`9eb6f94`). That
-source contains everything through the Task 0.8 static-security merge
-`e34103f` plus the local OCR accuracy, retry and guided-review program,
-opt-in AI evidence search, the passive cleanup audits, the LLM transport and
-worker-launch repairs, the casebook excerpt/supplement pipeline (including
-the opt-in OCR angle-classifier and interleaved-region-merge flags, the
-footnote placement replay, the split-item duplicate retraction and quality
-schema 13), four reviewed architecture-inventory refreshes, the POSIX
-symlinked-interpreter identity fix, an LF attribute for top-level test
-fixtures, dependency-light test guards, a Python 3.10/3.11-tolerant
-import-guard test, a 60-minute Windows unit-lane timeout and the test-time
-economy changes (a session-shared architecture inventory, an indexed
-inventory builder, cached lock-record parsing and executed-source digests,
-and a Windows unit lane split into three shards), pytest-xdist for the unit
-lanes, gradio import guards in seven OCR review test modules, FlagEmbedding
-1.4.2 for Transformers 5 reranking and the fresh-OCR token fidelity fixes,
-followed by stacked one-domain dependency updates for vector stores,
-Service/UI, test-audit tooling, ML/runtime, docling-core, ML advisory
-promotions, h2, cryptography and supply-chain policy renewals. The lock
-changes add pytest-xdist 3.8.0 and execnet 2.1.2 to `requirements-test.lock`
-and `requirements-smoke.lock` and move FlagEmbedding from 1.4.0 to 1.4.2 in
-`requirements-core.lock` and `requirements-full.lock`; the stacked
-vector-stores update moves qdrant-client from 1.19.0 to 1.19.1 and
-onnxruntime from 1.29.0 to 1.30.0 (CPython 3.11+) in its mapped locks; the
-stacked Service/UI update moves gradio from 6.25.0 to 6.28.0 (with
-gradio-client 2.7.1) and uvicorn from 0.52.4 to 0.54.0; the stacked
-test-audit tooling update moves uv from 0.12.5 to 0.12.20 and ruff from
-0.16.3 to 0.16.9; the stacked ML/runtime update moves torch to 2.14.0,
-torchvision to 0.29.0, sentence-transformers to 6.1.0 and tqdm to 4.70.1;
-the stacked docling-core update moves docling-core from 2.92.0 to 2.99.0;
-the stacked ML/runtime advisory promotion moves transformers to 5.16.1
-(tokenizers 0.23.2), datasets to 5.0.1 and aiohttp to 3.14.3; the stacked h2
-promotion moves h2 from 4.3.0 to 4.4.1; the stacked cryptography promotion
-moves cryptography from 49.0.0 to 50.0.1; the stacked supply-chain renewal
-changes no lock; the post-merge documentation changes no lock; the TOC
-glyph-leader fix changes no lock; no model lock changed. The executing
-environments were synchronized with repository-pinned uv 0.12.20 against the
-exact CPU application/test lock union plus its retained bootstrapper:
+(`1cffc58`), of its documentation follow-up #135 (`9eb6f94`), and of the TOC
+glyph-leader fix #138 (`a2c5629`). That source contains everything through
+the Task 0.8 static-security merge `e34103f` plus the local OCR accuracy,
+retry and guided-review program, opt-in AI evidence search, the passive
+cleanup audits, the LLM transport and worker-launch repairs, the casebook
+excerpt/supplement pipeline (including the opt-in OCR angle-classifier and
+interleaved-region-merge flags, the footnote placement replay, the
+split-item duplicate retraction and quality schema 13), four reviewed
+architecture-inventory refreshes, the POSIX symlinked-interpreter identity
+fix, an LF attribute for top-level test fixtures, dependency-light test
+guards, a Python 3.10/3.11-tolerant import-guard test, a 60-minute Windows
+unit-lane timeout and the test-time economy changes (a session-shared
+architecture inventory, an indexed inventory builder, cached lock-record
+parsing and executed-source digests, and a Windows unit lane split into
+three shards), pytest-xdist for the unit lanes, gradio import guards in
+seven OCR review test modules, FlagEmbedding 1.4.2 for Transformers 5
+reranking and the fresh-OCR token fidelity fixes, followed by stacked
+one-domain dependency updates for vector stores, Service/UI, test-audit
+tooling, ML/runtime, docling-core, ML advisory promotions, h2, cryptography
+and supply-chain policy renewals. The lock changes add pytest-xdist 3.8.0
+and execnet 2.1.2 to `requirements-test.lock` and `requirements-smoke.lock`
+and move FlagEmbedding from 1.4.0 to 1.4.2 in `requirements-core.lock` and
+`requirements-full.lock`; the stacked vector-stores update moves
+qdrant-client from 1.19.0 to 1.19.1 and onnxruntime from 1.29.0 to 1.30.0
+(CPython 3.11+) in its mapped locks; the stacked Service/UI update moves
+gradio from 6.25.0 to 6.28.0 (with gradio-client 2.7.1) and uvicorn from
+0.52.4 to 0.54.0; the stacked test-audit tooling update moves uv from 0.12.5
+to 0.12.20 and ruff from 0.16.3 to 0.16.9; the stacked ML/runtime update
+moves torch to 2.14.0, torchvision to 0.29.0, sentence-transformers to 6.1.0
+and tqdm to 4.70.1; the stacked docling-core update moves docling-core from
+2.92.0 to 2.99.0; the stacked ML/runtime advisory promotion moves
+transformers to 5.16.1 (tokenizers 0.23.2), datasets to 5.0.1 and aiohttp to
+3.14.3; the stacked h2 promotion moves h2 from 4.3.0 to 4.4.1; the stacked
+cryptography promotion moves cryptography from 49.0.0 to 50.0.1; the stacked
+supply-chain renewal changes no lock; the post-merge documentation changes
+no lock; the TOC glyph-leader fix changes no lock; the job-heartbeat
+hardening changes no lock; no model lock changed. The executing environments
+were synchronized with repository-pinned uv 0.12.20 against the exact CPU
+application/test lock union plus its retained bootstrapper:
 
 - `requirements-full.lock`
 - `requirements-test.lock`
@@ -64,8 +65,8 @@ marker-resolved distributions before generation.
 
 | Platform | Runtime | Report | Bytes | File SHA-256 | Embedded report SHA-256 |
 |---|---:|---|---:|---|---|
-| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,087 | `03212e9c7265a47f9fbe23c5b3b44f4a7c79281f3046d5c9a00b8f2283cb8de2` | `3a2deb53a9aa144f6899d6abb028d310822f84b0eaaf43b93eba91e0c7de2fea` |
-| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,478 | `587a9e9949247a2285305ea8eb82334328e83ea81f6e9b1d6d2802a2acaa4388` | `a9e3412a7d849334367eb609b2702a9824c9e53ae436b404c5a8a05d014ba198` |
+| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,083 | `30e7cd0d4bba0773765349c93feb98f7278704f5c35f90eeb4f9f630479005b7` | `076ae7c7c434fad43c8ab1e69b354d7780ed13582e5c3498571b765f2ea7efb4` |
+| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,480 | `614b9e2859868fefab020fa837f9f297bb490b63a167db8004ad4582b7bb39b0` | `0d7ad9d15b3092a626d9e696dcab5cc234c23a6f7f7d18014e986d665d41e3bf` |
 
 The reports attest the same source commit, clean-worktree state, tracked-diff
 digest, eight LF and `HEAD`-identical dependency/model-lock inputs, authoritative
@@ -318,6 +319,15 @@ splits table-of-contents chapter rows whose dot leaders were extracted as
 control characters or U+FFFD, only when the ordinary parse leaves a fused
 chapter title; it changes no dependency or lock and supersedes the `da13c4c`
 pair.
+The `e7b60cd` pair (gate-only child `2643774`) passed the hosted CI
+promotion gate on [PR
+#138](https://github.com/toddlar00/rag-pipeline/pull/138), which merged into
+`main` as `a2c5629`. The job-heartbeat hardening source `da6540d` rebases
+the reviewed heartbeat change of [PR
+#137](https://github.com/toddlar00/rag-pipeline/pull/137) (an independent
+review approved it with nits, all addressed) onto that merge; it tolerates
+transient Windows replace failures of the advisory heartbeat for a bounded
+time, changes no dependency or lock and supersedes the `e7b60cd` pair.
 The current reports above
 bind
 that exact clean source and each passes an independent complete

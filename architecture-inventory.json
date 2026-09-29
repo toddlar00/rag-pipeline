@@ -27101,7 +27101,7 @@
   "schema_version": 3,
   "source_architecture": {
     "class_count": 330,
-    "function_count": 4399,
+    "function_count": 4400,
     "import_graph": {
       "cyclic_components": [],
       "edge_count": 648,
@@ -30911,7 +30911,7 @@
             "scope": "top_level"
           }
         ],
-        "definition_locations_sha256": "9258a97520396be77d801c03cc8581cd7df96a5f08629c53f86c7a4416ff6e3b",
+        "definition_locations_sha256": "aedc1bed28312913829c096e7a048f1365c223fc3ec3bf8f45058448f10cda84",
         "function_count": 61,
         "functions": [
           {
@@ -31347,9 +31347,9 @@
           }
         ],
         "module": "job_coordination",
-        "non_blank_lines": 2111,
+        "non_blank_lines": 2131,
         "path": "job_coordination.py",
-        "physical_lines": 2277,
+        "physical_lines": 2297,
         "top_level_function_count": 53
       },
       {
@@ -57823,8 +57823,8 @@
             "scope": "nested"
           }
         ],
-        "definition_locations_sha256": "ff0d2ed0b6ae2dc68aadd816b53555bf92216360a3a5ce0f058177a2acb05550",
-        "function_count": 41,
+        "definition_locations_sha256": "e5362ecace8b6543111cdec67903c2e33e9afb0e28120d189d265d6bb1658b24",
+        "function_count": 42,
         "functions": [
           {
             "kind": "function",
@@ -58044,6 +58044,12 @@
           },
           {
             "kind": "function",
+            "name": "is_transient_replace_error",
+            "scope": "top_level",
+            "signature_sha256": "b56c06b794274ae385bdf5cfd0297275e258741cc88d3251798f1783106c2888"
+          },
+          {
+            "kind": "function",
             "name": "jsonl_lines",
             "scope": "top_level",
             "signature_sha256": "82cb7558d8bb7bf62a8fdb435dfadea26963f9948d306ebde5ece9d2550939d2"
@@ -58075,10 +58081,10 @@
         ],
         "import_edges": [],
         "module": "storage_policy",
-        "non_blank_lines": 1159,
+        "non_blank_lines": 1169,
         "path": "storage_policy.py",
-        "physical_lines": 1279,
-        "top_level_function_count": 38
+        "physical_lines": 1292,
+        "top_level_function_count": 39
       },
       {
         "class_count": 0,
@@ -63685,16 +63691,16 @@
         "top_level_function_count": 2
       }
     ],
-    "physical_line_count": 129869,
+    "physical_line_count": 129902,
     "source_groups": [
       "production",
       "tools",
       "other"
     ],
-    "top_level_function_count": 2913
+    "top_level_function_count": 2914
   },
   "tracked_sources": {
-    "count": 488,
+    "count": 489,
     "groups": [
       {
         "count": 152,
@@ -63855,7 +63861,7 @@
         ]
       },
       {
-        "count": 293,
+        "count": 294,
         "name": "tests",
         "paths": [
           "tests/conftest.py",
@@ -63926,6 +63932,7 @@
           "tests/test_interpreter_file.py",
           "tests/test_job_application.py",
           "tests/test_job_coordination_contracts.py",
+          "tests/test_job_heartbeat_transient.py",
           "tests/test_job_manager.py",
           "tests/test_job_manager_python_launch.py",
           "tests/test_job_runtime.py",
