@@ -1333,6 +1333,25 @@ read by fresh layout-aware OCR of an image-only derivative, using
       PDF pp. 389–390, with two uncovered source items and one output
       record. The other is a table's source-native row-count mismatch on
       PDF pp. 678–679, across two table records.
+  - *Stacked table headers (private tort-law casebook).*
+    - **Defect.** `#/tables/37` and `#/tables/38` (pp. 678-679) are one
+      worksheet with two header bands, split across a page. Both failed
+      `source_native_row_count_mismatch`.
+    - **Cause.** docling-core 2.99 (#126) joins stacked column-header rows
+      into one Markdown header. The native row-count oracle in
+      `quality_core._source_table_dimensions` still subtracted exactly one
+      header row.
+    - **Fix.** On branch `agent/table-header-row-count`, committed locally
+      and not yet in a PR, `table_retrieval_core.source_table_header_row_count`
+      ports docling-core's header-row count. When that count H is not 1,
+      the oracle expects `num_rows - H` rows.
+    - **Scope.** Only failing expectations change, and no schema or policy
+      version moves. The 19 READY h26 runs are unaffected.
+  - *One-column title rows.* `_source_table_dimensions` lacks rag's
+    `columns >= 2` guard on full-width title promotion. A one-column table
+    in the tort-law casebook (PDF p.881) would therefore fail the row
+    check. For now it is published as body text, so the check does not
+    run on it.
   - *Durable-job manager writes on Windows.* The advisory heartbeat now
     tolerates transient replace failures (WinError 5, 32 or 33) for up to
     60 seconds. The manager's other writes still fail on the first such
