@@ -7,54 +7,55 @@ fresh-process repetitions.
 
 ## Provenance
 
-Both current reports were generated from the clean oauthlib promotion source
-checkpoint `0333947f3dac3b641bd3735c047e17158818d7e9` (tree
-`6739285c29c88d1795808419e31a1341e8f44628`), a one-domain supply-chain
-remediation after a series of one-domain dependency updates on `main` after
-the history-preserving merges of #121 (`602bec1`), of that series, #122 to
-#130 (`1cffc58`), of its documentation follow-up #135 (`9eb6f94`), of the
-TOC glyph-leader fix #138 (`a2c5629`), of the job-heartbeat hardening #137
-(`634c38b`) and of the Nomic contract test #136 (`2f07510`). That source
-contains everything through the Task 0.8 static-security merge `e34103f`
-plus the local OCR accuracy, retry and guided-review program, opt-in AI
-evidence search, the passive cleanup audits, the LLM transport and
-worker-launch repairs, the casebook excerpt/supplement pipeline (including
-the opt-in OCR angle-classifier and interleaved-region-merge flags, the
-footnote placement replay, the split-item duplicate retraction and quality
-schema 13), four reviewed architecture-inventory refreshes, the POSIX
-symlinked-interpreter identity fix, an LF attribute for top-level test
-fixtures, dependency-light test guards, a Python 3.10/3.11-tolerant
-import-guard test, a 60-minute Windows unit-lane timeout and the test-time
-economy changes (a session-shared architecture inventory, an indexed
-inventory builder, cached lock-record parsing and executed-source digests,
-and a Windows unit lane split into three shards), pytest-xdist for the unit
-lanes, gradio import guards in seven OCR review test modules, FlagEmbedding
-1.4.2 for Transformers 5 reranking and the fresh-OCR token fidelity fixes,
-followed by stacked one-domain dependency updates for vector stores,
-Service/UI, test-audit tooling, ML/runtime, docling-core, ML advisory
-promotions, h2, cryptography, supply-chain policy renewals and oauthlib. The
-lock changes add pytest-xdist 3.8.0 and execnet 2.1.2 to
-`requirements-test.lock` and `requirements-smoke.lock` and move
-FlagEmbedding from 1.4.0 to 1.4.2 in `requirements-core.lock` and
-`requirements-full.lock`; the stacked vector-stores update moves
-qdrant-client from 1.19.0 to 1.19.1 and onnxruntime from 1.29.0 to 1.30.0
-(CPython 3.11+) in its mapped locks; the stacked Service/UI update moves
-gradio from 6.25.0 to 6.28.0 (with gradio-client 2.7.1) and uvicorn from
-0.52.4 to 0.54.0; the stacked test-audit tooling update moves uv from 0.12.5
-to 0.12.20 and ruff from 0.16.3 to 0.16.9; the stacked ML/runtime update
-moves torch to 2.14.0, torchvision to 0.29.0, sentence-transformers to 6.1.0
-and tqdm to 4.70.1; the stacked docling-core update moves docling-core from
-2.92.0 to 2.99.0; the stacked ML/runtime advisory promotion moves
-transformers to 5.16.1 (tokenizers 0.23.2), datasets to 5.0.1 and aiohttp to
-3.14.3; the stacked h2 promotion moves h2 from 4.3.0 to 4.4.1; the stacked
-cryptography promotion moves cryptography from 49.0.0 to 50.0.1; the stacked
-supply-chain renewal changes no lock; the post-merge documentation changes
-no lock; the TOC glyph-leader fix changes no lock; the job-heartbeat
-hardening changes no lock; the Nomic contract test changes no lock; the
-stacked oauthlib promotion moves oauthlib from 3.3.1 to 4.0.0; no model lock
-changed. The executing environments were synchronized with repository-pinned
-uv 0.12.20 against the exact CPU application/test lock union plus its
-retained bootstrapper:
+Both current reports were generated from the clean tokenless-glyph rotation
+fix source checkpoint `c2d7b57fcbbbb1b7ed33b568f481659f679adc26` (tree
+`04c75f7e92fe20572805aa9f3f391585e1ab2485`), a reading-order fix after a
+series of one-domain dependency updates on `main` after the
+history-preserving merges of #121 (`602bec1`), of that series, #122 to #130
+(`1cffc58`), of its documentation follow-up #135 (`9eb6f94`), of the TOC
+glyph-leader fix #138 (`a2c5629`), of the job-heartbeat hardening #137
+(`634c38b`), of the Nomic contract test #136 (`2f07510`) and of the oauthlib
+promotion #139 (`123bedb`). That source contains everything through the Task
+0.8 static-security merge `e34103f` plus the local OCR accuracy, retry and
+guided-review program, opt-in AI evidence search, the passive cleanup
+audits, the LLM transport and worker-launch repairs, the casebook
+excerpt/supplement pipeline (including the opt-in OCR angle-classifier and
+interleaved-region-merge flags, the footnote placement replay, the
+split-item duplicate retraction and quality schema 13), four reviewed
+architecture-inventory refreshes, the POSIX symlinked-interpreter identity
+fix, an LF attribute for top-level test fixtures, dependency-light test
+guards, a Python 3.10/3.11-tolerant import-guard test, a 60-minute Windows
+unit-lane timeout and the test-time economy changes (a session-shared
+architecture inventory, an indexed inventory builder, cached lock-record
+parsing and executed-source digests, and a Windows unit lane split into
+three shards), pytest-xdist for the unit lanes, gradio import guards in
+seven OCR review test modules, FlagEmbedding 1.4.2 for Transformers 5
+reranking and the fresh-OCR token fidelity fixes, followed by stacked
+one-domain dependency updates for vector stores, Service/UI, test-audit
+tooling, ML/runtime, docling-core, ML advisory promotions, h2, cryptography,
+supply-chain policy renewals and oauthlib. The lock changes add pytest-xdist
+3.8.0 and execnet 2.1.2 to `requirements-test.lock` and
+`requirements-smoke.lock` and move FlagEmbedding from 1.4.0 to 1.4.2 in
+`requirements-core.lock` and `requirements-full.lock`; the stacked
+vector-stores update moves qdrant-client from 1.19.0 to 1.19.1 and
+onnxruntime from 1.29.0 to 1.30.0 (CPython 3.11+) in its mapped locks; the
+stacked Service/UI update moves gradio from 6.25.0 to 6.28.0 (with
+gradio-client 2.7.1) and uvicorn from 0.52.4 to 0.54.0; the stacked
+test-audit tooling update moves uv from 0.12.5 to 0.12.20 and ruff from
+0.16.3 to 0.16.9; the stacked ML/runtime update moves torch to 2.14.0,
+torchvision to 0.29.0, sentence-transformers to 6.1.0 and tqdm to 4.70.1;
+the stacked docling-core update moves docling-core from 2.92.0 to 2.99.0;
+the stacked ML/runtime advisory promotion moves transformers to 5.16.1
+(tokenizers 0.23.2), datasets to 5.0.1 and aiohttp to 3.14.3; the stacked h2
+promotion moves h2 from 4.3.0 to 4.4.1; the stacked cryptography promotion
+moves cryptography from 49.0.0 to 50.0.1; the stacked supply-chain renewal
+changes no lock; the post-merge documentation changes no lock; the TOC
+glyph-leader fix changes no lock; the job-heartbeat hardening changes no
+lock; the Nomic contract test changes no lock; the stacked oauthlib
+promotion moves oauthlib from 3.3.1 to 4.0.0; the tokenless-glyph rotation
+fix changes no lock; no model lock changed. The executing environments were
+synchronized with repository-pinned uv 0.12.20 against the exact CPU
+application/test lock union plus its retained bootstrapper:
 
 - `requirements-full.lock`
 - `requirements-test.lock`
@@ -69,8 +70,8 @@ marker-resolved distributions before generation.
 
 | Platform | Runtime | Report | Bytes | File SHA-256 | Embedded report SHA-256 |
 |---|---:|---|---:|---|---|
-| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,088 | `f0fb2e3350d8f3db1107e81501d1e7746f86825a809f890f5f4096ecbcf6fe0b` | `5cfd85f98d74a195a63bae107bc6f13ea813fb546d9bb6ac411b81bad7ac9018` |
-| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,488 | `627d9b72cbf981ab5ce6c805d5c012c1ea848aece178ddd7fb7bcb571fd1f3da` | `3a3f98b7f43173c90bf5b7f0a49d263d793a3469e638da878b1ed334f8896f97` |
+| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,086 | `f704630ea525797f3a500d0390af4f68982de44839e62fb5d4165e5ff432d949` | `1c3b25ed617a8883a9650b27eb1599688ecdd41f7254efdc5a6572c1a3bacec5` |
+| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,483 | `7419aafd59db48799ca20c9aa0f5945e504111d86d2e5a064884089a5cdc69ed` | `5a19ad9f16ff419cbb3a31a3607083ebca76724bae9f7c59d9387471f78be888` |
 
 The reports attest the same source commit, clean-worktree state, tracked-diff
 digest, eight LF and `HEAD`-identical dependency/model-lock inputs, authoritative
@@ -354,6 +355,14 @@ promotion gate on [PR
 oauthlib a governed direct input and moves it from 3.3.1 to 4.0.0
 (CVE-2026-49264 and CVE-2026-49265) in the core, full and smoke locks, and
 supersedes the `8e0b2a6` pair.
+The `0333947` pair (gate-only child `63b22e2`) passed the hosted CI
+promotion gate on [PR
+#139](https://github.com/toddlar00/rag-pipeline/pull/139), which merged into
+`main` as `123bedb`. The tokenless-glyph rotation fix source `c2d7b57` lets
+the single-wrap reading-order repair and its lineage mirror rotate a page
+intact when only detached zero-token glyphs captured with the upper block
+break the run-disjointness proof; it changes no dependency or lock and
+supersedes the `0333947` pair.
 The current reports above
 bind
 that exact clean source and each passes an independent complete

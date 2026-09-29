@@ -1736,6 +1736,14 @@ promotion gate on [PR
 oauthlib a governed direct input and moves it from 3.3.1 to 4.0.0
 (CVE-2026-49264 and CVE-2026-49265) in the core, full and smoke locks, and
 supersedes the `8e0b2a6` pair.
+The `0333947` pair (gate-only child `63b22e2`) passed the hosted CI
+promotion gate on [PR
+#139](https://github.com/toddlar00/rag-pipeline/pull/139), which merged into
+`main` as `123bedb`. The tokenless-glyph rotation fix source `c2d7b57` lets
+the single-wrap reading-order repair and its lineage mirror rotate a page
+intact when only detached zero-token glyphs captured with the upper block
+break the run-disjointness proof; it changes no dependency or lock and
+supersedes the `0333947` pair.
 Its Windows/Linux
 pair (independent local same-platform comparisons passed) is that branch's
 candidate; its hosted checks and exact-SHA record are pending, and the
