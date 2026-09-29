@@ -1667,6 +1667,14 @@ order (`e8b7e41`, `ac997dc`, `94c2c47`, `049a57e`, `0a3b7f1`, `ca9c6df`,
 `a18e7fc`, `18e9221`, `1cffc58`). The post-merge documentation source
 `da13c4c` records the integrated series and its follow-ups in the README and
 ROADMAP, changes no dependency or lock, and supersedes the `01adb4f` pair.
+The `da13c4c` pair (gate-only child `fab0d70`) passed the hosted CI
+promotion gate on [PR
+#135](https://github.com/toddlar00/rag-pipeline/pull/135), which merged into
+`main` as `9eb6f94`. The failing-only TOC glyph-leader fix source `e7b60cd`
+splits table-of-contents chapter rows whose dot leaders were extracted as
+control characters or U+FFFD, only when the ordinary parse leaves a fused
+chapter title; it changes no dependency or lock and supersedes the `da13c4c`
+pair.
 Its Windows/Linux
 pair (independent local same-platform comparisons passed) is that branch's
 candidate; its hosted checks and exact-SHA record are pending, and the
