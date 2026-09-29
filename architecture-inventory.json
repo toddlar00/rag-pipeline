@@ -1434,6 +1434,13 @@
           "facade_roots": [
             "rag"
           ],
+          "module": "tests.test_table_header_rows_locked",
+          "path": "tests/test_table_header_rows_locked.py"
+        },
+        {
+          "facade_roots": [
+            "rag"
+          ],
           "module": "tests.test_table_retrieval_core",
           "path": "tests/test_table_retrieval_core.py"
         },
@@ -10252,6 +10259,26 @@
           "kinds": [
             "attribute"
           ],
+          "locations_sha256": "d34fb5a8baac07826adfd97fa435a6ec957049b31809cae473b55b866c4c449f",
+          "name": "_normalized_source_table_markdown",
+          "occurrence_count": 1,
+          "paths": [
+            "_normalized_source_table_markdown"
+          ],
+          "source_counts": [
+            {
+              "count": 1,
+              "path": "tests/test_table_header_rows_locked.py"
+            }
+          ]
+        },
+        {
+          "contexts": [
+            "load"
+          ],
+          "kinds": [
+            "attribute"
+          ],
           "locations_sha256": "61f52729fde2b1d3b87091b4204e030853920610d026cbb302da37acb2da843f",
           "name": "_ocr_corruption_score",
           "occurrence_count": 1,
@@ -13892,7 +13919,7 @@
           ]
         }
       ],
-      "using_module_count": 75
+      "using_module_count": 76
     }
   },
   "hash_domains": {
@@ -27115,8 +27142,8 @@
   },
   "schema_version": 3,
   "source_architecture": {
-    "class_count": 332,
-    "function_count": 4407,
+    "class_count": 333,
+    "function_count": 4408,
     "import_graph": {
       "cyclic_components": [],
       "edge_count": 649,
@@ -48219,7 +48246,7 @@
             "scope": "top_level"
           }
         ],
-        "definition_locations_sha256": "48b58d684a79a22fa6a25cb5ec33666f6afd5e19e140a7592f34770000a2c5a8",
+        "definition_locations_sha256": "a67a1260945c346a43faf14ba703687fd5dbeb6ff93f5464ab05f83bc3763e45",
         "function_count": 56,
         "functions": [
           {
@@ -48607,9 +48634,9 @@
           }
         ],
         "module": "quality_core",
-        "non_blank_lines": 2560,
+        "non_blank_lines": 2578,
         "path": "quality_core.py",
-        "physical_lines": 2700,
+        "physical_lines": 2720,
         "top_level_function_count": 52
       },
       {
@@ -58225,15 +58252,19 @@
         "top_level_function_count": 8
       },
       {
-        "class_count": 1,
+        "class_count": 2,
         "classes": [
           {
             "name": "MarkdownTable",
             "scope": "top_level"
+          },
+          {
+            "name": "_SourceTableCell",
+            "scope": "top_level"
           }
         ],
-        "definition_locations_sha256": "a269c59d8244a31ee7e9af8567024eb5ac655d2883c7b671c7de80541fa47192",
-        "function_count": 21,
+        "definition_locations_sha256": "860001cad9c9b3b28649cc1a96325ed5549d0f69e423f0e1803f0f1975ecaac4",
+        "function_count": 22,
         "functions": [
           {
             "kind": "function",
@@ -58345,6 +58376,12 @@
           },
           {
             "kind": "function",
+            "name": "source_table_header_row_count",
+            "scope": "top_level",
+            "signature_sha256": "4c7ab8da726422836b020f4fabaf7797b805cdce5748941ac7b23d6fadef968a"
+          },
+          {
+            "kind": "function",
             "name": "table_candidate_keep_indexes",
             "scope": "top_level",
             "signature_sha256": "b30a51e861162b568a974d49c4955f8def8b2746589f22bc7782e921caa3feca"
@@ -58364,10 +58401,10 @@
         ],
         "import_edges": [],
         "module": "table_retrieval_core",
-        "non_blank_lines": 735,
+        "non_blank_lines": 819,
         "path": "table_retrieval_core.py",
-        "physical_lines": 811,
-        "top_level_function_count": 20
+        "physical_lines": 906,
+        "top_level_function_count": 21
       },
       {
         "class_count": 0,
@@ -63767,16 +63804,16 @@
         "top_level_function_count": 2
       }
     ],
-    "physical_line_count": 130075,
+    "physical_line_count": 130190,
     "source_groups": [
       "production",
       "tools",
       "other"
     ],
-    "top_level_function_count": 2917
+    "top_level_function_count": 2918
   },
   "tracked_sources": {
-    "count": 490,
+    "count": 492,
     "groups": [
       {
         "count": 152,
@@ -63937,7 +63974,7 @@
         ]
       },
       {
-        "count": 295,
+        "count": 297,
         "name": "tests",
         "paths": [
           "tests/conftest.py",
@@ -64228,6 +64265,8 @@
           "tests/test_suggest_ocr_columns_cli.py",
           "tests/test_support_utilities.py",
           "tests/test_sync_model_artifacts.py",
+          "tests/test_table_header_rows.py",
+          "tests/test_table_header_rows_locked.py",
           "tests/test_table_retrieval_core.py",
           "tests/test_test_sharding.py",
           "tests/test_toc_glyph_leaders.py",
