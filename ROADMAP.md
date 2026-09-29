@@ -1544,6 +1544,13 @@ stacked ML/runtime dependency source `e579090` (superseding Dependabot #120:
 torch 2.14.0, torchvision 0.29.0, sentence-transformers 6.1.0 and tqdm
 4.70.1) keeps numpy at 2.5.2, which the OCR disposition observer's verified
 recipe requires, and supersedes the `c11099b` pair for its own pull request.
+The `e579090` pair (gate-only child `2bb7a54`) passed the hosted CI
+promotion gate on [PR
+#125](https://github.com/toddlar00/rag-pipeline/pull/125). The stacked
+docling-core dependency source `13f3b5d` moves docling-core alone from
+2.92.0 to 2.99.0 (docling stays at 2.121.0), lifting the macOS transformers
+cap that blocks the transformers advisory fix, and supersedes the `e579090`
+pair for its own pull request.
 Its Windows/Linux
 pair (independent local same-platform comparisons passed) is that branch's
 candidate; its hosted checks and exact-SHA record are pending, and the
