@@ -13,6 +13,7 @@ import hashlib
 import inspect
 import json
 import threading
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace as NS
 
@@ -226,16 +227,22 @@ def drain_result(result, trace=None):
 
 
 async def process_result(app, entry, inputs, *, state, session_hash, trace=None):
-    """Follow the actual process_api iterator, retaining every full-value yield."""
+    """Follow the actual process_api iterator, retaining every full-value yield.
+
+    Every call carries one event id, as a queued browser or client call does.
+    """
     trace = [] if trace is None else trace
     iterator = None
+    event_id = uuid.uuid4().hex
     try:
         for _ in range(4):
             result = await app.process_api(entry, inputs, state=state,
-                session_hash=session_hash, iterator=iterator, simple_format=True)
+                session_hash=session_hash, iterator=iterator, event_id=event_id,
+                simple_format=True)
             if not result["is_generating"]:
                 if iterator is not None:
-                    # Gradio returns its cached final values, not FINISHED_ITERATING.
+                    # For an event, Gradio returns its cached final values, not
+                    # FINISHED_ITERATING (since 6.28, only for an event).
                     assert result["data"] == trace[-1]
                 return result
             trace.append(result["data"])

@@ -521,6 +521,7 @@ def test_launched_context_download_survives_skips_and_clears_on_late_copy_failur
     from pathlib import Path
     import tempfile
     from types import SimpleNamespace
+    from urllib.parse import unquote
 
     monkeypatch.setenv("GRADIO_ANALYTICS_ENABLED", "False")
     gr = pytest.importorskip("gradio")
@@ -603,7 +604,8 @@ def test_launched_context_download_survives_skips_and_clears_on_late_copy_failur
                 copied = Path(payload["path"])
                 assert copied == cache / binding.path.name and copied != binding.path
                 assert copied.read_bytes() == retained
-                assert payload["url"].endswith(str(copied))
+                # Gradio 6.28 percent-encodes the path in file URLs.
+                assert unquote(payload["url"]).endswith(str(copied))
                 assert "Created a new source-bound context artifact" in response["data"][notice_index]
                 with pytest.raises(InvalidPathError):
                     _check_allowed(binding.path, False)
