@@ -907,12 +907,14 @@ def _source_table_dimensions(document: dict) -> dict[str, tuple[int, int]]:
     When that count is not one, every other source row is a data row.  The
     published title promotion needs a header that repeats the title, and a
     joined or blank header does not.  The exception is a flagged full-width
-    title over blank flagged sub-headers.  That header flattens to the bare
-    title and is promoted, so such a table stays a fail-closed mismatch.
+    title over flagged sub-header rows, at any count of two or more, whose
+    cells are blank, whitespace or punctuation only, or the exact title.
+    The joined header then reduces to the bare title and is promoted, so
+    such a table stays a fail-closed mismatch.
 
-    When the count is one (or the cells cannot be read), the established
-    rule is unchanged.  It is the ordinary single-row subtraction, with two
-    exceptions:
+    When the count is one, or the cells hold values outside the strict types
+    that the count models, the established rule is unchanged.  That rule is
+    the ordinary single-row subtraction, with two exceptions:
 
     - A table with exactly one source row whose cells are explicitly not
       headers is normalized to a blank Markdown header plus one data row, so

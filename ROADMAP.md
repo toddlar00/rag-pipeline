@@ -1341,12 +1341,23 @@ read by fresh layout-aware OCR of an image-only derivative, using
       into one Markdown header. The native row-count oracle in
       `quality_core._source_table_dimensions` still subtracted exactly one
       header row.
-    - **Fix.** On branch `agent/table-header-row-count`, committed locally
-      and not yet in a PR, `table_retrieval_core.source_table_header_row_count`
-      ports docling-core's header-row count. When that count H is not 1,
-      the oracle expects `num_rows - H` rows.
+    - **Fix.** A follow-up pull request addresses it.
+      `table_retrieval_core.source_table_header_row_count` ports
+      docling-core's header-row count. When that count H is not 1, the
+      oracle expects `num_rows - H` rows. Cells that fall outside the
+      strict types it models, including negative offsets, keep the old
+      rule.
     - **Scope.** Only failing expectations change, and no schema or policy
-      version moves. The 19 READY h26 runs are unaffected.
+      version moves.
+    - **Caveat.** Chunks that docling-core < 2.99 wrote for a table with H
+      other than 1 would now fail a fresh quality build. None of the 19
+      READY h26 runs has such a table.
+  - *Flagged title over bare sub-headers.* Consider a flagged full-width
+    title row over flagged sub-header rows whose cells are blank,
+    whitespace or punctuation only, or repeat the title. Its Markdown
+    header joins to the bare title, and rag promotes that to a preamble,
+    so the table publishes one data row fewer than the oracle expects.
+    It stays fail-closed as a row-count mismatch.
   - *One-column title rows.* `_source_table_dimensions` lacks rag's
     `columns >= 2` guard on full-width title promotion. A one-column table
     in the tort-law casebook (PDF p.881) would therefore fail the row

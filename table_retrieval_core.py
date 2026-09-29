@@ -167,9 +167,17 @@ def source_table_header_row_count(
 
     Cells fill the grid as in ``TableData.grid``.  Offsets are clipped to the
     table, a later cell overwrites an earlier one, and a cell counts only on
-    the row where it starts.  The result is ``None`` when the cells lack the
-    types that docling-core's ``TableCell`` requires, so a caller can keep
-    its established behavior for data that docling-core could not load.
+    the row where it starts.  An inverted or out-of-range cell covers no grid
+    position, although it still counts toward the first populated column.
+
+    Only strict types are modeled: integer offsets that are not bools and
+    not negative, string text, and a bool flag (absent means false).  For
+    anything else the result is ``None``, and the caller keeps its
+    established path.  That includes values docling-core's loader would
+    coerce, such as a flag of ``1`` or float, string or bool offsets.  It
+    also includes negative offsets, which docling-core indexes from the
+    grid's end or rejects with ``IndexError``.  Every nonnegative offset
+    clips into the grid, so the count itself never raises.
     """
     if (not _is_nonnegative_int(row_count)
             or not _is_nonnegative_int(column_count)
@@ -183,8 +191,7 @@ def source_table_header_row_count(
             cell.get(field) for field in _SOURCE_CELL_OFFSET_FIELDS)
         text = cell.get("text")
         column_header = cell.get("column_header", False)
-        if (any(not isinstance(value, int) or isinstance(value, bool)
-                for value in offsets)
+        if (any(not _is_nonnegative_int(value) for value in offsets)
                 or not isinstance(text, str)
                 or not isinstance(column_header, bool)):
             return None

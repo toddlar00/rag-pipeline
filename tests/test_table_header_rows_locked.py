@@ -4,11 +4,12 @@ docling-core 2.99, the locked floor, joins the leading run of column-header
 rows into the single header row that GitHub Markdown allows.
 ``quality_core._source_table_dimensions`` expects the published data rows
 through ``table_retrieval_core.source_table_header_row_count``, a
-standard-library port of that rule.  These tests replay synthetic
-``TableData`` grids through the real serializer and the pipeline's table
-normalization.  A serializer change that moves rows into or out of the
-Markdown header then fails here instead of in a private book's quality gate.
-They run only where docling-core is installed.  All text is synthetic.
+standard-library port of that rule.  These tests replay the synthetic
+``TableData`` grids of ``test_table_header_rows.py`` through the real
+serializer and the pipeline's table normalization.  A serializer change that
+moves rows into or out of the Markdown header then fails here instead of in
+a private book's quality gate.  They run only where docling-core is
+installed.  All text is synthetic.
 """
 
 import pytest
@@ -16,47 +17,37 @@ import pytest
 import quality_core
 import rag
 import table_retrieval_core as tables
-from test_quality_core import _stacked_header_worksheet
-from test_table_retrieval_core import SOURCE_HEADER_ROW_SHAPES, _source_cell
+from test_table_header_rows import SOURCE_HEADER_ROW_SHAPES, _source_cell
 
 
-# A flagged full-width title over a blank flagged sub-header row flattens to
+# A flagged full-width title over blank flagged sub-header rows flattens to
 # the title in every column, so rag also promotes it to a table preamble.
 # The oracle does not model that second step and stays fail-closed.
 _FAIL_CLOSED_RESIDUAL = "flagged-title-over-empty-sub-header-row"
-_SHAPES = {shape[0]: shape[1:] for shape in SOURCE_HEADER_ROW_SHAPES}
-
-
-def _grid(label, num_rows, num_cols, cells):
-    return pytest.param(num_rows, num_cols, cells, id=label)
-
-
-def _worksheet(data_rows):
-    data = _stacked_header_worksheet(data_rows)["data"]
-    return data["num_rows"], data["num_cols"], data["table_cells"]
-
-
 _TITLE = [_source_cell(0, 0, "Title", cols=2)]
 _BODY = [_source_cell(row, col, f"{row}.{col}")
          for row in (2, 3) for col in (0, 1)]
 _PUBLICATION_SHAPES = [
-    _grid(label, *shape[:3]) for label, shape in _SHAPES.items()
-    if label != _FAIL_CLOSED_RESIDUAL
+    pytest.param(*shape[1:4], id=shape[0])
+    for shape in SOURCE_HEADER_ROW_SHAPES
+    if shape[0] != _FAIL_CLOSED_RESIDUAL
 ] + [
-    _grid("worksheet-8-columns", *_worksheet(2)),
-    _grid("worksheet-page-break-continuation", *_worksheet(1)),
-    _grid("headerless-single-row", 1, 3, [
+    pytest.param(1, 3, [
         _source_cell(0, col, text)
-        for col, text in enumerate(("Interview", "Research", "Filing"))]),
-    _grid("full-width-title", 4, 2, _TITLE + [
-        _source_cell(1, 0, "Low"), _source_cell(1, 1, "High")] + _BODY),
-    _grid("flagged-title-over-sub-headers", 4, 2, [
+        for col, text in enumerate(("Interview", "Research", "Filing"))],
+        id="headerless-single-row"),
+    pytest.param(4, 2, _TITLE + [
+        _source_cell(1, 0, "Low"), _source_cell(1, 1, "High")] + _BODY,
+        id="full-width-title"),
+    pytest.param(4, 2, [
         _source_cell(0, 0, "Title", header=True, cols=2),
         _source_cell(1, 0, "Low", header=True),
-        _source_cell(1, 1, "High", header=True)] + _BODY),
-    _grid("title-over-flagged-row", 4, 2, _TITLE + [
+        _source_cell(1, 1, "High", header=True)] + _BODY,
+        id="flagged-title-over-sub-headers"),
+    pytest.param(4, 2, _TITLE + [
         _source_cell(1, 0, "Low", header=True),
-        _source_cell(1, 1, "High", header=True)] + _BODY),
+        _source_cell(1, 1, "High", header=True)] + _BODY,
+        id="title-over-flagged-row"),
 ]
 
 
@@ -113,9 +104,32 @@ def test_native_row_expectation_matches_the_published_table(
     assert published == (expected if expected[0] else None)
 
 
-def test_blank_sub_headers_under_a_flagged_title_stay_fail_closed():
-    expected, published = _oracle_and_publication(
-        *_SHAPES[_FAIL_CLOSED_RESIDUAL][:3])
+@pytest.mark.parametrize("sub_headers", [
+    (("", ""),), ((" ", "  "),), (("-", "."),), (("Title", "Title"),),
+    (("", ""), ("Title", " ")),
+], ids=("blank", "whitespace", "punctuation-only", "repeated-title",
+        "three-header-rows"))
+def test_bare_title_sub_headers_under_a_flagged_title_stay_fail_closed(
+        sub_headers):
+    cells = [_source_cell(0, 0, "Title", header=True, cols=2)]
+    for row, texts in enumerate(sub_headers, start=1):
+        cells += [_source_cell(row, col, text, header=True)
+                  for col, text in enumerate(texts)]
+    header_rows = 1 + len(sub_headers)
+    cells += [_source_cell(header_rows + row, col, f"{row}.{col}")
+              for row in range(3) for col in (0, 1)]
 
-    assert expected == (2, 3)
-    assert published == (1, 3)
+    expected, published = _oracle_and_publication(header_rows + 3, 2, cells)
+
+    assert expected == (3, 2)
+    assert published == (2, 2)
+
+
+def test_distinct_sub_headers_under_a_flagged_title_are_not_promoted():
+    cells = [_source_cell(0, 0, "Title", header=True, cols=2)]
+    cells += [_source_cell(1, col, text, header=True)
+              for col, text in enumerate(("Title:", "Title."))]
+    cells += [_source_cell(2 + row, col, f"{row}.{col}")
+              for row in range(3) for col in (0, 1)]
+
+    assert _oracle_and_publication(5, 2, cells) == ((3, 2), (3, 2))
