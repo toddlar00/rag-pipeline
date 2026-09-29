@@ -8,9 +8,9 @@
   on PR #118, the FlagEmbedding pair at `ddbef38` passed on PR #119 (all
   four merged through `ab6e159`), and the fresh-OCR fidelity pair at
   `1ba9415` passed on PR #121 (merged through `602bec1`); the stacked
-  one-domain dependency pair at source `db030f1` (vector-stores dependency)
-  is pending; exact-head human review and separate R8 owner authorization
-  are not recorded
+  one-domain dependency pair at source `eccc146` (Service/UI dependency) is
+  pending; exact-head human review and separate R8 owner authorization are
+  not recorded
 - **Milestone:** R10 prerequisite for the R8 pipeline-ownership move
 - **Report schema:** `phase-a0` v3
 
@@ -141,9 +141,9 @@ gate-only child `32153e9` and merge `376277c`
 Task 0.8 static-security pair at source `8891e1b` repeated it through
 gate-only child `1533164` and merge `e34103f`
 ([PR #107](https://github.com/toddlar00/rag-pipeline/pull/107)). The
-current replacement pair uses the clean vector-stores dependency source
-`db030f1c68d26328f98d6c4ef3001c07a8ca0f21` (tree
-`c1afaf39b28160f847c29b090f01c746e858053b`), the first of a stacked series
+current replacement pair uses the clean Service/UI dependency source
+`eccc146f9da19e5dfdbbb209de3a319e0109d2b1` (tree
+`3d91e22d481a04c663d5694d5a9ed8733105d232`), the second of a stacked series
 of one-domain dependency updates, on `main` after the merges of the
 fresh-OCR fidelity source `1ba9415`, the FlagEmbedding source `ddbef38`, the
 pytest-xdist source `ff5e64f`, the test-time economy source `365de1c` and
@@ -152,8 +152,8 @@ Python source, CI configuration, `.gitattributes`, two test-tooling locks
 (pytest-xdist and execnet in `requirements-test.lock` and
 `requirements-smoke.lock`) and the FlagEmbedding record of
 `requirements-core.lock` and `requirements-full.lock`; the stacked
-dependency updates also change the vector-stores records of their mapped
-locks, but no model lock. It supersedes the
+dependency updates also change the vector-stores and Service/UI records of
+their mapped locks, but no model lock. It supersedes the
 earlier `1ae8502` pair, whose child `766feaf` passed both hosted Phase A0
 cells but whose dependency-light unit lanes failed at collection. Source
 `a15232d` then passed both hosted Phase A0 cells on [PR
@@ -213,6 +213,16 @@ source `db030f1` (superseding Dependabot #114: qdrant-client 1.19.1, and
 onnxruntime 1.30.0 for CPython 3.11+) opens a series of one-domain
 dependency pull requests and supersedes the `1ba9415` pair for its own pull
 request.
+The `db030f1` pair (gate-only child `33397de`) passed the hosted CI
+promotion gate on [PR
+#122](https://github.com/toddlar00/rag-pipeline/pull/122); its Linux
+environment was synchronized with uv 0.11.31 rather than the pinned 0.12.5,
+although the hash-locked lock union alone determines the installed set. The
+stacked Service/UI dependency source `eccc146` (superseding Dependabot #115:
+gradio 6.28.0 and uvicorn 0.54.0) adapts two test harness assumptions to
+Gradio 6.28 (an event id for streamed `process_api` runs and decoded file
+URLs), synchronizes both platforms with the pinned uv 0.12.5, and supersedes
+the `db030f1` pair for its own pull request.
 Its Windows and
 Linux CPython 3.12.13 reports were
 generated after the same strict hash-locked synchronization and
@@ -387,15 +397,16 @@ test-only successor `ff5e64f`, the stacked FlagEmbedding source
 `515ed91`, its test-only successor `ddbef38` and then the fresh-OCR
 fidelity source `e8b3205` on `main` and then its review-fix successor
 `1ba9415`,
-then the stacked vector-stores dependency source `db030f1`.
+then the stacked vector-stores dependency source `db030f1`,
+then the stacked Service/UI dependency source `eccc146`.
 Its Windows report
-is 51,079 bytes (file SHA-256
-`d7020a5dc09e3c122fdbde4c1e0f5a236f1280c1e58f06e24435d3e459766103`;
+is 51,086 bytes (file SHA-256
+`5286f0f8ed700920656df46e64d884b0bc927bd9e1b9e8a237a3164d8c6a0f34`;
 embedded report SHA-256
-`fd0bd54b33db064cf8aa0941aa67ee09fc65a51fbb977fdec2b81995f73cc577`).
-Its Linux report is 50,486 bytes (file SHA-256
-`eaaab892f6244549ec54da706c8147153d78e89003b000c60e61d97dadcb810d`;
+`ed8ac3b3f39fede8b7f2ba69025c4ab617427e5c7ab71d18f2e1039c5fd8981b`).
+Its Linux report is 50,478 bytes (file SHA-256
+`96675a9caa9520582ac1baa2b56d7bec7ee3f039920ba81331695ce650b6983e`;
 embedded report SHA-256
-`ed647bb2db2e94236464882eef1fb3c63d744b84e1cef7f86384e45d62a4996f`).
+`a8774f71db6df605db0e023bab1374c1569c2cfae7232d17b303d6602947c7a8`).
 Both use CPython 3.12.13 and pass their complete local same-platform 9×5
 comparisons. Hosted promotion remains pending.

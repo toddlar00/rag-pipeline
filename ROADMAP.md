@@ -1519,6 +1519,16 @@ source `db030f1` (superseding Dependabot #114: qdrant-client 1.19.1, and
 onnxruntime 1.30.0 for CPython 3.11+) opens a series of one-domain
 dependency pull requests and supersedes the `1ba9415` pair for its own pull
 request.
+The `db030f1` pair (gate-only child `33397de`) passed the hosted CI
+promotion gate on [PR
+#122](https://github.com/toddlar00/rag-pipeline/pull/122); its Linux
+environment was synchronized with uv 0.11.31 rather than the pinned 0.12.5,
+although the hash-locked lock union alone determines the installed set. The
+stacked Service/UI dependency source `eccc146` (superseding Dependabot #115:
+gradio 6.28.0 and uvicorn 0.54.0) adapts two test harness assumptions to
+Gradio 6.28 (an event id for streamed `process_api` runs and decoded file
+URLs), synchronizes both platforms with the pinned uv 0.12.5, and supersedes
+the `db030f1` pair for its own pull request.
 Its Windows/Linux
 pair (independent local same-platform comparisons passed) is that branch's
 candidate; its hosted checks and exact-SHA record are pending, and the

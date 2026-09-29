@@ -7,9 +7,9 @@ fresh-process repetitions.
 
 ## Provenance
 
-Both current reports were generated from the clean vector-stores dependency
-source checkpoint `db030f1c68d26328f98d6c4ef3001c07a8ca0f21` (tree
-`c1afaf39b28160f847c29b090f01c746e858053b`), the first of a stacked series
+Both current reports were generated from the clean Service/UI dependency
+source checkpoint `eccc146f9da19e5dfdbbb209de3a319e0109d2b1` (tree
+`3d91e22d481a04c663d5694d5a9ed8733105d232`), the second of a stacked series
 of one-domain dependency updates on `main` after the history-preserving
 merge of #121 (`602bec1`). That source contains everything through the Task
 0.8 static-security merge `e34103f` plus the local OCR accuracy, retry and
@@ -27,15 +27,17 @@ parsing and executed-source digests, and a Windows unit lane split into
 three shards), pytest-xdist for the unit lanes, gradio import guards in
 seven OCR review test modules, FlagEmbedding 1.4.2 for Transformers 5
 reranking and the fresh-OCR token fidelity fixes, followed by stacked
-one-domain dependency updates for vector stores. The lock changes add
-pytest-xdist 3.8.0 and execnet 2.1.2 to `requirements-test.lock` and
-`requirements-smoke.lock` and move FlagEmbedding from 1.4.0 to 1.4.2 in
+one-domain dependency updates for vector stores and Service/UI. The lock
+changes add pytest-xdist 3.8.0 and execnet 2.1.2 to `requirements-test.lock`
+and `requirements-smoke.lock` and move FlagEmbedding from 1.4.0 to 1.4.2 in
 `requirements-core.lock` and `requirements-full.lock`; the stacked
 vector-stores update moves qdrant-client from 1.19.0 to 1.19.1 and
-onnxruntime from 1.29.0 to 1.30.0 (CPython 3.11+) in its mapped locks; no
-model lock changed. The executing environments were synchronized with
-repository-pinned uv 0.12.5 against the exact CPU application/test lock
-union plus its retained bootstrapper:
+onnxruntime from 1.29.0 to 1.30.0 (CPython 3.11+) in its mapped locks; the
+stacked Service/UI update moves gradio from 6.25.0 to 6.28.0 (with
+gradio-client 2.7.1) and uvicorn from 0.52.4 to 0.54.0; no model lock
+changed. The executing environments were synchronized with repository-pinned
+uv 0.12.5 against the exact CPU application/test lock union plus its
+retained bootstrapper:
 
 - `requirements-full.lock`
 - `requirements-test.lock`
@@ -50,8 +52,8 @@ marker-resolved distributions before generation.
 
 | Platform | Runtime | Report | Bytes | File SHA-256 | Embedded report SHA-256 |
 |---|---:|---|---:|---|---|
-| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,079 | `d7020a5dc09e3c122fdbde4c1e0f5a236f1280c1e58f06e24435d3e459766103` | `fd0bd54b33db064cf8aa0941aa67ee09fc65a51fbb977fdec2b81995f73cc577` |
-| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,486 | `eaaab892f6244549ec54da706c8147153d78e89003b000c60e61d97dadcb810d` | `ed647bb2db2e94236464882eef1fb3c63d744b84e1cef7f86384e45d62a4996f` |
+| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,086 | `5286f0f8ed700920656df46e64d884b0bc927bd9e1b9e8a237a3164d8c6a0f34` | `ed8ac3b3f39fede8b7f2ba69025c4ab617427e5c7ab71d18f2e1039c5fd8981b` |
+| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,478 | `96675a9caa9520582ac1baa2b56d7bec7ee3f039920ba81331695ce650b6983e` | `a8774f71db6df605db0e023bab1374c1569c2cfae7232d17b303d6602947c7a8` |
 
 The reports attest the same source commit, clean-worktree state, tracked-diff
 digest, eight LF and `HEAD`-identical dependency/model-lock inputs, authoritative
@@ -237,6 +239,16 @@ source `db030f1` (superseding Dependabot #114: qdrant-client 1.19.1, and
 onnxruntime 1.30.0 for CPython 3.11+) opens a series of one-domain
 dependency pull requests and supersedes the `1ba9415` pair for its own pull
 request.
+The `db030f1` pair (gate-only child `33397de`) passed the hosted CI
+promotion gate on [PR
+#122](https://github.com/toddlar00/rag-pipeline/pull/122); its Linux
+environment was synchronized with uv 0.11.31 rather than the pinned 0.12.5,
+although the hash-locked lock union alone determines the installed set. The
+stacked Service/UI dependency source `eccc146` (superseding Dependabot #115:
+gradio 6.28.0 and uvicorn 0.54.0) adapts two test harness assumptions to
+Gradio 6.28 (an event id for streamed `process_api` runs and decoded file
+URLs), synchronizes both platforms with the pinned uv 0.12.5, and supersedes
+the `db030f1` pair for its own pull request.
 The current reports above
 bind
 that exact clean source and each passes an independent complete
