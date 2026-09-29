@@ -1701,6 +1701,15 @@ the reviewed heartbeat change of [PR
 review approved it with nits, all addressed) onto that merge; it tolerates
 transient Windows replace failures of the advisory heartbeat for a bounded
 time, changes no dependency or lock and supersedes the `e7b60cd` pair.
+The `da6540d` pair (gate-only child `92c92cf`) passed the hosted CI
+promotion gate on [PR
+#137](https://github.com/toddlar00/rag-pipeline/pull/137), which merged into
+`main` as `634c38b`. The test-only source `28ba800` rebases the Nomic
+contract test of [PR
+#136](https://github.com/toddlar00/rag-pipeline/pull/136) onto that merge;
+it pins the pinned Nomic embedding code's whole Transformers contract in
+`tests/test_embedding_runtime_compat.py`, changes no dependency or lock, and
+supersedes the `da6540d` pair.
 Its Windows/Linux
 pair (independent local same-platform comparisons passed) is that branch's
 candidate; its hosted checks and exact-SHA record are pending, and the
