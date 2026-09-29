@@ -8,9 +8,9 @@
   on PR #118, the FlagEmbedding pair at `ddbef38` passed on PR #119 (all
   four merged through `ab6e159`), and the fresh-OCR fidelity pair at
   `1ba9415` passed on PR #121 (merged through `602bec1`); the stacked
-  one-domain dependency pair at source `8c12135` (ML/runtime
-  advisory-promotion) is pending; exact-head human review and separate R8
-  owner authorization are not recorded
+  one-domain dependency pair at source `21d66eb` (vector-stores
+  h2-promotion) is pending; exact-head human review and separate R8 owner
+  authorization are not recorded
 - **Milestone:** R10 prerequisite for the R8 pipeline-ownership move
 - **Report schema:** `phase-a0` v3
 
@@ -141,9 +141,9 @@ gate-only child `32153e9` and merge `376277c`
 Task 0.8 static-security pair at source `8891e1b` repeated it through
 gate-only child `1533164` and merge `e34103f`
 ([PR #107](https://github.com/toddlar00/rag-pipeline/pull/107)). The
-current replacement pair uses the clean ML/runtime advisory-promotion source
-`8c12135621caff4d4dea6829e3943ca245d28f1e` (tree
-`1098ecb3065794cffbe8f095f11f31b00614c5d3`), the sixth of a stacked series
+current replacement pair uses the clean vector-stores h2-promotion source
+`21d66eb7a5d42563630827a9f8b5b6dff6306409` (tree
+`62073c307b08603e3b475dec838219443ca0a0a5`), the seventh of a stacked series
 of one-domain dependency updates, on `main` after the merges of the
 fresh-OCR fidelity source `1ba9415`, the FlagEmbedding source `ddbef38`, the
 pytest-xdist source `ff5e64f`, the test-time economy source `365de1c` and
@@ -153,8 +153,8 @@ Python source, CI configuration, `.gitattributes`, two test-tooling locks
 `requirements-smoke.lock`) and the FlagEmbedding record of
 `requirements-core.lock` and `requirements-full.lock`; the stacked
 dependency updates also change the vector-stores, Service/UI, test-audit
-tooling, ML/runtime, PDF/Docling (docling-core) and promoted ML/runtime
-records of their mapped locks, but no model lock. It supersedes the
+tooling, ML/runtime, PDF/Docling (docling-core), promoted ML/runtime and
+promoted h2 records of their mapped locks, but no model lock. It supersedes the
 earlier `1ae8502` pair, whose child `766feaf` passed both hosted Phase A0
 cells but whose dependency-light unit lanes failed at collection. Source
 `a15232d` then passed both hosted Phase A0 cells on [PR
@@ -255,6 +255,9 @@ datasets and aiohttp to governed direct inputs to take their advisory fixes
 pinned Nomic embedding code calls; datasets 5.0.1; aiohttp 3.14.3), adds a
 guard test and refreshes the inventory, and supersedes the `13f3b5d` pair
 for its own pull request.
+The stacked vector-stores h2-promotion source `21d66eb` promotes h2 to a
+governed direct input to take its advisory fix (4.4.1) and supersedes the
+`8c12135` pair for its own pull request.
 Its Windows and
 Linux CPython 3.12.13 reports were
 generated after the same strict hash-locked synchronization and
@@ -434,15 +437,16 @@ then the stacked Service/UI dependency source `eccc146`,
 then the stacked test-audit tooling dependency source `c11099b`,
 then the stacked ML/runtime dependency source `e579090`,
 then the stacked docling-core dependency source `13f3b5d`,
-then the stacked ML/runtime advisory-promotion source `8c12135`.
+then the stacked ML/runtime advisory-promotion source `8c12135`,
+then the stacked vector-stores h2-promotion source `21d66eb`.
 Its Windows report
-is 51,082 bytes (file SHA-256
-`c560f04452041049d212eecb5968fe52d0456591ef59ed2d6bbd068cfcdb0f4d`;
+is 51,086 bytes (file SHA-256
+`2577d10ca8e6651025be2981ced8360195fedf9796ef71a6732195e91ed2a74a`;
 embedded report SHA-256
-`dbe60540f15dcfd63c841fd6690c7d2c2a5bb7764ffdbde3f048c7fc0344e158`).
-Its Linux report is 50,478 bytes (file SHA-256
-`48ae6802382a3d7b17740553326fa0aeead22b8203e60823ca0dc3cf9b085093`;
+`fdbdb07bc0309b22a6b44a9594c3ed57b257728399da83ac1233c5b40453739d`).
+Its Linux report is 50,473 bytes (file SHA-256
+`3d6765627af5823587925b5156322b1e11c9af16c5386ef0ae36c98a461abd98`;
 embedded report SHA-256
-`4a7f5d633589bff45ba1e7c6bc419ae204441d802797c46daa42a26e9fdb655c`).
+`990e6c11c96b6f0ab89a6b03fe1cb52bf4bd638e738ea028aef1cc238ba1a165`).
 Both use CPython 3.12.13 and pass their complete local same-platform 9×5
 comparisons. Hosted promotion remains pending.
