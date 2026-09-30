@@ -1484,6 +1484,8 @@ def _lexical_index_snapshot(records: list[dict], source_sha256: str) -> dict:
 
 def evaluate_lexical(queries: list[dict], chunks_path: Path, *,
                      expected_source_sha256: str,
+                     query_policy: str = (
+                         retrieval_core.LEXICAL_QUERY_POLICY_NONE),
                      k_values: list[int] | None = None,
                      include_details: bool = False,
                      report_detail: str = "summary",
@@ -1497,9 +1499,12 @@ def evaluate_lexical(queries: list[dict], chunks_path: Path, *,
     Every query calls ``rag._bm25_search`` itself, pinned to the validated
     chunks snapshot, so rankings equal the Chroma hybrid lexical leg before
     fusion, table-family collapse, and reranking by construction.
+    ``query_policy`` evaluates an opt-in query-side lexical policy; the
+    production search paths always use ``none``.
     """
     import rag
 
+    retrieval_core._validate_lexical_query_policy(query_policy)
     chunks_path = Path(chunks_path)
 
     def lexical_search(query: str, _db_path: Path, **search_options):
@@ -1507,7 +1512,8 @@ def evaluate_lexical(queries: list[dict], chunks_path: Path, *,
             query, chunks_path, search_options.get("n_results", 10),
             search_options.get("content_type"),
             search_options.get("chapter_num"),
-            expected_source_sha256=expected_source_sha256)
+            expected_source_sha256=expected_source_sha256,
+            query_policy=query_policy)
         return [
             {
                 "text": document,
@@ -1727,6 +1733,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help=("Production vector index, deterministic offline BM25 fixture "
               "adapter, or the model-free production lexical leg "
               "(rag._bm25_search) (default: index)"))
+    parser.add_argument(
+        "--lexical-query-policy",
+        choices=retrieval_core.LEXICAL_QUERY_POLICIES,
+        default=retrieval_core.LEXICAL_QUERY_POLICY_NONE,
+        help=("Versioned query-side policy for --retriever lexical; "
+              "evaluation only, production search keeps 'none' "
+              "(default: none)"))
     parser.add_argument("--chunks", type=Path, required=True,
                         help="Book-scoped chunks JSONL from a pipeline run")
     parser.add_argument("--db", type=Path,
@@ -1912,7 +1925,7 @@ def _report_config(args, **overrides) -> dict:
     if args.retriever == "lexical":
         # Only lexical reports carry this key, keeping the committed
         # index and offline-BM25 report shapes byte-for-byte unchanged.
-        configuration["lexical_query_policy"] = "none"
+        configuration["lexical_query_policy"] = args.lexical_query_policy
     review_binding = getattr(args, "review_receipt_binding", None)
     if review_binding is not None:
         configuration["review_receipt"] = dict(review_binding)
@@ -2063,6 +2076,9 @@ def _main_with_args(args, parser: argparse.ArgumentParser) -> int:
         parser.error(
             "hybrid, reranker, and context flags do not apply to the "
             "lexical retriever")
+    if (args.retriever != "lexical" and args.lexical_query_policy
+            != retrieval_core.LEXICAL_QUERY_POLICY_NONE):
+        parser.error("--lexical-query-policy requires --retriever lexical")
     if args.retriever == "index":
         try:
             if args.embedding_model.startswith(
@@ -2362,6 +2378,7 @@ def _main_with_args(args, parser: argparse.ArgumentParser) -> int:
             result = evaluate_lexical(
                 queries, args.chunks,
                 expected_source_sha256=index_snapshot["source_sha256"],
+                query_policy=args.lexical_query_policy,
                 **common)
             single_modes = {
                 "use_reranker": False,

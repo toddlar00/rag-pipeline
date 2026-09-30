@@ -406,3 +406,76 @@ def test_context_metadata_is_bounded_and_charged_to_the_global_budget():
         "What follows?", retrieval_core._grounded_sources(response))
     assert "x" * 100_000 not in prompt
     assert len(prompt) < 10_000
+
+
+# Frozen copy of the function-word list measured in the lexical research
+# (bm25_variants.FUNCTION_STOP).  Changing the policy requires a new version.
+_FUNCTION_WORDS_V1 = frozenset({
+    "a", "an", "and", "are", "as", "at", "be", "been", "by", "did", "do",
+    "does", "for", "from", "had", "has", "have", "in", "into", "is", "it",
+    "its", "of", "on", "or", "that", "the", "their", "this", "to", "was",
+    "were", "with", "what", "which", "who", "how", "his", "her", "he",
+    "she", "they", "them", "there", "these", "those", "i", "you", "we",
+})
+
+
+def test_lexical_query_policies_are_versioned_and_frozen():
+    assert retrieval_core.LEXICAL_QUERY_POLICIES == (
+        "none", "function-words-v1")
+    assert retrieval_core.LEXICAL_QUERY_FUNCTION_WORDS_V1 == (
+        _FUNCTION_WORDS_V1)
+    assert isinstance(
+        retrieval_core.LEXICAL_QUERY_FUNCTION_WORDS_V1, frozenset)
+    # Legally meaningful modals, negation, and conditionals stay searchable.
+    assert retrieval_core.LEXICAL_QUERY_FUNCTION_WORDS_V1.isdisjoint({
+        "may", "must", "shall", "should", "will", "would", "can", "could",
+        "not", "no", "nor", "if", "unless", "whether", "under", "without",
+        "when", "where", "why", "but", "because",
+    })
+
+
+def test_none_lexical_query_policy_returns_the_tokens_unchanged():
+    tokens = ["what", "is", "the", "rule", "the", "rule"]
+
+    filtered = retrieval_core._lexical_query_tokens(tokens, "none")
+
+    assert filtered == tokens
+    assert filtered is not tokens
+
+
+def test_function_word_policy_filters_the_query_and_keeps_duplicates():
+    tokens = retrieval_core._legal_search_tokens(
+        "What is the rule, and may the court not apply the rule under "
+        "Rule 12(b)(6) if the writing is ambiguous?")
+    original = list(tokens)
+
+    filtered = retrieval_core._lexical_query_tokens(
+        tokens, "function-words-v1")
+
+    assert tokens == original
+    assert filtered == [
+        token for token in tokens if token not in _FUNCTION_WORDS_V1]
+    assert filtered.count("rule") == 3
+    assert {"may", "not", "under", "if", "12(b)(6)"} <= set(filtered)
+    assert not _FUNCTION_WORDS_V1.intersection(filtered)
+
+
+@pytest.mark.parametrize("tokens", [
+    ["what", "is", "the"],
+    ["the", "the"],
+    [],
+])
+def test_function_word_policy_falls_back_when_nothing_would_remain(tokens):
+    assert retrieval_core._lexical_query_tokens(
+        tokens, "function-words-v1") == tokens
+
+
+@pytest.mark.parametrize("policy", [
+    "", "NONE", "Function-Words-V1", "function-words-v2", " none", None,
+    1, ("none",),
+])
+def test_unknown_lexical_query_policy_fails_closed(policy):
+    with pytest.raises(ValueError, match="lexical query policy"):
+        retrieval_core._lexical_query_tokens(["rule"], policy)
+    with pytest.raises(ValueError, match="lexical query policy"):
+        retrieval_core._validate_lexical_query_policy(policy)

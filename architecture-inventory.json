@@ -32,27 +32,27 @@
           {
             "binding": "rag",
             "kind": "import",
-            "line": 1501
+            "line": 1505
           },
           {
             "binding": "rag",
             "kind": "import",
-            "line": 1704
+            "line": 1710
           },
           {
             "binding": "rag",
             "kind": "import",
-            "line": 2195
+            "line": 2211
           },
           {
             "binding": "rag",
             "kind": "import",
-            "line": 2432
+            "line": 2449
           },
           {
             "binding": "rag",
             "kind": "import",
-            "line": 2459
+            "line": 2476
           }
         ],
         "facade_roots": [
@@ -69,7 +69,7 @@
             "kinds": [
               "attribute"
             ],
-            "locations_sha256": "34f1e14d4c0983050f4e88b2c7f2cb9004defc758ed30099b81cff658baf7408",
+            "locations_sha256": "b7c898f47934fafc520408fdb888fc2a367a4cad23e9afcaadc23eee1e0224a6",
             "name": "VectorStoreBusyError",
             "occurrence_count": 1,
             "paths": [
@@ -89,7 +89,7 @@
             "kinds": [
               "attribute"
             ],
-            "locations_sha256": "7c7a435c7c5c0523011edc95fd20a3af54e5f828137508558c74d4fa8eb23bde",
+            "locations_sha256": "be1a79b7b7b0770ca4232526636d1cd6275a6f4c00b865f0872f4a637219dd6e",
             "name": "_SUPERVISED_CHILD_ENV",
             "occurrence_count": 1,
             "paths": [
@@ -109,7 +109,7 @@
             "kinds": [
               "attribute"
             ],
-            "locations_sha256": "2f2f54e8afdd0eae53d4ea5ada8dc6e2e8d797a1ab45070c580c5ccbed28b057",
+            "locations_sha256": "089409660514a31e5290334e90d731decf1d2f3898f94a8c88f7d73bda99a759",
             "name": "_atomic_write_text",
             "occurrence_count": 1,
             "paths": [
@@ -129,7 +129,7 @@
             "kinds": [
               "attribute"
             ],
-            "locations_sha256": "156c909283b3c478242edd94e454d35e7b59c7dc067b804acd7f4e297b55236b",
+            "locations_sha256": "4c78999c2807ea89089f36616f17e4e589bccf6ae46f5ab2ede78ec519086556",
             "name": "_bm25_search",
             "occurrence_count": 1,
             "paths": [
@@ -149,7 +149,7 @@
             "kinds": [
               "attribute"
             ],
-            "locations_sha256": "3790bc89f61a71f4615f6fe1d3ddf16703074b595d6099f4d4b8da079b29cb42",
+            "locations_sha256": "62f67fdd0097ed5f5e542f6407a478cfcf1ecf27df17494e3a4e73a3fb12af46",
             "name": "_chunk_id",
             "occurrence_count": 2,
             "paths": [
@@ -169,7 +169,7 @@
             "kinds": [
               "attribute"
             ],
-            "locations_sha256": "a905eb3a607fb3562a956bcd6ae33c364456dc096cac3d1bdd288793f5b785eb",
+            "locations_sha256": "9857a8816236ce66c22362ff367298eec58cd29eee81ae84e5e869beee95e7c2",
             "name": "_cli_operation_timeout",
             "occurrence_count": 1,
             "paths": [
@@ -189,7 +189,7 @@
             "kinds": [
               "attribute"
             ],
-            "locations_sha256": "2cb0183dff4c9ce1c4bda712f7bbf1e39789f47b244bc52161e0c371a3e217c7",
+            "locations_sha256": "61edff9872263949123530211c71b8e6c325eab93a403aca9b82df1e1ad7002e",
             "name": "_normalize_db_lock_timeout",
             "occurrence_count": 1,
             "paths": [
@@ -209,7 +209,7 @@
             "kinds": [
               "attribute"
             ],
-            "locations_sha256": "610a32cb9ccf4b36ddb2dcc615ef8c006b07ddf7c1f639700c5e75cf0d453ef1",
+            "locations_sha256": "30b336e927732a4af49caa4f741ea7111095cffd9d87bd4fab7a6ed0fb9bbefd",
             "name": "_normalize_operation_timeout",
             "occurrence_count": 1,
             "paths": [
@@ -249,7 +249,7 @@
             "kinds": [
               "attribute"
             ],
-            "locations_sha256": "134a289e4c0b58fed5ceaf55cc4893d8126bbc4d0ce720d311de2ea94d3e57bf",
+            "locations_sha256": "0a7241f1becbceaa04cb7624c68d8db8dd728f47642ea310c23e57aa7002956a",
             "name": "_run_cli_with_deadline",
             "occurrence_count": 1,
             "paths": [
@@ -269,7 +269,7 @@
             "kinds": [
               "attribute"
             ],
-            "locations_sha256": "f45744a6c9c4bf1e3c3889c8232e9ae776df3014e69daf474dbbe080691195e7",
+            "locations_sha256": "c8d87c4a226f973a2ae4903b5788262d36816424bcff4051c45969b6feb8defa",
             "name": "_vector_store_lock",
             "occurrence_count": 2,
             "paths": [
@@ -1576,7 +1576,7 @@
             "source": "tests/test_process_supervision_module.py"
           },
           {
-            "line": 305,
+            "line": 306,
             "operation": "setattr",
             "source": "tests/test_search.py"
           },
@@ -2445,7 +2445,7 @@
             "target": "_api_throttle"
           },
           {
-            "locations_sha256": "9a5bf8334c884c348a0cf53b768a043319d2a2553c1d159cf5776f972dc63b2b",
+            "locations_sha256": "379c8d7f33d2b25de488aef3bd799cc6a8ea7c6fac51a8371234d908b4375fe5",
             "occurrence_count": 2,
             "operations": [
               "setattr"
@@ -2569,7 +2569,7 @@
             "target": "_begin_qdrant_index_update"
           },
           {
-            "locations_sha256": "4558d9f8a16e3f1c059728104fa127b09b83ccebbea4e0c54aaf52d646691481",
+            "locations_sha256": "91636ac10035f46349a08be34997404bcb929b7dc9f62f618304ffa3034963e9",
             "occurrence_count": 3,
             "operations": [
               "setattr"
@@ -3087,7 +3087,7 @@
             "target": "_embed_fn_cache"
           },
           {
-            "locations_sha256": "72bcfc3065388fdb1c2c519be207666f906a2af2a473e4caf45f1343fdf0aecd",
+            "locations_sha256": "6e29527d44a95b9cfe7d04ae4f6b12ff0bc7b65c3a0933c1078620a7133e60d5",
             "occurrence_count": 20,
             "operations": [
               "setattr"
@@ -3209,7 +3209,7 @@
             "target": "_get_embedding_fn"
           },
           {
-            "locations_sha256": "8a833c6150de6eea94c4a69faf375b7a5b30c30f0dd0d11db89c1662a2662227",
+            "locations_sha256": "2cf9bf2e77003c6026fbc01b640cc010f8ab190defa8c882a2d08b7d06786704",
             "occurrence_count": 1,
             "operations": [
               "setattr"
@@ -3537,7 +3537,7 @@
             "target": "_load_index_manifest"
           },
           {
-            "locations_sha256": "93a63039b9a876a81083ad3465cfc2b8501b45b0fffcd9fa2f72232b59e2a3ad",
+            "locations_sha256": "739df151bbe7c824447e663f1257ff869111e8667e3205002cd00723fc6d0564",
             "occurrence_count": 3,
             "operations": [
               "setattr"
@@ -3791,7 +3791,7 @@
             "target": "_page_count"
           },
           {
-            "locations_sha256": "d8a6c25c404dd90688b868e640f866ba4085297d1bd2b54bc9bfdd7515c27e5f",
+            "locations_sha256": "6e92c51a3dad4b9f5c3be360b72e97852cb8fb7e63de6b8e9ef9a04f32da1bc9",
             "occurrence_count": 3,
             "operations": [
               "setattr"
@@ -3881,7 +3881,7 @@
             "target": "_pipeline_publication_complete"
           },
           {
-            "locations_sha256": "cf5aa00c4d2a218fba62ab9d11aa6fa9378dac059b71ae489f6161bcbdc61124",
+            "locations_sha256": "a8aa04031efee74f354a2f145bcc871fd7d03d82c188c76a2bb818c3e3ac54ed",
             "occurrence_count": 9,
             "operations": [
               "setattr"
@@ -4061,7 +4061,7 @@
             "target": "_quality_report_complete"
           },
           {
-            "locations_sha256": "337def440cd3d2cd1bd932a252ce5043694fcb1f8a9c69945b3d366f9f46f222",
+            "locations_sha256": "68475787b47bf7c0433adaea52c9f79c2af3ba8f8405e954e77aa18df60a2cb9",
             "occurrence_count": 2,
             "operations": [
               "setattr"
@@ -4231,7 +4231,7 @@
             "target": "_require_chroma_stable_ids"
           },
           {
-            "locations_sha256": "63653078b639dc913d50b4a52817ec38d1b1d97982a2a1226f696bd2f3e530bd",
+            "locations_sha256": "47bfb3d1e436e71b63caaed9c6d59781ccb157202cafb69a9246acfbc258693e",
             "occurrence_count": 2,
             "operations": [
               "setattr"
@@ -4245,7 +4245,7 @@
             "target": "_require_hybrid_chunks_snapshot"
           },
           {
-            "locations_sha256": "30323c4fa0db7f6534322a50b19956b1c3c6b8db0e2570d1fd669ffde96005b3",
+            "locations_sha256": "28e04fe053821ccb1f30c383b3967efa6d586bd0248296421d2703d93a60db97",
             "occurrence_count": 3,
             "operations": [
               "setattr"
@@ -4259,7 +4259,7 @@
             "target": "_rerank"
           },
           {
-            "locations_sha256": "38207ecd616127df868659fba34c6c2a8ca76234c650ebe177c2d7ee260eebde",
+            "locations_sha256": "a1c12dd306892e3d9ad35bcf9ef919042b3b4680b5712d2339ca6a5316354ab3",
             "occurrence_count": 4,
             "operations": [
               "setattr"
@@ -4453,7 +4453,7 @@
             "target": "_save_index_manifest"
           },
           {
-            "locations_sha256": "1a5022069fd78f6a9b7c443d87e8a5bafcd5d85c67cae67f166a65d5086e8730",
+            "locations_sha256": "59604d2d791e1ebbe1a2d63a794a148a7e268284b497d9055588f7f6865e4ee2",
             "occurrence_count": 2,
             "operations": [
               "setattr"
@@ -4599,7 +4599,7 @@
             "target": "_unlock_vector_file"
           },
           {
-            "locations_sha256": "ae7df2ccb7d22005fbbf88cce5101dda5b0548bf3d2d2c1233c36da6747daf9b",
+            "locations_sha256": "e8b66492d538a9a65a42418a30c6a73f70658d54d7970e4b9e5be561a614b5bb",
             "occurrence_count": 3,
             "operations": [
               "setattr"
@@ -4671,7 +4671,7 @@
             "target": "_validate_pipeline_publication_generation"
           },
           {
-            "locations_sha256": "c9bfd715cfdec80b8e58ebc33afbb28befcb694f7f20289348c3ba7992bb6c7e",
+            "locations_sha256": "843f78e1c3a6aa32c541b919d07ed41732136f5da3ea82d437374627d57cfccf",
             "occurrence_count": 3,
             "operations": [
               "setattr"
@@ -4981,7 +4981,7 @@
             "target": "scan_pdf"
           },
           {
-            "locations_sha256": "c0c83ac8924fd4c8c4ca935804d4c9d9c2916c4f8600e1975d6c98c6fa0728aa",
+            "locations_sha256": "1f762495b316fa695ecd6bdd00d58ecbc0ea0e263d79a7d89844bcbdde6c62e0",
             "occurrence_count": 11,
             "operations": [
               "setattr"
@@ -6501,7 +6501,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "d46081ed23e093cd25aa0fc609904fb38f81fc827007ddfc2bb603e39d531360",
+          "locations_sha256": "196058bfc6acfbb64c977baf318a1cc219530bafa9c7071a4e46796b5d5ba2ac",
           "name": "_atomic_write_jsonl",
           "occurrence_count": 15,
           "paths": [
@@ -6705,9 +6705,9 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "596b3052c1e9b08d6a5234c2d2a616a6061f0c18f6dc6ab1390079018fd06b90",
+          "locations_sha256": "ce6974449c454bb86ff3722c22c043906def3c923d3af8f89517131896d2e4d2",
           "name": "_bm25_cache",
-          "occurrence_count": 6,
+          "occurrence_count": 8,
           "paths": [
             "_bm25_cache.clear"
           ],
@@ -6717,7 +6717,7 @@
               "path": "tests/test_eval.py"
             },
             {
-              "count": 5,
+              "count": 7,
               "path": "tests/test_search.py"
             }
           ]
@@ -6729,9 +6729,9 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "e968a0d89e98fa7a70f15855fb913da141040b8137846276edb6e46f67a43800",
+          "locations_sha256": "fd67bf84f5978aebf4b8683be25209fab4b2a91d0f66e6984b17bcc51593130f",
           "name": "_bm25_search",
-          "occurrence_count": 8,
+          "occurrence_count": 14,
           "paths": [
             "_bm25_search"
           ],
@@ -6741,7 +6741,7 @@
               "path": "tests/test_eval.py"
             },
             {
-              "count": 6,
+              "count": 12,
               "path": "tests/test_search.py"
             }
           ]
@@ -7425,7 +7425,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "2cbd62743f7eaa11d53fbd444f9fb71645151c394c795df1362473df96a17045",
+          "locations_sha256": "245aa20e9ab96131353a4d2312237470e4edf1510f800c42bc30f4e1a2d2e082",
           "name": "_chunk_id",
           "occurrence_count": 54,
           "paths": [
@@ -8611,7 +8611,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "0c944b4fe31faefd01b3f20adcb56893c2adb560effdeaaab6065b1d197eb7e3",
+          "locations_sha256": "5470285b191aa7e62b6598ea6c8f0dc3433a188a695422f31adf5aa8923ebf80",
           "name": "_get_reranker",
           "occurrence_count": 6,
           "paths": [
@@ -8683,7 +8683,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "fa4e3717faa7111e2934459501a1878c2609bcdeb7930ff2c1c303dd25539762",
+          "locations_sha256": "f075dd90941051787b4220031de4db32424be67ee8047b106c64f462eda6e750",
           "name": "_grounded_sources",
           "occurrence_count": 10,
           "paths": [
@@ -8847,7 +8847,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "0624171bc906dbaccfd661445aeeab35a61eea361d654e0f7ed3f102d9490938",
+          "locations_sha256": "dd8ef66365c80d80765c26d581388e05175a6e1ea49cba9289f2f2e4ef0a8353",
           "name": "_index_manifest_path",
           "occurrence_count": 13,
           "paths": [
@@ -9251,15 +9251,35 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "d110868aa0094238fb28d84457f62ef340f06c3351ae088609782c954539d338",
+          "locations_sha256": "452d289381856f1a9aebf039e1b9cfc37845fb921d4c37f639f1e94e69349e71",
           "name": "_legal_search_tokens",
-          "occurrence_count": 2,
+          "occurrence_count": 4,
           "paths": [
             "_legal_search_tokens"
           ],
           "source_counts": [
             {
-              "count": 2,
+              "count": 4,
+              "path": "tests/test_search.py"
+            }
+          ]
+        },
+        {
+          "contexts": [
+            "load"
+          ],
+          "kinds": [
+            "attribute"
+          ],
+          "locations_sha256": "5d4e93bbb9b7ab2b1d12170ebc66272fa6d805051d12d63cd78ca4c743ba04ca",
+          "name": "_lexical_document_text",
+          "occurrence_count": 1,
+          "paths": [
+            "_lexical_document_text"
+          ],
+          "source_counts": [
+            {
+              "count": 1,
               "path": "tests/test_search.py"
             }
           ]
@@ -9291,7 +9311,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "b3afefc6ab3d12c16455fe2c544863007c0b50e53186da3fa3fba29edc65ed73",
+          "locations_sha256": "8a48bd604cd0f313f464178422bd10b74b546f4bb19a0e1165cede23bae29edf",
           "name": "_llm_adapters",
           "occurrence_count": 6,
           "paths": [
@@ -10537,7 +10557,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "5a807af3572c9e77321fec28ed76df35cb447b33f6484ea6499b5cb69aff4565",
+          "locations_sha256": "948d3b2f0f78e61b6e386b317d434fc06b9a68cff25504c2d388946a71b815a4",
           "name": "_parse_index_records_strict",
           "occurrence_count": 5,
           "paths": [
@@ -10761,7 +10781,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "d6a01ffb2967b3d103be610b13dedb42df71b39241b0cb066ccf85ab174ad013",
+          "locations_sha256": "2ea0c8719b057dd29f8047a7c1d0b76da3b081643b95dc149921caa9a41b732c",
           "name": "_prepare_chroma_batch",
           "occurrence_count": 4,
           "paths": [
@@ -11261,7 +11281,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "196e4032c90d1a99f4f6215664edd107b5c8f66ac9cc45aae72c7f499ca078db",
+          "locations_sha256": "6d0b93186ac5bae61403193f96fef3233cd5872b9bd926d59641d887f4f53493",
           "name": "_quality_core",
           "occurrence_count": 37,
           "paths": [
@@ -11524,7 +11544,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "67636b95bfba33df5c7129c90c9b089d20ade5809ab6e45ca574f3c11cfae9c9",
+          "locations_sha256": "145eb5341f6c3cbeebd89d86b84faa9e7cc9c082369b5d5d970498cbcfacf9e7",
           "name": "_reciprocal_rank_fusion",
           "occurrence_count": 4,
           "paths": [
@@ -12312,7 +12332,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "d52cf017a46325a9ea3596e2b2f35a8d640930ecac842aad51f7a797914820a5",
+          "locations_sha256": "532f19dcb7015454512252a88c8f25ff06b6910d50e9172885e3c70cafeebfb9",
           "name": "_rerank",
           "occurrence_count": 6,
           "paths": [
@@ -12588,7 +12608,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "5ccc2daf0eff9062dd1fc5014e617643a801470c2879b458af5a03c6e9d5b9e6",
+          "locations_sha256": "6a4cdf6b3f6d2e235f98a756427a65cfbcc37017a47808d3fe573dc590e45f35",
           "name": "_retrieval_core",
           "occurrence_count": 8,
           "paths": [
@@ -12839,7 +12859,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "538db4b894374dd28041298b281b3e12044fcd16b35bab3f749d7f0b52e89e9e",
+          "locations_sha256": "5d89aab475f0f193b61e0199758c29fe893a9961d19fd65da780f3a2340abec5",
           "name": "_save_index_manifest",
           "occurrence_count": 40,
           "paths": [
@@ -13217,7 +13237,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "6092973dd899cab1b7e03e5e4eaa8b9d4884eff33c2c7043921e862996914857",
+          "locations_sha256": "2f2491cab27b144882a6234ab3469cfd8d5bc6d3b314a08feb9966d48bb763a0",
           "name": "_sparse_token_vector",
           "occurrence_count": 1,
           "paths": [
@@ -13619,7 +13639,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "add489b3f9915ad5e706e2232a04555ca85ca1136ca4412b7ef9b62a67acca97",
+          "locations_sha256": "026b7a14f73def390e0050236266f513b0b8f5230f5f1e99a3cc9bfa95661e67",
           "name": "_unpack_chroma_results",
           "occurrence_count": 1,
           "paths": [
@@ -13887,7 +13907,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "3eaecd689b63bdcb2cb46ed949129e8288ee68ab3628c8275094f80b12b2cf9d",
+          "locations_sha256": "1b5206f9c3807ca790156bb3480cd8d3263a0893172f163bf740933d88c3e1b5",
           "name": "_vector_store_lock",
           "occurrence_count": 19,
           "paths": [
@@ -14650,7 +14670,7 @@
         "qualname": "_begin_qdrant_index_update"
       },
       {
-        "contract_sha256": "1fe7ba6b313a9e83fe16fda53fb547e5dda8d30b3b8e9a4d07d55e3c62352111",
+        "contract_sha256": "940176f362c09e58f23414e19d5e56074c16f8ea468ef9b186a97a3b0a8fb651",
         "kind": "function",
         "module": "rag",
         "name": "_bm25_search",
@@ -26087,1223 +26107,1223 @@
         "name": "_bm25_search",
         "span": [
           24985,
-          25068
+          25075
         ]
       },
       {
         "kind": "function",
         "name": "_record_search_warning",
         "span": [
-          25077,
-          25080
+          25084,
+          25087
         ]
       },
       {
         "kind": "function",
         "name": "_unpack_chroma_results",
         "span": [
-          25083,
-          25100
+          25090,
+          25107
         ]
       },
       {
         "kind": "function",
         "name": "_search_chroma_candidates_impl",
         "span": [
-          25103,
-          25200
+          25110,
+          25207
         ]
       },
       {
         "kind": "function",
         "name": "_search_chroma_candidates",
         "span": [
-          25203,
-          25238
+          25210,
+          25245
         ]
       },
       {
         "kind": "function",
         "name": "_search_qdrant_candidates",
         "span": [
-          25241,
-          25337
+          25248,
+          25344
         ]
       },
       {
         "kind": "function",
         "name": "_search_hit_source_id",
         "span": [
-          25340,
-          25343
+          25347,
+          25350
         ]
       },
       {
         "kind": "function",
         "name": "_search_index_impl",
         "span": [
-          25346,
-          25581
+          25353,
+          25588
         ]
       },
       {
         "kind": "function",
         "name": "search_index",
         "span": [
-          25584,
-          25639
+          25591,
+          25646
         ]
       },
       {
         "kind": "function",
         "name": "_grounded_sources",
         "span": [
-          25656,
-          25660
+          25663,
+          25667
         ]
       },
       {
         "kind": "function",
         "name": "_answer_search_results",
         "span": [
-          25669,
-          25706
+          25676,
+          25713
         ]
       },
       {
         "kind": "function",
         "name": "_write_search_output",
         "span": [
-          25709,
-          25833
+          25716,
+          25840
         ]
       },
       {
         "kind": "function",
         "name": "query_index",
         "span": [
-          25836,
-          25901
+          25843,
+          25908
         ]
       },
       {
         "kind": "function",
         "name": "_escape_markdown_currency",
         "span": [
-          26010,
-          26054
+          26017,
+          26061
         ]
       },
       {
         "kind": "function",
         "name": "_escape_markdown_source_line_literals",
         "span": [
-          26057,
-          26142
+          26064,
+          26149
         ]
       },
       {
         "kind": "function",
         "name": "_escape_markdown_pandoc_literals",
         "span": [
-          26145,
-          26169
+          26152,
+          26176
         ]
       },
       {
         "kind": "function",
         "name": "_is_markdown_source_omission_record",
         "span": [
-          26172,
-          26178
+          26179,
+          26185
         ]
       },
       {
         "kind": "function",
         "name": "_is_markdown_endnote_record",
         "span": [
-          26181,
-          26186
+          26188,
+          26193
         ]
       },
       {
         "kind": "function",
         "name": "_markdown_emphasis",
         "span": [
-          26189,
-          26197
+          26196,
+          26204
         ]
       },
       {
         "kind": "function",
         "name": "_normalize_markdown_thematic_breaks",
         "span": [
-          26200,
-          26243
+          26207,
+          26250
         ]
       },
       {
         "kind": "function",
         "name": "_escape_markdown_large_ordered_list_literals",
         "span": [
-          26246,
-          26278
+          26253,
+          26285
         ]
       },
       {
         "kind": "function",
         "name": "_escape_markdown_implicit_reference_literals",
         "span": [
-          26281,
-          26351
+          26288,
+          26358
         ]
       },
       {
         "kind": "function",
         "name": "_normalize_markdown_blank_lines",
         "span": [
-          26354,
-          26361
+          26361,
+          26368
         ]
       },
       {
         "kind": "function",
         "name": "_normalize_markdown_table_cell_padding",
         "span": [
-          26364,
-          26391
+          26371,
+          26398
         ]
       },
       {
         "kind": "function",
         "name": "_markdown_source_bound_case_name",
         "span": [
-          26394,
-          26422
+          26401,
+          26429
         ]
       },
       {
         "kind": "function",
         "name": "_markdown_pdf_page_marker",
         "span": [
-          26425,
-          26435
+          26432,
+          26442
         ]
       },
       {
         "kind": "function",
         "name": "_format_chunk",
         "span": [
-          26438,
-          26535
+          26445,
+          26542
         ]
       },
       {
         "kind": "function",
         "name": "_filter_chunk_records",
         "span": [
-          26538,
-          26563
+          26545,
+          26570
         ]
       },
       {
         "kind": "function",
         "name": "_load_and_filter_chunks",
         "span": [
-          26566,
-          26575
+          26573,
+          26582
         ]
       },
       {
         "kind": "function",
         "name": "_section_heading_level",
         "span": [
-          26578,
-          26596
+          26585,
+          26603
         ]
       },
       {
         "kind": "function",
         "name": "_display_division_title",
         "span": [
-          26599,
-          26609
+          26606,
+          26616
         ]
       },
       {
         "kind": "function",
         "name": "_footnote_source_ref_numbers",
         "span": [
-          26612,
-          26621
+          26619,
+          26628
         ]
       },
       {
         "kind": "function",
         "name": "_footnote_source_refs",
         "span": [
-          26624,
-          26629
+          26631,
+          26636
         ]
       },
       {
         "kind": "function",
         "name": "_footnote_has_opening_marker",
         "span": [
-          26632,
-          26635
+          26639,
+          26642
         ]
       },
       {
         "kind": "function",
         "name": "_footnote_opening_match",
         "span": [
-          26638,
-          26641
+          26645,
+          26648
         ]
       },
       {
         "kind": "function",
         "name": "_footnote_edge_source_span",
         "span": [
-          26644,
-          26666
+          26651,
+          26673
         ]
       },
       {
         "kind": "function",
         "name": "_footnote_displaced_opening",
         "span": [
-          26669,
-          26683
+          26676,
+          26690
         ]
       },
       {
         "kind": "function",
         "name": "_footnote_false_structural_opening",
         "span": [
-          26686,
-          26728
+          26693,
+          26735
         ]
       },
       {
         "kind": "function",
         "name": "_markdown_footnote_continuation",
         "span": [
-          26731,
-          26800
+          26738,
+          26807
         ]
       },
       {
         "kind": "function",
         "name": "_merge_markdown_footnote_group",
         "span": [
-          26803,
-          26867
+          26810,
+          26874
         ]
       },
       {
         "kind": "function",
         "name": "_markdown_footnote_group_tail",
         "span": [
-          26870,
-          26896
+          26877,
+          26903
         ]
       },
       {
         "kind": "function",
         "name": "_logical_markdown_footnote_records",
         "span": [
-          26899,
-          26956
+          26906,
+          26963
         ]
       },
       {
         "kind": "function",
         "name": "_markdown_endnote_records",
         "span": [
-          26959,
-          27006
+          26966,
+          27013
         ]
       },
       {
         "kind": "function",
         "name": "_markdown_exact_source_segments",
         "span": [
-          27009,
-          27089
+          27016,
+          27096
         ]
       },
       {
         "kind": "function",
         "name": "_markdown_source_callout_candidates",
         "span": [
-          27092,
-          27133
+          27099,
+          27140
         ]
       },
       {
         "kind": "function",
         "name": "_markdown_rendered_section_parts",
         "span": [
-          27136,
-          27148
+          27143,
+          27155
         ]
       },
       {
         "kind": "function",
         "name": "_markdown_heading_callout_candidates",
         "span": [
-          27151,
-          27205
+          27158,
+          27212
         ]
       },
       {
         "kind": "function",
         "name": "_markdown_endnote_reference_replacements",
         "span": [
-          27208,
-          27283
+          27215,
+          27290
         ]
       },
       {
         "kind": "function",
         "name": "_markdown_with_endnote_references",
         "span": [
-          27286,
-          27299
+          27293,
+          27306
         ]
       },
       {
         "kind": "function",
         "name": "_append_markdown_endnotes",
         "span": [
-          27302,
-          27355
+          27309,
+          27362
         ]
       },
       {
         "kind": "function",
         "name": "_validate_markdown_endnote_links",
         "span": [
-          27358,
-          27400
+          27365,
+          27407
         ]
       },
       {
         "kind": "function",
         "name": "_assemble_markdown",
         "span": [
-          27403,
-          27605
+          27410,
+          27612
         ]
       },
       {
         "kind": "function",
         "name": "_export_plaintext",
         "span": [
-          27608,
-          27680
+          27615,
+          27687
         ]
       },
       {
         "kind": "function",
         "name": "_markdown_export_parameters",
         "span": [
-          27683,
-          27725
+          27690,
+          27732
         ]
       },
       {
         "kind": "function",
         "name": "_chunks_identity",
         "span": [
-          27728,
-          27733
+          27735,
+          27740
         ]
       },
       {
         "kind": "function",
         "name": "_markdown_validation_manifest_complete",
         "span": [
-          27736,
-          27754
+          27743,
+          27761
         ]
       },
       {
         "kind": "function",
         "name": "_unified_export_complete",
         "span": [
-          27757,
-          27780
+          27764,
+          27787
         ]
       },
       {
         "kind": "function",
         "name": "_record_source_page",
         "span": [
-          27783,
-          27793
+          27790,
+          27800
         ]
       },
       {
         "kind": "function",
         "name": "_group_split_markdown_records",
         "span": [
-          27796,
-          27845
+          27803,
+          27852
         ]
       },
       {
         "kind": "function",
         "name": "_split_markdown_group_sort_key",
         "span": [
-          27848,
-          27856
+          27855,
+          27863
         ]
       },
       {
         "kind": "function",
         "name": "_owned_chapter_filename",
         "span": [
-          27859,
-          27862
+          27866,
+          27869
         ]
       },
       {
         "kind": "function",
         "name": "_split_export_complete",
         "span": [
-          27865,
-          27905
+          27872,
+          27912
         ]
       },
       {
         "kind": "function",
         "name": "_markdown_table_record_count",
         "span": [
-          27908,
-          27911
+          27915,
+          27918
         ]
       },
       {
         "kind": "function",
         "name": "_log_markdown_validation_receipt",
         "span": [
-          27914,
-          27922
+          27921,
+          27929
         ]
       },
       {
         "kind": "function",
         "name": "_verified_markdown_figure_assets",
         "span": [
-          27925,
-          27952
+          27932,
+          27959
         ]
       },
       {
         "kind": "function",
         "name": "export_markdown",
         "span": [
-          27955,
-          28181
+          27962,
+          28188
         ]
       },
       {
         "kind": "function",
         "name": "_pipeline_paths_from_published_chunks",
         "span": [
-          28184,
-          28212
+          28191,
+          28219
         ]
       },
       {
         "kind": "function",
         "name": "_ai_project_receipt_path",
         "span": [
-          28215,
-          28218
+          28222,
+          28225
         ]
       },
       {
         "kind": "function",
         "name": "_ai_project_source_lease",
         "span": [
-          28221,
-          28245
+          28228,
+          28252
         ]
       },
       {
         "kind": "function",
         "name": "_ai_project_output_lease",
         "span": [
-          28248,
-          28261
+          28255,
+          28268
         ]
       },
       {
         "kind": "function",
         "name": "_load_ready_ai_project_source",
         "span": [
-          28264,
-          28319
+          28271,
+          28326
         ]
       },
       {
         "kind": "function",
         "name": "_ai_project_record_matches",
         "span": [
-          28322,
-          28333
+          28329,
+          28340
         ]
       },
       {
         "kind": "function",
         "name": "_existing_ai_project_owned_records",
         "span": [
-          28336,
-          28437
+          28343,
+          28444
         ]
       },
       {
         "kind": "function",
         "name": "_reject_nested_ai_project_target",
         "span": [
-          28440,
-          28454
+          28447,
+          28461
         ]
       },
       {
         "kind": "function",
         "name": "_ai_project_output_records",
         "span": [
-          28457,
-          28468
+          28464,
+          28475
         ]
       },
       {
         "kind": "function",
         "name": "_validate_ai_project_documents",
         "span": [
-          28471,
-          28501
+          28478,
+          28508
         ]
       },
       {
         "kind": "function",
         "name": "_remove_ai_project_staging",
         "span": [
-          28504,
-          28517
+          28511,
+          28524
         ]
       },
       {
         "kind": "function",
         "name": "_promote_ai_project_staging",
         "span": [
-          28520,
-          28558
+          28527,
+          28565
         ]
       },
       {
         "kind": "function",
         "name": "_ai_project_export_complete_locked",
         "span": [
-          28561,
-          28621
+          28568,
+          28628
         ]
       },
       {
         "kind": "function",
         "name": "_ai_project_export_complete",
         "span": [
-          28624,
-          28642
+          28631,
+          28649
         ]
       },
       {
         "kind": "function",
         "name": "export_ai_project",
         "span": [
-          28645,
-          28765
+          28652,
+          28772
         ]
       },
       {
         "kind": "function",
         "name": "extract_questions",
         "span": [
-          28776,
-          28836
+          28783,
+          28843
         ]
       },
       {
         "kind": "function",
         "name": "generate_exam_questions",
         "span": [
-          28869,
-          28996
+          28876,
+          29003
         ]
       },
       {
         "kind": "function",
         "name": "build_citation_graph",
         "span": [
-          29021,
-          29148
+          29028,
+          29155
         ]
       },
       {
         "kind": "function",
         "name": "generate_briefs",
         "span": [
-          29168,
-          29264
+          29175,
+          29271
         ]
       },
       {
         "kind": "function",
         "name": "_score_chunk_quality",
         "span": [
-          29287,
-          29296
+          29294,
+          29303
         ]
       },
       {
         "kind": "function",
         "name": "_export_flashcards",
         "span": [
-          29315,
-          29409
+          29322,
+          29416
         ]
       },
       {
         "kind": "function",
         "name": "_cluster_embeddings",
         "span": [
-          29426,
-          29471
+          29433,
+          29478
         ]
       },
       {
         "kind": "function",
         "name": "_raptor_parameters",
         "span": [
-          29474,
-          29496
+          29481,
+          29503
         ]
       },
       {
         "kind": "function",
         "name": "_raptor_output_complete",
         "span": [
-          29499,
-          29564
+          29506,
+          29571
         ]
       },
       {
         "kind": "function",
         "name": "build_raptor_tree",
         "span": [
-          29567,
-          29797
+          29574,
+          29804
         ]
       },
       {
         "kind": "function",
         "name": "_pipeline_run_is_ready",
         "span": [
-          29804,
-          29840
+          29811,
+          29847
         ]
       },
       {
         "kind": "function",
         "name": "show_info",
         "span": [
-          29843,
-          30055
+          29850,
+          30062
         ]
       },
       {
         "kind": "class",
         "name": "_PipelineStageError",
         "span": [
-          30062,
-          30068
+          30069,
+          30075
         ]
       },
       {
         "kind": "function",
         "name": "_background_pipeline_plan",
         "span": [
-          30071,
-          30099
+          30078,
+          30106
         ]
       },
       {
         "kind": "function",
         "name": "_mark_background_pipeline_binding",
         "span": [
-          30102,
-          30128
+          30109,
+          30135
         ]
       },
       {
         "kind": "function",
         "name": "_resolve_cloud_endpoint",
         "span": [
-          30131,
-          30137
+          30138,
+          30144
         ]
       },
       {
         "kind": "function",
         "name": "_cloud_endpoint_arg",
         "span": [
-          30140,
-          30146
+          30147,
+          30153
         ]
       },
       {
         "kind": "function",
         "name": "_resolve_cloud_key",
         "span": [
-          30149,
-          30159
+          30156,
+          30166
         ]
       },
       {
         "kind": "function",
         "name": "_llm_kwargs_from_args",
         "span": [
-          30162,
-          30173
+          30169,
+          30180
         ]
       },
       {
         "kind": "function",
         "name": "_configure_llm_runtime_from_args",
         "span": [
-          30179,
-          30184
+          30186,
+          30191
         ]
       },
       {
         "kind": "function",
         "name": "_index_chunks_for_backend",
         "span": [
-          30187,
-          30226
+          30194,
+          30233
         ]
       },
       {
         "kind": "function",
         "name": "_query_index_for_backend",
         "span": [
-          30229,
-          30235
+          30236,
+          30242
         ]
       },
       {
         "kind": "function",
         "name": "_publication_relative_path",
         "span": [
-          30323,
-          30336
+          30330,
+          30343
         ]
       },
       {
         "kind": "function",
         "name": "_publication_file_binding",
         "span": [
-          30339,
-          30351
+          30346,
+          30358
         ]
       },
       {
         "kind": "function",
         "name": "_publication_input_binding",
         "span": [
-          30354,
-          30366
+          30361,
+          30373
         ]
       },
       {
         "kind": "function",
         "name": "_publication_manifest_payload",
         "span": [
-          30369,
-          30372
+          30376,
+          30379
         ]
       },
       {
         "kind": "function",
         "name": "_publication_check_map",
         "span": [
-          30375,
-          30386
+          30382,
+          30393
         ]
       },
       {
         "kind": "function",
         "name": "_require_publication_checks",
         "span": [
-          30389,
-          30400
+          30396,
+          30407
         ]
       },
       {
         "kind": "function",
         "name": "_publication_markdown_artifacts",
         "span": [
-          30403,
-          30451
+          30410,
+          30458
         ]
       },
       {
         "kind": "function",
         "name": "_verify_publication_vector_store",
         "span": [
-          30454,
-          30524
+          30461,
+          30531
         ]
       },
       {
         "kind": "function",
         "name": "_index_publication_evidence",
         "span": [
-          30527,
-          30600
+          30534,
+          30607
         ]
       },
       {
         "kind": "function",
         "name": "_build_pipeline_publication_receipt",
         "span": [
-          30603,
-          30852
+          30610,
+          30859
         ]
       },
       {
         "kind": "function",
         "name": "_valid_publication_sha256",
         "span": [
-          30855,
-          30859
+          30862,
+          30866
         ]
       },
       {
         "kind": "function",
         "name": "_publication_evidence_contract",
         "span": [
-          30862,
-          31051
+          30869,
+          31058
         ]
       },
       {
         "kind": "function",
         "name": "_publication_binding_path",
         "span": [
-          31054,
-          31068
+          31061,
+          31075
         ]
       },
       {
         "kind": "function",
         "name": "_publication_receipt_gate",
         "span": [
-          31071,
-          31073
+          31078,
+          31080
         ]
       },
       {
         "kind": "function",
         "name": "_require_publication_manifest_output",
         "span": [
-          31076,
-          31092
+          31083,
+          31099
         ]
       },
       {
         "kind": "function",
         "name": "_require_publication_artifact_inventory",
         "span": [
-          31095,
-          31102
+          31102,
+          31109
         ]
       },
       {
         "kind": "function",
         "name": "_validate_pipeline_vector_publication_generation",
         "span": [
-          31105,
-          31173
+          31112,
+          31180
         ]
       },
       {
         "kind": "function",
         "name": "_validate_pipeline_publication_generation",
         "span": [
-          31176,
-          31485
+          31183,
+          31492
         ]
       },
       {
         "kind": "function",
         "name": "_pipeline_publication_complete",
         "span": [
-          31488,
-          31559
+          31495,
+          31566
         ]
       },
       {
         "kind": "function",
         "name": "_publish_pipeline_publication",
         "span": [
-          31562,
-          31582
+          31569,
+          31589
         ]
       },
       {
         "kind": "function",
         "name": "_run_pipeline_stages",
         "span": [
-          31585,
-          31974
+          31592,
+          31981
         ]
       },
       {
         "kind": "function",
         "name": "_run_pipeline_job",
         "span": [
-          31977,
-          32070
+          31984,
+          32077
         ]
       },
       {
         "kind": "function",
         "name": "_normalize_operation_timeout",
         "span": [
-          32077,
-          32080
+          32084,
+          32087
         ]
       },
       {
         "kind": "function",
         "name": "_cli_operation_timeout",
         "span": [
-          32083,
-          32090
+          32090,
+          32097
         ]
       },
       {
         "kind": "function",
         "name": "_new_supervised_start_gate",
         "span": [
-          32100,
-          32103
+          32107,
+          32110
         ]
       },
       {
         "kind": "function",
         "name": "_supervision_config",
         "span": [
-          32106,
-          32114
+          32113,
+          32121
         ]
       },
       {
         "kind": "function",
         "name": "_terminate_supervised_process",
         "span": [
-          32117,
-          32123
+          32124,
+          32130
         ]
       },
       {
         "kind": "function",
         "name": "_supervised_telemetry_requested",
         "span": [
-          32126,
-          32130
+          32133,
+          32137
         ]
       },
       {
         "kind": "function",
         "name": "_finalize_supervised_run_telemetry",
         "span": [
-          32133,
-          32149
+          32140,
+          32156
         ]
       },
       {
         "kind": "function",
         "name": "_start_supervised_run_telemetry",
         "span": [
-          32152,
-          32158
+          32159,
+          32165
         ]
       },
       {
         "kind": "function",
         "name": "_run_cli_with_deadline",
         "span": [
-          32161,
-          32205
+          32168,
+          32212
         ]
       },
       {
         "kind": "function",
         "name": "_run_rag_entrypoint",
         "span": [
-          32212,
-          32229
+          32219,
+          32236
         ]
       },
       {
         "kind": "function",
         "name": "_render_storage_outcome",
         "span": [
-          32232,
-          32248
+          32239,
+          32255
         ]
       },
       {
         "kind": "function",
         "name": "_apply_pipeline_deletion_with_leases",
         "span": [
-          32251,
-          32277
+          32258,
+          32284
         ]
       },
       {
         "kind": "function",
         "name": "_run_storage_command",
         "span": [
-          32280,
-          32375
+          32287,
+          32382
         ]
       },
       {
         "kind": "function",
         "name": "_render_job_summaries",
         "span": [
-          32378,
-          32386
+          32385,
+          32393
         ]
       },
       {
         "kind": "function",
         "name": "_background_submit_tokens",
         "span": [
-          32389,
-          32403
+          32396,
+          32410
         ]
       },
       {
         "kind": "function",
         "name": "_canonical_background_security_argv",
         "span": [
-          32417,
-          32484
+          32424,
+          32491
         ]
       },
       {
         "kind": "function",
         "name": "_run_jobs_command",
         "span": [
-          32491,
-          32605
+          32498,
+          32612
         ]
       },
       {
         "kind": "class",
         "name": "_StrictArgumentParser",
         "span": [
-          32615,
-          32625
+          32622,
+          32632
         ]
       },
       {
         "kind": "function",
         "name": "main",
         "span": [
-          32628,
-          33856
+          32635,
+          33863
         ]
       },
       {
         "kind": "function",
         "name": "_menu_choose",
         "span": [
-          33859,
-          33885
+          33866,
+          33892
         ]
       },
       {
         "kind": "function",
         "name": "_menu_yesno",
         "span": [
-          33888,
-          33897
+          33895,
+          33904
         ]
       },
       {
         "kind": "function",
         "name": "_menu_file",
         "span": [
-          33900,
-          33973
+          33907,
+          33980
         ]
       },
       {
         "kind": "function",
         "name": "_menu_cloud_consent_args",
         "span": [
-          33979,
-          33990
+          33986,
+          33997
         ]
       },
       {
         "kind": "function",
         "name": "_menu_cache_namespace_args",
         "span": [
-          33993,
-          34003
+          34000,
+          34010
         ]
       },
       {
         "kind": "function",
         "name": "_menu_llm_provider_args",
         "span": [
-          34006,
-          34121
+          34013,
+          34128
         ]
       },
       {
         "kind": "function",
         "name": "_menu_secrets_to_environment",
         "span": [
-          34127,
-          34135
+          34134,
+          34142
         ]
       },
       {
         "kind": "function",
         "name": "_menu_structure_profile",
         "span": [
-          34138,
-          34143
+          34145,
+          34150
         ]
       },
       {
         "kind": "function",
         "name": "interactive_menu",
         "span": [
-          34146,
-          34511
+          34153,
+          34518
         ]
       }
     ],
@@ -27312,7 +27332,7 @@
   "schema_version": 3,
   "source_architecture": {
     "class_count": 333,
-    "function_count": 4416,
+    "function_count": 4418,
     "import_graph": {
       "cyclic_components": [],
       "edge_count": 649,
@@ -29125,7 +29145,7 @@
       {
         "class_count": 0,
         "classes": [],
-        "definition_locations_sha256": "7caf9d6f89c27a0816ff28de9ba541106dd81493aef5c8f23544cb4cd8994f4e",
+        "definition_locations_sha256": "9a666cd9ac611e39954cec6a9e5b2b33e417057eb5c4b535436e371663bcd96e",
         "function_count": 56,
         "functions": [
           {
@@ -29420,7 +29440,7 @@
             "kind": "function",
             "name": "evaluate_lexical",
             "scope": "top_level",
-            "signature_sha256": "5cd50dcdef480de8d52ccc9384b2f7a0f64dbd93d0f8400e898a1439bba54a6a"
+            "signature_sha256": "c8031b27b791256cb047dd49a56b7b7e96d05db2acee5947ff7f2b4641d9ba0c"
           },
           {
             "kind": "function",
@@ -29580,9 +29600,9 @@
           }
         ],
         "module": "eval",
-        "non_blank_lines": 2296,
+        "non_blank_lines": 2313,
         "path": "eval.py",
-        "physical_lines": 2470,
+        "physical_lines": 2487,
         "top_level_function_count": 53
       },
       {
@@ -29979,7 +29999,7 @@
       {
         "class_count": 0,
         "classes": [],
-        "definition_locations_sha256": "7d5e7dfbd4b15a7536bd00428649dde2f2fb3c0fa5254d9f187342d7569908ce",
+        "definition_locations_sha256": "fee812ae8d411b3c44491115a802f770d2e8e6d06c0c68f424165af7ef023b3b",
         "function_count": 12,
         "functions": [
           {
@@ -30094,9 +30114,9 @@
           }
         ],
         "module": "evaluation_release",
-        "non_blank_lines": 366,
+        "non_blank_lines": 368,
         "path": "evaluation_release.py",
-        "physical_lines": 405,
+        "physical_lines": 407,
         "top_level_function_count": 12
       },
       {
@@ -48948,7 +48968,7 @@
             "scope": "nested"
           }
         ],
-        "definition_locations_sha256": "23524cc48ac4e9ce6a2b3182213a6c95d8a4514465eebc656bc360e340e264ef",
+        "definition_locations_sha256": "73a3bc185dbbe3bc6b11b6793be091373fd29f6f9cb82ee49f81b3e5a44e8352",
         "function_count": 832,
         "functions": [
           {
@@ -49333,7 +49353,7 @@
             "kind": "function",
             "name": "_bm25_search",
             "scope": "top_level",
-            "signature_sha256": "240a7bcf0c89ba7f75f854adbd347f4fabc59d04e5615d478a59f07fd806dbf6"
+            "signature_sha256": "afedd8fa52b1e66b4fc154d0f602aacd81e3c1b46ef79164a60cb2a98b831759"
           },
           {
             "kind": "function",
@@ -54262,9 +54282,9 @@
           }
         ],
         "module": "rag",
-        "non_blank_lines": 31573,
+        "non_blank_lines": 31580,
         "path": "rag.py",
-        "physical_lines": 34528,
+        "physical_lines": 34535,
         "top_level_function_count": 569
       },
       {
@@ -54864,8 +54884,8 @@
             "scope": "top_level"
           }
         ],
-        "definition_locations_sha256": "f5faf32f3bee6c52af73ebf93c55bbdd7775d8eb7b9332c055decd01a1291a9e",
-        "function_count": 45,
+        "definition_locations_sha256": "998dc770d905b2005c7d26e3546aeb2fffcac7d5f9dbbd46aab0c02d78dc8741",
+        "function_count": 47,
         "functions": [
           {
             "kind": "function",
@@ -55031,6 +55051,12 @@
           },
           {
             "kind": "function",
+            "name": "_lexical_query_tokens",
+            "scope": "top_level",
+            "signature_sha256": "faa197dd6832af4a281b26152132f89a5035cbe967191eccaf7879717d1807d3"
+          },
+          {
+            "kind": "function",
             "name": "_metadata_text",
             "scope": "top_level",
             "signature_sha256": "d04ea95a2054903ef12343336180c3dedf233f340e4546099cd1ba0a470163e9"
@@ -55133,6 +55159,12 @@
           },
           {
             "kind": "function",
+            "name": "_validate_lexical_query_policy",
+            "scope": "top_level",
+            "signature_sha256": "a2ad1115cd1bc3e08b801ea92ba6e4317f2ca0ffbbcb534c3040507c2e3b6691"
+          },
+          {
+            "kind": "function",
             "name": "_validated_stable_id_source",
             "scope": "top_level",
             "signature_sha256": "4affb6c87630275f535968e2f89efdb9d43ed2cf803d9d33195d957c223b3ad4"
@@ -55150,10 +55182,10 @@
           }
         ],
         "module": "retrieval_core",
-        "non_blank_lines": 1258,
+        "non_blank_lines": 1298,
         "path": "retrieval_core.py",
-        "physical_lines": 1398,
-        "top_level_function_count": 39
+        "physical_lines": 1445,
+        "top_level_function_count": 41
       },
       {
         "class_count": 1,
@@ -64021,13 +64053,13 @@
         "top_level_function_count": 2
       }
     ],
-    "physical_line_count": 130440,
+    "physical_line_count": 130513,
     "source_groups": [
       "production",
       "tools",
       "other"
     ],
-    "top_level_function_count": 2923
+    "top_level_function_count": 2925
   },
   "tracked_sources": {
     "count": 493,

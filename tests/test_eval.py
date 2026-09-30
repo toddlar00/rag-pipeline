@@ -2386,20 +2386,23 @@ def _lexical_cli(queries_path, chunks, report_path, *extra):
     ])
 
 
-def _assert_details_match_production_leg(queries, details, chunks, depth):
+def _assert_details_match_production_leg(
+        queries, details, chunks, depth, query_policy="none"):
     rag._bm25_cache.clear()
     assert len(details) == len(queries)
     for query, detail in zip(queries, details):
         _documents, metadatas, scores = rag._bm25_search(
-            query["query"], chunks, depth, **(query.get("filters") or {}))
+            query["query"], chunks, depth, **(query.get("filters") or {}),
+            query_policy=query_policy)
         assert [result["chunk_id"] for result in detail["results"]] == [
             metadata["stable_id"] for metadata in metadatas]
         assert [result["score"] for result in detail["results"]] == scores
 
 
+@pytest.mark.parametrize("query_policy", ["none", "function-words-v1"])
 @pytest.mark.parametrize("suite_name", _CC0_SUITES)
 def test_lexical_retriever_ranks_exactly_like_the_production_leg(
-        monkeypatch, tmp_path, suite_name):
+        monkeypatch, tmp_path, suite_name, query_policy):
     # The lexical evaluator must stay model-free for the dependency-light
     # CI lanes: any import of a vector or model stack fails this test.
     for module in ("chromadb", "qdrant_client", "sentence_transformers",
@@ -2410,6 +2413,7 @@ def test_lexical_retriever_ranks_exactly_like_the_production_leg(
 
     assert retrieval_eval.main([
         "--retriever", "lexical",
+        "--lexical-query-policy", query_policy,
         "--queries", str(suite / "queries.jsonl"),
         "--chunks", str(suite / "chunks.jsonl"),
         "--k", "1", "3", "5",
@@ -2421,10 +2425,11 @@ def test_lexical_retriever_ranks_exactly_like_the_production_leg(
     payload = json.loads(report_path.read_text(encoding="utf-8"))
     _assert_details_match_production_leg(
         retrieval_eval.load_queries(suite / "queries.jsonl"),
-        payload["query_details"], suite / "chunks.jsonl", 10)
+        payload["query_details"], suite / "chunks.jsonl", 10,
+        query_policy=query_policy)
     configuration = payload["configuration"]
     assert configuration["retriever"] == "lexical"
-    assert configuration["lexical_query_policy"] == "none"
+    assert configuration["lexical_query_policy"] == query_policy
     assert configuration["use_reranker"] is False
     assert configuration["hybrid"] is False
     assert configuration["embedding_model"] is None
@@ -2613,6 +2618,86 @@ def test_lexical_baseline_provenance_is_strict_and_comparable(tmp_path):
         load(dict(configuration), expected=offline_current)
     assert "retriever" in str(error.value)
     assert "lexical_query_policy" in str(error.value)
+
+    filtered_current = dict(
+        configuration, lexical_query_policy="function-words-v1")
+    with pytest.raises(
+            ValueError, match="differs for: lexical_query_policy$"):
+        load(dict(configuration), expected=filtered_current)
+
+
+def test_function_word_policy_is_opt_in_and_bound_into_reports(tmp_path):
+    queries_path, chunks = _write_lexical_fixture(tmp_path)
+    queries = retrieval_eval.load_queries(queries_path)
+    default_path = tmp_path / "none.json"
+    filtered_path = tmp_path / "function-words.json"
+
+    assert _lexical_cli(queries_path, chunks, default_path) == 0
+    assert _lexical_cli(
+        queries_path, chunks, filtered_path,
+        "--lexical-query-policy", "function-words-v1") == 0
+
+    default = json.loads(default_path.read_text(encoding="utf-8"))
+    filtered = json.loads(filtered_path.read_text(encoding="utf-8"))
+    assert default["configuration"]["lexical_query_policy"] == "none"
+    assert filtered["configuration"]["lexical_query_policy"] == (
+        "function-words-v1")
+    _assert_details_match_production_leg(
+        queries, filtered["query_details"], chunks, 5,
+        query_policy="function-words-v1")
+    # Dropping "is" and "an" from the query lets the judged mailbox rule
+    # outrank a passage that matched mostly through function words.
+    assert default["metrics"]["mrr"] == pytest.approx(0.833)
+    assert filtered["metrics"]["mrr"] == 1.0
+    # Reports from different policies are never silently comparable.
+    assert _lexical_cli(
+        queries_path, chunks, tmp_path / "rejected.json",
+        "--lexical-query-policy", "function-words-v1",
+        "--baseline-report", str(default_path),
+        "--max-regression", "mrr=0") == 1
+
+
+def test_evaluate_lexical_rejects_an_unknown_query_policy(tmp_path):
+    queries_path, chunks = _write_lexical_fixture(tmp_path)
+
+    with pytest.raises(ValueError, match="lexical query policy"):
+        retrieval_eval.evaluate_lexical(
+            retrieval_eval.load_queries(queries_path), chunks,
+            expected_source_sha256=hashlib.sha256(
+                chunks.read_bytes()).hexdigest(),
+            query_policy="stopwords", k_values=[1], n_results=5)
+
+
+@pytest.mark.parametrize("retriever_args", [
+    ["--retriever", "bm25"],
+    ["--retriever", "index", "--collection", "book"],
+])
+def test_lexical_query_policy_requires_the_lexical_retriever(
+        tmp_path, capsys, retriever_args):
+    queries_path, chunks = _write_lexical_fixture(tmp_path)
+
+    with pytest.raises(SystemExit) as error:
+        retrieval_eval.main([
+            *retriever_args,
+            "--db", str(tmp_path / "db"),
+            "--lexical-query-policy", "function-words-v1",
+            "--queries", str(queries_path),
+            "--chunks", str(chunks),
+        ])
+
+    assert error.value.code == 2
+    assert "--lexical-query-policy" in capsys.readouterr().err
+
+
+def test_lexical_query_policy_choices_fail_closed(tmp_path):
+    queries_path, chunks = _write_lexical_fixture(tmp_path)
+
+    with pytest.raises(SystemExit) as error:
+        _lexical_cli(
+            queries_path, chunks, tmp_path / "report.json",
+            "--lexical-query-policy", "stopwords")
+
+    assert error.value.code == 2
 
 
 def test_report_query_digest_uses_the_scored_snapshot(

@@ -10,6 +10,7 @@ import pytest
 import eval as retrieval_eval
 import rag
 import release_security
+import retrieval_core
 
 
 @pytest.fixture
@@ -1254,6 +1255,92 @@ def test_bm25_default_ranking_matches_captured_characterization(
     _assert_bm25_golden(
         rag._bm25_search(query, chunks, n_results, content_type, chapter_num),
         expected)
+
+
+def _bm25_oracle(query, n_results, content_type, chapter_num, *,
+                 function_words=frozenset()):
+    """Frozen, independent oracle of the production lexical leg."""
+    from rank_bm25 import BM25Okapi
+
+    records = _BM25_CHARACTERIZATION_RECORDS
+    corpus = [
+        rag._legal_search_tokens(rag._lexical_document_text(
+            record["text"], record["metadata"])) or ["__rag_empty__"]
+        for record in records
+    ]
+    tokens = rag._legal_search_tokens(query)
+    if not tokens:
+        return []
+    tokens = [token for token in tokens if token not in function_words] or tokens
+    scores = BM25Okapi(corpus).get_scores(tokens)
+    ranked = [
+        (float(scores[index]), index)
+        for index, record in enumerate(records)
+        if (not content_type
+            or record["metadata"].get("content_type") == content_type)
+        and (chapter_num is None
+             or record["metadata"].get("chapter_num") == chapter_num)
+        and set(corpus[index]).intersection(tokens)
+    ]
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    return [(index, score) for score, index in ranked[:n_results]]
+
+
+@pytest.mark.parametrize(
+    ("query", "n_results", "content_type", "chapter_num", "expected"),
+    _BM25_DEFAULT_GOLDEN)
+def test_bm25_function_word_policy_matches_a_frozen_oracle(
+        tmp_path, query, n_results, content_type, chapter_num, expected):
+    chunks = _write_bm25_characterization_corpus(tmp_path)
+    rag._bm25_cache.clear()
+    oracle = _bm25_oracle(query, n_results, content_type, chapter_num)
+    assert [index for index, _score in oracle] == [
+        index for index, _score in expected]
+    assert [score for _index, score in oracle] == pytest.approx(
+        [score for _index, score in expected], rel=1e-12, abs=1e-12)
+
+    _assert_bm25_golden(
+        rag._bm25_search(
+            query, chunks, n_results, content_type, chapter_num,
+            query_policy="function-words-v1"),
+        _bm25_oracle(
+            query, n_results, content_type, chapter_num,
+            function_words=retrieval_core.LEXICAL_QUERY_FUNCTION_WORDS_V1))
+    # The cached index is policy-independent: the default stays unchanged.
+    _assert_bm25_golden(
+        rag._bm25_search(
+            query, chunks, n_results, content_type, chapter_num,
+            query_policy="none"),
+        expected)
+    _assert_bm25_golden(
+        rag._bm25_search(query, chunks, n_results, content_type, chapter_num),
+        expected)
+
+
+def test_bm25_function_word_policy_changes_only_function_word_matches(
+        tmp_path):
+    chunks = _write_bm25_characterization_corpus(tmp_path)
+    rag._bm25_cache.clear()
+
+    documents, _, _ = rag._bm25_search(
+        "what is the rule for the statute of frauds", chunks, 8,
+        query_policy="function-words-v1")
+    only_function_words, _, _ = rag._bm25_search(
+        "what is the", chunks, 8, query_policy="function-words-v1")
+
+    records = _BM25_CHARACTERIZATION_RECORDS
+    # Record 7 matched the default query only through function words.
+    assert documents[0] == records[0]["text"]
+    assert records[7]["text"] not in documents
+    # A query of only function words degrades to the default behavior.
+    assert only_function_words == [
+        records[index]["text"] for index, _score in _BM25_DEFAULT_GOLDEN[2][4]]
+
+
+def test_bm25_rejects_unknown_query_policy_before_reading_chunks(tmp_path):
+    with pytest.raises(ValueError, match="lexical query policy"):
+        rag._bm25_search(
+            "rule", tmp_path / "missing.jsonl", 3, query_policy="stopwords")
 
 
 def test_qdrant_sparse_query_uses_shared_legal_analyzer(search_fakes):
