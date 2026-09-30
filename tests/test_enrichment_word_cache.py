@@ -5,9 +5,12 @@ all read unclipped ``get_text("words", sort=True)`` from the same private,
 hash-verified PDF snapshot, and four of them recompute the document's
 hard-hyphen attestations.  These tests pin the stage and enrichment outputs
 on one synthetic book so that sharing that work cannot change a result.
+``_NativePdfWordCache`` then extracts each page and the attestations once
+per enrichment call, never across snapshots, and refuses another PDF.
 Every fixture is synthetic.
 """
 
+from collections import Counter
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -384,3 +387,160 @@ def test_a_persistent_page_fault_fails_every_native_stage(
             "cross-page native-PDF word groups",
             "disjoint section-flow text groups",
         )]
+
+
+# -- The shared word cache ----------------------------------------------------
+
+
+def _count_sorted_word_extractions(monkeypatch) -> Counter:
+    """Count completed unclipped sorted-word extractions by page index."""
+    counts: Counter = Counter()
+    original = pymupdf.Page.get_text
+
+    def get_text(self, option="text", *args, **kwargs):
+        value = original(self, option, *args, **kwargs)
+        if option == "words" and not args and kwargs == {"sort": True}:
+            counts[self.number] += 1
+        return value
+
+    monkeypatch.setattr(pymupdf.Page, "get_text", get_text)
+    return counts
+
+
+def _count_attestation_passes(monkeypatch) -> list[None]:
+    calls: list[None] = []
+    original = rag._native_hard_hyphen_attestations_from_words
+
+    def counting(page_words):
+        calls.append(None)
+        return original(page_words)
+
+    monkeypatch.setattr(
+        rag, "_native_hard_hyphen_attestations_from_words", counting)
+    return calls
+
+
+def test_stages_sharing_one_word_cache_match_the_uncached_stages(tmp_path):
+    document, path = _build_book(tmp_path)
+
+    uncached = _run_stages(document, path, word_cache=None)
+    shared = _run_stages(
+        document, path, word_cache=rag._NativePdfWordCache(path))
+
+    assert shared == uncached
+    assert shared == _run_stages(document, path)
+
+
+def test_enrichment_extracts_each_page_and_the_attestations_once(
+        tmp_path, monkeypatch):
+    document, path = _build_book(tmp_path)
+    _snapshot(monkeypatch, path)
+    counts = _count_sorted_word_extractions(monkeypatch)
+    attestation_passes = _count_attestation_passes(monkeypatch)
+
+    first = _enrich(document, tmp_path)
+
+    assert first == _expected(groups=_FIRST_PASS, deferred=_DEFERRED)
+    assert counts == Counter(range(11))
+    assert len(attestation_passes) == 1
+
+    # A replay opens a new snapshot and never reuses the earlier words.
+    replay = _enrich(
+        document, tmp_path, reading_order_violations=_REPLAY_VIOLATION)
+
+    assert replay == _expected(groups=_REPLAY_PASS)
+    assert counts == Counter({page: 2 for page in range(11)})
+    assert len(attestation_passes) == 2
+
+
+def test_uncached_stages_keep_reading_the_pdf_themselves(
+        tmp_path, monkeypatch):
+    document, path = _build_book(tmp_path)
+    counts = _count_sorted_word_extractions(monkeypatch)
+
+    _run_stages(document, path)
+
+    # Direct callers keep today's per-stage extraction.
+    assert all(count > 1 for count in counts.values())
+    assert set(counts) == set(range(11))
+
+
+def test_a_failed_extraction_leaves_no_partial_cache_entry(
+        tmp_path, monkeypatch):
+    document, path = _build_book(tmp_path)
+    _snapshot(monkeypatch, path)
+    _inject_page_fault(
+        monkeypatch, 5, during="_recover_native_text_repairs")
+    counts = _count_sorted_word_extractions(monkeypatch)
+
+    enrichments = _enrich(document, tmp_path)
+
+    assert enrichments == _expected(
+        overrides={}, edits={}, groups=_FIRST_PASS, deferred=_DEFERRED)
+    # Pages before the fault stay cached; the failed page and the pages
+    # after it are extracted by the next stage, each once.
+    assert counts == Counter(range(11))
+
+
+def test_enrichment_releases_the_words_after_the_group_stages(
+        tmp_path, monkeypatch):
+    document, path = _build_book(tmp_path)
+    _snapshot(monkeypatch, path)
+    caches: list[rag._NativePdfWordCache] = []
+
+    class Recording(rag._NativePdfWordCache):
+        __slots__ = ()
+
+        def __init__(self, pdf_path):
+            super().__init__(pdf_path)
+            caches.append(self)
+
+    monkeypatch.setattr(rag, "_NativePdfWordCache", Recording)
+
+    _enrich(document, tmp_path)
+
+    assert [(cache.path, cache.page_count) for cache in caches] == [
+        (path, 11)]
+    assert caches[0]._page_words == {}
+    assert caches[0]._attestations is None
+
+
+def test_the_word_cache_returns_copies(tmp_path):
+    _document, path = _build_book(tmp_path)
+    cache = rag._NativePdfWordCache(path)
+
+    with pymupdf.open(path) as pdf:
+        cache.bind(path, pdf)
+        words = cache.page_words(pdf[3])
+        attestations = cache.hard_hyphen_attestations(pdf)
+        expected_words = pdf[3].get_text("words", sort=True)
+        expected_attestations = rag._native_hard_hyphen_attestations(pdf)
+        words.clear()
+        attestations.clear()
+
+        assert cache.page_words(pdf[3]) == expected_words
+        assert cache.hard_hyphen_attestations(pdf) == expected_attestations
+
+    assert expected_attestations == {"fault-tolerant"}
+
+
+def test_the_word_cache_refuses_another_pdf(tmp_path):
+    document, path = _build_book(tmp_path)
+    other = tmp_path / "other.pdf"
+    with pymupdf.open() as pdf:
+        pdf.new_page(width=612, height=792)
+        pdf.save(other)
+    cache = rag._NativePdfWordCache(path)
+
+    with pymupdf.open(path) as pdf, pymupdf.open(other) as short:
+        with pytest.raises(ValueError, match="another PDF snapshot"):
+            cache.page_words(pdf[0])
+        cache.bind(path, pdf)
+        with pytest.raises(ValueError, match="another PDF snapshot"):
+            cache.bind(other, short)
+        with pytest.raises(ValueError, match="another PDF snapshot"):
+            cache.bind(path, short)
+
+    with pytest.raises(ValueError, match="another PDF snapshot"):
+        rag._recover_cross_page_native_word_groups(
+            document, other, word_cache=cache)
