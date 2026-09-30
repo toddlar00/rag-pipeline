@@ -3097,29 +3097,41 @@ output/                 # Per-run book directories (auto-created)
 ### Required (`requirements.txt`)
 
 ```
-PyMuPDF>=1.24,<2                # PDF preprocessing and scaffold conversion
-docling>=2.31,<3                # PDF layout detection and conversion
-docling-core[chunking]>=2.70,<3 # HybridChunker and chunking extras
-pypdfium2>=4.30,<6              # PDF page counting and conversion backend
-sentence-transformers>=3.0,<6   # Local embedding models
-einops>=0.7,<1                  # Reviewed Nomic model-code dependency
-chromadb>=1.5.2,<2              # Default vector database; deterministic close()
-FlagEmbedding>=1.4.2,<2         # BGE cross-encoder reranker
-rank-bm25>=0.2,<0.3             # BM25 keyword search
-tqdm>=4.66,<5                   # Progress bars
-requests>=2.31,<3               # Cloud embedding and LLM HTTP calls
-numpy>=1.26,<3                  # RAPTOR clustering
+PyMuPDF>=1.28.2,<2                 # PDF preprocessing and scaffold conversion
+docling>=2.120.3,<3                # PDF layout detection and conversion
+docling-core[chunking]>=2.99.0,<3  # HybridChunker and chunking extras
+pypdfium2>=5.13.0,<6               # PDF page counting and conversion backend
+sentence-transformers>=6.1.0,<7    # Local embedding models
+einops>=0.7,<1                     # Reviewed Nomic model-code dependency
+chromadb>=1.5.2,<2                 # Default vector database; deterministic close()
+oauthlib>=4.0.0,<5                 # Governed input (chromadb -> kubernetes)
+onnxruntime>=1.14.1,<1.24; python_version < "3.11"  # Governed Chroma input (installability)
+onnxruntime>=1.30.0,<2; python_version >= "3.11"
+FlagEmbedding>=1.4.2,<2            # BGE cross-encoder reranker
+transformers>=5.10.0,<5.17         # Governed ML input; <5.17 for the Nomic code
+datasets>=5.0.1,<6                 # Governed ML input (advisory fix)
+aiohttp>=3.14.3,<4                 # Governed ML input (advisory fix)
+rank-bm25>=0.2,<0.3                # BM25 keyword search
+tqdm>=4.70.1,<5                    # Progress bars
+requests>=2.31,<3                  # Cloud embedding and LLM HTTP calls
+numpy>=1.26,<3                     # RAPTOR clustering
 ```
 
 ### Optional (`requirements-optional.txt`)
 
 ```
-qdrant-client>=1.17,<2       # Qdrant vector DB backend
+qdrant-client>=1.19.1,<2     # Qdrant vector DB backend
+h2>=4.4.1,<5                 # Governed input (qdrant-client HTTP/2)
 google-genai>=1.68,<2        # Gemini fallback + timeout/retry controls
-gradio>=6.0,<7               # Web UI
+cryptography>=50.0.0,<51     # Governed input (google-genai auth)
+gradio>=6.28.0,<7            # Web UI
 ```
 
-These are the project's direct declarations; transitive packages are omitted.
+These are the project's direct declarations; transitive packages such as
+PyTorch are omitted (the `requirements.txt` header covers installing CUDA
+wheels first). "Governed" inputs are transitive packages promoted to direct
+declarations so an advisory fix or installable wheels can be selected under
+the dependency-domain policy.
 Voyage, OpenAI, Cohere, Jina, DeepSeek, MiniMax, and custom OpenAI-compatible
 operations use the owned Requests transport already present in the core profile;
 their provider SDK packages are neither imported nor installed.

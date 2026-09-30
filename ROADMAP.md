@@ -35,7 +35,7 @@ publish a release.
 ### Local OCR development qualification (2026-09-06)
 
 The user-requested [OCR and AI-access improvement program](docs/ocr-improvement-program.md)
-remains active on a draft-PR branch; it does not supersede the integrated
+was integrated through PR #116 (`0a04207`); it does not supersede the integrated
 milestones or grant release/private-corpus approval. A frozen Windows CPython
 3.12.10 full-lock run observed 6,841 passing tests, seven skips and eight failures.
 One failure was a stale architecture consumer expectation; the other seven
@@ -137,12 +137,13 @@ representative accuracy or source-completeness claim follows. Unified guided
 review, approved reference inputs, adaptive retries, independent-engine checks,
 AI scan evidence and correction publication/rollback remain active work.
 
-### Casebook excerpts and source-order fixes (2026-09-25, draft PR, not integrated)
+### Casebook excerpts and source-order fixes (2026-09-25, integrated)
+
+Merged through [PR #116](https://github.com/toddlar00/rag-pipeline/pull/116)
+at `0a04207`.
 
 A private 18-excerpt casebook course corpus (page-bounded scans with no table
-of contents) exposed these gaps. The work is on a draft-PR branch only;
-it has no PR, hosted CI or independent release review, so it is not
-"Implemented (draft)".
+of contents) exposed these gaps.
 
 - **Excerpt profile.** `us-law-casebook-excerpt-v1` (`scaffold_source =
   "source_headings"`) skips the TOC gate and scaffold, excludes no pages as
@@ -186,10 +187,12 @@ it has no PR, hosted CI or independent release review, so it is not
   duplicate-line allowances do not cover multi-item entries; the architecture
   inventory was refreshed with review in `b8fd9cc` and `0e399d2`.
 
-### Casebook supplement, audit scope and OCR findings (2026-09-26, draft PR, not integrated)
+### Casebook supplement, audit scope and OCR findings (2026-09-26, integrated)
 
-Same status as the section above: draft-PR branch only, no completed hosted
-CI. Each change was independently and adversarially reviewed and changes only
+Merged through [PR #116](https://github.com/toddlar00/rag-pipeline/pull/116)
+at `0a04207`.
+
+Each change was independently and adversarially reviewed and changes only
 output that fails the gates today; no schema or policy version changed.
 
 - **Fidelity audit scope.** The greedy alignment fallback could lend the next
@@ -241,10 +244,13 @@ output that fails the gates today; no schema or policy version changed.
   rows are caught only by the gate; a printed range across a page-label gap
   renders as one span (h07 `pp.535-559`).
 
-### OCR angle-classifier override (2026-09-26, draft PR, not integrated)
+### OCR angle-classifier override (2026-09-26, integrated)
 
-This has the same status as the sections above. It implements the first
-owner-approved follow-up above. No schema or policy version changed.
+Merged through [PR #116](https://github.com/toddlar00/rag-pipeline/pull/116)
+at `0a04207`.
+
+It implements the first owner-approved follow-up above. No schema or policy
+version changed.
 
 - **Flag.** `--ocr-no-angle-classifier` (`convert`, `full`, `batch`, off by
   default) builds RapidOCR with `use_cls=False` whenever OCR runs. It does not
@@ -273,10 +279,13 @@ owner-approved follow-up above. No schema or policy version changed.
   - The flagged h04 has since been published end to end by a `full` job.
   - The architecture inventory was refreshed with review in `b8fd9cc`.
 
-### Multi-block overlapping-group recovery (2026-09-26, draft PR, not integrated)
+### Multi-block overlapping-group recovery (2026-09-26, integrated)
 
-This has the same status as the sections above. It implements the
-owner-approved h03 recovery-gate fix. No schema or policy version changed.
+Merged through [PR #116](https://github.com/toddlar00/rag-pipeline/pull/116)
+at `0a04207`.
+
+It implements the owner-approved h03 recovery-gate fix. No schema or policy
+version changed.
 
 - **Change.** Overlapping-group recovery used to reject every group whose
   union holds more than one native text block. One-block groups keep their
@@ -419,11 +428,13 @@ owner-approved h03 recovery-gate fix. No schema or policy version changed.
     `_publish_corpus_quality_report_locked` and `_chunk_document_locked`, and
     one test patch target. It was refreshed with review in `b8fd9cc`.
 
-### Bullet list after a lead-in at boundary merge (2026-09-27, draft PR, not integrated)
+### Bullet list after a lead-in at boundary merge (2026-09-27, integrated)
 
-This has the same status as the sections above. It implements the
-owner-approved h16 list-join fix (`#/texts/57`) as a gate-driven replay. No
-schema or policy version changed.
+Merged through [PR #116](https://github.com/toddlar00/rag-pipeline/pull/116)
+at `0a04207`.
+
+It implements the owner-approved h16 list-join fix (`#/texts/57`) as a
+gate-driven replay. No schema or policy version changed.
 
 - **Defect.** Boundary repair joins a same-heading sentence continuation
   inline, as `left + " " + right`. When the right record opens with a source
@@ -559,12 +570,14 @@ schema or policy version changed.
   - h16 is still blocked on the glyph fix. The p19 fix is in the next
     section; the glyph fix is in "Decorative square glyph exclusion" below.
 
-### Letter-spaced text-layer retry (2026-09-27, draft PR, not integrated)
+### Letter-spaced text-layer retry (2026-09-27, integrated)
 
-This has the same status as the sections above. It implements the
-owner-approved h16 p19 fix (`#/texts/179`, record 49). No schema or policy
-version changed. It is not a replay: it runs inside the first pass, so the
-one-dispatcher rule above does not apply to it.
+Merged through [PR #116](https://github.com/toddlar00/rag-pipeline/pull/116)
+at `0a04207`.
+
+It implements the owner-approved h16 p19 fix (`#/texts/179`, record 49). No
+schema or policy version changed. It is not a replay: it runs inside the
+first pass, so the one-dispatcher rule above does not apply to it.
 
 - **Defect.** h16 p19 lies in a scanner OCR text layer that places each glyph
   of three short words separately, with real space glyphs only between words.
@@ -763,15 +776,17 @@ one-dispatcher rule above does not apply to it.
     splits from the text layer (for example `#/texts/173`). An owner decision
     is needed before h16 publishes at this text quality.
 
-### Decorative square glyph exclusion (2026-09-27, draft PR, not integrated)
+### Decorative square glyph exclusion (2026-09-27, integrated)
 
-This has the same status as the sections above. It implements the
-owner-approved h16 `#/texts/14` fix as a typed quality exclusion. It is the
-owner-approved exception to the rule above: the quality report schema goes
-from 12 to 13 and the index manifest schema from 9 to 10, with a legacy query
-binding `(9, 12)`. No other schema or policy version changed. It is not a
-replay, and chunking never calls the new predicate, so no chunk output can
-change.
+Merged through [PR #116](https://github.com/toddlar00/rag-pipeline/pull/116)
+at `0a04207`.
+
+It implements the owner-approved h16 `#/texts/14` fix as a typed quality
+exclusion. It is the owner-approved exception to the rule above: the quality
+report schema goes from 12 to 13 and the index manifest schema from 9 to 10,
+with a legacy query binding `(9, 12)`. No other schema or policy version
+changed. It is not a replay, and chunking never calls the new predicate, so
+no chunk output can change.
 
 - **Defect.** h16 `#/texts/14` is a `text` item made only of U+25A0 in the
   page 2 margin. Normalization removes square-only lines, so its prepared
@@ -972,11 +987,13 @@ change.
   - A square-only caption, which the chunker can also erase, still fails
     closed; none exists in the scanned conversions.
 
-### Footnote placement by observed geometry (2026-09-27, draft PR, not integrated)
+### Footnote placement by observed geometry (2026-09-27, integrated)
 
-This has the same status as the sections above. It adds a third
-gate-driven replay to the one dispatcher, for the image-only h18 route. No
-schema or policy version changed.
+Merged through [PR #116](https://github.com/toddlar00/rag-pipeline/pull/116)
+at `0a04207`.
+
+It adds a third gate-driven replay to the one dispatcher, for the image-only
+h18 route. No schema or policy version changed.
 
 - **h18 route.** The page-labeled h18 is one scanned image per page under
   an invisible, badly misread scanner text layer. A private image-only
@@ -1061,14 +1078,17 @@ schema or policy version changed.
     line-level reading-order swaps, all from pairs of same-label layout
     regions overlapping by several lines, ~9 word misreads and ~40
     run-together words. See "OCR interleaved-region merge" for the swaps.
-  - The architecture inventory drift covers the new helpers, the new
-    keyword parameters and the new test modules.
+  - The architecture inventory drift covered the new helpers, the new
+    keyword parameters and the new test modules. It was refreshed with
+    review in `a15232d`.
 
-### OCR interleaved-region merge (2026-09-27, draft PR, not integrated)
+### OCR interleaved-region merge (2026-09-27, integrated)
 
-This has the same status as the sections above. It adds an opt-in conversion
-setting for a gate-silent reading-order defect in scanned excerpts. No schema
-or policy version changed.
+Merged through [PR #116](https://github.com/toddlar00/rag-pipeline/pull/116)
+at `0a04207`.
+
+It adds an opt-in conversion setting for a gate-silent reading-order defect
+in scanned excerpts. No schema or policy version changed.
 
 - **Defect.** Docling 2.121's layout model can split a scanned excerpt's
   paragraph into two overlapping layout regions with the same label (`text`,
@@ -1157,15 +1177,18 @@ or policy version changed.
     not position. h18 is image-only, so no such page exists there.
   - Chunking the flagged h18 exposed a chunk-preparation duplicate; see
     "Split item beside a per-item whole publication" below.
-  - The architecture inventory needs a reviewed `--refresh`: the new private
-    helpers, the changed signatures and the new test module drift from it.
+  - The new private helpers, the changed signatures and the new test modules
+    drifted from the architecture inventory. It was refreshed with review in
+    `a15232d`.
   - The OCR retry and disposition tools have no merged-region route.
 
-### Split item beside a per-item whole publication (2026-09-27, draft PR, not integrated)
+### Split item beside a per-item whole publication (2026-09-27, integrated)
 
-This has the same status as the sections above. It fixes a chunk-preparation
-duplicate that the flagged h18 conversion exposed. No schema or policy
-version changed.
+Merged through [PR #116](https://github.com/toddlar00/rag-pipeline/pull/116)
+at `0a04207`.
+
+It fixes a chunk-preparation duplicate that the flagged h18 conversion
+exposed. No schema or policy version changed.
 
 - **Defect.** HybridChunker can cite one long source item from two or more
   raw chunks. In `_prepare_source_preserving_chunks`, an ordinary raw chunk
@@ -1220,8 +1243,8 @@ version changed.
 
 The dependency-light suite has about 15,000 tests. On PR #116 the Windows
 unit lane needed 29.7 minutes (its limit was raised from 20 to 60) and the
-Linux unit lanes used 9 to 12.5 of their 15 minutes. Two stacked draft PRs
-shorten them without changing pipeline behavior.
+Linux unit lanes used 9 to 12.5 of their 15 minutes. Two stacked pull requests,
+since merged (#117 and #118), shorten them without changing pipeline behavior.
 
 - **[PR #117](https://github.com/toddlar00/rag-pipeline/pull/117)** (on
   #116). The repository architecture inventory is built once per test
@@ -1274,6 +1297,92 @@ read by fresh layout-aware OCR of an image-only derivative, using
   those 11, 81 of 99 text-measurable audited defects now match the scan,
   against 2 before. The other 6 keep their scanner-layer runs for the two
   reasons below.
+- **Fixed since (private tort-law casebook).**
+  - *TOC glyph leaders (private tort-law casebook).* The casebook's table
+    of contents has dot leaders that extraction returned as a control
+    character plus a run of U+FFFD. Since
+    [PR #138](https://github.com/toddlar00/rag-pipeline/pull/138) (merged as
+    `a2c5629`), `_parse_toc_tables` splits those
+    "title<glyph leaders>page" chapter rows in a second parse. That parse
+    runs only when the ordinary one leaves a fused chapter title (at least
+    three glyphs, a page number, then more text), and it takes the book
+    from 2,753 lineage issues to 6.
+    - Once the split runs, a summary-table chapter entry can carry an
+      earlier or equal page than the detailed-contents entry, and so win
+      primary dedup with its wording.
+    - A glyph chapter row that the ordinary parse discards, for example
+      before a roman-numbered row, stays discarded unless the gate fires.
+    - The remaining 6 issues come from a separate reading-order defect on
+      one page (PDF p. 954). Docling put the page's lower block before its
+      upper block, and the existing source reading-order repair did not
+      recover it. A detached soft hyphen (one item with zero lexical
+      tokens) sat beside a lower-block paragraph but was captured with the
+      upper block, and that made the blocks overlap.
+      [PR #140](https://github.com/toddlar00/rag-pipeline/pull/140) (merged
+      as `6baf14b`) fixes it. When only such glyphs captured with the upper
+      block stop the rotation, both the repair and its lineage mirror now
+      rotate the page intact. The captured order must also invert a
+      horizontally overlapping pair of text items. Only that page changes
+      in the book, its 6 records bind, and the 19 READY h26 runs are
+      unchanged.
+      With the rotation fixed, the casebook's chunking reaches the corpus
+      quality gate. That gate surfaced two separate defects the rotation
+      had masked, and both are now fixed. One was source-token fidelity on
+      PDF pp. 389–390, with two uncovered source items and one output
+      record (#146, below). The other was a table's source-native row-count
+      mismatch on PDF pp. 678–679, across two table records (#145, below).
+  - *Stacked table headers (private tort-law casebook).*
+    - **Defect.** `#/tables/37` and `#/tables/38` (pp. 678-679) are one
+      worksheet with two header bands, split across a page. Both failed
+      `source_native_row_count_mismatch`.
+    - **Cause.** docling-core 2.99 (#126) joins stacked column-header rows
+      into one Markdown header. The native row-count oracle in
+      `quality_core._source_table_dimensions` still subtracted exactly one
+      header row.
+    - **Fix.** Merged through
+      [PR #145](https://github.com/toddlar00/rag-pipeline/pull/145) as
+      `ce73b61`. `table_retrieval_core.source_table_header_row_count` ports
+      docling-core's header-row count. When that count H is not 1, the
+      oracle expects `num_rows - H` rows. Cells that fall outside the
+      strict types it models, including negative offsets, keep the old
+      rule.
+    - **Scope.** Only failing expectations change, and no schema or policy
+      version moves.
+    - **Caveat.** Chunks that docling-core < 2.99 wrote for a table with H
+      other than 1 would now fail a fresh quality build. None of the 19
+      READY h26 runs has such a table.
+  - *Soft-hyphen item seam (private tort-law casebook).* The native text
+    layer spells some line-end hyphens as U+002D U+00AD. Where Docling
+    ended a list item there and the next paragraph continued the word,
+    the chunker joined the two items with a line break. Source-bound
+    normalization's `spaced_hyphen` rule joins a plain `x-` line-break `y`
+    item seam as `x-y`, but the soft hyphen blocked it. The fidelity audit
+    then deleted the soft hyphen and dehyphenated across the break, reading
+    one token that neither item owns: 1 output and 2 source coverage
+    issues. Since
+    [PR #146](https://github.com/toddlar00/rag-pipeline/pull/146) (merged as
+    `8cc89b0`), `_join_soft_hyphen_item_seams` rewrites exactly such a
+    seam between consecutive text-bearing items to `x-y`, keeping both
+    tokens. It also reads the first item's ending from its Docling text,
+    because a native-repair override drops the soft hyphen (the override
+    must still end in a letter and a hyphen) while the chunk keeps the
+    Docling ending. It is failing-only: it fires only when the fused token
+    is not a token of any source text, marker or oracle in the document,
+    and it skips a pair that shares one recovery oracle. The book has one
+    other item that ends this way, and a native recovery group already
+    rebuilds its pair; no READY h26 run has one.
+    - Follow-up (not fixed): other item seams that the audit fuses but
+      normalization leaves split, and that therefore fail the same way.
+      Neither h26 nor the casebook has one.
+      - Non-ASCII letters. `_SPACED_HYPHEN_RE` matches only ASCII letters
+        and digits, but the audit dehyphenates between any Unicode letters
+        (`é-` line-break `y`).
+      - U+FF0D and U+FE63. NFKC turns both into `-`, so the audit fuses
+        them even without a soft hyphen, but `spaced_hyphen` does not join
+        them.
+      - A soft hyphen before the hyphen (`x` U+00AD `-` line-break `y`).
+      - A space between soft hyphens (`x-` U+00AD space U+00AD line-break
+        `y`).
 - **Follow-ups (not fixed).**
   - *Silent OCR text loss.* On curved or skewed page areas, fresh OCR can
     return no text for lines that no layout region (region OCR) or no OCR
@@ -1304,54 +1413,6 @@ read by fresh layout-aware OCR of an image-only derivative, using
     resolves artifact paths from the module-level output root, not its
     argument, so a different root reads as not READY (fail-closed).
     Durable-job input bindings hash the input path, not the input bytes.
-  - *TOC glyph leaders (private tort-law casebook).* The casebook's table
-    of contents has dot leaders that extraction returned as a control
-    character plus a run of U+FFFD. `_parse_toc_tables` now splits those
-    "title<glyph leaders>page" chapter rows in a second parse. That parse
-    runs only when the ordinary one leaves a fused chapter title (at least
-    three glyphs, a page number, then more text), and it takes the book
-    from 2,753 lineage issues to 6.
-    - Once the split runs, a summary-table chapter entry can carry an
-      earlier or equal page than the detailed-contents entry, and so win
-      primary dedup with its wording.
-    - A glyph chapter row that the ordinary parse discards, for example
-      before a roman-numbered row, stays discarded unless the gate fires.
-    - The remaining 6 issues come from a separate reading-order defect on
-      one page. Docling put the page's lower block before its upper block,
-      and the existing source reading-order repair did not recover it. A
-      detached soft hyphen (one item with zero lexical tokens) sat beside
-      a lower-block paragraph but was captured with the upper block, and
-      that made the blocks overlap. A follow-up pull request addresses
-      it. When only such glyphs captured with the upper block stop the
-      rotation, both the repair and its lineage mirror now rotate the page
-      intact. The captured order must also invert a horizontally
-      overlapping pair of text items. Only that page changes in the book,
-      its 6 records bind, and the 19 READY h26 runs are unchanged.
-      With the rotation fixed, the casebook's chunking reaches the corpus
-      quality gate. That gate surfaces two separate defects the rotation
-      had masked, and both are follow-ups. One is source-token fidelity on
-      PDF pp. 389–390, with two uncovered source items and one output
-      record. The other is a table's source-native row-count mismatch on
-      PDF pp. 678–679, across two table records.
-  - *Stacked table headers (private tort-law casebook).*
-    - **Defect.** `#/tables/37` and `#/tables/38` (pp. 678-679) are one
-      worksheet with two header bands, split across a page. Both failed
-      `source_native_row_count_mismatch`.
-    - **Cause.** docling-core 2.99 (#126) joins stacked column-header rows
-      into one Markdown header. The native row-count oracle in
-      `quality_core._source_table_dimensions` still subtracted exactly one
-      header row.
-    - **Fix.** A follow-up pull request addresses it.
-      `table_retrieval_core.source_table_header_row_count` ports
-      docling-core's header-row count. When that count H is not 1, the
-      oracle expects `num_rows - H` rows. Cells that fall outside the
-      strict types it models, including negative offsets, keep the old
-      rule.
-    - **Scope.** Only failing expectations change, and no schema or policy
-      version moves.
-    - **Caveat.** Chunks that docling-core < 2.99 wrote for a table with H
-      other than 1 would now fail a fresh quality build. None of the 19
-      READY h26 runs has such a table.
   - *Flagged title over bare sub-headers.* Consider a flagged full-width
     title row over flagged sub-header rows whose cells are blank,
     whitespace or punctuation only, or repeat the title. Its Markdown
@@ -1363,36 +1424,6 @@ read by fresh layout-aware OCR of an image-only derivative, using
     in the tort-law casebook (PDF p.881) would therefore fail the row
     check. For now it is published as body text, so the check does not
     run on it.
-  - *Soft-hyphen item seam (private tort-law casebook).* The native text
-    layer spells some line-end hyphens as U+002D U+00AD. Where Docling
-    ended a list item there and the next paragraph continued the word,
-    the chunker joined the two items with a line break. Source-bound
-    normalization's `spaced_hyphen` rule joins a plain `x-` line-break `y`
-    item seam as `x-y`, but the soft hyphen blocked it. The fidelity audit
-    then deleted the soft hyphen and dehyphenated across the break, reading
-    one token that neither item owns: 1 output and 2 source coverage
-    issues. `_join_soft_hyphen_item_seams` now rewrites exactly such a
-    seam between consecutive text-bearing items to `x-y`, keeping both
-    tokens. It also reads the first item's ending from its Docling text,
-    because a native-repair override drops the soft hyphen (the override
-    must still end in a letter and a hyphen) while the chunk keeps the
-    Docling ending. It is failing-only: it fires only when the fused token
-    is not a token of any source text, marker or oracle in the document,
-    and it skips a pair that shares one recovery oracle. The book has one
-    other item that ends this way, and a native recovery group already
-    rebuilds its pair; no READY h26 run has one.
-    - Follow-up (not fixed): other item seams that the audit fuses but
-      normalization leaves split, and that therefore fail the same way.
-      Neither h26 nor the casebook has one.
-      - Non-ASCII letters. `_SPACED_HYPHEN_RE` matches only ASCII letters
-        and digits, but the audit dehyphenates between any Unicode letters
-        (`é-` line-break `y`).
-      - U+FF0D and U+FE63. NFKC turns both into `-`, so the audit fuses
-        them even without a soft hyphen, but `spaced_hyphen` does not join
-        them.
-      - A soft hyphen before the hyphen (`x` U+00AD `-` line-break `y`).
-      - A space between soft hyphens (`x-` U+00AD space U+00AD line-break
-        `y`).
   - *Durable-job manager writes on Windows.* The advisory heartbeat now
     tolerates transient replace failures (WinError 5, 32 or 33) for up to
     60 seconds. The manager's other writes still fail on the first such
@@ -1555,6 +1586,110 @@ history-preserving, in order, through `1cffc58`.
     0.11.31 rather than the pinned uv. The hash-locked lock union alone
     determines the installed set; pairs from #123 on use the pinned uv on
     both platforms.
+
+### Post-series fixes (2026-09-29 to 2026-09-30, integrated)
+
+Seven code and dependency pull requests merged after the dependency series
+and its documentation follow-up #135 (`9eb6f94`), in this order,
+through `8cc89b0`. Four remove the private tort-law casebook's remaining
+publication blockers; the others harden durable jobs, pin the Nomic
+embedding code's Transformers names and clear two new advisories.
+
+- [#138](https://github.com/toddlar00/rag-pipeline/pull/138) (`a2c5629`):
+  TOC glyph-leader split. The private tort-law casebook's contents rows whose
+  dot leaders were extracted as glyphs fused into a chapter title that could
+  never bind to a source heading. `_parse_toc_tables` now splits them in a
+  second parse that runs only when the ordinary one leaves such a title,
+  which takes the book from 2,753 heading-lineage issues to 6.
+- [#137](https://github.com/toddlar00/rag-pipeline/pull/137) (`634c38b`):
+  job-heartbeat transient replace tolerance. When a scanner or indexer
+  briefly held the attempt's `runtime.json`, one failed advisory heartbeat
+  write made the durable job kill a healthy worker and report
+  `permission_denied`. Transient Windows replace failures (WinError 5, 32 or
+  33) of the heartbeat are now tolerated for up to 60 seconds; the manager's
+  other writes remain a follow-up under "Corpus audit follow-ups".
+- [#136](https://github.com/toddlar00/rag-pipeline/pull/136) (`2f07510`):
+  Nomic Transformers name-contract test.
+  `tests/test_embedding_runtime_compat.py` pins every Transformers name the
+  pinned Nomic remote code imports or inherits, so a release that removes
+  one, as 5.17 did, fails the unit suites. The review fix makes the
+  derivation fail closed on module imports and computed attribute names and
+  re-derive over every pinned remote-code file.
+- [#139](https://github.com/toddlar00/rag-pipeline/pull/139) (`123bedb`):
+  oauthlib 4.0.0 promotion for CVE-2026-49264 and CVE-2026-49265. oauthlib
+  became a governed direct input of the vector-stores domain, and only its
+  lock records moved. This is supply-chain hygiene, because nothing loads
+  oauthlib at runtime; both supply-chain jobs are green again.
+- [#140](https://github.com/toddlar00/rag-pipeline/pull/140) (`6baf14b`):
+  tokenless-glyph wrap rotation (PDF p. 954). The single-wrap repair and its
+  lineage mirror now rotate a page intact when only detached zero-token
+  glyphs captured with the upper block break the run-disjointness proof
+  (`heading_lineage.tokenless_glyph_rotation_admitted`). It is failing-only
+  as evidenced, not proven, and `HEADING_LINEAGE_POLICY` was deliberately not
+  bumped: quality requires an exact policy match, so a bump would invalidate
+  every published report.
+- [#145](https://github.com/toddlar00/rag-pipeline/pull/145) (`ce73b61`):
+  stacked Markdown table-header row-count oracle. docling-core 2.99 (#126)
+  joins stacked column-header rows into one Markdown header, but the native
+  row-count oracle still subtracted one header row, a regression that failed
+  two casebook tables. The oracle now counts header rows as docling-core
+  does; this is a check-only correction, and no schema or policy version
+  moved.
+- [#146](https://github.com/toddlar00/rag-pipeline/pull/146) (`8cc89b0`):
+  soft-hyphen item-seam join (PDF pp. 389–390). An item seam that the
+  fidelity audit would fuse into a token no source item owns is joined as
+  `x-y`. The first version never fired in a real chunk run: it read the
+  item's ending from the native-repair override, which drops the soft
+  hyphen, and the in-memory replay on published text that validated it never
+  took the real chunk path. Lesson: such a replay can miss the real chunk
+  path, so a chunking fix is confirmed with a real chunk run.
+- Every pull request had an independent review, passed the full locked
+  suites on Windows and Linux and its own Phase A0 pair, and carries an
+  exact-SHA record comment. All merged history-preserving.
+- **Tort-law casebook.** With #140, #145 and #146, a real chunk run of the
+  private casebook passes the whole corpus quality gate; the only warning is
+  `canonical_text_duplicates`. All 19 READY h26 runs re-chunk byte-identical.
+  A durable `full` re-run of the casebook from `8cc89b0`, in the new locked
+  environment, then published a READY run with the same chunks and a passing
+  quality gate (only the `canonical_text_duplicates` warning). Replacing
+  the older live index with it is left to the owner.
+- **Private h26 excerpts reprocessed on `8cc89b0`.**
+  - All 18 textbook excerpts were reprocessed from the exact inputs their
+    READY receipts bound, using their published OCR options, in the new
+    locked environment `ocr-locked-py312-qualified-v3`. That environment was
+    installed by `tools/install_ocr_environment.py` from these locks and
+    differs from v2 only in oauthlib.
+  - Every new run is READY and has identical chunk text, metadata and Docling
+    Markdown. The only differences are `recovery_sha256`, which binds the run's
+    own manifest, and float32 noise in one table bbox.
+  - No new dropped line and no audited finding worse (235 of 235 unchanged).
+    The fixed query smoke matches exactly, plain and reranked.
+  - The superseded runs were removed with the reviewed removal script, so
+    the corpus again has exactly 19 READY runs, one per reading.
+- **Dependabot.** #141 to #144 were closed with explanations:
+  - #141: google-genai 2 (the parked #88 owner decision) and a no-op
+    cryptography floor;
+  - #142: docling 2.130, held back for its worse audited reading order
+    until the owner decides (see "Held back" above);
+  - #143: a no-op chromadb floor;
+  - #144: numpy 2.5.3, which breaks the OCR observer recipe and CPython
+    3.10/3.11 resolution; transformers 5.17, which breaks the Nomic
+    embedding; and a no-op einops floor.
+
+  Closing a grouped Dependabot PR does not ignore versions, so they may
+  reopen. The strict `dependabot.yml` policy
+  (`tools/check_dependency_policy.py`) deliberately rejects any field beyond
+  package-ecosystem, directory, schedule, groups, commit-message and
+  open-pull-requests-limit.
+- **Owner decision (open).** Whether to add governed Dependabot `ignore`
+  rules, with reasons and expiries like the vulnerability exceptions. Until
+  then, a reopened proposal is closed again with its recorded reason.
+- **Follow-ups (not fixed).**
+  - Hosted Windows runners intermittently fail OCR review UI tests: two 15-s
+    Node subprocess timeouts in `tests/test_ocr_review_crop_preview_ui.py` /
+    `tests/test_ocr_review_crop_uncertainty_editor.py`, and once
+    `test_opt_in_launcher_installs_only_fixed_preview_script_and_preserves_security[archive]`
+    with the launcher's generic exit 2. Each passed on re-run and locally.
 
 ### Integrated convergence
 
@@ -1819,10 +1954,22 @@ cited item that ends in a hyphen plus soft hyphen to the next cited item
 exactly where the fidelity audit would otherwise fuse the two items'
 boundary tokens; it changes no dependency or lock and supersedes the
 `09340ed` pair.
+The `a7847ce` pair (gate-only child `f7dd3fe`) passed the hosted CI
+promotion gate on [PR
+#146](https://github.com/toddlar00/rag-pipeline/pull/146), which merged into
+`main` as `8cc89b0`. The documentation-only source `578a13a` records the
+integrated post-series fixes, relabels the sections integrated by #116,
+brings the README dependency blocks up to the declared requirements and
+records the private excerpt reprocessing; it changes no code, dependency or
+lock and supersedes the `a7847ce` pair.
+An independent accuracy review of the `578a13a` pair's pull request
+([#147](https://github.com/toddlar00/rag-pipeline/pull/147)) approved it
+with nits. The documentation source `f3ec23a` addresses them, records the
+published private tort-law re-run and supersedes the `578a13a` pair.
 Its Windows/Linux
 pair (independent local same-platform comparisons passed) is that branch's
 candidate; its hosted checks and exact-SHA record are pending, and the
-four merged pull requests carry theirs as PR comments.
+merged pull requests carry theirs as PR comments.
 
 Two operational follow-ups from the post-merge `main` push runs are open:
 a documentation-only merge passes its fast-lane pull-request run but then
@@ -1875,6 +2022,7 @@ release-qualified support.
 | PyMuPDF distribution basis and repository code license | No approved distribution basis and no repository license decision are recorded | Private filesystem-local evaluation only; no package or release publication. |
 | Private retrieval/answer qualification | Corpus-owner judgments, family aliases, floors, and promotion statistics remain unresolved | No production-qualified corpus or generalized quality claim. Portable generated/CC0 suites validate mechanics only. |
 | First version and platform/support tiers | Not selected | Development-only identity; no release tag or Tier-1 claim. |
+| Dependabot `ignore` rules for rejected versions | The strict `dependabot.yml` policy admits no `ignore` field, so closed grouped proposals (#141-#144) may reopen | Add no `ignore` rule and do not widen the policy; close a reopened proposal with its recorded reason. |
 
 Owner decisions are gates, not checkboxes an implementation agent may infer.
 A technical change may prepare a bounded decision mechanism, but it must pause
