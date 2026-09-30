@@ -899,14 +899,29 @@ def source_inventory(
 def _source_table_dimensions(document: dict) -> dict[str, tuple[int, int]]:
     """Return exact Markdown data-row/column dimensions from Docling tables.
 
-    Docling's matrix row count includes the first row that its Markdown export
+    Docling's matrix row count includes the rows that its Markdown export
     publishes as the header.  The strict retrieval parser counts only rows
-    after that header, hence the ordinary single-row subtraction.  A table
-    with exactly one source row whose cells are explicitly not headers is
-    normalized to a blank Markdown header plus one data row, so its attested
-    data-row count remains one.  A leading source cell spanning every column
-    is published as table preamble rather than as a duplicated Markdown row,
-    so that source-attested title row is also excluded from the data count.
+    after that header.  Since docling-core 2.99 the export joins a leading
+    run of column-header rows into its one header row, and
+    ``table_retrieval_core.source_table_header_row_count`` counts them.
+    When that count is not one, every other source row is a data row.  The
+    published title promotion needs a header that repeats the title, and a
+    joined or blank header does not.  The exception is a flagged full-width
+    title over flagged sub-header rows, at any count of two or more, whose
+    cells are blank, whitespace or punctuation only, or the exact title.
+    The joined header then reduces to the bare title and is promoted, so
+    such a table stays a fail-closed mismatch.
+
+    When the count is one, or the cells hold values outside the strict types
+    that the count models, the established rule is unchanged.  That rule is
+    the ordinary single-row subtraction, with two exceptions:
+
+    - A table with exactly one source row whose cells are explicitly not
+      headers is normalized to a blank Markdown header plus one data row, so
+      its attested data-row count remains one.
+    - A leading source cell spanning every column is published as table
+      preamble rather than as a duplicated Markdown row, so that
+      source-attested title row is also excluded from the data count.
     """
     dimensions = {}
     tables = document.get("tables") if isinstance(document, dict) else None
@@ -924,6 +939,11 @@ def _source_table_dimensions(document: dict) -> dict[str, tuple[int, int]]:
                 or not _is_nonnegative_int(columns) or columns < 1):
             continue
         cells = data.get("table_cells")
+        header_rows = table_retrieval_core.source_table_header_row_count(
+            rows, columns, cells)
+        if header_rows is not None and header_rows != 1:
+            dimensions[ref] = (rows - header_rows, columns)
+            continue
         column_header_flags = [
             cell.get("column_header") if isinstance(cell, dict) else None
             for cell in (cells if isinstance(cells, list) else [])

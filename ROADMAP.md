@@ -1333,6 +1333,36 @@ read by fresh layout-aware OCR of an image-only derivative, using
       PDF pp. 389–390, with two uncovered source items and one output
       record. The other is a table's source-native row-count mismatch on
       PDF pp. 678–679, across two table records.
+  - *Stacked table headers (private tort-law casebook).*
+    - **Defect.** `#/tables/37` and `#/tables/38` (pp. 678-679) are one
+      worksheet with two header bands, split across a page. Both failed
+      `source_native_row_count_mismatch`.
+    - **Cause.** docling-core 2.99 (#126) joins stacked column-header rows
+      into one Markdown header. The native row-count oracle in
+      `quality_core._source_table_dimensions` still subtracted exactly one
+      header row.
+    - **Fix.** A follow-up pull request addresses it.
+      `table_retrieval_core.source_table_header_row_count` ports
+      docling-core's header-row count. When that count H is not 1, the
+      oracle expects `num_rows - H` rows. Cells that fall outside the
+      strict types it models, including negative offsets, keep the old
+      rule.
+    - **Scope.** Only failing expectations change, and no schema or policy
+      version moves.
+    - **Caveat.** Chunks that docling-core < 2.99 wrote for a table with H
+      other than 1 would now fail a fresh quality build. None of the 19
+      READY h26 runs has such a table.
+  - *Flagged title over bare sub-headers.* Consider a flagged full-width
+    title row over flagged sub-header rows whose cells are blank,
+    whitespace or punctuation only, or repeat the title. Its Markdown
+    header joins to the bare title, and rag promotes that to a preamble,
+    so the table publishes one data row fewer than the oracle expects.
+    It stays fail-closed as a row-count mismatch.
+  - *One-column title rows.* `_source_table_dimensions` lacks rag's
+    `columns >= 2` guard on full-width title promotion. A one-column table
+    in the tort-law casebook (PDF p.881) would therefore fail the row
+    check. For now it is published as body text, so the check does not
+    run on it.
   - *Durable-job manager writes on Windows.* The advisory heartbeat now
     tolerates transient replace failures (WinError 5, 32 or 33) for up to
     60 seconds. The manager's other writes still fail on the first such
@@ -1744,6 +1774,13 @@ the single-wrap reading-order repair and its lineage mirror rotate a page
 intact when only detached zero-token glyphs captured with the upper block
 break the run-disjointness proof; it changes no dependency or lock and
 supersedes the `0333947` pair.
+The `c2d7b57` pair (gate-only child `193e202`) passed the hosted CI
+promotion gate on [PR
+#140](https://github.com/toddlar00/rag-pipeline/pull/140), which merged into
+`main` as `6baf14b`. The table header-row oracle fix source `09340ed` makes
+the native table row-count oracle count stacked Markdown header rows the way
+docling-core 2.99 exports them; it changes no dependency or lock and
+supersedes the `c2d7b57` pair.
 Its Windows/Linux
 pair (independent local same-platform comparisons passed) is that branch's
 candidate; its hosted checks and exact-SHA record are pending, and the

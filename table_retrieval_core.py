@@ -13,7 +13,7 @@ import re
 from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, NamedTuple
 
 
 TABLE_RETRIEVAL_SCHEMA_VERSION = 1
@@ -130,6 +130,101 @@ def source_table_has_single_headerless_row(
         and bool(column_header_flags)
         and all(flag is False for flag in column_header_flags)
     )
+
+
+_SOURCE_CELL_OFFSET_FIELDS = (
+    "start_row_offset_idx", "end_row_offset_idx",
+    "start_col_offset_idx", "end_col_offset_idx",
+)
+
+
+class _SourceTableCell(NamedTuple):
+    start_row: int
+    end_row: int
+    start_col: int
+    end_col: int
+    text: str
+    column_header: bool
+
+
+def source_table_header_row_count(
+        row_count: object, column_count: object,
+        table_cells: object) -> int | None:
+    """Return how many leading source rows Docling's Markdown header joins.
+
+    This is a standard-library port of ``_count_header_rows`` in the Markdown
+    table serializer of docling-core 2.99, the locked floor.  It works on
+    exported ``TableData`` dictionaries.  That serializer joins the leading
+    rows on which a ``column_header`` cell starts, and which carry no
+    unflagged text outside the first populated column, into the one Markdown
+    header row.  The export therefore publishes ``row_count`` minus this
+    count as data rows.  The two special cases are ported as well:
+
+    - The count is 1 when row 0 is not a header row and no cell below row 0
+      is flagged, so a table without flags keeps row 0 as its header.
+    - The count is 0 when the flags start only below row 0.  The export then
+      has a blank header over every source row.
+
+    Cells fill the grid as in ``TableData.grid``.  Offsets are clipped to the
+    table, a later cell overwrites an earlier one, and a cell counts only on
+    the row where it starts.  An inverted or out-of-range cell covers no grid
+    position, although it still counts toward the first populated column.
+
+    Only strict types are modeled: integer offsets that are not bools and
+    not negative, string text, and a bool flag (absent means false).  For
+    anything else the result is ``None``, and the caller keeps its
+    established path.  That includes values docling-core's loader would
+    coerce, such as a flag of ``1`` or float, string or bool offsets.  It
+    also includes negative offsets, which docling-core indexes from the
+    grid's end or rejects with ``IndexError``.  Every nonnegative offset
+    clips into the grid, so the count itself never raises.
+    """
+    if (not _is_nonnegative_int(row_count)
+            or not _is_nonnegative_int(column_count)
+            or not isinstance(table_cells, (list, tuple))):
+        return None
+    cells: list[_SourceTableCell] = []
+    for cell in table_cells:
+        if not isinstance(cell, Mapping):
+            return None
+        offsets = tuple(
+            cell.get(field) for field in _SOURCE_CELL_OFFSET_FIELDS)
+        text = cell.get("text")
+        column_header = cell.get("column_header", False)
+        if (any(not _is_nonnegative_int(value) for value in offsets)
+                or not isinstance(text, str)
+                or not isinstance(column_header, bool)):
+            return None
+        cells.append(_SourceTableCell(*offsets, text, column_header))
+
+    grid: list[list[int | None]] = [
+        [None] * column_count for _ in range(row_count)]
+    for index, cell in enumerate(cells):
+        for row in range(
+                min(cell.start_row, row_count), min(cell.end_row, row_count)):
+            for col in range(min(cell.start_col, column_count),
+                             min(cell.end_col, column_count)):
+                grid[row][col] = index
+    first_col = min((cell.start_col for cell in cells), default=0)
+    header_rows = 0
+    for row_index, row in enumerate(grid):
+        starting = [
+            cells[index] for index in row
+            if index is not None and cells[index].start_row == row_index]
+        carries_body_text = any(
+            not cell.column_header and cell.text.strip()
+            and cell.start_col != first_col
+            for cell in starting)
+        if (any(cell.column_header for cell in starting)
+                and not carries_body_text):
+            header_rows += 1
+            continue
+        if row_index == 0 and not any(
+                cells[index].column_header for later_row in grid[1:]
+                for index in later_row if index is not None):
+            return 1
+        break
+    return header_rows
 
 
 def normalize_source_table_markdown(

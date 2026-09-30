@@ -7,16 +7,17 @@ fresh-process repetitions.
 
 ## Provenance
 
-Both current reports were generated from the clean tokenless-glyph rotation
-fix source checkpoint `c2d7b57fcbbbb1b7ed33b568f481659f679adc26` (tree
-`04c75f7e92fe20572805aa9f3f391585e1ab2485`), a reading-order fix after a
-series of one-domain dependency updates on `main` after the
+Both current reports were generated from the clean table header-row oracle
+fix source checkpoint `09340edd05d15ac537deebee17ff0c7550c2e82d` (tree
+`c687aa833f3a4edadd86dbb569ae917b7ecdf0a9`), a quality-check correction
+after a series of one-domain dependency updates on `main` after the
 history-preserving merges of #121 (`602bec1`), of that series, #122 to #130
 (`1cffc58`), of its documentation follow-up #135 (`9eb6f94`), of the TOC
 glyph-leader fix #138 (`a2c5629`), of the job-heartbeat hardening #137
-(`634c38b`), of the Nomic contract test #136 (`2f07510`) and of the oauthlib
-promotion #139 (`123bedb`). That source contains everything through the Task
-0.8 static-security merge `e34103f` plus the local OCR accuracy, retry and
+(`634c38b`), of the Nomic contract test #136 (`2f07510`), of the oauthlib
+promotion #139 (`123bedb`) and of the tokenless-glyph rotation fix #140
+(`6baf14b`). That source contains everything through the Task 0.8
+static-security merge `e34103f` plus the local OCR accuracy, retry and
 guided-review program, opt-in AI evidence search, the passive cleanup
 audits, the LLM transport and worker-launch repairs, the casebook
 excerpt/supplement pipeline (including the opt-in OCR angle-classifier and
@@ -53,9 +54,10 @@ changes no lock; the post-merge documentation changes no lock; the TOC
 glyph-leader fix changes no lock; the job-heartbeat hardening changes no
 lock; the Nomic contract test changes no lock; the stacked oauthlib
 promotion moves oauthlib from 3.3.1 to 4.0.0; the tokenless-glyph rotation
-fix changes no lock; no model lock changed. The executing environments were
-synchronized with repository-pinned uv 0.12.20 against the exact CPU
-application/test lock union plus its retained bootstrapper:
+fix changes no lock; the table header-row oracle fix changes no lock; no
+model lock changed. The executing environments were synchronized with
+repository-pinned uv 0.12.20 against the exact CPU application/test lock
+union plus its retained bootstrapper:
 
 - `requirements-full.lock`
 - `requirements-test.lock`
@@ -70,8 +72,8 @@ marker-resolved distributions before generation.
 
 | Platform | Runtime | Report | Bytes | File SHA-256 | Embedded report SHA-256 |
 |---|---:|---|---:|---|---|
-| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,086 | `f704630ea525797f3a500d0390af4f68982de44839e62fb5d4165e5ff432d949` | `1c3b25ed617a8883a9650b27eb1599688ecdd41f7254efdc5a6572c1a3bacec5` |
-| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,483 | `7419aafd59db48799ca20c9aa0f5945e504111d86d2e5a064884089a5cdc69ed` | `5a19ad9f16ff419cbb3a31a3607083ebca76724bae9f7c59d9387471f78be888` |
+| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,084 | `b265ea7963e74524a263f7a470615213e38a0d63069669b0b57c6d6ce2b4f6d7` | `2d00d647bec856bb5d45df4e0d571df0e8377f092358bc66faf1625bf46dadec` |
+| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,483 | `bae04198e2f3ccb4ae0b580ae2273a4245f1d3158299d1eebb9dadd2ee94b4d5` | `fdb133b6e754dae211be617121ccf36d745e9fb8e417e092c59d64fd7c30df2f` |
 
 The reports attest the same source commit, clean-worktree state, tracked-diff
 digest, eight LF and `HEAD`-identical dependency/model-lock inputs, authoritative
@@ -363,6 +365,13 @@ the single-wrap reading-order repair and its lineage mirror rotate a page
 intact when only detached zero-token glyphs captured with the upper block
 break the run-disjointness proof; it changes no dependency or lock and
 supersedes the `0333947` pair.
+The `c2d7b57` pair (gate-only child `193e202`) passed the hosted CI
+promotion gate on [PR
+#140](https://github.com/toddlar00/rag-pipeline/pull/140), which merged into
+`main` as `6baf14b`. The table header-row oracle fix source `09340ed` makes
+the native table row-count oracle count stacked Markdown header rows the way
+docling-core 2.99 exports them; it changes no dependency or lock and
+supersedes the `c2d7b57` pair.
 The current reports above
 bind
 that exact clean source and each passes an independent complete
