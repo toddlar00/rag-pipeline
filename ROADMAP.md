@@ -35,7 +35,7 @@ publish a release.
 ### Local OCR development qualification (2026-09-06)
 
 The user-requested [OCR and AI-access improvement program](docs/ocr-improvement-program.md)
-remains active on a draft-PR branch; it does not supersede the integrated
+was integrated through PR #116 (`0a04207`); it does not supersede the integrated
 milestones or grant release/private-corpus approval. A frozen Windows CPython
 3.12.10 full-lock run observed 6,841 passing tests, seven skips and eight failures.
 One failure was a stale architecture consumer expectation; the other seven
@@ -1243,8 +1243,8 @@ exposed. No schema or policy version changed.
 
 The dependency-light suite has about 15,000 tests. On PR #116 the Windows
 unit lane needed 29.7 minutes (its limit was raised from 20 to 60) and the
-Linux unit lanes used 9 to 12.5 of their 15 minutes. Two stacked draft PRs
-shorten them without changing pipeline behavior.
+Linux unit lanes used 9 to 12.5 of their 15 minutes. Two stacked pull requests,
+since merged (#117 and #118), shorten them without changing pipeline behavior.
 
 - **[PR #117](https://github.com/toddlar00/rag-pipeline/pull/117)** (on
   #116). The repository architecture inventory is built once per test
@@ -1297,36 +1297,7 @@ read by fresh layout-aware OCR of an image-only derivative, using
   those 11, 81 of 99 text-measurable audited defects now match the scan,
   against 2 before. The other 6 keep their scanner-layer runs for the two
   reasons below.
-- **Follow-ups (not fixed).**
-  - *Silent OCR text loss.* On curved or skewed page areas, fresh OCR can
-    return no text for lines that no layout region (region OCR) or no OCR
-    detection (whole-page OCR) covers. 4 of 17 re-read excerpts lost 7 to
-    27 printed lines on one or two pages, yet every gate passed. A
-    geometric check found them by comparing each scanner-layer line box
-    with the conversion's region boxes. An OCR coverage gate should compare
-    printed-line geometry from an independent detector, or from an existing
-    text layer, with the conversion regions and fail closed on uncovered
-    text.
-  - *Source-token changes on OCR input.* Two of 17 re-read excerpts failed
-    `source_token_fidelity` in both OCR modes. The causes were a same-heading
-    merge that removed a hyphen between two source items, the known
-    fused-term spellings applied to source-bound text, and one folio misread
-    as `1` and labeled body text. The first two are fixed by the section
-    below; the folio case remains open.
-  - *Printed-page discontinuities.* A chunk can join text across a gap
-    between two excerpt ranges. It then cites a span that includes the
-    missing pages and inherits the earlier chapter's heading path. A
-    non-consecutive printed label should end the chunk and the inherited
-    heading context.
-  - *Query layer.* There is no corpus-wide query mode. Hybrid RRF scores
-    and the vector-only fallback's cosine scores, which are used silently
-    when BM25 finds nothing, are not comparable across runs. Search does not
-    check READY or superseded status. Opening a Chroma run rewrites its
-    SQLite file, and the persisted HNSW index is empty until first open.
-  - *Run and job bindings.* `_pipeline_run_is_ready(output_root, ...)`
-    resolves artifact paths from the module-level output root, not its
-    argument, so a different root reads as not READY (fail-closed).
-    Durable-job input bindings hash the input path, not the input bytes.
+- **Fixed since (private tort-law casebook).**
   - *TOC glyph leaders (private tort-law casebook).* The casebook's table
     of contents has dot leaders that extraction returned as a control
     character plus a run of U+FFFD. Since
@@ -1380,17 +1351,6 @@ read by fresh layout-aware OCR of an image-only derivative, using
     - **Caveat.** Chunks that docling-core < 2.99 wrote for a table with H
       other than 1 would now fail a fresh quality build. None of the 19
       READY h26 runs has such a table.
-  - *Flagged title over bare sub-headers.* Consider a flagged full-width
-    title row over flagged sub-header rows whose cells are blank,
-    whitespace or punctuation only, or repeat the title. Its Markdown
-    header joins to the bare title, and rag promotes that to a preamble,
-    so the table publishes one data row fewer than the oracle expects.
-    It stays fail-closed as a row-count mismatch.
-  - *One-column title rows.* `_source_table_dimensions` lacks rag's
-    `columns >= 2` guard on full-width title promotion. A one-column table
-    in the tort-law casebook (PDF p.881) would therefore fail the row
-    check. For now it is published as body text, so the check does not
-    run on it.
   - *Soft-hyphen item seam (private tort-law casebook).* The native text
     layer spells some line-end hyphens as U+002D U+00AD. Where Docling
     ended a list item there and the next paragraph continued the word,
@@ -1423,6 +1383,47 @@ read by fresh layout-aware OCR of an image-only derivative, using
       - A soft hyphen before the hyphen (`x` U+00AD `-` line-break `y`).
       - A space between soft hyphens (`x-` U+00AD space U+00AD line-break
         `y`).
+- **Follow-ups (not fixed).**
+  - *Silent OCR text loss.* On curved or skewed page areas, fresh OCR can
+    return no text for lines that no layout region (region OCR) or no OCR
+    detection (whole-page OCR) covers. 4 of 17 re-read excerpts lost 7 to
+    27 printed lines on one or two pages, yet every gate passed. A
+    geometric check found them by comparing each scanner-layer line box
+    with the conversion's region boxes. An OCR coverage gate should compare
+    printed-line geometry from an independent detector, or from an existing
+    text layer, with the conversion regions and fail closed on uncovered
+    text.
+  - *Source-token changes on OCR input.* Two of 17 re-read excerpts failed
+    `source_token_fidelity` in both OCR modes. The causes were a same-heading
+    merge that removed a hyphen between two source items, the known
+    fused-term spellings applied to source-bound text, and one folio misread
+    as `1` and labeled body text. The first two are fixed by the section
+    below; the folio case remains open.
+  - *Printed-page discontinuities.* A chunk can join text across a gap
+    between two excerpt ranges. It then cites a span that includes the
+    missing pages and inherits the earlier chapter's heading path. A
+    non-consecutive printed label should end the chunk and the inherited
+    heading context.
+  - *Query layer.* There is no corpus-wide query mode. Hybrid RRF scores
+    and the vector-only fallback's cosine scores, which are used silently
+    when BM25 finds nothing, are not comparable across runs. Search does not
+    check READY or superseded status. Opening a Chroma run rewrites its
+    SQLite file, and the persisted HNSW index is empty until first open.
+  - *Run and job bindings.* `_pipeline_run_is_ready(output_root, ...)`
+    resolves artifact paths from the module-level output root, not its
+    argument, so a different root reads as not READY (fail-closed).
+    Durable-job input bindings hash the input path, not the input bytes.
+  - *Flagged title over bare sub-headers.* Consider a flagged full-width
+    title row over flagged sub-header rows whose cells are blank,
+    whitespace or punctuation only, or repeat the title. Its Markdown
+    header joins to the bare title, and rag promotes that to a preamble,
+    so the table publishes one data row fewer than the oracle expects.
+    It stays fail-closed as a row-count mismatch.
+  - *One-column title rows.* `_source_table_dimensions` lacks rag's
+    `columns >= 2` guard on full-width title promotion. A one-column table
+    in the tort-law casebook (PDF p.881) would therefore fail the row
+    check. For now it is published as body text, so the check does not
+    run on it.
   - *Durable-job manager writes on Windows.* The advisory heartbeat now
     tolerates transient replace failures (WinError 5, 32 or 33) for up to
     60 seconds. The manager's other writes still fail on the first such
@@ -1588,7 +1589,8 @@ history-preserving, in order, through `1cffc58`.
 
 ### Post-series fixes (2026-09-29 to 2026-09-30, integrated)
 
-Seven pull requests merged after the dependency series, in this order,
+Seven code and dependency pull requests merged after the dependency series
+and its documentation follow-up #135 (`9eb6f94`), in this order,
 through `8cc89b0`. Four remove the private tort-law casebook's remaining
 publication blockers; the others harden durable jobs, pin the Nomic
 embedding code's Transformers names and clear two new advisories.
@@ -1665,8 +1667,8 @@ embedding code's Transformers names and clear two new advisories.
 - **Dependabot.** #141 to #144 were closed with explanations:
   - #141: google-genai 2 (the parked #88 owner decision) and a no-op
     cryptography floor;
-  - #142: docling 2.130, rejected for its worse audited reading order (see
-    "Held back" above);
+  - #142: docling 2.130, held back for its worse audited reading order
+    until the owner decides (see "Held back" above);
   - #143: a no-op chromadb floor;
   - #144: numpy 2.5.3, which breaks the OCR observer recipe and CPython
     3.10/3.11 resolution; transformers 5.17, which breaks the Nomic

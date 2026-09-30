@@ -3105,7 +3105,7 @@ sentence-transformers>=6.1.0,<7    # Local embedding models
 einops>=0.7,<1                     # Reviewed Nomic model-code dependency
 chromadb>=1.5.2,<2                 # Default vector database; deterministic close()
 oauthlib>=4.0.0,<5                 # Governed input (chromadb -> kubernetes)
-onnxruntime>=1.14.1,<1.24; python_version < "3.11"  # Governed Chroma input
+onnxruntime>=1.14.1,<1.24; python_version < "3.11"  # Governed Chroma input (installability)
 onnxruntime>=1.30.0,<2; python_version >= "3.11"
 FlagEmbedding>=1.4.2,<2            # BGE cross-encoder reranker
 transformers>=5.10.0,<5.17         # Governed ML input; <5.17 for the Nomic code
@@ -3130,8 +3130,8 @@ gradio>=6.28.0,<7            # Web UI
 These are the project's direct declarations; transitive packages such as
 PyTorch are omitted (the `requirements.txt` header covers installing CUDA
 wheels first). "Governed" inputs are transitive packages promoted to direct
-pins so their advisory fixes can be selected under the dependency-domain
-policy.
+declarations so an advisory fix or installable wheels can be selected under
+the dependency-domain policy.
 Voyage, OpenAI, Cohere, Jina, DeepSeek, MiniMax, and custom OpenAI-compatible
 operations use the owned Requests transport already present in the core profile;
 their provider SDK packages are neither imported nor installed.
