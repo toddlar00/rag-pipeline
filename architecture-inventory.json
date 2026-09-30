@@ -30998,7 +30998,7 @@
             "scope": "top_level"
           }
         ],
-        "definition_locations_sha256": "49fdb26b5f063aff462f2828ba7f4d3736214bdd1bfd79bea584d2c43fbbaf97",
+        "definition_locations_sha256": "579f5f8fab2ef95d433c19e4bca687115b7d6ecbe99e72ef1088faf69af76695",
         "function_count": 34,
         "functions": [
           {
@@ -31210,7 +31210,7 @@
         "module": "ingestion_core",
         "non_blank_lines": 731,
         "path": "ingestion_core.py",
-        "physical_lines": 862,
+        "physical_lines": 863,
         "top_level_function_count": 24
       },
       {
@@ -64241,7 +64241,7 @@
         "top_level_function_count": 2
       }
     ],
-    "physical_line_count": 130576,
+    "physical_line_count": 130577,
     "source_groups": [
       "production",
       "tools",
