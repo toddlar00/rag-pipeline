@@ -1658,7 +1658,7 @@
             "target": "_model_artifacts.configure_transformers_dynamic_module_cache"
           },
           {
-            "locations_sha256": "4e08ea9983f63e352d678c6e7c2536a78411dba5291c0e3dcc3331dc487a2385",
+            "locations_sha256": "1b9de3067b6025cfbb9f3ce16ed95760bb8c756553c53ba579002a5177bdb231",
             "occurrence_count": 5,
             "operations": [
               "setattr"
@@ -3642,7 +3642,7 @@
             "target": "_model_artifact_lock_sha256"
           },
           {
-            "locations_sha256": "d1195fdce711fe5294a01306f05dd37c7cba1a474eb88241004310245b9a6ba5",
+            "locations_sha256": "e0dd7194dd86f94a82c72e720ad2af016e8ce8af53d27d9eee373cad1b6b215f",
             "occurrence_count": 11,
             "operations": [
               "setattr"
@@ -8574,7 +8574,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "9cd5bf668b6ee9687f628bfe91436f66ad1071d42ad769dfb3f86a4c38b85683",
+          "locations_sha256": "3e3c9d6c1e26b249e9a0f1e032acb888dbbcf8a185d30094f6331fef57d74343",
           "name": "_get_embedding_fn",
           "occurrence_count": 14,
           "paths": [
@@ -10004,7 +10004,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "0ed67f13726f77a3cc73673dbef31d11edcd5da7fa271125702fc6c628c2e0c7",
+          "locations_sha256": "a6f30da6ac15826144c37f54e1806a0e8668dbe081d48435ce78791d5e20e106",
           "name": "_model_artifacts",
           "occurrence_count": 9,
           "paths": [
@@ -33508,7 +33508,7 @@
             "scope": "nested"
           }
         ],
-        "definition_locations_sha256": "4acd9beafd0407bf5034091451a3254ae7e7a324bb46315d4ba3680778287a66",
+        "definition_locations_sha256": "5dab2bc4a6e8f367cdee4021fa99406f6bc72c5e680d8949ef5a9be2bc68eb72",
         "function_count": 70,
         "functions": [
           {
@@ -33934,9 +33934,9 @@
         ],
         "import_edges": [],
         "module": "model_artifacts",
-        "non_blank_lines": 2293,
+        "non_blank_lines": 2297,
         "path": "model_artifacts.py",
-        "physical_lines": 2498,
+        "physical_lines": 2502,
         "top_level_function_count": 62
       },
       {
@@ -64146,7 +64146,7 @@
         "top_level_function_count": 2
       }
     ],
-    "physical_line_count": 130557,
+    "physical_line_count": 130561,
     "source_groups": [
       "production",
       "tools",
