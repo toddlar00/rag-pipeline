@@ -59,6 +59,13 @@ DEFAULT_DENSE_WEIGHT = 0.5
 DEFAULT_SPARSE_WEIGHT = 1.0
 DEFAULT_DB_LOCK_TIMEOUT = 30.0
 DEFAULT_OPERATION_TIMEOUT = 14400.0
+LEXICAL_RETRIEVER_IMPLEMENTATION = "rag._bm25_search"
+LEXICAL_RETRIEVER_SCORING = (
+    "rank_bm25.BM25Okapi (k1=1.5, b=0.75, epsilon=0.25) over legal search "
+    "tokens with any-term matching")
+LEXICAL_CANDIDATE_SCOPE = (
+    "Chroma hybrid lexical leg before fusion, table-family collapse, and "
+    "reranking")
 REPORT_SCHEMA_VERSION = evaluation_contract.REPORT_SCHEMA_VERSION
 GROUNDING_CASE_SCHEMA_VERSION = evaluation_queries.GROUNDING_CASE_SCHEMA_VERSION
 GROUNDING_SCORER_VERSION = evaluation_contract.GROUNDING_SCORER_VERSION
@@ -1447,6 +1454,78 @@ def evaluate_offline_bm25(queries: list[dict], index, *,
         **options)
 
 
+def _load_lexical_corpus(chunks_path: Path,
+                         rag_module) -> tuple[list[dict], str]:
+    """Capture and parse the exact snapshot the production lexical leg reads."""
+    raw, source_sha256, _ = rag_module._read_index_artifact_snapshot(
+        chunks_path)
+    return (
+        rag_module._parse_index_records_strict(raw, chunks_path),
+        source_sha256,
+    )
+
+
+def _lexical_index_snapshot(records: list[dict], source_sha256: str) -> dict:
+    """Describe the corpus and scorer bound into a lexical report."""
+    from importlib import metadata
+
+    return {
+        "source_sha256": source_sha256,
+        "source_record_count": len(records),
+        "record_count": len(records),
+        "table_child_count": table_retrieval_core.table_child_count(records),
+        "id_scheme": retrieval_core._chunk_id_scheme(records),
+        "retriever_implementation": LEXICAL_RETRIEVER_IMPLEMENTATION,
+        "scoring": LEXICAL_RETRIEVER_SCORING,
+        "scoring_library_version": metadata.version("rank-bm25"),
+        "candidate_scope": LEXICAL_CANDIDATE_SCOPE,
+    }
+
+
+def evaluate_lexical(queries: list[dict], chunks_path: Path, *,
+                     expected_source_sha256: str,
+                     k_values: list[int] | None = None,
+                     include_details: bool = False,
+                     report_detail: str = "summary",
+                     table_family_attestation: (
+                         evaluation_contract.TableFamilyAttestation | None
+                     ) = None,
+                     collect_measurements: bool = False,
+                     **options) -> dict:
+    """Evaluate the production lexical leg without models or a vector index.
+
+    Every query calls ``rag._bm25_search`` itself, pinned to the validated
+    chunks snapshot, so rankings equal the Chroma hybrid lexical leg before
+    fusion, table-family collapse, and reranking by construction.
+    """
+    import rag
+
+    chunks_path = Path(chunks_path)
+
+    def lexical_search(query: str, _db_path: Path, **search_options):
+        documents, metadatas, scores = rag._bm25_search(
+            query, chunks_path, search_options.get("n_results", 10),
+            search_options.get("content_type"),
+            search_options.get("chapter_num"),
+            expected_source_sha256=expected_source_sha256)
+        return [
+            {
+                "text": document,
+                "metadata": metadata,
+                "score": score,
+                "chunk_id": metadata["stable_id"],
+            }
+            for document, metadata, score in zip(documents, metadatas, scores)
+        ]
+
+    return _evaluate_impl(
+        queries, Path("."), k_values=k_values, include_details=include_details,
+        report_detail=report_detail, search_fn=lexical_search,
+        table_family_attestation=table_family_attestation,
+        collect_measurements=collect_measurements, embedding_requests=False,
+        **options)
+
+
 def _parse_metric_limits(values: list[str], *, option: str) -> dict[str, float]:
     limits = {}
     for value in values:
@@ -1483,7 +1562,7 @@ def _load_baseline_metrics(path: Path, *,
         expected_configuration = _portable_configuration(
             expected_configuration)
         retriever = expected_configuration.get("retriever")
-        strict = retriever in {"index", "bm25"}
+        strict = retriever in {"index", "bm25", "lexical"}
         if strict:
             if payload.get("schema_version") != REPORT_SCHEMA_VERSION:
                 raise ValueError(
@@ -1504,6 +1583,8 @@ def _load_baseline_metrics(path: Path, *,
                     "reranker_model", "overfetch", "rrf_k", "dense_weight",
                     "sparse_weight", "model_artifact_lock_sha256",
                 })
+            elif retriever == "lexical":
+                required_keys.add("lexical_query_policy")
             missing = sorted(required_keys - baseline_configuration.keys())
             if missing:
                 raise ValueError(
@@ -1538,7 +1619,7 @@ def _load_baseline_metrics(path: Path, *,
             "table_family_judgment_schema_version",
             "table_retrieval_policy", "context_window",
             "context_max_characters", "context_segment_characters",
-            "release_security",
+            "release_security", "lexical_query_policy",
         }
         mismatches = []
         for key in comparable_keys:
@@ -1642,9 +1723,10 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=("vector", "vector_reranked", "hybrid", "hybrid_reranked"),
         help="Retrieval mode selected from --release-policy")
     parser.add_argument(
-        "--retriever", choices=["index", "bm25"], default="index",
-        help=("Production vector index or deterministic offline BM25 "
-              "(default: index)"))
+        "--retriever", choices=["index", "bm25", "lexical"], default="index",
+        help=("Production vector index, deterministic offline BM25 fixture "
+              "adapter, or the model-free production lexical leg "
+              "(rag._bm25_search) (default: index)"))
     parser.add_argument("--chunks", type=Path, required=True,
                         help="Book-scoped chunks JSONL from a pipeline run")
     parser.add_argument("--db", type=Path,
@@ -1827,6 +1909,10 @@ def _report_config(args, **overrides) -> dict:
         if "index_snapshot" in configuration:
             configuration["index_snapshot"] = _portable_index_snapshot(
                 configuration["index_snapshot"])
+    if args.retriever == "lexical":
+        # Only lexical reports carry this key, keeping the committed
+        # index and offline-BM25 report shapes byte-for-byte unchanged.
+        configuration["lexical_query_policy"] = "none"
     review_binding = getattr(args, "review_receipt_binding", None)
     if review_binding is not None:
         configuration["review_receipt"] = dict(review_binding)
@@ -1962,7 +2048,7 @@ def _main_with_args(args, parser: argparse.ArgumentParser) -> int:
         parser.error("threshold checks are supported only without --compare")
     if args.bootstrap and not args.compare:
         parser.error("--bootstrap requires --compare")
-    if args.retriever == "bm25" and args.compare:
+    if args.retriever != "index" and args.compare:
         parser.error("--compare is supported only with --retriever index")
     if args.retriever == "index" and (args.db is None or not args.collection):
         parser.error("--db and --collection are required with --retriever index")
@@ -1971,6 +2057,12 @@ def _main_with_args(args, parser: argparse.ArgumentParser) -> int:
             or args.context_window):
         parser.error(
             "hybrid, reranker, and context flags do not apply to offline BM25")
+    if args.retriever == "lexical" and (
+            args.hybrid is not None or args.reranker is not None
+            or args.context_window):
+        parser.error(
+            "hybrid, reranker, and context flags do not apply to the "
+            "lexical retriever")
     if args.retriever == "index":
         try:
             if args.embedding_model.startswith(
@@ -2078,7 +2170,7 @@ def _main_with_args(args, parser: argparse.ArgumentParser) -> int:
         _expand_grounding_release_thresholds(queries, minimums, maximums)
         _validate_corpus_pin_coverage(
             queries,
-            required=(args.retriever == "bm25"
+            required=(args.retriever in {"bm25", "lexical"}
                       or args.baseline_report is not None
                       or _has_v2_grounding_cases(queries)
                       or _has_table_family_judgments(queries)),
@@ -2099,6 +2191,23 @@ def _main_with_args(args, parser: argparse.ArgumentParser) -> int:
             _validate_grounding_evidence_ids(
                 queries, list(offline_index.records), _chunk_id)
             index_snapshot = offline_index.snapshot.as_report_dict()
+        elif args.retriever == "lexical":
+            import rag
+
+            lexical_records, lexical_source_sha256 = _load_lexical_corpus(
+                args.chunks, rag)
+            _validate_declared_corpus_snapshot(
+                queries,
+                actual_hash=lexical_source_sha256,
+                actual_count=len(lexical_records))
+            table_family_attestation = _validate_judged_ids(
+                queries, lexical_records, rag._chunk_id,
+                corpus_sha256=lexical_source_sha256,
+                id_scheme=retrieval_core._chunk_id_scheme(lexical_records))
+            _validate_grounding_evidence_ids(
+                queries, lexical_records, rag._chunk_id)
+            index_snapshot = _lexical_index_snapshot(
+                lexical_records, lexical_source_sha256)
         else:
             index_snapshot = _validate_declared_index(
                 queries, args.chunks, args.db,
@@ -2249,6 +2358,15 @@ def _main_with_args(args, parser: argparse.ArgumentParser) -> int:
                 "use_reranker": False,
                 "hybrid": False,
             }
+        elif args.retriever == "lexical":
+            result = evaluate_lexical(
+                queries, args.chunks,
+                expected_source_sha256=index_snapshot["source_sha256"],
+                **common)
+            single_modes = {
+                "use_reranker": False,
+                "hybrid": False,
+            }
         else:
             result = evaluate(queries, args.db, **common, **single_modes)
     except (FileNotFoundError, LookupError, ValueError) as exc:
@@ -2321,7 +2439,7 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         parser.error(str(exc))
 
-    if args.retriever == "bm25":
+    if args.retriever in {"bm25", "lexical"}:
         return _main_with_args(args, parser)
     if args.db is None or not args.collection:
         return _main_with_args(args, parser)
