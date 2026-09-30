@@ -482,10 +482,8 @@ def test_a_failed_extraction_leaves_no_partial_cache_entry(
     assert counts == Counter(range(11))
 
 
-def test_enrichment_releases_the_words_after_the_group_stages(
-        tmp_path, monkeypatch):
-    document, path = _build_book(tmp_path)
-    _snapshot(monkeypatch, path)
+def _record_word_caches(monkeypatch) -> list[rag._NativePdfWordCache]:
+    """Collect every word cache an enrichment call constructs."""
     caches: list[rag._NativePdfWordCache] = []
 
     class Recording(rag._NativePdfWordCache):
@@ -496,11 +494,50 @@ def test_enrichment_releases_the_words_after_the_group_stages(
             caches.append(self)
 
     monkeypatch.setattr(rag, "_NativePdfWordCache", Recording)
+    return caches
 
-    _enrich(document, tmp_path)
 
+def test_enrichment_releases_the_words_after_the_group_stages(
+        tmp_path, monkeypatch):
+    document, path = _build_book(tmp_path)
+    _snapshot(monkeypatch, path)
+    caches = _record_word_caches(monkeypatch)
+
+    enrichments = _enrich(document, tmp_path)
+
+    assert enrichments == _expected(groups=_FIRST_PASS, deferred=_DEFERRED)
     assert [(cache.path, cache.page_count) for cache in caches] == [
         (path, 11)]
+    assert caches[0]._page_words == {}
+    assert caches[0]._attestations is None
+
+
+def test_a_failed_required_group_stage_still_releases_the_words(
+        tmp_path, monkeypatch):
+    document, path = _build_book(tmp_path)
+    _snapshot(monkeypatch, path)
+    caches = _record_word_caches(monkeypatch)
+    held: list[tuple[int, bool]] = []
+
+    def failing(*_args, word_cache, **_kwargs):
+        held.append((
+            len(word_cache._page_words),
+            word_cache._attestations is not None))
+        raise RuntimeError("injected stage failure")
+
+    monkeypatch.setattr(
+        rag, "_recover_disjoint_section_flow_groups", failing)
+
+    with pytest.raises(
+            rag._SourceEnrichmentError,
+            match=r"\(disjoint section-flow text groups\): "
+                  r"injected stage failure"):
+        _enrich(document, tmp_path, source_pdf_path=path)
+
+    # The earlier stages had filled the cache; the propagating failure
+    # must not keep those words alive.
+    assert held == [(11, True)]
+    assert len(caches) == 1
     assert caches[0]._page_words == {}
     assert caches[0]._attestations is None
 
@@ -544,3 +581,21 @@ def test_the_word_cache_refuses_another_pdf(tmp_path):
     with pytest.raises(ValueError, match="another PDF snapshot"):
         rag._recover_cross_page_native_word_groups(
             document, other, word_cache=cache)
+
+
+def test_the_word_cache_refuses_another_path_with_the_same_page_count(
+        tmp_path):
+    document, path = _build_book(tmp_path)
+    twin = tmp_path / "twin.pdf"
+    twin.write_bytes(path.read_bytes())
+    cache = rag._NativePdfWordCache(path)
+
+    with pymupdf.open(path) as pdf, pymupdf.open(twin) as copy:
+        cache.bind(path, pdf)
+        assert len(copy) == cache.page_count == 11
+        with pytest.raises(ValueError, match="another PDF snapshot"):
+            cache.bind(twin, copy)
+
+    with pytest.raises(ValueError, match="another PDF snapshot"):
+        rag._recover_cross_page_native_word_groups(
+            document, twin, word_cache=cache)

@@ -17057,67 +17057,71 @@ def _recover_bound_source_enrichments(
             # The native text-group stages below read every page's sorted
             # words from this one snapshot; extract each page only once.
             word_cache = _NativePdfWordCache(recovery_source.pdf.path)
-            native_text_overrides = optional_stage(
-                "native-PDF text repairs",
-                lambda: _recover_native_text_repairs(
-                    dl_doc, recovery_source.pdf.path,
-                    repair_edits=native_repair_edits,
-                    rebuild_refs=native_text_rebuild_refs,
-                    structural_ranges=structural_ranges,
-                    letter_spaced_retries=letter_spaced_retries,
-                    word_cache=word_cache),
-                None,
-            )
-            if native_text_overrides is None:
-                # A failed optional stage must not leak partial retries.
-                native_text_overrides = {}
-                letter_spaced_retries.clear()
-            deferred_text_groups: list[SourceTextGroupRecovery] = []
-            text_group_recoveries = optional_stage(
-                "overlapping native-PDF text groups",
-                lambda: _recover_overlapping_native_text_groups(
-                    dl_doc, recovery_source.pdf.path,
-                    structural_ranges=structural_ranges,
-                    reading_order_violations=reading_order_violations,
-                    deferred_groups=deferred_text_groups,
-                    word_cache=word_cache),
-                (),
-            )
-            text_group_recoveries += optional_stage(
-                "adjacent native-PDF split-word groups",
-                lambda: _recover_adjacent_native_split_word_groups(
-                    dl_doc, recovery_source.pdf.path,
-                    text_overrides=native_text_overrides,
-                    structural_ranges=structural_ranges,
-                    claimed_refs={
-                        ref for recovery in text_group_recoveries
-                        for ref in recovery.refs
-                    },
-                    word_cache=word_cache),
-                (),
-            )
-            text_group_recoveries += optional_stage(
-                "cross-page native-PDF word groups",
-                lambda: _recover_cross_page_native_word_groups(
-                    dl_doc, recovery_source.pdf.path,
-                    text_overrides=native_text_overrides,
-                    structural_ranges=structural_ranges,
-                    claimed_refs={
-                        ref for recovery in text_group_recoveries
-                        for ref in recovery.refs
-                    },
-                    word_cache=word_cache),
-                (),
-            )
-            text_group_recoveries += optional_stage(
-                "disjoint section-flow text groups",
-                lambda: _recover_disjoint_section_flow_groups(
-                    dl_doc, recovery_source.pdf.path,
-                    structural_ranges=structural_ranges,
-                    word_cache=word_cache),
-                (),
-            )
-            word_cache.clear()
+            try:
+                native_text_overrides = optional_stage(
+                    "native-PDF text repairs",
+                    lambda: _recover_native_text_repairs(
+                        dl_doc, recovery_source.pdf.path,
+                        repair_edits=native_repair_edits,
+                        rebuild_refs=native_text_rebuild_refs,
+                        structural_ranges=structural_ranges,
+                        letter_spaced_retries=letter_spaced_retries,
+                        word_cache=word_cache),
+                    None,
+                )
+                if native_text_overrides is None:
+                    # A failed optional stage must not leak partial retries.
+                    native_text_overrides = {}
+                    letter_spaced_retries.clear()
+                deferred_text_groups: list[SourceTextGroupRecovery] = []
+                text_group_recoveries = optional_stage(
+                    "overlapping native-PDF text groups",
+                    lambda: _recover_overlapping_native_text_groups(
+                        dl_doc, recovery_source.pdf.path,
+                        structural_ranges=structural_ranges,
+                        reading_order_violations=reading_order_violations,
+                        deferred_groups=deferred_text_groups,
+                        word_cache=word_cache),
+                    (),
+                )
+                text_group_recoveries += optional_stage(
+                    "adjacent native-PDF split-word groups",
+                    lambda: _recover_adjacent_native_split_word_groups(
+                        dl_doc, recovery_source.pdf.path,
+                        text_overrides=native_text_overrides,
+                        structural_ranges=structural_ranges,
+                        claimed_refs={
+                            ref for recovery in text_group_recoveries
+                            for ref in recovery.refs
+                        },
+                        word_cache=word_cache),
+                    (),
+                )
+                text_group_recoveries += optional_stage(
+                    "cross-page native-PDF word groups",
+                    lambda: _recover_cross_page_native_word_groups(
+                        dl_doc, recovery_source.pdf.path,
+                        text_overrides=native_text_overrides,
+                        structural_ranges=structural_ranges,
+                        claimed_refs={
+                            ref for recovery in text_group_recoveries
+                            for ref in recovery.refs
+                        },
+                        word_cache=word_cache),
+                    (),
+                )
+                text_group_recoveries += optional_stage(
+                    "disjoint section-flow text groups",
+                    lambda: _recover_disjoint_section_flow_groups(
+                        dl_doc, recovery_source.pdf.path,
+                        structural_ranges=structural_ranges,
+                        word_cache=word_cache),
+                    (),
+                )
+            finally:
+                # Release the words on every path, so that a required
+                # stage's propagating failure does not keep them alive.
+                word_cache.clear()
             # Every group stage above decided on today's overrides.  A
             # recovered group's oracle replaces its members' overrides, and a
             # deferred group's members may be admitted by the order replay, so
