@@ -1511,7 +1511,7 @@
             "source": "tests/test_ocr_region_merge.py"
           },
           {
-            "line": 1202,
+            "line": 1624,
             "operation": "setattr",
             "source": "tests/test_phase_a0_benchmark.py"
           },
@@ -4353,7 +4353,7 @@
             "target": "_run_pipeline_job"
           },
           {
-            "locations_sha256": "3b5bcef6f81913aba467bfd711327aaf6c1c31b7ae9988a6c245251f2ddf19d4",
+            "locations_sha256": "3ce24c64c5c405516b0ac6638eefd7e68b65a97ce6c819a72120090fee772e4c",
             "occurrence_count": 9,
             "operations": [
               "setattr"
@@ -4621,7 +4621,7 @@
             "target": "_validate_pipeline_publication_generation"
           },
           {
-            "locations_sha256": "6342bbd33203bba7b3574e6fbe5616d60230c2601b27f6bd814d6f7b38e3dcb8",
+            "locations_sha256": "ae84ac6c13db232e4d2139188233fc06e4c66fca38b1df58144c43f0598ee14c",
             "occurrence_count": 2,
             "operations": [
               "setattr"
@@ -8717,7 +8717,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "578326e7badbe2694a8fffc14bff07658f9550e557adfce5df9569eec7553758",
+          "locations_sha256": "4c98df4e424deab30ea79431aaf85061d83e9c8f827adf2b62044bb31e2531c1",
           "name": "_index_chunks_for_backend",
           "occurrence_count": 1,
           "paths": [
@@ -27250,7 +27250,7 @@
   "schema_version": 3,
   "source_architecture": {
     "class_count": 333,
-    "function_count": 4412,
+    "function_count": 4413,
     "import_graph": {
       "cyclic_components": [],
       "edge_count": 649,
@@ -58622,8 +58622,8 @@
             "scope": "nested"
           }
         ],
-        "definition_locations_sha256": "a62e3cba391aca1aa5171cbabfff8a639f82b473afdc0bc02ae01c2898e92e36",
-        "function_count": 93,
+        "definition_locations_sha256": "56d4970cc5da6de0d16f64c30675fe0f309baad1164fd0609514703dfe6bcf88",
+        "function_count": 94,
         "functions": [
           {
             "kind": "function",
@@ -58912,6 +58912,12 @@
             "name": "_read_report",
             "scope": "top_level",
             "signature_sha256": "94d9f4cc616227fa5bfcf38a02f43b038a65db834ce7b85ddd42438287855ea7"
+          },
+          {
+            "kind": "function",
+            "name": "_remove_capture_root",
+            "scope": "top_level",
+            "signature_sha256": "4cb69f7713f810197fa92a50e8057be671c340215857da8f70fee855753ec64a"
           },
           {
             "kind": "function",
@@ -59268,10 +59274,10 @@
           }
         ],
         "module": "tools.benchmark_phase_a0",
-        "non_blank_lines": 2951,
+        "non_blank_lines": 3005,
         "path": "tools/benchmark_phase_a0.py",
-        "physical_lines": 3179,
-        "top_level_function_count": 70
+        "physical_lines": 3236,
+        "top_level_function_count": 71
       },
       {
         "class_count": 1,
@@ -63935,13 +63941,13 @@
         "top_level_function_count": 2
       }
     ],
-    "physical_line_count": 130322,
+    "physical_line_count": 130379,
     "source_groups": [
       "production",
       "tools",
       "other"
     ],
-    "top_level_function_count": 2920
+    "top_level_function_count": 2921
   },
   "tracked_sources": {
     "count": 493,

@@ -21,6 +21,7 @@ import os
 import platform
 import re
 import runpy
+import shutil
 import stat
 import statistics
 import subprocess
@@ -55,6 +56,13 @@ _TEST_BREAK_SUPERVISION_ENV = "RAG_PHASE_A0_TEST_ONLY_BREAK_SUPERVISION"
 _TEST_BREAK_SUPERVISION_VALUE = "phase-a0-audit-mutation-v1"
 _GUARD_VERSION = 1
 _RSS_SCOPE = "process_only_excludes_descendants"
+# A descendant killed with its tree can hold inherited capture handles briefly
+# after the job reports empty. Removal retries only Windows access, sharing,
+# lock and pending-deletion violations, within about 3.2 s of backoff plus a
+# margin that keeps scheduling jitter from forfeiting the final attempt.
+_CAPTURE_CLEANUP_DELAYS = (0.01, 0.025, 0.05, 0.1, 0.2, 0.4, 0.8, 1.6)
+_CAPTURE_CLEANUP_DEADLINE_MARGIN = 0.5
+_CAPTURE_CLEANUP_TRANSIENT_WINERRORS = frozenset({5, 32, 33, 145})
 
 SCENARIOS = (
     "cold_import_rag",
@@ -331,6 +339,38 @@ def _exact_environment_overrides(
     return overrides
 
 
+def _remove_capture_root(
+        path: Path, *, rmtree: Callable[[Path], object] = shutil.rmtree,
+        sleep: Callable[[float], object] = time.sleep,
+        monotonic: Callable[[], float] = time.monotonic,
+        delays: Sequence[float] = _CAPTURE_CLEANUP_DELAYS,
+) -> bool:
+    """Remove one runner-owned capture tree; true only once it is gone.
+
+    The attempt count and monotonic deadline both bound the wait, so a
+    persistent hold or any other removal failure still fails closed.
+    """
+    deadline = monotonic() + sum(delays) + _CAPTURE_CLEANUP_DEADLINE_MARGIN
+    for attempt in range(len(delays) + 1):
+        try:
+            rmtree(path)
+            return True
+        except FileNotFoundError:
+            # As TemporaryDirectory did, a vanished entry is not a failure;
+            # the root is confirmed gone or removal is attempted again.
+            if not os.path.lexists(path):
+                return True
+        except OSError as exc:
+            if (getattr(exc, "winerror", None)
+                    not in _CAPTURE_CLEANUP_TRANSIENT_WINERRORS):
+                return False
+        if (attempt == len(delays)
+                or monotonic() + delays[attempt] > deadline):
+            return False
+        sleep(delays[attempt])
+    return False
+
+
 def _run_contained_process(
         script_path: Path, arguments: Sequence[str], *, cwd: Path,
         environment: Mapping[str, str], timeout_seconds: float,
@@ -350,55 +390,72 @@ def _run_contained_process(
         start_gate_timeout=10.0,
     )
     try:
-        with tempfile.TemporaryDirectory(
-                prefix="phase-a0-capture-", dir=cwd) as capture_name:
-            capture_root = Path(capture_name)
-            stdout_path = capture_root / "stdout.bin"
-            stderr_path = capture_root / "stderr.bin"
-            with stdout_path.open("x+b") as stdout_handle, \
-                    stderr_path.open("x+b") as stderr_handle:
-                for path in (stdout_path, stderr_path):
-                    try:
-                        path.chmod(0o600)
-                    except OSError:
-                        pass
-
-                def enforce_output_bound(_process) -> None:
-                    if any(os.fstat(handle.fileno()).st_size > max_output_bytes
-                           for handle in (stdout_handle, stderr_handle)):
-                        raise PhaseA0BenchmarkError(
-                            "contained process exceeded its output bound")
-
-                exit_code = process_supervision._run_cli_with_deadline(
-                    Path(script_path),
-                    list(arguments),
-                    operation="Phase A0 contained probe",
-                    timeout=float(timeout_seconds),
-                    config=config,
-                    working_directory=Path(cwd),
-                    environment_overrides=_exact_environment_overrides(
-                        environment),
-                    heartbeat=enforce_output_bound,
-                    stdout_target=stdout_handle,
-                    stderr_target=stderr_handle,
-                    warn_fn=lambda _message: None,
-                )
-                enforce_output_bound(None)
-                stdout_handle.flush()
-                stderr_handle.flush()
-            stdout = (
-                b"" if stdout_path.stat().st_size == 0 else _read_bounded_file(
-                    stdout_path, max_bytes=max_output_bytes,
-                    description="contained stdout"))
-            stderr = (
-                b"" if stderr_path.stat().st_size == 0 else _read_bounded_file(
-                    stderr_path, max_bytes=max_output_bytes,
-                    description="contained stderr"))
-    except PhaseA0BenchmarkError:
-        raise
+        capture_root = Path(tempfile.mkdtemp(
+            prefix="phase-a0-capture-", dir=cwd))
     except BaseException as exc:
         raise PhaseA0BenchmarkError(
             "contained process failed with confirmed cleanup") from exc
+    body_error: BaseException | None = None
+    try:
+        stdout_path = capture_root / "stdout.bin"
+        stderr_path = capture_root / "stderr.bin"
+        with stdout_path.open("x+b") as stdout_handle, \
+                stderr_path.open("x+b") as stderr_handle:
+            for path in (stdout_path, stderr_path):
+                try:
+                    path.chmod(0o600)
+                except OSError:
+                    pass
+
+            def enforce_output_bound(_process) -> None:
+                if any(os.fstat(handle.fileno()).st_size > max_output_bytes
+                       for handle in (stdout_handle, stderr_handle)):
+                    raise PhaseA0BenchmarkError(
+                        "contained process exceeded its output bound")
+
+            exit_code = process_supervision._run_cli_with_deadline(
+                Path(script_path),
+                list(arguments),
+                operation="Phase A0 contained probe",
+                timeout=float(timeout_seconds),
+                config=config,
+                working_directory=Path(cwd),
+                environment_overrides=_exact_environment_overrides(
+                    environment),
+                heartbeat=enforce_output_bound,
+                stdout_target=stdout_handle,
+                stderr_target=stderr_handle,
+                warn_fn=lambda _message: None,
+            )
+            enforce_output_bound(None)
+            stdout_handle.flush()
+            stderr_handle.flush()
+        stdout = (
+            b"" if stdout_path.stat().st_size == 0 else _read_bounded_file(
+                stdout_path, max_bytes=max_output_bytes,
+                description="contained stdout"))
+        stderr = (
+            b"" if stderr_path.stat().st_size == 0 else _read_bounded_file(
+                stderr_path, max_bytes=max_output_bytes,
+                description="contained stderr"))
+    except BaseException as exc:
+        body_error = exc
+    # Raise only outside any handler so a primary error keeps its own context.
+    cleanup_error: BaseException | None = None
+    try:
+        cleanup_confirmed = _remove_capture_root(capture_root)
+    except BaseException as exc:
+        cleanup_confirmed, cleanup_error = False, exc
+    if not cleanup_confirmed:
+        raise PhaseA0BenchmarkError(
+            "contained process capture cleanup was unconfirmed",
+            diagnostic_code="phase-a0-capture-cleanup-unconfirmed",
+        ) from (body_error if body_error is not None else cleanup_error)
+    if isinstance(body_error, PhaseA0BenchmarkError):
+        raise body_error
+    if body_error is not None:
+        raise PhaseA0BenchmarkError(
+            "contained process failed with confirmed cleanup") from body_error
     return SimpleNamespace(
         returncode=exit_code,
         stdout=stdout,
