@@ -1903,6 +1903,20 @@ def _validate_mutated_security_workflow(
             _MERGE_KEY_ERROR,
             id="merge-key-in-with",
         ),
+        pytest.param(
+            "name: Security fixture\n",
+            "--- &root\nname: Security fixture\n",
+            "--- &root",
+            _ANCHOR_ERROR,
+            id="anchored-document-root",
+        ),
+        pytest.param(
+            "name: Security fixture\n",
+            "--- !!map\nname: Security fixture\n",
+            "--- !!map",
+            _TAG_ERROR,
+            id="tagged-document-root",
+        ),
     ],
 )
 def test_yaml_node_properties_and_merge_keys_are_rejected(
