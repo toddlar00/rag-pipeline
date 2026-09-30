@@ -302,6 +302,11 @@ console.log('inert detail-event controls passed; no browser layout claim');
 """
 
 
+# A ceiling, not an expectation: Node can take over 15 s to start on busy
+# hosted Windows runners.
+_NODE_TIMEOUT = 60
+
+
 def test_inert_javascript_scoping_activation_scroll_and_fit_controls():
     node = shutil.which("node")
     if node is None:
@@ -309,7 +314,7 @@ def test_inert_javascript_scoping_activation_scroll_and_fit_controls():
     script = "const SCRIPT=" + json.dumps(preview.PREVIEW_JS) + ";\n" + _EVENT_HARNESS
     environment = {key: value for key, value in os.environ.items() if not key.upper().startswith("NODE")}
     completed = subprocess.run([node, "-e", script], capture_output=True, text=True, encoding="utf-8",
-                               errors="replace", timeout=15, env=environment, check=False)
+                               errors="replace", timeout=_NODE_TIMEOUT, env=environment, check=False)
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert completed.stdout.strip() == "inert detail-event controls passed; no browser layout claim"
 
