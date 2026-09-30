@@ -1649,8 +1649,10 @@ embedding code's Transformers names and clear two new advisories.
 - **Tort-law casebook.** With #140, #145 and #146, a real chunk run of the
   private casebook passes the whole corpus quality gate; the only warning is
   `canonical_text_duplicates`. All 19 READY h26 runs re-chunk byte-identical.
-  The next step is a durable `full` re-run of the casebook from merged
-  `main`.
+  A durable `full` re-run of the casebook from `8cc89b0`, in the new locked
+  environment, then published a READY run with the same chunks and a passing
+  quality gate (only the `canonical_text_duplicates` warning). Replacing
+  the older live index with it is left to the owner.
 - **Private h26 excerpts reprocessed on `8cc89b0`.**
   - All 18 textbook excerpts were reprocessed from the exact inputs their
     READY receipts bound, using their published OCR options, in the new
