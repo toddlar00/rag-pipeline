@@ -92,11 +92,21 @@ _REQUIRED_SECURITY_FILTERS = frozenset({
     "requirements*.txt",
 })
 _ACTION_SHA_RE = re.compile(r"[0-9a-fA-F]{40}")
-# A header is a whole line, so a comment or quoted value that merely ends in
-# ': |' cannot open a block scalar and blank the following workflow lines.
+_BLOCK_SCALAR_INDICATOR = r"[>|](?:[1-9]?[-+]?|[-+]?[1-9]?)"
+# A header is a whole line holding one plain key, so a comment or quoted value
+# that merely ends in ': |' cannot open a block scalar and blank the following
+# workflow lines. Its body is everything indented past the key's column.
 _BLOCK_SCALAR_RE = re.compile(
-    r"^(?:(?:-\s+)?[A-Za-z0-9_][A-Za-z0-9_.-]*\s*:\s+)?"
-    r"[>|](?:[1-9]?[-+]?|[-+]?[1-9]?)(?:\s+#.*)?\s*$"
+    r"^(?P<entry>-\s+)?[A-Za-z0-9_][A-Za-z0-9_.-]*\s*:\s+"
+    + _BLOCK_SCALAR_INDICATOR
+    + r"(?:\s+#.*)?\s*$"
+)
+# Any other line that may end in a block-scalar header is rejected, because
+# its body would stay structural and could satisfy a required-key check.
+_AMBIGUOUS_BLOCK_SCALAR_RE = re.compile(
+    r"(?:^(?:-\s+)*|^---\s+|:\s*)"
+    + _BLOCK_SCALAR_INDICATOR
+    + r"\s*(?:#.*)?$"
 )
 # Anchors, aliases and tags can prefix or stand in for a mapping key that the
 # line-based checks then miss; YAML 1.1 parsers also import merge-key entries.
@@ -272,8 +282,8 @@ def _structural_workflow_lines(lines: list[str]) -> list[str]:
                 continue
             block_parent_indent = None
         structural.append(line)
-        if stripped and _BLOCK_SCALAR_RE.search(stripped):
-            block_parent_indent = indentation
+        if stripped and (header := _BLOCK_SCALAR_RE.search(stripped)):
+            block_parent_indent = indentation + len(header.group("entry") or "")
     return structural
 
 
@@ -316,6 +326,14 @@ def _validate_supported_workflow_syntax(
             errors.append(
                 f"{workflow_path}:{index + 1}: YAML merge keys are "
                 "unsupported by the security validator"
+            )
+        if (
+            _AMBIGUOUS_BLOCK_SCALAR_RE.search(stripped)
+            and not _BLOCK_SCALAR_RE.search(stripped)
+        ):
+            errors.append(
+                f"{workflow_path}:{index + 1}: ambiguous block scalar headers "
+                "are unsupported by the security validator"
             )
     return errors
 
