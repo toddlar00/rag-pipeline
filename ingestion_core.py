@@ -760,6 +760,7 @@ def docling_assembled_page_count(message: str) -> int:
         return 0
     return sum(1 for page in match.group(2).split(",") if page.strip())
 
+
 _MEMORY_EXHAUSTION_MARKERS = ("out of memory", "bad_alloc")
 _EVIDENCE_TOKEN_LIMIT = 64
 _MAX_REPORTED_ERROR_SOURCES = 8
