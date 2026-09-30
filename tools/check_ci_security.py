@@ -110,7 +110,7 @@ _AMBIGUOUS_BLOCK_SCALAR_RE = re.compile(
 )
 # Anchors, aliases and tags can prefix or stand in for a mapping key that the
 # line-based checks then miss; YAML 1.1 parsers also import merge-key entries.
-_YAML_NODE_START = r"(?:^(?:-\s+)*|:\s+|[\[,]\s*)"
+_YAML_NODE_START = r"(?:^(?:-\s+)*|^---\s+|:\s+|[\[,]\s*)"
 _YAML_ANCHOR_OR_ALIAS_RE = re.compile(
     _YAML_NODE_START + r"[&*][^\s,\[\]{}]+"
 )
