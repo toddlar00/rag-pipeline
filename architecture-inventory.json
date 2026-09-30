@@ -1016,6 +1016,13 @@
         },
         {
           "facade_roots": [
+            "rag"
+          ],
+          "module": "tests.test_enrichment_word_cache",
+          "path": "tests/test_enrichment_word_cache.py"
+        },
+        {
+          "facade_roots": [
             "rag",
             "try_lock",
             "unlock"
@@ -1489,6 +1496,11 @@
             "line": 100,
             "operation": "delattr",
             "source": "tests/test_architecture_inventory.py"
+          },
+          {
+            "line": 274,
+            "operation": "setattr",
+            "source": "tests/test_enrichment_word_cache.py"
           },
           {
             "line": 285,
@@ -3689,8 +3701,8 @@
             "target": "_normalize_source_markdown_text"
           },
           {
-            "locations_sha256": "747c36b1948aa28cc10bd6284e45f64e2d0ee2bb9861673b166a5e4df9ed545d",
-            "occurrence_count": 7,
+            "locations_sha256": "ecf75154b7dc27e607c2eb4565213310b14241e24e8c05192245a5bb9e5e4950",
+            "occurrence_count": 8,
             "operations": [
               "setattr"
             ],
@@ -3698,6 +3710,10 @@
               {
                 "count": 1,
                 "path": "tests/test_contents_outline_guards.py"
+              },
+              {
+                "count": 1,
+                "path": "tests/test_enrichment_word_cache.py"
               },
               {
                 "count": 1,
@@ -11542,13 +11558,17 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "846499701b993f77fba55baa750c286812c02e4923c73f58b56c73868574de70",
+          "locations_sha256": "69d80d62fd2d50b7706e392cd80a9159460ee91d09a3b251fdb61f32b0fa0f69",
           "name": "_recover_adjacent_native_split_word_groups",
-          "occurrence_count": 5,
+          "occurrence_count": 6,
           "paths": [
             "_recover_adjacent_native_split_word_groups"
           ],
           "source_counts": [
+            {
+              "count": 1,
+              "path": "tests/test_enrichment_word_cache.py"
+            },
             {
               "count": 5,
               "path": "tests/test_scaffold_structure.py"
@@ -11562,9 +11582,9 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "a7faf5d7bf9c73e2234ac2176899ce1836df1fda59585b4b1fa52464ff41e4f0",
+          "locations_sha256": "1410cd1e23c87d3f084e661f10fbcfb5c184f48f6674aea65de5058c52f07662",
           "name": "_recover_bound_source_enrichments",
-          "occurrence_count": 7,
+          "occurrence_count": 8,
           "paths": [
             "_recover_bound_source_enrichments"
           ],
@@ -11572,6 +11592,10 @@
             {
               "count": 1,
               "path": "tests/test_contents_outline_guards.py"
+            },
+            {
+              "count": 1,
+              "path": "tests/test_enrichment_word_cache.py"
             },
             {
               "count": 1,
@@ -11662,13 +11686,17 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "12581f27cf287ba4ff84a53227547b5d4b4b4a58470cfa1a09955f4c3bbc0c53",
+          "locations_sha256": "0c0f6d072d5c14bfaca72b1dabc70f2a3b4c3d8370f5ff7bce6bf75b4d85da0a",
           "name": "_recover_cross_page_native_word_groups",
-          "occurrence_count": 1,
+          "occurrence_count": 2,
           "paths": [
             "_recover_cross_page_native_word_groups"
           ],
           "source_counts": [
+            {
+              "count": 1,
+              "path": "tests/test_enrichment_word_cache.py"
+            },
             {
               "count": 1,
               "path": "tests/test_scaffold_structure.py"
@@ -11702,13 +11730,17 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "cfcb3abf251510cb2c74a5265420e6ee077315110adafb053d6427825ee97d7e",
+          "locations_sha256": "6e46d995fce8b7a860aa6566774e36d5a461d2ee2402afe776eac4ba477f5da3",
           "name": "_recover_disjoint_section_flow_groups",
-          "occurrence_count": 1,
+          "occurrence_count": 2,
           "paths": [
             "_recover_disjoint_section_flow_groups"
           ],
           "source_counts": [
+            {
+              "count": 1,
+              "path": "tests/test_enrichment_word_cache.py"
+            },
             {
               "count": 1,
               "path": "tests/test_scaffold_structure.py"
@@ -11750,13 +11782,17 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "5f93dbbca26b076ae148536893adecc5bc539e6a911886658c26592c4d1310ee",
+          "locations_sha256": "7f6ae47b663793f526c8c65b33c6092d130ac34177af1f73cd1be1c17a47071e",
           "name": "_recover_native_text_repairs",
-          "occurrence_count": 2,
+          "occurrence_count": 3,
           "paths": [
             "_recover_native_text_repairs"
           ],
           "source_counts": [
+            {
+              "count": 1,
+              "path": "tests/test_enrichment_word_cache.py"
+            },
             {
               "count": 2,
               "path": "tests/test_letter_spaced_text_layer.py"
@@ -11770,13 +11806,17 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "8eeefbadcc9e3af76d70bb49ee4b4ba897ad128dafdb0fa83cdb833e05ab612a",
+          "locations_sha256": "d193196a3208a486cd1e3a20b4e3b013633183b28de5eca3cb181767ef66efaa",
           "name": "_recover_overlapping_native_text_groups",
-          "occurrence_count": 5,
+          "occurrence_count": 6,
           "paths": [
             "_recover_overlapping_native_text_groups"
           ],
           "source_counts": [
+            {
+              "count": 1,
+              "path": "tests/test_enrichment_word_cache.py"
+            },
             {
               "count": 2,
               "path": "tests/test_overlapping_native_block_runs.py"
@@ -13975,7 +14015,7 @@
           ]
         }
       ],
-      "using_module_count": 77
+      "using_module_count": 78
     }
   },
   "hash_domains": {
@@ -63944,7 +63984,7 @@
     "top_level_function_count": 2920
   },
   "tracked_sources": {
-    "count": 493,
+    "count": 494,
     "groups": [
       {
         "count": 152,
@@ -64105,7 +64145,7 @@
         ]
       },
       {
-        "count": 298,
+        "count": 299,
         "name": "tests",
         "paths": [
           "tests/conftest.py",
@@ -64146,6 +64186,7 @@
           "tests/test_embedding_policy.py",
           "tests/test_embedding_runtime_compat.py",
           "tests/test_endpoint_policy.py",
+          "tests/test_enrichment_word_cache.py",
           "tests/test_eval.py",
           "tests/test_eval_bootstrap.py",
           "tests/test_evaluate_ocr_context_cli.py",
