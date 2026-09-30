@@ -1789,6 +1789,8 @@ _UNICODE_SPACES = [
 # YAML never indents with tabs, and PyYAML rejects a tab where a token
 # starts, so the validator must not measure columns across one either.
 _NON_SPACE_WHITESPACE = [*_UNICODE_SPACES, pytest.param("\t", id="tab")]
+_NON_ASCII_WHITESPACE_ERROR = "non-ASCII whitespace is unsupported"
+_LINE_BREAK_ERROR = "line breaks other than LF and CR are unsupported"
 
 
 def _validate_mutated_security_workflow(
@@ -2159,6 +2161,105 @@ def test_blank_looking_lines_with_non_spaces_end_block_scalar_bodies(space):
     ) == [
         f"workflow.yml:4: {_NON_SPACE_INDENT_ERROR} by the security validator"
     ]
+
+
+@pytest.mark.parametrize("space", _UNICODE_SPACES)
+@pytest.mark.parametrize(
+    ("old", "new", "flagged", "messages"),
+    [
+        # PyYAML reads the key as 'persist-credentials<space>', so the
+        # real input is absent and credentials persist.
+        pytest.param(
+            "          persist-credentials: false\n",
+            "          persist-credentials{space}: false\n",
+            "          persist-credentials{space}: false",
+            (_NON_ASCII_WHITESPACE_ERROR,),
+            id="checkout-input-key",
+        ),
+        # PyYAML reads 'permissions<space>', so the workflow has no
+        # permissions mapping and gets the default token permissions.
+        pytest.param(
+            "permissions:\n  contents: read\n",
+            "permissions{space}:\n  contents: read\n",
+            "permissions{space}:",
+            (_NON_ASCII_WHITESPACE_ERROR,),
+            id="top-level-permissions-key",
+        ),
+        # A YAML 1.2 anchor name may hold any non-space character, so this
+        # anchors a 'uses' key that hides an unpinned checkout.
+        pytest.param(
+            _CHECKOUT_STEP,
+            "      - &{space} uses: actions/checkout@main\n"
+            "        with:\n"
+            "          persist-credentials: true\n",
+            "      - &{space} uses: actions/checkout@main",
+            (_ANCHOR_ERROR, _NON_ASCII_WHITESPACE_ERROR),
+            id="anchor-name",
+        ),
+    ],
+)
+def test_non_ascii_whitespace_inside_structural_lines_fails_closed(
+    tmp_path, old, new, flagged, messages, space
+):
+    errors, lines = _validate_mutated_security_workflow(
+        tmp_path, old, new.format(space=space)
+    )
+
+    _assert_flagged(errors, lines, flagged.format(space=space), messages)
+
+
+@pytest.mark.parametrize("space", _UNICODE_SPACES)
+@pytest.mark.parametrize(
+    "entry",
+    [
+        pytest.param("      - tools/check_ci_security.py{space}", id="trailing"),
+        pytest.param("      - {space}tools/check_ci_security.py", id="leading"),
+    ],
+)
+def test_security_trigger_paths_with_non_ascii_whitespace_fail_closed(
+    tmp_path, entry, space
+):
+    # The plain scalar keeps the Unicode space, so the path filter no longer
+    # names the file, but event_paths() strips it and reports it covered.
+    _policy_data, workflow_path = _valid_tree(tmp_path)
+    text = workflow_path.read_text(encoding="utf-8")
+    covered = '      - "tools/check_ci_security.py"\n'
+    assert text.count(covered) == 2
+    entry = entry.format(space=space)
+    text = text.replace(covered, entry + "\n", 1)
+    workflow_path.write_text(text, encoding="utf-8")
+
+    errors = check_ci_security.validate(tmp_path)
+
+    _assert_flagged(
+        errors, text.splitlines(), entry, (_NON_ASCII_WHITESPACE_ERROR,)
+    )
+
+
+@pytest.mark.parametrize(
+    "separator",
+    [
+        pytest.param("\x0b", id="vertical-tab"),
+        pytest.param("\x0c", id="form-feed"),
+        pytest.param("\x1c", id="file-separator"),
+        pytest.param("\x1d", id="group-separator"),
+        pytest.param("\x1e", id="record-separator"),
+        pytest.param("\x85", id="next-line"),
+        pytest.param(" ", id="line-separator"),
+        pytest.param(" ", id="paragraph-separator"),
+    ],
+)
+def test_line_breaks_other_than_lf_and_cr_fail_closed(tmp_path, separator):
+    # str.splitlines() starts a new line at each of these. YAML 1.2 does not,
+    # and YAML 1.1 folds NEL, LS and PS into the quoted scalar, so the fake
+    # 'persist-credentials: false #"' line is never a with: input.
+    errors, lines = _validate_mutated_security_workflow(
+        tmp_path,
+        "          persist-credentials: false\n",
+        f'          note: "x{separator}          persist-credentials: false #"\n',
+    )
+
+    _assert_flagged(errors, lines, '          note: "x', (_LINE_BREAK_ERROR,))
 
 
 def test_tracked_workflows_pass_the_structural_whitespace_rules():
