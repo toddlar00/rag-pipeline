@@ -551,9 +551,31 @@ def _conservative_token_estimate(text: str) -> int:
     return max(1, byte_estimate, lexical_estimate)
 
 
+# Building the exact tokenizer takes seconds and transformers does not reuse
+# it, yet chunking, validation, prefix bounding and indexing each count the
+# same model's inputs.  One verified tokenizer therefore stays resident for the
+# life of the process (a few hundred MiB for the default model), including
+# later conversions and embedding-model loads in a batch.  It is keyed by its
+# content-addressed verified path and the AutoTokenizer class that built it;
+# the bundle is still re-verified on every call, and unverified development
+# sources are never cached.  Tokenizer calls reset shared truncation state, so
+# every use is serialized under the lock.
+_EMBEDDING_TOKEN_COUNT_SLICE = 256
+_embedding_token_counter_entry: tuple[tuple[str, type], object] | None = None
+_embedding_token_counter_lock = _threading.Lock()
+
+
+def _clear_embedding_token_counter_cache() -> None:
+    """Release the resident verified token-counter tokenizer."""
+    global _embedding_token_counter_entry
+    with _embedding_token_counter_lock:
+        _embedding_token_counter_entry = None
+
+
 def _count_embedding_text_tokens(texts: list[str],
                                  embedding_model: str) -> tuple[list[int], bool]:
     """Count model input tokens, returning ``(counts, exact_tokenizer)``."""
+    global _embedding_token_counter_entry
     texts = _prepare_embedding_inputs(
         texts, embedding_model, "document")
     try:
@@ -570,13 +592,35 @@ def _count_embedding_text_tokens(texts: list[str],
                 "trust_remote_code": not verified,
                 **({"local_files_only": True} if verified else {}),
             }
-            tokenizer = AutoTokenizer.from_pretrained(
-                model_source, **loader_kwargs)
-            return [
-                len(tokenizer.encode(
-                    text, add_special_tokens=True, truncation=False))
-                for text in texts
-            ], True
+            cache_key = (str(model_source), AutoTokenizer)
+            with _embedding_token_counter_lock:
+                entry = _embedding_token_counter_entry
+                if verified and entry is not None and entry[0] == cache_key:
+                    tokenizer = entry[1]
+                else:
+                    tokenizer = AutoTokenizer.from_pretrained(
+                        model_source, **loader_kwargs)
+                    if verified:
+                        _embedding_token_counter_entry = (
+                            cache_key, tokenizer)
+                if not callable(tokenizer):
+                    return [
+                        len(tokenizer.encode(
+                            text, add_special_tokens=True, truncation=False))
+                        for text in texts
+                    ], True
+                # Batched encoding yields the same ids as per-text encode.
+                # Fixed slices bound the encodings held at once, and an empty
+                # input never reaches the tokenizer, which rejects [].
+                counts = []
+                for start in range(
+                        0, len(texts), _EMBEDDING_TOKEN_COUNT_SLICE):
+                    encoded = tokenizer(
+                        texts[start:start + _EMBEDDING_TOKEN_COUNT_SLICE],
+                        add_special_tokens=True, truncation=False,
+                        return_attention_mask=False)
+                    counts.extend(len(ids) for ids in encoded["input_ids"])
+                return counts, True
     except Exception as exc:
         log.warning(
             "Could not load the exact tokenizer for %s (%s); using a "
@@ -1800,6 +1844,7 @@ def _reset_rag_caches_after_fork() -> None:
     global _artifact_sha256_cache, _artifact_sha256_cache_lock
     global _bm25_cache, _bm25_cache_lock
     global _reranker_instances, _reranker_lock
+    global _embedding_token_counter_entry, _embedding_token_counter_lock
     _sync_vector_store_lock_facades()
     if "_artifact_sha256_cache" in globals():
         _artifact_sha256_cache = {}
@@ -1812,6 +1857,11 @@ def _reset_rag_caches_after_fork() -> None:
         # not safe to reuse in the child. Reload lazily on first use instead.
         _reranker_instances = {}
         _reranker_lock = _threading.Lock()
+    if "_embedding_token_counter_entry" in globals():
+        # Like the reranker, a tokenizer and a mutex inherited from a
+        # multithreaded parent are rebuilt lazily in the child.
+        _embedding_token_counter_entry = None
+        _embedding_token_counter_lock = _threading.Lock()
 
 
 def _reset_vector_store_locks_after_fork() -> None:
