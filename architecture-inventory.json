@@ -1011,6 +1011,13 @@
           "facade_roots": [
             "rag"
           ],
+          "module": "tests.test_embedding_init_skip",
+          "path": "tests/test_embedding_init_skip.py"
+        },
+        {
+          "facade_roots": [
+            "rag"
+          ],
           "module": "tests.test_embedding_policy",
           "path": "tests/test_embedding_policy.py"
         },
@@ -13975,7 +13982,7 @@
           ]
         }
       ],
-      "using_module_count": 77
+      "using_module_count": 78
     }
   },
   "hash_domains": {
@@ -63944,7 +63951,7 @@
     "top_level_function_count": 2920
   },
   "tracked_sources": {
-    "count": 493,
+    "count": 494,
     "groups": [
       {
         "count": 152,
@@ -64105,7 +64112,7 @@
         ]
       },
       {
-        "count": 298,
+        "count": 299,
         "name": "tests",
         "paths": [
           "tests/conftest.py",
@@ -64143,6 +64150,7 @@
           "tests/test_diagnose_ocr_dispositions_cli.py",
           "tests/test_diagnose_ocr_stages_cli.py",
           "tests/test_document_profiles.py",
+          "tests/test_embedding_init_skip.py",
           "tests/test_embedding_policy.py",
           "tests/test_embedding_runtime_compat.py",
           "tests/test_endpoint_policy.py",
