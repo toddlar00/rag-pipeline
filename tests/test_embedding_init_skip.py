@@ -4,14 +4,18 @@ The pinned Nomic remote ``from_pretrained`` builds every parameter as a real
 CPU tensor, runs its random initializers, and then copies the verified
 checkpoint in with ``load_state_dict(strict=False)``. ``_LocalEmbedFn``
 skips those discarded initializers for that one verified model and then
-proves, from the checkpoint header, that the checkpoint supplied every
-tensor.
+proves, from the checkpoint header, that every parameter belongs to the
+transformer and that the checkpoint declares each of the transformer's
+state-dict tensors at its exact shape. That header proof cannot see a
+non-persistent buffer or a temporary tensor initialized inside the skip
+window.
 
 The differential test is the oracle for that load path: it builds the model
 the way the remote code does on its own (a direct ``SentenceTransformer`` load
 of the verified bundle, random initialization included) and requires the
-production load to reproduce every state-dict tensor, every buffer and the
-embeddings of synthetic texts bit for bit. It runs in a child process, so the
+production load to reproduce every state-dict tensor, every buffer (including
+the non-persistent ones the header proof cannot see) and the embeddings of
+synthetic texts bit for bit. It runs in a child process, so the
 loaded Torch, the process-private Transformers module cache and roughly 2 GB
 of weights never leak into other tests, and it skips unless Torch, Sentence
 Transformers and a verified cached bundle are all present. No CI workflow
