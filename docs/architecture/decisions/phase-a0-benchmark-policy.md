@@ -15,8 +15,9 @@
   #137 (merged through `634c38b`), the Nomic contract-test pair passed on PR
   #136 (merged through `2f07510`), the oauthlib promotion pair passed on PR
   #139 (merged through `123bedb`), the tokenless-glyph rotation fix pair
-  passed on PR #140 (merged through `6baf14b`), and the table header-row
-  oracle fix pair at source `09340ed` is pending; exact-head human review
+  passed on PR #140 (merged through `6baf14b`), the table header-row oracle
+  fix pair passed on PR #145 (merged through `ce73b61`), and the soft-hyphen
+  item-seam fix pair at source `a7847ce` is pending; exact-head human review
   and separate R8 owner authorization are not recorded
 - **Milestone:** R10 prerequisite for the R8 pipeline-ownership move
 - **Report schema:** `phase-a0` v3
@@ -148,25 +149,26 @@ gate-only child `32153e9` and merge `376277c`
 Task 0.8 static-security pair at source `8891e1b` repeated it through
 gate-only child `1533164` and merge `e34103f`
 ([PR #107](https://github.com/toddlar00/rag-pipeline/pull/107)). The
-current replacement pair uses the clean table header-row oracle fix source
-`09340edd05d15ac537deebee17ff0c7550c2e82d` (tree
-`c687aa833f3a4edadd86dbb569ae917b7ecdf0a9`), a quality-check correction
+current replacement pair uses the clean soft-hyphen item-seam fix source
+`a7847ce01fa133a4da07c220f27db69b98b906e0` (tree
+`f8fd757f9314180cf855cb3ca86c988be20ff5c1`), a source-token fidelity fix
 after a series of one-domain dependency updates, on `main` after the merges
-of the tokenless-glyph rotation fix #140 (`6baf14b`), the oauthlib promotion
-#139 (`123bedb`), the Nomic contract test #136 (`2f07510`), the
-job-heartbeat hardening #137 (`634c38b`), the TOC glyph-leader fix #138
-(`a2c5629`), the documentation follow-up #135 (`9eb6f94`), the dependency
-series #122 to #130 (`1cffc58`), the fresh-OCR fidelity source `1ba9415`,
-the FlagEmbedding source `ddbef38`, the pytest-xdist source `ff5e64f`, the
-test-time economy source `365de1c` and the OCR-program and casebook-excerpt
-source `29ea76b`; together they changed Python source, CI configuration,
-`.gitattributes`, two test-tooling locks (pytest-xdist and execnet in
-`requirements-test.lock` and `requirements-smoke.lock`) and the
-FlagEmbedding record of `requirements-core.lock` and
-`requirements-full.lock`; the stacked dependency updates also change the
-vector-stores, Service/UI, test-audit tooling, ML/runtime, PDF/Docling
-(docling-core), promoted ML/runtime, promoted h2, promoted cryptography and
-promoted oauthlib records of their mapped locks, but no model lock. It supersedes the
+of the table header-row oracle fix #145 (`ce73b61`), the tokenless-glyph
+rotation fix #140 (`6baf14b`), the oauthlib promotion #139 (`123bedb`), the
+Nomic contract test #136 (`2f07510`), the job-heartbeat hardening #137
+(`634c38b`), the TOC glyph-leader fix #138 (`a2c5629`), the documentation
+follow-up #135 (`9eb6f94`), the dependency series #122 to #130 (`1cffc58`),
+the fresh-OCR fidelity source `1ba9415`, the FlagEmbedding source `ddbef38`,
+the pytest-xdist source `ff5e64f`, the test-time economy source `365de1c`
+and the OCR-program and casebook-excerpt source `29ea76b`; together they
+changed Python source, CI configuration, `.gitattributes`, two test-tooling
+locks (pytest-xdist and execnet in `requirements-test.lock` and
+`requirements-smoke.lock`) and the FlagEmbedding record of
+`requirements-core.lock` and `requirements-full.lock`; the stacked
+dependency updates also change the vector-stores, Service/UI, test-audit
+tooling, ML/runtime, PDF/Docling (docling-core), promoted ML/runtime,
+promoted h2, promoted cryptography and promoted oauthlib records of their
+mapped locks, but no model lock. It supersedes the
 earlier `1ae8502` pair, whose child `766feaf` passed both hosted Phase A0
 cells but whose dependency-light unit lanes failed at collection. Source
 `a15232d` then passed both hosted Phase A0 cells on [PR
@@ -339,6 +341,14 @@ promotion gate on [PR
 the native table row-count oracle count stacked Markdown header rows the way
 docling-core 2.99 exports them; it changes no dependency or lock and
 supersedes the `c2d7b57` pair.
+The `09340ed` pair (gate-only child `1353ffa`) passed the hosted CI
+promotion gate on [PR
+#145](https://github.com/toddlar00/rag-pipeline/pull/145), which merged into
+`main` as `ce73b61`. The soft-hyphen item-seam fix source `a7847ce` joins a
+cited item that ends in a hyphen plus soft hyphen to the next cited item
+exactly where the fidelity audit would otherwise fuse the two items'
+boundary tokens; it changes no dependency or lock and supersedes the
+`09340ed` pair.
 Its Windows and
 Linux CPython 3.12.13 reports were
 generated after the same strict hash-locked synchronization and
@@ -529,15 +539,16 @@ then the stacked Nomic contract-test source `28ba800`,
 then the stacked Nomic contract-test source `8e0b2a6`,
 then the stacked oauthlib promotion source `0333947`,
 then the stacked tokenless-glyph rotation fix source `c2d7b57`,
-then the stacked table header-row oracle fix source `09340ed`.
+then the stacked table header-row oracle fix source `09340ed`,
+then the stacked soft-hyphen item-seam fix source `a7847ce`.
 Its Windows report
-is 51,084 bytes (file SHA-256
-`b265ea7963e74524a263f7a470615213e38a0d63069669b0b57c6d6ce2b4f6d7`;
+is 51,082 bytes (file SHA-256
+`0da37bf98f6a132a302a339f7b647a719ea739621063b723b766d0eb0da6ee17`;
 embedded report SHA-256
-`2d00d647bec856bb5d45df4e0d571df0e8377f092358bc66faf1625bf46dadec`).
-Its Linux report is 50,483 bytes (file SHA-256
-`bae04198e2f3ccb4ae0b580ae2273a4245f1d3158299d1eebb9dadd2ee94b4d5`;
+`0a80fbbfa6b8cf6c98f886bf5d24aa6f81a150cc4fb3aca092a541b2d84df78e`).
+Its Linux report is 50,478 bytes (file SHA-256
+`99be1ae4e6d29f431d8aadf3340d44a0cba386f3cbf963fb9d8af20e9d88bfd5`;
 embedded report SHA-256
-`fdb133b6e754dae211be617121ccf36d745e9fb8e417e092c59d64fd7c30df2f`).
+`2f417fbba0a6acbc9c5164bc721c39768a5c921e1c1a88fe639563e626f1f47b`).
 Both use CPython 3.12.13 and pass their complete local same-platform 9×5
 comparisons. Hosted promotion remains pending.

@@ -1811,6 +1811,14 @@ promotion gate on [PR
 the native table row-count oracle count stacked Markdown header rows the way
 docling-core 2.99 exports them; it changes no dependency or lock and
 supersedes the `c2d7b57` pair.
+The `09340ed` pair (gate-only child `1353ffa`) passed the hosted CI
+promotion gate on [PR
+#145](https://github.com/toddlar00/rag-pipeline/pull/145), which merged into
+`main` as `ce73b61`. The soft-hyphen item-seam fix source `a7847ce` joins a
+cited item that ends in a hyphen plus soft hyphen to the next cited item
+exactly where the fidelity audit would otherwise fuse the two items'
+boundary tokens; it changes no dependency or lock and supersedes the
+`09340ed` pair.
 Its Windows/Linux
 pair (independent local same-platform comparisons passed) is that branch's
 candidate; its hosted checks and exact-SHA record are pending, and the
