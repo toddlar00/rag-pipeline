@@ -67,20 +67,6 @@ def oracle_tokens(text):
     return retrieval_core._LEGAL_WORD_RE.findall(normalized) + canonical
 
 
-# A substring that every match of each canonical pass contains. When it is
-# absent from the string a pass receives, that pass cannot change the string.
-REQUIRED_ALIAS_LITERALS = (
-    "federal", "civ", None, None, "ct", "supp", "supp", "supp", "3d", "2d")
-REQUIRED_INLINE_LITERALS = (
-    ("hyphen_wrap", ORACLE_HYPHEN_WRAP, "-"),
-    ("hyphen_wrap", ORACLE_HYPHEN_WRAP, "\n"),
-    ("title_usc", ORACLE_TITLE_USC, "title"),
-    ("title_usc", ORACLE_TITLE_USC, "united"),
-    ("thousands", ORACLE_THOUSANDS, ","),
-    ("subsection", retrieval_core._LEGAL_SUBSECTION_RE.pattern, "("),
-    ("usd", ORACLE_USD, "$"),
-)
-
 # Line-wrap hyphen joins and soft-hyphen removal run before the other passes,
 # so they can create a literal that the raw text does not contain.
 _SPLIT_LITERALS = (
@@ -156,12 +142,28 @@ def _split_template_texts(rng, atoms):
     return texts
 
 
+def _respaced_template_texts(rng):
+    """Templates with every space replaced by other whitespace, re-cased."""
+    whitespace = (
+        " ", "  ", "", "\n", "\t", "\r\n", "\x0b", "\x0c", "\u00a0", "\u3000",
+        "\u2028")
+    texts = []
+    for template in _MATCH_TEMPLATES:
+        for _ in range(20):
+            text = "".join(
+                rng.choice(whitespace) if char == " " else char
+                for char in template)
+            texts.append(rng.choice((str.lower, str.upper, str.title))(text))
+    return texts
+
+
 @functools.cache
 def fuzz_texts():
     """Seeded adversarial strings shared by every property in this module."""
     rng = random.Random(20260930)
     atoms = _FUZZ_ATOMS + _split_literal_atoms()
     texts = _split_template_texts(rng, atoms)
+    texts.extend(_respaced_template_texts(rng))
     texts.extend(
         "".join(rng.choice(atoms) for _ in range(rng.randint(1, 40)))
         for _ in range(16_000)
@@ -324,21 +326,39 @@ def _oracle_passes():
 
 
 def _required_literal_cases():
-    cases = [
-        (f"alias_{index}", pattern.pattern, literal)
-        for index, ((pattern, _), literal) in enumerate(zip(
-            retrieval_core._LEGAL_SEARCH_ALIASES, REQUIRED_ALIAS_LITERALS,
-            strict=True))
-        if literal is not None
-    ]
-    cases.extend(REQUIRED_INLINE_LITERALS)
+    """Each guarded pass's canonical and executed pattern with its guard.
+
+    The inline guards mirror the literals tested in the analyzer's body.
+    """
+    pairs = []
+    for index, ((canonical, _), (guard, executed, _)) in enumerate(zip(
+            retrieval_core._LEGAL_SEARCH_ALIASES,
+            retrieval_core._LEGAL_ALIAS_PLAN, strict=True)):
+        if guard is not None:
+            pairs.append((f"alias_{index}", canonical, executed, guard))
+    pairs.extend([
+        ("hyphen_wrap", re.compile(ORACLE_HYPHEN_WRAP),
+         retrieval_core._LEGAL_HYPHEN_WRAP_RE, "-"),
+        ("title_usc", re.compile(ORACLE_TITLE_USC),
+         retrieval_core._LEGAL_TITLE_USC_RE, "united"),
+        ("thousands", re.compile(ORACLE_THOUSANDS),
+         retrieval_core._LEGAL_THOUSANDS_RE, ","),
+        ("subsection", retrieval_core._LEGAL_SUBSECTION_RE,
+         retrieval_core._LEGAL_SUBSECTION_RE, "("),
+        ("usd", re.compile(ORACLE_USD), retrieval_core._LEGAL_USD_RE, "$"),
+    ])
+    cases = []
+    for name, canonical, executed, guard in pairs:
+        cases.append((name, "canonical", canonical.pattern, guard))
+        if executed.pattern != canonical.pattern:
+            cases.append((name, "executed", executed.pattern, guard))
     return cases
 
 
 def test_seeded_fuzz_exercises_every_oracle_pass():
     passes = _oracle_passes()
     required = {}
-    for name, _, literal in _required_literal_cases():
+    for name, _, _, literal in _required_literal_cases():
         required.setdefault(name, []).append(literal)
     changed = dict.fromkeys((name for name, _ in passes), 0)
     # Changes made although a required literal was absent from the folded
@@ -368,11 +388,12 @@ def test_seeded_fuzz_exercises_every_oracle_pass():
 @pytest.mark.parametrize(
     ("name", "source", "literal"),
     [
-        pytest.param(name, source, literal, id=f"{name}-{ascii(literal)}")
-        for name, source, literal in _required_literal_cases()
+        pytest.param(
+            name, source, literal, id=f"{name}-{role}-{ascii(literal)}")
+        for name, role, source, literal in _required_literal_cases()
     ],
 )
-def test_every_canonical_match_contains_its_required_literal(
+def test_every_match_of_a_guarded_pass_contains_its_guard_literal(
         name, source, literal):
     pattern = re.compile(source)
     matches = [
@@ -382,6 +403,43 @@ def test_every_canonical_match_contains_its_required_literal(
 
     assert len(matches) >= 20, name
     assert [ascii(match) for match in matches if literal not in match] == []
+
+
+def test_alias_plan_follows_the_canonical_aliases_in_order():
+    aliases = retrieval_core._LEGAL_SEARCH_ALIASES
+    guards = retrieval_core._LEGAL_ALIAS_GUARDS
+    plan = retrieval_core._LEGAL_ALIAS_PLAN
+
+    assert len(plan) == len(aliases) == len(guards)
+    for (guard, pattern, replacement), (canonical, expected), declared in zip(
+            plan, aliases, guards, strict=True):
+        assert guard == declared
+        assert replacement is expected
+        assert pattern is canonical
+
+
+@pytest.mark.parametrize(
+    ("compiled", "source"),
+    [
+        pytest.param(
+            retrieval_core._LEGAL_HYPHEN_WRAP_RE, ORACLE_HYPHEN_WRAP,
+            id="hyphen_wrap"),
+        pytest.param(
+            retrieval_core._LEGAL_TITLE_USC_RE, ORACLE_TITLE_USC,
+            id="title_usc"),
+        pytest.param(
+            retrieval_core._LEGAL_THOUSANDS_RE, ORACLE_THOUSANDS,
+            id="thousands"),
+        pytest.param(
+            retrieval_core._LEGAL_SUBSECTION_PART_RE, ORACLE_SUBSECTION_PART,
+            id="subsection_part"),
+        pytest.param(retrieval_core._LEGAL_USD_RE, ORACLE_USD, id="usd"),
+    ],
+)
+def test_precompiled_inline_patterns_keep_their_oracle_source(
+        compiled, source):
+    assert compiled.pattern == source
+    assert compiled.flags == re.compile(source).flags
 
 
 def test_analyzer_names_stay_shared_by_rag_and_offline_retrieval():
@@ -397,7 +455,7 @@ def test_analyzer_names_stay_shared_by_rag_and_offline_retrieval():
     assert (offline_retrieval._legal_search_tokens
             is retrieval_core._legal_search_tokens)
     assert isinstance(aliases, tuple)
-    assert len(aliases) == len(REQUIRED_ALIAS_LITERALS)
+    assert len(aliases) == 10
     assert all(
         isinstance(pattern, re.Pattern) and isinstance(replacement, str)
         for pattern, replacement in aliases)

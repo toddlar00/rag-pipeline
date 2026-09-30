@@ -183,6 +183,26 @@ _LEGAL_SUBSECTION_RE = re.compile(
     r"\b(\d+[a-z]?)\s*((?:\(\s*[a-z0-9]+\s*\))+)")
 _LEGAL_CITATION_RE = re.compile(
     r"\b(\d+)\s+(us|sct|f3d|f2d|fsupp3d|fsupp2d|fsupp)\s+(\d+)\b")
+_LEGAL_HYPHEN_WRAP_RE = re.compile(r"(?<=[a-z])-[ \t]*\r?\n[ \t]*(?=[a-z])")
+_LEGAL_TITLE_USC_RE = re.compile(
+    r"\btitle\s+(\d+)\s+of\s+the\s+united\s+states\s+code\b")
+_LEGAL_THOUSANDS_RE = re.compile(r"(?<=\d),(?=\d{3}(?:\D|$))")
+_LEGAL_SUBSECTION_PART_RE = re.compile(r"[a-z0-9]+")
+_LEGAL_USD_RE = re.compile(r"\$\s*(\d+(?:\.\d+)?)")
+# The legal analyzer skips a regex pass when a substring that every match of
+# the pass contains is absent from the string the pass receives: such a pass
+# cannot change that string, so skipping it is exact. Guards are tested
+# against the evolving string because earlier passes (hyphen joins,
+# soft-hyphen removal, replacements) can create a literal the raw text lacks.
+# _LEGAL_ALIAS_GUARDS holds that literal for each _LEGAL_SEARCH_ALIASES entry,
+# or None when no selective literal exists.
+_LEGAL_ALIAS_GUARDS = (
+    "federal", "civ", None, None, "ct", "supp", "supp", "supp", "3d", "2d")
+_LEGAL_ALIAS_PLAN = tuple(
+    (guard, pattern, replacement)
+    for guard, (pattern, replacement) in zip(
+        _LEGAL_ALIAS_GUARDS, _LEGAL_SEARCH_ALIASES, strict=True)
+)
 _LEXICAL_METADATA_FIELDS = (
     "primary_case", "case_names", "section_path", "headings",
     "chapter_title", "context", "cross_references",
@@ -196,17 +216,18 @@ def _normalize_legal_search_text(text: str) -> str:
     normalized = normalized.replace("\u00ad", "")
     # Join words broken only by PDF line wrapping while retaining ordinary
     # in-line hyphens as token boundaries.
-    normalized = re.sub(
-        r"(?<=[a-z])-[ \t]*\r?\n[ \t]*(?=[a-z])", "", normalized)
+    if "-" in normalized:
+        normalized = _LEGAL_HYPHEN_WRAP_RE.sub("", normalized)
     normalized = normalized.replace("§§", " sections ").replace("§", " section ")
-    normalized = re.sub(
-        r"\btitle\s+(\d+)\s+of\s+the\s+united\s+states\s+code\b",
-        r"\1 usc", normalized)
-    for pattern, replacement in _LEGAL_SEARCH_ALIASES:
-        normalized = pattern.sub(replacement, normalized)
+    if "united" in normalized:
+        normalized = _LEGAL_TITLE_USC_RE.sub(r"\1 usc", normalized)
+    for guard, pattern, replacement in _LEGAL_ALIAS_PLAN:
+        if guard is None or guard in normalized:
+            normalized = pattern.sub(replacement, normalized)
     # Thousands separators should not make equivalent dollar thresholds use
     # different lexical terms (for example, $75,000 and 75000).
-    normalized = re.sub(r"(?<=\d),(?=\d{3}(?:\D|$))", "", normalized)
+    if "," in normalized:
+        normalized = _LEGAL_THOUSANDS_RE.sub("", normalized)
     return normalized
 
 
@@ -220,18 +241,20 @@ def _legal_search_tokens(text: str) -> list[str]:
     """
     normalized = _normalize_legal_search_text(text)
     canonical = []
-    for match in _LEGAL_SUBSECTION_RE.finditer(normalized):
-        subsections = re.findall(r"[a-z0-9]+", match.group(2))
-        canonical.append(
-            match.group(1) + "".join(f"({part})" for part in subsections))
+    if "(" in normalized:
+        for match in _LEGAL_SUBSECTION_RE.finditer(normalized):
+            subsections = _LEGAL_SUBSECTION_PART_RE.findall(match.group(2))
+            canonical.append(
+                match.group(1) + "".join(f"({part})" for part in subsections))
     canonical.extend(
         f"{volume}_{reporter}_{page}"
         for volume, reporter, page in _LEGAL_CITATION_RE.findall(normalized)
     )
-    canonical.extend(
-        f"usd_{amount.replace('.', '_')}"
-        for amount in re.findall(r"\$\s*(\d+(?:\.\d+)?)", normalized)
-    )
+    if "$" in normalized:
+        canonical.extend(
+            f"usd_{amount.replace('.', '_')}"
+            for amount in _LEGAL_USD_RE.findall(normalized)
+        )
     return _LEGAL_WORD_RE.findall(normalized) + canonical
 
 
