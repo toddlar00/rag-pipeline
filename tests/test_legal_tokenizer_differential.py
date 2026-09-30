@@ -107,8 +107,8 @@ _FUZZ_ATOMS = (
 _MATCH_TEMPLATES = (
     "Federal Rules of Civil Procedure", "Fed. R. Civ. P.", "U.S.C.", "U.S.",
     "S. Ct.", "F. Supp. 3d", "F. Supp. 2d", "F. Supp.", "F.3d", "F.2d",
-    "Title 28 of the United States Code", "\u00a7 12", "12(b)(6)",
-    "$75,000", "326 U.S. 310",
+    "F. 3d", "F. 2d", "Title 28 of the United States Code", "\u00a7 12",
+    "12(b)(6)", "$75,000", "326 U.S. 310",
 )
 
 
@@ -125,7 +125,10 @@ def _split_literal_atoms():
 
 
 def _split_template_texts(rng, atoms):
-    """Every template split once by a soft hyphen or line-wrap hyphen."""
+    """Every template split once by a soft hyphen or line-wrap hyphen.
+
+    Each split appears alone and inside three random contexts.
+    """
     texts = []
     for template in _MATCH_TEMPLATES:
         for index in range(1, len(template)):
@@ -134,11 +137,13 @@ def _split_template_texts(rng, atoms):
             if head[-1].isalpha() and tail[0].isalpha():
                 joiners.extend(("-\n", "- \r\n\t"))
             for joiner in joiners:
-                prefix = "".join(
-                    rng.choice(atoms) for _ in range(rng.randint(0, 3)))
-                suffix = "".join(
-                    rng.choice(atoms) for _ in range(rng.randint(0, 3)))
-                texts.append(f"{prefix} {head}{joiner}{tail} {suffix}")
+                texts.append(f" {head}{joiner}{tail} ")
+                for _ in range(3):
+                    prefix = "".join(
+                        rng.choice(atoms) for _ in range(rng.randint(0, 3)))
+                    suffix = "".join(
+                        rng.choice(atoms) for _ in range(rng.randint(0, 3)))
+                    texts.append(f"{prefix} {head}{joiner}{tail} {suffix}")
     return texts
 
 
@@ -362,10 +367,12 @@ def test_seeded_fuzz_exercises_every_oracle_pass():
         required.setdefault(name, []).append(literal)
     changed = dict.fromkeys((name for name, _ in passes), 0)
     # Changes made although a required literal was absent from the folded
-    # input, so an earlier pass must have created it.
+    # input, so an earlier pass must have created it. Only literals with a
+    # letter can be created, by joining a split word or by a replacement.
     created = dict.fromkeys(
         (name for name, literals in required.items()
-         if any(literal.isalpha() for literal in literals)), 0)
+         if any(char.isalpha() for literal in literals for char in literal)),
+        0)
     diverged = 0
     for original in fuzz_texts():
         folded = unicodedata.normalize("NFKC", original).casefold()
