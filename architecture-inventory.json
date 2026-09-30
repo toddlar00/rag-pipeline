@@ -1623,7 +1623,7 @@
             "target": "_markdown_validation.validation_receipt_is_complete"
           },
           {
-            "locations_sha256": "9f9e1cd798ea76fd70f8361a5201fb4bd4c447bfc2f654491240801c359df00c",
+            "locations_sha256": "9cef825a42c8c1ab9ef6ffffcee67028da634e4b96a93f14de67d12f20215190",
             "occurrence_count": 1,
             "operations": [
               "setattr"
@@ -1637,7 +1637,7 @@
             "target": "_model_artifacts.configure_transformers_dynamic_module_cache"
           },
           {
-            "locations_sha256": "d839e51a0a15746fb187a06efd96435b8f1064d759132447358f22f4a9d44b5c",
+            "locations_sha256": "bf4ef5a78cbebccc47243f05cb56476fc868da3aa24814ea0c6b33bf2fcf88f5",
             "occurrence_count": 4,
             "operations": [
               "setattr"
@@ -1651,7 +1651,7 @@
             "target": "_model_artifacts.model_artifact"
           },
           {
-            "locations_sha256": "58445d3854b5bd84eece801c5d81a264f2efd9784bacbc5dabdd0636799123df",
+            "locations_sha256": "a62c5aa987f95a66eafd70eb3e017839be11f100c703ad28dd2cba669efedd6b",
             "occurrence_count": 2,
             "operations": [
               "setattr"
@@ -1669,7 +1669,7 @@
             "target": "_model_artifacts.verified_docling_artifact_directory"
           },
           {
-            "locations_sha256": "a0ad47b5ab2bbc1ab4fb12114aa0a13ea0a41302b6d98a43114f4ad4a4018936",
+            "locations_sha256": "de1fc800995d4a3267241d1a1e5e9a02f6d748e4b65be13e9dbd16a1804a2ade",
             "occurrence_count": 1,
             "operations": [
               "setattr"
@@ -3617,7 +3617,7 @@
             "target": "_model_artifact_lock_sha256"
           },
           {
-            "locations_sha256": "49ea4d2d956c7e53255c28867e7f0095756b7ff237f05365ab07eface04edb54",
+            "locations_sha256": "b479d5a0a2c5d1ef1f85ac1acf33446a3b29931352818eb871ea4dc1c359bf10",
             "occurrence_count": 10,
             "operations": [
               "setattr"
@@ -3831,7 +3831,7 @@
             "target": "_pipeline_publication_complete"
           },
           {
-            "locations_sha256": "26cd6333f63b30807995f3443a194b7745077c410a0c9105acf106b393c9edb8",
+            "locations_sha256": "33d36b6fe504d3309c9dd4875e6d901193ec4f7e0b56e18dc7ad8b7cc01eadde",
             "occurrence_count": 9,
             "operations": [
               "setattr"
@@ -4209,7 +4209,7 @@
             "target": "_rerank"
           },
           {
-            "locations_sha256": "eddf02ca50a160bf1fe605a7f1809fe946f20ca9205388d81d20bd6bd8625d8d",
+            "locations_sha256": "8a0000a6b1a29fa23f875e089fb46acef1df8b6750893a0cb6f2bc92478bd547",
             "occurrence_count": 4,
             "operations": [
               "setattr"
@@ -4667,7 +4667,7 @@
             "target": "_write_artifact_completion"
           },
           {
-            "locations_sha256": "ce66bc6341b6dd7da8b37d52bab55c2c12f8e607c0f3b67b93ed1cba25796d68",
+            "locations_sha256": "85754bcbe0916d6b97aad13fee44552c224d67410f573ef88f1ebe2ea740af96",
             "occurrence_count": 1,
             "operations": [
               "setattr"
@@ -5943,7 +5943,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "771882d607cf2608646b875f88274fd46d9fd6b3566898689b2cba75d877f5ab",
+          "locations_sha256": "7ea6c5b23e49ef7109751c65fd6a0ee3e2f73ef40d742b708b426c8957fb9aca",
           "name": "_ZS_LABELS",
           "occurrence_count": 1,
           "paths": [
@@ -7646,7 +7646,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "78320889f0ad6eb7bde4b299f5374871a137f863a0184b96e8d397eb3b558415",
+          "locations_sha256": "249091d18e62717239ddd57babdef0620f8941386a01eb4702c4229a993f8320",
           "name": "_configure_docling_model_artifacts",
           "occurrence_count": 5,
           "paths": [
@@ -7862,7 +7862,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "bdc888dfe8f01f632d19f064baba83a8a970844bde51d26789b818e45da345d2",
+          "locations_sha256": "f6ae24109547e6171f779ca4749463baa802f6a783503fe6eb3ff33271a69117",
           "name": "_count_embedding_text_tokens",
           "occurrence_count": 3,
           "paths": [
@@ -8525,7 +8525,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "54f1eb39d6746e13b12461873a54aaa0e04d5e76abe101de27be6e9f6b8fbc98",
+          "locations_sha256": "d36f99d2e69f1521d2f198a825f9a3ca451d85becf200e84a78fc662ca7cbff2",
           "name": "_get_embedding_fn",
           "occurrence_count": 10,
           "paths": [
@@ -8549,7 +8549,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "7da9761d749203db624bd327d59b8556c7dfb317de882a39a2e046cfd6c8369d",
+          "locations_sha256": "c40c51db087138b9e0a043db1108da338270b8bbb5fa704ce71be0117aea456f",
           "name": "_get_reranker",
           "occurrence_count": 6,
           "paths": [
@@ -9951,7 +9951,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "2e0281d61a38e0e3a1271942369cfff82f2c4889f2d48c7f30cbbd347edcefa5",
+          "locations_sha256": "9f0dccade2861309917074edba2ed1760aad41e6e8b7760d6f709f52403e534c",
           "name": "_model_artifacts",
           "occurrence_count": 8,
           "paths": [
@@ -9975,7 +9975,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "fcbb16b2524d6400cf0ba27135dfa44d6a15bd67c8293dfb3796cbec20a7aba0",
+          "locations_sha256": "6c015d0713437edfbea429ad52f6bc2937b7815f03c60c61d5833cb17ea38631",
           "name": "_model_loader_source",
           "occurrence_count": 4,
           "paths": [
@@ -10591,7 +10591,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "46fe945551d42d0c508ec11061bad1dfab55aaf9f3ce5a1c65db7c2a98bb1249",
+          "locations_sha256": "3202161ce40acfdcb6a9d0cd842e9c3ba97dbafc84bdf6118fc4e6ac71d0fc6c",
           "name": "_pin_docling_layout_revision",
           "occurrence_count": 1,
           "paths": [
@@ -13985,7 +13985,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "abc1e1fef2513484b791b84d4d89715e9936452f3a78007de58357aa7ed07e31",
+          "locations_sha256": "e9bb2f2400c8bff25239317e8a97edf5da2d7509cc505acf5f12f7b842a59a29",
           "name": "_zeroshot_classify",
           "occurrence_count": 1,
           "paths": [
@@ -33373,7 +33373,7 @@
             "scope": "nested"
           }
         ],
-        "definition_locations_sha256": "43841617b551a873bd66b8c3b561f18428e47e52b366c51ca40c6bdd3968e023",
+        "definition_locations_sha256": "2659be604dcadad51a2679c7b19d68768ecfb08c1e705e504f4261d509fbe439",
         "function_count": 67,
         "functions": [
           {
@@ -33781,9 +33781,9 @@
         ],
         "import_edges": [],
         "module": "model_artifacts",
-        "non_blank_lines": 2217,
+        "non_blank_lines": 2219,
         "path": "model_artifacts.py",
-        "physical_lines": 2412,
+        "physical_lines": 2414,
         "top_level_function_count": 59
       },
       {
@@ -61366,7 +61366,7 @@
       {
         "class_count": 0,
         "classes": [],
-        "definition_locations_sha256": "be68fbd5e22038840ab3d7e9c40b4805c3fc5075b1deb8d1e6cf7f6dd0a898d1",
+        "definition_locations_sha256": "ca92da7705688cb1a2320b38ee65e5833eba0754e17af1cc77a1899bb19db7e3",
         "function_count": 7,
         "functions": [
           {
@@ -61414,9 +61414,9 @@
         ],
         "import_edges": [],
         "module": "tools.check_static_security",
-        "non_blank_lines": 296,
+        "non_blank_lines": 301,
         "path": "tools/check_static_security.py",
-        "physical_lines": 316,
+        "physical_lines": 321,
         "top_level_function_count": 7
       },
       {
@@ -63959,7 +63959,7 @@
         "top_level_function_count": 2
       }
     ],
-    "physical_line_count": 130325,
+    "physical_line_count": 130332,
     "source_groups": [
       "production",
       "tools",

@@ -7,7 +7,9 @@ and absolute paths never reach the console or the retained envelope.
 Deliberate dangerous constructs inside tests (exec, pickle, bind-all, and
 suspicious-import probes that exist to prove rejection paths) are exempt
 by declared rule scope, and everything else is suppressed only through
-narrow, counted, expiring policy records.
+narrow, counted, expiring policy records. Ruff runs isolated from project
+and user configuration and ignores inline ``noqa``, file-level, and range
+suppression comments, so neither can hide a finding from this gate.
 """
 
 from __future__ import annotations
@@ -137,6 +139,11 @@ def _run_ruff(rules: list[str], root: Path) -> list[dict[str, Any]]:
         "-m",
         "ruff",
         "check",
+        # Only this policy file may accept a finding: ignore project and
+        # user ruff configuration (per-file ignores, excludes) and every
+        # in-source suppression comment.
+        "--isolated",
+        "--ignore-noqa",
         "--select",
         ",".join(rules),
         "--output-format",
@@ -219,9 +226,7 @@ def evaluate(
     for finding in findings:
         rule = finding["rule"]
         path = finding["path"]
-        if rule in test_exempt and (
-            path.startswith("tests/") or path.startswith("evaluation/")
-        ):
+        if rule in test_exempt and path.startswith("tests/"):
             continue
         row = dict(finding)
         key = (rule, path)

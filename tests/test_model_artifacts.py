@@ -77,8 +77,10 @@ class _FakeResponse:
 
 
 def _git_blob_sha1(payload):
-    return hashlib.sha1(  # noqa: S324 - Git object identity by design.
-        b"blob " + str(len(payload)).encode("ascii") + b"\0" + payload
+    # Git object identity by design, matching the Hub's blob hash.
+    return hashlib.sha1(
+        b"blob " + str(len(payload)).encode("ascii") + b"\0" + payload,
+        usedforsecurity=False,
     ).hexdigest()
 
 

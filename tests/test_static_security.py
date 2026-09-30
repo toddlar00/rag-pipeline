@@ -142,6 +142,73 @@ def test_per_rule_negative_fixtures_stay_quiet(tmp_path):
     assert raw == []
 
 
+_MD5_SOURCE = "import hashlib\nhashlib.md5(payload)\n"
+
+
+@pytest.mark.parametrize("source", (
+    "import hashlib\nhashlib.md5(payload)  # noqa: S324\n",
+    "import hashlib\nhashlib.md5(payload)  # noqa\n",
+    "# ruff: noqa: S324\n" + _MD5_SOURCE,
+    "# ruff: noqa\n" + _MD5_SOURCE,
+    "# flake8: noqa\n" + _MD5_SOURCE,
+    (
+        "import hashlib\n"
+        "# ruff: disable[S324]\n"
+        "hashlib.md5(payload)\n"
+        "# ruff: enable[S324]\n"
+    ),
+), ids=(
+    "inline-code", "inline-blanket", "file-code", "file-blanket",
+    "flake8-file-blanket", "range",
+))
+def test_inline_suppression_comments_cannot_bypass_the_gate(tmp_path, source):
+    (tmp_path / "bypass.py").write_text(source, encoding="utf-8")
+
+    raw = check_static_security._run_ruff(["S324"], tmp_path)
+
+    assert [item["code"] for item in raw] == ["S324"]
+
+
+def test_project_ruff_config_cannot_bypass_the_gate(tmp_path):
+    (tmp_path / "pyproject.toml").write_text(
+        "[tool.ruff]\n"
+        'extend-exclude = ["excluded.py"]\n'
+        "\n"
+        "[tool.ruff.lint.per-file-ignores]\n"
+        '"ignored.py" = ["S324"]\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "nested").mkdir()
+    (tmp_path / "nested" / "ruff.toml").write_text(
+        'extend-exclude = ["hidden.py"]\n', encoding="utf-8"
+    )
+    for name in ("excluded.py", "ignored.py", "nested/hidden.py"):
+        (tmp_path / name).write_text(_MD5_SOURCE, encoding="utf-8")
+
+    raw = check_static_security._run_ruff(["S324"], tmp_path)
+
+    assert sorted(
+        (Path(item["filename"]).resolve().relative_to(tmp_path.resolve())
+         .as_posix(), item["code"])
+        for item in raw
+    ) == [
+        ("excluded.py", "S324"),
+        ("ignored.py", "S324"),
+        ("nested/hidden.py", "S324"),
+    ]
+
+
+def test_explicit_non_security_digest_marking_is_accepted(tmp_path):
+    (tmp_path / "marked.py").write_text(
+        "import hashlib\n"
+        "hashlib.md5(payload, usedforsecurity=False)\n"
+        "hashlib.sha1(payload, usedforsecurity=False)\n",
+        encoding="utf-8",
+    )
+
+    assert check_static_security._run_ruff(["S324"], tmp_path) == []
+
+
 def test_unaccepted_finding_fails():
     errors, reported = check_static_security.evaluate(
         [_finding()], _policy(), today=_TODAY
@@ -203,6 +270,7 @@ def test_exempt_rules_skip_test_paths_only():
         _finding(rule="S301", path="tests/test_something.py"),
         _finding(rule="S301", path="module.py"),
         _finding(rule="S324", path="tests/test_other.py"),
+        _finding(rule="S301", path="evaluation/fixture.py"),
     ]
 
     errors, reported = check_static_security.evaluate(
@@ -212,8 +280,9 @@ def test_exempt_rules_skip_test_paths_only():
     assert errors == [
         "module.py:10: S301 is not accepted by policy",
         "tests/test_other.py:10: S324 is not accepted by policy",
+        "evaluation/fixture.py:10: S301 is not accepted by policy",
     ]
-    assert len(reported) == 2
+    assert len(reported) == 3
 
 
 @pytest.mark.parametrize("mutate", (
