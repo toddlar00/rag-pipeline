@@ -42813,7 +42813,7 @@
             "scope": "top_level"
           }
         ],
-        "definition_locations_sha256": "086bfd6e20c053a0ed619aa4594e9df9548c9b83be5159805ab8338c332126f8",
+        "definition_locations_sha256": "32334c17b2e74e5fe118ec40ddb797e8f291a86553f3210dfce2a9928058709f",
         "function_count": 29,
         "functions": [
           {
@@ -43079,9 +43079,9 @@
           }
         ],
         "module": "ocr_review_crop_packs",
-        "non_blank_lines": 447,
+        "non_blank_lines": 448,
         "path": "ocr_review_crop_packs.py",
-        "physical_lines": 509,
+        "physical_lines": 510,
         "top_level_function_count": 7
       },
       {
@@ -63050,7 +63050,7 @@
             "scope": "top_level"
           }
         ],
-        "definition_locations_sha256": "a336a9c638f3106cf5b1a489fea1c0e54a89ae0a9b4bc68baea93257ef69cd38",
+        "definition_locations_sha256": "37ec9bdd57846d957b0c5ee500d2cc497bfbc88ab9b80a4529bbc8427009cc1a",
         "function_count": 2,
         "functions": [
           {
@@ -63123,9 +63123,9 @@
           }
         ],
         "module": "tools.review_ocr",
-        "non_blank_lines": 137,
+        "non_blank_lines": 141,
         "path": "tools/review_ocr.py",
-        "physical_lines": 152,
+        "physical_lines": 156,
         "top_level_function_count": 1
       },
       {
@@ -63935,7 +63935,7 @@
         "top_level_function_count": 2
       }
     ],
-    "physical_line_count": 130322,
+    "physical_line_count": 130327,
     "source_groups": [
       "production",
       "tools",

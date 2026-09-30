@@ -1,5 +1,6 @@
 """Opt-in archive launcher/UI composition, with inert host and render doubles."""
 
+import importlib
 import sys
 from types import SimpleNamespace as NS
 
@@ -130,6 +131,30 @@ def test_archive_close_receives_remaining_shared_shutdown_budget(archive_launch,
     monkeypatch.setattr(review_ocr, "time", NS(monotonic=lambda: next(clock)))
     assert review_ocr.main(args) == 0
     assert c.pack_timeouts == [expected]
+
+
+@pytest.mark.parametrize("execute", [False, True])
+def test_archive_close_budget_is_bounded_when_rounded_remaining_time_exceeds_it(archive_launch, monkeypatch, execute):
+    c = archive_launch
+    # Same-tick readings straddling a binary precision boundary round upward.
+    now = 131071.999
+    assert (now + 40.) - now > 40.
+    args = c.args + ["--crop-review-pack-dir", str(c.pack_root)]
+    if execute:
+        args.append("--enable-ocr-execution")
+    # Replace the launcher clock capability only; pytest keeps its real clock.
+    monkeypatch.setattr(review_ocr, "time", NS(monotonic=lambda: now))
+    assert review_ocr.main(args) == 0
+    assert c.pack_timeouts == [40.]
+    closing = (["pack-revoke", "coordinator-close", "pack-close", "app-close"] if execute
+               else ["pack-revoke", "pack-close", "app-close"])
+    assert c.events[-len(closing):] == closing
+
+
+def test_launcher_archive_close_budget_matches_service_bound():
+    # A local copy keeps the default launcher from importing the pack service.
+    service = importlib.import_module("ocr_review_crop_packs")
+    assert review_ocr._ARCHIVE_CLOSE_SECONDS == service.MAX_CLOSE_SECONDS
 
 
 def test_archive_option_does_not_bypass_token_validation(archive_launch, monkeypatch):

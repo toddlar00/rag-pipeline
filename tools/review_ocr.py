@@ -14,6 +14,9 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+# The crop archive service's close bound, kept local so the default launch
+# never imports that service.
+_ARCHIVE_CLOSE_SECONDS = 40.0
 
 
 class _Parser(argparse.ArgumentParser):
@@ -113,7 +116,8 @@ def main(argv=None) -> int:
             finally:
                 # Revoke approval/new starts and supervise worker shutdown before
                 # closing the UI. Attempt both cleanups even if either fails.
-                archive_deadline = time.monotonic() + 40.0
+                # Float subtraction at a clock precision boundary can exceed the budget.
+                archive_deadline = time.monotonic() + _ARCHIVE_CLOSE_SECONDS
                 try:
                     try:
                         if pack_service is not None:
@@ -126,8 +130,8 @@ def main(argv=None) -> int:
                                         or shutdown.get("cleanup_confirmed") is not True):
                                     raise RuntimeError("review worker cleanup is unconfirmed")
                         finally:
-                            if pack_service is not None and pack_service.close(
-                                    timeout_seconds=max(0., archive_deadline - time.monotonic())) is not True:
+                            if pack_service is not None and pack_service.close(timeout_seconds=min(
+                                    _ARCHIVE_CLOSE_SECONDS, max(0., archive_deadline - time.monotonic()))) is not True:
                                 raise RuntimeError("crop archive cleanup is unconfirmed")
                 finally:
                     if app is not None:

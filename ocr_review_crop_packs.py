@@ -492,6 +492,7 @@ class CropReviewPackService:
         if (type(timeout_seconds) not in (int, float) or not 0 <= timeout_seconds <= MAX_CLOSE_SECONDS
                 or not math.isfinite(timeout_seconds)):
             _fail()
+        # Float subtraction at a clock precision boundary can exceed the budget.
         deadline = time.monotonic() + timeout_seconds
         try:
             self.request_close()
@@ -499,7 +500,7 @@ class CropReviewPackService:
                 drained = self._condition.wait_for(lambda: not self._active,
                                                    timeout=max(0., deadline - time.monotonic()))
             preview_closed = self._owned_preview is None or self._owned_preview.close(
-                timeout_seconds=max(0., deadline - time.monotonic())) is True
+                timeout_seconds=min(MAX_CLOSE_SECONDS, max(0., deadline - time.monotonic()))) is True
         except BaseException:
             with self._lock:
                 self._uncertain = True
