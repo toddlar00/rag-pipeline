@@ -70,7 +70,7 @@ _HEARTBEAT_TRANSIENT_FAILURE_BUDGET = 60.0
 # transition. A transient replace failure of one of them is retried as a fresh
 # atomic write, repeating every storage check, within a bounded budget. Until
 # the ready marker is published the writes share one budget that leaves room
-# for interpreter startup within the shortest launcher wait (the UI's 5 s).
+# for interpreter startup within the UI's default 5 s --job-ready-timeout.
 # The cancellation evidence shares a short one, because the cancelled worker
 # keeps running until it is written. Every later write has its own.
 _PRE_READY_TRANSIENT_WRITE_BUDGET = 3.0
@@ -911,8 +911,8 @@ def run_job(
         )
         # Until the ready marker is published a launcher may still be waiting
         # for this manager, so every write up to then shares one deadline and
-        # a held file cannot outlast that wait; each later write has its own
-        # budget. The writers are looked up when each call is made.
+        # a held file cannot outlast the default wait; each later write has
+        # its own budget. The writers are looked up when each call is made.
         pre_ready_deadline = (
             time.monotonic() + _PRE_READY_TRANSIENT_WRITE_BUDGET)
         ready_published = False
