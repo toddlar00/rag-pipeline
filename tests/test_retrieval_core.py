@@ -1,3 +1,4 @@
+import hashlib
 import subprocess
 import sys
 
@@ -406,3 +407,98 @@ def test_context_metadata_is_bounded_and_charged_to_the_global_budget():
         "What follows?", retrieval_core._grounded_sources(response))
     assert "x" * 100_000 not in prompt
     assert len(prompt) < 10_000
+
+
+# Sparse-vector indices are persisted in Qdrant collections, so these digests
+# must stay byte-identical across any change to how the hash is computed.
+# Synthetic and public-citation tokens only.
+_STABLE_TOKEN_HASH_GOLDEN = {
+    "": 3558706393,
+    "a": 214005177,
+    "the": 2411998317,
+    "rule": 2551979643,
+    "section": 1943352366,
+    "negligence": 2281413742,
+    "duty": 2714776504,
+    "res": 2602594663,
+    "ipsa": 3534904213,
+    "loquitur": 3739756339,
+    "usc": 2472078972,
+    "us": 188454906,
+    "sct": 82664998,
+    "f3d": 833220109,
+    "fsupp3d": 2313342258,
+    "1332": 685902262,
+    "1332(a)(1)": 2845635709,
+    "12(b)(6)": 3657141309,
+    "326_us_310": 4180724443,
+    "usd_75000": 3514950000,
+    "usd_10_50": 3273113821,
+    "don't": 1500549786,
+    "3.5": 2151704230,
+    "§": 3181005861,
+    "é": 1725812119,
+    "ü": 3224637605,
+    "中文": 2814034467,
+    "\U0001f600": 704834243,
+}
+_SYNTHETIC_TOKEN_ALPHABET = (
+    "abcdefghijklmnopqrstuvwxyz0123456789_()'."
+    "§éü中文\U0001f600"
+)
+
+
+def _synthetic_tokens(count):
+    # A fixed 64-bit LCG keeps the sample identical on every Python version.
+    state = 0x2545F491
+    tokens = []
+    for index in range(count):
+        chars = []
+        for _ in range(index % 25):
+            state = (
+                state * 6364136223846793005 + 1442695040888963407
+            ) % 2**64
+            chars.append(
+                _SYNTHETIC_TOKEN_ALPHABET[
+                    (state >> 33) % len(_SYNTHETIC_TOKEN_ALPHABET)
+                ]
+            )
+        tokens.append("".join(chars))
+    return tokens
+
+
+def test_stable_token_hash_matches_persisted_sparse_indices():
+    assert rag._stable_token_hash is retrieval_core._stable_token_hash
+    assert {
+        token: retrieval_core._stable_token_hash(token)
+        for token in _STABLE_TOKEN_HASH_GOLDEN
+    } == _STABLE_TOKEN_HASH_GOLDEN
+
+
+def test_stable_token_hash_is_unchanged_over_a_broad_synthetic_sample():
+    digest = hashlib.sha256()
+    for token in _synthetic_tokens(5000):
+        digest.update(
+            retrieval_core._stable_token_hash(token).to_bytes(4, "big"))
+
+    assert digest.hexdigest() == (
+        "cafef627737a9ed818a70fcb109208c627cace823cbae1715460b52caad2294c"
+    )
+
+
+def test_stable_token_hash_rejects_unencodable_tokens():
+    with pytest.raises(UnicodeEncodeError):
+        retrieval_core._stable_token_hash("\ud800")
+
+
+def test_sparse_token_vector_counts_terms_under_the_stable_hash():
+    assert rag._sparse_token_vector is retrieval_core._sparse_token_vector
+    assert retrieval_core._sparse_token_vector(
+        "negligence duty negligence"
+    ) == (
+        [
+            _STABLE_TOKEN_HASH_GOLDEN["negligence"],
+            _STABLE_TOKEN_HASH_GOLDEN["duty"],
+        ],
+        [2.0, 1.0],
+    )

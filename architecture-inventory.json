@@ -2687,7 +2687,7 @@
             "target": "_chunk_document_locked"
           },
           {
-            "locations_sha256": "4bc971ec29a65b8f2d13607c8311d2c1e43841bb7e3ccf3144666fe19be61b2e",
+            "locations_sha256": "694d6321ae3e40bccf0f36d3d49551b780f9b9947f28917b069e41d49e13d0d4",
             "occurrence_count": 3,
             "operations": [
               "setattr"
@@ -4403,7 +4403,7 @@
             "target": "_save_index_manifest"
           },
           {
-            "locations_sha256": "1a5022069fd78f6a9b7c443d87e8a5bafcd5d85c67cae67f166a65d5086e8730",
+            "locations_sha256": "77b9a18f49d9508cf4cd66f78599439f927f7f549be1e00726a3866e77175322",
             "occurrence_count": 2,
             "operations": [
               "setattr"
@@ -8621,7 +8621,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "fa4e3717faa7111e2934459501a1878c2609bcdeb7930ff2c1c303dd25539762",
+          "locations_sha256": "a27518004e47c4c0cca79b058c18dbdb1a7c667a8c809d75e049d7300076bc65",
           "name": "_grounded_sources",
           "occurrence_count": 10,
           "paths": [
@@ -12837,7 +12837,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "1e07e63377a0ac517241a5c140439e8354e23ab5af4338360026851bc00f2394",
+          "locations_sha256": "f5f53b7a070094b185663c00c5368d8e959f2e7fd85b1665b02ae7268984aa46",
           "name": "_search_hit_source_id",
           "occurrence_count": 4,
           "paths": [
@@ -13155,13 +13155,17 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "fe8cf54b42cae50d25eea8df9b929a92bef36cc175975d63550cb520bd251e5b",
+          "locations_sha256": "7b6b8c483428c5a5e04708b9c78d01731f1088f4383b5837cb141975fe9e716c",
           "name": "_sparse_token_vector",
-          "occurrence_count": 1,
+          "occurrence_count": 2,
           "paths": [
             "_sparse_token_vector"
           ],
           "source_counts": [
+            {
+              "count": 1,
+              "path": "tests/test_retrieval_core.py"
+            },
             {
               "count": 1,
               "path": "tests/test_search.py"
@@ -13269,6 +13273,26 @@
             {
               "count": 2,
               "path": "tests/test_scaffold_structure.py"
+            }
+          ]
+        },
+        {
+          "contexts": [
+            "load"
+          ],
+          "kinds": [
+            "attribute"
+          ],
+          "locations_sha256": "1bef46599bb190ebf342ac50d3c00e2497836b17312571f0ebcd3f713831ba02",
+          "name": "_stable_token_hash",
+          "occurrence_count": 1,
+          "paths": [
+            "_stable_token_hash"
+          ],
+          "source_counts": [
+            {
+              "count": 1,
+              "path": "tests/test_retrieval_core.py"
             }
           ]
         },
