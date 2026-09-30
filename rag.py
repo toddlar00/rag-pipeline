@@ -8342,8 +8342,6 @@ def _convert_pdf_generation(
                 telemetry: _run_telemetry.RunTelemetry | None = None,
                 ) -> "ConversionInputBinding":
     """Convert an already-pinned PDF pathname generation."""
-    import os
-
     md_path = markdown_output or doc_output.with_name(
         f"{doc_output.stem}_docling.md")
     effective_input = original_input
@@ -8426,10 +8424,7 @@ def _convert_pdf_generation(
             "remove OCR source pixels."
         )
 
-    if backend == "pypdfium2":
-        os.environ["DOCLING_PDF_BACKEND"] = "pypdfium2"
-        log.info("Backend: pypdfium2")
-    elif backend != "auto":
+    if backend not in ("pypdfium2", "auto"):
         log.warning(f"Unknown backend '{backend}', using auto")
 
     # Validate/read the source before importing Docling's heavyweight runtime.
@@ -8501,6 +8496,9 @@ def _convert_pdf_generation(
             )
         else:
             log.info(f"Mode: CPU ({total_pages} pages — this may take a while)")
+            if batch_size_override is not None:
+                log.warning(
+                    "--batch-size has no effect on the CPU conversion path")
             pipeline_opts = PdfPipelineOptions(
                 accelerator_options=AcceleratorOptions(
                     num_threads=_ingestion_core.DOCLING_INFERENCE_THREADS,
@@ -8522,9 +8520,17 @@ def _convert_pdf_generation(
         if merge_interleaved_regions:
             format_option["pipeline_cls"] = (
                 _interleaved_region_merge_pipeline_cls())
+        pdf_format_option = PdfFormatOption(**format_option)
+        # Docling never reads DOCLING_PDF_BACKEND.  --backend stays in the
+        # conversion parameters only so existing receipt digests still match.
+        effective_backend = getattr(pdf_format_option, "backend", None)
+        log.info(
+            "Docling PDF backend: "
+            f"{getattr(effective_backend, '__name__', 'unknown')} "
+            f"(requested --backend={backend} is recorded but not used)")
         converter = DocumentConverter(
             format_options={
-                InputFormat.PDF: PdfFormatOption(**format_option),
+                InputFormat.PDF: pdf_format_option,
             },
         )
 
@@ -33270,6 +33276,9 @@ def main(argv: list[str] | None = None):
                         help="Overwrite existing output")
 
     # convert
+    backend_help = (
+        "Kept for compatibility: recorded in conversion receipts but does not "
+        "change Docling's PDF backend")
     p_conv = sub.add_parser("convert", help="PDF to DoclingDocument")
     p_conv.add_argument("--pdf", type=Path, required=True)
     p_conv.add_argument("--out", type=Path, default=DEFAULT_DOC_PATH)
@@ -33277,7 +33286,7 @@ def main(argv: list[str] | None = None):
                         help="Override GPU layout_batch_size (auto by VRAM)")
     p_conv.add_argument("--backend", default="pypdfium2",
                         choices=["pypdfium2", "auto"],
-                        help="PDF backend ('pypdfium2' avoids std::bad_alloc)")
+                        help=backend_help)
     p_conv.add_argument("--force", action="store_true",
                         help="Overwrite existing output")
     p_conv.add_argument("--no-preprocess", action="store_true",
@@ -33594,7 +33603,7 @@ def main(argv: list[str] | None = None):
     p_full.add_argument("--pdf", type=Path, required=True)
     p_full.add_argument("--batch-size", type=int, default=None)
     p_full.add_argument("--backend", default="pypdfium2",
-                        choices=["pypdfium2", "auto"])
+                        choices=["pypdfium2", "auto"], help=backend_help)
     p_full.add_argument("--force", action="store_true")
     p_full.add_argument("--no-preprocess", action="store_true",
                         help="Skip auto-detection of background scan images")
@@ -33642,7 +33651,7 @@ def main(argv: list[str] | None = None):
                          help="PDF files to process")
     p_batch.add_argument("--batch-size", type=int, default=None)
     p_batch.add_argument("--backend", default="pypdfium2",
-                         choices=["pypdfium2", "auto"])
+                         choices=["pypdfium2", "auto"], help=backend_help)
     p_batch.add_argument("--force", action="store_true")
     p_batch.add_argument("--no-preprocess", action="store_true")
     p_batch.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
