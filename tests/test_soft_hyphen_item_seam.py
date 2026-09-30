@@ -219,6 +219,27 @@ def test_the_item_ending_may_come_from_either_source_text(
     assert joined == LEFT + RIGHT
 
 
+def test_a_docling_ending_without_the_override_hyphen_is_unchanged():
+    # Docling ends "Cabinet-" U+00AD but the override ends "Cabinet": the
+    # override did more than drop the soft hyphen, so the rule declines.
+    items = _pair()
+    overrides = {"#/texts/1": LEFT[:-1]}
+    oracles = {
+        item.self_ref: _oracle(
+            overrides.get(item.self_ref, item.text),
+            source_fidelity_core.single_source_oracle_group_sha256(
+                item.self_ref))
+        for item in items}
+    text = f"{LEFT}{SOFT}\n{RIGHT}"
+
+    joined = rag._join_soft_hyphen_item_seams(
+        text, items,
+        item_text=lambda item: overrides.get(item.self_ref, item.text),
+        fidelity_oracles=oracles, source_vocabulary=frozenset)
+
+    assert joined == text
+
+
 def test_the_rule_is_idempotent():
     items = _pair()
     once = _join(LEFT + SOFT + "\n" + RIGHT, items)

@@ -1373,11 +1373,14 @@ read by fresh layout-aware OCR of an image-only derivative, using
     one token that neither item owns: 1 output and 2 source coverage
     issues. `_join_soft_hyphen_item_seams` now rewrites exactly such a
     seam between consecutive text-bearing items to `x-y`, keeping both
-    tokens. It is failing-only: it fires only when the fused token is not
-    a token of any source text, marker or oracle in the document, and it
-    skips a pair that shares one recovery oracle. The book has one other
-    item that ends this way, and a native recovery group already rebuilds
-    its pair; no READY h26 run has one.
+    tokens. It also reads the first item's ending from its Docling text,
+    because a native-repair override drops the soft hyphen (the override
+    must still end in a letter and a hyphen) while the chunk keeps the
+    Docling ending. It is failing-only: it fires only when the fused token
+    is not a token of any source text, marker or oracle in the document,
+    and it skips a pair that shares one recovery oracle. The book has one
+    other item that ends this way, and a native recovery group already
+    rebuilds its pair; no READY h26 run has one.
     - Follow-up (not fixed): other item seams that the audit fuses but
       normalization leaves split, and that therefore fail the same way.
       Neither h26 nor the casebook has one.
