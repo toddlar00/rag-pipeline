@@ -57,8 +57,6 @@ _HOSTILE_ENV = {
 
 # Each marker names the pre-change defect its tests reproduce; the commit
 # that fixes the defect removes the marker.
-_INERT_BACKEND = pytest.mark.xfail(
-    strict=True, reason="conversion claims an unused pypdfium2 backend")
 _DEAD_PROGRESS = pytest.mark.xfail(
     strict=True, reason="dead progress regex and DEBUG log flood")
 
@@ -679,7 +677,7 @@ def test_real_docling_options_ignore_the_ambient_environment(tmp_path):
 
     assert completed.returncode == 0, completed.stderr[-4000:]
     observed = json.loads(completed.stdout.strip().splitlines()[-1])
-    observed.pop("backend_variable")  # asserted with the backend change
+    assert observed.pop("backend_variable") is False
     assert observed == {
         "num_threads": 4,
         "device": "cpu",
@@ -694,7 +692,6 @@ def test_real_docling_options_ignore_the_ambient_environment(tmp_path):
 # --- (c) Truthful backend ----------------------------------------------------
 
 
-@_INERT_BACKEND
 @pytest.mark.parametrize("backend", ["pypdfium2", "auto"])
 def test_conversion_logs_the_backend_docling_really_uses(
         monkeypatch, tmp_path, caplog, no_backend_variable, backend):
@@ -710,7 +707,6 @@ def test_conversion_logs_the_backend_docling_really_uses(
         f"--backend={backend} is recorded but not used)") in caplog.text
 
 
-@_INERT_BACKEND
 def test_cpu_path_warns_that_batch_size_has_no_effect(
         monkeypatch, tmp_path, caplog):
     docling = _FakeDocling(monkeypatch)
@@ -722,7 +718,6 @@ def test_cpu_path_warns_that_batch_size_has_no_effect(
         caplog.text)
 
 
-@_INERT_BACKEND
 @pytest.mark.parametrize("command", ["convert", "full", "batch"])
 def test_backend_help_says_the_flag_is_only_recorded(capsys, command):
     with pytest.raises(SystemExit) as raised:
