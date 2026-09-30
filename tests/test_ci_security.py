@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import textwrap
@@ -1632,11 +1633,137 @@ def test_block_scalar_content_is_not_interpreted_as_workflow_yaml(tmp_path):
         + "          payload = {\n"
         + '              "uses": "actions/checkout@main",\n'
         + '              "permissions": "write-all",\n'
-        + "          }\n",
+        + "          }\n"
+        + "          &anchor uses: actions/checkout@main\n"
+        + "          - *alias\n"
+        + "          !!str permissions: write-all\n"
+        + "          <<: *merged\n"
+        + "          ls dist/*.whl && test ! -e build\n",
         encoding="utf-8",
     )
 
     assert check_ci_security.validate(tmp_path) == []
+
+
+@pytest.mark.parametrize(
+    "header",
+    ["run: >-", "run: |+", "run: |2", "run: | # inert payload"],
+)
+def test_block_scalar_header_forms_hide_only_their_bodies(tmp_path, header):
+    _policy_data, workflow_path = _valid_tree(tmp_path)
+    workflow_path.write_text(
+        workflow_path.read_text(encoding="utf-8")
+        + "      - name: Render inert fixture\n"
+        + f"        {header}\n"
+        + "            uses: actions/checkout@main\n"
+        + "            permissions: write-all\n",
+        encoding="utf-8",
+    )
+
+    assert check_ci_security.validate(tmp_path) == []
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        pytest.param(
+            "  merge_group:\n",
+            '      - "**/*.py"\n'
+            "      - '!docs/**'\n"
+            "  merge_group:\n",
+            id="quoted-glob-and-negated-paths",
+        ),
+        pytest.param(
+            "  push:\n",
+            "  schedule:\n"
+            "    - cron: '0 * * * *'\n"
+            "  push:\n",
+            id="quoted-cron",
+        ),
+        pytest.param(
+            "  test:\n    runs-on: ubuntu-latest\n",
+            "  test:\n    runs-on: ubuntu-latest\n"
+            "    if: ${{ !cancelled() && github.event_name == 'push' }}\n"
+            "    strategy:\n"
+            "      matrix:\n"
+            "        os: [ubuntu-24.04, windows-latest]\n",
+            id="negated-expression-and-flow-sequence-matrix",
+        ),
+        pytest.param(
+            "          persist-credentials: false\n",
+            "          persist-credentials: false\n"
+            "      - name: List built wheels & sdists\n"
+            "        run: ls dist/*.whl dist/*.tar.gz && test ! -e build\n",
+            id="single-line-run-globs",
+        ),
+    ],
+)
+def test_yaml_indicator_characters_inside_scalars_stay_supported(
+    tmp_path, old, new
+):
+    _policy_data, workflow_path = _valid_tree(tmp_path)
+    text = workflow_path.read_text(encoding="utf-8")
+    assert text.count(old) == 1
+    workflow_path.write_text(text.replace(old, new), encoding="utf-8")
+
+    assert check_ci_security.validate(tmp_path) == []
+
+
+_REVIEWED_BLOCK_SCALAR_RE = re.compile(
+    r"(?:^|:)\s*[>|](?:[1-9]?[-+]?|[-+]?[1-9]?)\s*(?:#.*)?$"
+)
+
+
+def _reviewed_structural_workflow_lines(lines: list[str]) -> list[str]:
+    """Frozen block-scalar blanking reviewed before the strict header rule."""
+    structural: list[str] = []
+    block_parent_indent: int | None = None
+    for line in lines:
+        stripped = line.strip()
+        indentation = len(line) - len(line.lstrip(" "))
+        if block_parent_indent is not None:
+            if not stripped or indentation > block_parent_indent:
+                structural.append("")
+                continue
+            block_parent_indent = None
+        structural.append(line)
+        if stripped and _REVIEWED_BLOCK_SCALAR_RE.search(stripped):
+            block_parent_indent = indentation
+    return structural
+
+
+def _tracked_workflow_texts() -> dict[str, str]:
+    root = check_ci_security.PROJECT_ROOT
+    texts = {
+        path.relative_to(root).as_posix(): path.read_text(encoding="utf-8")
+        for path in sorted((root / ".github").rglob("*"))
+        if path.is_file() and path.suffix in {".yml", ".yaml"}
+    }
+    texts["rendered force-full bootstrap"] = _bootstrap_ci_workflow_text()
+    return texts
+
+
+def test_structural_lines_match_reviewed_blanking_on_tracked_workflows():
+    texts = _tracked_workflow_texts()
+    assert {
+        check_ci_security.ACTIVE_CI_FIXTURE_PATH,
+        check_ci_security.CI_WORKFLOW_PATH,
+        check_ci_security.DEPENDENCY_WORKFLOW_PATH,
+        check_ci_security.SECRET_WORKFLOW_PATH,
+        check_ci_security.SECURITY_WORKFLOW_PATH,
+        check_ci_security.STATIC_WORKFLOW_PATH,
+    } <= set(texts)
+    blanked = 0
+    for name, text in texts.items():
+        lines = text.splitlines()
+        expected = _reviewed_structural_workflow_lines(lines)
+        assert (
+            check_ci_security._structural_workflow_lines(lines) == expected
+        ), name
+        blanked += sum(
+            1 for raw, kept in zip(lines, expected) if raw.strip() and not kept
+        )
+    assert blanked > 0
 
 
 def test_all_declared_current_and_future_owners_need_both_filters(tmp_path):
