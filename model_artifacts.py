@@ -1781,7 +1781,11 @@ def safetensors_tensor_shapes(path: Path) -> dict[str, tuple[int, ...]]:
         header = json.loads(
             raw.decode("utf-8"),
             object_pairs_hook=_unique_safetensors_entries)
-    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
+    except ModelArtifactError:
+        raise
+    except (ValueError, RecursionError) as exc:
+        # ValueError covers UnicodeDecodeError, json.JSONDecodeError and an
+        # integer literal beyond CPython's int/str conversion digit limit.
         raise ModelArtifactError(
             f"safetensors header is not UTF-8 JSON: {path}: {exc}") from exc
     if not isinstance(header, dict):

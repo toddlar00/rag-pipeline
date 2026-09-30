@@ -423,8 +423,10 @@ def test_checkpoint_guard_fails_closed_on_uncovered_tensors(
     ("truncated", "header is truncated"),
     ("not-utf8", "not UTF-8 JSON"),
     ("not-json", "not UTF-8 JSON"),
+    ("huge-integer", "not UTF-8 JSON"),
     ("not-object", "not a JSON object"),
-    ("duplicate", "repeats entry 'a'"),
+    # Anchored: the parser's own error is not re-wrapped as a JSON error.
+    ("duplicate", "^safetensors header repeats entry 'a'$"),
     ("entry-not-object", "invalid shape for 'a'"),
     ("missing-shape", "invalid shape for 'a'"),
     ("negative-dimension", "invalid shape for 'a'"),
@@ -448,6 +450,14 @@ def test_checkpoint_header_reader_fails_closed(tmp_path, case, message):
         _checkpoint(path, raw=b'{"\xff": 1}')
     elif case == "not-json":
         _checkpoint(path, raw=b"{not json}")
+    elif case == "huge-integer":
+        # CPython's int/str conversion limit makes the JSON parser raise a
+        # plain ValueError for a longer integer literal.
+        limit = getattr(sys, "get_int_max_str_digits", lambda: 0)()
+        if not limit:
+            pytest.skip("this interpreter has no integer digit limit")
+        _checkpoint(path, raw=(
+            b'{"a": {"shape": [' + b"9" * (limit + 1) + b"]}}"))
     elif case == "not-object":
         _checkpoint(path, [entry])
     elif case == "duplicate":
