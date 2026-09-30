@@ -8282,6 +8282,26 @@ def _confidence_summary(confidence) -> tuple[dict, list[int]]:
     return metrics, poor_pages
 
 
+def _docling_error_evidence(
+        result) -> tuple[_ingestion_core.ConversionErrorEvidence, ...]:
+    """Content-free evidence for each Docling ErrorItem, never its message."""
+    def identifier(value) -> str:
+        value = getattr(value, "value", value)
+        return "" if value is None else str(value)
+
+    evidence = []
+    for error in getattr(result, "errors", None) or ():
+        page_no = getattr(error, "page_no", None)
+        evidence.append(_ingestion_core.conversion_error_evidence(
+            page_no=page_no if type(page_no) is int else None,
+            component=identifier(getattr(error, "component_type", None)),
+            module=identifier(getattr(error, "module_name", None)),
+            category=identifier(getattr(error, "category", None)),
+            message=identifier(getattr(error, "error_message", None)),
+        ))
+    return tuple(evidence)
+
+
 def _convert_pdf_generation(
                 pdf_path: Path, doc_output: Path, *,
                 snapshot_stack: ExitStack,
@@ -8519,6 +8539,23 @@ def _convert_pdf_generation(
             pbar.update(remaining)
     pbar.close()
     dl_logger.removeHandler(handler)
+
+    # Docling reports a failed pipeline stage as PARTIAL_SUCCESS, re-adding
+    # the page empty, instead of raising.  The READY gates use the Docling
+    # JSON as their source oracle and cannot see that loss, so fail closed
+    # here: outside the raised-OOM handler, before any Docling output exists.
+    status = getattr(result, "status", None)
+    error_evidence = _docling_error_evidence(result)
+    incomplete = _ingestion_core.docling_conversion_failure(
+        None if status is None else str(getattr(status, "value", status)),
+        error_evidence)
+    if incomplete is not None:
+        if use_gpu and any(item.memory_exhausted for item in error_evidence):
+            log.error(
+                f"CUDA out of memory during conversion! "
+                f"Current batch_size={batch_size}")
+            log.error(f"  Retry with: --batch-size {max(1, batch_size // 2)}")
+        raise _ingestion_core.DoclingConversionIncompleteError(incomplete)
 
     log.info(f"Conversion complete in {elapsed:.0f}s "
              f"({total_pages / elapsed:.1f} pages/sec)")
