@@ -106,17 +106,21 @@ def test_soft_hyphen_line_break_inside_one_item_is_unchanged(
     assert report["status"] == "pass"
 
 
-def test_the_seam_is_read_from_the_native_override(monkeypatch, tmp_path):
-    # Real seams are native repairs: the chunk carries the override's
-    # spelling ("Cabinet"), not the Docling item's ("Cabinct"), so the rule
-    # must read each item's bound override.
+def test_a_native_repair_seam_keeps_both_source_tokens(monkeypatch, tmp_path):
+    # The real path: both items are native repairs marked for rebuild, but
+    # the merged chunk takes item-local repair edits. The first override
+    # drops the soft hyphen ("Cabinet-"), no edit touches its ending, so the
+    # chunk keeps the Docling "-" U+00AD seam. The override also corrects
+    # the last word ("Cabinct"), so its tokens, not Docling's, anchor the
+    # seam. Fails before the Docling ending was read (seam kept, gate fails).
     recover = rag._recover_bound_source_enrichments
 
     def enrichments(*args, **kwargs):
         return dataclasses.replace(
             recover(*args, **kwargs),
-            text_overrides={"#/texts/1": LEFT + SOFT},
-            text_repair_edits={"#/texts/1": (("Cabinct", "Cabinet"),)})
+            text_overrides={"#/texts/1": LEFT, "#/texts/2": RIGHT},
+            text_repair_edits={"#/texts/1": (("Cabinct", "Cabinet"),)},
+            text_rebuild_refs=frozenset({"#/texts/1", "#/texts/2"}))
 
     monkeypatch.setattr(rag, "_recover_bound_source_enrichments", enrichments)
     texts, report = _chunk(monkeypatch, tmp_path,
@@ -190,6 +194,29 @@ def test_the_seam_is_joined_with_its_hyphen(seam):
     assert "Cabinet-level" in joined
     assert list(source_fidelity_core.lexical_tokens(joined)) == (
         _per_item_tokens(items))
+
+
+@pytest.mark.parametrize("docling_tail, override_tail", [
+    (SOFT, ""),   # item-local repair: the chunk keeps Docling's ending
+    ("", SOFT),   # rebuild from an override that keeps the soft hyphen
+], ids=["docling_ending", "override_ending"])
+def test_the_item_ending_may_come_from_either_source_text(
+        docling_tail, override_tail):
+    items = _pair(left_tail=docling_tail)
+    overrides = {"#/texts/1": LEFT + override_tail}
+    oracles = {
+        item.self_ref: _oracle(
+            overrides.get(item.self_ref, item.text),
+            source_fidelity_core.single_source_oracle_group_sha256(
+                item.self_ref))
+        for item in items}
+
+    joined = rag._join_soft_hyphen_item_seams(
+        f"{LEFT}{SOFT}\n{RIGHT}", items,
+        item_text=lambda item: overrides.get(item.self_ref, item.text),
+        fidelity_oracles=oracles, source_vocabulary=frozenset)
+
+    assert joined == LEFT + RIGHT
 
 
 def test_the_rule_is_idempotent():

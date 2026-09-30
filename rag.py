@@ -6907,6 +6907,9 @@ def _join_soft_hyphen_item_seams(
     begins with a letter, the only place in ``text`` where the first item's
     last token meets the second's first token across that seam becomes
     ``-``.  That is what ``spaced_hyphen`` produces without the soft hyphen.
+    The first item's ending is read from its Docling text as well as from
+    ``item_text``: a native override can drop the soft hyphen, while the
+    chunk's item-local repair keeps the Docling ending.
 
     Failing-only: the audit fuses every such seam, and the rewrite is made
     only when the fused token is not a lexical token of any source item,
@@ -6934,7 +6937,8 @@ def _join_soft_hyphen_item_seams(
             # A shared recovery oracle owns the pair's text as one unit.
             continue
         left_text, right_text = item_text(left), item_text(right)
-        if (_SOFT_HYPHEN_ITEM_END_RE.search(left_text) is None
+        if (not any(_SOFT_HYPHEN_ITEM_END_RE.search(ending)
+                    for ending in (left_text, _source_item_text(left)))
                 or _SOFT_HYPHEN_ITEM_START_RE.match(right_text) is None):
             continue
         last = _source_fidelity_core.lexical_tokens(left_text)[-1:]
