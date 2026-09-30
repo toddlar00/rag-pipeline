@@ -1747,6 +1747,92 @@ def verify_cached_runtime_bundle(spec: RuntimeBundleSpec) -> bool:
     return True
 
 
+_MAX_SAFETENSORS_HEADER_BYTES = 16 * 1024 * 1024
+
+
+def _unique_safetensors_entries(
+        pairs: list[tuple[str, object]]) -> dict[str, object]:
+    entries: dict[str, object] = {}
+    for name, entry in pairs:
+        if name in entries:
+            raise ModelArtifactError(
+                f"safetensors header repeats entry {name[:200]!r}")
+        entries[name] = entry
+    return entries
+
+
+def safetensors_tensor_shapes(path: Path) -> dict[str, tuple[int, ...]]:
+    """Return the tensor shapes declared by one bounded safetensors header.
+
+    Only the 8-byte little-endian length prefix and the JSON header are read;
+    tensor data is never touched. A truncated, oversized, non-UTF-8,
+    non-object or duplicate-keyed header, or any malformed shape, fails
+    closed. ``__metadata__`` is not a tensor and is skipped.
+    """
+    try:
+        with Path(path).open("rb") as handle:
+            prefix = handle.read(8)
+            length = int.from_bytes(prefix, "little")
+            if (len(prefix) != 8
+                    or not 2 <= length <= _MAX_SAFETENSORS_HEADER_BYTES):
+                raise ModelArtifactError(
+                    f"safetensors header length is invalid: {path}")
+            raw = handle.read(length)
+    except OSError as exc:
+        raise ModelArtifactError(
+            f"could not read safetensors header {path}: {exc}") from exc
+    if len(raw) != length:
+        raise ModelArtifactError(f"safetensors header is truncated: {path}")
+    try:
+        header = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=_unique_safetensors_entries)
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
+        raise ModelArtifactError(
+            f"safetensors header is not UTF-8 JSON: {path}: {exc}") from exc
+    if not isinstance(header, dict):
+        raise ModelArtifactError(
+            f"safetensors header is not a JSON object: {path}")
+    shapes: dict[str, tuple[int, ...]] = {}
+    for name, entry in header.items():
+        if name == "__metadata__":
+            continue
+        shape = entry.get("shape") if isinstance(entry, dict) else None
+        if not isinstance(shape, list) or not all(
+                type(dimension) is int and dimension >= 0
+                for dimension in shape):
+            raise ModelArtifactError(
+                f"safetensors header has an invalid shape for "
+                f"{name[:200]!r}: {path}")
+        shapes[name] = tuple(shape)
+    return shapes
+
+
+def require_checkpoint_tensors(
+        path: Path, tensors: Mapping[str, Sequence[int]], *,
+        model_id: str) -> None:
+    """Fail closed unless one checkpoint declares every loaded tensor.
+
+    A loader that copies a checkpoint over already-allocated parameters with
+    ``strict=False`` silently keeps whatever a parameter held before for any
+    tensor the checkpoint lacks. This proves from the bounded header alone
+    that *path* declares every name in *tensors* at exactly its shape.
+    """
+    if not tensors:
+        raise ModelArtifactError(
+            f"no loaded tensors to prove against the checkpoint for "
+            f"{model_id}")
+    declared = safetensors_tensor_shapes(path)
+    uncovered = sorted(
+        name for name, shape in tensors.items()
+        if declared.get(name) != tuple(shape))
+    if uncovered:
+        raise ModelArtifactError(
+            f"verified checkpoint for {model_id} does not supply "
+            f"{len(uncovered)} loaded tensor(s) at their loaded shape: "
+            + ", ".join(uncovered[:5]))
+
+
 def _validated_hub_endpoint(endpoint: str) -> str:
     """Return a canonical HTTPS Hub endpoint without exposing credentials."""
     if not isinstance(endpoint, str):
