@@ -1781,10 +1781,10 @@ _NON_SPACE_INDENT_ERROR = "non-space indentation is unsupported"
 # separates tokens only with ASCII spaces and tabs, so to YAML they are
 # ordinary plain-scalar characters.
 _UNICODE_SPACES = [
-    pytest.param(" ", id="no-break-space"),
-    pytest.param(" ", id="em-space"),
-    pytest.param("　", id="ideographic-space"),
-    pytest.param(" ", id="narrow-no-break-space"),
+    pytest.param("\u00a0", id="no-break-space"),
+    pytest.param("\u2003", id="em-space"),
+    pytest.param("\u3000", id="ideographic-space"),
+    pytest.param("\u202f", id="narrow-no-break-space"),
 ]
 # YAML never indents with tabs, and PyYAML rejects a tab where a token
 # starts, so the validator must not measure columns across one either.
@@ -2245,8 +2245,8 @@ def test_security_trigger_paths_with_non_ascii_whitespace_fail_closed(
         pytest.param("\x1d", id="group-separator"),
         pytest.param("\x1e", id="record-separator"),
         pytest.param("\x85", id="next-line"),
-        pytest.param(" ", id="line-separator"),
-        pytest.param(" ", id="paragraph-separator"),
+        pytest.param("\u2028", id="line-separator"),
+        pytest.param("\u2029", id="paragraph-separator"),
     ],
 )
 def test_line_breaks_other_than_lf_and_cr_fail_closed(tmp_path, separator):
