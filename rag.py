@@ -864,9 +864,12 @@ def _data_embedding_vectors(
 # loading: it builds every parameter as a real CPU tensor, runs the random
 # initializers, and only then copies the verified checkpoint over them with
 # ``load_state_dict(strict=False)``. Skipping those discarded initializers
-# saves seconds per cold load. Only verified models whose single
-# ``model.safetensors`` supplies every transformer tensor belong here; a load
-# that skipped anything must pass ``_require_loaded_embedding_checkpoint``.
+# saves seconds per cold load. Only verified models belong here whose single
+# ``model.safetensors`` supplies every transformer state-dict tensor and whose
+# loader initializes no other tensor through ``torch.nn.init``. A load that
+# skipped anything must pass ``_require_loaded_embedding_checkpoint``, which
+# checks the first condition from the checkpoint header but cannot check the
+# second.
 _INIT_SKIP_EMBEDDING_MODELS = frozenset({"nomic-ai/nomic-embed-text-v2-moe"})
 _TORCH_INIT_FUNCTION_NAMES = (
     "uniform_", "normal_", "constant_", "ones_", "zeros_", "eye_", "dirac_",
@@ -923,11 +926,23 @@ def _skipped_torch_init():
 
 def _require_loaded_embedding_checkpoint(
         model, checkpoint: Path, model_id: str) -> None:
-    """Prove the verified checkpoint overwrote every skipped initializer.
+    """Prove the checkpoint declares every loaded transformer tensor.
 
-    Every parameter must belong to the transformer, and the checkpoint must
-    declare each of that transformer's state-dict tensors at its exact shape.
-    An unexpected Sentence Transformers structure fails closed.
+    Every parameter must belong to the transformer, and the verified
+    checkpoint header must declare each of that transformer's state-dict
+    entries (parameters and persistent buffers) at its exact shape. An
+    unexpected Sentence Transformers structure fails closed.
+
+    This does not prove that the checkpoint overwrote every skipped
+    initializer. A non-persistent buffer or a temporary tensor that the
+    loading thread initializes through ``torch.nn.init`` inside the skip
+    window is not a state-dict entry, so no checkpoint supplies it and this
+    check cannot see it; skipping its initializer leaves whatever its
+    allocation held. The pinned Nomic remote code initializes none (its
+    non-persistent ``inv_freq`` and ``norm_factor`` buffers come from
+    ``arange`` and ``sqrt``). The real-bundle differential test in
+    ``tests/test_embedding_init_skip.py`` compares every named buffer bit for
+    bit, so rerun it whenever the remote code or its runtime changes.
     """
     try:
         transformer = model[0].auto_model
@@ -1170,8 +1185,10 @@ def _get_embedding_fn(
                         model_source, **loader_kwargs,
                     )
                 if skipped_init[0]:
-                    # Cache nothing until the checkpoint provably overwrote
-                    # every tensor whose random initialization was skipped.
+                    # Cache nothing until every parameter is proven to belong
+                    # to the transformer and the checkpoint header declares
+                    # each transformer state-dict tensor at its exact shape.
+                    # The helper's docstring states what that cannot cover.
                     _require_loaded_embedding_checkpoint(
                         model, Path(model_source) / "model.safetensors",
                         self._name)
