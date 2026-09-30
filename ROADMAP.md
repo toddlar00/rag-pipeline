@@ -1649,6 +1649,19 @@ embedding code's Transformers names and clear two new advisories.
   `canonical_text_duplicates`. All 19 READY h26 runs re-chunk byte-identical.
   The next step is a durable `full` re-run of the casebook from merged
   `main`.
+- **Private h26 excerpts reprocessed on `8cc89b0`.**
+  - All 18 textbook excerpts were reprocessed from the exact inputs their
+    READY receipts bound, using their published OCR options, in the new
+    locked environment `ocr-locked-py312-qualified-v3`. That environment was
+    installed by `tools/install_ocr_environment.py` from these locks and
+    differs from v2 only in oauthlib.
+  - Every new run is READY and has identical chunk text, metadata and Docling
+    Markdown. The only differences are `recovery_sha256`, which binds the run's
+    own manifest, and float32 noise in one table bbox.
+  - No new dropped line and no audited finding worse (235 of 235 unchanged).
+    The fixed query smoke matches exactly, plain and reranked.
+  - The superseded runs were removed with the reviewed removal script, so
+    the corpus again has exactly 19 READY runs, one per reading.
 - **Dependabot.** #141 to #144 were closed with explanations:
   - #141: google-genai 2 (the parked #88 owner decision) and a no-op
     cryptography floor;
