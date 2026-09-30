@@ -17,7 +17,7 @@ import re
 import subprocess
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, BinaryIO, Callable, Iterable
 
 _HEX_VALUE = re.compile(r"^(sha(?:1|256|512):)?[0-9a-fA-F]{32,128}$")
 _REPEATED_CHAR = re.compile(r"^(.)\1{7,}$")
@@ -265,7 +265,65 @@ def _tracked_documents(root: Path) -> Iterable[tuple[str, str]]:
         yield entry, payload.decode("utf-8", errors="replace")
 
 
+_CANONICAL_OID = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
+_BATCH_HEADER = re.compile(
+    rb"(?P<oid>[0-9a-f]{40}|[0-9a-f]{64}) (?P<kind>blob|tree|commit|tag) "
+    rb"(?P<size>0|[1-9][0-9]{0,18})\n"
+)
+_BATCH_HEADER_LIMIT = 128
+
+
+def _read_batch_record(
+    stream: BinaryIO, object_id: str
+) -> tuple[bytes, bytes]:
+    """Read one lock-step ``git cat-file --batch`` record as (kind, body).
+
+    A ``missing`` or ``ambiguous`` reply, an echoed id other than the
+    requested one, a malformed or oversized header, a short body, or a
+    missing terminator fails closed.
+    """
+    header = stream.readline(_BATCH_HEADER_LIMIT)
+    match = _BATCH_HEADER.fullmatch(header)
+    if match is None or match.group("oid").decode("ascii") != object_id:
+        raise ValueError(f"cannot read blob {object_id}")
+    size = int(match.group("size"))
+    body = stream.read(size)
+    if len(body) != size or stream.read(1) != b"\n":
+        raise ValueError(f"cannot read blob {object_id}")
+    return match.group("kind"), body
+
+
+def _per_object_document(
+    root: Path, object_id: str, object_path: str
+) -> tuple[str, str] | None:
+    kind = subprocess.run(
+        ("git", "-C", str(root), "cat-file", "-t", object_id),
+        capture_output=True,
+        check=False,
+    )
+    if kind.stdout.decode("ascii", errors="replace").strip() != "blob":
+        return None
+    blob = subprocess.run(
+        ("git", "-C", str(root), "cat-file", "blob", object_id),
+        capture_output=True,
+        check=False,
+    )
+    if blob.returncode != 0:
+        raise ValueError(f"cannot read blob {object_id}")
+    return (
+        f"{object_id[:12]}:{object_path}",
+        blob.stdout.decode("utf-8", errors="replace"),
+    )
+
+
 def _history_documents(root: Path) -> Iterable[tuple[str, str]]:
+    """Yield every blob with a path reachable from any ref, one at a time.
+
+    Objects that rev-list listed are read in order through one lock-step
+    ``git cat-file --batch`` process that buffers one object at a time.
+    Fragments that the splitlines parse cuts out of names containing other
+    line separators keep the per-object route and its exact behaviour.
+    """
     shallow = subprocess.run(
         ("git", "-C", str(root), "rev-parse", "--is-shallow-repository"),
         capture_output=True,
@@ -283,32 +341,55 @@ def _history_documents(root: Path) -> Iterable[tuple[str, str]]:
     )
     if listing.returncode != 0:
         raise ValueError("git rev-list --objects --all failed")
+    text = listing.stdout.decode("utf-8", errors="replace")
+    # rev-list ends each object line with LF and cuts names at LF, so only
+    # the first token of an LF-delimited line is an id it actually listed.
+    listed = {line.partition(" ")[0] for line in text.split("\n")}
     seen: set[str] = set()
-    for line in listing.stdout.decode("utf-8", errors="replace").splitlines():
+    entries: list[tuple[str, str]] = []
+    for line in text.splitlines():
         if not line:
             continue
         object_id, _, object_path = line.partition(" ")
         if not object_path or object_id in seen:
             continue
         seen.add(object_id)
-        kind = subprocess.run(
-            ("git", "-C", str(root), "cat-file", "-t", object_id),
-            capture_output=True,
-            check=False,
-        )
-        if kind.stdout.decode("ascii", errors="replace").strip() != "blob":
-            continue
-        blob = subprocess.run(
-            ("git", "-C", str(root), "cat-file", "blob", object_id),
-            capture_output=True,
-            check=False,
-        )
-        if blob.returncode != 0:
-            raise ValueError(f"cannot read blob {object_id}")
-        yield (
-            f"{object_id[:12]}:{object_path}",
-            blob.stdout.decode("utf-8", errors="replace"),
-        )
+        entries.append((object_id, object_path))
+    if not entries:
+        return
+    process = subprocess.Popen(
+        ("git", "-C", str(root), "cat-file", "--batch"),
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        for object_id, object_path in entries:
+            if object_id in listed and _CANONICAL_OID.fullmatch(object_id):
+                process.stdin.write(object_id.encode("ascii") + b"\n")
+                process.stdin.flush()
+                kind, body = _read_batch_record(process.stdout, object_id)
+                if kind == b"blob":
+                    yield (
+                        f"{object_id[:12]}:{object_path}",
+                        body.decode("utf-8", errors="replace"),
+                    )
+                continue
+            document = _per_object_document(root, object_id, object_path)
+            if document is not None:
+                yield document
+        process.stdin.close()
+        if process.stdout.read(1) != b"" or process.wait() != 0:
+            raise ValueError("git cat-file --batch failed")
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+        for stream in (process.stdin, process.stdout):
+            try:
+                stream.close()
+            except OSError:
+                pass
 
 
 def evaluate(

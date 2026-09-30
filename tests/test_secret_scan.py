@@ -1,4 +1,5 @@
 import hashlib
+import io
 import json
 import subprocess
 import sys
@@ -480,3 +481,127 @@ def test_history_reader_matches_frozen_per_object_reader(
     assert status == 1
     assert out.count("github-token match") == 1
     assert secret not in out
+
+
+def test_history_reads_listed_objects_through_one_batch_process(
+    tmp_path, monkeypatch
+):
+    repo = tmp_path / "repo"
+    _history_fixture(repo, "sha1")
+    calls = []
+    real_popen = subprocess.Popen
+
+    def spy(arguments, **kwargs):
+        calls.append(tuple(arguments[3:]))
+        return real_popen(arguments, **kwargs)
+
+    monkeypatch.setattr(check_secrets.subprocess, "Popen", spy)
+    list(check_secrets._history_documents(repo))
+
+    assert calls.count(("cat-file", "--batch")) == 1
+    per_object = {
+        call[2] for call in calls
+        if call[:2] in (("cat-file", "-t"), ("cat-file", "blob"))
+    }
+    # Only the listing-parse fragments that rev-list never listed.
+    assert per_object == {"HEAD:big.txt", "0" * 39 + "1"}
+
+
+_BATCH_OID = "ab" * 20
+
+
+@pytest.mark.parametrize("reply", (
+    b"",
+    f"{_BATCH_OID} missing\n".encode(),
+    f"{_BATCH_OID} ambiguous\n".encode(),
+    ("cd" * 20 + " blob 3\nabc\n").encode(),
+    f"{_BATCH_OID.upper()} blob 3\nabc\n".encode(),
+    f"{_BATCH_OID} symlink 3\nabc\n".encode(),
+    f"{_BATCH_OID} blob 03\nabc\n".encode(),
+    f"{_BATCH_OID} blob {'1' * 100}\n".encode(),
+    f"{_BATCH_OID} blob 5\nabc\n".encode(),
+    f"{_BATCH_OID} blob 3\nabcX".encode(),
+    f"{_BATCH_OID} blob 3\nabc".encode(),
+))
+def test_batch_record_framing_violations_fail_closed(reply):
+    with pytest.raises(ValueError, match="cannot read blob " + _BATCH_OID):
+        check_secrets._read_batch_record(io.BytesIO(reply), _BATCH_OID)
+
+
+def test_batch_records_are_read_by_size_in_lock_step():
+    body = b"\x00\r\n\nline\n"
+    tree_oid = "cd" * 32
+    stream = io.BytesIO(
+        f"{_BATCH_OID} blob {len(body)}\n".encode() + body + b"\n"
+        + f"{tree_oid} tree 0\n\n".encode()
+    )
+
+    assert check_secrets._read_batch_record(stream, _BATCH_OID) == (
+        b"blob", body,
+    )
+    assert check_secrets._read_batch_record(stream, tree_oid) == (b"tree", b"")
+    assert stream.read() == b""
+
+
+class _RecordingSink(io.BytesIO):
+    captured = b""
+
+    def close(self):
+        if not self.closed:
+            self.captured = self.getvalue()
+        super().close()
+
+
+class _FakeBatchProcess:
+    def __init__(self, reply: bytes, status: int) -> None:
+        self.stdin = _RecordingSink()
+        self.stdout = io.BytesIO(reply)
+        self.returncode = None
+        self._status = status
+
+    def poll(self):
+        return self.returncode
+
+    def kill(self):
+        self.returncode = -9
+
+    def wait(self):
+        if self.returncode is None:
+            self.returncode = self._status
+        return self.returncode
+
+
+@pytest.mark.parametrize(("reply", "status", "message"), (
+    ("{oid} blob 8\ncontent\n\ntrailing", 0, "git cat-file --batch failed"),
+    ("{oid} blob 8\ncontent\n\n", 1, "git cat-file --batch failed"),
+    ("{oid} missing\n", 0, "cannot read blob"),
+))
+def test_history_batch_process_faults_fail_closed(
+    tmp_path, monkeypatch, capsys, reply, status, message
+):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "--quiet")
+    (repo / "file.txt").write_text("content\n", encoding="utf-8")
+    _git(repo, "add", "file.txt")
+    _git(repo, "commit", "--quiet", "-m", "initial")
+    oid = _git(repo, "rev-parse", "HEAD:file.txt").strip()
+    fakes = []
+    real_popen = subprocess.Popen
+
+    def fake_popen(arguments, **kwargs):
+        if tuple(arguments[3:]) != ("cat-file", "--batch"):
+            return real_popen(arguments, **kwargs)
+        fakes.append(_FakeBatchProcess(reply.format(oid=oid).encode(), status))
+        return fakes[-1]
+
+    monkeypatch.setattr(check_secrets.subprocess, "Popen", fake_popen)
+    result = check_secrets.main([
+        "--policy", str(_write_policy(tmp_path, _policy())),
+        "--mode", "history", "--root", str(repo),
+    ])
+
+    assert result == 1
+    assert f"error: {message}" in capsys.readouterr().out
+    assert fakes[0].stdin.captured == (oid + "\n").encode()
+    assert fakes[0].returncode is not None
