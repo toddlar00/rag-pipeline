@@ -13,6 +13,7 @@ from test_review_ocr_execution_cli import launch_case  # noqa: F401
 def archive_launch(launch_case, monkeypatch):  # noqa: F811
     c = launch_case
     c.packs = []
+    c.pack_timeouts = []
     c.pack_root = c.workspace.output_dir / "private-packs"
 
     class Packs:
@@ -32,6 +33,7 @@ def archive_launch(launch_case, monkeypatch):  # noqa: F811
 
         def close(self, *, timeout_seconds):
             c.events.append("pack-close")
+            c.pack_timeouts.append(timeout_seconds)
             assert 0 <= timeout_seconds <= 40
             if "pack-close" in c.failures:
                 raise c.failures["pack-close"]
@@ -113,6 +115,21 @@ def test_cancelled_archive_launch_still_closes_all_resources(archive_launch):
     c.failures["launch"] = KeyboardInterrupt()
     assert review_ocr.main(c.args + ["--crop-review-pack-dir", str(c.pack_root), "--enable-ocr-execution"]) == 130
     assert c.events[-4:] == ["pack-revoke", "coordinator-close", "pack-close", "app-close"]
+
+
+@pytest.mark.parametrize("execute", [False, True])
+@pytest.mark.parametrize(("readings", "expected"), [((1000., 1012.5), 27.5), ((1000., 1050.), 0.)])
+def test_archive_close_receives_remaining_shared_shutdown_budget(archive_launch, monkeypatch, execute, readings,
+                                                                  expected):
+    c = archive_launch
+    clock = iter(readings)
+    args = c.args + ["--crop-review-pack-dir", str(c.pack_root)]
+    if execute:
+        args.append("--enable-ocr-execution")
+    # Replace the launcher clock capability only; pytest keeps its real clock.
+    monkeypatch.setattr(review_ocr, "time", NS(monotonic=lambda: next(clock)))
+    assert review_ocr.main(args) == 0
+    assert c.pack_timeouts == [expected]
 
 
 def test_archive_option_does_not_bypass_token_validation(archive_launch, monkeypatch):
