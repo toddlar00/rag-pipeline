@@ -1378,10 +1378,18 @@ read by fresh layout-aware OCR of an image-only derivative, using
     skips a pair that shares one recovery oracle. The book has one other
     item that ends this way, and a native recovery group already rebuilds
     its pair; no READY h26 run has one.
-    - Follow-up: `_SPACED_HYPHEN_RE` matches only ASCII letters and digits,
-      but the audit dehyphenates between any Unicode letters. A plain item
-      seam between non-ASCII letters (`é-` line-break `y`) would therefore
-      fail the same way. Neither h26 nor the casebook has one.
+    - Follow-up (not fixed): other item seams that the audit fuses but
+      normalization leaves split, and that therefore fail the same way.
+      Neither h26 nor the casebook has one.
+      - Non-ASCII letters. `_SPACED_HYPHEN_RE` matches only ASCII letters
+        and digits, but the audit dehyphenates between any Unicode letters
+        (`é-` line-break `y`).
+      - U+FF0D and U+FE63. NFKC turns both into `-`, so the audit fuses
+        them even without a soft hyphen, but `spaced_hyphen` does not join
+        them.
+      - A soft hyphen before the hyphen (`x` U+00AD `-` line-break `y`).
+      - A space between soft hyphens (`x-` U+00AD space U+00AD line-break
+        `y`).
   - *Durable-job manager writes on Windows.* The advisory heartbeat now
     tolerates transient replace failures (WinError 5, 32 or 33) for up to
     60 seconds. The manager's other writes still fail on the first such

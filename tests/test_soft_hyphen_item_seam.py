@@ -15,6 +15,7 @@ only at an item seam whose fused reading no source item, marker or oracle in
 the document carries. All text is synthetic.
 """
 
+import dataclasses
 from types import SimpleNamespace
 
 import pytest
@@ -102,6 +103,26 @@ def test_soft_hyphen_line_break_inside_one_item_is_unchanged(
 
     # The list serializer leaves a space before the item's own line break.
     assert texts == [f"1. {LEFT}{SOFT} \n{tail}\n{RIGHT}\n{NEXT}"]
+    assert report["status"] == "pass"
+
+
+def test_the_seam_is_read_from_the_native_override(monkeypatch, tmp_path):
+    # Real seams are native repairs: the chunk carries the override's
+    # spelling ("Cabinet"), not the Docling item's ("Cabinct"), so the rule
+    # must read each item's bound override.
+    recover = rag._recover_bound_source_enrichments
+
+    def enrichments(*args, **kwargs):
+        return dataclasses.replace(
+            recover(*args, **kwargs),
+            text_overrides={"#/texts/1": LEFT + SOFT},
+            text_repair_edits={"#/texts/1": (("Cabinct", "Cabinet"),)})
+
+    monkeypatch.setattr(rag, "_recover_bound_source_enrichments", enrichments)
+    texts, report = _chunk(monkeypatch, tmp_path,
+                           item=LEFT.replace("Cabinet", "Cabinct") + SOFT)
+
+    assert texts == [f"1. {LEFT}{RIGHT}\n{NEXT}"]
     assert report["status"] == "pass"
 
 
@@ -242,6 +263,54 @@ def test_a_seam_shape_before_an_item_end_is_not_an_item_seam():
     assert _join(text, items) == text
 
 
+def test_an_in_item_break_is_not_taken_for_a_space_joined_seam():
+    # The first item breaks "W-" U+00AD newline "level" inside itself and
+    # ends in "Cabinet-" U+00AD; the chunk joins the real seam with a space.
+    # The audit fuses the in-item break on both sides: this passes today.
+    left = f"Its W-{SOFT}\nlevel staff sit in one of the Cabinet-{SOFT}"
+    items = [_item("#/texts/1", left), _item("#/texts/2", RIGHT)]
+    text = f"{left} {RIGHT}"
+    assert list(source_fidelity_core.lexical_tokens(text)) == (
+        _per_item_tokens(items))
+
+    assert _join(text, items) == text
+
+
+def test_a_seam_after_the_first_item_pair_is_joined():
+    items = [_item("#/texts/0", NEXT), *_pair()]
+
+    joined = _join(f"{NEXT}\n{LEFT}{SOFT}\n{RIGHT}", items)
+
+    assert joined == f"{NEXT}\n{LEFT}{RIGHT}"
+
+
+def test_two_seams_in_one_chunk_are_both_joined():
+    middle = "level departments report to an Under-"
+    last = "secretary of each department."
+    items = [_item("#/texts/1", LEFT + SOFT),
+             _item("#/texts/2", middle + SOFT), _item("#/texts/3", last)]
+
+    joined = _join(f"{LEFT}{SOFT}\n{middle}{SOFT}\n{last}", items)
+
+    assert joined == f"{LEFT}{middle}{last}"
+    assert list(source_fidelity_core.lexical_tokens(joined)) == (
+        _per_item_tokens(items))
+
+
+def test_an_item_ending_in_whitespace_still_forms_the_seam():
+    items = [_item("#/texts/1", LEFT + SOFT + " "), _item("#/texts/2", RIGHT)]
+
+    assert _join(f"{LEFT}{SOFT} \n{RIGHT}", items) == LEFT + RIGHT
+
+
+@pytest.mark.parametrize("label", ["footnote", "caption"])
+def test_footnote_and_caption_seams_are_joined(label):
+    items = [_item("#/texts/1", LEFT + SOFT, label=label),
+             _item("#/texts/2", RIGHT, label=label)]
+
+    assert _join(f"{LEFT}{SOFT}\n{RIGHT}", items) == LEFT + RIGHT
+
+
 def test_items_that_are_not_consecutive_are_unchanged():
     left, right = _pair()
     between = _item("#/pictures/0", "", label="picture")
@@ -316,10 +385,18 @@ def test_the_vocabulary_is_read_only_for_a_qualifying_seam(left_tail, reads):
 
 
 def test_the_document_vocabulary_is_built_once():
+    reads = []
+
+    class Oracles(dict):
+        def values(self):
+            reads.append(None)
+            return super().values()
+
     item = _item("#/texts/1", "Cabinetlevel", label="list_item", marker="a.")
-    oracles = {"#/texts/2": {"oracle_lexical_tokens": ["recovered"]}}
+    oracles = Oracles({"#/texts/2": {"oracle_lexical_tokens": ["recovered"]}})
     vocabulary = rag._lazy_source_lexical_vocabulary(
         {"#/texts/1": item}, oracles)
 
     assert vocabulary() == {"cabinetlevel", "a", "recovered"}
     assert vocabulary() is vocabulary()
+    assert len(reads) == 1

@@ -21926,6 +21926,12 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
         dl_doc, source_enrichments, prepared_chunks=prepared_chunks)
     source_lexical_vocabulary = _lazy_source_lexical_vocabulary(
         lineage_item_by_ref, lineage_fidelity_oracles)
+
+    def canonical_item_text(item) -> str:
+        """Return an item's bound native override, else its Docling text."""
+        return source_enrichments.text_overrides.get(
+            str(getattr(item, "self_ref", "")), _source_item_text(item))
+
     opaque_fidelity_oracles = {
         ref: dict(oracle)
         for ref, oracle in lineage_fidelity_oracles.items()
@@ -22041,20 +22047,14 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
         )
         clean = _join_soft_hyphen_item_seams(
             clean, list(doc_items or []),
-            item_text=lambda item: source_enrichments.text_overrides.get(
-                str(getattr(item, "self_ref", "")),
-                _source_item_text(item),
-            ),
+            item_text=canonical_item_text,
             fidelity_oracles=lineage_fidelity_oracles,
             source_vocabulary=source_lexical_vocabulary,
         )
         clean = _restore_source_list_item_markdown_indents(
             clean,
             list(doc_items or []),
-            lambda item: source_enrichments.text_overrides.get(
-                str(getattr(item, "self_ref", "")),
-                _source_item_text(item),
-            ),
+            canonical_item_text,
         )
         # Cleanup can intentionally remove a chunk whose only content was a
         # decorative section-marker glyph.  Such chunks may still have a
