@@ -27250,7 +27250,7 @@
   "schema_version": 3,
   "source_architecture": {
     "class_count": 333,
-    "function_count": 4412,
+    "function_count": 4414,
     "import_graph": {
       "cyclic_components": [],
       "edge_count": 649,
@@ -31109,8 +31109,8 @@
             "scope": "top_level"
           }
         ],
-        "definition_locations_sha256": "aedc1bed28312913829c096e7a048f1365c223fc3ec3bf8f45058448f10cda84",
-        "function_count": 61,
+        "definition_locations_sha256": "398b3303289550b4ae9ffd27599f4d6496025bc263f50c6f44d4dfaedf945f22",
+        "function_count": 63,
         "functions": [
           {
             "kind": "function",
@@ -31414,6 +31414,12 @@
           },
           {
             "kind": "function",
+            "name": "_write_tolerating_transient_replace",
+            "scope": "top_level",
+            "signature_sha256": "2b15b162ad609dacc822e17e3021b38a7f64c05788591f3f007955caa6bd1f00"
+          },
+          {
+            "kind": "function",
             "name": "default_service_job_coordination_binding",
             "scope": "top_level",
             "signature_sha256": "b4f3d9aca5d93dfd20ce5087c31cb9cfe9a7fa350b8c2570db3a059ef3727556"
@@ -31477,6 +31483,12 @@
             "name": "run_job.heartbeat",
             "scope": "nested",
             "signature_sha256": "a5f835070639f51d3f8c494ec14f92d343b7b9c041ee9779cc4364abea7cf6ec"
+          },
+          {
+            "kind": "function",
+            "name": "run_job.tolerant_write",
+            "scope": "nested",
+            "signature_sha256": "b233f0e4be751e3b09fac307bba03c8a623eedfe2fa35f20b0b579ed7f3d47af"
           }
         ],
         "import_edges": [
@@ -31545,10 +31557,10 @@
           }
         ],
         "module": "job_coordination",
-        "non_blank_lines": 2131,
+        "non_blank_lines": 2197,
         "path": "job_coordination.py",
-        "physical_lines": 2297,
-        "top_level_function_count": 53
+        "physical_lines": 2368,
+        "top_level_function_count": 54
       },
       {
         "class_count": 7,
@@ -63935,13 +63947,13 @@
         "top_level_function_count": 2
       }
     ],
-    "physical_line_count": 130322,
+    "physical_line_count": 130393,
     "source_groups": [
       "production",
       "tools",
       "other"
     ],
-    "top_level_function_count": 2920
+    "top_level_function_count": 2921
   },
   "tracked_sources": {
     "count": 494,

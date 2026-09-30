@@ -257,6 +257,25 @@ def test_writes_before_the_ready_handshake_share_one_budget(
     assert store.get_job(submitted.job_id).status == "queued"
 
 
+def test_writes_keep_the_pre_ready_budget_until_ready_is_published(
+        tmp_path, monkeypatch, clock, writes):
+    # A worker start that fails before the ready marker leaves the launcher
+    # still waiting, so the terminal writes that follow must not start fresh
+    # per-write budgets of their own.
+    writes.fail("ready", math.inf)
+    writes.fail("runtime", math.inf,
+                lambda runtime: runtime.phase == "terminal")
+    store, submitted, run = _fake_run(tmp_path, monkeypatch)
+
+    with pytest.raises(PermissionError):
+        run()
+
+    assert len(writes.failures("ready")) > 1
+    assert len(writes.failures("runtime")) >= 1
+    assert sum(clock.sleeps) <= job_manager._PRE_READY_TRANSIENT_WRITE_BUDGET
+    assert store.get_job(submitted.job_id).status == "failed"
+
+
 # Transient failures after a committed terminal transition.
 
 def test_terminal_runtime_write_survives_transient_replace_failures(
@@ -391,8 +410,7 @@ time.sleep(30)
     store.request_cancel(submitted.job_id)
     manager.join(timeout=30)
     assert not manager.is_alive()
-    assert "error" not in result_box, result_box.get("error")
-    return store, submitted, result_box["result"]
+    return store, submitted, result_box
 
 
 def _cancel_evidence(_value):
@@ -404,8 +422,10 @@ def test_cancellation_writes_survive_transient_replace_failures(
     writes.fail("runtime", 2, _cancel_evidence)
     writes.fail("report", 2, _cancel_evidence)
 
-    store, submitted, result = _cancel_running_worker(tmp_path)
+    store, submitted, outcome = _cancel_running_worker(tmp_path)
 
+    assert "error" not in outcome, outcome.get("error")
+    result = outcome["result"]
     assert len(writes.failures("runtime")) == 2
     assert len(writes.failures("report")) == 2
     assert result.status == "cancelled"
@@ -422,12 +442,18 @@ def test_cancellation_writes_share_one_short_budget(tmp_path, clock, writes):
     writes.fail("runtime", 5, _cancel_evidence)
     writes.fail("report", math.inf, _cancel_evidence)
 
-    store, submitted, result = _cancel_running_worker(tmp_path)
+    store, submitted, _outcome = _cancel_running_worker(tmp_path)
 
     budget = job_manager._CANCELLATION_TRANSIENT_WRITE_BUDGET
     assert len(writes.failures("runtime")) == 5
     assert len(writes.failures("report")) > 1
     assert sum(clock.sleeps) <= budget
-    # The failure still aborts supervision, as it did without retries.
-    assert result.status == "interrupted"
-    assert result.cleanup_confirmed
+    # The exhausted failure still aborts supervision, as a first failure did
+    # before these retries: the worker is stopped and the attempt is terminal.
+    # run_job then raises from the terminal report, which rejects a manager
+    # error under a cancel trigger; that predates the retries and is not
+    # asserted here.
+    assert store.get_job(submitted.job_id).status == "interrupted"
+    runtime = _attempt_json(store, submitted.job_id, "runtime.json")
+    assert runtime["phase"] == "terminal"
+    assert runtime["cleanup_confirmed"] is True
