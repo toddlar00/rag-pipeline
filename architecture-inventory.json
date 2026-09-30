@@ -54802,7 +54802,7 @@
             "scope": "top_level"
           }
         ],
-        "definition_locations_sha256": "f5faf32f3bee6c52af73ebf93c55bbdd7775d8eb7b9332c055decd01a1291a9e",
+        "definition_locations_sha256": "1a7456f1690305dda2bbbe5aae17cbdb00e5d71e2bbbd71a2754d4bfdb179972",
         "function_count": 45,
         "functions": [
           {
@@ -55088,9 +55088,9 @@
           }
         ],
         "module": "retrieval_core",
-        "non_blank_lines": 1258,
+        "non_blank_lines": 1261,
         "path": "retrieval_core.py",
-        "physical_lines": 1398,
+        "physical_lines": 1401,
         "top_level_function_count": 39
       },
       {
@@ -63959,7 +63959,7 @@
         "top_level_function_count": 2
       }
     ],
-    "physical_line_count": 130322,
+    "physical_line_count": 130325,
     "source_groups": [
       "production",
       "tools",

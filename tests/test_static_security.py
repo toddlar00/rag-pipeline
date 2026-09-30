@@ -225,8 +225,7 @@ def test_repository_policy_is_valid_and_narrow():
     assert policy["ruff_version"] == "0.16.9"
     assert "S101" not in policy["blocking_rules"]
     assert "S603" not in policy["blocking_rules"]
-    assert len(policy["suppressions"]) == 1
-    assert policy["suppressions"][0]["path"] == "retrieval_core.py"
+    assert policy["suppressions"] == []
 
 
 def test_normalize_relativizes_and_orders(tmp_path):
@@ -276,14 +275,7 @@ def test_repository_tree_passes_with_committed_policy(tmp_path, capsys):
     assert status == 0
     envelope = json.loads(envelope_path.read_text(encoding="utf-8"))
     assert envelope["violations"] == 0
-    assert envelope["findings"] == [
-        {
-            "path": "retrieval_core.py",
-            "row": 166,
-            "rule": "S324",
-            "suppressed_through": "2026-11-30",
-        }
-    ]
+    assert envelope["findings"] == []
     payload = json.dumps(envelope)
     assert "\\\\" not in payload
     assert "message" not in payload
