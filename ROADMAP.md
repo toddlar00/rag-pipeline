@@ -1966,6 +1966,13 @@ An independent accuracy review of the `578a13a` pair's pull request
 ([#147](https://github.com/toddlar00/rag-pipeline/pull/147)) approved it
 with nits. The documentation source `f3ec23a` addresses them, records the
 published private tort-law re-run and supersedes the `578a13a` pair.
+The `f3ec23a` pair (gate-only child `df8623e`) passed the hosted CI
+promotion gate on [PR
+#147](https://github.com/toddlar00/rag-pipeline/pull/147), which merged into
+`main` as `9fff7bb`. The test-only source `e5966e1` makes the heartbeat
+failure-budget tests independent of runner speed and raises the Node
+subprocess ceilings of three OCR review UI tests; it changes no pipeline
+behavior, dependency or lock and supersedes the `f3ec23a` pair.
 Its Windows/Linux
 pair (independent local same-platform comparisons passed) is that branch's
 candidate; its hosted checks and exact-SHA record are pending, and the

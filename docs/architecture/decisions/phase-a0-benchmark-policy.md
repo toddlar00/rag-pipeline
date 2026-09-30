@@ -17,9 +17,11 @@
   #139 (merged through `123bedb`), the tokenless-glyph rotation fix pair
   passed on PR #140 (merged through `6baf14b`), the table header-row oracle
   fix pair passed on PR #145 (merged through `ce73b61`), the soft-hyphen
-  item-seam fix pair passed on PR #146 (merged through `8cc89b0`), and the
-  post-series documentation pair at source `f3ec23a` is pending; exact-head
-  human review and separate R8 owner authorization are not recorded
+  item-seam fix pair passed on PR #146 (merged through `8cc89b0`), the
+  post-series documentation pair passed on PR #147 (merged through
+  `9fff7bb`), and the heartbeat test fix pair at source `e5966e1` is
+  pending; exact-head human review and separate R8 owner authorization are
+  not recorded
 - **Milestone:** R10 prerequisite for the R8 pipeline-ownership move
 - **Report schema:** `phase-a0` v3
 
@@ -150,21 +152,21 @@ gate-only child `32153e9` and merge `376277c`
 Task 0.8 static-security pair at source `8891e1b` repeated it through
 gate-only child `1533164` and merge `e34103f`
 ([PR #107](https://github.com/toddlar00/rag-pipeline/pull/107)). The
-current replacement pair uses the clean post-series documentation source
-`f3ec23a4a18b9fd664b3fc24fc5a069dab2d1534` (tree
-`2f0d08cb38d73c8b51ebdc18dcb616281c851c52`), a documentation follow-up after
-a series of one-domain dependency updates, on `main` after the merges of the
-soft-hyphen item-seam fix #146 (`8cc89b0`), the table header-row oracle fix
-#145 (`ce73b61`), the tokenless-glyph rotation fix #140 (`6baf14b`), the
-oauthlib promotion #139 (`123bedb`), the Nomic contract test #136
-(`2f07510`), the job-heartbeat hardening #137 (`634c38b`), the TOC
-glyph-leader fix #138 (`a2c5629`), the documentation follow-up #135
-(`9eb6f94`), the dependency series #122 to #130 (`1cffc58`), the fresh-OCR
-fidelity source `1ba9415`, the FlagEmbedding source `ddbef38`, the
-pytest-xdist source `ff5e64f`, the test-time economy source `365de1c` and
-the OCR-program and casebook-excerpt source `29ea76b`; together they changed
-Python source, CI configuration, `.gitattributes`, two test-tooling locks
-(pytest-xdist and execnet in `requirements-test.lock` and
+current replacement pair uses the clean heartbeat test fix source
+`e5966e1305cf5d58d2b01d32b96f453798f0ef27` (tree
+`0f4037acb3598c6c6e3c89078fe068094b222f3b`), a test-only follow-up after a
+series of one-domain dependency updates, on `main` after the merges of the
+post-series documentation #147 (`9fff7bb`), the soft-hyphen item-seam fix
+#146 (`8cc89b0`), the table header-row oracle fix #145 (`ce73b61`), the
+tokenless-glyph rotation fix #140 (`6baf14b`), the oauthlib promotion #139
+(`123bedb`), the Nomic contract test #136 (`2f07510`), the job-heartbeat
+hardening #137 (`634c38b`), the TOC glyph-leader fix #138 (`a2c5629`), the
+documentation follow-up #135 (`9eb6f94`), the dependency series #122 to #130
+(`1cffc58`), the fresh-OCR fidelity source `1ba9415`, the FlagEmbedding
+source `ddbef38`, the pytest-xdist source `ff5e64f`, the test-time economy
+source `365de1c` and the OCR-program and casebook-excerpt source `29ea76b`;
+together they changed Python source, CI configuration, `.gitattributes`, two
+test-tooling locks (pytest-xdist and execnet in `requirements-test.lock` and
 `requirements-smoke.lock`) and the FlagEmbedding record of
 `requirements-core.lock` and `requirements-full.lock`; the stacked
 dependency updates also change the vector-stores, Service/UI, test-audit
@@ -363,6 +365,13 @@ An independent accuracy review of the `578a13a` pair's pull request
 ([#147](https://github.com/toddlar00/rag-pipeline/pull/147)) approved it
 with nits. The documentation source `f3ec23a` addresses them, records the
 published private tort-law re-run and supersedes the `578a13a` pair.
+The `f3ec23a` pair (gate-only child `df8623e`) passed the hosted CI
+promotion gate on [PR
+#147](https://github.com/toddlar00/rag-pipeline/pull/147), which merged into
+`main` as `9fff7bb`. The test-only source `e5966e1` makes the heartbeat
+failure-budget tests independent of runner speed and raises the Node
+subprocess ceilings of three OCR review UI tests; it changes no pipeline
+behavior, dependency or lock and supersedes the `f3ec23a` pair.
 Its Windows and
 Linux CPython 3.12.13 reports were
 generated after the same strict hash-locked synchronization and
@@ -556,15 +565,16 @@ then the stacked tokenless-glyph rotation fix source `c2d7b57`,
 then the stacked table header-row oracle fix source `09340ed`,
 then the stacked soft-hyphen item-seam fix source `a7847ce`,
 then the stacked post-series documentation source `578a13a`,
-then the stacked post-series documentation source `f3ec23a`.
+then the stacked post-series documentation source `f3ec23a`,
+then the stacked heartbeat test fix source `e5966e1`.
 Its Windows report
-is 51,080 bytes (file SHA-256
-`e9b06a7b9c241b61342b3532cd8cc11e2a753d6d218284d32c4e2a7e17caa4b9`;
+is 51,082 bytes (file SHA-256
+`379ccaf31cd0d9b21e39e3939adc579c995a73dc103641637bece0c6c03439d2`;
 embedded report SHA-256
-`317dcc1a9d708f8a197ef5b77c1665a60145c226305cd50edb4a2a214bc74ca6`).
-Its Linux report is 50,482 bytes (file SHA-256
-`9fa14831e9016819d4c94a6b9cbaac56e1111ad164ae64bf987ca44f45fcf63f`;
+`03796f9dff2bd56f3f38f6f6a369e10b64d2881d085cdfa60e45b7a2ba48876b`).
+Its Linux report is 50,478 bytes (file SHA-256
+`f85aa81149aa321378490d6c64d6cb0a3e47c56efff557420b618b9ccd745911`;
 embedded report SHA-256
-`2577cd4c5fd16ae1b9c413553ee993fa0470ae4e0e6a8972f016fc1f4b759055`).
+`bab24b5f26612766985900a24b551b1ff990c60822241bf885cafc9439549365`).
 Both use CPython 3.12.13 and pass their complete local same-platform 9×5
 comparisons. Hosted promotion remains pending.

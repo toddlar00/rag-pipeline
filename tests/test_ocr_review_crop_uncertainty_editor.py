@@ -18,6 +18,11 @@ import pytest
 import ocr_review_crop_uncertainty_editor as editor
 
 
+# A ceiling, not an expectation: Node can take over 15 s to start on busy
+# hosted Windows runners.
+_NODE_TIMEOUT = 60
+
+
 def spec(**changes):
     return editor.editor_value(**{**dict(image_token="image", action_token="action", mode_token="mode",
         mode="annotate", width=800, height=400, requested_bbox=[.25, .5, 799.75, 399.5],
@@ -336,7 +341,7 @@ def test_actual_script_in_inert_geometry_event_port(identifier, case):
         pytest.skip("Node unavailable for explicitly inert JS control")
     script = editor.EDITOR_JS.replace("__OCR_FIXED_IMAGE_ID__", json.dumps(identifier))
     run = subprocess.run([node, "-e", _HARNESS], input=json.dumps({"script": script, "value": spec(),
-                         "id": identifier, "case": case}), text=True, capture_output=True, timeout=15,
+                         "id": identifier, "case": case}), text=True, capture_output=True, timeout=_NODE_TIMEOUT,
                          cwd=Path(__file__).resolve().parent)
     assert run.returncode == 0, run.stderr
     assert json.loads(run.stdout) == {"case": case, "events": json.loads(run.stdout)["events"], "passed": True}
@@ -369,7 +374,7 @@ def test_component_script_survives_skip_props_before_lazy_mount(tmp_path, monkey
         props = update.get("props", bridge.props)
         run = subprocess.run([node, "-e", _HARNESS], input=json.dumps({
             "script": bridge.js_on_load, "value": spec(), "props": props,
-            "id": identifier, "case": case}), text=True, capture_output=True, timeout=15,
+            "id": identifier, "case": case}), text=True, capture_output=True, timeout=_NODE_TIMEOUT,
             cwd=Path(__file__).resolve().parent)
         assert run.returncode == 0, run.stderr
         assert json.loads(run.stdout)["passed"] is True

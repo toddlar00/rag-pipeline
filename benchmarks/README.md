@@ -7,36 +7,37 @@ fresh-process repetitions.
 
 ## Provenance
 
-Both current reports were generated from the clean post-series documentation
-source checkpoint `f3ec23a4a18b9fd664b3fc24fc5a069dab2d1534` (tree
-`2f0d08cb38d73c8b51ebdc18dcb616281c851c52`), a documentation follow-up after
-a series of one-domain dependency updates on `main` after the
+Both current reports were generated from the clean heartbeat test fix source
+checkpoint `e5966e1305cf5d58d2b01d32b96f453798f0ef27` (tree
+`0f4037acb3598c6c6e3c89078fe068094b222f3b`), a test-only follow-up after a
+series of one-domain dependency updates on `main` after the
 history-preserving merges of #121 (`602bec1`), of that series, #122 to #130
 (`1cffc58`), of its documentation follow-up #135 (`9eb6f94`), of the TOC
 glyph-leader fix #138 (`a2c5629`), of the job-heartbeat hardening #137
 (`634c38b`), of the Nomic contract test #136 (`2f07510`), of the oauthlib
 promotion #139 (`123bedb`), of the tokenless-glyph rotation fix #140
-(`6baf14b`), of the table header-row oracle fix #145 (`ce73b61`) and of the
-soft-hyphen item-seam fix #146 (`8cc89b0`). That source contains everything
-through the Task 0.8 static-security merge `e34103f` plus the local OCR
-accuracy, retry and guided-review program, opt-in AI evidence search, the
-passive cleanup audits, the LLM transport and worker-launch repairs, the
-casebook excerpt/supplement pipeline (including the opt-in OCR
-angle-classifier and interleaved-region-merge flags, the footnote placement
-replay, the split-item duplicate retraction and quality schema 13), four
-reviewed architecture-inventory refreshes, the POSIX symlinked-interpreter
-identity fix, an LF attribute for top-level test fixtures, dependency-light
-test guards, a Python 3.10/3.11-tolerant import-guard test, a 60-minute
-Windows unit-lane timeout and the test-time economy changes (a
-session-shared architecture inventory, an indexed inventory builder, cached
-lock-record parsing and executed-source digests, and a Windows unit lane
-split into three shards), pytest-xdist for the unit lanes, gradio import
-guards in seven OCR review test modules, FlagEmbedding 1.4.2 for
-Transformers 5 reranking and the fresh-OCR token fidelity fixes, followed by
-stacked one-domain dependency updates for vector stores, Service/UI,
-test-audit tooling, ML/runtime, docling-core, ML advisory promotions, h2,
-cryptography, supply-chain policy renewals and oauthlib. The lock changes
-add pytest-xdist 3.8.0 and execnet 2.1.2 to `requirements-test.lock` and
+(`6baf14b`), of the table header-row oracle fix #145 (`ce73b61`), of the
+soft-hyphen item-seam fix #146 (`8cc89b0`) and of the post-series
+documentation #147 (`9fff7bb`). That source contains everything through the
+Task 0.8 static-security merge `e34103f` plus the local OCR accuracy, retry
+and guided-review program, opt-in AI evidence search, the passive cleanup
+audits, the LLM transport and worker-launch repairs, the casebook
+excerpt/supplement pipeline (including the opt-in OCR angle-classifier and
+interleaved-region-merge flags, the footnote placement replay, the
+split-item duplicate retraction and quality schema 13), four reviewed
+architecture-inventory refreshes, the POSIX symlinked-interpreter identity
+fix, an LF attribute for top-level test fixtures, dependency-light test
+guards, a Python 3.10/3.11-tolerant import-guard test, a 60-minute Windows
+unit-lane timeout and the test-time economy changes (a session-shared
+architecture inventory, an indexed inventory builder, cached lock-record
+parsing and executed-source digests, and a Windows unit lane split into
+three shards), pytest-xdist for the unit lanes, gradio import guards in
+seven OCR review test modules, FlagEmbedding 1.4.2 for Transformers 5
+reranking and the fresh-OCR token fidelity fixes, followed by stacked
+one-domain dependency updates for vector stores, Service/UI, test-audit
+tooling, ML/runtime, docling-core, ML advisory promotions, h2, cryptography,
+supply-chain policy renewals and oauthlib. The lock changes add pytest-xdist
+3.8.0 and execnet 2.1.2 to `requirements-test.lock` and
 `requirements-smoke.lock` and move FlagEmbedding from 1.4.0 to 1.4.2 in
 `requirements-core.lock` and `requirements-full.lock`; the stacked
 vector-stores update moves qdrant-client from 1.19.0 to 1.19.1 and
@@ -57,9 +58,10 @@ lock; the Nomic contract test changes no lock; the stacked oauthlib
 promotion moves oauthlib from 3.3.1 to 4.0.0; the tokenless-glyph rotation
 fix changes no lock; the table header-row oracle fix changes no lock; the
 soft-hyphen item-seam fix changes no lock; the post-series documentation
-changes no lock; no model lock changed. The executing environments were
-synchronized with repository-pinned uv 0.12.20 against the exact CPU
-application/test lock union plus its retained bootstrapper:
+changes no lock; the heartbeat test fix changes no lock; no model lock
+changed. The executing environments were synchronized with repository-pinned
+uv 0.12.20 against the exact CPU application/test lock union plus its
+retained bootstrapper:
 
 - `requirements-full.lock`
 - `requirements-test.lock`
@@ -74,8 +76,8 @@ marker-resolved distributions before generation.
 
 | Platform | Runtime | Report | Bytes | File SHA-256 | Embedded report SHA-256 |
 |---|---:|---|---:|---|---|
-| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,080 | `e9b06a7b9c241b61342b3532cd8cc11e2a753d6d218284d32c4e2a7e17caa4b9` | `317dcc1a9d708f8a197ef5b77c1665a60145c226305cd50edb4a2a214bc74ca6` |
-| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,482 | `9fa14831e9016819d4c94a6b9cbaac56e1111ad164ae64bf987ca44f45fcf63f` | `2577cd4c5fd16ae1b9c413553ee993fa0470ae4e0e6a8972f016fc1f4b759055` |
+| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,082 | `379ccaf31cd0d9b21e39e3939adc579c995a73dc103641637bece0c6c03439d2` | `03796f9dff2bd56f3f38f6f6a369e10b64d2881d085cdfa60e45b7a2ba48876b` |
+| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,478 | `f85aa81149aa321378490d6c64d6cb0a3e47c56efff557420b618b9ccd745911` | `bab24b5f26612766985900a24b551b1ff990c60822241bf885cafc9439549365` |
 
 The reports attest the same source commit, clean-worktree state, tracked-diff
 digest, eight LF and `HEAD`-identical dependency/model-lock inputs, authoritative
@@ -394,6 +396,13 @@ An independent accuracy review of the `578a13a` pair's pull request
 ([#147](https://github.com/toddlar00/rag-pipeline/pull/147)) approved it
 with nits. The documentation source `f3ec23a` addresses them, records the
 published private tort-law re-run and supersedes the `578a13a` pair.
+The `f3ec23a` pair (gate-only child `df8623e`) passed the hosted CI
+promotion gate on [PR
+#147](https://github.com/toddlar00/rag-pipeline/pull/147), which merged into
+`main` as `9fff7bb`. The test-only source `e5966e1` makes the heartbeat
+failure-budget tests independent of runner speed and raises the Node
+subprocess ceilings of three OCR review UI tests; it changes no pipeline
+behavior, dependency or lock and supersedes the `f3ec23a` pair.
 The current reports above
 bind
 that exact clean source and each passes an independent complete

@@ -11,6 +11,7 @@ failures still fail the job.
 """
 
 import inspect
+import time
 
 import pytest
 
@@ -37,6 +38,29 @@ def _replace_error(winerror, error_type=PermissionError):
 
 def _from_heartbeat():
     return any(frame.function == "heartbeat" for frame in inspect.stack(0))
+
+
+class _HeartbeatClock:
+    """job_coordination's time module, with a stepped clock for the heartbeat.
+
+    Only the heartbeat's monotonic reads advance by a fixed step, so the
+    failure budget counts heartbeats rather than wall time and cannot be
+    exceeded early on a slow runner. job_coordination's other reads (the
+    worker-tree confirmation) stay real; process_supervision's deadline
+    clock is its own and is not patched.
+    """
+
+    def __init__(self, step):
+        self._step, self._now = step, 0.0
+
+    def monotonic(self):
+        if _from_heartbeat():
+            self._now += self._step
+            return self._now
+        return time.monotonic()
+
+    def __getattr__(self, name):
+        return getattr(time, name)
 
 
 def _run(tmp_path, monkeypatch, failure, *, should_fail, seconds=1.5):
@@ -74,21 +98,29 @@ def test_transient_heartbeat_replace_failures_do_not_fail_a_healthy_job(
 
 def test_persistent_heartbeat_failures_fail_the_job_after_the_budget(
         tmp_path, monkeypatch):
+    # Each failed heartbeat advances the clock 0.2 s: the fourth reaches 0.6 s
+    # past the first failure, beyond the 0.5 s budget.
     monkeypatch.setattr(job_manager, "_HEARTBEAT_TRANSIENT_FAILURE_BUDGET", 0.5)
+    monkeypatch.setattr(job_manager, "time", _HeartbeatClock(0.2))
 
     result, raised = _run(tmp_path, monkeypatch, _replace_error(5),
                           should_fail=lambda count: True, seconds=5)
 
-    assert len(raised) > 1  # tolerated within the budget, then propagated
+    assert len(raised) == 4  # three tolerated within the budget, then propagated
     assert result.status == "failed"
 
 
 def test_a_successful_heartbeat_resets_the_failure_budget(
         tmp_path, monkeypatch):
+    # Three failures span 0.4 s of the 0.5 s budget; without the reset after
+    # every fourth (successful) heartbeat, the fifth would exceed it.
     monkeypatch.setattr(job_manager, "_HEARTBEAT_TRANSIENT_FAILURE_BUDGET", 0.5)
+    monkeypatch.setattr(job_manager, "time", _HeartbeatClock(0.2))
 
+    # A 5 s worker leaves room for the five or more heartbeats the reset needs,
+    # even when a slow runner spaces them out.
     result, raised = _run(tmp_path, monkeypatch, _replace_error(32),
-                          should_fail=lambda count: count % 4 != 0, seconds=2)
+                          should_fail=lambda count: count % 4 != 0, seconds=5)
 
     assert len(raised) > 3
     assert result.status == "succeeded"
