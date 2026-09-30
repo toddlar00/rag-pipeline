@@ -55,11 +55,6 @@ _HOSTILE_ENV = {
     "DOCLING_PERF_PAGE_BATCH_SIZE": "7",
 }
 
-# Each marker names the pre-change defect its tests reproduce; the commit
-# that fixes the defect removes the marker.
-_DEAD_PROGRESS = pytest.mark.xfail(
-    strict=True, reason="dead progress regex and DEBUG log flood")
-
 
 class FakeParseBackend:
     """Stands in for Docling's default DoclingParseDocumentBackend."""
@@ -213,7 +208,7 @@ class _FakeDocling:
 
 def _error_item(page_no=2, message=_PRIVATE_TEXT, *, module="table",
                 category="inference_failure", component="model"):
-    """A fake Docling ErrorItem whose enums expose ``value`` like the real one."""
+    """A fake Docling ErrorItem; its enums expose ``value`` like Docling's."""
     return SimpleNamespace(
         component_type=SimpleNamespace(value=component),
         module_name=module, error_message=message,
@@ -268,7 +263,7 @@ class _Records(logging.Handler):
 
 @contextmanager
 def _root_capture(level):
-    """A NOTSET handler on a root logger at *level*, as ``rag.main`` sets up."""
+    """A NOTSET handler on a root logger at *level*, as ``rag.main`` uses."""
     root = logging.getLogger()
     handler = _Records()
     previous = root.level
@@ -312,7 +307,8 @@ def no_backend_variable(monkeypatch):
 # --- Characterization: behavior every change must preserve -----------------
 
 
-@pytest.mark.parametrize("status", ["success", SimpleNamespace(value="success")])
+@pytest.mark.parametrize(
+    "status", ["success", SimpleNamespace(value="success")])
 def test_successful_conversion_writes_the_same_artifacts(
         monkeypatch, tmp_path, status):
     docling = _FakeDocling(monkeypatch)
@@ -517,7 +513,8 @@ def test_only_a_clean_success_is_publishable():
     assert ingestion_core.docling_conversion_failure("success", ()) is None
     for status in ("partial_success", "failure", "skipped", "pending", None,
                    "SUCCESS"):
-        assert ingestion_core.docling_conversion_failure(status, ()) is not None
+        assert ingestion_core.docling_conversion_failure(
+            status, ()) is not None
     assert ingestion_core.docling_conversion_failure(
         "success", (_evidence(),)) is not None
 
@@ -733,7 +730,6 @@ def test_backend_help_says_the_flag_is_only_recorded(capsys, command):
 # --- (d) Progress and log volume -------------------------------------------
 
 
-@_DEAD_PROGRESS
 def test_progress_advances_from_assemble_records_during_conversion(
         monkeypatch, tmp_path):
     docling = _FakeDocling(monkeypatch, pages=5)
@@ -754,7 +750,6 @@ def test_progress_advances_from_assemble_records_during_conversion(
     assert bar.closed
 
 
-@_DEAD_PROGRESS
 def test_profiling_records_stay_out_of_an_info_level_log(
         monkeypatch, tmp_path):
     docling = _FakeDocling(monkeypatch, pages=2)
@@ -780,7 +775,6 @@ def test_profiling_records_stay_out_of_an_info_level_log(
     ]
 
 
-@_DEAD_PROGRESS
 @pytest.mark.parametrize("fails", [False, True])
 def test_pipeline_logger_state_is_restored(monkeypatch, tmp_path, fails):
     logger = logging.getLogger(_PIPELINE_LOGGER)
@@ -799,7 +793,6 @@ def test_pipeline_logger_state_is_restored(monkeypatch, tmp_path, fails):
     assert bars[-1].closed
 
 
-@_DEAD_PROGRESS
 def test_redirected_progress_refreshes_at_most_every_thirty_seconds(
         monkeypatch, tmp_path):
     docling = _FakeDocling(monkeypatch)
@@ -813,7 +806,6 @@ def test_redirected_progress_refreshes_at_most_every_thirty_seconds(
     assert bar.kwargs["maxinterval"] >= bar.kwargs["mininterval"]
 
 
-@_DEAD_PROGRESS
 def test_progress_filter_never_raises_into_docling_stage_threads(
         monkeypatch, tmp_path):
     # Docling logs from its stage threads inside ``except Exception``: an
@@ -834,7 +826,6 @@ def test_progress_filter_never_raises_into_docling_stage_threads(
     assert (tmp_path / "book.json").exists()
 
 
-@_DEAD_PROGRESS
 @pytest.mark.skipif(importlib.util.find_spec("docling") is None,
                     reason="requires the locked Docling runtime")
 def test_profiling_format_matches_the_installed_docling():
@@ -844,5 +835,42 @@ def test_profiling_format_matches_the_installed_docling():
     assert f'"{_PROFILING_TEMPLATE}"' in stage_source
     assert 'name="assemble"' in inspect.getsource(pipeline)
     assert pipeline._log.name == _PIPELINE_LOGGER
+    assert rag._DOCLING_PIPELINE_LOGGER == _PIPELINE_LOGGER
     message = _PROFILING_TEMPLATE % ("assemble", 3, [4, 5], 1.0, 2.0, 1.0)
     assert ingestion_core.docling_assembled_page_count(message) == 2
+
+
+@pytest.mark.parametrize(("message", "pages"), [
+    (_PROFILING_TEMPLATE % ("assemble", 1, [7], 1.0, 2.0, 1.0), 1),
+    (_PROFILING_TEMPLATE % ("assemble", 12, [1, 2, 3], 1.0, 2.0, 1.0), 3),
+    (_PROFILING_TEMPLATE % ("assemble", 1, [], 1.0, 2.0, 1.0), 0),
+    (_PROFILING_TEMPLATE % ("table", 1, [1, 2], 1.0, 2.0, 1.0), 0),
+    ("PIPELINE_PROFILING Stage assemble: pages=[1, 2]", 0),
+    ("Processing pages [1, 2]", 0),  # the shape the old regex expected
+    ("", 0),
+])
+def test_assembled_page_count_reads_only_assemble_records(message, pages):
+    assert ingestion_core.docling_assembled_page_count(message) == pages
+
+
+@pytest.mark.parametrize(
+    "floor", [logging.DEBUG, logging.INFO, logging.WARNING])
+def test_progress_filter_drops_only_records_below_the_floor(floor):
+    counted = []
+    progress = rag._DoclingProgressFilter(floor, counted.append)
+
+    def record(level, message, *args):
+        return logging.LogRecord(
+            _PIPELINE_LOGGER, level, __file__, 1, message, args, None)
+
+    records = [
+        record(logging.DEBUG, _PROFILING_TEMPLATE, "assemble", 1, [1, 2],
+               1.0, 2.0, 1.0),
+        record(logging.INFO, "Processing document %s", "book.pdf"),
+        record(logging.ERROR, "Stage %s failed for run %d: %s", "table", 1,
+               "synthetic"),
+    ]
+
+    assert [bool(progress.filter(item)) for item in records] == [
+        floor <= logging.DEBUG, floor <= logging.INFO, True]
+    assert counted == [2]
