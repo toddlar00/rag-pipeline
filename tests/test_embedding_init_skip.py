@@ -4,14 +4,18 @@ The pinned Nomic remote ``from_pretrained`` builds every parameter as a real
 CPU tensor, runs its random initializers, and then copies the verified
 checkpoint in with ``load_state_dict(strict=False)``. ``_LocalEmbedFn``
 skips those discarded initializers for that one verified model and then
-proves, from the checkpoint header, that the checkpoint supplied every
-tensor.
+proves, from the checkpoint header, that every parameter belongs to the
+transformer and that the checkpoint declares each of the transformer's
+state-dict tensors at its exact shape. That header proof cannot see a
+non-persistent buffer or a temporary tensor initialized inside the skip
+window.
 
 The differential test is the oracle for that load path: it builds the model
 the way the remote code does on its own (a direct ``SentenceTransformer`` load
 of the verified bundle, random initialization included) and requires the
-production load to reproduce every state-dict tensor, every buffer and the
-embeddings of synthetic texts bit for bit. It runs in a child process, so the
+production load to reproduce every state-dict tensor, every buffer (including
+the non-persistent ones the header proof cannot see) and the embeddings of
+synthetic texts bit for bit. It runs in a child process, so the
 loaded Torch, the process-private Transformers module cache and roughly 2 GB
 of weights never leak into other tests, and it skips unless Torch, Sentence
 Transformers and a verified cached bundle are all present. No CI workflow
@@ -279,6 +283,54 @@ def test_a_later_patcher_is_never_clobbered(monkeypatch):
         if name != "normal_"}
 
 
+def _stack_depth():
+    frame, depth = sys._getframe(1), 0
+    while frame is not None:
+        frame, depth = frame.f_back, depth + 1
+    return depth
+
+
+def test_interleaved_patchers_never_stack_leftover_wrappers(monkeypatch):
+    init = _fake_torch_init(monkeypatch)
+    depths = []
+
+    def normal_(tensor, *_args, **_kwargs):
+        depths.append(_stack_depth())
+        tensor.initialized_by.append("normal_")
+        return tensor
+
+    def guarded_normal(tensor, *args, **kwargs):
+        # Like Transformers' init guard: it calls Torch's own function, not
+        # the slot value it saved.
+        return normal_(tensor, *args, **kwargs)
+
+    init.normal_ = normal_
+    for _ in range(50):
+        skipped_tensor, tensor = _Tensor(), _Tensor()
+        with rag._skipped_torch_init() as skipped:
+            init.normal_(skipped_tensor)
+            # A patcher interleaving with the window (on another thread in
+            # production) saves this window's wrapper as its original ...
+            saved = init.normal_
+            init.normal_ = guarded_normal
+        # ... and reinstalls it after the window closed.
+        init.normal_ = saved
+        init.normal_(tensor)
+
+        assert skipped == [1]
+        assert skipped_tensor.initialized_by == []
+        assert tensor.initialized_by == ["normal_"]
+
+    # Each leftover replaced the previous one instead of wrapping it, so the
+    # pass-through chain never deepened ...
+    assert len(depths) == 50
+    assert len(set(depths)) == 1
+    # ... and the next undisturbed window restores Torch's own function.
+    with rag._skipped_torch_init():
+        pass
+    assert init.normal_ is normal_
+
+
 def test_nested_windows_on_one_thread_count_and_restore_in_order(
         monkeypatch):
     init = _fake_torch_init(monkeypatch)
@@ -371,8 +423,10 @@ def test_checkpoint_guard_fails_closed_on_uncovered_tensors(
     ("truncated", "header is truncated"),
     ("not-utf8", "not UTF-8 JSON"),
     ("not-json", "not UTF-8 JSON"),
+    ("huge-integer", "not UTF-8 JSON"),
     ("not-object", "not a JSON object"),
-    ("duplicate", "repeats entry 'a'"),
+    # Anchored: the parser's own error is not re-wrapped as a JSON error.
+    ("duplicate", "^safetensors header repeats entry 'a'$"),
     ("entry-not-object", "invalid shape for 'a'"),
     ("missing-shape", "invalid shape for 'a'"),
     ("negative-dimension", "invalid shape for 'a'"),
@@ -396,6 +450,14 @@ def test_checkpoint_header_reader_fails_closed(tmp_path, case, message):
         _checkpoint(path, raw=b'{"\xff": 1}')
     elif case == "not-json":
         _checkpoint(path, raw=b"{not json}")
+    elif case == "huge-integer":
+        # CPython's int/str conversion limit makes the JSON parser raise a
+        # plain ValueError for a longer integer literal.
+        limit = getattr(sys, "get_int_max_str_digits", lambda: 0)()
+        if not limit:
+            pytest.skip("this interpreter has no integer digit limit")
+        _checkpoint(path, raw=(
+            b'{"a": {"shape": [' + b"9" * (limit + 1) + b"]}}"))
     elif case == "not-object":
         _checkpoint(path, [entry])
     elif case == "duplicate":

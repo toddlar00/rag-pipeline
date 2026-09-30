@@ -908,9 +908,12 @@ def _data_embedding_vectors(
 # loading: it builds every parameter as a real CPU tensor, runs the random
 # initializers, and only then copies the verified checkpoint over them with
 # ``load_state_dict(strict=False)``. Skipping those discarded initializers
-# saves seconds per cold load. Only verified models whose single
-# ``model.safetensors`` supplies every transformer tensor belong here; a load
-# that skipped anything must pass ``_require_loaded_embedding_checkpoint``.
+# saves seconds per cold load. Only verified models belong here whose single
+# ``model.safetensors`` supplies every transformer state-dict tensor and whose
+# loader initializes no other tensor through ``torch.nn.init``. A load that
+# skipped anything must pass ``_require_loaded_embedding_checkpoint``, which
+# checks the first condition from the checkpoint header but cannot check the
+# second.
 _INIT_SKIP_EMBEDDING_MODELS = frozenset({"nomic-ai/nomic-embed-text-v2-moe"})
 _TORCH_INIT_FUNCTION_NAMES = (
     "uniform_", "normal_", "constant_", "ones_", "zeros_", "eye_", "dirac_",
@@ -918,6 +921,31 @@ _TORCH_INIT_FUNCTION_NAMES = (
     "kaiming_normal_", "trunc_normal_", "orthogonal_", "sparse_",
 )
 _torch_init_skip_lock = _threading.RLock()
+
+
+class _TorchInitSkip:
+    """One skip window's replacement for one ``torch.nn.init`` function.
+
+    It skips only on the owning thread while its window is open and otherwise
+    delegates to the function it replaced. A window never reopens, so a
+    wrapper whose window has closed is a pure delegate for good.
+    """
+
+    __slots__ = ("replaced", "_active", "_owner", "_skipped")
+
+    def __init__(self, replaced, active, owner, skipped):
+        self.replaced = replaced
+        self._active, self._owner, self._skipped = active, owner, skipped
+
+    @property
+    def closed(self):
+        return not self._active[0]
+
+    def __call__(self, tensor, *args, **kwargs):
+        if self._active[0] and _threading.get_ident() == self._owner:
+            self._skipped[0] += 1
+            return tensor
+        return self.replaced(tensor, *args, **kwargs)
 
 
 @contextmanager
@@ -929,8 +957,14 @@ def _skipped_torch_init():
     serialized, and each wrapper skips only on the owning thread while its
     window is open. Otherwise it delegates to the function it replaced, so a
     wrapper captured by other code or left installed by an interleaved patcher
-    stays a transparent pass-through. A slot is restored only while it still
-    holds this window's wrapper, which never clobbers another patcher.
+    stays a transparent pass-through. A new window wraps what such a closed
+    leftover delegates to, never the leftover itself. In any run of this
+    module's wrappers in a chain, only the first can therefore be closed and
+    the rest belong to distinct open windows, so repeated interleaving cannot
+    pile leftovers up; only another patcher's wrappers that delegate to what
+    they replaced can deepen a chain beyond that. A slot is restored only
+    while it still holds this window's wrapper, which never clobbers another
+    patcher.
     """
     skipped = [0]
     init = sys.modules.get("torch.nn.init")
@@ -941,20 +975,17 @@ def _skipped_torch_init():
         owner = _threading.get_ident()
         active = [True]
         installed = {}
-
-        def _bypass(original):
-            def _skip_init(tensor, *args, **kwargs):
-                if active[0] and _threading.get_ident() == owner:
-                    skipped[0] += 1
-                    return tensor
-                return original(tensor, *args, **kwargs)
-            return _skip_init
-
         try:
             for name in _TORCH_INIT_FUNCTION_NAMES:
                 original = getattr(init, name, None)
+                # A closed leftover is a pure delegate, so wrap what it
+                # delegates to. An open wrapper here can only belong to an
+                # enclosing window on this thread (the lock serializes
+                # windows), and it must stay in the chain.
+                while type(original) is _TorchInitSkip and original.closed:
+                    original = original.replaced
                 if callable(original):
-                    wrapper = _bypass(original)
+                    wrapper = _TorchInitSkip(original, active, owner, skipped)
                     installed[name] = (original, wrapper)
                     setattr(init, name, wrapper)
             yield skipped
@@ -967,11 +998,23 @@ def _skipped_torch_init():
 
 def _require_loaded_embedding_checkpoint(
         model, checkpoint: Path, model_id: str) -> None:
-    """Prove the verified checkpoint overwrote every skipped initializer.
+    """Prove the checkpoint declares every loaded transformer tensor.
 
-    Every parameter must belong to the transformer, and the checkpoint must
-    declare each of that transformer's state-dict tensors at its exact shape.
-    An unexpected Sentence Transformers structure fails closed.
+    Every parameter must belong to the transformer, and the verified
+    checkpoint header must declare each of that transformer's state-dict
+    entries (parameters and persistent buffers) at its exact shape. An
+    unexpected Sentence Transformers structure fails closed.
+
+    This does not prove that the checkpoint overwrote every skipped
+    initializer. A non-persistent buffer or a temporary tensor that the
+    loading thread initializes through ``torch.nn.init`` inside the skip
+    window is not a state-dict entry, so no checkpoint supplies it and this
+    check cannot see it; skipping its initializer leaves whatever its
+    allocation held. The pinned Nomic remote code initializes none (its
+    non-persistent ``inv_freq`` and ``norm_factor`` buffers come from
+    ``arange`` and ``sqrt``). The real-bundle differential test in
+    ``tests/test_embedding_init_skip.py`` compares every named buffer bit for
+    bit, so rerun it whenever the remote code or its runtime changes.
     """
     try:
         transformer = model[0].auto_model
@@ -1214,8 +1257,10 @@ def _get_embedding_fn(
                         model_source, **loader_kwargs,
                     )
                 if skipped_init[0]:
-                    # Cache nothing until the checkpoint provably overwrote
-                    # every tensor whose random initialization was skipped.
+                    # Cache nothing until every parameter is proven to belong
+                    # to the transformer and the checkpoint header declares
+                    # each transformer state-dict tensor at its exact shape.
+                    # The helper's docstring states what that cannot cover.
                     _require_loaded_embedding_checkpoint(
                         model, Path(model_source) / "model.safetensors",
                         self._name)
