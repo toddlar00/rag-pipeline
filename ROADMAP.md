@@ -1962,6 +1962,10 @@ integrated post-series fixes, relabels the sections integrated by #116,
 brings the README dependency blocks up to the declared requirements and
 records the private excerpt reprocessing; it changes no code, dependency or
 lock and supersedes the `a7847ce` pair.
+An independent accuracy review of the `578a13a` pair's pull request
+([#147](https://github.com/toddlar00/rag-pipeline/pull/147)) approved it
+with nits. The documentation source `f3ec23a` addresses them, records the
+published private tort-law re-run and supersedes the `578a13a` pair.
 Its Windows/Linux
 pair (independent local same-platform comparisons passed) is that branch's
 candidate; its hosted checks and exact-SHA record are pending, and the

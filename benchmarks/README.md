@@ -8,8 +8,8 @@ fresh-process repetitions.
 ## Provenance
 
 Both current reports were generated from the clean post-series documentation
-source checkpoint `578a13a7015c1d1e256665d456fe36a936cbd0a8` (tree
-`2e149be30090527f75c58d5315237bacd1304abb`), a documentation follow-up after
+source checkpoint `f3ec23a4a18b9fd664b3fc24fc5a069dab2d1534` (tree
+`2f0d08cb38d73c8b51ebdc18dcb616281c851c52`), a documentation follow-up after
 a series of one-domain dependency updates on `main` after the
 history-preserving merges of #121 (`602bec1`), of that series, #122 to #130
 (`1cffc58`), of its documentation follow-up #135 (`9eb6f94`), of the TOC
@@ -74,8 +74,8 @@ marker-resolved distributions before generation.
 
 | Platform | Runtime | Report | Bytes | File SHA-256 | Embedded report SHA-256 |
 |---|---:|---|---:|---|---|
-| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,083 | `9ac5ec668ca64db383db6c7ec435febc98adb1e3d3a024441507fefbc4d0c1bf` | `8808e8037a580214ef6486f39376bfcf6e1507b6d413d2bec9fe95da171ed100` |
-| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,476 | `0c8c388ce570b947ba74e321dd6876dc3b3b717a6a1658d63e7fc85129be5284` | `103d42e2a4e8024057084d12627c9a81bd56c47916363379d1234d0a7f621be6` |
+| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,080 | `e9b06a7b9c241b61342b3532cd8cc11e2a753d6d218284d32c4e2a7e17caa4b9` | `317dcc1a9d708f8a197ef5b77c1665a60145c226305cd50edb4a2a214bc74ca6` |
+| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,482 | `9fa14831e9016819d4c94a6b9cbaac56e1111ad164ae64bf987ca44f45fcf63f` | `2577cd4c5fd16ae1b9c413553ee993fa0470ae4e0e6a8972f016fc1f4b759055` |
 
 The reports attest the same source commit, clean-worktree state, tracked-diff
 digest, eight LF and `HEAD`-identical dependency/model-lock inputs, authoritative
@@ -390,6 +390,10 @@ integrated post-series fixes, relabels the sections integrated by #116,
 brings the README dependency blocks up to the declared requirements and
 records the private excerpt reprocessing; it changes no code, dependency or
 lock and supersedes the `a7847ce` pair.
+An independent accuracy review of the `578a13a` pair's pull request
+([#147](https://github.com/toddlar00/rag-pipeline/pull/147)) approved it
+with nits. The documentation source `f3ec23a` addresses them, records the
+published private tort-law re-run and supersedes the `578a13a` pair.
 The current reports above
 bind
 that exact clean source and each passes an independent complete

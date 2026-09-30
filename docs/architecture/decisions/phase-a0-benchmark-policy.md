@@ -18,7 +18,7 @@
   passed on PR #140 (merged through `6baf14b`), the table header-row oracle
   fix pair passed on PR #145 (merged through `ce73b61`), the soft-hyphen
   item-seam fix pair passed on PR #146 (merged through `8cc89b0`), and the
-  post-series documentation pair at source `578a13a` is pending; exact-head
+  post-series documentation pair at source `f3ec23a` is pending; exact-head
   human review and separate R8 owner authorization are not recorded
 - **Milestone:** R10 prerequisite for the R8 pipeline-ownership move
 - **Report schema:** `phase-a0` v3
@@ -151,8 +151,8 @@ Task 0.8 static-security pair at source `8891e1b` repeated it through
 gate-only child `1533164` and merge `e34103f`
 ([PR #107](https://github.com/toddlar00/rag-pipeline/pull/107)). The
 current replacement pair uses the clean post-series documentation source
-`578a13a7015c1d1e256665d456fe36a936cbd0a8` (tree
-`2e149be30090527f75c58d5315237bacd1304abb`), a documentation follow-up after
+`f3ec23a4a18b9fd664b3fc24fc5a069dab2d1534` (tree
+`2f0d08cb38d73c8b51ebdc18dcb616281c851c52`), a documentation follow-up after
 a series of one-domain dependency updates, on `main` after the merges of the
 soft-hyphen item-seam fix #146 (`8cc89b0`), the table header-row oracle fix
 #145 (`ce73b61`), the tokenless-glyph rotation fix #140 (`6baf14b`), the
@@ -359,6 +359,10 @@ integrated post-series fixes, relabels the sections integrated by #116,
 brings the README dependency blocks up to the declared requirements and
 records the private excerpt reprocessing; it changes no code, dependency or
 lock and supersedes the `a7847ce` pair.
+An independent accuracy review of the `578a13a` pair's pull request
+([#147](https://github.com/toddlar00/rag-pipeline/pull/147)) approved it
+with nits. The documentation source `f3ec23a` addresses them, records the
+published private tort-law re-run and supersedes the `578a13a` pair.
 Its Windows and
 Linux CPython 3.12.13 reports were
 generated after the same strict hash-locked synchronization and
@@ -551,15 +555,16 @@ then the stacked oauthlib promotion source `0333947`,
 then the stacked tokenless-glyph rotation fix source `c2d7b57`,
 then the stacked table header-row oracle fix source `09340ed`,
 then the stacked soft-hyphen item-seam fix source `a7847ce`,
-then the stacked post-series documentation source `578a13a`.
+then the stacked post-series documentation source `578a13a`,
+then the stacked post-series documentation source `f3ec23a`.
 Its Windows report
-is 51,083 bytes (file SHA-256
-`9ac5ec668ca64db383db6c7ec435febc98adb1e3d3a024441507fefbc4d0c1bf`;
+is 51,080 bytes (file SHA-256
+`e9b06a7b9c241b61342b3532cd8cc11e2a753d6d218284d32c4e2a7e17caa4b9`;
 embedded report SHA-256
-`8808e8037a580214ef6486f39376bfcf6e1507b6d413d2bec9fe95da171ed100`).
-Its Linux report is 50,476 bytes (file SHA-256
-`0c8c388ce570b947ba74e321dd6876dc3b3b717a6a1658d63e7fc85129be5284`;
+`317dcc1a9d708f8a197ef5b77c1665a60145c226305cd50edb4a2a214bc74ca6`).
+Its Linux report is 50,482 bytes (file SHA-256
+`9fa14831e9016819d4c94a6b9cbaac56e1111ad164ae64bf987ca44f45fcf63f`;
 embedded report SHA-256
-`103d42e2a4e8024057084d12627c9a81bd56c47916363379d1234d0a7f621be6`).
+`2577cd4c5fd16ae1b9c413553ee993fa0470ae4e0e6a8972f016fc1f4b759055`).
 Both use CPython 3.12.13 and pass their complete local same-platform 9×5
 comparisons. Hosted promotion remains pending.
