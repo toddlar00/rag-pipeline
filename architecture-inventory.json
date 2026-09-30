@@ -5322,7 +5322,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "565d57fc7d51315a017342771bf730bc8f85ab6f960665b137759404a3480b6b",
+          "locations_sha256": "b09e6c53553c707c9300758c367c93b440d4c65e1c7a11d83bc8dc3792ee5391",
           "name": "_LEGAL_CITATION_RE",
           "occurrence_count": 1,
           "paths": [
@@ -5342,7 +5342,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "8a154f3c453400d5cef5655db00f490b8da0c5c9b96c5f565c8d87135a406178",
+          "locations_sha256": "c863200d7b0998c5f1b600ab36898feec1ad38200952cf580c0e2d5feace375d",
           "name": "_LEGAL_SEARCH_ALIASES",
           "occurrence_count": 1,
           "paths": [
@@ -5362,7 +5362,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "d6883733bc9c0ba5418a23431a63b6ff3dba9e17618769be8e4dde06788d607d",
+          "locations_sha256": "0752583540ce306880ba3357c58dd153cefc5fe6b51c48f449d339a27a096e17",
           "name": "_LEGAL_SUBSECTION_RE",
           "occurrence_count": 1,
           "paths": [
@@ -5382,7 +5382,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "f27120b7812d2fb43c4f9e4960443ae69a9f94709ac77dff4fba42d818d3ce09",
+          "locations_sha256": "bbbe4aaa9968f00c068a1e202a88e98e2f93552204336b9eb0ee2064110e47ee",
           "name": "_LEGAL_WORD_RE",
           "occurrence_count": 1,
           "paths": [
@@ -9276,7 +9276,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "f9271e81e7334d79eadd8a677b3ae4bd0108e53e3a52f40dd494f318271caa39",
+          "locations_sha256": "9d34195dc723fffabc3c23cc8c283c11d8a52a8f7407c2973fa06cd65f12f65d",
           "name": "_legal_search_tokens",
           "occurrence_count": 3,
           "paths": [
@@ -10270,7 +10270,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "3a657d0a19fc822ac3c7b94782d10ef081601de1d9740872606d76eea7e6f128",
+          "locations_sha256": "e26771f6392d51518b2c83ff73a6d2cfabcca4692898f70fa754a8c26982d3bc",
           "name": "_normalize_legal_search_text",
           "occurrence_count": 1,
           "paths": [
@@ -54889,7 +54889,7 @@
             "scope": "top_level"
           }
         ],
-        "definition_locations_sha256": "f5faf32f3bee6c52af73ebf93c55bbdd7775d8eb7b9332c055decd01a1291a9e",
+        "definition_locations_sha256": "9cbbbff913671b61ceb0a20502e4ebd05d76c74645f298afc8d3236da72d10e0",
         "function_count": 45,
         "functions": [
           {
@@ -55175,9 +55175,9 @@
           }
         ],
         "module": "retrieval_core",
-        "non_blank_lines": 1258,
+        "non_blank_lines": 1281,
         "path": "retrieval_core.py",
-        "physical_lines": 1398,
+        "physical_lines": 1421,
         "top_level_function_count": 39
       },
       {
@@ -64046,7 +64046,7 @@
         "top_level_function_count": 2
       }
     ],
-    "physical_line_count": 130322,
+    "physical_line_count": 130345,
     "source_groups": [
       "production",
       "tools",
