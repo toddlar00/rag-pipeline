@@ -92,9 +92,20 @@ _REQUIRED_SECURITY_FILTERS = frozenset({
     "requirements*.txt",
 })
 _ACTION_SHA_RE = re.compile(r"[0-9a-fA-F]{40}")
+# A header is a whole line, so a comment or quoted value that merely ends in
+# ': |' cannot open a block scalar and blank the following workflow lines.
 _BLOCK_SCALAR_RE = re.compile(
-    r"(?:^|:)\s*[>|](?:[1-9]?[-+]?|[-+]?[1-9]?)\s*(?:#.*)?$"
+    r"^(?:(?:-\s+)?[A-Za-z0-9_][A-Za-z0-9_.-]*\s*:\s+)?"
+    r"[>|](?:[1-9]?[-+]?|[-+]?[1-9]?)(?:\s+#.*)?\s*$"
 )
+# Anchors, aliases and tags can prefix or stand in for a mapping key that the
+# line-based checks then miss; YAML 1.1 parsers also import merge-key entries.
+_YAML_NODE_START = r"(?:^(?:-\s+)*|:\s+|[\[,]\s*)"
+_YAML_ANCHOR_OR_ALIAS_RE = re.compile(
+    _YAML_NODE_START + r"[&*][^\s,\[\]{}]+"
+)
+_YAML_TAG_RE = re.compile(_YAML_NODE_START + r"!")
+_YAML_MERGE_KEY_RE = re.compile(r"^(?:-\s+)*<<\s*:")
 _QUOTED_MAPPING_KEY_RE = re.compile(
     r'''^(?:-\s+)?(?:"(?:[^"\\]|\\.)*"|'(?:[^']|'')*')\s*:'''
 )
@@ -289,6 +300,21 @@ def _validate_supported_workflow_syntax(
         if re.match(r"^\?\s+", stripped):
             errors.append(
                 f"{workflow_path}:{index + 1}: explicit mapping keys are "
+                "unsupported by the security validator"
+            )
+        if _YAML_ANCHOR_OR_ALIAS_RE.search(stripped):
+            errors.append(
+                f"{workflow_path}:{index + 1}: YAML anchors and aliases are "
+                "unsupported by the security validator"
+            )
+        if _YAML_TAG_RE.search(stripped):
+            errors.append(
+                f"{workflow_path}:{index + 1}: YAML tags are unsupported by "
+                "the security validator"
+            )
+        if _YAML_MERGE_KEY_RE.search(stripped):
+            errors.append(
+                f"{workflow_path}:{index + 1}: YAML merge keys are "
                 "unsupported by the security validator"
             )
     return errors
