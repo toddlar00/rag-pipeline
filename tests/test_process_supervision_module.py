@@ -266,6 +266,56 @@ def test_deadline_expiry_terminates_finalizes_and_returns_124(monkeypatch):
     assert "exceeded its 5s deadline" in recorder.warnings[0]
 
 
+@pytest.mark.parametrize("poll_callback", [False, True])
+def test_deadline_rechecks_injected_clock_only_with_poll_callback(
+    monkeypatch, poll_callback,
+):
+    clock = FakeClock()
+    gate = FakeGate()
+    recorder = Recorder()
+    waits = []
+    heartbeats = []
+
+    class FakeProcess:
+        pid = 4246
+
+        def wait(self, timeout):
+            # The injected clock stays held until the third wait.
+            waits.append(timeout)
+            if len(waits) == 3:
+                clock.now += 5.0
+            raise subprocess.TimeoutExpired("worker", timeout)
+
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(
+        ps.subprocess, "Popen", lambda *_args, **_kwargs: FakeProcess()
+    )
+    callbacks = {"heartbeat": heartbeats.append} if poll_callback else {}
+
+    code = ps._run_cli_with_deadline(
+        Path("worker.py"),
+        ["index"],
+        terminate_fn=lambda process, *, kill_job=None: True,
+        **_core_kwargs(recorder, gate, clock),
+        **callbacks,
+    )
+
+    assert code == 124
+    assert recorder.finalized == [("index", "failed", "TimeoutError")]
+    if poll_callback:
+        # Each poll slice re-reads the injected clock, so a held clock holds
+        # the deadline until it moves past it.
+        assert waits == [0.2, 0.2, 0.2]
+        assert len(heartbeats) == 3
+    else:
+        # Without a poll callback one wait spans the whole remaining budget,
+        # and its expiry ends the operation even though the clock is held.
+        assert waits == [5.0]
+        assert heartbeats == []
+
+
 def test_unconfirmed_cleanup_raises_and_skips_finalize(monkeypatch):
     clock = FakeClock()
     gate = FakeGate()
