@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from decimal import Decimal
+from fractions import Fraction
 import math
 import random
 from types import SimpleNamespace
@@ -166,7 +168,8 @@ class _Gram(str):
 
 _THRESHOLDS = (
     0.95, math.nextafter(0.95, 1.0), math.nextafter(0.95, 0.0), 0.8, 0.5,
-    1.0, 1, 0, 0.0, -1.0, 2.0, math.inf, math.nan,
+    1.0, 1, 0, 0.0, -1.0, 2.0, math.inf, math.nan, True, False,
+    Fraction(19, 20), Decimal("0.95"),
 )
 
 
@@ -302,6 +305,17 @@ def test_zero_length_fingerprints_keep_the_original_error_order(lengths):
         assert outcome[:2] == ("raised", ZeroDivisionError)
 
 
+@pytest.mark.parametrize("threshold", ["0.9", None, b"0.9", (0.9,)])
+def test_non_numeric_threshold_keeps_the_original_comparison_error(threshold):
+    chunks = [{"text": "x" * 40} for _ in range(3)]
+    values = [frozenset({"abc", "bcd", "cde"}), frozenset({"abc", "bcd"}),
+              frozenset({"abc", "bcd", "cde"})]
+    for audited in (True, False):
+        outcome = _assert_same(chunks, threshold, values, audited=audited)
+        assert outcome[:2] == ("raised", TypeError)
+        assert "'>='" in outcome[2]
+
+
 def test_non_builtin_trigrams_and_threshold_keep_dunder_dispatch():
     def run(dedup):
         calls = []
@@ -362,13 +376,17 @@ def test_non_builtin_trigrams_and_threshold_keep_dunder_dispatch():
                 return float.__ge__(self, other)
 
         plain = [Gram(text) for text in ("aa", "bb", "cc", "dd")]
-        values = iter([
+        values = [
             Grams(plain[:3]), frozenset(plain), Grams(plain[:3]),
             frozenset({"aa", "bb"}), Grams({"x"}), frozenset({"aa", "bb", "cc"}),
             frozenset({"aa", "bb", "cc"}), frozenset(plain[:3]),
-        ])
+            frozenset({"pp", "qq", "rr"}), frozenset({"pp", "qq", "rr", "ss"}),
+            frozenset({"pp", "qq"}), frozenset({"pp", "qq", "rr", "ss", "tt"}),
+            Grams({"pp", "qq", "rr"}),
+        ]
+        chunks = [{"text": "xxxxx"} for _ in values]
+        values = iter(values)
         calls.clear()
-        chunks = [{"text": "xxxxx"} for _ in range(8)]
         result = dedup(chunks, Threshold(0.7), text_fingerprint_fn=_identity,
                        make_trigrams_fn=lambda value: next(values))
         positions = {id(chunk): index for index, chunk in enumerate(chunks)}
@@ -446,3 +464,4 @@ def test_concurrent_calls_match_the_oracle():
         results = list(pool.map(
             lambda corpus: chunking_core._deduplicate_chunks(corpus, 0.8), corpora))
     assert [[id(chunk) for chunk in result] for result in results] == expected
+
