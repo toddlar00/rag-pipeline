@@ -1774,6 +1774,13 @@ the single-wrap reading-order repair and its lineage mirror rotate a page
 intact when only detached zero-token glyphs captured with the upper block
 break the run-disjointness proof; it changes no dependency or lock and
 supersedes the `0333947` pair.
+The `c2d7b57` pair (gate-only child `193e202`) passed the hosted CI
+promotion gate on [PR
+#140](https://github.com/toddlar00/rag-pipeline/pull/140), which merged into
+`main` as `6baf14b`. The table header-row oracle fix source `09340ed` makes
+the native table row-count oracle count stacked Markdown header rows the way
+docling-core 2.99 exports them; it changes no dependency or lock and
+supersedes the `c2d7b57` pair.
 Its Windows/Linux
 pair (independent local same-platform comparisons passed) is that branch's
 candidate; its hosted checks and exact-SHA record are pending, and the

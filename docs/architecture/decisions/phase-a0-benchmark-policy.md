@@ -14,9 +14,10 @@
   (merged through `a2c5629`), the job-heartbeat hardening pair passed on PR
   #137 (merged through `634c38b`), the Nomic contract-test pair passed on PR
   #136 (merged through `2f07510`), the oauthlib promotion pair passed on PR
-  #139 (merged through `123bedb`), and the tokenless-glyph rotation fix pair
-  at source `c2d7b57` is pending; exact-head human review and separate R8
-  owner authorization are not recorded
+  #139 (merged through `123bedb`), the tokenless-glyph rotation fix pair
+  passed on PR #140 (merged through `6baf14b`), and the table header-row
+  oracle fix pair at source `09340ed` is pending; exact-head human review
+  and separate R8 owner authorization are not recorded
 - **Milestone:** R10 prerequisite for the R8 pipeline-ownership move
 - **Report schema:** `phase-a0` v3
 
@@ -147,25 +148,25 @@ gate-only child `32153e9` and merge `376277c`
 Task 0.8 static-security pair at source `8891e1b` repeated it through
 gate-only child `1533164` and merge `e34103f`
 ([PR #107](https://github.com/toddlar00/rag-pipeline/pull/107)). The
-current replacement pair uses the clean tokenless-glyph rotation fix source
-`c2d7b57fcbbbb1b7ed33b568f481659f679adc26` (tree
-`04c75f7e92fe20572805aa9f3f391585e1ab2485`), a reading-order fix after a
-series of one-domain dependency updates, on `main` after the merges of the
-oauthlib promotion #139 (`123bedb`), the Nomic contract test #136
-(`2f07510`), the job-heartbeat hardening #137 (`634c38b`), the TOC
-glyph-leader fix #138 (`a2c5629`), the documentation follow-up #135
-(`9eb6f94`), the dependency series #122 to #130 (`1cffc58`), the fresh-OCR
-fidelity source `1ba9415`, the FlagEmbedding source `ddbef38`, the
-pytest-xdist source `ff5e64f`, the test-time economy source `365de1c` and
-the OCR-program and casebook-excerpt source `29ea76b`; together they changed
-Python source, CI configuration, `.gitattributes`, two test-tooling locks
-(pytest-xdist and execnet in `requirements-test.lock` and
-`requirements-smoke.lock`) and the FlagEmbedding record of
-`requirements-core.lock` and `requirements-full.lock`; the stacked
-dependency updates also change the vector-stores, Service/UI, test-audit
-tooling, ML/runtime, PDF/Docling (docling-core), promoted ML/runtime,
-promoted h2, promoted cryptography and promoted oauthlib records of their
-mapped locks, but no model lock. It supersedes the
+current replacement pair uses the clean table header-row oracle fix source
+`09340edd05d15ac537deebee17ff0c7550c2e82d` (tree
+`c687aa833f3a4edadd86dbb569ae917b7ecdf0a9`), a quality-check correction
+after a series of one-domain dependency updates, on `main` after the merges
+of the tokenless-glyph rotation fix #140 (`6baf14b`), the oauthlib promotion
+#139 (`123bedb`), the Nomic contract test #136 (`2f07510`), the
+job-heartbeat hardening #137 (`634c38b`), the TOC glyph-leader fix #138
+(`a2c5629`), the documentation follow-up #135 (`9eb6f94`), the dependency
+series #122 to #130 (`1cffc58`), the fresh-OCR fidelity source `1ba9415`,
+the FlagEmbedding source `ddbef38`, the pytest-xdist source `ff5e64f`, the
+test-time economy source `365de1c` and the OCR-program and casebook-excerpt
+source `29ea76b`; together they changed Python source, CI configuration,
+`.gitattributes`, two test-tooling locks (pytest-xdist and execnet in
+`requirements-test.lock` and `requirements-smoke.lock`) and the
+FlagEmbedding record of `requirements-core.lock` and
+`requirements-full.lock`; the stacked dependency updates also change the
+vector-stores, Service/UI, test-audit tooling, ML/runtime, PDF/Docling
+(docling-core), promoted ML/runtime, promoted h2, promoted cryptography and
+promoted oauthlib records of their mapped locks, but no model lock. It supersedes the
 earlier `1ae8502` pair, whose child `766feaf` passed both hosted Phase A0
 cells but whose dependency-light unit lanes failed at collection. Source
 `a15232d` then passed both hosted Phase A0 cells on [PR
@@ -331,6 +332,13 @@ the single-wrap reading-order repair and its lineage mirror rotate a page
 intact when only detached zero-token glyphs captured with the upper block
 break the run-disjointness proof; it changes no dependency or lock and
 supersedes the `0333947` pair.
+The `c2d7b57` pair (gate-only child `193e202`) passed the hosted CI
+promotion gate on [PR
+#140](https://github.com/toddlar00/rag-pipeline/pull/140), which merged into
+`main` as `6baf14b`. The table header-row oracle fix source `09340ed` makes
+the native table row-count oracle count stacked Markdown header rows the way
+docling-core 2.99 exports them; it changes no dependency or lock and
+supersedes the `c2d7b57` pair.
 Its Windows and
 Linux CPython 3.12.13 reports were
 generated after the same strict hash-locked synchronization and
@@ -520,15 +528,16 @@ then the stacked job-heartbeat hardening source `da6540d`,
 then the stacked Nomic contract-test source `28ba800`,
 then the stacked Nomic contract-test source `8e0b2a6`,
 then the stacked oauthlib promotion source `0333947`,
-then the stacked tokenless-glyph rotation fix source `c2d7b57`.
+then the stacked tokenless-glyph rotation fix source `c2d7b57`,
+then the stacked table header-row oracle fix source `09340ed`.
 Its Windows report
-is 51,086 bytes (file SHA-256
-`f704630ea525797f3a500d0390af4f68982de44839e62fb5d4165e5ff432d949`;
+is 51,084 bytes (file SHA-256
+`b265ea7963e74524a263f7a470615213e38a0d63069669b0b57c6d6ce2b4f6d7`;
 embedded report SHA-256
-`1c3b25ed617a8883a9650b27eb1599688ecdd41f7254efdc5a6572c1a3bacec5`).
+`2d00d647bec856bb5d45df4e0d571df0e8377f092358bc66faf1625bf46dadec`).
 Its Linux report is 50,483 bytes (file SHA-256
-`7419aafd59db48799ca20c9aa0f5945e504111d86d2e5a064884089a5cdc69ed`;
+`bae04198e2f3ccb4ae0b580ae2273a4245f1d3158299d1eebb9dadd2ee94b4d5`;
 embedded report SHA-256
-`5a19ad9f16ff419cbb3a31a3607083ebca76724bae9f7c59d9387471f78be888`).
+`fdb133b6e754dae211be617121ccf36d745e9fb8e417e092c59d64fd7c30df2f`).
 Both use CPython 3.12.13 and pass their complete local same-platform 9×5
 comparisons. Hosted promotion remains pending.
