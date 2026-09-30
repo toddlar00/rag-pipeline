@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import stat
 import sys
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -939,6 +940,177 @@ time.sleep(60)
         benchmark._run_contained_process(
             script, (), cwd=tmp_path, environment=environment,
             timeout_seconds=10, max_output_bytes=1024)
+
+
+def _capture_roots(root: Path) -> list[Path]:
+    return sorted(path for path in root.iterdir()
+                  if path.name.startswith("phase-a0-capture-"))
+
+
+def _exceed_output_bound(kwargs: dict, observed: dict) -> None:
+    """Drive the runner's own heartbeat past its bound, as a real probe does."""
+    kwargs["stdout_target"].write(b"x" * 64)
+    kwargs["stdout_target"].flush()
+    try:
+        kwargs["heartbeat"](None)
+    except benchmark.PhaseA0BenchmarkError as exc:
+        observed["primary"] = exc
+        raise
+    raise AssertionError("heartbeat did not enforce the output bound")
+
+
+def test_contained_runner_capture_root_is_private_and_removed(
+        monkeypatch, tmp_path):
+    import process_supervision
+
+    observed = {}
+
+    def fake_supervisor(_script, _arguments, **kwargs):
+        capture_root = Path(kwargs["stdout_target"].name).parent
+        observed.update({
+            "capture_root": capture_root,
+            "capture_mode": stat.S_IMODE(capture_root.stat().st_mode),
+            "file_modes": [
+                stat.S_IMODE(os.fstat(kwargs[name].fileno()).st_mode)
+                for name in ("stdout_target", "stderr_target")],
+            "names": sorted(path.name for path in capture_root.iterdir()),
+        })
+        kwargs["stderr_target"].write(b"diagnostic")
+        return 3
+
+    monkeypatch.setattr(
+        process_supervision, "_run_cli_with_deadline", fake_supervisor)
+    result = benchmark._run_contained_process(
+        tmp_path / "probe.py", (), cwd=tmp_path,
+        environment=benchmark.safe_child_environment(tmp_path),
+        timeout_seconds=3, max_output_bytes=32)
+
+    assert vars(result) == {
+        "returncode": 3, "stdout": b"", "stderr": b"diagnostic",
+        "cleanup_confirmed": True}
+    capture_root = observed["capture_root"]
+    assert capture_root.parent == tmp_path
+    assert capture_root.name.startswith("phase-a0-capture-")
+    assert observed["names"] == ["stderr.bin", "stdout.bin"]
+    if os.name != "nt":
+        assert observed["capture_mode"] == 0o700
+        assert observed["file_modes"] == [0o600, 0o600]
+    assert not capture_root.exists()
+    assert _capture_roots(tmp_path) == []
+
+
+def test_contained_runner_reraises_primary_error_after_removing_capture(
+        monkeypatch, tmp_path):
+    import process_supervision
+
+    observed = {}
+    context = TimeoutError("simulated deadline context")
+
+    def fake_supervisor(_script, _arguments, **kwargs):
+        try:
+            raise context
+        except TimeoutError:
+            _exceed_output_bound(kwargs, observed)
+
+    monkeypatch.setattr(
+        process_supervision, "_run_cli_with_deadline", fake_supervisor)
+    with pytest.raises(
+            benchmark.PhaseA0BenchmarkError, match="output bound") as raised:
+        benchmark._run_contained_process(
+            tmp_path / "probe.py", (), cwd=tmp_path,
+            environment=benchmark.safe_child_environment(tmp_path),
+            timeout_seconds=3, max_output_bytes=32)
+
+    assert raised.value is observed["primary"]
+    assert raised.value.__cause__ is None
+    assert raised.value.__context__ is context
+    assert raised.value.diagnostic_code is None
+    assert _capture_roots(tmp_path) == []
+
+
+@pytest.mark.parametrize(
+    "failure", [RuntimeError("boom"), KeyboardInterrupt(), SystemExit(7)],
+    ids=["runtime-error", "keyboard-interrupt", "system-exit"])
+def test_contained_runner_wraps_non_phase_failures_after_cleanup(
+        monkeypatch, tmp_path, failure):
+    import process_supervision
+
+    def fake_supervisor(_script, _arguments, **_kwargs):
+        raise failure
+
+    monkeypatch.setattr(
+        process_supervision, "_run_cli_with_deadline", fake_supervisor)
+    with pytest.raises(
+            benchmark.PhaseA0BenchmarkError,
+            match="^contained process failed with confirmed cleanup$",
+    ) as raised:
+        benchmark._run_contained_process(
+            tmp_path / "probe.py", (), cwd=tmp_path,
+            environment=benchmark.safe_child_environment(tmp_path),
+            timeout_seconds=3)
+
+    assert raised.value.__cause__ is failure
+    assert raised.value.diagnostic_code is None
+    assert _capture_roots(tmp_path) == []
+
+
+def test_contained_runner_wraps_capture_creation_failure(
+        monkeypatch, tmp_path):
+    import process_supervision
+
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError("no process may start without capture files")
+
+    monkeypatch.setattr(
+        process_supervision, "_run_cli_with_deadline", unexpected)
+    missing = tmp_path / "missing"
+    with pytest.raises(
+            benchmark.PhaseA0BenchmarkError,
+            match="^contained process failed with confirmed cleanup$",
+    ) as raised:
+        benchmark._run_contained_process(
+            tmp_path / "probe.py", (), cwd=missing,
+            environment=benchmark.safe_child_environment(tmp_path),
+            timeout_seconds=3)
+
+    assert isinstance(raised.value.__cause__, FileNotFoundError)
+    assert not missing.exists()
+
+
+@pytest.mark.skipif(
+    os.name != "nt", reason="only Windows refuses to delete an open file")
+@pytest.mark.xfail(
+    strict=True,
+    reason="the capture cleanup error replaces the primary error")
+def test_contained_runner_keeps_primary_error_through_transient_capture_hold(
+        monkeypatch, tmp_path):
+    import process_supervision
+
+    observed = {}
+
+    def fake_supervisor(_script, _arguments, **kwargs):
+        # A killed descendant's inherited handle can outlive the confirmed
+        # tree kill briefly; model it with a handle released on a timer.
+        holder = open(kwargs["stdout_target"].name, "rb")
+        observed["release"] = threading.Timer(0.25, holder.close)
+        observed["release"].start()
+        _exceed_output_bound(kwargs, observed)
+
+    monkeypatch.setattr(
+        process_supervision, "_run_cli_with_deadline", fake_supervisor)
+    try:
+        with pytest.raises(
+                benchmark.PhaseA0BenchmarkError,
+                match="output bound") as raised:
+            benchmark._run_contained_process(
+                tmp_path / "probe.py", (), cwd=tmp_path,
+                environment=benchmark.safe_child_environment(tmp_path),
+                timeout_seconds=3, max_output_bytes=32)
+    finally:
+        observed["release"].join()
+
+    assert raised.value is observed["primary"]
+    assert _capture_roots(tmp_path) == []
 
 
 def test_probe_main_fails_closed_if_code_resolves_the_operator_home(
