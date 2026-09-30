@@ -2262,6 +2262,56 @@ def test_offline_cli_runs_without_database_and_writes_redacted_telemetry(
     assert "text_preview" not in payload["query_details"][0]["results"][0]
 
 
+def test_offline_bm25_report_provenance_shape_is_characterized(tmp_path):
+    # Captured from the fixture adapter before the production lexical
+    # retriever existed; committed CI baselines depend on this exact shape.
+    root = Path(__file__).resolve().parents[1]
+    suite = root / "evaluation" / "suites" / "property"
+    report_path = tmp_path / "property-report.json"
+
+    assert retrieval_eval.main([
+        "--retriever", "bm25",
+        "--queries", str(suite / "queries.jsonl"),
+        "--chunks", str(suite / "chunks.jsonl"),
+        "--k", "1", "3", "5",
+        "--depth", "10",
+        "--json-report", str(report_path),
+    ]) == 0
+
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+    configuration = payload["configuration"]
+    assert sorted(configuration) == [
+        "context_max_characters", "context_segment_characters",
+        "context_window", "cost_rates", "db_backend", "db_lock_timeout",
+        "dense_weight", "embedding_model", "grounding_scorer_version",
+        "hybrid", "index_snapshot", "judgment_scorer_version", "k_values",
+        "llm_report_sha256", "model_artifact_lock_sha256",
+        "operation_timeout", "overfetch", "queries_sha256",
+        "release_security", "report_detail", "reranker_model",
+        "retrieval_depth", "retriever", "rrf_k", "sparse_weight",
+        "table_family_judgment_schema_version", "table_retrieval_policy",
+        "use_reranker",
+    ]
+    assert configuration["index_snapshot"] == {
+        "source_sha256": (
+            "606ea787c06e32b8b0a8b0e31a96900c5e2996839e8ed384cda291e0693776a8"),
+        "source_record_count": 11,
+        "record_count": 11,
+        "table_child_count": 0,
+        "id_scheme": "retrieval_core._chunk_id",
+        "retriever_implementation": "offline_retrieval.OfflineBM25Index/v2",
+        "scoring": "BM25 Okapi with non-negative Robertson IDF",
+        "minimum_content_term_matches": 2,
+        "stop_words_sha256": (
+            "0ea48becd93d2fca663ea0f82865f254488b0ff9a61e91e434dc2e2565a09a6f"),
+    }
+    baseline = json.loads(
+        (root / "evaluation" / "baselines" / "property-bm25.json")
+        .read_text(encoding="utf-8"))
+    assert configuration["index_snapshot"] == (
+        baseline["configuration"]["index_snapshot"])
+
+
 def test_report_query_digest_uses_the_scored_snapshot(
         monkeypatch, tmp_path):
     queries_path = tmp_path / "queries.jsonl"
