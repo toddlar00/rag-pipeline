@@ -473,6 +473,58 @@ def test_owned_preview_is_closed_and_cleanup_failure_is_visible(tmp_path, monkey
     assert service.close() is clean and calls == ["request", "close"]
 
 
+@pytest.mark.parametrize(("readings", "expected"), [((1000., 1001., 1002.5), 7.5), ((1000., 1001., 1020.), 0.)])
+def test_owned_preview_close_receives_remaining_service_budget(tmp_path, monkeypatch, policy_pack,  # noqa: F811
+                                                                readings, expected):
+    import ocr_crop_preview_supervision
+
+    seen = []
+    preview = NS(render=lambda *_a, **_kw: None, private_root=tmp_path / "inert-owned-preview",
+                 render_with_view=lambda *_a, **_kw: None, request_close=lambda: None,
+                 close=lambda *, timeout_seconds: seen.append(timeout_seconds) or True)
+    monkeypatch.setattr(ocr_crop_preview_supervision, "CropPreviewController", lambda _workspace: preview)
+    service = host.CropReviewPackService(_workspace(policy_pack.binding, []), tmp_path)
+    clock = iter(readings)
+    # Replace the service clock capability only, after construction.
+    monkeypatch.setattr(host, "time", NS(monotonic=lambda: next(clock)))
+    assert service.close(timeout_seconds=10) is True
+    assert seen == [expected] and service._uncertain is False
+
+
+def test_service_close_budget_never_exceeds_owned_preview_bound():
+    import ocr_crop_preview_supervision
+
+    assert host.MAX_CLOSE_SECONDS <= ocr_crop_preview_supervision.CLOSE_TIMEOUT_SECONDS
+
+
+@pytest.mark.parametrize("timeout", [None, 40.])
+def test_owned_preview_close_is_bounded_when_rounded_remaining_time_exceeds_budget(tmp_path, monkeypatch,
+                                                                                   policy_pack, timeout):  # noqa: F811
+    import ocr_crop_preview_supervision
+
+    scratch = tmp_path / "host-temp"
+    scratch.mkdir()
+    monkeypatch.setattr(ocr_crop_preview_supervision.tempfile, "gettempdir", lambda: str(scratch))
+    workspace = _workspace(policy_pack.binding, [])
+    workspace.output_dir = tmp_path / "review-output"
+    workspace.output_dir.mkdir()
+    (tmp_path / "packs").mkdir()
+    # The real owned controller keeps its actual clock, bound check and cleanup.
+    service = host.CropReviewPackService(workspace, tmp_path / "packs")
+    controller, seen = service._owned_preview, []
+    preview_root, real_close = controller.private_root, controller.close
+    assert preview_root.parent == scratch and preview_root.is_dir()
+    monkeypatch.setattr(controller, "close", lambda **kw: seen.append(kw) or real_close(**kw))
+    # Same-tick readings straddling a binary precision boundary round upward.
+    now = 131071.999
+    assert (now + 40.) - now > 40.
+    # Replace the service clock capability only, after construction.
+    monkeypatch.setattr(host, "time", NS(monotonic=lambda: now))
+    assert service.close(**({} if timeout is None else {"timeout_seconds": timeout})) is True
+    assert seen == [{"timeout_seconds": 40.}]
+    assert service._uncertain is False and not preview_root.exists()
+
+
 @pytest.mark.parametrize("operation", ["regions", "hardscan"])
 def test_complete_generated_historical_archives_open_compare_revise_without_native_runtime(tmp_path, operation):
     before = archive_fixture(operation, text="before")
