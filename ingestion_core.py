@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
+import re
 from typing import Literal, Protocol, TypedDict, TypeAlias
 
 
@@ -741,13 +742,31 @@ def apply_background_image_removals(
 # DOCLING_NUM_THREADS in the environment cannot change conversion bytes.
 DOCLING_INFERENCE_THREADS = 4
 
+# Docling 2.121 logs "PIPELINE_PROFILING Stage %s: run_id=%d pages=%s ..." at
+# DEBUG after every stage batch; the stage name is a formatting argument.
+DOCLING_PROFILING_PREFIX = "PIPELINE_PROFILING Stage "
+_DOCLING_PROFILED_STAGE_RE = re.compile(
+    r"^PIPELINE_PROFILING Stage ([a-z_]+): run_id=\d+ pages=\[([0-9, ]*)\] ")
+
+
+def docling_assembled_page_count(message: str) -> int:
+    """Pages one formatted Docling profiling message reports as assembled.
+
+    A page is finished once its ``assemble`` stage completes; every other
+    stage and any other message count zero.
+    """
+    match = _DOCLING_PROFILED_STAGE_RE.match(message)
+    if match is None or match.group(1) != "assemble":
+        return 0
+    return sum(1 for page in match.group(2).split(",") if page.strip())
+
 _MEMORY_EXHAUSTION_MARKERS = ("out of memory", "bad_alloc")
 _EVIDENCE_TOKEN_LIMIT = 64
 _MAX_REPORTED_ERROR_SOURCES = 8
 
 
 class DoclingConversionIncompleteError(RuntimeError):
-    """Docling finished without a clean success, so nothing may be published."""
+    """Docling finished without a clean success; nothing may be published."""
 
 
 @dataclass(frozen=True)
