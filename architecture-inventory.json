@@ -1825,7 +1825,7 @@
             "target": "operating.getenv"
           },
           {
-            "locations_sha256": "6b81cd994d8436ec896fe114497b523e6a168039e64f2c3041a4ee5e6810163c",
+            "locations_sha256": "ed48ff64fd08e46910cdbded8b5c0c564bad7da39ddfd7f6685fa26a250e60bd",
             "occurrence_count": 6,
             "operations": [
               "setattr"
@@ -2149,7 +2149,7 @@
             "target": "_API_EMBEDDING_BATCH_TOKEN_BUDGET"
           },
           {
-            "locations_sha256": "f7a029aa222d6fd14f8d00d26ce123f7f4333aeb449a0133e8c7e195c7c2100f",
+            "locations_sha256": "de1f353f05cef8568b90dd0456f2911b76b811db594d872054c6da3c92fce7a8",
             "occurrence_count": 2,
             "operations": [
               "setattr"
@@ -2427,7 +2427,7 @@
             "target": "_atomic_write_exact_utf8"
           },
           {
-            "locations_sha256": "45a45f02fe1464f5a50933240acebdeb87467599fdc77afe106115e174290a7b",
+            "locations_sha256": "2c1762ba12808e6121d2026733fa33013c92b1fd117620ce26e38ca57e54752a",
             "occurrence_count": 5,
             "operations": [
               "setattr"
@@ -2533,7 +2533,7 @@
             "target": "_bm25_search"
           },
           {
-            "locations_sha256": "b1802b9b5a4f8d8d4582986204dd693308db01f123d5b25dc10bd1b685afe894",
+            "locations_sha256": "6bd4b9fe1f16fcf216d58b4df845d2287bddc87bbcf0acbed8f8ca88ce4277c1",
             "occurrence_count": 2,
             "operations": [
               "setattr"
@@ -2687,7 +2687,7 @@
             "target": "_chunk_document_locked"
           },
           {
-            "locations_sha256": "4bc971ec29a65b8f2d13607c8311d2c1e43841bb7e3ccf3144666fe19be61b2e",
+            "locations_sha256": "33a4239e86b1e2438655e048595cf22f120d901a13b09d278e7ef626c3e8296c",
             "occurrence_count": 3,
             "operations": [
               "setattr"
@@ -3741,7 +3741,7 @@
             "target": "_page_count"
           },
           {
-            "locations_sha256": "d8a6c25c404dd90688b868e640f866ba4085297d1bd2b54bc9bfdd7515c27e5f",
+            "locations_sha256": "4dd86335b28241e66dcc93713bbf8622d9014ea2a91e1133fbe16ada81d131e5",
             "occurrence_count": 3,
             "operations": [
               "setattr"
@@ -6171,7 +6171,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "987d13510c329ae00d7932e301f12d1f9c8c0d9c3c1ba473a26c7e30723e8450",
+          "locations_sha256": "f223af1ac0ffbfb0c0a1429a1bc40ab9c26591d94df69f7fe80c20bfeeb5442b",
           "name": "_artifact_completion_path",
           "occurrence_count": 24,
           "paths": [
@@ -6211,7 +6211,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "afd11541ab79716a60753063150d81433765df285882bfc8f39a278308ea073b",
+          "locations_sha256": "89bc8dad978804d48ff37ff4da852576256b1d0be7423fb98913e3aa1a4d011d",
           "name": "_artifact_parameters_sha256",
           "occurrence_count": 17,
           "paths": [
@@ -6251,7 +6251,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "877b2ceaf6870807f59420b871492bf891f72a8ddf76979c0e66900a9aa8b09d",
+          "locations_sha256": "9aa27ed1cb914e1d61998114cb0f076f1bb77c91e40b894ca10514354c97e5d8",
           "name": "_artifact_sha256_cache",
           "occurrence_count": 2,
           "paths": [
@@ -6271,7 +6271,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "68ee666a61e695e1b826fa0b8659189734ada6ec937d7b06d4360dbcfcb6b43c",
+          "locations_sha256": "f5721329c9c1825571de6bca6381656d86e37f637aa0f67fbf7ef08392b0f282",
           "name": "_artifact_stat_fingerprint",
           "occurrence_count": 3,
           "paths": [
@@ -6391,7 +6391,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "fd8c44a950b354eaaf4bc3c4e722d5a9cca8c98caeb9a941248e26116808c3ef",
+          "locations_sha256": "af4b636a74fdc76b9df99e882086e64f675d3f0f7db7ad5ff0cf2753382e8b7e",
           "name": "_atomic_write_json",
           "occurrence_count": 38,
           "paths": [
@@ -6903,7 +6903,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "ee849e4e8c058dcdf2a76902e852d7fbaa20e10d2e0d6f43ddd34061d4d82771",
+          "locations_sha256": "b496cdcd4c53b37979cd49ec1fe1ad87c8603063672b41f4a74ad52b76500400",
           "name": "_cached_artifact_sha256",
           "occurrence_count": 13,
           "paths": [
@@ -9554,7 +9554,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "1020a72d2393df44da2375997c257e839ae74d80f476177ac82c49377d718255",
+          "locations_sha256": "6952e906eff542bf82be0d85ad48484df3238760c287666329ccffe634ce59d7",
           "name": "_load_index_snapshot_strict",
           "occurrence_count": 2,
           "paths": [
@@ -10475,7 +10475,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "5a807af3572c9e77321fec28ed76df35cb447b33f6484ea6499b5cb69aff4565",
+          "locations_sha256": "bcdea6fdb3079e81d3e89ace9c55f2b439c6e2f62ce97196096f4361e8c5039b",
           "name": "_parse_index_records_strict",
           "occurrence_count": 5,
           "paths": [
@@ -11438,7 +11438,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "00c47b748b41a6643520a946fbaab3b35cc587b95617752e5fb72eb35b0f8d72",
+          "locations_sha256": "80e35e7cae5a8e4be89e7c5cde4bdc9475cb45182749aa8110f244a479a4e3ce",
           "name": "_read_index_artifact_snapshot",
           "occurrence_count": 5,
           "paths": [
@@ -13909,7 +13909,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "4430cd1391010f4fa57e88ec45b07150b21cbd4640697129b192ad43fc29052e",
+          "locations_sha256": "a4df9a60b53b6c19aed0e9d0369cea387cabae9ecca49c431fa6e40d8dd8d979",
           "name": "_write_artifact_completion",
           "occurrence_count": 9,
           "paths": [
