@@ -252,8 +252,8 @@ def test_strict_parser_accepts_finite_float_edges_unchanged():
 
 def test_strict_parser_keeps_stdlib_bom_error_for_later_lines():
     payload = (
-        '﻿{"text":"a","metadata":{}}\n'
-        '﻿{"text":"b","metadata":{}}\n'
+        '\ufeff{"text":"a","metadata":{}}\n'
+        '\ufeff{"text":"b","metadata":{}}\n'
     )
 
     with pytest.raises(ValueError) as caught:
@@ -382,7 +382,7 @@ def _random_chunk_line(rng, index):
     roll = rng.random()
     special = (
         "nope", "[]", '{"metadata":{}}', '{"text":"x","metadata":[]}',
-        '﻿{"text":"b","metadata":{}}', '{"text":"b","metadata":{}}',
+        '\ufeff{"text":"b","metadata":{}}', '{"text":"b","metadata":{}}',
         "",
     )
     if roll < 0.08:
