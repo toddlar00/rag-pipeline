@@ -283,6 +283,54 @@ def test_a_later_patcher_is_never_clobbered(monkeypatch):
         if name != "normal_"}
 
 
+def _stack_depth():
+    frame, depth = sys._getframe(1), 0
+    while frame is not None:
+        frame, depth = frame.f_back, depth + 1
+    return depth
+
+
+def test_interleaved_patchers_never_stack_leftover_wrappers(monkeypatch):
+    init = _fake_torch_init(monkeypatch)
+    depths = []
+
+    def normal_(tensor, *_args, **_kwargs):
+        depths.append(_stack_depth())
+        tensor.initialized_by.append("normal_")
+        return tensor
+
+    def guarded_normal(tensor, *args, **kwargs):
+        # Like Transformers' init guard: it calls Torch's own function, not
+        # the slot value it saved.
+        return normal_(tensor, *args, **kwargs)
+
+    init.normal_ = normal_
+    for _ in range(50):
+        skipped_tensor, tensor = _Tensor(), _Tensor()
+        with rag._skipped_torch_init() as skipped:
+            init.normal_(skipped_tensor)
+            # A patcher interleaving with the window (on another thread in
+            # production) saves this window's wrapper as its original ...
+            saved = init.normal_
+            init.normal_ = guarded_normal
+        # ... and reinstalls it after the window closed.
+        init.normal_ = saved
+        init.normal_(tensor)
+
+        assert skipped == [1]
+        assert skipped_tensor.initialized_by == []
+        assert tensor.initialized_by == ["normal_"]
+
+    # Each leftover replaced the previous one instead of wrapping it, so the
+    # pass-through chain never deepened ...
+    assert len(depths) == 50
+    assert len(set(depths)) == 1
+    # ... and the next undisturbed window restores Torch's own function.
+    with rag._skipped_torch_init():
+        pass
+    assert init.normal_ is normal_
+
+
 def test_nested_windows_on_one_thread_count_and_restore_in_order(
         monkeypatch):
     init = _fake_torch_init(monkeypatch)
