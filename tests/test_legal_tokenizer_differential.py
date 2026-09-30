@@ -405,41 +405,152 @@ def test_every_match_of_a_guarded_pass_contains_its_guard_literal(
     assert [ascii(match) for match in matches if literal not in match] == []
 
 
+def _word_literal_first(source):
+    """Rewrite a leading ``\\bX`` as ``X(?<!\\wX)`` for one word character X.
+
+    ``\\b`` before a word character holds exactly when no word character
+    precedes it, and a lookbehind cannot match before the start of the
+    string, so the negative lookbehind accepts that position too.
+    """
+    match = re.fullmatch(r"\\b(\w)(?![*+?{])(.*)", source, re.DOTALL)
+    assert match is not None, source
+    char, rest = match.groups()
+    return char + r"(?<!\w" + char + ")" + rest
+
+
+def _lookbehind_literal_first(source):
+    """Rewrite a leading ``(?<=B)X`` as ``X(?<=BX)`` for one literal X."""
+    match = re.fullmatch(
+        r"\(\?<=([^()]+)\)([^\\.^$*+?{}\[\]|()])(?![*+?{])(.*)",
+        source, re.DOTALL)
+    assert match is not None, source
+    behind, char, rest = match.groups()
+    return char + "(?<=" + behind + char + ")" + rest
+
+
+def test_literal_first_transforms_rewrite_only_the_leading_assertion():
+    assert _word_literal_first(r"\bs\.?\s*ct\.?(?=\W|$)") == (
+        r"s(?<!\ws)\.?\s*ct\.?(?=\W|$)")
+    assert _lookbehind_literal_first(ORACLE_THOUSANDS) == (
+        r",(?<=\d,)(?=\d{3}(?:\D|$))")
+    for source in (r"\bu?s", r"\b\d+", r"(?<=a)b*", r"(?<=a)\.x"):
+        with pytest.raises(AssertionError):
+            (_word_literal_first if source.startswith("\\b")
+             else _lookbehind_literal_first)(source)
+
+
 def test_alias_plan_follows_the_canonical_aliases_in_order():
     aliases = retrieval_core._LEGAL_SEARCH_ALIASES
     guards = retrieval_core._LEGAL_ALIAS_GUARDS
     plan = retrieval_core._LEGAL_ALIAS_PLAN
 
     assert len(plan) == len(aliases) == len(guards)
-    for (guard, pattern, replacement), (canonical, expected), declared in zip(
-            plan, aliases, guards, strict=True):
+    rewritten = []
+    for index, ((guard, pattern, replacement), (canonical, expected),
+                declared) in enumerate(zip(plan, aliases, guards, strict=True)):
         assert guard == declared
         assert replacement is expected
-        assert pattern is canonical
+        if pattern is not canonical:
+            # A literal-first entry must be the mechanical rewrite of the
+            # canonical source, so editing a canonical alias fails here.
+            assert pattern.pattern == _word_literal_first(canonical.pattern)
+            assert pattern.flags == canonical.flags
+            rewritten.append(index)
+
+    assert rewritten == [2, 3, 4]
 
 
 @pytest.mark.parametrize(
-    ("compiled", "source"),
+    ("compiled", "source", "transform"),
     [
         pytest.param(
             retrieval_core._LEGAL_HYPHEN_WRAP_RE, ORACLE_HYPHEN_WRAP,
-            id="hyphen_wrap"),
+            _lookbehind_literal_first, id="hyphen_wrap"),
         pytest.param(
-            retrieval_core._LEGAL_TITLE_USC_RE, ORACLE_TITLE_USC,
+            retrieval_core._LEGAL_TITLE_USC_RE, ORACLE_TITLE_USC, None,
             id="title_usc"),
         pytest.param(
             retrieval_core._LEGAL_THOUSANDS_RE, ORACLE_THOUSANDS,
-            id="thousands"),
+            _lookbehind_literal_first, id="thousands"),
         pytest.param(
             retrieval_core._LEGAL_SUBSECTION_PART_RE, ORACLE_SUBSECTION_PART,
-            id="subsection_part"),
-        pytest.param(retrieval_core._LEGAL_USD_RE, ORACLE_USD, id="usd"),
+            None, id="subsection_part"),
+        pytest.param(
+            retrieval_core._LEGAL_USD_RE, ORACLE_USD, None, id="usd"),
     ],
 )
-def test_precompiled_inline_patterns_keep_their_oracle_source(
-        compiled, source):
-    assert compiled.pattern == source
+def test_precompiled_inline_patterns_follow_their_oracle_source(
+        compiled, source, transform):
+    expected = source if transform is None else transform(source)
+
+    assert compiled.pattern == expected
     assert compiled.flags == re.compile(source).flags
+
+
+def _literal_first_pairs():
+    """Canonical and literal-first forms of every rewritten pass."""
+    pairs = [
+        (f"alias_{index}", canonical, executed)
+        for index, ((canonical, _), (_, executed, _)) in enumerate(zip(
+            retrieval_core._LEGAL_SEARCH_ALIASES,
+            retrieval_core._LEGAL_ALIAS_PLAN, strict=True))
+        if executed is not canonical
+    ]
+    pairs.append((
+        "hyphen_wrap", re.compile(ORACLE_HYPHEN_WRAP),
+        retrieval_core._LEGAL_HYPHEN_WRAP_RE))
+    pairs.append((
+        "thousands", re.compile(ORACLE_THOUSANDS),
+        retrieval_core._LEGAL_THOUSANDS_RE))
+    return pairs
+
+
+def _spans(pattern, text):
+    return [match.span() for match in pattern.finditer(text)]
+
+
+@pytest.mark.parametrize(
+    ("name", "canonical", "executed"),
+    [pytest.param(*pair, id=pair[0]) for pair in _literal_first_pairs()],
+)
+def test_literal_first_pattern_matches_the_canonical_spans(
+        name, canonical, executed):
+    texts = fuzz_pattern_inputs()
+    differing = [
+        ascii(text) for text in texts
+        if _spans(canonical, text) != _spans(executed, text)
+    ]
+
+    assert sum(1 for text in texts if canonical.search(text)) >= 20, name
+    assert differing[:3] == []
+
+
+# One match of each rewritten pass, preceded below by every code point.
+_LITERAL_FIRST_PROBES = {
+    "alias_2": "u.s.c.",
+    "alias_3": "u.s.",
+    "alias_4": "s.ct.",
+    "hyphen_wrap": "-\nb",
+    "thousands": ",000",
+}
+
+
+def test_literal_first_pattern_agrees_after_every_preceding_code_point():
+    pairs = _literal_first_pairs()
+    code_points = [
+        code for code in range(0x10000) if not 0xD800 <= code <= 0xDFFF]
+    code_points.extend(range(0x10000, 0x110000, 97))
+
+    assert sorted(name for name, _, _ in pairs) == sorted(
+        _LITERAL_FIRST_PROBES)
+    for name, canonical, executed in pairs:
+        probe = _LITERAL_FIRST_PROBES[name]
+        text = "".join(chr(code) + probe + " " for code in code_points)
+        spans = _spans(canonical, text)
+
+        assert len(spans) >= 10, name
+        assert spans == _spans(executed, text), name
+        assert _spans(canonical, probe) == _spans(executed, probe), name
 
 
 def test_analyzer_names_stay_shared_by_rag_and_offline_retrieval():
