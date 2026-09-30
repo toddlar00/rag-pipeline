@@ -64,6 +64,20 @@ _HEARTBEAT_INTERVAL = 1.0
 # runtime.json longer than the atomic-replace retry window, so transient
 # replace failures are tolerated until this long without a successful write.
 _HEARTBEAT_TRANSIENT_FAILURE_BUDGET = 60.0
+# The manager's other writes are not advisory: the child-started runtime
+# records the worker identity recovery relies on before the running transition
+# commits, and the terminal runtime and attempt report follow a committed
+# transition. A transient replace failure of one of them is retried as a fresh
+# atomic write, repeating every storage check, within a bounded budget. Until
+# the ready marker is published the writes share one budget that leaves room
+# for interpreter startup within the shortest launcher wait (the UI's 5 s).
+# The cancellation evidence shares a short one, because the cancelled worker
+# keeps running until it is written. Every later write has its own.
+_PRE_READY_TRANSIENT_WRITE_BUDGET = 3.0
+_CANCELLATION_TRANSIENT_WRITE_BUDGET = 2.0
+_MANAGER_TRANSIENT_WRITE_BUDGET = 8.0
+# Backoff between those retries; the last delay repeats until the budget ends.
+_MANAGER_TRANSIENT_WRITE_DELAYS = (0.05, 0.1, 0.25, 0.5, 1.0)
 _RECOVERY_TERMINATE_GRACE = 3.0
 _GENERIC_BACKGROUND_TIMEOUT = 4 * 60 * 60.0
 _TERMINAL_TELEMETRY = frozenset({
@@ -167,6 +181,32 @@ def _attempt_run_id(execution: job_runtime.JobExecution) -> str:
 def _write_attempt_report(
         path: Path, report: attempt_reporting.AttemptReport) -> None:
     attempt_reporting.publish(path, report)
+
+
+def _write_tolerating_transient_replace(
+        write: Callable[..., None], *arguments: Any, deadline: float,
+        **options: Any) -> None:
+    """Call ``write``, retrying only transient Windows replace failures.
+
+    ``deadline`` is a ``time.monotonic()`` value. Each retry is a fresh atomic
+    write. Any other error, or a transient one at or after the deadline,
+    propagates unchanged.
+    """
+    attempt = 0
+    while True:
+        try:
+            write(*arguments, **options)
+            return
+        except OSError as exc:
+            if not storage_policy.is_transient_replace_error(exc):
+                raise
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise
+            delay = _MANAGER_TRANSIENT_WRITE_DELAYS[
+                min(attempt, len(_MANAGER_TRANSIENT_WRITE_DELAYS) - 1)]
+            attempt += 1
+            time.sleep(min(delay, remaining))
 
 
 def _load_attempt_report(
@@ -869,7 +909,23 @@ def run_job(
             observed_at=now,
             manager_started_at=now,
         )
-        _write_attempt_report(paths.attempt_report, attempt_report)
+        # Until the ready marker is published a launcher may still be waiting
+        # for this manager, so every write up to then shares one deadline and
+        # a held file cannot outlast that wait; each later write has its own
+        # budget. The writers are looked up when each call is made.
+        pre_ready_deadline = (
+            time.monotonic() + _PRE_READY_TRANSIENT_WRITE_BUDGET)
+        ready_published = False
+
+        def tolerant_write(write, *arguments, **options) -> None:
+            deadline = (
+                time.monotonic() + _MANAGER_TRANSIENT_WRITE_BUDGET
+                if ready_published else pre_ready_deadline)
+            _write_tolerating_transient_replace(
+                write, *arguments, deadline=deadline, **options)
+
+        tolerant_write(
+            _write_attempt_report, paths.attempt_report, attempt_report)
         try:
             job_runtime.validate_execution_directories(execution)
         except job_runtime.JobRuntimeError:
@@ -888,7 +944,8 @@ def run_job(
                 terminal_reason="execution_validation_failed",
                 manager_error=True,
             )
-            _write_attempt_report(paths.attempt_report, attempt_report)
+            tolerant_write(
+                _write_attempt_report, paths.attempt_report, attempt_report)
             raise
         runtime = RuntimeMetadata(
             job_id=job_id,
@@ -906,19 +963,20 @@ def run_job(
             exit_code=None,
             updated_at=now,
         )
-        _write_runtime(paths.runtime, runtime)
+        tolerant_write(_write_runtime, paths.runtime, runtime)
         current = store.transition_job(
             job_id, "starting", attempt_token=execution.attempt_token,
             expected_revision=execution.revision, lease=lease)
         runtime = replace(
             runtime, job_status=current.status, updated_at=time.time())
-        _write_runtime(paths.runtime, runtime)
+        tolerant_write(_write_runtime, paths.runtime, runtime)
         attempt_report = attempt_reporting.advance(
             attempt_report,
             observed_at=max(time.time(), attempt_report.updated_at),
             status=current.status,
         )
-        _write_attempt_report(paths.attempt_report, attempt_report)
+        tolerant_write(
+            _write_attempt_report, paths.attempt_report, attempt_report)
 
         # Cancellation requested before launch never creates a worker.
         if store.is_cancel_requested(job_id, execution.attempt_token):
@@ -941,10 +999,12 @@ def run_job(
                 cancel_observed=True,
                 cancel_observed_at=cancel_observed_at,
             )
-            _write_attempt_report(paths.attempt_report, attempt_report)
-            _write_ready(
-                paths, execution=execution, nonce=ready_nonce,
+            tolerant_write(
+                _write_attempt_report, paths.attempt_report, attempt_report)
+            tolerant_write(
+                _write_ready, paths, execution=execution, nonce=ready_nonce,
                 manager_pid=manager_pid, manager_birth=manager_birth)
+            ready_published = True
             current = store.transition_job(
                 job_id, "cancelled", attempt_token=execution.attempt_token,
                 expected_revision=current.revision, lease=lease)
@@ -953,7 +1013,7 @@ def run_job(
                 runtime, phase="terminal", job_status=current.status,
                 cleanup_confirmed=True, exit_code=130,
                 heartbeat_at=finished, updated_at=finished)
-            _write_runtime(paths.runtime, runtime)
+            tolerant_write(_write_runtime, paths.runtime, runtime)
             attempt_report = attempt_reporting.advance(
                 attempt_report,
                 observed_at=finished,
@@ -964,7 +1024,8 @@ def run_job(
                 terminal_reason="cancelled",
                 exit_code=130,
             )
-            _write_attempt_report(paths.attempt_report, attempt_report)
+            tolerant_write(
+                _write_attempt_report, paths.attempt_report, attempt_report)
             return ManagerResult(
                 job_id=job_id, status="cancelled",
                 attempt_number=execution.attempt_number, exit_code=130,
@@ -982,6 +1043,7 @@ def run_job(
 
         def child_started(process) -> None:
             nonlocal worker, worker_birth, runtime, current, attempt_report
+            nonlocal ready_published
             worker = process
             worker_birth = process_birth_identity(int(process.pid))
             worker_started_at = max(time.time(), attempt_report.updated_at)
@@ -989,14 +1051,14 @@ def run_job(
                 runtime, worker_pid=int(process.pid),
                 worker_birth=worker_birth, heartbeat_at=worker_started_at,
                 updated_at=worker_started_at)
-            _write_runtime(paths.runtime, runtime)
+            tolerant_write(_write_runtime, paths.runtime, runtime)
             current = store.transition_job(
                 job_id, "running", attempt_token=execution.attempt_token,
                 expected_revision=current.revision, lease=lease)
             runtime = replace(
                 runtime, phase="running", job_status=current.status,
                 updated_at=worker_started_at)
-            _write_runtime(paths.runtime, runtime)
+            tolerant_write(_write_runtime, paths.runtime, runtime)
             attempt_report = attempt_reporting.advance(
                 attempt_report,
                 observed_at=worker_started_at,
@@ -1004,10 +1066,12 @@ def run_job(
                 worker_started=True,
                 worker_started_at=worker_started_at,
             )
-            _write_attempt_report(paths.attempt_report, attempt_report)
-            _write_ready(
-                paths, execution=execution, nonce=ready_nonce,
+            tolerant_write(
+                _write_attempt_report, paths.attempt_report, attempt_report)
+            tolerant_write(
+                _write_ready, paths, execution=execution, nonce=ready_nonce,
                 manager_pid=manager_pid, manager_birth=manager_birth)
+            ready_published = True
 
         def cancellation_requested() -> bool:
             nonlocal cancel_observed, current, runtime, attempt_report
@@ -1029,7 +1093,11 @@ def run_job(
                     runtime, job_status=current.status,
                     heartbeat_at=cancel_observed_at,
                     updated_at=cancel_observed_at)
-                _write_runtime(paths.runtime, runtime)
+                cancellation_deadline = (
+                    time.monotonic() + _CANCELLATION_TRANSIENT_WRITE_BUDGET)
+                _write_tolerating_transient_replace(
+                    _write_runtime, paths.runtime, runtime,
+                    deadline=cancellation_deadline)
                 attempt_report = attempt_reporting.advance(
                     attempt_report,
                     observed_at=cancel_observed_at,
@@ -1040,7 +1108,9 @@ def run_job(
                     cancel_observed=True,
                     cancel_observed_at=cancel_observed_at,
                 )
-                _write_attempt_report(paths.attempt_report, attempt_report)
+                _write_tolerating_transient_replace(
+                    _write_attempt_report, paths.attempt_report,
+                    attempt_report, deadline=cancellation_deadline)
             return requested
 
         def heartbeat(_process) -> None:
@@ -1105,7 +1175,7 @@ def run_job(
         finally:
             active_log_handle = None
         try:
-            _cap_closed_worker_log(paths.log)
+            tolerant_write(_cap_closed_worker_log, paths.log)
         except BaseException:
             manager_error = True
 
@@ -1137,7 +1207,7 @@ def run_job(
             runtime, phase="terminal", job_status=current.status,
             heartbeat_at=finished, cleanup_confirmed=cleanup_confirmed,
             exit_code=exit_code, updated_at=finished)
-        _write_runtime(paths.runtime, runtime)
+        tolerant_write(_write_runtime, paths.runtime, runtime)
         reason = _result_reason(
             current.status, exit_code, cancel_observed)
         if cancel_observed:
@@ -1177,7 +1247,8 @@ def run_job(
             exit_code=exit_code,
             manager_error=manager_error,
         )
-        _write_attempt_report(paths.attempt_report, attempt_report)
+        tolerant_write(
+            _write_attempt_report, paths.attempt_report, attempt_report)
         return ManagerResult(
             job_id=job_id,
             status=current.status,
