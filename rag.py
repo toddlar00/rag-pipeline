@@ -16,7 +16,7 @@ Usage:
 
 import argparse
 from collections import Counter, defaultdict
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack, contextmanager, nullcontext
 import contextvars
 import copy
 import gc
@@ -860,6 +860,96 @@ def _data_embedding_vectors(
         expected_count=expected_count, provider=provider)
 
 
+# The pinned Nomic remote ``from_pretrained`` bypasses Transformers' meta-device
+# loading: it builds every parameter as a real CPU tensor, runs the random
+# initializers, and only then copies the verified checkpoint over them with
+# ``load_state_dict(strict=False)``. Skipping those discarded initializers
+# saves seconds per cold load. Only verified models whose single
+# ``model.safetensors`` supplies every transformer tensor belong here; a load
+# that skipped anything must pass ``_require_loaded_embedding_checkpoint``.
+_INIT_SKIP_EMBEDDING_MODELS = frozenset({"nomic-ai/nomic-embed-text-v2-moe"})
+_TORCH_INIT_FUNCTION_NAMES = (
+    "uniform_", "normal_", "constant_", "ones_", "zeros_", "eye_", "dirac_",
+    "xavier_uniform_", "xavier_normal_", "kaiming_uniform_",
+    "kaiming_normal_", "trunc_normal_", "orthogonal_", "sparse_",
+)
+_torch_init_skip_lock = _threading.RLock()
+
+
+@contextmanager
+def _skipped_torch_init():
+    """Skip ``torch.nn.init`` primitives that this thread calls in the window.
+
+    Yields a one-item list counting the skipped calls. Torch is never imported
+    here; without a loaded ``torch.nn.init`` nothing is patched. Windows are
+    serialized, and each wrapper skips only on the owning thread while its
+    window is open. Otherwise it delegates to the function it replaced, so a
+    wrapper captured by other code or left installed by an interleaved patcher
+    stays a transparent pass-through. A slot is restored only while it still
+    holds this window's wrapper, which never clobbers another patcher.
+    """
+    skipped = [0]
+    init = sys.modules.get("torch.nn.init")
+    if init is None:
+        yield skipped
+        return
+    with _torch_init_skip_lock:
+        owner = _threading.get_ident()
+        active = [True]
+        installed = {}
+
+        def _bypass(original):
+            def _skip_init(tensor, *args, **kwargs):
+                if active[0] and _threading.get_ident() == owner:
+                    skipped[0] += 1
+                    return tensor
+                return original(tensor, *args, **kwargs)
+            return _skip_init
+
+        try:
+            for name in _TORCH_INIT_FUNCTION_NAMES:
+                original = getattr(init, name, None)
+                if callable(original):
+                    wrapper = _bypass(original)
+                    installed[name] = (original, wrapper)
+                    setattr(init, name, wrapper)
+            yield skipped
+        finally:
+            active[0] = False
+            for name, (original, wrapper) in installed.items():
+                if getattr(init, name, None) is wrapper:
+                    setattr(init, name, original)
+
+
+def _require_loaded_embedding_checkpoint(
+        model, checkpoint: Path, model_id: str) -> None:
+    """Prove the verified checkpoint overwrote every skipped initializer.
+
+    Every parameter must belong to the transformer, and the checkpoint must
+    declare each of that transformer's state-dict tensors at its exact shape.
+    An unexpected Sentence Transformers structure fails closed.
+    """
+    try:
+        transformer = model[0].auto_model
+        outside = (
+            {id(parameter) for parameter in model.parameters()}
+            - {id(parameter) for parameter in transformer.parameters()})
+        tensors = {
+            name: tuple(tensor.shape)
+            for name, tensor in transformer.state_dict().items()
+        }
+    except (AttributeError, IndexError, KeyError, TypeError) as exc:
+        raise _model_artifacts.ModelArtifactError(
+            f"cannot prove the checkpoint load for {model_id}: unexpected "
+            f"model structure ({type(exc).__name__})") from exc
+    if outside:
+        raise _model_artifacts.ModelArtifactError(
+            f"{model_id} has {len(outside)} parameter(s) outside its "
+            "checkpointed transformer")
+    _model_artifacts.require_checkpoint_tensors(
+        checkpoint, tensors, model_id=model_id)
+
+
 def _get_embedding_fn(
         model_name: str, *, input_type: str = "document",
         security_policy: (
@@ -1072,9 +1162,23 @@ def _get_embedding_fn(
                         "local_files_only": True,
                         "model_kwargs": {"use_safetensors": True},
                     })
-                self._model = SentenceTransformer(
-                    model_source, **loader_kwargs,
-                )
+                skip_init = (
+                    verified and self._name in _INIT_SKIP_EMBEDDING_MODELS)
+                with (_skipped_torch_init() if skip_init
+                      else nullcontext([0])) as skipped_init:
+                    model = SentenceTransformer(
+                        model_source, **loader_kwargs,
+                    )
+                if skipped_init[0]:
+                    # Cache nothing until the checkpoint provably overwrote
+                    # every tensor whose random initialization was skipped.
+                    _require_loaded_embedding_checkpoint(
+                        model, Path(model_source) / "model.safetensors",
+                        self._name)
+                    log.debug(
+                        "Skipped %d discarded initializer calls loading %s",
+                        skipped_init[0], self._name)
+                self._model = model
                 declared_limit = EMBEDDING_MAX_TOKENS.get(self._name)
                 runtime_limit = getattr(self._model, "max_seq_length", None)
                 if (
