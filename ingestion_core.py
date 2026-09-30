@@ -737,6 +737,10 @@ def apply_background_image_removals(
 
 # Docling conversion outcome -------------------------------------------------
 
+# Docling's own default inference thread count, pinned so OMP_NUM_THREADS or
+# DOCLING_NUM_THREADS in the environment cannot change conversion bytes.
+DOCLING_INFERENCE_THREADS = 4
+
 _MEMORY_EXHAUSTION_MARKERS = ("out of memory", "bad_alloc")
 _EVIDENCE_TOKEN_LIMIT = 64
 _MAX_REPORTED_ERROR_SOURCES = 8

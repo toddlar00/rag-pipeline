@@ -57,8 +57,6 @@ _HOSTILE_ENV = {
 
 # Each marker names the pre-change defect its tests reproduce; the commit
 # that fixes the defect removes the marker.
-_UNPINNED = pytest.mark.xfail(
-    strict=True, reason="Docling runtime knobs follow the environment")
 _INERT_BACKEND = pytest.mark.xfail(
     strict=True, reason="conversion claims an unused pypdfium2 backend")
 _DEAD_PROGRESS = pytest.mark.xfail(
@@ -578,7 +576,6 @@ def test_memory_exhaustion_is_detected_without_keeping_the_message():
 # --- (b) Pin the runtime knobs ---------------------------------------------
 
 
-@_UNPINNED
 @pytest.mark.parametrize("gpu", [False, True])
 def test_accelerator_options_are_explicit(monkeypatch, tmp_path, gpu):
     for name, value in _HOSTILE_ENV.items():
@@ -593,7 +590,6 @@ def test_accelerator_options_are_explicit(monkeypatch, tmp_path, gpu):
     assert vars(kwargs["accelerator_options"]) == expected
 
 
-@_UNPINNED
 def test_default_settings_scope_covers_options_and_conversion(
         monkeypatch, tmp_path):
     docling = _FakeDocling(monkeypatch)
@@ -664,7 +660,6 @@ print(json.dumps(observed, sort_keys=True))
 """
 
 
-@_UNPINNED
 @pytest.mark.skipif(importlib.util.find_spec("docling") is None,
                     reason="requires the locked Docling runtime")
 def test_real_docling_options_ignore_the_ambient_environment(tmp_path):
@@ -684,13 +679,13 @@ def test_real_docling_options_ignore_the_ambient_environment(tmp_path):
 
     assert completed.returncode == 0, completed.stderr[-4000:]
     observed = json.loads(completed.stdout.strip().splitlines()[-1])
+    observed.pop("backend_variable")  # asserted with the backend change
     assert observed == {
         "num_threads": 4,
         "device": "cpu",
         "compile_model": False,
         "visualize_layout": False,
         "page_batch_size": 4,
-        "backend_variable": False,
         # The scope restores the ambient value for the rest of the process.
         "visualize_layout_after": True,
     }
