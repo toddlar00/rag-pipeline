@@ -186,10 +186,17 @@ _LEGAL_SUBSECTION_RE = re.compile(
     r"\b(\d+[a-z]?)\s*((?:\(\s*[a-z0-9]+\s*\))+)")
 _LEGAL_CITATION_RE = re.compile(
     r"\b(\d+)\s+(us|sct|f3d|f2d|fsupp3d|fsupp2d|fsupp)\s+(\d+)\b")
-_LEGAL_HYPHEN_WRAP_RE = re.compile(r"(?<=[a-z])-[ \t]*\r?\n[ \t]*(?=[a-z])")
+# sre skips ahead to a pattern's leading literal, but tries a pattern that
+# starts with \b or a lookbehind at every position. The literal-first passes
+# below therefore match their leading literal first and check the preceding
+# character with a lookbehind after it. For a word character X, \bX matches
+# exactly where X(?<!\wX) does: \b and \w share Unicode word semantics, and a
+# lookbehind cannot match before the start of the string. Likewise,
+# (?<=B)X matches exactly where X(?<=BX) does.
+_LEGAL_HYPHEN_WRAP_RE = re.compile(r"-(?<=[a-z]-)[ \t]*\r?\n[ \t]*(?=[a-z])")
 _LEGAL_TITLE_USC_RE = re.compile(
     r"\btitle\s+(\d+)\s+of\s+the\s+united\s+states\s+code\b")
-_LEGAL_THOUSANDS_RE = re.compile(r"(?<=\d),(?=\d{3}(?:\D|$))")
+_LEGAL_THOUSANDS_RE = re.compile(r",(?<=\d,)(?=\d{3}(?:\D|$))")
 _LEGAL_SUBSECTION_PART_RE = re.compile(r"[a-z0-9]+")
 _LEGAL_USD_RE = re.compile(r"\$\s*(\d+(?:\.\d+)?)")
 # The legal analyzer skips a regex pass when a substring that every match of
@@ -201,10 +208,26 @@ _LEGAL_USD_RE = re.compile(r"\$\s*(\d+(?:\.\d+)?)")
 # or None when no selective literal exists.
 _LEGAL_ALIAS_GUARDS = (
     "federal", "civ", None, None, "ct", "supp", "supp", "supp", "3d", "2d")
+# Literal-first equivalents of _LEGAL_SEARCH_ALIASES entries, or None to run
+# the canonical pattern. The unguarded usc and us aliases, and the sct alias
+# whose guard seldom skips it, gain the most.
+_LEGAL_ALIAS_LITERAL_FIRST = (
+    None,
+    None,
+    re.compile(r"u(?<!\wu)\.?\s*s\.?\s*c\.?(?=\W|$)"),
+    re.compile(r"u(?<!\wu)\.?\s*s\.?(?=\W|$)"),
+    re.compile(r"s(?<!\ws)\.?\s*ct\.?(?=\W|$)"),
+    None,
+    None,
+    None,
+    None,
+    None,
+)
 _LEGAL_ALIAS_PLAN = tuple(
-    (guard, pattern, replacement)
-    for guard, (pattern, replacement) in zip(
-        _LEGAL_ALIAS_GUARDS, _LEGAL_SEARCH_ALIASES, strict=True)
+    (guard, pattern if literal_first is None else literal_first, replacement)
+    for guard, literal_first, (pattern, replacement) in zip(
+        _LEGAL_ALIAS_GUARDS, _LEGAL_ALIAS_LITERAL_FIRST,
+        _LEGAL_SEARCH_ALIASES, strict=True)
 )
 _LEXICAL_METADATA_FIELDS = (
     "primary_case", "case_names", "section_path", "headings",
