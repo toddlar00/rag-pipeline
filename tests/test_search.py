@@ -10,6 +10,7 @@ import pytest
 import eval as retrieval_eval
 import rag
 import release_security
+import retrieval_core
 
 
 @pytest.fixture
@@ -1137,6 +1138,209 @@ def test_bm25_cache_sha_prevents_aba_stat_aliasing(monkeypatch, tmp_path):
         documents, _, _ = rag._bm25_search(
             query, chunks, 1, expected_source_sha256=expected)
         assert documents == [record["text"]]
+
+
+# Synthetic corpus and rankings captured from the production lexical leg
+# before any lexical query policy existed.  They pin duplicate query terms,
+# function-word-only queries, the epsilon IDF floor, stable tie order,
+# metadata filters, and bounded legal metadata as the default behavior.
+_BM25_CHARACTERIZATION_RECORDS = [
+    {"text": "The court held that the statute of frauds requires a signed "
+             "writing for a contract to sell land.",
+     "metadata": {"source_file": "synthetic", "chunk_index": 0,
+                  "content_type": "doctrine", "chapter_num": 1}},
+    {"text": "A contract is an agreement the court will enforce; the court "
+             "may excuse performance when a condition fails.",
+     "metadata": {"source_file": "synthetic", "chunk_index": 1,
+                  "content_type": "doctrine", "chapter_num": 1}},
+    {"text": "The court reviewed whether the offer was accepted before it "
+             "was revoked by the offeror.",
+     "metadata": {"source_file": "synthetic", "chunk_index": 2,
+                  "content_type": "case_summary", "chapter_num": 2,
+                  "primary_case": "Offeror v. Offeree"}},
+    {"text": "Under the mailbox rule an acceptance is effective on dispatch "
+             "unless the offer provides otherwise.",
+     "metadata": {"source_file": "synthetic", "chunk_index": 3,
+                  "content_type": "doctrine", "chapter_num": 2}},
+    {"text": "The court must not enforce a promise that lacks consideration, "
+             "and it shall not imply one.",
+     "metadata": {"source_file": "synthetic", "chunk_index": 4,
+                  "content_type": "doctrine", "chapter_num": 3}},
+    {"text": "The court must not enforce a promise that lacks consideration, "
+             "and it shall not imply one.",
+     "metadata": {"source_file": "synthetic-duplicate", "chunk_index": 4,
+                  "content_type": "doctrine", "chapter_num": 3}},
+    {"text": "Rule 12(b)(6) permits dismissal for failure to state a claim "
+             "under 28 U.S.C. section 1332.",
+     "metadata": {"source_file": "synthetic", "chunk_index": 5,
+                  "content_type": "rule", "chapter_num": 4,
+                  "section_path": ["Pleading", "Motions"]}},
+    {"text": "What the parties intended is a question of fact for the jury "
+             "if the writing is ambiguous.",
+     "metadata": {"source_file": "synthetic", "chunk_index": 6,
+                  "content_type": "doctrine", "chapter_num": 4}},
+]
+_BM25_DEFAULT_GOLDEN = [
+    ("what is the rule for the statute of frauds", 5, None, None,
+     [(0, 5.456108055058197), (7, 4.775981709417677),
+      (3, 2.4673690339434065), (1, 1.3618262978044804),
+      (6, 1.313282802503909)]),
+    ("contract contract court", 8, None, None,
+     [(1, 2.3336081402974176), (0, 2.1940683328164083),
+      (4, 0.33696071610259354), (5, 0.33696071610259354),
+      (2, 0.3197175238073649)]),
+    ("what is the", 8, None, None,
+     [(7, 2.81398185280601), (3, 0.9662224987375065),
+      (1, 0.9025689665161062), (2, 0.537446303461126),
+      (0, 0.45925733128837415), (4, 0.33696071610259354),
+      (5, 0.33696071610259354)]),
+    ("!!! ???", 8, None, None, []),
+    ("court must not enforce a promise without consideration", 3, None,
+     None,
+     [(4, 5.501869506768927), (5, 5.501869506768927),
+      (1, 1.3618262978044804)]),
+    ("the offer and the acceptance", 8, "doctrine", None,
+     [(3, 3.6969955531071013), (4, 1.6616411281886043),
+      (5, 1.6616411281886043), (7, 1.0905274084774845),
+      (0, 0.9185146625767483), (1, 0.9185146625767483)]),
+    ("the offer and the acceptance", 8, None, 2,
+     [(3, 3.6969955531071013), (2, 2.012068011426774)]),
+    ("Fed. R. Civ. P. 12(b)(6) motion", 4, None, None,
+     [(6, 6.898379358197497), (3, 1.0150929900984311)]),
+    ("whether the writing is ambiguous", 8, None, None,
+     [(7, 3.7757658018489435), (2, 2.1159994798357236),
+      (0, 1.3964327357928958), (3, 0.9662224987375065),
+      (1, 0.9025689665161062), (4, 0.33696071610259354),
+      (5, 0.33696071610259354)]),
+    ("court", 8, None, None,
+     [(1, 0.45925733128837415), (4, 0.33696071610259354),
+      (5, 0.33696071610259354), (0, 0.3197175238073649),
+      (2, 0.3197175238073649)]),
+]
+
+
+def _write_bm25_characterization_corpus(tmp_path):
+    chunks = tmp_path / "chunks.jsonl"
+    chunks.write_text(
+        "".join(json.dumps(record) + "\n"
+                for record in _BM25_CHARACTERIZATION_RECORDS),
+        encoding="utf-8",
+    )
+    return chunks
+
+
+def _assert_bm25_golden(result, expected):
+    documents, metadatas, scores = result
+    records = _BM25_CHARACTERIZATION_RECORDS
+    indexes = [index for index, _score in expected]
+    assert documents == [records[index]["text"] for index in indexes]
+    assert metadatas == [
+        {**records[index]["metadata"],
+         "stable_id": rag._chunk_id(records[index])}
+        for index in indexes
+    ]
+    assert all(type(score) is float for score in scores)
+    assert scores == pytest.approx(
+        [score for _index, score in expected], rel=1e-12, abs=1e-12)
+
+
+@pytest.mark.parametrize(
+    ("query", "n_results", "content_type", "chapter_num", "expected"),
+    _BM25_DEFAULT_GOLDEN)
+def test_bm25_default_ranking_matches_captured_characterization(
+        tmp_path, query, n_results, content_type, chapter_num, expected):
+    chunks = _write_bm25_characterization_corpus(tmp_path)
+    rag._bm25_cache.clear()
+
+    _assert_bm25_golden(
+        rag._bm25_search(query, chunks, n_results, content_type, chapter_num),
+        expected)
+
+
+def _bm25_oracle(query, n_results, content_type, chapter_num, *,
+                 function_words=frozenset()):
+    """Frozen, independent oracle of the production lexical leg."""
+    from rank_bm25 import BM25Okapi
+
+    records = _BM25_CHARACTERIZATION_RECORDS
+    corpus = [
+        rag._legal_search_tokens(rag._lexical_document_text(
+            record["text"], record["metadata"])) or ["__rag_empty__"]
+        for record in records
+    ]
+    tokens = rag._legal_search_tokens(query)
+    if not tokens:
+        return []
+    tokens = [token for token in tokens if token not in function_words] or tokens
+    scores = BM25Okapi(corpus).get_scores(tokens)
+    ranked = [
+        (float(scores[index]), index)
+        for index, record in enumerate(records)
+        if (not content_type
+            or record["metadata"].get("content_type") == content_type)
+        and (chapter_num is None
+             or record["metadata"].get("chapter_num") == chapter_num)
+        and set(corpus[index]).intersection(tokens)
+    ]
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    return [(index, score) for score, index in ranked[:n_results]]
+
+
+@pytest.mark.parametrize(
+    ("query", "n_results", "content_type", "chapter_num", "expected"),
+    _BM25_DEFAULT_GOLDEN)
+def test_bm25_function_word_policy_matches_a_frozen_oracle(
+        tmp_path, query, n_results, content_type, chapter_num, expected):
+    chunks = _write_bm25_characterization_corpus(tmp_path)
+    rag._bm25_cache.clear()
+    oracle = _bm25_oracle(query, n_results, content_type, chapter_num)
+    assert [index for index, _score in oracle] == [
+        index for index, _score in expected]
+    assert [score for _index, score in oracle] == pytest.approx(
+        [score for _index, score in expected], rel=1e-12, abs=1e-12)
+
+    _assert_bm25_golden(
+        rag._bm25_search(
+            query, chunks, n_results, content_type, chapter_num,
+            query_policy="function-words-v1"),
+        _bm25_oracle(
+            query, n_results, content_type, chapter_num,
+            function_words=retrieval_core.LEXICAL_QUERY_FUNCTION_WORDS_V1))
+    # The cached index is policy-independent: the default stays unchanged.
+    _assert_bm25_golden(
+        rag._bm25_search(
+            query, chunks, n_results, content_type, chapter_num,
+            query_policy="none"),
+        expected)
+    _assert_bm25_golden(
+        rag._bm25_search(query, chunks, n_results, content_type, chapter_num),
+        expected)
+
+
+def test_bm25_function_word_policy_changes_only_function_word_matches(
+        tmp_path):
+    chunks = _write_bm25_characterization_corpus(tmp_path)
+    rag._bm25_cache.clear()
+
+    documents, _, _ = rag._bm25_search(
+        "what is the rule for the statute of frauds", chunks, 8,
+        query_policy="function-words-v1")
+    only_function_words, _, _ = rag._bm25_search(
+        "what is the", chunks, 8, query_policy="function-words-v1")
+
+    records = _BM25_CHARACTERIZATION_RECORDS
+    # Record 7 matched the default query only through function words.
+    assert documents[0] == records[0]["text"]
+    assert records[7]["text"] not in documents
+    # A query of only function words degrades to the default behavior.
+    assert only_function_words == [
+        records[index]["text"] for index, _score in _BM25_DEFAULT_GOLDEN[2][4]]
+
+
+def test_bm25_rejects_unknown_query_policy_before_reading_chunks(tmp_path):
+    with pytest.raises(ValueError, match="lexical query policy"):
+        rag._bm25_search(
+            "rule", tmp_path / "missing.jsonl", 3, query_policy="stopwords")
 
 
 def test_qdrant_sparse_query_uses_shared_legal_analyzer(search_fakes):

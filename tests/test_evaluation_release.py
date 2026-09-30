@@ -201,6 +201,26 @@ def test_apply_release_policy_rejects_ambiguous_cli_overrides(tmp_path):
             args, argv=["--hybrid", "--k", "1", "3"])
 
 
+def test_apply_release_policy_owns_the_lexical_query_policy(tmp_path):
+    args = SimpleNamespace(
+        release_policy=_write_policy(tmp_path),
+        policy_mode="hybrid",
+        json_report=tmp_path / "report.json",
+        review_receipt=tmp_path / "receipt.json",
+        lexical_query_policy="function-words-v1",
+    )
+
+    evaluation_release.apply_release_policy(args, argv=[])
+
+    assert args.retriever == "index"
+    assert args.lexical_query_policy == "none"
+    for argv in (["--lexical-query-policy", "function-words-v1"],
+                 ["--lexical-query-policy=none"]):
+        with pytest.raises(
+                ValueError, match="remove: --lexical-query-policy$"):
+            evaluation_release.apply_release_policy(args, argv=argv)
+
+
 def test_runtime_binding_requires_queries_corpus_receipt_and_model_lock():
     policy = evaluation_release.validate_release_policy(_policy())
     queries = [{

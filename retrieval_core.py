@@ -310,6 +310,53 @@ def _sparse_token_vector(text: str) -> tuple[list[int], list[float]]:
     return list(token_counts), [float(value) for value in token_counts.values()]
 
 
+# Versioned, opt-in query-side lexical policies.  ``none`` is the production
+# default.  ``function-words-v1`` drops pure function words from the query
+# token stream only, so chunk text and every index stay byte-identical.  It
+# deliberately keeps legally meaningful modals, negation, and conditionals
+# such as may, must, shall, not, no, if, whether, and under.  Any change to
+# the word list requires a new policy name.
+LEXICAL_QUERY_POLICY_NONE = "none"
+LEXICAL_QUERY_POLICY_FUNCTION_WORDS_V1 = "function-words-v1"
+LEXICAL_QUERY_POLICIES = (
+    LEXICAL_QUERY_POLICY_NONE,
+    LEXICAL_QUERY_POLICY_FUNCTION_WORDS_V1,
+)
+LEXICAL_QUERY_FUNCTION_WORDS_V1 = frozenset({
+    "a", "an", "and", "are", "as", "at", "be", "been", "by", "did", "do",
+    "does", "for", "from", "had", "has", "have", "in", "into", "is", "it",
+    "its", "of", "on", "or", "that", "the", "their", "this", "to", "was",
+    "were", "with", "what", "which", "who", "how", "his", "her", "he",
+    "she", "they", "them", "there", "these", "those", "i", "you", "we",
+})
+
+
+def _validate_lexical_query_policy(policy: object) -> str:
+    """Return a known lexical query policy name or fail closed."""
+    if not isinstance(policy, str) or policy not in LEXICAL_QUERY_POLICIES:
+        raise ValueError(
+            "lexical query policy must be one of: "
+            + ", ".join(LEXICAL_QUERY_POLICIES))
+    return policy
+
+
+def _lexical_query_tokens(tokens: list[str], policy: str) -> list[str]:
+    """Apply one lexical query policy to analyzed query tokens.
+
+    Order and duplicate terms are preserved.  When filtering would leave no
+    token, the unfiltered tokens are returned so the query degrades to the
+    default behavior instead of silently matching nothing.
+    """
+    policy = _validate_lexical_query_policy(policy)
+    if policy == LEXICAL_QUERY_POLICY_NONE:
+        return list(tokens)
+    filtered = [
+        token for token in tokens
+        if token not in LEXICAL_QUERY_FUNCTION_WORDS_V1
+    ]
+    return filtered or list(tokens)
+
+
 def _chunk_hash(rec: dict) -> str:
     """Compute a hash of the indexable chunk payload for change detection.
 
