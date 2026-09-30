@@ -45,8 +45,9 @@ class _HeartbeatClock:
 
     Only the heartbeat's monotonic reads advance by a fixed step, so the
     failure budget counts heartbeats rather than wall time and cannot be
-    exceeded early on a slow runner. Every other read stays real, so the
-    supervision deadlines keep their meaning.
+    exceeded early on a slow runner. job_coordination's other reads (the
+    worker-tree confirmation) stay real; process_supervision's deadline
+    clock is its own and is not patched.
     """
 
     def __init__(self, step):

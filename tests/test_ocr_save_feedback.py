@@ -429,6 +429,8 @@ process.stdout.write('fixed-text-original-arguments-ok');
     environment = {key: value for key, value in os.environ.items() if not key.upper().startswith("NODE")}
     result = subprocess.run([node, "-e", harness], input=json.dumps({"script": script, "id": status.elem_id,
         "mount": status.js_on_load, "terminal": feedback.SAVE_UNCONFIRMED}),
-        capture_output=True, text=True, encoding="utf-8", timeout=15, env=environment, check=False)
+        # A ceiling, not an expectation: Node can take over 15 s to start on
+        # busy hosted Windows runners.
+        capture_output=True, text=True, encoding="utf-8", timeout=60, env=environment, check=False)
     assert result.returncode == 0, result.stderr
     assert result.stdout == "fixed-text-original-arguments-ok"
