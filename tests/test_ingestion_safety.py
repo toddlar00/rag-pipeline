@@ -1,4 +1,4 @@
-from contextlib import ExitStack
+from contextlib import ExitStack, nullcontext
 import sys
 from types import ModuleType, SimpleNamespace
 
@@ -379,9 +379,14 @@ def test_explicit_ocr_alone_forces_full_page_rapidocr(
     accelerator_options = ModuleType(
         "docling.datamodel.accelerator_options")
     accelerator_options.AcceleratorDevice = AcceleratorDevice
-    accelerator_options.AcceleratorOptions = object
+    accelerator_options.AcceleratorOptions = SimpleNamespace
     base_models = ModuleType("docling.datamodel.base_models")
     base_models.InputFormat = SimpleNamespace(PDF="pdf")
+    settings = ModuleType("docling.datamodel.settings")
+    settings.scoped = lambda **_kwargs: nullcontext()
+    settings.BatchConcurrencySettings = SimpleNamespace
+    settings.DebugSettings = SimpleNamespace
+    settings.InferenceSettings = SimpleNamespace
     monkeypatch.setitem(
         sys.modules, "docling.document_converter", document_converter)
     monkeypatch.setitem(
@@ -391,6 +396,7 @@ def test_explicit_ocr_alone_forces_full_page_rapidocr(
         accelerator_options)
     monkeypatch.setitem(
         sys.modules, "docling.datamodel.base_models", base_models)
+    monkeypatch.setitem(sys.modules, "docling.datamodel.settings", settings)
     monkeypatch.setattr(
         rag, "_detect_gpu", lambda: (AcceleratorDevice.CPU, 1, "CPU"))
     monkeypatch.setattr(

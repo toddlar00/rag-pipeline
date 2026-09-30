@@ -3,12 +3,15 @@
 The core operates on small structural PDF page/document protocols.  Facades
 own PyMuPDF imports, paths, logging, progress display, saving, and CLI output.
 No image deletion is attempted until every page has been inspected completely.
+A Docling conversion result is publishable only when content-free evidence
+shows a clean success.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
+import re
 from typing import Literal, Protocol, TypedDict, TypeAlias
 
 
@@ -731,3 +734,130 @@ def apply_background_image_removals(
         removed_xrefs=frozenset(removed_xrefs),
         deletion_issues=tuple(issues),
     )
+
+
+# Docling conversion outcome -------------------------------------------------
+
+# Docling's own default inference thread count, pinned so OMP_NUM_THREADS or
+# DOCLING_NUM_THREADS in the environment cannot change conversion bytes.
+DOCLING_INFERENCE_THREADS = 4
+
+# Docling 2.121 logs "PIPELINE_PROFILING Stage %s: run_id=%d pages=%s ..." at
+# DEBUG after every stage batch; the stage name is a formatting argument.
+DOCLING_PROFILING_PREFIX = "PIPELINE_PROFILING Stage "
+_DOCLING_PROFILED_STAGE_RE = re.compile(
+    r"^PIPELINE_PROFILING Stage ([a-z_]+): run_id=\d+ pages=\[([0-9, ]*)\] ")
+
+
+def docling_assembled_page_count(message: str) -> int:
+    """Pages one formatted Docling profiling message reports as assembled.
+
+    A page is finished once its ``assemble`` stage completes; every other
+    stage and any other message count zero.
+    """
+    match = _DOCLING_PROFILED_STAGE_RE.match(message)
+    if match is None or match.group(1) != "assemble":
+        return 0
+    return sum(1 for page in match.group(2).split(",") if page.strip())
+
+
+_MEMORY_EXHAUSTION_MARKERS = ("out of memory", "bad_alloc")
+_EVIDENCE_TOKEN_LIMIT = 64
+_MAX_REPORTED_ERROR_SOURCES = 8
+
+
+class DoclingConversionIncompleteError(RuntimeError):
+    """Docling finished without a clean success; nothing may be published."""
+
+
+@dataclass(frozen=True)
+class ConversionErrorEvidence:
+    """Content-free facts about one Docling ``ErrorItem``.
+
+    The error message is never retained: Docling copies exception text into
+    it, and that text can quote the source document.
+    """
+
+    page_no: int | None
+    component: str
+    module: str
+    category: str
+    memory_exhausted: bool
+
+
+def conversion_error_evidence(
+        *, page_no: int | None, component: str, module: str, category: str,
+        message: str) -> ConversionErrorEvidence:
+    """Reduce one Docling error to evidence; *message* is read only for OOM."""
+    lowered = message.lower()
+    return ConversionErrorEvidence(
+        page_no=page_no, component=component, module=module,
+        category=category,
+        memory_exhausted=any(
+            marker in lowered for marker in _MEMORY_EXHAUSTION_MARKERS),
+    )
+
+
+def _evidence_token(value: str | None) -> str:
+    """Bound one identifier and keep it to a single printable log token."""
+    if not value:
+        return "unknown"
+    return "".join(
+        char if char.isascii() and (char.isalnum() or char in "_.:-")
+        else "?"
+        for char in value[:_EVIDENCE_TOKEN_LIMIT])
+
+
+def _counted(count: int, noun: str) -> str:
+    return f"{count} {noun}{'' if count == 1 else 's'}"
+
+
+def _bounded_listing(values: Sequence[str], limit: int) -> str:
+    listing = ", ".join(values[:limit])
+    hidden = len(values) - limit
+    return f"{listing} (+{hidden} more)" if hidden > 0 else listing
+
+
+def docling_conversion_failure(
+        status: str | None,
+        errors: Sequence[ConversionErrorEvidence], *,
+        max_pages: int = 20) -> str | None:
+    """Content-free reason a Docling result must not be published, or None.
+
+    Only ``success`` with no recorded errors is complete.  Docling 2.121
+    returns ``partial_success`` instead of raising when a pipeline stage fails
+    on some pages, and re-adds those pages empty so page counts still match.
+    It also promotes ``success`` with errors to ``partial_success``, so errors
+    under ``success`` fail the same way.  The summary names the status, the
+    error count, at most *max_pages* affected page numbers and at most eight
+    distinct ``module/category`` sources; it never includes error text.
+    """
+    if status == "success" and not errors:
+        return None
+    pages = sorted({error.page_no for error in errors
+                    if error.page_no is not None})
+    document_level = sum(1 for error in errors if error.page_no is None)
+    sources = sorted({
+        f"{_evidence_token(error.module)}/{_evidence_token(error.category)}"
+        for error in errors})
+    memory_exhausted = sum(1 for error in errors if error.memory_exhausted)
+
+    details = [f"status {_evidence_token(status)}",
+               _counted(len(errors), "error")]
+    if pages:
+        details.append(
+            f"{_counted(len(pages), 'affected page')}: ["
+            + _bounded_listing([str(page) for page in pages], max_pages)
+            + "]")
+    if document_level:
+        details.append(_counted(document_level, "document-level error"))
+    if sources:
+        details.append(
+            "sources: "
+            + _bounded_listing(sources, _MAX_REPORTED_ERROR_SOURCES))
+    if memory_exhausted:
+        details.append(
+            f"memory exhausted in {_counted(memory_exhausted, 'error')}")
+    return ("Docling conversion incomplete (" + "; ".join(details)
+            + "). No Docling JSON, Markdown or conversion manifest was "
+            "written.")
