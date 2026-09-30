@@ -962,6 +962,13 @@
           "facade_roots": [
             "rag"
           ],
+          "module": "tests.test_chunk_dedup_differential",
+          "path": "tests/test_chunk_dedup_differential.py"
+        },
+        {
+          "facade_roots": [
+            "rag"
+          ],
           "module": "tests.test_chunking_core",
           "path": "tests/test_chunking_core.py"
         },
@@ -2745,8 +2752,8 @@
             "target": "_chunk_record_count"
           },
           {
-            "locations_sha256": "75060f8e75a63bb8b8dfedb7417c84d57f8c89b467110c603a7ec7addd41b720",
-            "occurrence_count": 2,
+            "locations_sha256": "1cd243314e26ece0f6cdcecf527ae12c77df48aea6f377b3d4da0460f72e0827",
+            "occurrence_count": 3,
             "operations": [
               "setattr"
             ],
@@ -2754,6 +2761,10 @@
               {
                 "count": 1,
                 "path": "tests/test_chunk_dedup_audit.py"
+              },
+              {
+                "count": 1,
+                "path": "tests/test_chunk_dedup_differential.py"
               },
               {
                 "count": 1,
@@ -5070,9 +5081,9 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "55fe8da1f4a8d908ffed7fcf6003da2e272a7e215a55e9e5222aad6ec2ed036c",
+          "locations_sha256": "7d7b8f335e056689d2e8fe3359cf7c5ebcbc080ea776309112542d35b538de6e",
           "name": "_CHUNK_DEDUP_CORE",
-          "occurrence_count": 1,
+          "occurrence_count": 2,
           "paths": [
             "_CHUNK_DEDUP_CORE"
           ],
@@ -5080,6 +5091,10 @@
             {
               "count": 1,
               "path": "tests/test_chunk_dedup_audit.py"
+            },
+            {
+              "count": 1,
+              "path": "tests/test_chunk_dedup_differential.py"
             }
           ]
         },
@@ -7926,9 +7941,9 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "2c06220d25f4b1c62cc502f6f50103e6a14539ff5d73e33640b39c18e0ae62ee",
+          "locations_sha256": "636561d95df760aa4d21a605c1e2024fdb2b2cb32f3da83df1b2b397af0fa944",
           "name": "_deduplicate_chunks",
-          "occurrence_count": 32,
+          "occurrence_count": 34,
           "paths": [
             "_deduplicate_chunks"
           ],
@@ -7936,6 +7951,10 @@
             {
               "count": 25,
               "path": "tests/test_chunk_dedup_audit.py"
+            },
+            {
+              "count": 2,
+              "path": "tests/test_chunk_dedup_differential.py"
             },
             {
               "count": 4,
@@ -13975,7 +13994,7 @@
           ]
         }
       ],
-      "using_module_count": 77
+      "using_module_count": 78
     }
   },
   "hash_domains": {
@@ -63944,7 +63963,7 @@
     "top_level_function_count": 2920
   },
   "tracked_sources": {
-    "count": 493,
+    "count": 494,
     "groups": [
       {
         "count": 152,
@@ -64105,7 +64124,7 @@
         ]
       },
       {
-        "count": 298,
+        "count": 299,
         "name": "tests",
         "paths": [
           "tests/conftest.py",
@@ -64124,6 +64143,7 @@
           "tests/test_casebook_pointer_adjacency.py",
           "tests/test_casebook_pointer_headings.py",
           "tests/test_chunk_dedup_audit.py",
+          "tests/test_chunk_dedup_differential.py",
           "tests/test_chunking_core.py",
           "tests/test_ci_promotion.py",
           "tests/test_ci_security.py",
