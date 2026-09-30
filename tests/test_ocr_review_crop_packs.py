@@ -491,6 +491,40 @@ def test_owned_preview_close_receives_remaining_service_budget(tmp_path, monkeyp
     assert seen == [expected] and service._uncertain is False
 
 
+def test_service_close_budget_never_exceeds_owned_preview_bound():
+    import ocr_crop_preview_supervision
+
+    assert host.MAX_CLOSE_SECONDS <= ocr_crop_preview_supervision.CLOSE_TIMEOUT_SECONDS
+
+
+@pytest.mark.parametrize("timeout", [None, 40.])
+def test_owned_preview_close_is_bounded_when_rounded_remaining_time_exceeds_budget(tmp_path, monkeypatch,
+                                                                                   policy_pack, timeout):  # noqa: F811
+    import ocr_crop_preview_supervision
+
+    scratch = tmp_path / "host-temp"
+    scratch.mkdir()
+    monkeypatch.setattr(ocr_crop_preview_supervision.tempfile, "gettempdir", lambda: str(scratch))
+    workspace = _workspace(policy_pack.binding, [])
+    workspace.output_dir = tmp_path / "review-output"
+    workspace.output_dir.mkdir()
+    (tmp_path / "packs").mkdir()
+    # The real owned controller keeps its actual clock, bound check and cleanup.
+    service = host.CropReviewPackService(workspace, tmp_path / "packs")
+    controller, seen = service._owned_preview, []
+    preview_root, real_close = controller.private_root, controller.close
+    assert preview_root.parent == scratch and preview_root.is_dir()
+    monkeypatch.setattr(controller, "close", lambda **kw: seen.append(kw) or real_close(**kw))
+    # Same-tick readings straddling a binary precision boundary round upward.
+    now = 131071.999
+    assert (now + 40.) - now > 40.
+    # Replace the service clock capability only, after construction.
+    monkeypatch.setattr(host, "time", NS(monotonic=lambda: now))
+    assert service.close(**({} if timeout is None else {"timeout_seconds": timeout})) is True
+    assert seen == [{"timeout_seconds": 40.}]
+    assert service._uncertain is False and not preview_root.exists()
+
+
 @pytest.mark.parametrize("operation", ["regions", "hardscan"])
 def test_complete_generated_historical_archives_open_compare_revise_without_native_runtime(tmp_path, operation):
     before = archive_fixture(operation, text="before")
