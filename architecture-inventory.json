@@ -27269,7 +27269,7 @@
   "schema_version": 3,
   "source_architecture": {
     "class_count": 333,
-    "function_count": 4412,
+    "function_count": 4413,
     "import_graph": {
       "cyclic_components": [],
       "edge_count": 649,
@@ -28231,8 +28231,8 @@
             "scope": "top_level"
           }
         ],
-        "definition_locations_sha256": "0c02377b9e294b1fe9f65c4ffe41da1cc2c118f7246caa0af352ff62a64c1ae6",
-        "function_count": 39,
+        "definition_locations_sha256": "e3acd9f8ff344a73a9ff6c93083806b7385f7e4ea176304a037b956ef535fdf3",
+        "function_count": 40,
         "functions": [
           {
             "kind": "function",
@@ -28386,6 +28386,12 @@
           },
           {
             "kind": "function",
+            "name": "_trigram_mask",
+            "scope": "top_level",
+            "signature_sha256": "054d2e9c6626ce0f52542995716ed0ce83845948c72a17478e3568c6c323a058"
+          },
+          {
+            "kind": "function",
             "name": "_url_followed_by_prose_boundary",
             "scope": "top_level",
             "signature_sha256": "8f55ce984bcae74af0adf52a125aa02264225646518bea3466e9d108e47e0466"
@@ -28471,10 +28477,10 @@
         ],
         "import_edges": [],
         "module": "chunking_core",
-        "non_blank_lines": 1338,
+        "non_blank_lines": 1385,
         "path": "chunking_core.py",
-        "physical_lines": 1467,
-        "top_level_function_count": 36
+        "physical_lines": 1517,
+        "top_level_function_count": 37
       },
       {
         "class_count": 1,
@@ -63954,13 +63960,13 @@
         "top_level_function_count": 2
       }
     ],
-    "physical_line_count": 130322,
+    "physical_line_count": 130372,
     "source_groups": [
       "production",
       "tools",
       "other"
     ],
-    "top_level_function_count": 2920
+    "top_level_function_count": 2921
   },
   "tracked_sources": {
     "count": 494,

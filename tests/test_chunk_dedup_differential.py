@@ -465,3 +465,34 @@ def test_concurrent_calls_match_the_oracle():
             lambda corpus: chunking_core._deduplicate_chunks(corpus, 0.8), corpora))
     assert [[id(chunk) for chunk in result] for result in results] == expected
 
+
+def test_default_trigrams_qualify_for_the_exact_bitset_path():
+    trigrams = _make_trigrams(_text_fingerprint("A synthetic proposition, twice."))
+    assert type(trigrams) is frozenset and trigrams
+    assert all(type(gram) is str for gram in trigrams)
+    assert chunking_core._trigram_mask(trigrams, {}).bit_count() == len(trigrams)
+
+
+def test_trigram_mask_shares_positions_and_counts_intersections():
+    rng = random.Random(5)
+    universe = [f"g{position:03d}" for position in range(300)]
+    positions = {}
+    values = [frozenset(rng.sample(universe, rng.randint(1, 120)))
+              for _ in range(30)]
+    masks = [chunking_core._trigram_mask(value, positions) for value in values]
+    assert len(positions) == len(frozenset().union(*values))
+    assert sorted(positions.values()) == list(range(len(positions)))
+    for first, first_mask in zip(values, masks):
+        assert first_mask.bit_count() == len(first)
+        for second, second_mask in zip(values, masks):
+            assert (first_mask & second_mask).bit_count() == len(first & second)
+    assert chunking_core._trigram_mask(frozenset(), {}) == 0
+
+
+@pytest.mark.parametrize("value", [
+    {"abc"}, ["abc"], ("abc",), _TrigramSet({"abc"}),
+    frozenset({_Gram("abc")}), frozenset({1}), frozenset({"abc", 1}),
+    {"abc": None}.keys(),
+])
+def test_trigram_mask_declines_values_outside_the_exact_contract(value):
+    assert chunking_core._trigram_mask(value, {}) is None
