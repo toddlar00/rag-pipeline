@@ -7,42 +7,52 @@
           {
             "binding": "rag",
             "kind": "import",
-            "line": 171
+            "line": 178
           },
           {
             "binding": "rag_module",
             "kind": "import",
-            "line": 257
+            "line": 264
           },
           {
             "binding": "rag_module",
             "kind": "import",
-            "line": 363
+            "line": 370
           },
           {
             "binding": "rag",
             "kind": "import",
-            "line": 510
+            "line": 517
           },
           {
             "binding": "rag",
             "kind": "import",
-            "line": 1399
+            "line": 1406
           },
           {
             "binding": "rag",
             "kind": "import",
-            "line": 1623
+            "line": 1501
           },
           {
             "binding": "rag",
             "kind": "import",
-            "line": 2314
+            "line": 1704
           },
           {
             "binding": "rag",
             "kind": "import",
-            "line": 2341
+            "line": 2195
+          },
+          {
+            "binding": "rag",
+            "kind": "import",
+            "line": 2432
+          },
+          {
+            "binding": "rag",
+            "kind": "import",
+            "line": 2459
           }
         ],
         "facade_roots": [
@@ -59,7 +69,7 @@
             "kinds": [
               "attribute"
             ],
-            "locations_sha256": "5d01c70eb641821083342045a57ad62b3f09551803f5ec18d8baa850fa78e765",
+            "locations_sha256": "34f1e14d4c0983050f4e88b2c7f2cb9004defc758ed30099b81cff658baf7408",
             "name": "VectorStoreBusyError",
             "occurrence_count": 1,
             "paths": [
@@ -79,7 +89,7 @@
             "kinds": [
               "attribute"
             ],
-            "locations_sha256": "c43b243ba6ea46120f92941b182bd7afbcf5e91c6ba7f153be44f5c47235787d",
+            "locations_sha256": "7c7a435c7c5c0523011edc95fd20a3af54e5f828137508558c74d4fa8eb23bde",
             "name": "_SUPERVISED_CHILD_ENV",
             "occurrence_count": 1,
             "paths": [
@@ -99,7 +109,7 @@
             "kinds": [
               "attribute"
             ],
-            "locations_sha256": "73fabfdea94a9f04eb42cc8d075306648c851876f9006991c02f6ad50a5c3657",
+            "locations_sha256": "2f2f54e8afdd0eae53d4ea5ada8dc6e2e8d797a1ab45070c580c5ccbed28b057",
             "name": "_atomic_write_text",
             "occurrence_count": 1,
             "paths": [
@@ -119,7 +129,47 @@
             "kinds": [
               "attribute"
             ],
-            "locations_sha256": "7fc323854ec2c160ee0d5c8e3d995e8ef5f64068e81c9701dc96e2f5b8884abe",
+            "locations_sha256": "156c909283b3c478242edd94e454d35e7b59c7dc067b804acd7f4e297b55236b",
+            "name": "_bm25_search",
+            "occurrence_count": 1,
+            "paths": [
+              "_bm25_search"
+            ],
+            "source_counts": [
+              {
+                "count": 1,
+                "path": "eval.py"
+              }
+            ]
+          },
+          {
+            "contexts": [
+              "load"
+            ],
+            "kinds": [
+              "attribute"
+            ],
+            "locations_sha256": "3790bc89f61a71f4615f6fe1d3ddf16703074b595d6099f4d4b8da079b29cb42",
+            "name": "_chunk_id",
+            "occurrence_count": 2,
+            "paths": [
+              "_chunk_id"
+            ],
+            "source_counts": [
+              {
+                "count": 2,
+                "path": "eval.py"
+              }
+            ]
+          },
+          {
+            "contexts": [
+              "load"
+            ],
+            "kinds": [
+              "attribute"
+            ],
+            "locations_sha256": "a905eb3a607fb3562a956bcd6ae33c364456dc096cac3d1bdd288793f5b785eb",
             "name": "_cli_operation_timeout",
             "occurrence_count": 1,
             "paths": [
@@ -139,7 +189,7 @@
             "kinds": [
               "attribute"
             ],
-            "locations_sha256": "f49fb2eb6053ff84a72be5a502df06675b0494254e766baa1e1df5af0722c3cc",
+            "locations_sha256": "2cb0183dff4c9ce1c4bda712f7bbf1e39789f47b244bc52161e0c371a3e217c7",
             "name": "_normalize_db_lock_timeout",
             "occurrence_count": 1,
             "paths": [
@@ -159,7 +209,7 @@
             "kinds": [
               "attribute"
             ],
-            "locations_sha256": "e11f0699059ba74f61c1f658e6c470d44f73a283a135e8c5d1623a4a766179e5",
+            "locations_sha256": "610a32cb9ccf4b36ddb2dcc615ef8c006b07ddf7c1f639700c5e75cf0d453ef1",
             "name": "_normalize_operation_timeout",
             "occurrence_count": 1,
             "paths": [
@@ -179,7 +229,7 @@
             "kinds": [
               "attribute"
             ],
-            "locations_sha256": "cf896fd030a808ff052b497839108cc947f8155d031545f6a3cfac5a682047f8",
+            "locations_sha256": "e5ebdff3c5d3c75cc8303a3a1589af0b3b5a33f8702efb87b71d864511102da7",
             "name": "_read_index_artifact_snapshot",
             "occurrence_count": 1,
             "paths": [
@@ -199,7 +249,7 @@
             "kinds": [
               "attribute"
             ],
-            "locations_sha256": "234f8a7bdb8d85d2fc147ff3a3494df433c9e400bb320fdb52d8b4b64c117e43",
+            "locations_sha256": "134a289e4c0b58fed5ceaf55cc4893d8126bbc4d0ce720d311de2ea94d3e57bf",
             "name": "_run_cli_with_deadline",
             "occurrence_count": 1,
             "paths": [
@@ -219,7 +269,7 @@
             "kinds": [
               "attribute"
             ],
-            "locations_sha256": "5019fcc82e50ca442b267e793ba36f8cf9874f6e681c0cf67858db82a6a3800a",
+            "locations_sha256": "f45744a6c9c4bf1e3c3889c8232e9ae776df3014e69daf474dbbe080691195e7",
             "name": "_vector_store_lock",
             "occurrence_count": 2,
             "paths": [
@@ -239,7 +289,7 @@
             "kinds": [
               "attribute"
             ],
-            "locations_sha256": "ecfb612a17b3e31679000fb891a2e4fd784705a447ff6da8e2521e17e11f9a15",
+            "locations_sha256": "ef472fc774058546cecc9a6a7501d15adde96eb2ab389cc55eadcc98eeeb5c6a",
             "name": "search_index",
             "occurrence_count": 1,
             "paths": [
@@ -1825,7 +1875,7 @@
             "target": "operating.getenv"
           },
           {
-            "locations_sha256": "6b81cd994d8436ec896fe114497b523e6a168039e64f2c3041a4ee5e6810163c",
+            "locations_sha256": "a6708648baaeff74108846d7b0e73f5ed9e0e6830ab918825bd69b448acf008b",
             "occurrence_count": 6,
             "operations": [
               "setattr"
@@ -2395,7 +2445,7 @@
             "target": "_api_throttle"
           },
           {
-            "locations_sha256": "6090fab79c61c97945b848f939774a1743d7e7a373d142799adb553641e29753",
+            "locations_sha256": "9a5bf8334c884c348a0cf53b768a043319d2a2553c1d159cf5776f972dc63b2b",
             "occurrence_count": 2,
             "operations": [
               "setattr"
@@ -3245,7 +3295,7 @@
             "target": "_index_chunks_for_backend"
           },
           {
-            "locations_sha256": "ed5d565cc497f59dc1a5729bf306c50f98cdb29aaf2af56479de32c5ec91ef33",
+            "locations_sha256": "68a0bd595ce96ad2c3ce1932fee2bac56df223a9b2919b0d44665309e87c37da",
             "occurrence_count": 6,
             "operations": [
               "setattr"
@@ -4499,7 +4549,7 @@
             "target": "_toc_verification_source_json"
           },
           {
-            "locations_sha256": "8088dffa06cebded2cfdff146ca221e6eca85e6bb8a0fe992acb4799f5f9ed87",
+            "locations_sha256": "b0edc3f7e9ff8625159288630aa17bc2bb4c5a0688836648641b3fc4278edb99",
             "occurrence_count": 3,
             "operations": [
               "setattr"
@@ -4531,7 +4581,7 @@
             "target": "_unified_export_complete"
           },
           {
-            "locations_sha256": "f6627495649fd38bf65275d3c51bf801c3c2d478a406eedbad9152ca44537d51",
+            "locations_sha256": "c23750b38de6905cfadc267a7b7b018cdf74571912293027028ed6b30cfaa23b",
             "occurrence_count": 5,
             "operations": [
               "setattr"
@@ -4621,12 +4671,16 @@
             "target": "_validate_pipeline_publication_generation"
           },
           {
-            "locations_sha256": "6342bbd33203bba7b3574e6fbe5616d60230c2601b27f6bd814d6f7b38e3dcb8",
-            "occurrence_count": 2,
+            "locations_sha256": "c9bfd715cfdec80b8e58ebc33afbb28befcb694f7f20289348c3ba7992bb6c7e",
+            "occurrence_count": 3,
             "operations": [
               "setattr"
             ],
             "source_counts": [
+              {
+                "count": 1,
+                "path": "tests/test_eval.py"
+              },
               {
                 "count": 1,
                 "path": "tests/test_phase_a0_benchmark.py"
@@ -4927,7 +4981,7 @@
             "target": "scan_pdf"
           },
           {
-            "locations_sha256": "5e0e6028416bf23ecad9a0b43d58f7a68e8214fbab6735cb166e265425bb15bf",
+            "locations_sha256": "c0c83ac8924fd4c8c4ca935804d4c9d9c2916c4f8600e1975d6c98c6fa0728aa",
             "occurrence_count": 11,
             "operations": [
               "setattr"
@@ -6447,7 +6501,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "3e176832f43b0f22800dc6e48608b07ed57c91fc2c78fd61fb40bc1d2333e3ca",
+          "locations_sha256": "d46081ed23e093cd25aa0fc609904fb38f81fc827007ddfc2bb603e39d531360",
           "name": "_atomic_write_jsonl",
           "occurrence_count": 15,
           "paths": [
@@ -6599,7 +6653,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "188c2879069e23f06162b0f08f3a31bc2a9bf6e2d6570ec21f63accf64456ceb",
+          "locations_sha256": "fae765bdf9c1364d2120e66abe2f6a15d7baebe87507f9e7ce20f13c846f3675",
           "name": "_begin_index_update",
           "occurrence_count": 7,
           "paths": [
@@ -6651,13 +6705,17 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "9400438dde128d59babfede16623661ae76d9ff5a259c9ad012195a0dc51abdc",
+          "locations_sha256": "596b3052c1e9b08d6a5234c2d2a616a6061f0c18f6dc6ab1390079018fd06b90",
           "name": "_bm25_cache",
-          "occurrence_count": 5,
+          "occurrence_count": 6,
           "paths": [
             "_bm25_cache.clear"
           ],
           "source_counts": [
+            {
+              "count": 1,
+              "path": "tests/test_eval.py"
+            },
             {
               "count": 5,
               "path": "tests/test_search.py"
@@ -6671,13 +6729,17 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "24dca115e7d05a3bc81e414f378e580b67e54eb00a33a02806ba560c8ce9be54",
+          "locations_sha256": "e968a0d89e98fa7a70f15855fb913da141040b8137846276edb6e46f67a43800",
           "name": "_bm25_search",
-          "occurrence_count": 6,
+          "occurrence_count": 8,
           "paths": [
             "_bm25_search"
           ],
           "source_counts": [
+            {
+              "count": 2,
+              "path": "tests/test_eval.py"
+            },
             {
               "count": 6,
               "path": "tests/test_search.py"
@@ -7331,7 +7393,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "eddaeb0bfbf06804111f32da35c36f809df4774eab2d9116832b34f156929e09",
+          "locations_sha256": "ddc7d41e3f04c05d649521db0ca87d769c3215c0edf938b59efe79097d6acf8b",
           "name": "_chunk_hash",
           "occurrence_count": 16,
           "paths": [
@@ -7363,9 +7425,9 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "cb8866a5495587061a553c8678b7abf69461b48a4b92ceba874769a4de71f5ea",
+          "locations_sha256": "2cbd62743f7eaa11d53fbd444f9fb71645151c394c795df1362473df96a17045",
           "name": "_chunk_id",
-          "occurrence_count": 53,
+          "occurrence_count": 54,
           "paths": [
             "_chunk_id"
           ],
@@ -7383,7 +7445,7 @@
               "path": "tests/test_core_helpers.py"
             },
             {
-              "count": 29,
+              "count": 30,
               "path": "tests/test_eval.py"
             },
             {
@@ -8785,7 +8847,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "71f92917760fd5bd2e6217d03df3079be3b79a9606ecd3fe80313ae075f96db9",
+          "locations_sha256": "0624171bc906dbaccfd661445aeeab35a61eea361d654e0f7ed3f102d9490938",
           "name": "_index_manifest_path",
           "occurrence_count": 13,
           "paths": [
@@ -9915,7 +9977,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "9fdd8ed0a573b97dfcb7cb3d949dfb85b947afae78fdf6c6dc0b83cded802b0c",
+          "locations_sha256": "59e0c35af741e880be3d2160ef76735969fd7fe155806b1c8f738c1a07f7a422",
           "name": "_model_artifact_lock_sha256",
           "occurrence_count": 11,
           "paths": [
@@ -11199,7 +11261,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "a98d619ddba035e1c0d0180914d9a0fe694a1620a96ca288acaadd76fe76ac2d",
+          "locations_sha256": "196e4032c90d1a99f4f6215664edd107b5c8f66ac9cc45aae72c7f499ca078db",
           "name": "_quality_core",
           "occurrence_count": 37,
           "paths": [
@@ -12777,7 +12839,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "6d9a6e4764a33d7d64df0e17dd69524dd82dd36aed3e5df09a2395232e299570",
+          "locations_sha256": "538db4b894374dd28041298b281b3e12044fcd16b35bab3f749d7f0b52e89e9e",
           "name": "_save_index_manifest",
           "occurrence_count": 40,
           "paths": [
@@ -13489,7 +13551,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "e771bfd14a66ee0a3b7d84724f5de7d16433107890d8a3281f59f748a4fec370",
+          "locations_sha256": "5cde6d54ba2dc79adaa3f637ecdbaf50cff5ead75fda5e3fa426bfeff0cca0d4",
           "name": "_try_vector_file_lock",
           "occurrence_count": 2,
           "paths": [
@@ -13533,7 +13595,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "f94c00aa6c5e3c5c8080baba2ca294cd91b06e32945b303713fc705da4f81c65",
+          "locations_sha256": "fc034cc69969ec82004f69987df4633f4956ade6636d6d32aa8564848b31161d",
           "name": "_unlock_vector_file",
           "occurrence_count": 2,
           "paths": [
@@ -13825,7 +13887,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "d3b8769eee5dd546417b13e4133a8e3570a071a2d5dfde2068470f0036cd1244",
+          "locations_sha256": "3eaecd689b63bdcb2cb46ed949129e8288ee68ab3628c8275094f80b12b2cf9d",
           "name": "_vector_store_lock",
           "occurrence_count": 19,
           "paths": [
@@ -27250,7 +27312,7 @@
   "schema_version": 3,
   "source_architecture": {
     "class_count": 333,
-    "function_count": 4412,
+    "function_count": 4416,
     "import_graph": {
       "cyclic_components": [],
       "edge_count": 649,
@@ -29063,8 +29125,8 @@
       {
         "class_count": 0,
         "classes": [],
-        "definition_locations_sha256": "518059d3cf88d261cbb82628900c93e359dbf3c05459e4e8f2caf943a7b45cdc",
-        "function_count": 52,
+        "definition_locations_sha256": "7caf9d6f89c27a0816ff28de9ba541106dd81493aef5c8f23544cb4cd8994f4e",
+        "function_count": 56,
         "functions": [
           {
             "kind": "function",
@@ -29170,9 +29232,21 @@
           },
           {
             "kind": "function",
+            "name": "_lexical_index_snapshot",
+            "scope": "top_level",
+            "signature_sha256": "dd86e8bd259fe717dec144ceb8add5497136c51a64f50806f1c6fe28773e1800"
+          },
+          {
+            "kind": "function",
             "name": "_load_baseline_metrics",
             "scope": "top_level",
             "signature_sha256": "96a79f1aac98601ed1df27887559c479c3a4b09529d26ab984174d5f01c3b234"
+          },
+          {
+            "kind": "function",
+            "name": "_load_lexical_corpus",
+            "scope": "top_level",
+            "signature_sha256": "1871cfbf1e04be1f8ba69a552b08339bd8a715fe7b692d594709f3d0c5c8f0f7"
           },
           {
             "kind": "function",
@@ -29344,6 +29418,18 @@
           },
           {
             "kind": "function",
+            "name": "evaluate_lexical",
+            "scope": "top_level",
+            "signature_sha256": "5cd50dcdef480de8d52ccc9384b2f7a0f64dbd93d0f8400e898a1439bba54a6a"
+          },
+          {
+            "kind": "function",
+            "name": "evaluate_lexical.lexical_search",
+            "scope": "nested",
+            "signature_sha256": "9fdf741012e2d3f95bdcb0cf7bad043b290d7cd36c18d09f2e9f4d02e146140d"
+          },
+          {
+            "kind": "function",
             "name": "evaluate_offline_bm25",
             "scope": "top_level",
             "signature_sha256": "dcc32d4f7bfbf9fc36e49db9d454384401fa1f2bdcfe6598de23da7952b713fb"
@@ -29494,10 +29580,10 @@
           }
         ],
         "module": "eval",
-        "non_blank_lines": 2190,
+        "non_blank_lines": 2296,
         "path": "eval.py",
-        "physical_lines": 2352,
-        "top_level_function_count": 50
+        "physical_lines": 2470,
+        "top_level_function_count": 53
       },
       {
         "class_count": 1,
@@ -63935,13 +64021,13 @@
         "top_level_function_count": 2
       }
     ],
-    "physical_line_count": 130322,
+    "physical_line_count": 130440,
     "source_groups": [
       "production",
       "tools",
       "other"
     ],
-    "top_level_function_count": 2920
+    "top_level_function_count": 2923
   },
   "tracked_sources": {
     "count": 493,
