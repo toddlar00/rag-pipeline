@@ -1776,6 +1776,19 @@ _ANCHOR_ERROR = "YAML anchors and aliases are unsupported"
 _TAG_ERROR = "YAML tags are unsupported"
 _MERGE_KEY_ERROR = "YAML merge keys are unsupported"
 _AMBIGUOUS_HEADER_ERROR = "ambiguous block scalar headers are unsupported"
+_NON_SPACE_INDENT_ERROR = "non-space indentation is unsupported"
+# Python's str.strip() and re's \s treat these as whitespace, but YAML
+# separates tokens only with ASCII spaces and tabs, so to YAML they are
+# ordinary plain-scalar characters.
+_UNICODE_SPACES = [
+    pytest.param(" ", id="no-break-space"),
+    pytest.param(" ", id="em-space"),
+    pytest.param("　", id="ideographic-space"),
+    pytest.param(" ", id="narrow-no-break-space"),
+]
+# YAML never indents with tabs, and PyYAML rejects a tab where a token
+# starts, so the validator must not measure columns across one either.
+_NON_SPACE_WHITESPACE = [*_UNICODE_SPACES, pytest.param("\t", id="tab")]
 
 
 def _validate_mutated_security_workflow(
@@ -2035,6 +2048,128 @@ def test_block_scalars_the_validator_cannot_blank_fail_closed(
         f"{stripped.index(flagged) + 1}: {_AMBIGUOUS_HEADER_ERROR} "
         "by the security validator"
     ) in errors
+
+
+def _assert_flagged(
+    errors: list[str],
+    lines: list[str],
+    flagged: str,
+    messages: tuple[str, ...],
+) -> None:
+    assert lines.count(flagged) == 1
+    prefix = (
+        f"{check_ci_security.SECURITY_WORKFLOW_PATH}:"
+        f"{lines.index(flagged) + 1}: "
+    )
+    for message in messages:
+        assert f"{prefix}{message} by the security validator" in errors
+
+
+@pytest.mark.parametrize("space", _NON_SPACE_WHITESPACE)
+@pytest.mark.parametrize(
+    ("header", "messages"),
+    [
+        # YAML reads '-<space>note' as one plain key, not a sequence entry.
+        pytest.param(
+            "-{space}note: |",
+            (_AMBIGUOUS_HEADER_ERROR,),
+            id="after-dash",
+        ),
+        # YAML reads '<space>- note' as one plain key at the space's column.
+        pytest.param(
+            "{space}- note: |",
+            (_NON_SPACE_INDENT_ERROR, _AMBIGUOUS_HEADER_ERROR),
+            id="before-dash",
+        ),
+    ],
+)
+def test_non_space_whitespace_cannot_move_a_block_scalar_key_column(
+    tmp_path, header, messages, space
+):
+    header = header.format(space=space)
+    errors, lines = _validate_mutated_security_workflow(
+        tmp_path,
+        _CHECKOUT_STEP,
+        "      - name: Check out repository\n"
+        f"        uses: actions/checkout@{_CHECKOUT_SHA}\n"
+        "        with:\n"
+        f"          {header}\n"
+        "            persist-credentials: false\n",
+    )
+
+    _assert_flagged(errors, lines, f"          {header}", messages)
+
+
+@pytest.mark.parametrize("space", _NON_SPACE_WHITESPACE)
+@pytest.mark.parametrize(
+    ("new", "flagged"),
+    [
+        # YAML reads the key as '<space>persist-credentials', so the real
+        # input is absent and credentials persist.
+        pytest.param(
+            "          {space}persist-credentials: false\n",
+            "          {space}persist-credentials: false",
+            id="required-input-key",
+        ),
+        # '<space>#x' is a plain key to YAML, not a comment, so its block
+        # scalar swallows the line the checker would otherwise count.
+        pytest.param(
+            "          {space}#x: |\n"
+            "            persist-credentials: false\n",
+            "          {space}#x: |",
+            id="comment-looking-block-scalar-key",
+        ),
+    ],
+)
+def test_structural_lines_indented_with_non_spaces_fail_closed(
+    tmp_path, new, flagged, space
+):
+    errors, lines = _validate_mutated_security_workflow(
+        tmp_path,
+        "          persist-credentials: false\n",
+        new.format(space=space),
+    )
+
+    _assert_flagged(
+        errors, lines, flagged.format(space=space), (_NON_SPACE_INDENT_ERROR,)
+    )
+
+
+@pytest.mark.parametrize("space", _NON_SPACE_WHITESPACE)
+def test_blank_looking_lines_with_non_spaces_end_block_scalar_bodies(space):
+    lines = [
+        "steps:",
+        "  - run: |",
+        "      echo inert",
+        space,
+        "      permissions: write-all",
+    ]
+
+    structural = check_ci_security._structural_workflow_lines(lines)
+
+    assert structural == [
+        "steps:",
+        "  - run: |",
+        "",
+        space,
+        "      permissions: write-all",
+    ]
+    assert check_ci_security._validate_supported_workflow_syntax(
+        "workflow.yml", structural
+    ) == [
+        f"workflow.yml:4: {_NON_SPACE_INDENT_ERROR} by the security validator"
+    ]
+
+
+def test_tracked_workflows_pass_the_structural_whitespace_rules():
+    for name, text in _tracked_workflow_texts().items():
+        lines = check_ci_security._structural_workflow_lines(text.splitlines())
+        assert check_ci_security._validate_supported_workflow_syntax(
+            name, lines
+        ) == [], name
+        if name != ".github/dependabot.yml":
+            assert check_ci_security.validate_workflow(name, text) == [], name
+    assert check_ci_security.validate() == []
 
 
 def test_compact_sequence_block_scalar_ends_at_the_key_column():
