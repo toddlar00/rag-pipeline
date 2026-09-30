@@ -57,8 +57,6 @@ _HOSTILE_ENV = {
 
 # Each marker names the pre-change defect its tests reproduce; the commit
 # that fixes the defect removes the marker.
-_FAILS_OPEN = pytest.mark.xfail(
-    strict=True, reason="an incomplete Docling conversion is published")
 _UNPINNED = pytest.mark.xfail(
     strict=True, reason="Docling runtime knobs follow the environment")
 _INERT_BACKEND = pytest.mark.xfail(
@@ -433,7 +431,6 @@ def test_interactive_progress_keeps_tqdm_defaults(monkeypatch, tmp_path):
 # --- (a) Fail closed on an incomplete conversion ---------------------------
 
 
-@_FAILS_OPEN
 @pytest.mark.parametrize("status", [
     SimpleNamespace(value="partial_success"), "partial_success"])
 def test_partial_success_fails_closed_before_any_docling_output(
@@ -462,7 +459,6 @@ def test_partial_success_fails_closed_before_any_docling_output(
     assert not manifest.exists()
 
 
-@_FAILS_OPEN
 @pytest.mark.parametrize(("status", "errors"), [
     ("failure", [_error_item(page_no=None)]),
     ("skipped", []),
@@ -484,7 +480,6 @@ def test_any_other_outcome_than_a_clean_success_fails_closed(
     assert not (tmp_path / "book_docling.md").exists()
 
 
-@_FAILS_OPEN
 def test_gpu_memory_exhaustion_logs_batch_size_guidance(
         monkeypatch, tmp_path, caplog):
     docling = _FakeDocling(monkeypatch, gpu=True)
@@ -501,7 +496,6 @@ def test_gpu_memory_exhaustion_logs_batch_size_guidance(
     assert _PRIVATE_TEXT not in str(raised.value) + caplog.text
 
 
-@_FAILS_OPEN
 def test_cpu_memory_exhaustion_gives_no_batch_size_advice(
         monkeypatch, tmp_path, caplog):
     docling = _FakeDocling(monkeypatch)
@@ -514,6 +508,71 @@ def test_cpu_memory_exhaustion_gives_no_batch_size_advice(
 
     assert "memory" in str(raised.value)
     assert "--batch-size" not in caplog.text
+
+
+def _evidence(page_no=2, *, module="table", category="inference_failure",
+              message="synthetic"):
+    return ingestion_core.conversion_error_evidence(
+        page_no=page_no, component="model", module=module,
+        category=category, message=message)
+
+
+def test_only_a_clean_success_is_publishable():
+    assert ingestion_core.docling_conversion_failure("success", ()) is None
+    for status in ("partial_success", "failure", "skipped", "pending", None,
+                   "SUCCESS"):
+        assert ingestion_core.docling_conversion_failure(status, ()) is not None
+    assert ingestion_core.docling_conversion_failure(
+        "success", (_evidence(),)) is not None
+
+
+def test_failure_summary_is_bounded_and_content_free():
+    errors = [_evidence(page, message=f"{_PRIVATE_TEXT} {page}")
+              for page in range(25, 0, -1)]
+    errors += [_evidence(3), _evidence(None, module="StandardPdfPipeline",
+                                      category="timeout")]
+    errors += [_evidence(1, module=f"stage{index}") for index in range(9)]
+
+    summary = ingestion_core.docling_conversion_failure(
+        "partial_success", errors)
+
+    assert summary == (
+        "Docling conversion incomplete (status partial_success; 36 errors; "
+        "25 affected pages: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, "
+        "15, 16, 17, 18, 19, 20 (+5 more)]; 1 document-level error; "
+        "sources: StandardPdfPipeline/timeout, stage0/inference_failure, "
+        "stage1/inference_failure, stage2/inference_failure, "
+        "stage3/inference_failure, stage4/inference_failure, "
+        "stage5/inference_failure, stage6/inference_failure (+3 more)). "
+        "No Docling JSON, Markdown or conversion manifest was written.")
+    assert _PRIVATE_TEXT not in summary
+
+
+def test_failure_summary_bounds_each_identifier_to_one_log_token():
+    summary = ingestion_core.docling_conversion_failure(
+        "partial\nsuccess", [_evidence(
+            1, module="m" * 100, category="line\nbreak text")])
+
+    assert "\n" not in summary
+    assert "status partial?success" in summary
+    assert f"sources: {'m' * 64}/line?break?text)" in summary
+    assert "1 affected page: [1]" in summary
+
+
+def test_memory_exhaustion_is_detected_without_keeping_the_message():
+    exhausted = [_evidence(message=message) for message in (
+        "CUDA out of memory. Tried to allocate 2.00 GiB",
+        "std::bad_alloc", "Out Of Memory")]
+    other = _evidence(message="index out of range")
+
+    assert all(item.memory_exhausted for item in exhausted)
+    assert not other.memory_exhausted
+    assert set(vars(other)) == {
+        "page_no", "component", "module", "category", "memory_exhausted"}
+    summary = ingestion_core.docling_conversion_failure(
+        "partial_success", exhausted + [other])
+    assert "memory exhausted in 3 errors" in summary
+    assert "Tried to allocate" not in summary
 
 
 # --- (b) Pin the runtime knobs ---------------------------------------------
