@@ -1363,6 +1363,36 @@ read by fresh layout-aware OCR of an image-only derivative, using
     in the tort-law casebook (PDF p.881) would therefore fail the row
     check. For now it is published as body text, so the check does not
     run on it.
+  - *Soft-hyphen item seam (private tort-law casebook).* The native text
+    layer spells some line-end hyphens as U+002D U+00AD. Where Docling
+    ended a list item there and the next paragraph continued the word,
+    the chunker joined the two items with a line break. Source-bound
+    normalization's `spaced_hyphen` rule joins a plain `x-` line-break `y`
+    item seam as `x-y`, but the soft hyphen blocked it. The fidelity audit
+    then deleted the soft hyphen and dehyphenated across the break, reading
+    one token that neither item owns: 1 output and 2 source coverage
+    issues. `_join_soft_hyphen_item_seams` now rewrites exactly such a
+    seam between consecutive text-bearing items to `x-y`, keeping both
+    tokens. It also reads the first item's ending from its Docling text,
+    because a native-repair override drops the soft hyphen (the override
+    must still end in a letter and a hyphen) while the chunk keeps the
+    Docling ending. It is failing-only: it fires only when the fused token
+    is not a token of any source text, marker or oracle in the document,
+    and it skips a pair that shares one recovery oracle. The book has one
+    other item that ends this way, and a native recovery group already
+    rebuilds its pair; no READY h26 run has one.
+    - Follow-up (not fixed): other item seams that the audit fuses but
+      normalization leaves split, and that therefore fail the same way.
+      Neither h26 nor the casebook has one.
+      - Non-ASCII letters. `_SPACED_HYPHEN_RE` matches only ASCII letters
+        and digits, but the audit dehyphenates between any Unicode letters
+        (`é-` line-break `y`).
+      - U+FF0D and U+FE63. NFKC turns both into `-`, so the audit fuses
+        them even without a soft hyphen, but `spaced_hyphen` does not join
+        them.
+      - A soft hyphen before the hyphen (`x` U+00AD `-` line-break `y`).
+      - A space between soft hyphens (`x-` U+00AD space U+00AD line-break
+        `y`).
   - *Durable-job manager writes on Windows.* The advisory heartbeat now
     tolerates transient replace failures (WinError 5, 32 or 33) for up to
     60 seconds. The manager's other writes still fail on the first such
@@ -1781,6 +1811,14 @@ promotion gate on [PR
 the native table row-count oracle count stacked Markdown header rows the way
 docling-core 2.99 exports them; it changes no dependency or lock and
 supersedes the `c2d7b57` pair.
+The `09340ed` pair (gate-only child `1353ffa`) passed the hosted CI
+promotion gate on [PR
+#145](https://github.com/toddlar00/rag-pipeline/pull/145), which merged into
+`main` as `ce73b61`. The soft-hyphen item-seam fix source `a7847ce` joins a
+cited item that ends in a hyphen plus soft hyphen to the next cited item
+exactly where the fidelity audit would otherwise fuse the two items'
+boundary tokens; it changes no dependency or lock and supersedes the
+`09340ed` pair.
 Its Windows/Linux
 pair (independent local same-platform comparisons passed) is that branch's
 candidate; its hosted checks and exact-SHA record are pending, and the
