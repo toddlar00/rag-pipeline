@@ -3159,7 +3159,7 @@
             "target": "_get_embedding_fn"
           },
           {
-            "locations_sha256": "40f77c6adaabfa0eafe0f388683693e6cdb6d88eb604da19040e490ce3944a50",
+            "locations_sha256": "8a833c6150de6eea94c4a69faf375b7a5b30c30f0dd0d11db89c1662a2662227",
             "occurrence_count": 1,
             "operations": [
               "setattr"
@@ -3831,7 +3831,7 @@
             "target": "_pipeline_publication_complete"
           },
           {
-            "locations_sha256": "7cf12f57bc860ef20c5ea52e7e7bfb0fb9dfc282800c3514ec6a2b338046a815",
+            "locations_sha256": "cf5aa00c4d2a218fba62ab9d11aa6fa9378dac059b71ae489f6161bcbdc61124",
             "occurrence_count": 9,
             "operations": [
               "setattr"
@@ -4209,7 +4209,7 @@
             "target": "_rerank"
           },
           {
-            "locations_sha256": "9a0f58c6a1163f6fc6c56aec312756a1faed3ac9ff400140743a979aa14a9c79",
+            "locations_sha256": "38207ecd616127df868659fba34c6c2a8ca76234c650ebe177c2d7ee260eebde",
             "occurrence_count": 4,
             "operations": [
               "setattr"
@@ -4927,7 +4927,7 @@
             "target": "scan_pdf"
           },
           {
-            "locations_sha256": "062c895bef95d9a2c8719b5bccc95d7068eda2d6cc94efd792ffcd45a972cc70",
+            "locations_sha256": "5e0e6028416bf23ecad9a0b43d58f7a68e8214fbab6735cb166e265425bb15bf",
             "occurrence_count": 11,
             "operations": [
               "setattr"
@@ -6651,15 +6651,15 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "f87f764c95735eb8d9c194cb1b5f94694da1fa1e8d9d3677b6c3f12517a51799",
+          "locations_sha256": "9400438dde128d59babfede16623661ae76d9ff5a259c9ad012195a0dc51abdc",
           "name": "_bm25_cache",
-          "occurrence_count": 4,
+          "occurrence_count": 5,
           "paths": [
             "_bm25_cache.clear"
           ],
           "source_counts": [
             {
-              "count": 4,
+              "count": 5,
               "path": "tests/test_search.py"
             }
           ]
@@ -6671,15 +6671,15 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "1ef752391298bea4fe25e24e53e48623f50b0e5194b2ef0833c3361b97cf7fd7",
+          "locations_sha256": "24dca115e7d05a3bc81e414f378e580b67e54eb00a33a02806ba560c8ce9be54",
           "name": "_bm25_search",
-          "occurrence_count": 5,
+          "occurrence_count": 6,
           "paths": [
             "_bm25_search"
           ],
           "source_counts": [
             {
-              "count": 5,
+              "count": 6,
               "path": "tests/test_search.py"
             }
           ]
@@ -7363,9 +7363,9 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "e34914beaf15c69d36c3bce3797a4832a4291f16be7d8e147ca7be1f22657546",
+          "locations_sha256": "cb8866a5495587061a553c8678b7abf69461b48a4b92ceba874769a4de71f5ea",
           "name": "_chunk_id",
-          "occurrence_count": 52,
+          "occurrence_count": 53,
           "paths": [
             "_chunk_id"
           ],
@@ -7391,7 +7391,7 @@
               "path": "tests/test_index_manifests.py"
             },
             {
-              "count": 4,
+              "count": 5,
               "path": "tests/test_search.py"
             },
             {
@@ -8549,7 +8549,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "392ea7cd15cf5dd4009825886cd6129a9c0e1b976cc4c4796e514b8ab4e54f74",
+          "locations_sha256": "0c944b4fe31faefd01b3f20adcb56893c2adb560effdeaaab6065b1d197eb7e3",
           "name": "_get_reranker",
           "occurrence_count": 6,
           "paths": [
@@ -9229,7 +9229,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "38e0577f938aff3437b0b009dd67b03fe707ae00c0b78f7e94f3b6828da9cf8b",
+          "locations_sha256": "b3afefc6ab3d12c16455fe2c544863007c0b50e53186da3fa3fba29edc65ed73",
           "name": "_llm_adapters",
           "occurrence_count": 6,
           "paths": [
@@ -11462,7 +11462,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "d12c756c0e687d081a1338d30e5d3a165df0dcaeb8b1f49d2204e0da8806047b",
+          "locations_sha256": "67636b95bfba33df5c7129c90c9b089d20ade5809ab6e45ca574f3c11cfae9c9",
           "name": "_reciprocal_rank_fusion",
           "occurrence_count": 4,
           "paths": [
@@ -12250,7 +12250,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "487ff463ae4f088752a93c809edeb3152e555cc39c3b2a9b327d79b0a991ffb6",
+          "locations_sha256": "d52cf017a46325a9ea3596e2b2f35a8d640930ecac842aad51f7a797914820a5",
           "name": "_rerank",
           "occurrence_count": 6,
           "paths": [
@@ -13155,7 +13155,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "fe8cf54b42cae50d25eea8df9b929a92bef36cc175975d63550cb520bd251e5b",
+          "locations_sha256": "6092973dd899cab1b7e03e5e4eaa8b9d4884eff33c2c7043921e862996914857",
           "name": "_sparse_token_vector",
           "occurrence_count": 1,
           "paths": [
