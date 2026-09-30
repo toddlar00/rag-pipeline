@@ -1662,6 +1662,21 @@ def _load_index_chunk_completion_inputs(
     a quality report whose provenance was detached from the chunk completion
     that committed this exact JSONL generation.
     """
+    inputs, parameters_sha256, _ = _load_index_chunk_completion_bindings(
+        chunks_path, chunks_sha256=chunks_sha256, chunks_size=chunks_size,
+        records=records)
+    return inputs, parameters_sha256
+
+
+def _load_index_chunk_completion_bindings(
+        chunks_path: Path, *, chunks_sha256: str, chunks_size: int,
+        records: list[dict]) -> tuple[dict, str, dict]:
+    """Validate the chunk completion and return its verified oracle registry.
+
+    The registry is the exact sidecar snapshot checked against this
+    completion, so a quality binding can validate against it without reading
+    the sidecar again.
+    """
     chunks_path = Path(chunks_path)
     manifest_path = _artifact_completion_path(
         chunks_path, stage="chunking")
@@ -1724,7 +1739,7 @@ def _load_index_chunk_completion_inputs(
                    for key in ("name", "size", "sha256"))):
         raise ValueError(
             "chunk completion does not bind this chunks generation")
-    _load_source_oracle_registry(chunks_path, inputs)
+    source_oracle_registry = _load_source_oracle_registry(chunks_path, inputs)
 
     if (any(
             isinstance(metadata := record.get("metadata"), dict)
@@ -1733,7 +1748,7 @@ def _load_index_chunk_completion_inputs(
             and inputs.get("table_recovery") is None):
         raise ValueError(
             "recovered tables lack a bound source-PDF input")
-    return inputs, payload["parameters_sha256"]
+    return inputs, payload["parameters_sha256"], source_oracle_registry
 
 
 def _validated_quality_report_binding(
@@ -1761,16 +1776,20 @@ def _validated_quality_report_binding(
     completion_parameters_sha256 = None
     effective_input_bindings = input_bindings
     if effective_input_bindings is None:
+        # The completion check already loaded and validated the registry
+        # its inputs bind; reuse that snapshot instead of rereading it.
         (effective_input_bindings,
-         completion_parameters_sha256) = (
-            _load_index_chunk_completion_inputs(
+         completion_parameters_sha256,
+         source_oracle_registry) = (
+            _load_index_chunk_completion_bindings(
                 chunks_path,
                 chunks_sha256=chunks_sha256,
                 chunks_size=chunks_size,
                 records=records,
             ))
-    source_oracle_registry = _load_source_oracle_registry(
-        chunks_path, effective_input_bindings)
+    else:
+        source_oracle_registry = _load_source_oracle_registry(
+            chunks_path, effective_input_bindings)
     payload = _quality_core.parse_quality_report_bytes(
         report_raw,
         chunks_name=chunks_path.name,

@@ -16,6 +16,7 @@ import copy
 from collections import Counter
 import hashlib
 import json
+from pathlib import Path
 import random
 
 import pytest
@@ -424,6 +425,90 @@ def test_quality_binding_validates_against_the_bound_registry(
     assert report_sha256 == hashlib.sha256(
         report_path.read_bytes()).hexdigest()
     assert payload == json.loads(report_path.read_text(encoding="utf-8"))
+
+
+def _count_registry_loads(monkeypatch):
+    real_load = rag._load_source_oracle_registry
+    loaded = []
+
+    def count_load(chunks_path, inputs):
+        registry = real_load(chunks_path, inputs)
+        loaded.append(registry)
+        return registry
+
+    monkeypatch.setattr(rag, "_load_source_oracle_registry", count_load)
+    return loaded
+
+
+@pytest.mark.parametrize("supply_inputs", [False, True])
+def test_quality_binding_loads_the_registry_once(
+        monkeypatch, tmp_path, supply_inputs):
+    chunks, inputs, raw, records = _published_quality_fixture(tmp_path)
+    registry_path = rag._source_oracle_registry_path(chunks)
+    real_read = rag._read_index_artifact_snapshot
+    registry_reads = []
+
+    def count_registry_reads(path, **kwargs):
+        if Path(path) == registry_path:
+            registry_reads.append(path)
+        return real_read(path, **kwargs)
+
+    monkeypatch.setattr(
+        rag, "_read_index_artifact_snapshot", count_registry_reads)
+    loaded = _count_registry_loads(monkeypatch)
+    real_parse = rag._quality_core.parse_quality_report_bytes
+    validated = []
+
+    def record_registry(raw_report, **kwargs):
+        validated.append(kwargs["source_oracle_registry"])
+        return real_parse(raw_report, **kwargs)
+
+    monkeypatch.setattr(
+        rag._quality_core, "parse_quality_report_bytes", record_registry)
+    rag._validated_quality_report_binding(
+        chunks, records, hashlib.sha256(raw).hexdigest(), len(raw),
+        input_bindings=inputs if supply_inputs else None)
+
+    assert len(loaded) == 1
+    assert len(registry_reads) == 1
+    assert len(validated) == 1 and validated[0] is loaded[0]
+
+
+def test_chunk_completion_inputs_still_load_and_validate_the_registry(
+        monkeypatch, tmp_path):
+    chunks, inputs, raw, records = _published_quality_fixture(tmp_path)
+    loaded = _count_registry_loads(monkeypatch)
+
+    result = rag._load_index_chunk_completion_inputs(
+        chunks, chunks_sha256=hashlib.sha256(raw).hexdigest(),
+        chunks_size=len(raw), records=records)
+
+    assert result[0] == inputs
+    assert len(loaded) == 1
+
+
+def test_attestation_root_reuses_only_supplied_attestations(base):
+    records, _report, _kwargs = _copies(base)
+    records[1]["metadata"]["retrieval_role"] = "table_child"
+    records[3]["metadata"] = None
+    expected = _frozen_output_attestation_root_sha256(records)
+    supplied = {
+        index: source_fidelity_core.record_attestation(record)
+        for index, record in enumerate(records)
+        if index in {0, 2, 4}
+    }
+
+    assert source_fidelity_core.output_attestation_root_sha256(
+        records) == expected
+    assert source_fidelity_core.output_attestation_root_sha256(
+        records, precomputed=supplied) == expected
+    assert source_fidelity_core.output_attestation_root_sha256(
+        records, precomputed={}) == expected
+    assert source_fidelity_core.output_lexical_count(records) == (
+        _frozen_output_lexical_count(records))
+    with pytest.raises(TypeError):
+        source_fidelity_core.output_attestation_root_sha256(
+            records, supplied)
 
 
 def test_quality_binding_rejects_a_registry_detached_from_its_completion(

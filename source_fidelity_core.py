@@ -406,9 +406,22 @@ def attach_record_attestations(records: Iterable[dict]) -> None:
         metadata["source_fidelity"] = record_attestation(record)
 
 
-def output_attestation_root_sha256(records: Sequence[dict]) -> str:
+def output_attestation_root_sha256(
+        records: Sequence[dict], *,
+        precomputed: Mapping[int, dict] | None = None,
+) -> str:
+    """Hash the record attestations of every non-table-child record.
+
+    ``precomputed`` may supply, by record index, attestations the caller
+    already derived with ``record_attestation`` from these exact records.
+    Selection, order, and any record without a supplied value are unchanged.
+    """
+    precomputed = precomputed or {}
     evidence = [
-        {"record_index": index, "attestation": record_attestation(record)}
+        {"record_index": index,
+         "attestation": (
+             precomputed[index] if index in precomputed
+             else record_attestation(record))}
         for index, record in enumerate(records)
         if not isinstance(record.get("metadata"), dict)
         or record["metadata"].get("retrieval_role") != "table_child"

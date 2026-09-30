@@ -2496,24 +2496,37 @@ def validate_quality_report(
         if payload["normalization"] != _normalization_issues(records):
             raise ValueError(
                 "corpus quality report normalization does not match records")
-        for record in records:
+        # One attestation per record serves the stale check, the output
+        # token count, and the root. Precedence is unchanged: stale checks
+        # run in index order, records without dict metadata are tokenized
+        # only after them, and the root is derived only when both counts
+        # match.
+        attestations = {}
+        unattested = []
+        expected_output_tokens = 0
+        for index, record in enumerate(records):
             metadata = record.get("metadata")
-            if (not isinstance(metadata, dict)
-                    or metadata.get("retrieval_role") == "table_child"):
+            if not isinstance(metadata, dict):
+                unattested.append(record)
                 continue
-            if metadata.get("source_fidelity") \
-                    != source_fidelity_core.record_attestation(record):
+            if metadata.get("retrieval_role") == "table_child":
+                continue
+            attestation = source_fidelity_core.record_attestation(record)
+            if metadata.get("source_fidelity") != attestation:
                 raise ValueError(
                     "corpus quality report output attestation is stale")
-        expected_output_tokens = source_fidelity_core.output_lexical_count(
-            records)
+            attestations[index] = attestation
+            expected_output_tokens += attestation["output_lexical_count"]
+        for record in unattested:
+            expected_output_tokens += len(source_fidelity_core.lexical_tokens(
+                str(record.get("text") or "")))
         fidelity_summary = lineage["fidelity"]
         if (fidelity_summary.get("output_tokens") != expected_output_tokens
                 or fidelity_summary.get("covered_output_tokens")
                 != expected_output_tokens
                 or fidelity_summary.get("output_attestation_root_sha256")
                 != source_fidelity_core.output_attestation_root_sha256(
-                    records)):
+                    records, precomputed=attestations)):
             raise ValueError(
                 "corpus quality report output fidelity does not match records")
         expected_retrieval = retrieval_core._retrieval_linkage_summary(
