@@ -16,9 +16,10 @@
   #136 (merged through `2f07510`), the oauthlib promotion pair passed on PR
   #139 (merged through `123bedb`), the tokenless-glyph rotation fix pair
   passed on PR #140 (merged through `6baf14b`), the table header-row oracle
-  fix pair passed on PR #145 (merged through `ce73b61`), and the soft-hyphen
-  item-seam fix pair at source `a7847ce` is pending; exact-head human review
-  and separate R8 owner authorization are not recorded
+  fix pair passed on PR #145 (merged through `ce73b61`), the soft-hyphen
+  item-seam fix pair passed on PR #146 (merged through `8cc89b0`), and the
+  post-series documentation pair at source `578a13a` is pending; exact-head
+  human review and separate R8 owner authorization are not recorded
 - **Milestone:** R10 prerequisite for the R8 pipeline-ownership move
 - **Report schema:** `phase-a0` v3
 
@@ -149,20 +150,21 @@ gate-only child `32153e9` and merge `376277c`
 Task 0.8 static-security pair at source `8891e1b` repeated it through
 gate-only child `1533164` and merge `e34103f`
 ([PR #107](https://github.com/toddlar00/rag-pipeline/pull/107)). The
-current replacement pair uses the clean soft-hyphen item-seam fix source
-`a7847ce01fa133a4da07c220f27db69b98b906e0` (tree
-`f8fd757f9314180cf855cb3ca86c988be20ff5c1`), a source-token fidelity fix
-after a series of one-domain dependency updates, on `main` after the merges
-of the table header-row oracle fix #145 (`ce73b61`), the tokenless-glyph
-rotation fix #140 (`6baf14b`), the oauthlib promotion #139 (`123bedb`), the
-Nomic contract test #136 (`2f07510`), the job-heartbeat hardening #137
-(`634c38b`), the TOC glyph-leader fix #138 (`a2c5629`), the documentation
-follow-up #135 (`9eb6f94`), the dependency series #122 to #130 (`1cffc58`),
-the fresh-OCR fidelity source `1ba9415`, the FlagEmbedding source `ddbef38`,
-the pytest-xdist source `ff5e64f`, the test-time economy source `365de1c`
-and the OCR-program and casebook-excerpt source `29ea76b`; together they
-changed Python source, CI configuration, `.gitattributes`, two test-tooling
-locks (pytest-xdist and execnet in `requirements-test.lock` and
+current replacement pair uses the clean post-series documentation source
+`578a13a7015c1d1e256665d456fe36a936cbd0a8` (tree
+`2e149be30090527f75c58d5315237bacd1304abb`), a documentation follow-up after
+a series of one-domain dependency updates, on `main` after the merges of the
+soft-hyphen item-seam fix #146 (`8cc89b0`), the table header-row oracle fix
+#145 (`ce73b61`), the tokenless-glyph rotation fix #140 (`6baf14b`), the
+oauthlib promotion #139 (`123bedb`), the Nomic contract test #136
+(`2f07510`), the job-heartbeat hardening #137 (`634c38b`), the TOC
+glyph-leader fix #138 (`a2c5629`), the documentation follow-up #135
+(`9eb6f94`), the dependency series #122 to #130 (`1cffc58`), the fresh-OCR
+fidelity source `1ba9415`, the FlagEmbedding source `ddbef38`, the
+pytest-xdist source `ff5e64f`, the test-time economy source `365de1c` and
+the OCR-program and casebook-excerpt source `29ea76b`; together they changed
+Python source, CI configuration, `.gitattributes`, two test-tooling locks
+(pytest-xdist and execnet in `requirements-test.lock` and
 `requirements-smoke.lock`) and the FlagEmbedding record of
 `requirements-core.lock` and `requirements-full.lock`; the stacked
 dependency updates also change the vector-stores, Service/UI, test-audit
@@ -349,6 +351,14 @@ cited item that ends in a hyphen plus soft hyphen to the next cited item
 exactly where the fidelity audit would otherwise fuse the two items'
 boundary tokens; it changes no dependency or lock and supersedes the
 `09340ed` pair.
+The `a7847ce` pair (gate-only child `f7dd3fe`) passed the hosted CI
+promotion gate on [PR
+#146](https://github.com/toddlar00/rag-pipeline/pull/146), which merged into
+`main` as `8cc89b0`. The documentation-only source `578a13a` records the
+integrated post-series fixes, relabels the sections integrated by #116,
+brings the README dependency blocks up to the declared requirements and
+records the private excerpt reprocessing; it changes no code, dependency or
+lock and supersedes the `a7847ce` pair.
 Its Windows and
 Linux CPython 3.12.13 reports were
 generated after the same strict hash-locked synchronization and
@@ -540,15 +550,16 @@ then the stacked Nomic contract-test source `8e0b2a6`,
 then the stacked oauthlib promotion source `0333947`,
 then the stacked tokenless-glyph rotation fix source `c2d7b57`,
 then the stacked table header-row oracle fix source `09340ed`,
-then the stacked soft-hyphen item-seam fix source `a7847ce`.
+then the stacked soft-hyphen item-seam fix source `a7847ce`,
+then the stacked post-series documentation source `578a13a`.
 Its Windows report
-is 51,082 bytes (file SHA-256
-`0da37bf98f6a132a302a339f7b647a719ea739621063b723b766d0eb0da6ee17`;
+is 51,083 bytes (file SHA-256
+`9ac5ec668ca64db383db6c7ec435febc98adb1e3d3a024441507fefbc4d0c1bf`;
 embedded report SHA-256
-`0a80fbbfa6b8cf6c98f886bf5d24aa6f81a150cc4fb3aca092a541b2d84df78e`).
-Its Linux report is 50,478 bytes (file SHA-256
-`99be1ae4e6d29f431d8aadf3340d44a0cba386f3cbf963fb9d8af20e9d88bfd5`;
+`8808e8037a580214ef6486f39376bfcf6e1507b6d413d2bec9fe95da171ed100`).
+Its Linux report is 50,476 bytes (file SHA-256
+`0c8c388ce570b947ba74e321dd6876dc3b3b717a6a1658d63e7fc85129be5284`;
 embedded report SHA-256
-`2f417fbba0a6acbc9c5164bc721c39768a5c921e1c1a88fe639563e626f1f47b`).
+`103d42e2a4e8024057084d12627c9a81bd56c47916363379d1234d0a7f621be6`).
 Both use CPython 3.12.13 and pass their complete local same-platform 9×5
 comparisons. Hosted promotion remains pending.

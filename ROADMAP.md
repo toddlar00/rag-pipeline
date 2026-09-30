@@ -1950,6 +1950,14 @@ cited item that ends in a hyphen plus soft hyphen to the next cited item
 exactly where the fidelity audit would otherwise fuse the two items'
 boundary tokens; it changes no dependency or lock and supersedes the
 `09340ed` pair.
+The `a7847ce` pair (gate-only child `f7dd3fe`) passed the hosted CI
+promotion gate on [PR
+#146](https://github.com/toddlar00/rag-pipeline/pull/146), which merged into
+`main` as `8cc89b0`. The documentation-only source `578a13a` records the
+integrated post-series fixes, relabels the sections integrated by #116,
+brings the README dependency blocks up to the declared requirements and
+records the private excerpt reprocessing; it changes no code, dependency or
+lock and supersedes the `a7847ce` pair.
 Its Windows/Linux
 pair (independent local same-platform comparisons passed) is that branch's
 candidate; its hosted checks and exact-SHA record are pending, and the
