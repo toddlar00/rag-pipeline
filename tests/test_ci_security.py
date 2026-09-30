@@ -1766,6 +1766,253 @@ def test_structural_lines_match_reviewed_blanking_on_tracked_workflows():
     assert blanked > 0
 
 
+_CHECKOUT_STEP = (
+    "      - name: Check out repository\n"
+    f"        uses: actions/checkout@{_CHECKOUT_SHA}\n"
+    "        with:\n"
+    "          persist-credentials: false\n"
+)
+_ANCHOR_ERROR = "YAML anchors and aliases are unsupported"
+_TAG_ERROR = "YAML tags are unsupported"
+_MERGE_KEY_ERROR = "YAML merge keys are unsupported"
+
+
+def _validate_mutated_security_workflow(
+    root: Path,
+    old: str,
+    new: str,
+) -> tuple[list[str], list[str]]:
+    _policy_data, workflow_path = _valid_tree(root)
+    text = workflow_path.read_text(encoding="utf-8")
+    assert text.count(old) == 1
+    text = text.replace(old, new)
+    workflow_path.write_text(text, encoding="utf-8")
+    return check_ci_security.validate(root), text.splitlines()
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "flagged", "message"),
+    [
+        pytest.param(
+            _CHECKOUT_STEP,
+            "      - &checkout uses: actions/checkout@main\n"
+            "        with:\n"
+            "          persist-credentials: true\n",
+            "- &checkout uses: actions/checkout@main",
+            _ANCHOR_ERROR,
+            id="anchored-uses-key-hides-unpinned-checkout",
+        ),
+        pytest.param(
+            "  test:\n    runs-on:",
+            "  test:\n    &grant permissions: write-all\n    runs-on:",
+            "&grant permissions: write-all",
+            _ANCHOR_ERROR,
+            id="anchored-job-permissions-key",
+        ),
+        pytest.param(
+            "    runs-on: ubuntu-latest\n",
+            "    runs-on: &runner ubuntu-latest\n",
+            "runs-on: &runner ubuntu-latest",
+            _ANCHOR_ERROR,
+            id="anchored-value",
+        ),
+        pytest.param(
+            "permissions:\n  contents: read\n\njobs:\n"
+            "  test:\n    runs-on: ubuntu-latest\n    steps:\n"
+            + _CHECKOUT_STEP,
+            "permissions:\n  contents: read\n\n"
+            "env:\n  CHECKOUT: &checkout actions/checkout@main\n\njobs:\n"
+            "  test:\n    runs-on: ubuntu-latest\n    steps:\n"
+            "      - uses: *checkout\n"
+            "        with:\n"
+            "          persist-credentials: false\n",
+            "- uses: *checkout",
+            _ANCHOR_ERROR,
+            id="aliased-uses-value",
+        ),
+        pytest.param(
+            _CHECKOUT_STEP,
+            _CHECKOUT_STEP.replace(
+                "      - name:", "      - &checkout\n        name:"
+            )
+            + "      - *checkout\n",
+            "- *checkout",
+            _ANCHOR_ERROR,
+            id="aliased-whole-step",
+        ),
+        pytest.param(
+            "    runs-on: ubuntu-latest\n",
+            "    runs-on: ubuntu-latest\n"
+            "    strategy:\n"
+            "      matrix:\n"
+            "        os: [ubuntu-24.04, *runner]\n",
+            "os: [ubuntu-24.04, *runner]",
+            _ANCHOR_ERROR,
+            id="aliased-flow-sequence-entry",
+        ),
+        pytest.param(
+            "          persist-credentials: false\n",
+            "          persist-credentials: false\n"
+            "      - - &nested uses: evil/action@main\n",
+            "- - &nested uses: evil/action@main",
+            _ANCHOR_ERROR,
+            id="anchored-key-in-nested-sequence",
+        ),
+        pytest.param(
+            f"        uses: actions/checkout@{_CHECKOUT_SHA}\n",
+            "        !!str uses: actions/checkout@main\n",
+            "!!str uses: actions/checkout@main",
+            _TAG_ERROR,
+            id="tagged-uses-key-hides-unpinned-checkout",
+        ),
+        pytest.param(
+            "  test:\n    runs-on:",
+            "  test:\n    !!str permissions: write-all\n    runs-on:",
+            "!!str permissions: write-all",
+            _TAG_ERROR,
+            id="tagged-job-permissions-key",
+        ),
+        pytest.param(
+            "  test:\n    runs-on:",
+            "  test:\n"
+            "    !<tag:yaml.org,2002:str> permissions: write-all\n"
+            "    runs-on:",
+            "!<tag:yaml.org,2002:str> permissions: write-all",
+            _TAG_ERROR,
+            id="verbatim-tagged-job-permissions-key",
+        ),
+        pytest.param(
+            "    runs-on: ubuntu-latest\n",
+            "    runs-on: ubuntu-latest\n    if: !cancelled()\n",
+            "if: !cancelled()",
+            _TAG_ERROR,
+            id="unwrapped-negated-expression-is-a-tag",
+        ),
+        pytest.param(
+            "    runs-on: ubuntu-latest\n",
+            "    runs-on: ubuntu-latest\n    <<: *defaults\n",
+            "<<: *defaults",
+            _MERGE_KEY_ERROR,
+            id="merge-key-in-job",
+        ),
+        pytest.param(
+            "          persist-credentials: false\n",
+            "          persist-credentials: false\n          <<: *inputs\n",
+            "<<: *inputs",
+            _MERGE_KEY_ERROR,
+            id="merge-key-in-with",
+        ),
+    ],
+)
+def test_yaml_node_properties_and_merge_keys_are_rejected(
+    tmp_path, old, new, flagged, message
+):
+    errors, lines = _validate_mutated_security_workflow(tmp_path, old, new)
+
+    stripped = [line.strip() for line in lines]
+    assert stripped.count(flagged) == 1
+    assert (
+        f"{check_ci_security.SECURITY_WORKFLOW_PATH}:"
+        f"{stripped.index(flagged) + 1}: {message} by the security validator"
+    ) in errors
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "expected"),
+    [
+        pytest.param(
+            "  test:\n    runs-on:",
+            "  test: # note: |\n    permissions: write-all\n    runs-on:",
+            "require one top-level permissions mapping and no job-level "
+            "overrides",
+            id="job-comment-ending-in-literal-indicator",
+        ),
+        pytest.param(
+            _CHECKOUT_STEP,
+            "      - name: Check out repository # see: >\n"
+            "        uses: actions/checkout@main\n"
+            "        with:\n"
+            "          persist-credentials: true\n",
+            "40-character commit SHA: actions/checkout@main",
+            id="step-comment-ending-in-folded-indicator",
+        ),
+        pytest.param(
+            _CHECKOUT_STEP,
+            '      - name: "x: | #"\n'
+            "        uses: actions/checkout@main\n"
+            "        with:\n"
+            "          persist-credentials: false\n",
+            "40-character commit SHA: actions/checkout@main",
+            id="quoted-value-ending-in-literal-indicator",
+        ),
+        pytest.param(
+            "    steps:\n" + _CHECKOUT_STEP,
+            "    steps: # body: |\n"
+            "      - uses: actions/checkout@main\n"
+            "        with:\n"
+            "          persist-credentials: true\n",
+            "actions/checkout must set persist-credentials: false exactly once",
+            id="sequence-comment-ending-in-literal-indicator",
+        ),
+    ],
+)
+def test_comments_and_quoted_values_cannot_open_block_scalars(
+    tmp_path, old, new, expected
+):
+    errors, _lines = _validate_mutated_security_workflow(tmp_path, old, new)
+
+    assert any(expected in error for error in errors)
+
+
+@pytest.mark.parametrize(
+    ("header", "is_header"),
+    [
+        ("run: |", True),
+        ("run: >-", True),
+        ("run: |2+", True),
+        ("run: |+ # keep", True),
+        ("- run: |", True),
+        ("SCRIPT_BODY: >", True),
+        ("|", True),
+        ("- |", False),
+        ("- - run: |", False),
+        ("run:|", False),
+        ("my key: |", False),
+        ("run: &body |", False),
+        ("run: !!str >", False),
+        ("build: # note: |", False),
+        ("- name: Checkout # see: >", False),
+        ('- name: "x: | #"', False),
+        ("steps: # body: |", False),
+    ],
+)
+def test_block_scalar_headers_never_hide_more_than_the_reviewed_rule(
+    header, is_header
+):
+    lines = [
+        "jobs:",
+        f"  {header}",
+        "      uses: actions/checkout@main",
+        "",
+        "        permissions: write-all",
+        "  steps:",
+    ]
+
+    structural = check_ci_security._structural_workflow_lines(lines)
+
+    hidden = [
+        index for index, line in enumerate(structural)
+        if lines[index].strip() and not line
+    ]
+    assert hidden == ([2, 4] if is_header else [])
+    reviewed = _reviewed_structural_workflow_lines(lines)
+    assert all(
+        line == lines[index]
+        for index, line in enumerate(structural)
+        if reviewed[index]
+    )
+
+
 def test_all_declared_current_and_future_owners_need_both_filters(tmp_path):
     policy, workflow_path = _valid_tree(tmp_path)
     policy["reserved_implementation_owners"]["future_provider"] = [
