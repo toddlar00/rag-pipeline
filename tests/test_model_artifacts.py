@@ -1,6 +1,8 @@
 import copy
+import errno
 import hashlib
 import io
+import itertools
 import json
 import os
 from dataclasses import replace
@@ -91,14 +93,13 @@ def _model_file(path, payload):
     )
 
 
-def _synthetic_artifacts(tmp_path):
+def _synthetic_artifacts(tmp_path, *, weights=b"safe tensor payload"):
     prefix = b"code/repo--"
     config = (
         b'{"auto_map":{"AutoConfig":"code/repo--config.C",'
         b'"AutoModel":"code/repo--model.M"}}'
     )
     derived = config.replace(prefix, b"")
-    weights = b"safe tensor payload"
     config_code = b"class C: pass\n"
     model_code = b"from .config import C\nclass M: pass\n"
     main = model_artifacts.PinnedModelArtifact(
@@ -924,6 +925,151 @@ def test_cached_runtime_bundle_rejects_unexpected_empty_directory(
     with pytest.raises(
             model_artifacts.ModelArtifactError, match="unexpected directory"):
         model_artifacts.verify_cached_runtime_bundle(spec)
+
+
+_HASH_BLOCK = 1024 * 1024
+
+
+def _hash_payload(label, size):
+    # SHAKE output is deterministic and aperiodic, so a misplaced, repeated
+    # or stale block cannot hash to the same digest by accident.
+    return hashlib.shake_256(label.encode("ascii")).digest(size)
+
+
+class _UnevenReadStream(io.RawIOBase):
+    """Serve a payload in uneven slices and optionally fail mid-stream."""
+
+    def __init__(self, payload, *, fail_at=None):
+        self._payload = memoryview(payload)
+        self._offset = 0
+        self._steps = itertools.cycle((1, 4093, _HASH_BLOCK - 1, 65537))
+        self._fail_at = fail_at
+
+    def readable(self):
+        return True
+
+    def readinto(self, buffer):
+        if self._fail_at is not None and self._offset >= self._fail_at:
+            raise OSError(errno.EIO, "synthetic device error")
+        count = min(
+            len(buffer), next(self._steps), len(self._payload) - self._offset)
+        buffer[:count] = self._payload[self._offset:self._offset + count]
+        self._offset += count
+        return count
+
+
+class _StreamPath:
+    def __init__(self, stream):
+        self.stream = stream
+        self.modes = []
+
+    def open(self, mode="r", buffering=-1):
+        self.modes.append(mode)
+        return self.stream
+
+    def __str__(self):
+        return "synthetic/model.safetensors"
+
+
+@pytest.mark.parametrize("size", [
+    0, 1,
+    _HASH_BLOCK - 1, _HASH_BLOCK, _HASH_BLOCK + 1,
+    4 * _HASH_BLOCK - 1, 4 * _HASH_BLOCK, 4 * _HASH_BLOCK + 1,
+    10 * _HASH_BLOCK,
+])
+def test_artifact_hash_matches_whole_payload_digest_at_read_boundaries(
+        tmp_path, size):
+    payload = _hash_payload(f"artifact-{size}", size)
+    path = tmp_path / "model.safetensors"
+    path.write_bytes(payload)
+
+    assert model_artifacts._sha256_path(path) == (
+        size, hashlib.sha256(payload).hexdigest())
+
+
+def test_artifact_hash_consumes_uneven_reads_until_end_of_file():
+    payload = _hash_payload("uneven-reads", 3 * _HASH_BLOCK + 11)
+    path = _StreamPath(_UnevenReadStream(payload))
+
+    assert model_artifacts._sha256_path(path) == (
+        len(payload), hashlib.sha256(payload).hexdigest())
+    assert path.modes == ["rb"]
+    assert path.stream.closed
+
+
+def test_artifact_hash_maps_open_and_read_failures_to_one_error(tmp_path):
+    failing = _StreamPath(_UnevenReadStream(
+        _hash_payload("read-failure", 2 * _HASH_BLOCK), fail_at=_HASH_BLOCK))
+    for path in (tmp_path, tmp_path / "missing.safetensors", failing):
+        with pytest.raises(model_artifacts.ModelArtifactError) as caught:
+            model_artifacts._sha256_path(path)
+        cause = caught.value.__cause__
+        assert isinstance(cause, OSError)
+        assert str(caught.value) == (
+            f"could not hash model artifact {path}: {cause}")
+    assert cause.errno == errno.EIO
+    assert failing.stream.closed
+
+
+def test_model_snapshot_rejects_same_size_multi_block_weight_edit(
+        monkeypatch, tmp_path):
+    weights = _hash_payload("snapshot-weights", 2 * _HASH_BLOCK + 17)
+    main, code, roots, _derived = _synthetic_artifacts(
+        tmp_path, weights=weights)
+    artifacts = {main.model_id: main, code.model_id: code}
+    monkeypatch.setattr(
+        model_artifacts, "model_artifact",
+        lambda model_id, **_kwargs: artifacts.get(model_id))
+    tampered = bytearray(weights)
+    tampered[_HASH_BLOCK + 5] ^= 0x01
+    (roots[main.model_id] / "model.safetensors").write_bytes(tampered)
+
+    with pytest.raises(
+            model_artifacts.ModelArtifactError,
+            match="model snapshot checksum differs for model.safetensors"):
+        model_artifacts.verified_model_directory(
+            main.model_id, "embedding", cache_root=tmp_path / "cache",
+            allow_download=True, authorize_download_fn=lambda: None,
+            snapshot_download_fn=lambda **kwargs: str(
+                roots[kwargs["repo_id"]]))
+    spec = model_artifacts.runtime_bundle_spec(
+        main.model_id, "embedding", cache_root=tmp_path / "cache")
+    assert model_artifacts.verify_cached_runtime_bundle(spec) is False
+
+
+def test_cached_runtime_bundle_rejects_multi_block_weight_edits(
+        monkeypatch, tmp_path):
+    weights = _hash_payload("runtime-weights", 2 * _HASH_BLOCK + 17)
+    main, code, roots, _derived = _synthetic_artifacts(
+        tmp_path, weights=weights)
+    artifacts = {main.model_id: main, code.model_id: code}
+    monkeypatch.setattr(
+        model_artifacts, "model_artifact",
+        lambda model_id, **_kwargs: artifacts.get(model_id))
+    result = model_artifacts.verified_model_directory(
+        main.model_id, "embedding", cache_root=tmp_path / "cache",
+        allow_download=True, authorize_download_fn=lambda: None,
+        snapshot_download_fn=lambda **kwargs: str(roots[kwargs["repo_id"]]))
+    spec = model_artifacts.runtime_bundle_spec(
+        main.model_id, "embedding", cache_root=tmp_path / "cache")
+    weight_path = result / "model.safetensors"
+    assert weight_path.read_bytes() == weights
+    assert model_artifacts.verify_cached_runtime_bundle(spec) is True
+
+    edits = []
+    for offset in (0, _HASH_BLOCK - 1, _HASH_BLOCK + 5, len(weights) - 1):
+        tampered = bytearray(weights)
+        tampered[offset] ^= 0x01
+        edits.append(bytes(tampered))
+    edits.extend((weights[:-1], weights + b"\0"))
+    for edited in edits:
+        weight_path.write_bytes(edited)
+        with pytest.raises(
+                model_artifacts.ModelArtifactError,
+                match="runtime model checksum differs for model.safetensors"):
+            model_artifacts.verify_cached_runtime_bundle(spec)
+        weight_path.write_bytes(weights)
+        assert model_artifacts.verify_cached_runtime_bundle(spec) is True
 
 
 def test_verified_installed_package_model_checks_version_and_bytes(

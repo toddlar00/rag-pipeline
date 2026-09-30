@@ -1623,7 +1623,7 @@
             "target": "_markdown_validation.validation_receipt_is_complete"
           },
           {
-            "locations_sha256": "48d2072ef345b21cf7809f3de476d0d89ff2216cc5020a9c5d8784a3f00deeb1",
+            "locations_sha256": "6852af25f4d6ecf88781f37a2946e9a834bb9f199df418fcdd717bb057d41da7",
             "occurrence_count": 1,
             "operations": [
               "setattr"
@@ -1637,7 +1637,7 @@
             "target": "_model_artifacts.configure_transformers_dynamic_module_cache"
           },
           {
-            "locations_sha256": "31677e03d9d6a62e238e4a03e334d65b517a89bc36e5ec23f11566a07629ac87",
+            "locations_sha256": "810a0b84620b9047a8ee7258254117f39f87fd56d3e6811b4c4889975faaee25",
             "occurrence_count": 4,
             "operations": [
               "setattr"
@@ -1651,7 +1651,7 @@
             "target": "_model_artifacts.model_artifact"
           },
           {
-            "locations_sha256": "05678779e8b5d98f55bed1d846dc7ba2c7a40e8cadbbe5eeb770891fff5f49a3",
+            "locations_sha256": "0dc9a0002b52b13c35da2a1cb70e643eb8d692d56cf2ce648b0e42daad5a4a7f",
             "occurrence_count": 2,
             "operations": [
               "setattr"
@@ -1669,7 +1669,7 @@
             "target": "_model_artifacts.verified_docling_artifact_directory"
           },
           {
-            "locations_sha256": "b2076a303671ebe3ec06836a12ea8bd3ca4b7496ebbd757dbcf6e6e47e45ef75",
+            "locations_sha256": "2a4dd33b545882ffeb0cf5b2a60340c1db48e7f21bdab7b8fa0fb34646c0054b",
             "occurrence_count": 1,
             "operations": [
               "setattr"
@@ -3617,7 +3617,7 @@
             "target": "_model_artifact_lock_sha256"
           },
           {
-            "locations_sha256": "46ad73f69892df71ca470b6daa963ffbe0004594bf7cbee9f70ec30e5d2eb3e7",
+            "locations_sha256": "982bb6f9f6e27fd5531f2c1ac3a1e8e68498f3a0fec39e2a57cb92e22b4d5613",
             "occurrence_count": 10,
             "operations": [
               "setattr"
@@ -3831,7 +3831,7 @@
             "target": "_pipeline_publication_complete"
           },
           {
-            "locations_sha256": "7cf12f57bc860ef20c5ea52e7e7bfb0fb9dfc282800c3514ec6a2b338046a815",
+            "locations_sha256": "8a5b01eb816107483b782560e9456873ba21542b1e48e8134e1f0a0d909a9948",
             "occurrence_count": 9,
             "operations": [
               "setattr"
@@ -4209,7 +4209,7 @@
             "target": "_rerank"
           },
           {
-            "locations_sha256": "9a0f58c6a1163f6fc6c56aec312756a1faed3ac9ff400140743a979aa14a9c79",
+            "locations_sha256": "5b00cb5de5a1926e13fecf79b611f7c30e487399fca3ed32e1a69a42bf67690e",
             "occurrence_count": 4,
             "operations": [
               "setattr"
@@ -4667,7 +4667,7 @@
             "target": "_write_artifact_completion"
           },
           {
-            "locations_sha256": "76bc3728e2f37fa43e9750c14a796857a0233f62a3be18cf2b8c89743642e7fa",
+            "locations_sha256": "b0949fd8d67063b24ea93cd54e2e1d0bbfa510e120d289911d55dd6488102d6b",
             "occurrence_count": 1,
             "operations": [
               "setattr"
@@ -5943,7 +5943,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "dbe5f4f3a0cbd001f92e47f7a260fc1991c01b023197ea58b93e3403c73f5cec",
+          "locations_sha256": "859853e2176d76cdb7d820b0a0d3e63ca267789b761de007df81660da096df96",
           "name": "_ZS_LABELS",
           "occurrence_count": 1,
           "paths": [
@@ -7646,7 +7646,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "5cc107c6dbeb4a7dc6e27afca0b4e6e9f0ef497a366e26bcdfc08f4c2e5578b1",
+          "locations_sha256": "55f7b858d6ede6e1059a872c4d5dde23c83feec8c95eab36417c19fea6b84e97",
           "name": "_configure_docling_model_artifacts",
           "occurrence_count": 5,
           "paths": [
@@ -7862,7 +7862,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "ff165c446fe8994672dc3d621f2abd59bebc4fad110485451fa57304c7cd0b93",
+          "locations_sha256": "ed66a2bef250823a8db0178379adbb1ddcf515b517e3760dd58ca2846d4a2d14",
           "name": "_count_embedding_text_tokens",
           "occurrence_count": 3,
           "paths": [
@@ -8525,7 +8525,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "7d684b53a432e59e8d1e64fbd2bf143a4df10a018c75c980f2e3543dfc7d0376",
+          "locations_sha256": "0e69d726171e37beb09f0b1a0c37d92110b5d0036fc4aba35dc2c40bc63f8cb6",
           "name": "_get_embedding_fn",
           "occurrence_count": 10,
           "paths": [
@@ -8549,7 +8549,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "392ea7cd15cf5dd4009825886cd6129a9c0e1b976cc4c4796e514b8ab4e54f74",
+          "locations_sha256": "92d89a264009c9f785d4929e7e5f7a8db0be1b574ad2a4ffa595052cd98c794d",
           "name": "_get_reranker",
           "occurrence_count": 6,
           "paths": [
@@ -9951,7 +9951,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "22af8923b3a3d32291f6fb64562511fab8802ac5bbea29665c1156fb87c69d0f",
+          "locations_sha256": "487f0a0a4f87d27efb461037ea0aa8a74812f730e8a826bf7a21bb35d184fb34",
           "name": "_model_artifacts",
           "occurrence_count": 8,
           "paths": [
@@ -9975,7 +9975,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "8d959a3245deecb8276e2ea6d2f767f3e443555d46d62554c3e6d02c5dd53a88",
+          "locations_sha256": "19f7cff897afbba64a51306628adcc592bbfba41203da84a854b04a49cd079ab",
           "name": "_model_loader_source",
           "occurrence_count": 4,
           "paths": [
@@ -10591,7 +10591,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "a3c7d7b34c7353187ed4a51755e3576faad25dc97d61bd9525b361329f4a8055",
+          "locations_sha256": "f556b054dad00c1f27287ed3cc9a877d38178460756256a5911387712f859d10",
           "name": "_pin_docling_layout_revision",
           "occurrence_count": 1,
           "paths": [
@@ -13961,7 +13961,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "afb64348b6de55618ab640ef717b3563ab5ddeafbed93bf8ed45c080c93fe898",
+          "locations_sha256": "fc11c38e90ef55b3bf5ab483dff79d07c11811be794cabfccb2e0c12794674b7",
           "name": "_zeroshot_classify",
           "occurrence_count": 1,
           "paths": [
