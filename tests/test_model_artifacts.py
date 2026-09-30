@@ -77,8 +77,10 @@ class _FakeResponse:
 
 
 def _git_blob_sha1(payload):
-    return hashlib.sha1(  # noqa: S324 - Git object identity by design.
-        b"blob " + str(len(payload)).encode("ascii") + b"\0" + payload
+    # Git object identity by design, matching the Hub's blob hash.
+    return hashlib.sha1(
+        b"blob " + str(len(payload)).encode("ascii") + b"\0" + payload,
+        usedforsecurity=False,
     ).hexdigest()
 
 
@@ -475,6 +477,22 @@ def test_hub_metadata_and_file_fetches_are_bounded_and_retry():
             "owner/model", "a" * 40, "config.json", len(payload), "0" * 40,
             opener=lambda *_args, **_kwargs: _FakeResponse(payload),
         )
+
+
+@pytest.mark.parametrize(("payload", "git_blob_sha1"), (
+    (b"", "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"),
+    (b"hello\n", "ce013625030ba8dba906f756967f9e9ca394464a"),
+))
+def test_hub_file_git_identity_matches_git_hash_object(payload, git_blob_sha1):
+    # Values from `git hash-object`, independent of the _git_blob_sha1 helper.
+    assert _git_blob_sha1(payload) == git_blob_sha1
+    checksum = model_artifacts.fetch_hub_file_sha256(
+        "owner/model", "a" * 40, "config.json", len(payload), git_blob_sha1,
+        opener=lambda *_args, **_kwargs: _FakeResponse(
+            payload, content_length=len(payload)),
+    )
+
+    assert checksum == hashlib.sha256(payload).hexdigest()
 
 
 def test_pypi_wheel_model_payloads_are_verified_from_actual_bytes():

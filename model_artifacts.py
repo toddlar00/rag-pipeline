@@ -743,8 +743,10 @@ def fetch_hub_file_sha256(
             if len(payload) != expected_size:
                 raise ModelArtifactError(
                     f"Hub file size differs for {model_id}:{safe_path}")
-            git_hash = hashlib.sha1(  # noqa: S324 - Git object identity by design.
-                b"blob " + str(len(payload)).encode("ascii") + b"\0" + payload
+            # Git object identity by design; the SHA-256 below is the content check.
+            git_hash = hashlib.sha1(
+                b"blob " + str(len(payload)).encode("ascii") + b"\0" + payload,
+                usedforsecurity=False,
             ).hexdigest()
             if git_hash != expected_git_blob_sha1:
                 raise ModelArtifactError(
