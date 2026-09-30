@@ -1335,11 +1335,15 @@ def pinned_model_kwargs(
 def _sha256_path(path: Path) -> tuple[int, str]:
     size = 0
     digest = hashlib.sha256()
+    # Reuse one block instead of allocating a new bytes object per read;
+    # only the filled prefix of each (possibly short) read is hashed.
+    buffer = bytearray(1024 * 1024)
+    view = memoryview(buffer)
     try:
-        with path.open("rb") as handle:
-            while block := handle.read(1024 * 1024):
-                size += len(block)
-                digest.update(block)
+        with path.open("rb", buffering=0) as handle:
+            while count := handle.readinto(buffer):
+                size += count
+                digest.update(view[:count])
     except OSError as exc:
         raise ModelArtifactError(f"could not hash model artifact {path}: {exc}") from exc
     return size, digest.hexdigest()

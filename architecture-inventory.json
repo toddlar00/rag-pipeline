@@ -33349,7 +33349,7 @@
             "scope": "nested"
           }
         ],
-        "definition_locations_sha256": "43841617b551a873bd66b8c3b561f18428e47e52b366c51ca40c6bdd3968e023",
+        "definition_locations_sha256": "265e6a2c8c08ce8bb9839e40394086efd0252d614a832c4ce1c22cc9fb2fd70f",
         "function_count": 67,
         "functions": [
           {
@@ -33757,9 +33757,9 @@
         ],
         "import_edges": [],
         "module": "model_artifacts",
-        "non_blank_lines": 2217,
+        "non_blank_lines": 2221,
         "path": "model_artifacts.py",
-        "physical_lines": 2412,
+        "physical_lines": 2416,
         "top_level_function_count": 59
       },
       {
@@ -63935,7 +63935,7 @@
         "top_level_function_count": 2
       }
     ],
-    "physical_line_count": 130322,
+    "physical_line_count": 130326,
     "source_groups": [
       "production",
       "tools",
