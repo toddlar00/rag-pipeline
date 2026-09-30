@@ -854,9 +854,34 @@ def test_posix_escalation_kills_descendant_that_ignores_sigterm(
         encoding="utf-8",
     )
     monkeypatch.setattr(rag, "_SUPERVISED_TERMINATE_GRACE", 0.2)
+    # Expire the deadline only after the grandchild's first heartbeat, which
+    # its SIG_IGN precedes, so the SIGKILL escalation is always exercised
+    # however slowly the two interpreters start. The first clock read sets
+    # the deadline; the no-op heartbeat callback makes the supervision loop
+    # re-read the clock on every poll slice. The real-time bound turns a
+    # grandchild that never starts into a prompt heartbeat assertion failure.
+    real_supervisor = rag._process_supervision._run_cli_with_deadline
+    give_up_at = time.monotonic() + 30
+    clock_calls = []
+
+    def deadline_clock():
+        clock_calls.append(None)
+        if len(clock_calls) > 1 and (
+                heartbeat.exists() or time.monotonic() >= give_up_at):
+            return 1.0
+        return 0.0
+
+    def with_deadline_clock(*args, **kwargs):
+        return real_supervisor(*args, **kwargs, monotonic=deadline_clock)
+
+    monkeypatch.setattr(
+        rag._process_supervision, "_run_cli_with_deadline",
+        with_deadline_clock)
 
     assert rag._run_cli_with_deadline(
-        script, [str(heartbeat)], operation="query", timeout=0.5) == 124
+        script, [str(heartbeat)], operation="query", timeout=0.5,
+        heartbeat=lambda _process: None) == 124
+    assert heartbeat.is_file()
     time.sleep(0.2)
     stopped_value = heartbeat.read_text(encoding="utf-8")
     time.sleep(0.3)
