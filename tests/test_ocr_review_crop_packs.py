@@ -473,6 +473,24 @@ def test_owned_preview_is_closed_and_cleanup_failure_is_visible(tmp_path, monkey
     assert service.close() is clean and calls == ["request", "close"]
 
 
+@pytest.mark.parametrize(("readings", "expected"), [((1000., 1001., 1002.5), 7.5), ((1000., 1001., 1020.), 0.)])
+def test_owned_preview_close_receives_remaining_service_budget(tmp_path, monkeypatch, policy_pack,  # noqa: F811
+                                                                readings, expected):
+    import ocr_crop_preview_supervision
+
+    seen = []
+    preview = NS(render=lambda *_a, **_kw: None, private_root=tmp_path / "inert-owned-preview",
+                 render_with_view=lambda *_a, **_kw: None, request_close=lambda: None,
+                 close=lambda *, timeout_seconds: seen.append(timeout_seconds) or True)
+    monkeypatch.setattr(ocr_crop_preview_supervision, "CropPreviewController", lambda _workspace: preview)
+    service = host.CropReviewPackService(_workspace(policy_pack.binding, []), tmp_path)
+    clock = iter(readings)
+    # Replace the service clock capability only, after construction.
+    monkeypatch.setattr(host, "time", NS(monotonic=lambda: next(clock)))
+    assert service.close(timeout_seconds=10) is True
+    assert seen == [expected] and service._uncertain is False
+
+
 @pytest.mark.parametrize("operation", ["regions", "hardscan"])
 def test_complete_generated_historical_archives_open_compare_revise_without_native_runtime(tmp_path, operation):
     before = archive_fixture(operation, text="before")
