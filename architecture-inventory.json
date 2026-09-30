@@ -1117,6 +1117,13 @@
           "facade_roots": [
             "rag"
           ],
+          "module": "tests.test_legal_tokenizer_differential",
+          "path": "tests/test_legal_tokenizer_differential.py"
+        },
+        {
+          "facade_roots": [
+            "rag"
+          ],
           "module": "tests.test_letter_spaced_merge_proofs",
           "path": "tests/test_letter_spaced_merge_proofs.py"
         },
@@ -5315,6 +5322,86 @@
           "kinds": [
             "attribute"
           ],
+          "locations_sha256": "565d57fc7d51315a017342771bf730bc8f85ab6f960665b137759404a3480b6b",
+          "name": "_LEGAL_CITATION_RE",
+          "occurrence_count": 1,
+          "paths": [
+            "_LEGAL_CITATION_RE"
+          ],
+          "source_counts": [
+            {
+              "count": 1,
+              "path": "tests/test_legal_tokenizer_differential.py"
+            }
+          ]
+        },
+        {
+          "contexts": [
+            "load"
+          ],
+          "kinds": [
+            "attribute"
+          ],
+          "locations_sha256": "8a154f3c453400d5cef5655db00f490b8da0c5c9b96c5f565c8d87135a406178",
+          "name": "_LEGAL_SEARCH_ALIASES",
+          "occurrence_count": 1,
+          "paths": [
+            "_LEGAL_SEARCH_ALIASES"
+          ],
+          "source_counts": [
+            {
+              "count": 1,
+              "path": "tests/test_legal_tokenizer_differential.py"
+            }
+          ]
+        },
+        {
+          "contexts": [
+            "load"
+          ],
+          "kinds": [
+            "attribute"
+          ],
+          "locations_sha256": "d6883733bc9c0ba5418a23431a63b6ff3dba9e17618769be8e4dde06788d607d",
+          "name": "_LEGAL_SUBSECTION_RE",
+          "occurrence_count": 1,
+          "paths": [
+            "_LEGAL_SUBSECTION_RE"
+          ],
+          "source_counts": [
+            {
+              "count": 1,
+              "path": "tests/test_legal_tokenizer_differential.py"
+            }
+          ]
+        },
+        {
+          "contexts": [
+            "load"
+          ],
+          "kinds": [
+            "attribute"
+          ],
+          "locations_sha256": "f27120b7812d2fb43c4f9e4960443ae69a9f94709ac77dff4fba42d818d3ce09",
+          "name": "_LEGAL_WORD_RE",
+          "occurrence_count": 1,
+          "paths": [
+            "_LEGAL_WORD_RE"
+          ],
+          "source_counts": [
+            {
+              "count": 1,
+              "path": "tests/test_legal_tokenizer_differential.py"
+            }
+          ]
+        },
+        {
+          "contexts": [
+            "load"
+          ],
+          "kinds": [
+            "attribute"
+          ],
           "locations_sha256": "a77f84d7897c9444226430109b516f4bfc04239e845ca1422df2778d19448cc2",
           "name": "_LetterSpacedLayerRetry",
           "occurrence_count": 2,
@@ -9189,13 +9276,17 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "d110868aa0094238fb28d84457f62ef340f06c3351ae088609782c954539d338",
+          "locations_sha256": "f9271e81e7334d79eadd8a677b3ae4bd0108e53e3a52f40dd494f318271caa39",
           "name": "_legal_search_tokens",
-          "occurrence_count": 2,
+          "occurrence_count": 3,
           "paths": [
             "_legal_search_tokens"
           ],
           "source_counts": [
+            {
+              "count": 1,
+              "path": "tests/test_legal_tokenizer_differential.py"
+            },
             {
               "count": 2,
               "path": "tests/test_search.py"
@@ -10169,6 +10260,26 @@
             {
               "count": 2,
               "path": "tests/test_vector_store_concurrency.py"
+            }
+          ]
+        },
+        {
+          "contexts": [
+            "load"
+          ],
+          "kinds": [
+            "attribute"
+          ],
+          "locations_sha256": "3a657d0a19fc822ac3c7b94782d10ef081601de1d9740872606d76eea7e6f128",
+          "name": "_normalize_legal_search_text",
+          "occurrence_count": 1,
+          "paths": [
+            "_normalize_legal_search_text"
+          ],
+          "source_counts": [
+            {
+              "count": 1,
+              "path": "tests/test_legal_tokenizer_differential.py"
             }
           ]
         },
@@ -13975,7 +14086,7 @@
           ]
         }
       ],
-      "using_module_count": 77
+      "using_module_count": 78
     }
   },
   "hash_domains": {
@@ -63944,7 +64055,7 @@
     "top_level_function_count": 2920
   },
   "tracked_sources": {
-    "count": 493,
+    "count": 494,
     "groups": [
       {
         "count": 152,
@@ -64105,7 +64216,7 @@
         ]
       },
       {
-        "count": 298,
+        "count": 299,
         "name": "tests",
         "paths": [
           "tests/conftest.py",
@@ -64182,6 +64293,7 @@
           "tests/test_job_runtime.py",
           "tests/test_jobs_cli.py",
           "tests/test_launcher_scripts.py",
+          "tests/test_legal_tokenizer_differential.py",
           "tests/test_letter_spaced_merge_proofs.py",
           "tests/test_letter_spaced_text_layer.py",
           "tests/test_list_boundary_characterization.py",
