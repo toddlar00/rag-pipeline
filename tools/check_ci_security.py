@@ -112,9 +112,11 @@ _AMBIGUOUS_BLOCK_SCALAR_RE = re.compile(
 )
 # Anchors, aliases and tags can prefix or stand in for a mapping key that the
 # line-based checks then miss; YAML 1.1 parsers also import merge-key entries.
+# A YAML 1.2 anchor name may hold any character but a space, a tab or a flow
+# indicator, so a Unicode space can be part of it.
 _YAML_NODE_START = r"(?:^(?:-\s+)*|^---\s+|:\s+|[\[,]\s*)"
 _YAML_ANCHOR_OR_ALIAS_RE = re.compile(
-    _YAML_NODE_START + r"[&*][^\s,\[\]{}]+"
+    _YAML_NODE_START + r"[&*][^ \t,\[\]{}]+"
 )
 _YAML_TAG_RE = re.compile(_YAML_NODE_START + r"!")
 _YAML_MERGE_KEY_RE = re.compile(r"^(?:-\s+)*<<\s*:")
@@ -124,6 +126,12 @@ _QUOTED_MAPPING_KEY_RE = re.compile(
 _FLOW_MAPPING_RE = re.compile(
     r"^(?:\{|-\s*(?:&\S+\s*)?\{|[^:#]+:\s*(?:&\S+\s*)?\{)"
 )
+# Python's str.strip(), \s and str.splitlines() accept more whitespace and
+# line breaks than YAML, whose tokens are separated only by ASCII spaces and
+# tabs and whose lines end only at LF or CR. Workflow structure using the
+# others is rejected, so the line checks read it the way YAML does.
+_NON_ASCII_WHITESPACE_RE = re.compile(r"[^\S \t]")
+_YAML_LINE_ENDINGS = frozenset({"", "\n", "\r", "\r\n"})
 _CANDIDATE_REF = "${{ github.sha }}"
 _PHASE_A0_BOOTSTRAP_REF = (
     "${{ github.event.pull_request.head.sha || github.sha }}"
@@ -303,8 +311,9 @@ def _validate_supported_workflow_syntax(
     """Reject YAML forms that could hide security-sensitive mapping keys."""
     errors: list[str] = []
     for index, line in enumerate(lines):
-        # str.strip() and \s also drop tabs and Unicode spaces that YAML
-        # treats as content, so the checks below would misread the line.
+        # YAML indents only with spaces. str.strip() and \s would also drop a
+        # leading tab or Unicode space, which YAML rejects or reads as part
+        # of the key, so the checks below would misread the line.
         if line[: len(line) - len(line.lstrip())].strip(" "):
             errors.append(
                 f"{workflow_path}:{index + 1}: non-space indentation is "
@@ -313,6 +322,11 @@ def _validate_supported_workflow_syntax(
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             continue
+        if _NON_ASCII_WHITESPACE_RE.search(line.lstrip()):
+            errors.append(
+                f"{workflow_path}:{index + 1}: non-ASCII whitespace is "
+                "unsupported by the security validator"
+            )
         if _QUOTED_MAPPING_KEY_RE.search(stripped):
             errors.append(
                 f"{workflow_path}:{index + 1}: quoted mapping keys are "
@@ -1865,11 +1879,22 @@ def _validate_action_pins(workflow_path: str, lines: list[str]) -> list[str]:
     return errors
 
 
+def _validate_line_breaks(workflow_path: str, text: str) -> list[str]:
+    """Reject line boundaries that str.splitlines() honours but YAML does not."""
+    return [
+        f"{workflow_path}:{index + 1}: line breaks other than LF and CR are "
+        "unsupported by the security validator"
+        for index, line in enumerate(text.splitlines(keepends=True))
+        if line[len(line.splitlines()[0]):] not in _YAML_LINE_ENDINGS
+    ]
+
+
 def validate_workflow(workflow_path: str, text: str) -> list[str]:
     """Validate action pins, read-only permissions, and checkout credentials."""
     lines = _structural_workflow_lines(text.splitlines())
     return (
-        _validate_supported_workflow_syntax(workflow_path, lines)
+        _validate_line_breaks(workflow_path, text)
+        + _validate_supported_workflow_syntax(workflow_path, lines)
         + _validate_permissions(workflow_path, lines)
         + _validate_action_pins(workflow_path, lines)
     )
