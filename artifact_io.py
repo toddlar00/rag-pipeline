@@ -1274,6 +1274,24 @@ def _read_index_artifact_snapshot(
     raise AssertionError("unreachable artifact read retry state")
 
 
+def _contains_nonfinite_float(value: object) -> bool:
+    """Return whether a decoded JSON value holds NaN or an infinity.
+
+    The strict parser runs this path-free scan on every record and rebuilds
+    the exact field path only for a record that fails.
+    """
+    pending = [value]
+    while pending:
+        value = pending.pop()
+        if isinstance(value, dict):
+            pending.extend(value.values())
+        elif isinstance(value, list):
+            pending.extend(value)
+        elif isinstance(value, float) and not math.isfinite(value):
+            return True
+    return False
+
+
 def _parse_index_records_strict(
         raw: bytes, path: Path, *, chunk_id_fn: ChunkIdFn) -> list[dict]:
     """Parse and validate one already-captured chunks byte snapshot."""
@@ -1312,24 +1330,26 @@ def _parse_index_records_strict(
                     f"Invalid chunk at {path}:{line_number}: "
                     "'metadata' must be a JSON object"
                 )
-            pending = [("metadata", record["metadata"])]
-            while pending:
-                field_path, value = pending.pop()
-                if isinstance(value, float) and not math.isfinite(value):
-                    raise ValueError(
-                        f"Invalid chunk at {path}:{line_number}: "
-                        f"'{field_path}' must contain finite numbers"
-                    )
-                if isinstance(value, dict):
-                    pending.extend(
-                        (f"{field_path}.{key}", child)
-                        for key, child in value.items()
-                    )
-                elif isinstance(value, list):
-                    pending.extend(
-                        (f"{field_path}[{index}]", child)
-                        for index, child in enumerate(value)
-                    )
+            if _contains_nonfinite_float(record["metadata"]):
+                pending = [("metadata", record["metadata"])]
+                while pending:
+                    field_path, value = pending.pop()
+                    if isinstance(value, float) and not math.isfinite(value):
+                        raise ValueError(
+                            f"Invalid chunk at {path}:{line_number}: "
+                            f"'{field_path}' must contain finite numbers"
+                        )
+                    if isinstance(value, dict):
+                        pending.extend(
+                            (f"{field_path}.{key}", child)
+                            for key, child in value.items()
+                        )
+                    elif isinstance(value, list):
+                        pending.extend(
+                            (f"{field_path}[{index}]", child)
+                            for index, child in enumerate(value)
+                        )
+                raise AssertionError("unreachable non-finite metadata state")
             records.append(record)
 
         if not records:

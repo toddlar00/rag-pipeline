@@ -1,5 +1,8 @@
 import hashlib
+import json
+import math
 import os
+import random
 import subprocess
 import sys
 from pathlib import Path
@@ -99,6 +102,346 @@ def test_jsonl_reader_still_accepts_both_written_line_terminators():
         records = rag._parse_index_records_strict(
             contents.encode("utf-8"), Path("chunks.jsonl"))
         assert [record["text"] for record in records] == ["a", "b"]
+
+
+_CHUNKS_PATH = Path("chunks.jsonl")
+_NONFINITE_LITERALS = (
+    "NaN", "Infinity", "-Infinity", "1e999", "-1e999", "1E400",
+    "1" * 400 + ".0",
+)
+
+
+def _text_identity(record):
+    return record["text"]
+
+
+def _parse_strict(payload):
+    return artifact_io._parse_index_records_strict(
+        payload.encode("utf-8"), _CHUNKS_PATH, chunk_id_fn=_text_identity)
+
+
+def _nonfinite_message(line_number, field_path):
+    return (
+        f"Invalid chunk at {_CHUNKS_PATH}:{line_number}: "
+        f"'{field_path}' must contain finite numbers"
+    )
+
+
+@pytest.mark.parametrize(
+    "literal", _NONFINITE_LITERALS,
+    ids=["nan", "inf", "-inf", "1e999", "-1e999", "1E400", "long-decimal"])
+@pytest.mark.parametrize(
+    ("template", "field_path"),
+    [
+        ('{"a":@}', "metadata.a"),
+        ('{"a":{"b":@}}', "metadata.a.b"),
+        ('{"a":[0,@]}', "metadata.a[1]"),
+        ('{"a":[{"b":@}]}', "metadata.a[0].b"),
+    ],
+)
+def test_strict_parser_reports_exact_nonfinite_metadata_path(
+        literal, template, field_path):
+    payload = (
+        '{"text":"first","metadata":{"finite":1.5}}\n'
+        '{"text":"second","metadata":'
+        + template.replace("@", literal) + "}\n"
+    )
+
+    with pytest.raises(ValueError) as caught:
+        _parse_strict(payload)
+
+    assert str(caught.value) == _nonfinite_message(2, field_path)
+    assert caught.value.__cause__ is None
+
+
+@pytest.mark.parametrize(
+    ("metadata", "field_path"),
+    [
+        ('{"a":NaN,"b":Infinity}', "metadata.b"),
+        ('{"a":[NaN,-Infinity]}', "metadata.a[1]"),
+        ('{"a":NaN,"b":{"c":1e999}}', "metadata.b.c"),
+        ('{"a":{"c":NaN},"b":[1,2]}', "metadata.a.c"),
+        ('{"a":[{"x":NaN},{"y":[Infinity,3]}],"b":"s"}',
+         "metadata.a[1].y[0]"),
+        ('{"x.y[0]":NaN}', "metadata.x.y[0]"),
+    ],
+)
+def test_strict_parser_reports_the_last_pushed_nonfinite_path(
+        metadata, field_path):
+    """The reported path follows the parser's LIFO walk, not source order."""
+    payload = '{"text":"t","metadata":' + metadata + "}\n"
+
+    with pytest.raises(ValueError) as caught:
+        _parse_strict(payload)
+
+    assert str(caught.value) == _nonfinite_message(1, field_path)
+
+
+def test_strict_parser_accepts_nonfinite_values_outside_metadata():
+    payload = (
+        '{"text":"t","metadata":{"n":1},"score":NaN,'
+        '"extra":[Infinity,{"x":-1e999}]}\n'
+    )
+
+    [record] = _parse_strict(payload)
+
+    assert math.isnan(record["score"])
+    assert record["extra"][0] == math.inf
+    assert record["extra"][1] == {"x": -math.inf}
+    assert record["metadata"] == {"n": 1}
+
+
+@pytest.mark.parametrize(
+    ("payload", "metadata"),
+    [
+        ('{"text":"t","metadata":{"x":NaN,"x":1}}\n', {"x": 1}),
+        ('{"text":"t","metadata":{"x":NaN},"metadata":{"y":2}}\n',
+         {"y": 2}),
+    ],
+)
+def test_strict_parser_accepts_nonfinite_value_replaced_by_duplicate_key(
+        payload, metadata):
+    [record] = _parse_strict(payload)
+
+    assert record["metadata"] == metadata
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        ('{"text":"a","metadata":{"x":NaN}}\nnope\n',
+         _nonfinite_message(1, "metadata.x")),
+        ('nope\n{"text":"a","metadata":{"x":NaN}}\n',
+         f"Invalid JSON in chunks file {_CHUNKS_PATH}:1: Expecting value"),
+        ('{"metadata":{"x":NaN}}\n',
+         f"Invalid chunk at {_CHUNKS_PATH}:1: "
+         "'text' must be a non-empty string"),
+        ('{"text":"a","metadata":{}}\n{"text":"a","metadata":{"x":NaN}}\n',
+         _nonfinite_message(2, "metadata.x")),
+        ('\n \n{"text":"a","metadata":{"x":Infinity}}\n',
+         _nonfinite_message(3, "metadata.x")),
+    ],
+)
+def test_strict_parser_nonfinite_check_keeps_line_precedence(
+        payload, message):
+    with pytest.raises(ValueError) as caught:
+        _parse_strict(payload)
+
+    assert str(caught.value) == message
+
+
+def test_strict_parser_accepts_finite_float_edges_unchanged():
+    huge_integer = "1" * 400
+    payload = (
+        '{"text":"t","metadata":{"big":1e308,"negative_zero":-0.0,'
+        '"subnormal":5e-324,"underflow":1e-400,"integer":'
+        + huge_integer + "}}\n"
+    )
+
+    [record] = _parse_strict(payload)
+    metadata = record["metadata"]
+
+    assert metadata["big"] == 1e308
+    assert metadata["negative_zero"] == 0.0
+    assert math.copysign(1.0, metadata["negative_zero"]) == -1.0
+    assert metadata["subnormal"] == 5e-324
+    assert metadata["underflow"] == 0.0
+    assert isinstance(metadata["underflow"], float)
+    assert metadata["integer"] == int(huge_integer)
+
+
+def test_strict_parser_keeps_stdlib_bom_error_for_later_lines():
+    payload = (
+        '﻿{"text":"a","metadata":{}}\n'
+        '﻿{"text":"b","metadata":{}}\n'
+    )
+
+    with pytest.raises(ValueError) as caught:
+        _parse_strict(payload)
+
+    assert str(caught.value) == (
+        f"Invalid JSON in chunks file {_CHUNKS_PATH}:2: "
+        "Unexpected UTF-8 BOM (decode using utf-8-sig)"
+    )
+
+
+def test_strict_parser_checks_latin1_fallback_metadata():
+    raw = '{"text":"caf\xe9","metadata":{"a":[-Infinity]}}\n'.encode(
+        "latin-1")
+
+    with pytest.raises(ValueError) as caught:
+        artifact_io._parse_index_records_strict(
+            raw, _CHUNKS_PATH, chunk_id_fn=_text_identity)
+
+    assert str(caught.value) == _nonfinite_message(1, "metadata.a[0]")
+
+
+def test_strict_parser_fails_closed_when_scan_and_path_walk_disagree(
+        monkeypatch):
+    monkeypatch.setattr(
+        artifact_io, "_contains_nonfinite_float", lambda value: True)
+
+    with pytest.raises(AssertionError, match="unreachable non-finite"):
+        _parse_strict('{"text":"t","metadata":{"x":1.5}}\n')
+
+
+def _parse_index_records_strict_3aede7d(raw, path, *, chunk_id_fn):
+    """Frozen copy of the strict parser at 3aede7d (differential oracle)."""
+    last_unicode_error = None
+    for encoding in ("utf-8-sig", "latin-1"):
+        try:
+            contents = raw.decode(encoding)
+        except UnicodeDecodeError as exc:
+            last_unicode_error = exc
+            continue
+
+        records = []
+        for line_number, line in enumerate(
+                storage_policy.jsonl_lines(contents), 1):
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"Invalid JSON in chunks file {path}:{line_number}: "
+                    f"{exc.msg}"
+                ) from exc
+            if not isinstance(record, dict):
+                raise ValueError(
+                    f"Invalid chunk at {path}:{line_number}: "
+                    "record must be a JSON object"
+                )
+            if (not isinstance(record.get("text"), str)
+                    or not record["text"].strip()):
+                raise ValueError(
+                    f"Invalid chunk at {path}:{line_number}: "
+                    "'text' must be a non-empty string"
+                )
+            if not isinstance(record.get("metadata"), dict):
+                raise ValueError(
+                    f"Invalid chunk at {path}:{line_number}: "
+                    "'metadata' must be a JSON object"
+                )
+            pending = [("metadata", record["metadata"])]
+            while pending:
+                field_path, value = pending.pop()
+                if isinstance(value, float) and not math.isfinite(value):
+                    raise ValueError(
+                        f"Invalid chunk at {path}:{line_number}: "
+                        f"'{field_path}' must contain finite numbers"
+                    )
+                if isinstance(value, dict):
+                    pending.extend(
+                        (f"{field_path}.{key}", child)
+                        for key, child in value.items()
+                    )
+                elif isinstance(value, list):
+                    pending.extend(
+                        (f"{field_path}[{index}]", child)
+                        for index, child in enumerate(value)
+                    )
+            records.append(record)
+
+        if not records:
+            raise ValueError(f"Chunks file contains no records: {path}")
+        stable_ids = [chunk_id_fn(record) for record in records]
+        if len(set(stable_ids)) != len(stable_ids):
+            raise ValueError(
+                f"Chunks file contains duplicate stable chunk IDs: {path}")
+        return records
+
+    raise ValueError(
+        f"Could not decode chunks file: {path}") from last_unicode_error
+
+
+_DIFFERENTIAL_NUMBERS = _NONFINITE_LITERALS + (
+    "1e308", "-0.0", "5e-324", "1e-400", "0.5", "7", "-3", "2.5e+10",
+    "1" * 400,
+)
+_DIFFERENTIAL_SCALARS = ('"s"', "true", "false", "null")
+
+
+def _random_json_value(rng, depth):
+    roll = rng.random()
+    if depth > 3 or roll < 0.45:
+        if rng.random() < 0.6:
+            return rng.choice(_DIFFERENTIAL_NUMBERS)
+        return rng.choice(_DIFFERENTIAL_SCALARS)
+    size = rng.randint(0, 4)
+    if roll < 0.75:
+        keys = [rng.choice("abcxyz") for _ in range(size)]
+        return "{" + ",".join(
+            f'"{key}":{_random_json_value(rng, depth + 1)}' for key in keys
+        ) + "}"
+    return "[" + ",".join(
+        _random_json_value(rng, depth + 1) for _ in range(size)) + "]"
+
+
+def _random_chunk_line(rng, index):
+    roll = rng.random()
+    special = (
+        "nope", "[]", '{"metadata":{}}', '{"text":"x","metadata":[]}',
+        '﻿{"text":"b","metadata":{}}', '{"text":"b","metadata":{}}',
+        "",
+    )
+    if roll < 0.08:
+        return special[int(roll * 100) % len(special)]
+    extra = ""
+    if rng.random() < 0.3:
+        extra = f',"score":{rng.choice(_DIFFERENTIAL_NUMBERS)}'
+    text_index = 0 if rng.random() < 0.2 else index
+    return (
+        f'{{"text":"t{text_index}","metadata":{{"chunk_index":{index},'
+        f'"m":{_random_json_value(rng, 0)}}}{extra}}}'
+    )
+
+
+def _strict_parse_outcome(parser, raw):
+    try:
+        records = parser(raw, _CHUNKS_PATH, chunk_id_fn=_text_identity)
+    except (ValueError, TypeError) as exc:
+        cause = exc.__cause__
+        return ("error", type(exc), str(exc), type(cause), str(cause))
+    return ("records", repr(records))
+
+
+def _strict_parse_outcome_kind(outcome):
+    if outcome[0] == "records":
+        return "records"
+    for marker in (
+            "finite numbers", "Invalid JSON", "non-empty string",
+            "duplicate stable"):
+        if marker in outcome[2]:
+            return marker
+    return outcome[2]
+
+
+def test_strict_parser_matches_frozen_oracle_on_generated_corpora():
+    rng = random.Random(20260930)
+    outcomes = set()
+    for _ in range(400):
+        lines = [
+            _random_chunk_line(rng, index)
+            for index in range(rng.randint(1, 6))
+        ]
+        text = "\n".join(lines) + "\n"
+        payloads = [text.encode("utf-8")]
+        if all(ord(character) < 256 for character in text):
+            payloads.append(
+                text.encode("latin-1").replace(b"t0", b"t\xe90"))
+        for raw in payloads:
+            expected = _strict_parse_outcome(
+                _parse_index_records_strict_3aede7d, raw)
+            actual = _strict_parse_outcome(
+                artifact_io._parse_index_records_strict, raw)
+            assert actual == expected, raw
+            outcomes.add(_strict_parse_outcome_kind(expected))
+
+    assert {
+        "records", "finite numbers", "Invalid JSON", "non-empty string",
+        "duplicate stable",
+    } <= outcomes
 
 
 def test_snapshot_loader_uses_current_rag_parser(monkeypatch, tmp_path):
