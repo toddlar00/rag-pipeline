@@ -34,26 +34,40 @@ def _in_frame(name):
     return any(frame.function == name for frame in inspect.stack(0))
 
 
-class _VirtualRetryClock:
-    """job_coordination's time module, with virtual write-retry backoff.
+# The job_coordination functions whose monotonic reads set or check a write
+# retry deadline.
+_WRITE_BUDGET_READERS = frozenset({
+    "run_job", "tolerant_write", "cancellation_requested",
+    "_write_tolerating_transient_replace",
+})
 
-    A sleep taken inside the manager's retry helper advances this clock
-    instead of waiting, so every budget is exhausted deterministically and
-    fast and the recorded sleeps are the real schedule. Every other read and
-    sleep stays real.
+
+class _VirtualRetryClock:
+    """job_coordination's time module, with a virtual clock for write budgets.
+
+    The monotonic reads that set or check a write retry deadline see a
+    virtual time that only the retry helper's sleeps advance, and those
+    sleeps return at once. A budget is therefore spent by its backoff
+    schedule alone, however slowly the runner executes the writes, and the
+    recorded sleeps are the real schedule. Every other read and sleep (the
+    heartbeat's budget, waits for a worker's teardown) stays real.
     """
 
     def __init__(self):
-        self.offset = 0.0
+        self.now = 0.0
         self.sleeps = []
 
     def monotonic(self):
-        return time.monotonic() + self.offset
+        if inspect.currentframe().f_back.f_code.co_name in (
+                _WRITE_BUDGET_READERS):
+            return self.now
+        return time.monotonic()
 
     def sleep(self, seconds):
-        if _in_frame("_write_tolerating_transient_replace"):
+        if (inspect.currentframe().f_back.f_code.co_name
+                == "_write_tolerating_transient_replace"):
             self.sleeps.append(seconds)
-            self.offset += seconds
+            self.now += seconds
             return
         time.sleep(seconds)
 
@@ -252,9 +266,52 @@ def test_writes_before_the_ready_handshake_share_one_budget(
     assert len(writes.failures("report")) == 5
     assert len(writes.failures("runtime")) > 1
     assert clock.sleeps[:5] == delays
-    assert sum(clock.sleeps) <= budget
-    assert sum(clock.sleeps) > sum(delays)
+    # A budget of its own would have let the runtime write sleep 3 s more.
+    assert sum(clock.sleeps) == pytest.approx(budget)
     assert store.get_job(submitted.job_id).status == "queued"
+
+
+@pytest.mark.parametrize(("kind", "predicate"), [
+    ("runtime", lambda runtime: (
+        runtime.job_status == "starting" and runtime.worker_pid is None)),
+    ("report", lambda report: report.status == "starting"),
+    ("runtime", lambda runtime: runtime.phase == "running"),
+], ids=["starting-runtime", "starting-report", "running-runtime"])
+def test_pre_ready_writes_survive_transient_replace_failures(
+        tmp_path, monkeypatch, clock, writes, kind, predicate):
+    # The writes after the committed 'starting' and 'running' transitions
+    # that the tests above do not fail.
+    writes.fail(kind, 2, predicate)
+    store, submitted, run = _fake_run(tmp_path, monkeypatch)
+
+    result = run()
+
+    assert len(writes.failures(kind)) == 2
+    assert result.status == "succeeded"
+    _paths, outcome = _attempt_outcome(store, submitted.job_id)
+    assert outcome.status == "succeeded"
+
+
+def test_validation_failure_report_survives_transient_replace_failures(
+        tmp_path, monkeypatch, clock, writes):
+    store, submitted, run = _fake_run(
+        tmp_path, monkeypatch, supervisor=_forbidden_supervisor)
+
+    def invalid_directories(_execution):
+        raise job_runtime.JobStateError("job output root is unavailable")
+
+    monkeypatch.setattr(
+        job_runtime, "validate_execution_directories", invalid_directories)
+    writes.fail("report", 2, lambda report: report.status == "failed")
+
+    with pytest.raises(job_runtime.JobStateError, match="is unavailable"):
+        run()
+
+    assert len(writes.failures("report")) == 2
+    assert store.get_job(submitted.job_id).status == "failed"
+    _paths, outcome = _attempt_outcome(store, submitted.job_id)
+    assert outcome.terminal_reason == "execution_validation_failed"
+    assert outcome.manager_error
 
 
 def test_writes_keep_the_pre_ready_budget_until_ready_is_published(
@@ -271,8 +328,11 @@ def test_writes_keep_the_pre_ready_budget_until_ready_is_published(
         run()
 
     assert len(writes.failures("ready")) > 1
-    assert len(writes.failures("runtime")) >= 1
-    assert sum(clock.sleeps) <= job_manager._PRE_READY_TRANSIENT_WRITE_BUDGET
+    # The ready retries spent the whole budget, so the terminal runtime write
+    # propagates its first failure.
+    assert len(writes.failures("runtime")) == 1
+    assert sum(clock.sleeps) == pytest.approx(
+        job_manager._PRE_READY_TRANSIENT_WRITE_BUDGET)
     assert store.get_job(submitted.job_id).status == "failed"
 
 
@@ -325,7 +385,7 @@ def test_persistent_terminal_failure_escapes_after_its_budget(
     assert len(writes.failures("runtime")) == len(clock.sleeps) + 1
     assert clock.sleeps[:len(delays)] == list(delays)
     assert max(clock.sleeps) == delays[-1]  # the last delay repeats
-    assert budget - delays[-1] < sum(clock.sleeps) <= budget
+    assert sum(clock.sleeps) == pytest.approx(budget)
     # The committed terminal status stands; reconciliation repairs the rest.
     assert store.get_job(submitted.job_id).status == "succeeded"
 
@@ -349,8 +409,10 @@ def test_non_transient_terminal_failure_is_not_retried(
     assert store.get_job(submitted.job_id).status == "succeeded"
 
 
-def test_prelaunch_cancellation_terminal_writes_survive_transient_failures(
+def test_prelaunch_cancellation_writes_survive_transient_failures(
         tmp_path, monkeypatch, clock, writes):
+    writes.fail("report", 2, lambda report: report.status == "cancel_requested")
+    writes.fail("ready", 2)
     writes.fail("runtime", 2, lambda runtime: runtime.phase == "terminal")
     writes.fail("report", 2, lambda report: report.status == "cancelled")
     store, submitted, run = _fake_run(
@@ -359,12 +421,32 @@ def test_prelaunch_cancellation_terminal_writes_survive_transient_failures(
 
     result = run()
 
+    assert len(writes.failures("report")) == 4
+    assert len(writes.failures("ready")) == 2
     assert len(writes.failures("runtime")) == 2
-    assert len(writes.failures("report")) == 2
     assert result.status == "cancelled"
     _paths, outcome = _attempt_outcome(store, submitted.job_id)
     assert outcome.status == "cancelled"
     assert outcome.finalized_by == "manager"
+
+
+def test_prelaunch_cancellation_terminal_writes_get_their_own_budget(
+        tmp_path, monkeypatch, clock, writes):
+    # The ready marker precedes these terminal writes, so the launcher has
+    # stopped waiting and each write has a full budget rather than what is
+    # left of the pre-ready one.
+    writes.fail("runtime", math.inf,
+                lambda runtime: runtime.phase == "terminal")
+    store, submitted, run = _fake_run(
+        tmp_path, monkeypatch, supervisor=_forbidden_supervisor)
+    store.request_cancel(submitted.job_id)
+
+    with pytest.raises(PermissionError):
+        run()
+
+    assert sum(clock.sleeps) == pytest.approx(
+        job_manager._MANAGER_TRANSIENT_WRITE_BUDGET)
+    assert store.get_job(submitted.job_id).status == "cancelled"
 
 
 def test_closed_worker_log_cap_survives_transient_replace_failures(
@@ -445,13 +527,17 @@ def test_cancellation_writes_share_one_short_budget(tmp_path, clock, writes):
     store, submitted, _outcome = _cancel_running_worker(tmp_path)
 
     budget = job_manager._CANCELLATION_TRANSIENT_WRITE_BUDGET
+    delays = list(job_manager._MANAGER_TRANSIENT_WRITE_DELAYS)
     assert len(writes.failures("runtime")) == 5
     assert len(writes.failures("report")) > 1
-    assert sum(clock.sleeps) <= budget
+    assert clock.sleeps[:5] == delays
+    # A budget of its own would have let the report write sleep 2 s more.
+    assert sum(clock.sleeps) == pytest.approx(budget)
     # The exhausted failure still aborts supervision, as a first failure did
     # before these retries: the worker is stopped and the attempt is terminal.
-    # run_job then raises from the terminal report, which rejects a manager
-    # error under a cancel trigger; that predates the retries and is not
+    # run_job then raises ValueError from the terminal report, which here
+    # rejects a manager error under a cancel trigger (a failed runtime write
+    # trips a different check); that predates the retries and is not
     # asserted here.
     assert store.get_job(submitted.job_id).status == "interrupted"
     runtime = _attempt_json(store, submitted.job_id, "runtime.json")
