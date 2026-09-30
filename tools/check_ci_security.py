@@ -95,11 +95,13 @@ _ACTION_SHA_RE = re.compile(r"[0-9a-fA-F]{40}")
 _BLOCK_SCALAR_INDICATOR = r"[>|](?:[1-9]?[-+]?|[-+]?[1-9]?)"
 # A header is a whole line holding one plain key, so a comment or quoted value
 # that merely ends in ': |' cannot open a block scalar and blank the following
-# workflow lines. Its body is everything indented past the key's column.
+# workflow lines. Its body is everything indented past the key's column. YAML
+# separates tokens only with ASCII spaces and tabs, and a compact entry's key
+# column counts only spaces, so Unicode whitespace never forms a header.
 _BLOCK_SCALAR_RE = re.compile(
-    r"^(?P<entry>-\s+)?[A-Za-z0-9_][A-Za-z0-9_.-]*\s*:\s+"
+    r"^(?P<entry>- +)?[A-Za-z0-9_][A-Za-z0-9_.-]*[ \t]*:[ \t]+"
     + _BLOCK_SCALAR_INDICATOR
-    + r"(?:\s+#.*)?\s*$"
+    + r"(?:[ \t]+#.*)?[ \t]*$"
 )
 # Any other line that may end in a block-scalar header is rejected, because
 # its body would stay structural and could satisfy a required-key check.
@@ -269,20 +271,27 @@ def _indent(line: str) -> int:
     return len(line) - len(line.lstrip(" "))
 
 
+def _block_scalar_header(line: str) -> re.Match[str] | None:
+    """Match the one supported block-scalar header after space indentation."""
+    return _BLOCK_SCALAR_RE.match(line[_indent(line):])
+
+
 def _structural_workflow_lines(lines: list[str]) -> list[str]:
     """Blank block-scalar bodies while preserving workflow line numbers."""
     structural: list[str] = []
     block_parent_indent: int | None = None
     for line in lines:
-        stripped = line.strip()
+        # Only spaces make a line blank to YAML; any other whitespace is
+        # content, so such a line ends the body and stays visible.
+        blank = not line.strip(" ")
         indentation = _indent(line)
         if block_parent_indent is not None:
-            if not stripped or indentation > block_parent_indent:
+            if blank or indentation > block_parent_indent:
                 structural.append("")
                 continue
             block_parent_indent = None
         structural.append(line)
-        if stripped and (header := _BLOCK_SCALAR_RE.search(stripped)):
+        if not blank and (header := _block_scalar_header(line)):
             block_parent_indent = indentation + len(header.group("entry") or "")
     return structural
 
@@ -294,6 +303,13 @@ def _validate_supported_workflow_syntax(
     """Reject YAML forms that could hide security-sensitive mapping keys."""
     errors: list[str] = []
     for index, line in enumerate(lines):
+        # str.strip() and \s also drop tabs and Unicode spaces that YAML
+        # treats as content, so the checks below would misread the line.
+        if line[: len(line) - len(line.lstrip())].strip(" "):
+            errors.append(
+                f"{workflow_path}:{index + 1}: non-space indentation is "
+                "unsupported by the security validator"
+            )
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             continue
@@ -329,7 +345,7 @@ def _validate_supported_workflow_syntax(
             )
         if (
             _AMBIGUOUS_BLOCK_SCALAR_RE.search(stripped)
-            and not _BLOCK_SCALAR_RE.search(stripped)
+            and _block_scalar_header(line) is None
         ):
             errors.append(
                 f"{workflow_path}:{index + 1}: ambiguous block scalar headers "
