@@ -25,15 +25,24 @@ _POSITIVE_SOURCES = {
         "import subprocess\n"
         "subprocess.run(command, shell=True)\n"
     ),
+    "S604": (
+        "def run(command, shell=False):\n"
+        "    return command\n"
+        "run(command, shell=True)\n"
+    ),
     "S605": 'import os\nos.system("ls " + name)\n',
+    "S606": "import os\nos.execl(program, program)\n",
     "S608": (
         'QUERY = "SELECT * FROM users WHERE name = \'%s\'" % name\n'
     ),
 }
 
 _NEGATIVE_SOURCES = {
+    "S102": 'compile(source, "<fixture>", "exec")\n',
     "S104": 'HOST = "127.0.0.1"\n',
     "S301": "import json\njson.loads(payload)\n",
+    "S302": "import marshal\nmarshal.dumps(value)\n",
+    "S307": "import ast\nast.literal_eval(payload)\n",
     "S324": "import hashlib\nhashlib.sha256(payload)\n",
     "S501": (
         "import requests\n"
@@ -43,6 +52,23 @@ _NEGATIVE_SOURCES = {
     "S602": (
         "import subprocess\n"
         "subprocess.run(command, check=True)\n"
+    ),
+    "S604": (
+        "def run(command, shell=False):\n"
+        "    return command\n"
+        "run(command, shell=False)\n"
+    ),
+    "S605": (
+        "import subprocess\n"
+        'subprocess.run(["ls", name], check=True)\n'
+    ),
+    "S606": (
+        "import subprocess\n"
+        "subprocess.run([program], check=True)\n"
+    ),
+    "S608": (
+        'QUERY = "SELECT * FROM users WHERE name = ?"\n'
+        "cursor.execute(QUERY, (name,))\n"
     ),
 }
 
@@ -79,18 +105,28 @@ def _finding(rule="S324", path="module.py", row=10):
     return {"path": path, "row": row, "rule": rule}
 
 
+def test_every_blocking_rule_has_positive_and_negative_fixtures():
+    policy = check_static_security._load_policy(
+        Path("static-security-policy.json")
+    )
+
+    assert sorted(_POSITIVE_SOURCES) == policy["blocking_rules"]
+    assert sorted(_NEGATIVE_SOURCES) == policy["blocking_rules"]
+
+
 def test_per_rule_positive_fixtures_alert(tmp_path):
+    expected = set()
     for index, (rule, source) in enumerate(_POSITIVE_SOURCES.items()):
-        (tmp_path / f"positive_{index}_{rule.lower()}.py").write_text(
-            source, encoding="utf-8"
-        )
+        name = f"positive_{index}_{rule.lower()}.py"
+        (tmp_path / name).write_text(source, encoding="utf-8")
+        expected.add((name, rule))
 
     raw = check_static_security._run_ruff(
         sorted(_POSITIVE_SOURCES), tmp_path
     )
-    caught = {item["code"] for item in raw}
+    caught = {(Path(item["filename"]).name, item["code"]) for item in raw}
 
-    assert caught == set(_POSITIVE_SOURCES)
+    assert caught == expected
 
 
 def test_per_rule_negative_fixtures_stay_quiet(tmp_path):
