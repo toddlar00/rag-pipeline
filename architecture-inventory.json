@@ -27250,7 +27250,7 @@
   "schema_version": 3,
   "source_architecture": {
     "class_count": 333,
-    "function_count": 4412,
+    "function_count": 4413,
     "import_graph": {
       "cyclic_components": [],
       "edge_count": 649,
@@ -60641,8 +60641,8 @@
             "scope": "top_level"
           }
         ],
-        "definition_locations_sha256": "3245bcf75fe7f074b14f9dcc70ef49944d94f78057dd90d39a358818a10b83af",
-        "function_count": 41,
+        "definition_locations_sha256": "9eced66401b95e7baa4c58f4f970cbbb440fc6b896fafa4268eb9809170f9707",
+        "function_count": 42,
         "functions": [
           {
             "kind": "function",
@@ -60655,6 +60655,12 @@
             "name": "_allowed_group_assignment",
             "scope": "top_level",
             "signature_sha256": "e69a48fb10879307f19493ced176ad6c02b6c04fcb12bf95f084e9e382ea3947"
+          },
+          {
+            "kind": "function",
+            "name": "_block_scalar_header",
+            "scope": "top_level",
+            "signature_sha256": "388a47dd1d58c1fc73722d38a894ab6f518ef0c7a4fe59082b232cdcbdc5116a"
           },
           {
             "kind": "function",
@@ -60893,10 +60899,10 @@
         ],
         "import_edges": [],
         "module": "tools.check_ci_security",
-        "non_blank_lines": 1878,
+        "non_blank_lines": 1892,
         "path": "tools/check_ci_security.py",
-        "physical_lines": 2004,
-        "top_level_function_count": 40
+        "physical_lines": 2020,
+        "top_level_function_count": 41
       },
       {
         "class_count": 0,
@@ -63935,13 +63941,13 @@
         "top_level_function_count": 2
       }
     ],
-    "physical_line_count": 130366,
+    "physical_line_count": 130382,
     "source_groups": [
       "production",
       "tools",
       "other"
     ],
-    "top_level_function_count": 2920
+    "top_level_function_count": 2921
   },
   "tracked_sources": {
     "count": 493,
