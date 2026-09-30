@@ -1016,6 +1016,14 @@
         },
         {
           "facade_roots": [
+            "NOMIC",
+            "rag"
+          ],
+          "module": "tests.test_embedding_token_counter_cache",
+          "path": "tests/test_embedding_token_counter_cache.py"
+        },
+        {
+          "facade_roots": [
             "rag",
             "try_lock",
             "unlock"
@@ -2903,12 +2911,16 @@
             "target": "_converted_outputs_complete_locked"
           },
           {
-            "locations_sha256": "13ba5e4a6ff55bd416963be7f81a7c875953ff2d7023b8c8c6a875888223b658",
-            "occurrence_count": 10,
+            "locations_sha256": "2895ea9010ce53958ee978d3423a294102fdcdd9371e8ee925f87f2992c06182",
+            "occurrence_count": 11,
             "operations": [
               "setattr"
             ],
             "source_counts": [
+              {
+                "count": 1,
+                "path": "tests/test_embedding_token_counter_cache.py"
+              },
               {
                 "count": 5,
                 "path": "tests/test_index_manifests.py"
@@ -3617,12 +3629,16 @@
             "target": "_model_artifact_lock_sha256"
           },
           {
-            "locations_sha256": "46ad73f69892df71ca470b6daa963ffbe0004594bf7cbee9f70ec30e5d2eb3e7",
-            "occurrence_count": 10,
+            "locations_sha256": "c8fbb36d5189b938c0e8a7c20fc307e7b15eaeb713e596f513605521fd8a120d",
+            "occurrence_count": 15,
             "operations": [
               "setattr"
             ],
             "source_counts": [
+              {
+                "count": 5,
+                "path": "tests/test_embedding_token_counter_cache.py"
+              },
               {
                 "count": 1,
                 "path": "tests/test_ingestion_safety.py"
@@ -6759,13 +6775,17 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "3882ca1eff929816823e2cd5d2b38d6c28c184725b8538ac58759c8bf566e1e4",
+          "locations_sha256": "5db307c2f52210d3169ad5d3fd6fad41a83e97d47a621afda36c1b51f6d5ff91",
           "name": "_bound_embedding_prefixes_to_model_limit",
-          "occurrence_count": 1,
+          "occurrence_count": 3,
           "paths": [
             "_bound_embedding_prefixes_to_model_limit"
           ],
           "source_counts": [
+            {
+              "count": 2,
+              "path": "tests/test_embedding_token_counter_cache.py"
+            },
             {
               "count": 1,
               "path": "tests/test_ingestion_safety.py"
@@ -7690,13 +7710,17 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "06a766643deb2d6dff06edc38130be4efd7ff551debe32ec547175dcd7ea3373",
+          "locations_sha256": "710fc510fae055a6eaaf0cc28c37af6a6ee3335d737c538b9ca6a6a567d5b41c",
           "name": "_conservative_token_estimate",
-          "occurrence_count": 2,
+          "occurrence_count": 5,
           "paths": [
             "_conservative_token_estimate"
           ],
           "source_counts": [
+            {
+              "count": 3,
+              "path": "tests/test_embedding_token_counter_cache.py"
+            },
             {
               "count": 2,
               "path": "tests/test_native_group_order_replay.py"
@@ -7862,13 +7886,17 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "ff165c446fe8994672dc3d621f2abd59bebc4fad110485451fa57304c7cd0b93",
+          "locations_sha256": "eace3b922f64523bfe2c26a319f92cbc6486d62b138f86d3b0eab3c31b1e264a",
           "name": "_count_embedding_text_tokens",
-          "occurrence_count": 3,
+          "occurrence_count": 15,
           "paths": [
             "_count_embedding_text_tokens"
           ],
           "source_counts": [
+            {
+              "count": 12,
+              "path": "tests/test_embedding_token_counter_cache.py"
+            },
             {
               "count": 2,
               "path": "tests/test_model_artifacts.py"
@@ -8213,13 +8241,17 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "d4b2485c848718f5a39545a760e92671a960dfee17aa92550a5fbe0161340b94",
+          "locations_sha256": "01589c147859ef88a1030bbf80a7f2a484619341237e6084baa734b5c4b8cbe6",
           "name": "_embedding_text",
-          "occurrence_count": 1,
+          "occurrence_count": 3,
           "paths": [
             "_embedding_text"
           ],
           "source_counts": [
+            {
+              "count": 2,
+              "path": "tests/test_embedding_token_counter_cache.py"
+            },
             {
               "count": 1,
               "path": "tests/test_ingestion_safety.py"
@@ -9975,13 +10007,17 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "8d959a3245deecb8276e2ea6d2f767f3e443555d46d62554c3e6d02c5dd53a88",
+          "locations_sha256": "a667aaf5a8750c57671d0a6c71cc0cb3681af5f5be59dd78ce972d284411e87a",
           "name": "_model_loader_source",
-          "occurrence_count": 4,
+          "occurrence_count": 6,
           "paths": [
             "_model_loader_source"
           ],
           "source_counts": [
+            {
+              "count": 2,
+              "path": "tests/test_embedding_token_counter_cache.py"
+            },
             {
               "count": 4,
               "path": "tests/test_model_artifacts.py"
@@ -10717,6 +10753,26 @@
             {
               "count": 2,
               "path": "tests/test_search.py"
+            }
+          ]
+        },
+        {
+          "contexts": [
+            "load"
+          ],
+          "kinds": [
+            "attribute"
+          ],
+          "locations_sha256": "64a1e74e529760ee582b355cf9e8de01198f5999c5c6aa682fe7ef281ebb5c42",
+          "name": "_prepare_embedding_inputs",
+          "occurrence_count": 3,
+          "paths": [
+            "_prepare_embedding_inputs"
+          ],
+          "source_counts": [
+            {
+              "count": 3,
+              "path": "tests/test_embedding_token_counter_cache.py"
             }
           ]
         },
@@ -13975,7 +14031,7 @@
           ]
         }
       ],
-      "using_module_count": 77
+      "using_module_count": 78
     }
   },
   "hash_domains": {
@@ -63944,7 +64000,7 @@
     "top_level_function_count": 2920
   },
   "tracked_sources": {
-    "count": 493,
+    "count": 494,
     "groups": [
       {
         "count": 152,
@@ -64105,7 +64161,7 @@
         ]
       },
       {
-        "count": 298,
+        "count": 299,
         "name": "tests",
         "paths": [
           "tests/conftest.py",
@@ -64145,6 +64201,7 @@
           "tests/test_document_profiles.py",
           "tests/test_embedding_policy.py",
           "tests/test_embedding_runtime_compat.py",
+          "tests/test_embedding_token_counter_cache.py",
           "tests/test_endpoint_policy.py",
           "tests/test_eval.py",
           "tests/test_eval_bootstrap.py",
