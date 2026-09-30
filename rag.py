@@ -7531,6 +7531,26 @@ def _conversion_parameters(*, batch_size_override: int | None,
     return parameters
 
 
+def _docling_default_settings_scope():
+    """Run Docling with its default perf, debug, and inference settings.
+
+    ``docling.datamodel.settings.settings`` is populated from DOCLING_*
+    variables when Docling is imported: an ambient
+    DOCLING_INFERENCE_COMPILE_TORCH_MODELS would compile the layout model and
+    DOCLING_DEBUG_VISUALIZE_* would write page renders into the working
+    directory.  ``scoped`` restores the previous values on exit.
+    """
+    from docling.datamodel.settings import (
+        BatchConcurrencySettings,
+        DebugSettings,
+        InferenceSettings,
+        scoped,
+    )
+
+    return scoped(perf=BatchConcurrencySettings(), debug=DebugSettings(),
+                  inference=InferenceSettings())
+
+
 def _pin_docling_layout_revision(pipeline_options) -> str | None:
     """Replace Docling's mutable layout ref with the reviewed commit hash."""
     layout_options = pipeline_options.layout_options
@@ -8243,83 +8263,95 @@ def _convert_pdf_generation(
             "running for this PDF.")
     log.info(f"OCR: {ocr_mode}")
 
-    if use_gpu:
-        log.info(f"Mode: GPU ({gpu_name}), layout_batch_size={batch_size}")
-        pipeline_opts = ThreadedPdfPipelineOptions(
-            accelerator_options=AcceleratorOptions(device=AcceleratorDevice.CUDA),
-            layout_batch_size=batch_size,
-            table_batch_size=4,
-            ocr_batch_size=batch_size,
-            queue_max_size=8,
-            **common_opts,
+    # Explicit accelerator options beat OMP_NUM_THREADS and DOCLING_*
+    # variables.  Docling's settings singleton reads DOCLING_* at import, so
+    # reset it for option construction (the layout engine resolves
+    # compile_model then) through conversion (debug output is read then).
+    with _docling_default_settings_scope():
+        if use_gpu:
+            log.info(f"Mode: GPU ({gpu_name}), layout_batch_size={batch_size}")
+            pipeline_opts = ThreadedPdfPipelineOptions(
+                accelerator_options=AcceleratorOptions(
+                    num_threads=_ingestion_core.DOCLING_INFERENCE_THREADS,
+                    device=AcceleratorDevice.CUDA),
+                layout_batch_size=batch_size,
+                table_batch_size=4,
+                ocr_batch_size=batch_size,
+                queue_max_size=8,
+                **common_opts,
+            )
+        else:
+            log.info(f"Mode: CPU ({total_pages} pages — this may take a while)")
+            pipeline_opts = PdfPipelineOptions(
+                accelerator_options=AcceleratorOptions(
+                    num_threads=_ingestion_core.DOCLING_INFERENCE_THREADS,
+                    device=AcceleratorDevice.CPU),
+                **common_opts,
+            )
+
+        if revision := _pin_docling_layout_revision(pipeline_opts):
+            log.info(f"Docling layout revision: {revision}")
+        artifacts_root = _configure_docling_model_artifacts(
+            pipeline_opts, include_ocr=effective_ocr,
+            ocr_full_page=force_full_page_ocr,
+            ocr_angle_classifier=ocr_angle_classifier,
+            security_policy=security_policy)
+        log.info(f"Docling verified model artifacts: {artifacts_root}")
+
+        # Without the opt-in merge, Docling keeps its own default pipeline class.
+        format_option = {"pipeline_options": pipeline_opts}
+        if merge_interleaved_regions:
+            format_option["pipeline_cls"] = (
+                _interleaved_region_merge_pipeline_cls())
+        converter = DocumentConverter(
+            format_options={
+                InputFormat.PDF: PdfFormatOption(**format_option),
+            },
         )
-    else:
-        log.info(f"Mode: CPU ({total_pages} pages — this may take a while)")
-        pipeline_opts = PdfPipelineOptions(**common_opts)
 
-    if revision := _pin_docling_layout_revision(pipeline_opts):
-        log.info(f"Docling layout revision: {revision}")
-    artifacts_root = _configure_docling_model_artifacts(
-        pipeline_opts, include_ocr=effective_ocr,
-        ocr_full_page=force_full_page_ocr,
-        ocr_angle_classifier=ocr_angle_classifier,
-        security_policy=security_policy)
-    log.info(f"Docling verified model artifacts: {artifacts_root}")
+        # --- Progress bar via log interception ---
+        from tqdm import tqdm
+        import threading
 
-    # Without the opt-in merge, Docling keeps its own default pipeline class.
-    format_option = {"pipeline_options": pipeline_opts}
-    if merge_interleaved_regions:
-        format_option["pipeline_cls"] = (
-            _interleaved_region_merge_pipeline_cls())
-    converter = DocumentConverter(
-        format_options={
-            InputFormat.PDF: PdfFormatOption(**format_option),
-        },
-    )
+        pbar = tqdm(total=total_pages, desc="Converting", unit="pg",
+                    bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} pages "
+                               "[{elapsed}<{remaining}, {rate_fmt}]")
+        _seen = {"n": 0, "lock": threading.Lock()}
 
-    # --- Progress bar via log interception ---
-    from tqdm import tqdm
-    import threading
+        class _ProgressHandler(logging.Handler):
+            def emit(self, record):
+                m = re.search(r"pages \[([^\]]+)\]", record.getMessage())
+                if m:
+                    count = len(m.group(1).split(","))
+                    with _seen["lock"]:
+                        _seen["n"] += count
+                        pbar.update(count)
 
-    pbar = tqdm(total=total_pages, desc="Converting", unit="pg",
-                bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} pages "
-                           "[{elapsed}<{remaining}, {rate_fmt}]")
-    _seen = {"n": 0, "lock": threading.Lock()}
+        handler = _ProgressHandler()
+        handler.setLevel(logging.DEBUG)
+        dl_logger = logging.getLogger("docling.pipeline.standard_pdf_pipeline")
+        dl_logger.addHandler(handler)
+        dl_logger.setLevel(logging.DEBUG)
 
-    class _ProgressHandler(logging.Handler):
-        def emit(self, record):
-            m = re.search(r"pages \[([^\]]+)\]", record.getMessage())
-            if m:
-                count = len(m.group(1).split(","))
-                with _seen["lock"]:
-                    _seen["n"] += count
-                    pbar.update(count)
+        # --- Run conversion ---
+        t0 = time.time()
+        try:
+            result = converter.convert(str(pdf_path))
+        except RuntimeError as e:
+            if "out of memory" in str(e).lower():
+                log.error(f"CUDA out of memory! Current batch_size={batch_size}")
+                log.error(f"  Retry with: --batch-size {max(1, batch_size // 2)}")
+                sys.exit(1)
+            raise
+        elapsed = time.time() - t0
 
-    handler = _ProgressHandler()
-    handler.setLevel(logging.DEBUG)
-    dl_logger = logging.getLogger("docling.pipeline.standard_pdf_pipeline")
-    dl_logger.addHandler(handler)
-    dl_logger.setLevel(logging.DEBUG)
-
-    # --- Run conversion ---
-    t0 = time.time()
-    try:
-        result = converter.convert(str(pdf_path))
-    except RuntimeError as e:
-        if "out of memory" in str(e).lower():
-            log.error(f"CUDA out of memory! Current batch_size={batch_size}")
-            log.error(f"  Retry with: --batch-size {max(1, batch_size // 2)}")
-            sys.exit(1)
-        raise
-    elapsed = time.time() - t0
-
-    # Ensure bar reaches 100%
-    with _seen["lock"]:
-        remaining = total_pages - _seen["n"]
-        if remaining > 0:
-            pbar.update(remaining)
-    pbar.close()
-    dl_logger.removeHandler(handler)
+        # Ensure bar reaches 100%
+        with _seen["lock"]:
+            remaining = total_pages - _seen["n"]
+            if remaining > 0:
+                pbar.update(remaining)
+        pbar.close()
+        dl_logger.removeHandler(handler)
 
     # Docling reports a failed pipeline stage as PARTIAL_SUCCESS, re-adding
     # the page empty, instead of raising.  The READY gates use the Docling
