@@ -1775,6 +1775,7 @@ _CHECKOUT_STEP = (
 _ANCHOR_ERROR = "YAML anchors and aliases are unsupported"
 _TAG_ERROR = "YAML tags are unsupported"
 _MERGE_KEY_ERROR = "YAML merge keys are unsupported"
+_AMBIGUOUS_HEADER_ERROR = "ambiguous block scalar headers are unsupported"
 
 
 def _validate_mutated_security_workflow(
@@ -1965,38 +1966,141 @@ def test_comments_and_quoted_values_cannot_open_block_scalars(
 
 
 @pytest.mark.parametrize(
-    ("header", "is_header"),
+    ("header", "body"),
     [
-        ("run: |", True),
-        ("run: >-", True),
-        ("run: |2+", True),
-        ("run: |+ # keep", True),
-        ("- run: |", True),
-        ("SCRIPT_BODY: >", True),
-        ("|", True),
-        ("- |", False),
-        ("- - run: |", False),
-        ("run:|", False),
-        ("my key: |", False),
-        ("run: &body |", False),
-        ("run: !!str >", False),
-        ("build: # note: |", False),
-        ("- name: Checkout # see: >", False),
-        ('- name: "x: | #"', False),
-        ("steps: # body: |", False),
+        pytest.param(
+            "          my note: |\n",
+            "            persist-credentials: false\n",
+            id="input-key-with-space",
+        ),
+        pytest.param(
+            "          note/x: >-\n",
+            "            persist-credentials: false\n",
+            id="input-key-with-slash",
+        ),
+        pytest.param(
+            "          résumé: |\n",
+            "            persist-credentials: false\n",
+            id="non-ascii-input-key",
+        ),
+        pytest.param(
+            "          note:\n            |\n",
+            "            persist-credentials: false\n",
+            id="bare-indicator-under-input-key",
+        ),
+        pytest.param(
+            "          note:\n            - |\n",
+            "              persist-credentials: false\n",
+            id="sequence-entry",
+        ),
+        pytest.param(
+            "          note:\n            - - text: |\n",
+            "                  persist-credentials: false\n",
+            id="nested-compact-sequence-entry",
+        ),
     ],
 )
-def test_block_scalar_headers_never_hide_more_than_the_reviewed_rule(
-    header, is_header
+def test_block_scalars_the_validator_cannot_blank_fail_closed(
+    tmp_path, header, body
 ):
+    errors, lines = _validate_mutated_security_workflow(
+        tmp_path,
+        _CHECKOUT_STEP,
+        "      - name: Check out repository\n"
+        f"        uses: actions/checkout@{_CHECKOUT_SHA}\n"
+        "        with:\n"
+        + header
+        + body,
+    )
+
+    flagged = header.splitlines()[-1].strip()
+    stripped = [line.strip() for line in lines]
+    assert stripped.count(flagged) == 1
+    assert (
+        f"{check_ci_security.SECURITY_WORKFLOW_PATH}:"
+        f"{stripped.index(flagged) + 1}: {_AMBIGUOUS_HEADER_ERROR} "
+        "by the security validator"
+    ) in errors
+
+
+def test_compact_sequence_block_scalar_ends_at_the_key_column():
+    lines = [
+        "steps:",
+        "  - run: |",
+        "      echo inert",
+        "",
+        "    uses: actions/checkout@main",
+        "  - name: next",
+    ]
+
+    assert check_ci_security._structural_workflow_lines(lines) == [
+        "steps:",
+        "  - run: |",
+        "",
+        "",
+        "    uses: actions/checkout@main",
+        "  - name: next",
+    ]
+
+
+def test_compact_sequence_block_scalar_cannot_hide_sibling_keys(tmp_path):
+    errors, lines = _validate_mutated_security_workflow(
+        tmp_path,
+        _CHECKOUT_STEP,
+        "      - name: |\n"
+        "        uses: actions/checkout@main\n"
+        "        with:\n"
+        "          persist-credentials: true\n",
+    )
+
+    stripped = [line.strip() for line in lines]
+    assert stripped.count("uses: actions/checkout@main") == 1
+    line_number = stripped.index("uses: actions/checkout@main") + 1
+    prefix = f"{check_ci_security.SECURITY_WORKFLOW_PATH}:{line_number}: "
+    assert (
+        prefix + "action must use a full 40-character commit SHA: "
+        "actions/checkout@main"
+    ) in errors
+    assert (
+        prefix + "actions/checkout must set persist-credentials: false "
+        "exactly once"
+    ) in errors
+
+
+@pytest.mark.parametrize(
+    ("header", "rejection"),
+    [
+        ("run: |", None),
+        ("run: >-", None),
+        ("run: |2+", None),
+        ("run: |+ # keep", None),
+        ("- run: |", None),
+        ("SCRIPT_BODY: >", None),
+        ("|", _AMBIGUOUS_HEADER_ERROR),
+        ("- |", _AMBIGUOUS_HEADER_ERROR),
+        ("--- |", _AMBIGUOUS_HEADER_ERROR),
+        ("- - run: |", _AMBIGUOUS_HEADER_ERROR),
+        ("run:|", _AMBIGUOUS_HEADER_ERROR),
+        ("my key: |", _AMBIGUOUS_HEADER_ERROR),
+        ("? run\n: |", _AMBIGUOUS_HEADER_ERROR),
+        ("run: &body |", _ANCHOR_ERROR),
+        ("run: !!str >", _TAG_ERROR),
+        ("build: # note: |", _AMBIGUOUS_HEADER_ERROR),
+        ("- name: Checkout # see: >", _AMBIGUOUS_HEADER_ERROR),
+        ('- name: "x: | #"', _AMBIGUOUS_HEADER_ERROR),
+        ("steps: # body: |", _AMBIGUOUS_HEADER_ERROR),
+    ],
+)
+def test_block_scalar_headers_are_blanked_or_rejected(header, rejection):
     lines = [
         "jobs:",
-        f"  {header}",
+        *(f"  {line}" for line in header.splitlines()),
         "      uses: actions/checkout@main",
         "",
         "        permissions: write-all",
         "  steps:",
     ]
+    header_index = len(header.splitlines())
 
     structural = check_ci_security._structural_workflow_lines(lines)
 
@@ -2004,12 +2108,29 @@ def test_block_scalar_headers_never_hide_more_than_the_reviewed_rule(
         index for index, line in enumerate(structural)
         if lines[index].strip() and not line
     ]
-    assert hidden == ([2, 4] if is_header else [])
+    assert hidden == (
+        [header_index + 1, header_index + 3] if rejection is None else []
+    )
     reviewed = _reviewed_structural_workflow_lines(lines)
     assert all(
         line == lines[index]
         for index, line in enumerate(structural)
         if reviewed[index]
+    )
+    header_errors = [
+        error
+        for error in check_ci_security._validate_supported_workflow_syntax(
+            "workflow.yml", structural
+        )
+        if error.startswith(f"workflow.yml:{header_index + 1}: ")
+    ]
+    assert header_errors == (
+        []
+        if rejection is None
+        else [
+            f"workflow.yml:{header_index + 1}: {rejection} "
+            "by the security validator"
+        ]
     )
 
 

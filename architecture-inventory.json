@@ -60641,7 +60641,7 @@
             "scope": "top_level"
           }
         ],
-        "definition_locations_sha256": "e0b7366342eab158ad72ef23b86baa3bb433bf70ebbcca8d15727de0b4e1b56a",
+        "definition_locations_sha256": "3245bcf75fe7f074b14f9dcc70ef49944d94f78057dd90d39a358818a10b83af",
         "function_count": 41,
         "functions": [
           {
@@ -60893,9 +60893,9 @@
         ],
         "import_edges": [],
         "module": "tools.check_ci_security",
-        "non_blank_lines": 1860,
+        "non_blank_lines": 1878,
         "path": "tools/check_ci_security.py",
-        "physical_lines": 1986,
+        "physical_lines": 2004,
         "top_level_function_count": 40
       },
       {
@@ -63935,7 +63935,7 @@
         "top_level_function_count": 2
       }
     ],
-    "physical_line_count": 130348,
+    "physical_line_count": 130366,
     "source_groups": [
       "production",
       "tools",
