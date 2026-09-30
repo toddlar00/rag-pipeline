@@ -63944,7 +63944,7 @@
     "top_level_function_count": 2920
   },
   "tracked_sources": {
-    "count": 493,
+    "count": 494,
     "groups": [
       {
         "count": 152,
@@ -64105,7 +64105,7 @@
         ]
       },
       {
-        "count": 298,
+        "count": 299,
         "name": "tests",
         "paths": [
           "tests/conftest.py",
@@ -64179,6 +64179,7 @@
           "tests/test_job_heartbeat_transient.py",
           "tests/test_job_manager.py",
           "tests/test_job_manager_python_launch.py",
+          "tests/test_job_manager_transient_writes.py",
           "tests/test_job_runtime.py",
           "tests/test_jobs_cli.py",
           "tests/test_launcher_scripts.py",
