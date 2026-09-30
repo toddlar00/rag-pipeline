@@ -1117,13 +1117,6 @@
           "facade_roots": [
             "rag"
           ],
-          "module": "tests.test_legal_tokenizer_differential",
-          "path": "tests/test_legal_tokenizer_differential.py"
-        },
-        {
-          "facade_roots": [
-            "rag"
-          ],
           "module": "tests.test_letter_spaced_merge_proofs",
           "path": "tests/test_letter_spaced_merge_proofs.py"
         },
@@ -1832,7 +1825,7 @@
             "target": "operating.getenv"
           },
           {
-            "locations_sha256": "ed48ff64fd08e46910cdbded8b5c0c564bad7da39ddfd7f6685fa26a250e60bd",
+            "locations_sha256": "9ca41bc6ae46c9f0fcfa0358749976c6e1d2d1b7d2fadb43fd733c74358522b0",
             "occurrence_count": 6,
             "operations": [
               "setattr"
@@ -2156,7 +2149,7 @@
             "target": "_API_EMBEDDING_BATCH_TOKEN_BUDGET"
           },
           {
-            "locations_sha256": "de1f353f05cef8568b90dd0456f2911b76b811db594d872054c6da3c92fce7a8",
+            "locations_sha256": "6729e94205b0e19ea96b681e1be14ac580e824cce8bdeffc7aa0fb67da1096c1",
             "occurrence_count": 2,
             "operations": [
               "setattr"
@@ -2434,7 +2427,7 @@
             "target": "_atomic_write_exact_utf8"
           },
           {
-            "locations_sha256": "2c1762ba12808e6121d2026733fa33013c92b1fd117620ce26e38ca57e54752a",
+            "locations_sha256": "b5a728de013b528d7bd18fa90a48527a1802ce33953a3c7f12daeb6b31101e8b",
             "occurrence_count": 5,
             "operations": [
               "setattr"
@@ -2540,7 +2533,7 @@
             "target": "_bm25_search"
           },
           {
-            "locations_sha256": "6bd4b9fe1f16fcf216d58b4df845d2287bddc87bbcf0acbed8f8ca88ce4277c1",
+            "locations_sha256": "ec8220372be1cff700b3f61e00a6ca91f8a0af72a012de77f54b7fcc1438c86a",
             "occurrence_count": 2,
             "operations": [
               "setattr"
@@ -3748,7 +3741,7 @@
             "target": "_page_count"
           },
           {
-            "locations_sha256": "4dd86335b28241e66dcc93713bbf8622d9014ea2a91e1133fbe16ada81d131e5",
+            "locations_sha256": "36ba6c9d227a90a00e13d8d62b84276b1e372ab8894db51ba1b4908fd97f2b18",
             "occurrence_count": 3,
             "operations": [
               "setattr"
@@ -5322,86 +5315,6 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "055b5bc5e84fd94ad0cf1ec8b7cf9c2a7059d013324b2b616fcc4067db168ad1",
-          "name": "_LEGAL_CITATION_RE",
-          "occurrence_count": 1,
-          "paths": [
-            "_LEGAL_CITATION_RE"
-          ],
-          "source_counts": [
-            {
-              "count": 1,
-              "path": "tests/test_legal_tokenizer_differential.py"
-            }
-          ]
-        },
-        {
-          "contexts": [
-            "load"
-          ],
-          "kinds": [
-            "attribute"
-          ],
-          "locations_sha256": "7559fbc7a02b1704609dcc09e4d9b77493890aa96c756eef61521681908cbbd7",
-          "name": "_LEGAL_SEARCH_ALIASES",
-          "occurrence_count": 1,
-          "paths": [
-            "_LEGAL_SEARCH_ALIASES"
-          ],
-          "source_counts": [
-            {
-              "count": 1,
-              "path": "tests/test_legal_tokenizer_differential.py"
-            }
-          ]
-        },
-        {
-          "contexts": [
-            "load"
-          ],
-          "kinds": [
-            "attribute"
-          ],
-          "locations_sha256": "b9e2207fa94c4f980da4adb62952e78d89003d455be80a38b80dd2d2f904abe4",
-          "name": "_LEGAL_SUBSECTION_RE",
-          "occurrence_count": 1,
-          "paths": [
-            "_LEGAL_SUBSECTION_RE"
-          ],
-          "source_counts": [
-            {
-              "count": 1,
-              "path": "tests/test_legal_tokenizer_differential.py"
-            }
-          ]
-        },
-        {
-          "contexts": [
-            "load"
-          ],
-          "kinds": [
-            "attribute"
-          ],
-          "locations_sha256": "7293c73207f4124cfd42345f09af80b1030978130df3c009dab194d4224a4fb1",
-          "name": "_LEGAL_WORD_RE",
-          "occurrence_count": 1,
-          "paths": [
-            "_LEGAL_WORD_RE"
-          ],
-          "source_counts": [
-            {
-              "count": 1,
-              "path": "tests/test_legal_tokenizer_differential.py"
-            }
-          ]
-        },
-        {
-          "contexts": [
-            "load"
-          ],
-          "kinds": [
-            "attribute"
-          ],
           "locations_sha256": "a77f84d7897c9444226430109b516f4bfc04239e845ca1422df2778d19448cc2",
           "name": "_LetterSpacedLayerRetry",
           "occurrence_count": 2,
@@ -6258,7 +6171,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "f223af1ac0ffbfb0c0a1429a1bc40ab9c26591d94df69f7fe80c20bfeeb5442b",
+          "locations_sha256": "12d0f9ea8bd6b336623922bda9604d04e28dfd625bdcb3315f20601e207bf75b",
           "name": "_artifact_completion_path",
           "occurrence_count": 24,
           "paths": [
@@ -6298,7 +6211,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "89bc8dad978804d48ff37ff4da852576256b1d0be7423fb98913e3aa1a4d011d",
+          "locations_sha256": "219659704fe98682afc9d69241bc4e23ad8b260b164c6c8e6aff2a79ffee61b3",
           "name": "_artifact_parameters_sha256",
           "occurrence_count": 17,
           "paths": [
@@ -6338,7 +6251,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "9aa27ed1cb914e1d61998114cb0f076f1bb77c91e40b894ca10514354c97e5d8",
+          "locations_sha256": "8bfe583513a943654b6cea343b5158a2a3c830175705c183e127e26cdd9e8d09",
           "name": "_artifact_sha256_cache",
           "occurrence_count": 2,
           "paths": [
@@ -6358,7 +6271,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "f5721329c9c1825571de6bca6381656d86e37f637aa0f67fbf7ef08392b0f282",
+          "locations_sha256": "a6ac026fb45478ce5d5ed12ecb672a2456ca04880532740dc9bbceace0ae43d3",
           "name": "_artifact_stat_fingerprint",
           "occurrence_count": 3,
           "paths": [
@@ -6478,7 +6391,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "af4b636a74fdc76b9df99e882086e64f675d3f0f7db7ad5ff0cf2753382e8b7e",
+          "locations_sha256": "85e490796e2b74c3db0e11e00fae54932a35b082c798aae613bfe254708454c6",
           "name": "_atomic_write_json",
           "occurrence_count": 38,
           "paths": [
@@ -6990,7 +6903,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "b496cdcd4c53b37979cd49ec1fe1ad87c8603063672b41f4a74ad52b76500400",
+          "locations_sha256": "6ffce1b54216993483cdc344dbb7dac230f7da700c8993f728421871d8734fd2",
           "name": "_cached_artifact_sha256",
           "occurrence_count": 13,
           "paths": [
@@ -9276,17 +9189,13 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "691b4bebc3c87d2762ed39b4847a88151fcc06de9a92aaa2f03e327cea2c738e",
+          "locations_sha256": "d110868aa0094238fb28d84457f62ef340f06c3351ae088609782c954539d338",
           "name": "_legal_search_tokens",
-          "occurrence_count": 3,
+          "occurrence_count": 2,
           "paths": [
             "_legal_search_tokens"
           ],
           "source_counts": [
-            {
-              "count": 1,
-              "path": "tests/test_legal_tokenizer_differential.py"
-            },
             {
               "count": 2,
               "path": "tests/test_search.py"
@@ -9645,7 +9554,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "6952e906eff542bf82be0d85ad48484df3238760c287666329ccffe634ce59d7",
+          "locations_sha256": "2bfc0d627eb7249ffe01a9522eea39d115564c1595dd1317898517b3ac97d54f",
           "name": "_load_index_snapshot_strict",
           "occurrence_count": 2,
           "paths": [
@@ -10260,26 +10169,6 @@
             {
               "count": 2,
               "path": "tests/test_vector_store_concurrency.py"
-            }
-          ]
-        },
-        {
-          "contexts": [
-            "load"
-          ],
-          "kinds": [
-            "attribute"
-          ],
-          "locations_sha256": "76cfea47c806feb961e348322c60bc16fe9125e7ce0a6b82bc7833a6f1adc667",
-          "name": "_normalize_legal_search_text",
-          "occurrence_count": 1,
-          "paths": [
-            "_normalize_legal_search_text"
-          ],
-          "source_counts": [
-            {
-              "count": 1,
-              "path": "tests/test_legal_tokenizer_differential.py"
             }
           ]
         },
@@ -11549,7 +11438,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "80e35e7cae5a8e4be89e7c5cde4bdc9475cb45182749aa8110f244a479a4e3ce",
+          "locations_sha256": "c6e143d7891aec739de7de2354e267a80822d31243cdc197224db265d594a8e5",
           "name": "_read_index_artifact_snapshot",
           "occurrence_count": 5,
           "paths": [
@@ -14020,7 +13909,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "a4df9a60b53b6c19aed0e9d0369cea387cabae9ecca49c431fa6e40d8dd8d979",
+          "locations_sha256": "1dceaf976efae2757374b86218a029242b4caedd35c038e8f74bfd1426498f18",
           "name": "_write_artifact_completion",
           "occurrence_count": 9,
           "paths": [
@@ -14086,7 +13975,7 @@
           ]
         }
       ],
-      "using_module_count": 78
+      "using_module_count": 77
     }
   },
   "hash_domains": {
@@ -27361,7 +27250,7 @@
   "schema_version": 3,
   "source_architecture": {
     "class_count": 333,
-    "function_count": 4412,
+    "function_count": 4413,
     "import_graph": {
       "cyclic_components": [],
       "edge_count": 649,
@@ -27858,8 +27747,8 @@
             "scope": "nested"
           }
         ],
-        "definition_locations_sha256": "27ec76baed031b899e59531140c4ed91aa2e8510f5bc6939ba72f4b31106dfc1",
-        "function_count": 46,
+        "definition_locations_sha256": "bc745b67f6e793aa611f93e318a1b78da3c98bbb52ef7b9e7e28327e6e5eebd8",
+        "function_count": 47,
         "functions": [
           {
             "kind": "function",
@@ -27980,6 +27869,12 @@
             "name": "_atomic_write_text",
             "scope": "top_level",
             "signature_sha256": "fc90cefaf4760bfa1f67dcd2c79ad4385087287bd3cc5d437ab5d12790e111fc"
+          },
+          {
+            "kind": "function",
+            "name": "_contains_nonfinite_float",
+            "scope": "top_level",
+            "signature_sha256": "e214c7aaf59b2badd62aee96a9f2bdc7456b126f7b3615a03b8f1e0ac4eac38d"
           },
           {
             "kind": "function",
@@ -28150,10 +28045,10 @@
           }
         ],
         "module": "artifact_io",
-        "non_blank_lines": 1356,
+        "non_blank_lines": 1373,
         "path": "artifact_io.py",
-        "physical_lines": 1475,
-        "top_level_function_count": 33
+        "physical_lines": 1495,
+        "top_level_function_count": 34
       },
       {
         "class_count": 1,
@@ -54889,7 +54784,7 @@
             "scope": "top_level"
           }
         ],
-        "definition_locations_sha256": "276b00c1ac952f6a366452c9e02f28289d32f8c83e162cea9bf23281d5fd1678",
+        "definition_locations_sha256": "f5faf32f3bee6c52af73ebf93c55bbdd7775d8eb7b9332c055decd01a1291a9e",
         "function_count": 45,
         "functions": [
           {
@@ -55175,9 +55070,9 @@
           }
         ],
         "module": "retrieval_core",
-        "non_blank_lines": 1304,
+        "non_blank_lines": 1258,
         "path": "retrieval_core.py",
-        "physical_lines": 1444,
+        "physical_lines": 1398,
         "top_level_function_count": 39
       },
       {
@@ -64046,16 +63941,16 @@
         "top_level_function_count": 2
       }
     ],
-    "physical_line_count": 130368,
+    "physical_line_count": 130342,
     "source_groups": [
       "production",
       "tools",
       "other"
     ],
-    "top_level_function_count": 2920
+    "top_level_function_count": 2921
   },
   "tracked_sources": {
-    "count": 494,
+    "count": 493,
     "groups": [
       {
         "count": 152,
@@ -64216,7 +64111,7 @@
         ]
       },
       {
-        "count": 299,
+        "count": 298,
         "name": "tests",
         "paths": [
           "tests/conftest.py",
@@ -64293,7 +64188,6 @@
           "tests/test_job_runtime.py",
           "tests/test_jobs_cli.py",
           "tests/test_launcher_scripts.py",
-          "tests/test_legal_tokenizer_differential.py",
           "tests/test_letter_spaced_merge_proofs.py",
           "tests/test_letter_spaced_text_layer.py",
           "tests/test_list_boundary_characterization.py",
