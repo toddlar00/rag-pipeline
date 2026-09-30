@@ -276,6 +276,15 @@ def test_strict_parser_checks_latin1_fallback_metadata():
     assert str(caught.value) == _nonfinite_message(1, "metadata.a[0]")
 
 
+def test_strict_parser_fails_closed_when_scan_and_path_walk_disagree(
+        monkeypatch):
+    monkeypatch.setattr(
+        artifact_io, "_contains_nonfinite_float", lambda value: True)
+
+    with pytest.raises(AssertionError, match="unreachable non-finite"):
+        _parse_strict('{"text":"t","metadata":{"x":1.5}}\n')
+
+
 def _parse_index_records_strict_3aede7d(raw, path, *, chunk_id_fn):
     """Frozen copy of the strict parser at 3aede7d (differential oracle)."""
     last_unicode_error = None
