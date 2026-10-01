@@ -7,21 +7,23 @@ fresh-process repetitions.
 
 ## Provenance
 
-Both current reports were generated from the clean urllib3 promotion source
-checkpoint `aab03262237e7e37363144b3c80c595aeef88231` (tree
-`66226c4be91f587be2502de3b683f4bf6e8c5be3`), a one-domain supply-chain
-remediation after a series of one-domain dependency updates on `main` after
-the history-preserving merges of #121 (`602bec1`), of that series, #122 to
-#130 (`1cffc58`), of its documentation follow-up #135 (`9eb6f94`), of the
-TOC glyph-leader fix #138 (`a2c5629`), of the job-heartbeat hardening #137
-(`634c38b`), of the Nomic contract test #136 (`2f07510`), of the oauthlib
-promotion #139 (`123bedb`), of the tokenless-glyph rotation fix #140
-(`6baf14b`), of the table header-row oracle fix #145 (`ce73b61`), of the
-soft-hyphen item-seam fix #146 (`8cc89b0`), of the post-series
-documentation #147 (`9fff7bb`), of the heartbeat test fix #148
-(`3aede7d`), of the static-security S324 retirement #150 (`76f98d6`) and of
-the hosted-flake fixes #151 (`584c4a5`, whose second parent `f5af79a` is
-this source's parent). That source contains everything through the
+Both current reports were generated from the clean query-path speedup
+source checkpoint `18a70ab0b57b7958a2e098be609232f233dceb6c` (tree
+`0de647885d98a8f86349239231c529e3d3a2cdd1`), three output-identical
+query-path speedups after a series of one-domain dependency updates on
+`main` after the history-preserving merges of #121 (`602bec1`), of that
+series, #122 to #130 (`1cffc58`), of its documentation follow-up #135
+(`9eb6f94`), of the TOC glyph-leader fix #138 (`a2c5629`), of the
+job-heartbeat hardening #137 (`634c38b`), of the Nomic contract test #136
+(`2f07510`), of the oauthlib promotion #139 (`123bedb`), of the
+tokenless-glyph rotation fix #140 (`6baf14b`), of the table header-row
+oracle fix #145 (`ce73b61`), of the soft-hyphen item-seam fix #146
+(`8cc89b0`), of the post-series documentation #147 (`9fff7bb`), of the
+heartbeat test fix #148 (`3aede7d`), of the static-security S324
+retirement #150 (`76f98d6`), of the hosted-flake fixes #151 (`584c4a5`) and
+of the urllib3 promotion #152 (`25f9ba1`, whose second parent `19b9ef9` is
+the base this source's ten commits are stacked on). That source contains
+everything through the
 Task 0.8 static-security merge `e34103f` plus the local OCR accuracy, retry
 and guided-review program, opt-in AI evidence search, the passive cleanup
 audits, the LLM transport and worker-launch repairs, the casebook
@@ -64,7 +66,8 @@ soft-hyphen item-seam fix changes no lock; the post-series documentation
 changes no lock; the heartbeat test fix changes no lock; the static-security
 S324 retirement changes no lock; the stacked hosted-flake fixes change no
 lock; the stacked urllib3 promotion moves urllib3 from 2.7.0 to 2.8.0 in the
-core, full, test, service, smoke and security locks; no model lock changed.
+core, full, test, service, smoke and security locks; the stacked query-path
+speedups change no lock; no model lock changed.
 The executing environments were synchronized to this source's locks
 (urllib3 2.8.0) with repository-pinned uv 0.12.20 against the exact CPU
 application/test lock union plus its retained bootstrapper:
@@ -82,8 +85,8 @@ marker-resolved distributions before generation.
 
 | Platform | Runtime | Report | Bytes | File SHA-256 | Embedded report SHA-256 |
 |---|---:|---|---:|---|---|
-| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,022 | `c51cbdcefdc545d5bf52b84ab8ab4757e8bbbe5d84f8f5a62a5d110d00ce4d3b` | `51b1e2a76b8594886be0a6165bdfb4bea799beb4b05a97ac40a5396422183767` |
-| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,427 | `8dda5377cf369dff5048cf6ae6b5b58719fb516421e8f85115800191d88d3e57` | `06a063f3dcb538eaf951d897889ed4e8e562446559c43dc208e003f02fc9e57c` |
+| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,176 | `f4585ce198a04dfd20cf31d122930dc1e5a1b12308d1c8c8374b243058f9dca5` | `8e994328de744953319b49a5a50ac945c78d51f375a6b87f6ce51527fd5f6439` |
+| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,574 | `8868172b3f36a4716b2a177f156d7b627610b0eaf7fb0d7fc5a5afd7b221b158` | `613eaa4ee4f260947973745cdc22bd90c3192648dac2c3f8218f650f0de33396` |
 
 The reports attest the same source commit, clean-worktree state, tracked-diff
 digest, eight LF and `HEAD`-identical dependency/model-lock inputs, authoritative
@@ -444,6 +447,21 @@ promotion gate on [PR
 urllib3 a governed direct input and moves it from 2.7.0 to 2.8.0
 (CVE-2026-97687, CVE-2026-97688 and CVE-2026-97689) in the core, full, test,
 service, smoke and security locks, and supersedes the `6b97fc5` pair.
+The `aab0326` pair (gate-only child `19b9ef9`) passed the hosted CI
+promotion gate on [PR
+#152](https://github.com/toddlar00/rag-pipeline/pull/152), which merged into
+`main` as `25f9ba1`; the networked vulnerability/SBOM jobs passed at that
+head. The stacked query-path speedup source `18a70ab` makes three
+output-identical query-path speedups: local reranking scores each pool
+without FlagEmbedding 1.4.2's discarded batch-size probe forward pass (one
+pass instead of two for pools of up to 128 pairs), with float.hex-identical
+scores; the legal lexical
+analyzer skips each pass whose required literal is absent from the current
+string and puts the leading literal first in its slow patterns; and the
+strict chunks parser runs a path-free non-finite scan before its field-path
+walk, with identical records and error text. It changes no pipeline output,
+dependency or lock and supersedes the `aab0326` pair for its own pull
+request.
 The current reports above
 bind
 that exact clean source and each passes an independent complete

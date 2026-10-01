@@ -1714,18 +1714,25 @@ are prepared, and each was independently reviewed.
 #150](https://github.com/toddlar00/rag-pipeline/pull/150) as `76f98d6`; its
 Phase A0 pair passed the hosted CI promotion gate there, and the separate
 networked vulnerability/SBOM jobs failed at that head on three new urllib3
-advisories that also affect `main`. A separate one-domain provider-transport
-promotion of urllib3 to 2.8.0, which clears them, is now proposed in one
-pull request from `agent/urllib3-2-8-promotion` with its own Phase A0 pair
-at source `aab0326`, its hosted checks pending, and is not integrated. The
+advisories. A separate one-domain provider-transport promotion of urllib3
+to 2.8.0, which clears them, merged into `main` through [PR
+#152](https://github.com/toddlar00/rag-pipeline/pull/152) as `25f9ba1`; its
+Phase A0 pair at source `aab0326` passed the hosted CI promotion gate there,
+and the networked vulnerability/SBOM jobs passed at that head. The
 three hosted-flake fix branches (`agent/imp-a0-capture-cleanup-retry`,
 `agent/imp-review-ocr-close-deadline-clamp` and
 `agent/imp-posix-sigterm-test-deflake`) merged together into `main` through
 [PR #151](https://github.com/toddlar00/rag-pipeline/pull/151) as `584c4a5`;
 their shared Phase A0 pair at source `6b97fc5` passed the hosted CI
-promotion gate there. The other 14 have no pull request, so none of them is
-"Implemented (draft)"; of the 18, only the static-security branch and the
-three hosted-flake fix branches are integrated. The integration
+promotion gate there. The three query-path speed branches
+(`agent/imp-reranker-single-pass`,
+`agent/imp-legal-tokenizer-literal-guards` and
+`agent/imp-strict-parse-nonfinite-flag`) are now proposed together in one
+pull request from `agent/query-path-speedups`, which is stacked on PR #152's
+evidence head `19b9ef9` and carries its own Phase A0 pair at source
+`18a70ab`, its hosted checks pending. The other 11 have no pull request, so
+none of them is "Implemented (draft)"; of the 18, only the static-security
+branch and the three hosted-flake fix branches are integrated. The integration
 branch `agent/research-improvements` merges all 18 only to validate the
 combination; each other branch lands through its own pull request. Branch
 names below omit the `agent/imp-` prefix.
@@ -1742,7 +1749,11 @@ names below omit the `agent/imp-` prefix.
   rankings and scores unchanged.
   - `reranker-single-pass`: scores rerank pairs in one forward pass,
     without FlagEmbedding 1.4.2's discarded batch-size probe. `--rerank`
-    scoring is 1.9-2.1x faster with float.hex-identical scores.
+    scoring is 1.9-2.1x faster with float.hex-identical scores. It is now
+    proposed together with `legal-tokenizer-literal-guards` and
+    `strict-parse-nonfinite-flag` in one stacked pull request, with their
+    shared Phase A0 pair at source `18a70ab` (hosted checks pending), and is
+    not integrated.
   - `chunk-dedup-bitset`: an exact size-ratio bound and integer-bitset
     Jaccard in `chunking_core._deduplicate_chunks`. 42-55x at 2,831
     synthetic chunks (184 s to 3.3-4.4 s). Deduplication takes about 54 s
@@ -1758,7 +1769,8 @@ names below omit the `agent/imp-` prefix.
   - `legal-tokenizer-literal-guards`: literal guards and literal-first
     regex forms in `_legal_search_tokens`. 2.2-2.3x, identical over a
     280,000-string differential fuzz; about 1 s of CPU off each cold Chroma
-    hybrid query.
+    hybrid query. It is now proposed in the same stacked pull request
+    (hosted checks pending) and is not integrated.
   - `quality-attestation-single-pass`: attests each record once and reads
     the oracle registry once per binding. 35-45% (about 0.7-1.5 s) off each
     quality binding on the index, search and publication paths.
@@ -1771,6 +1783,8 @@ names below omit the `agent/imp-` prefix.
   - `strict-parse-nonfinite-flag`: a path-free non-finite scan ahead of the
     strict JSONL parser's metadata walk. 23-31% off each parse on
     synthetic corpora (19-21%, about 50-70 ms, on the largest real corpus).
+    It is now proposed in the same stacked pull request (hosted checks
+    pending) and is not integrated.
   - `secret-scan-history-batch`: the secret scanner's history mode reads
     blobs through one `git cat-file --batch`. Windows blob reading drops
     from 106 s to 1.1 s (about 6-7x end to end), with identical findings.
@@ -1852,10 +1866,14 @@ names below omit the `agent/imp-` prefix.
     path differ. The scratch copies were deleted.
 - **Before integration.** Each remaining branch needs a draft pull request
   and its own Phase A0 source/evidence pair (the three hosted-flake fix
-  branches shared one stacked pull request and pair). Every branch changes
-  `architecture-inventory.json`, so after each merge the next branch is
-  rebased and its inventory refreshed. Twelve branches change paths that
-  `ci-security-ownership.json` owns or governs (every `rag.py`,
+  branches shared one stacked pull request and pair, and the three
+  query-path speed branches are proposed with another). That combined
+  query-path pull request departs from the A1 owner-decision row's
+  condition that each slice is its own pull request with its own Phase A0
+  source/evidence pair; splitting it is the owner's call. Every branch
+  changes `architecture-inventory.json`, so after each merge the next
+  branch is rebased and its inventory refreshed. Twelve branches change
+  paths that `ci-security-ownership.json` owns or governs (every `rag.py`,
   `retrieval_core.py` or `model_artifacts.py` change, and the CI-validator,
   secret-scan and static-security tools), so they also need owned-path
   review. The A1 authorization covers the ten speed branches; whether the
@@ -2248,6 +2266,21 @@ promotion gate on [PR
 urllib3 a governed direct input and moves it from 2.7.0 to 2.8.0
 (CVE-2026-97687, CVE-2026-97688 and CVE-2026-97689) in the core, full, test,
 service, smoke and security locks, and supersedes the `6b97fc5` pair.
+The `aab0326` pair (gate-only child `19b9ef9`) passed the hosted CI
+promotion gate on [PR
+#152](https://github.com/toddlar00/rag-pipeline/pull/152), which merged into
+`main` as `25f9ba1`; the networked vulnerability/SBOM jobs passed at that
+head. The stacked query-path speedup source `18a70ab` makes three
+output-identical query-path speedups: local reranking scores each pool
+without FlagEmbedding 1.4.2's discarded batch-size probe forward pass (one
+pass instead of two for pools of up to 128 pairs), with float.hex-identical
+scores; the legal lexical
+analyzer skips each pass whose required literal is absent from the current
+string and puts the leading literal first in its slow patterns; and the
+strict chunks parser runs a path-free non-finite scan before its field-path
+walk, with identical records and error text. It changes no pipeline output,
+dependency or lock and supersedes the `aab0326` pair for its own pull
+request.
 Its Windows/Linux
 pair (independent local same-platform comparisons passed) is that branch's
 candidate; its hosted checks and exact-SHA record are pending, and the

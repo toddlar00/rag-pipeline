@@ -23,9 +23,10 @@
   `3aede7d`), the static-security S324 retirement pair at source `3af52f8`
   passed on PR #150 (merged through `76f98d6`), the stacked hosted-flake
   fix pair at source `6b97fc5` passed on PR #151 (merged through
-  `584c4a5`), and the urllib3 promotion pair at source `aab0326` is
-  pending; exact-head human review and separate R8 owner authorization are
-  not recorded
+  `584c4a5`), the urllib3 promotion pair at source `aab0326` passed on PR
+  #152 (merged through `25f9ba1`), and the stacked query-path speedup pair
+  at source `18a70ab` is pending; exact-head human review and separate R8
+  owner authorization are not recorded
 - **Milestone:** R10 prerequisite for the R8 pipeline-ownership move
 - **Report schema:** `phase-a0` v3
 
@@ -156,13 +157,15 @@ gate-only child `32153e9` and merge `376277c`
 Task 0.8 static-security pair at source `8891e1b` repeated it through
 gate-only child `1533164` and merge `e34103f`
 ([PR #107](https://github.com/toddlar00/rag-pipeline/pull/107)). The
-current replacement pair uses the clean urllib3 promotion source
-`aab03262237e7e37363144b3c80c595aeef88231` (tree
-`66226c4be91f587be2502de3b683f4bf6e8c5be3`), a one-domain supply-chain
-remediation after a series of one-domain dependency updates, on `main` after
-the merges of the hosted-flake fixes #151 (`584c4a5`, whose second parent
-`f5af79a` is this source's parent), the static-security S324 retirement
-#150 (`76f98d6`), the heartbeat test fix #148 (`3aede7d`), the post-series
+current replacement pair uses the clean query-path speedup source
+`18a70ab0b57b7958a2e098be609232f233dceb6c` (tree
+`0de647885d98a8f86349239231c529e3d3a2cdd1`), three output-identical
+query-path speedups after a series of one-domain dependency updates, on
+`main` after the merges of the urllib3 promotion #152 (`25f9ba1`, whose
+second parent `19b9ef9` is the base this source's ten commits are stacked
+on), the hosted-flake fixes
+#151 (`584c4a5`), the static-security S324 retirement #150 (`76f98d6`), the
+heartbeat test fix #148 (`3aede7d`), the post-series
 documentation #147 (`9fff7bb`), the soft-hyphen item-seam fix
 #146 (`8cc89b0`), the table header-row oracle fix #145 (`ce73b61`), the
 tokenless-glyph rotation fix #140 (`6baf14b`), the oauthlib promotion #139
@@ -414,6 +417,21 @@ promotion gate on [PR
 urllib3 a governed direct input and moves it from 2.7.0 to 2.8.0
 (CVE-2026-97687, CVE-2026-97688 and CVE-2026-97689) in the core, full, test,
 service, smoke and security locks, and supersedes the `6b97fc5` pair.
+The `aab0326` pair (gate-only child `19b9ef9`) passed the hosted CI
+promotion gate on [PR
+#152](https://github.com/toddlar00/rag-pipeline/pull/152), which merged into
+`main` as `25f9ba1`; the networked vulnerability/SBOM jobs passed at that
+head. The stacked query-path speedup source `18a70ab` makes three
+output-identical query-path speedups: local reranking scores each pool
+without FlagEmbedding 1.4.2's discarded batch-size probe forward pass (one
+pass instead of two for pools of up to 128 pairs), with float.hex-identical
+scores; the legal lexical
+analyzer skips each pass whose required literal is absent from the current
+string and puts the leading literal first in its slow patterns; and the
+strict chunks parser runs a path-free non-finite scan before its field-path
+walk, with identical records and error text. It changes no pipeline output,
+dependency or lock and supersedes the `aab0326` pair for its own pull
+request.
 Its Windows and
 Linux CPython 3.12.13 reports were
 generated after the same strict hash-locked synchronization, to its locks
@@ -612,15 +630,16 @@ then the stacked post-series documentation source `f3ec23a`,
 then the stacked heartbeat test fix source `e5966e1`,
 then the stacked static-security S324 retirement source `3af52f8`,
 then the stacked hosted-flake fix source `6b97fc5`,
-then the stacked urllib3 promotion source `aab0326`.
+then the stacked urllib3 promotion source `aab0326`,
+then the stacked query-path speedup source `18a70ab`.
 Its Windows report
-is 51,022 bytes (file SHA-256
-`c51cbdcefdc545d5bf52b84ab8ab4757e8bbbe5d84f8f5a62a5d110d00ce4d3b`;
+is 51,176 bytes (file SHA-256
+`f4585ce198a04dfd20cf31d122930dc1e5a1b12308d1c8c8374b243058f9dca5`;
 embedded report SHA-256
-`51b1e2a76b8594886be0a6165bdfb4bea799beb4b05a97ac40a5396422183767`).
-Its Linux report is 50,427 bytes (file SHA-256
-`8dda5377cf369dff5048cf6ae6b5b58719fb516421e8f85115800191d88d3e57`;
+`8e994328de744953319b49a5a50ac945c78d51f375a6b87f6ce51527fd5f6439`).
+Its Linux report is 50,574 bytes (file SHA-256
+`8868172b3f36a4716b2a177f156d7b627610b0eaf7fb0d7fc5a5afd7b221b158`;
 embedded report SHA-256
-`06a063f3dcb538eaf951d897889ed4e8e562446559c43dc208e003f02fc9e57c`).
+`613eaa4ee4f260947973745cdc22bd90c3192648dac2c3f8218f650f0de33396`).
 Both use CPython 3.12.13 and pass their complete local same-platform 9×5
 comparisons. Hosted promotion remains pending.
