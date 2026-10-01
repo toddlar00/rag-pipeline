@@ -58,6 +58,10 @@ tqdm>=4.70.1,<5
 
 # HTTP clients used by cloud embedding and LLM backends
 requests>=2.31,<3
+# Promoted from requests (and chromadb's kubernetes) so the
+# CVE-2026-97687/CVE-2026-97688/CVE-2026-97689 fix (urllib3 2.8.0) can be
+# selected under the dependency-domain policy.
+urllib3>=2.8.0,<3
 
 # Numerical operations used by RAPTOR clustering
 numpy>=1.26,<3

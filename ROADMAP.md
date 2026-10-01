@@ -1701,10 +1701,10 @@ embedding code's Transformers names and clear two new advisories.
     The branch `agent/imp-review-ocr-close-deadline-clamp` fixes the likely
     cause of the exit 2: Windows monotonic-clock rounding can push the
     remaining close time just above its 40-second limit. No stderr was
-    retained from the hosted run, so that cause is not proven. The fix is
-    now proposed in the stacked hosted-flake fix pull request (hosted checks
-    pending; see "Research improvement pass (2026-09-30, prepared)") and is
-    not on `main`.
+    retained from the hosted run, so that cause is not proven. The fix
+    merged into `main` through [PR
+    #151](https://github.com/toddlar00/rag-pipeline/pull/151) as `584c4a5`
+    (see "Research improvement pass (2026-09-30, prepared)").
 
 ### Research improvement pass (2026-09-30, prepared)
 
@@ -1714,15 +1714,18 @@ are prepared, and each was independently reviewed.
 #150](https://github.com/toddlar00/rag-pipeline/pull/150) as `76f98d6`; its
 Phase A0 pair passed the hosted CI promotion gate there, and the separate
 networked vulnerability/SBOM jobs failed at that head on three new urllib3
-advisories that also affect `main`. The three hosted-flake fix branches
-(`agent/imp-a0-capture-cleanup-retry`,
+advisories that also affect `main`. A separate one-domain provider-transport
+promotion of urllib3 to 2.8.0, which clears them, is now proposed in one
+pull request from `agent/urllib3-2-8-promotion` with its own Phase A0 pair
+at source `aab0326`, its hosted checks pending, and is not integrated. The
+three hosted-flake fix branches (`agent/imp-a0-capture-cleanup-retry`,
 `agent/imp-review-ocr-close-deadline-clamp` and
-`agent/imp-posix-sigterm-test-deflake`) are now proposed together in one
-pull request from `agent/hosted-flake-fixes`, which is stacked on PR #150
-and carries its own Phase A0 pair at source `6b97fc5`, its hosted checks
-pending. The other 14 have no pull request, so none of them is
-"Implemented (draft)"; of the 18, only the static-security branch is
-integrated. The integration
+`agent/imp-posix-sigterm-test-deflake`) merged together into `main` through
+[PR #151](https://github.com/toddlar00/rag-pipeline/pull/151) as `584c4a5`;
+their shared Phase A0 pair at source `6b97fc5` passed the hosted CI
+promotion gate there. The other 14 have no pull request, so none of them is
+"Implemented (draft)"; of the 18, only the static-security branch and the
+three hosted-flake fix branches are integrated. The integration
 branch `agent/research-improvements` merges all 18 only to validate the
 combination; each other branch lands through its own pull request. Branch
 names below omit the `agent/imp-` prefix.
@@ -1792,21 +1795,18 @@ names below omit the `agent/imp-` prefix.
     (`OMP_NUM_THREADS` and `DOCLING_*` changed output bytes) and stops the
     DEBUG log flood.
   - `review-ocr-close-deadline-clamp`: clamps the crop archive's remaining
-    close time (see the hosted-runner follow-up above). It is now proposed
-    together with `a0-capture-cleanup-retry` and
-    `posix-sigterm-test-deflake` in one stacked pull request, with its Phase
-    A0 pair at source `6b97fc5` (hosted checks pending), and is not
-    integrated.
+    close time (see the hosted-runner follow-up above). It merged together
+    with `a0-capture-cleanup-retry` and `posix-sigterm-test-deflake` through
+    PR #151 as `584c4a5`, with their shared Phase A0 pair at source
+    `6b97fc5`, which passed the hosted CI promotion gate.
   - `a0-capture-cleanup-retry`: the Phase A0 contained runner retries
     transient Windows errors when it removes its capture directory, so a
     WinError 32 no longer masks the primary error. This was the hosted
     "contained-runner regex" flake: 11 of 640 stressed runs failed before,
-    0 of 640 after. It is now proposed in the same stacked pull request
-    (hosted checks pending) and is not integrated.
+    0 of 640 after. It merged through the same pull request.
   - `posix-sigterm-test-deflake`: test-only; removes a startup race in
     `test_posix_escalation_kills_descendant_that_ignores_sigterm` (see
-    Phase A0 below). It is now proposed in the same stacked pull request
-    (hosted checks pending) and is not integrated.
+    Phase A0 below). It merged through the same pull request.
   - `ci-validator-yaml-anchors`: closes workflow-validator F4 by rejecting
     YAML anchors, aliases, tags and merge keys that hid unpinned actions or
     write-all permissions. It also rejects fake block-scalar headers, and
@@ -1852,7 +1852,7 @@ names below omit the `agent/imp-` prefix.
     path differ. The scratch copies were deleted.
 - **Before integration.** Each remaining branch needs a draft pull request
   and its own Phase A0 source/evidence pair (the three hosted-flake fix
-  branches share one stacked pull request and pair). Every branch changes
+  branches shared one stacked pull request and pair). Every branch changes
   `architecture-inventory.json`, so after each merge the next branch is
   rebased and its inventory refreshed. Twelve branches change paths that
   `ci-security-ownership.json` owns or governs (every `rag.py`,
@@ -2241,6 +2241,13 @@ rounding could exceed; and the POSIX SIGTERM-escalation test holds its
 deadline until the grandchild has installed SIG_IGN and written its first
 heartbeat. It changes no pipeline output, dependency or lock and supersedes
 the `3af52f8` pair for its own pull request.
+The `6b97fc5` pair (gate-only child `f5af79a`) passed the hosted CI
+promotion gate on [PR
+#151](https://github.com/toddlar00/rag-pipeline/pull/151), which merged into
+`main` as `584c4a5`. The provider-transport promotion source `aab0326` makes
+urllib3 a governed direct input and moves it from 2.7.0 to 2.8.0
+(CVE-2026-97687, CVE-2026-97688 and CVE-2026-97689) in the core, full, test,
+service, smoke and security locks, and supersedes the `6b97fc5` pair.
 Its Windows/Linux
 pair (independent local same-platform comparisons passed) is that branch's
 candidate; its hosted checks and exact-SHA record are pending, and the
@@ -2256,10 +2263,9 @@ security-owned workflow change requiring its own review); and
 `test_posix_escalation_kills_descendant_that_ignores_sigterm` showed one
 cleanup-confirmation flake on a busy hosted runner at `b3c7cf7` (tree
 identical to the fully green pull-request run; rerun requested). The
-branch `agent/imp-posix-sigterm-test-deflake`, now proposed in the stacked
-hosted-flake fix pull request (hosted checks pending) and not integrated,
-removes that test's separate startup race but does not address this
-cleanup-confirmation flake.
+branch `agent/imp-posix-sigterm-test-deflake`, merged through PR #151 as
+`584c4a5`, removes that test's separate startup race but does not address
+this cleanup-confirmation flake.
 The only diagnosed reproduction was one of two cleanup-confirmation failures
 in a variant with a 1.0 s grace: a SIGKILLed grandchild held in
 uninterruptible (D-state) sleep 2.66 s past the confirmation window. Two
@@ -2425,8 +2431,8 @@ rule/path/line findings, and exactly one counted expiring suppression
 (the non-cryptographic MD5 sparse-vector token index in
 `retrieval_core.py`, whose suppression expires on 2026-11-30). The separate
 versioned index-migration follow-up once planned to replace it is superseded
-by the branch `agent/imp-static-security-s324-noqa`, now proposed with its
-Phase A0 pair (hosted checks pending) and not integrated:
+by the branch `agent/imp-static-security-s324-noqa`, which merged through
+PR #150 as `76f98d6`:
 `md5(..., usedforsecurity=False)` keeps the sparse indices byte-identical,
 so the suppression retires without an index migration (see "Research
 improvement pass (2026-09-30, prepared)"). This completes the Task 0.6-0.8

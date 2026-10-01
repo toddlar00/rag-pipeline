@@ -7,21 +7,21 @@ fresh-process repetitions.
 
 ## Provenance
 
-Both current reports were generated from the clean hosted-flake fix source
-checkpoint `6b97fc5f235903b44adffb7bd3f9118dd1408a1e` (tree
-`693984fd79c6c125abe555f6be170b44e4ceafdd`), three hosted-CI reliability
-fixes stacked on the static-security S324 retirement source `3af52f8`, a
-static-security gate follow-up after a series of one-domain dependency
-updates on `main` after the history-preserving merges of #121 (`602bec1`),
-of that series, #122 to
+Both current reports were generated from the clean urllib3 promotion source
+checkpoint `aab03262237e7e37363144b3c80c595aeef88231` (tree
+`66226c4be91f587be2502de3b683f4bf6e8c5be3`), a one-domain supply-chain
+remediation after a series of one-domain dependency updates on `main` after
+the history-preserving merges of #121 (`602bec1`), of that series, #122 to
 #130 (`1cffc58`), of its documentation follow-up #135 (`9eb6f94`), of the
 TOC glyph-leader fix #138 (`a2c5629`), of the job-heartbeat hardening #137
 (`634c38b`), of the Nomic contract test #136 (`2f07510`), of the oauthlib
 promotion #139 (`123bedb`), of the tokenless-glyph rotation fix #140
 (`6baf14b`), of the table header-row oracle fix #145 (`ce73b61`), of the
 soft-hyphen item-seam fix #146 (`8cc89b0`), of the post-series
-documentation #147 (`9fff7bb`) and of the heartbeat test fix #148
-(`3aede7d`). That source contains everything through the
+documentation #147 (`9fff7bb`), of the heartbeat test fix #148
+(`3aede7d`), of the static-security S324 retirement #150 (`76f98d6`) and of
+the hosted-flake fixes #151 (`584c4a5`, whose second parent `f5af79a` is
+this source's parent). That source contains everything through the
 Task 0.8 static-security merge `e34103f` plus the local OCR accuracy, retry
 and guided-review program, opt-in AI evidence search, the passive cleanup
 audits, the LLM transport and worker-launch repairs, the casebook
@@ -39,8 +39,8 @@ seven OCR review test modules, FlagEmbedding 1.4.2 for Transformers 5
 reranking and the fresh-OCR token fidelity fixes, followed by stacked
 one-domain dependency updates for vector stores, Service/UI, test-audit
 tooling, ML/runtime, docling-core, ML advisory promotions, h2, cryptography,
-supply-chain policy renewals and oauthlib. The lock changes add pytest-xdist
-3.8.0 and execnet 2.1.2 to `requirements-test.lock` and
+supply-chain policy renewals, oauthlib and urllib3. The lock changes add
+pytest-xdist 3.8.0 and execnet 2.1.2 to `requirements-test.lock` and
 `requirements-smoke.lock` and move FlagEmbedding from 1.4.0 to 1.4.2 in
 `requirements-core.lock` and `requirements-full.lock`; the stacked
 vector-stores update moves qdrant-client from 1.19.0 to 1.19.1 and
@@ -63,9 +63,11 @@ fix changes no lock; the table header-row oracle fix changes no lock; the
 soft-hyphen item-seam fix changes no lock; the post-series documentation
 changes no lock; the heartbeat test fix changes no lock; the static-security
 S324 retirement changes no lock; the stacked hosted-flake fixes change no
-lock; no model lock changed. The executing environments were synchronized
-with repository-pinned uv 0.12.20 against the exact CPU application/test
-lock union plus its retained bootstrapper:
+lock; the stacked urllib3 promotion moves urllib3 from 2.7.0 to 2.8.0 in the
+core, full, test, service, smoke and security locks; no model lock changed.
+The executing environments were synchronized to this source's locks
+(urllib3 2.8.0) with repository-pinned uv 0.12.20 against the exact CPU
+application/test lock union plus its retained bootstrapper:
 
 - `requirements-full.lock`
 - `requirements-test.lock`
@@ -80,8 +82,8 @@ marker-resolved distributions before generation.
 
 | Platform | Runtime | Report | Bytes | File SHA-256 | Embedded report SHA-256 |
 |---|---:|---|---:|---|---|
-| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,028 | `f5c1619508f1f48b57a2aa6155aa029f96f1534e9c8cf6eefefd95be8a6f93a5` | `3e3ca58f00790063a570d212d1e977f9ba703eb3db3c40aaf53b5ed323d1b2da` |
-| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,422 | `14fd224a77d66f40024695c13cb206ae0fcc52ca3420fe5f4ae77a80c39434e0` | `d682054f464a2ecdb89976c97d5d58b76183ce76b96efbad72aa0168a6c42349` |
+| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,022 | `c51cbdcefdc545d5bf52b84ab8ab4757e8bbbe5d84f8f5a62a5d110d00ce4d3b` | `51b1e2a76b8594886be0a6165bdfb4bea799beb4b05a97ac40a5396422183767` |
+| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,427 | `8dda5377cf369dff5048cf6ae6b5b58719fb516421e8f85115800191d88d3e57` | `06a063f3dcb538eaf951d897889ed4e8e562446559c43dc208e003f02fc9e57c` |
 
 The reports attest the same source commit, clean-worktree state, tracked-diff
 digest, eight LF and `HEAD`-identical dependency/model-lock inputs, authoritative
@@ -435,6 +437,13 @@ rounding could exceed; and the POSIX SIGTERM-escalation test holds its
 deadline until the grandchild has installed SIG_IGN and written its first
 heartbeat. It changes no pipeline output, dependency or lock and supersedes
 the `3af52f8` pair for its own pull request.
+The `6b97fc5` pair (gate-only child `f5af79a`) passed the hosted CI
+promotion gate on [PR
+#151](https://github.com/toddlar00/rag-pipeline/pull/151), which merged into
+`main` as `584c4a5`. The provider-transport promotion source `aab0326` makes
+urllib3 a governed direct input and moves it from 2.7.0 to 2.8.0
+(CVE-2026-97687, CVE-2026-97688 and CVE-2026-97689) in the core, full, test,
+service, smoke and security locks, and supersedes the `6b97fc5` pair.
 The current reports above
 bind
 that exact clean source and each passes an independent complete
