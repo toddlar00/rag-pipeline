@@ -7,11 +7,13 @@ fresh-process repetitions.
 
 ## Provenance
 
-Both current reports were generated from the clean static-security S324
-retirement source checkpoint `3af52f8cbe41b9c3872e6af6c5c7230659243018`
-(tree `02da93a1d8de080254ceef63ed7ae02ed0053bfc`), a static-security gate
-follow-up after a series of one-domain dependency updates on `main` after
-the history-preserving merges of #121 (`602bec1`), of that series, #122 to
+Both current reports were generated from the clean hosted-flake fix source
+checkpoint `6b97fc5f235903b44adffb7bd3f9118dd1408a1e` (tree
+`693984fd79c6c125abe555f6be170b44e4ceafdd`), three hosted-CI reliability
+fixes stacked on the static-security S324 retirement source `3af52f8`, a
+static-security gate follow-up after a series of one-domain dependency
+updates on `main` after the history-preserving merges of #121 (`602bec1`),
+of that series, #122 to
 #130 (`1cffc58`), of its documentation follow-up #135 (`9eb6f94`), of the
 TOC glyph-leader fix #138 (`a2c5629`), of the job-heartbeat hardening #137
 (`634c38b`), of the Nomic contract test #136 (`2f07510`), of the oauthlib
@@ -60,9 +62,10 @@ promotion moves oauthlib from 3.3.1 to 4.0.0; the tokenless-glyph rotation
 fix changes no lock; the table header-row oracle fix changes no lock; the
 soft-hyphen item-seam fix changes no lock; the post-series documentation
 changes no lock; the heartbeat test fix changes no lock; the static-security
-S324 retirement changes no lock; no model lock changed. The executing
-environments were synchronized with repository-pinned uv 0.12.20 against the
-exact CPU application/test lock union plus its retained bootstrapper:
+S324 retirement changes no lock; the stacked hosted-flake fixes change no
+lock; no model lock changed. The executing environments were synchronized
+with repository-pinned uv 0.12.20 against the exact CPU application/test
+lock union plus its retained bootstrapper:
 
 - `requirements-full.lock`
 - `requirements-test.lock`
@@ -77,8 +80,8 @@ marker-resolved distributions before generation.
 
 | Platform | Runtime | Report | Bytes | File SHA-256 | Embedded report SHA-256 |
 |---|---:|---|---:|---|---|
-| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,079 | `2152ee96bcc52c716aabde1714c93d2e133f9e33bf2a10444b7cf4d507d2d661` | `ed4f99984f1cb7f2818933556cce705201a9e9f94326321308f2f7a063c989ad` |
-| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,486 | `d6ad0f18151ddfee025862804d8ad889846abbee7c4cfd8f623f1c299a138ff3` | `6726e05ae916102c5fa7a55be5f64412c2115088c972726b45a8e76b5bb861bd` |
+| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,028 | `f5c1619508f1f48b57a2aa6155aa029f96f1534e9c8cf6eefefd95be8a6f93a5` | `3e3ca58f00790063a570d212d1e977f9ba703eb3db3c40aaf53b5ed323d1b2da` |
+| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,422 | `14fd224a77d66f40024695c13cb206ae0fcc52ca3420fe5f4ae77a80c39434e0` | `d682054f464a2ecdb89976c97d5d58b76183ce76b96efbad72aa0168a6c42349` |
 
 The reports attest the same source commit, clean-worktree state, tracked-diff
 digest, eight LF and `HEAD`-identical dependency/model-lock inputs, authoritative
@@ -418,6 +421,20 @@ blocking rule (including S604 and S606) with positive and negative
 fixtures, removes the dead `evaluation/` exemption and pins the Hub Git
 blob identity to `git hash-object` values. It changes no pipeline output,
 dependency or lock and supersedes the `e5966e1` pair.
+The `3af52f8` pair (gate-only child `f0513b7`) passed the hosted CI
+promotion gate on [PR
+#150](https://github.com/toddlar00/rag-pipeline/pull/150), which merged into
+`main` as `76f98d6`; the separate networked vulnerability/SBOM jobs failed at
+that head on three new urllib3 advisories. The stacked hosted-flake fix source
+`6b97fc5` makes three hosted-CI reliability fixes: the Phase A0 contained
+runner retries transient Windows errors when it removes its capture
+directory, so a WinError 32 no longer masks the primary error; the OCR
+review launcher and the crop-pack service clamp the remaining close time
+they hand on to the 40-second close bound, which Windows monotonic-clock
+rounding could exceed; and the POSIX SIGTERM-escalation test holds its
+deadline until the grandchild has installed SIG_IGN and written its first
+heartbeat. It changes no pipeline output, dependency or lock and supersedes
+the `3af52f8` pair for its own pull request.
 The current reports above
 bind
 that exact clean source and each passes an independent complete

@@ -1698,22 +1698,34 @@ embedding code's Transformers names and clear two new advisories.
     `test_opt_in_launcher_installs_only_fixed_preview_script_and_preserves_security[archive]`
     with the launcher's generic exit 2. Each passed on re-run and locally.
     #148 (`3aede7d`) raised those Node subprocess ceilings to 60 seconds.
-    The prepared branch `agent/imp-review-ocr-close-deadline-clamp` (not on
-    `main`) fixes the likely cause of the exit 2: Windows monotonic-clock
-    rounding can push the remaining close time just above its 40-second
-    limit. No stderr was retained from the hosted run, so that cause is not
-    proven.
+    The branch `agent/imp-review-ocr-close-deadline-clamp` fixes the likely
+    cause of the exit 2: Windows monotonic-clock rounding can push the
+    remaining close time just above its 40-second limit. No stderr was
+    retained from the hosted run, so that cause is not proven. The fix is
+    now proposed in the stacked hosted-flake fix pull request (hosted checks
+    pending; see "Research improvement pass (2026-09-30, prepared)") and is
+    not on `main`.
 
 ### Research improvement pass (2026-09-30, prepared)
 
 Eighteen branches `agent/imp-*`, each based on `main` `3aede7d` and pushed,
 are prepared, and each was independently reviewed.
-`agent/imp-static-security-s324-noqa` is now proposed with its Phase A0
-pair, its hosted checks pending; the other 17 have no pull request, so none
-of them is "Implemented (draft)", and none of the 18 is integrated. The
-integration branch `agent/research-improvements` merges all 18 only to
-validate the combination; each branch lands through its own pull request.
-Branch names below omit the `agent/imp-` prefix.
+`agent/imp-static-security-s324-noqa` merged into `main` through [PR
+#150](https://github.com/toddlar00/rag-pipeline/pull/150) as `76f98d6`; its
+Phase A0 pair passed the hosted CI promotion gate there, and the separate
+networked vulnerability/SBOM jobs failed at that head on three new urllib3
+advisories that also affect `main`. The three hosted-flake fix branches
+(`agent/imp-a0-capture-cleanup-retry`,
+`agent/imp-review-ocr-close-deadline-clamp` and
+`agent/imp-posix-sigterm-test-deflake`) are now proposed together in one
+pull request from `agent/hosted-flake-fixes`, which is stacked on PR #150
+and carries its own Phase A0 pair at source `6b97fc5`, its hosted checks
+pending. The other 14 have no pull request, so none of them is
+"Implemented (draft)"; of the 18, only the static-security branch is
+integrated. The integration
+branch `agent/research-improvements` merges all 18 only to validate the
+combination; each other branch lands through its own pull request. Branch
+names below omit the `agent/imp-` prefix.
 
 - **Method.** Codebase mapping and external research produced 78
   candidates. A synthesis pass ranked 32, and one adversarial verifier per
@@ -1766,8 +1778,10 @@ Branch names below omit the `agent/imp-` prefix.
     indices, so no index migration is needed. It also closes a fail-open in
     which inline `# noqa`, ruff range suppressions and project ruff
     configuration could hide blocking findings: the gate now runs
-    `ruff --isolated --ignore-noqa`. It is now proposed with its Phase A0
-    pair at source `3af52f8` (hosted checks pending) and is not integrated.
+    `ruff --isolated --ignore-noqa`. It merged through PR #150 as
+    `76f98d6` with its Phase A0 pair at source `3af52f8`, which passed the
+    hosted CI promotion gate (the separate networked vulnerability/SBOM jobs
+    failed at that head on three new urllib3 advisories).
   - `docling-conversion-hardening`: a Docling PARTIAL_SUCCESS, failure or
     success-with-errors result now raises
     `DoclingConversionIncompleteError` instead of publishing. Docling 2.121
@@ -1778,15 +1792,21 @@ Branch names below omit the `agent/imp-` prefix.
     (`OMP_NUM_THREADS` and `DOCLING_*` changed output bytes) and stops the
     DEBUG log flood.
   - `review-ocr-close-deadline-clamp`: clamps the crop archive's remaining
-    close time (see the hosted-runner follow-up above).
+    close time (see the hosted-runner follow-up above). It is now proposed
+    together with `a0-capture-cleanup-retry` and
+    `posix-sigterm-test-deflake` in one stacked pull request, with its Phase
+    A0 pair at source `6b97fc5` (hosted checks pending), and is not
+    integrated.
   - `a0-capture-cleanup-retry`: the Phase A0 contained runner retries
     transient Windows errors when it removes its capture directory, so a
     WinError 32 no longer masks the primary error. This was the hosted
     "contained-runner regex" flake: 11 of 640 stressed runs failed before,
-    0 of 640 after.
+    0 of 640 after. It is now proposed in the same stacked pull request
+    (hosted checks pending) and is not integrated.
   - `posix-sigterm-test-deflake`: test-only; removes a startup race in
     `test_posix_escalation_kills_descendant_that_ignores_sigterm` (see
-    Phase A0 below).
+    Phase A0 below). It is now proposed in the same stacked pull request
+    (hosted checks pending) and is not integrated.
   - `ci-validator-yaml-anchors`: closes workflow-validator F4 by rejecting
     YAML anchors, aliases, tags and merge keys that hid unpinned actions or
     write-all permissions. It also rejects fake block-scalar headers, and
@@ -1830,8 +1850,9 @@ Branch names below omit the `agent/imp-` prefix.
     byte-identical to the base code's, and 413 of 413 stored embeddings are
     bitwise identical; only timestamps, UUIDs, lock names and the scratch
     path differ. The scratch copies were deleted.
-- **Before integration.** Each branch needs a draft pull request and its own
-  Phase A0 source/evidence pair. Every branch changes
+- **Before integration.** Each remaining branch needs a draft pull request
+  and its own Phase A0 source/evidence pair (the three hosted-flake fix
+  branches share one stacked pull request and pair). Every branch changes
   `architecture-inventory.json`, so after each merge the next branch is
   rebased and its inventory refreshed. Twelve branches change paths that
   `ci-security-ownership.json` owns or governs (every `rag.py`,
@@ -2206,6 +2227,20 @@ blocking rule (including S604 and S606) with positive and negative
 fixtures, removes the dead `evaluation/` exemption and pins the Hub Git
 blob identity to `git hash-object` values. It changes no pipeline output,
 dependency or lock and supersedes the `e5966e1` pair.
+The `3af52f8` pair (gate-only child `f0513b7`) passed the hosted CI
+promotion gate on [PR
+#150](https://github.com/toddlar00/rag-pipeline/pull/150), which merged into
+`main` as `76f98d6`; the separate networked vulnerability/SBOM jobs failed at
+that head on three new urllib3 advisories. The stacked hosted-flake fix source
+`6b97fc5` makes three hosted-CI reliability fixes: the Phase A0 contained
+runner retries transient Windows errors when it removes its capture
+directory, so a WinError 32 no longer masks the primary error; the OCR
+review launcher and the crop-pack service clamp the remaining close time
+they hand on to the 40-second close bound, which Windows monotonic-clock
+rounding could exceed; and the POSIX SIGTERM-escalation test holds its
+deadline until the grandchild has installed SIG_IGN and written its first
+heartbeat. It changes no pipeline output, dependency or lock and supersedes
+the `3af52f8` pair for its own pull request.
 Its Windows/Linux
 pair (independent local same-platform comparisons passed) is that branch's
 candidate; its hosted checks and exact-SHA record are pending, and the
@@ -2221,8 +2256,10 @@ security-owned workflow change requiring its own review); and
 `test_posix_escalation_kills_descendant_that_ignores_sigterm` showed one
 cleanup-confirmation flake on a busy hosted runner at `b3c7cf7` (tree
 identical to the fully green pull-request run; rerun requested). The
-prepared branch `agent/imp-posix-sigterm-test-deflake` removes that test's
-separate startup race but does not address this cleanup-confirmation flake.
+branch `agent/imp-posix-sigterm-test-deflake`, now proposed in the stacked
+hosted-flake fix pull request (hosted checks pending) and not integrated,
+removes that test's separate startup race but does not address this
+cleanup-confirmation flake.
 The only diagnosed reproduction was one of two cleanup-confirmation failures
 in a variant with a 1.0 s grace: a SIGKILLed grandchild held in
 uninterruptible (D-state) sleep 2.66 s past the confirmation window. Two
