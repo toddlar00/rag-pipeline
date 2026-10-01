@@ -21,9 +21,11 @@
   post-series documentation pair passed on PR #147 (merged through
   `9fff7bb`), the heartbeat test fix pair passed on PR #148 (merged through
   `3aede7d`), the static-security S324 retirement pair at source `3af52f8`
-  passed on PR #150 (merged through `76f98d6`), and the stacked
-  hosted-flake fix pair at source `6b97fc5` is pending; exact-head human
-  review and separate R8 owner authorization are not recorded
+  passed on PR #150 (merged through `76f98d6`), the stacked hosted-flake
+  fix pair at source `6b97fc5` passed on PR #151 (merged through
+  `584c4a5`), and the urllib3 promotion pair at source `aab0326` is
+  pending; exact-head human review and separate R8 owner authorization are
+  not recorded
 - **Milestone:** R10 prerequisite for the R8 pipeline-ownership move
 - **Report schema:** `phase-a0` v3
 
@@ -154,13 +156,13 @@ gate-only child `32153e9` and merge `376277c`
 Task 0.8 static-security pair at source `8891e1b` repeated it through
 gate-only child `1533164` and merge `e34103f`
 ([PR #107](https://github.com/toddlar00/rag-pipeline/pull/107)). The
-current replacement pair uses the clean hosted-flake fix source
-`6b97fc5f235903b44adffb7bd3f9118dd1408a1e` (tree
-`693984fd79c6c125abe555f6be170b44e4ceafdd`), three hosted-CI reliability
-fixes stacked on the static-security S324 retirement source `3af52f8`, a
-static-security gate follow-up after a series of one-domain dependency
-updates, on `main` after the merges of the heartbeat test fix #148
-(`3aede7d`), the post-series
+current replacement pair uses the clean urllib3 promotion source
+`aab03262237e7e37363144b3c80c595aeef88231` (tree
+`66226c4be91f587be2502de3b683f4bf6e8c5be3`), a one-domain supply-chain
+remediation after a series of one-domain dependency updates, on `main` after
+the merges of the hosted-flake fixes #151 (`584c4a5`, whose second parent
+`f5af79a` is this source's parent), the static-security S324 retirement
+#150 (`76f98d6`), the heartbeat test fix #148 (`3aede7d`), the post-series
 documentation #147 (`9fff7bb`), the soft-hyphen item-seam fix
 #146 (`8cc89b0`), the table header-row oracle fix #145 (`ce73b61`), the
 tokenless-glyph rotation fix #140 (`6baf14b`), the oauthlib promotion #139
@@ -176,8 +178,8 @@ test-tooling locks (pytest-xdist and execnet in `requirements-test.lock` and
 `requirements-core.lock` and `requirements-full.lock`; the stacked
 dependency updates also change the vector-stores, Service/UI, test-audit
 tooling, ML/runtime, PDF/Docling (docling-core), promoted ML/runtime,
-promoted h2, promoted cryptography and promoted oauthlib records of their
-mapped locks, but no model lock. It supersedes the
+promoted h2, promoted cryptography, promoted oauthlib and promoted urllib3
+records of their mapped locks, but no model lock. It supersedes the
 earlier `1ae8502` pair, whose child `766feaf` passed both hosted Phase A0
 cells but whose dependency-light unit lanes failed at collection. Source
 `a15232d` then passed both hosted Phase A0 cells on [PR
@@ -405,11 +407,19 @@ rounding could exceed; and the POSIX SIGTERM-escalation test holds its
 deadline until the grandchild has installed SIG_IGN and written its first
 heartbeat. It changes no pipeline output, dependency or lock and supersedes
 the `3af52f8` pair for its own pull request.
+The `6b97fc5` pair (gate-only child `f5af79a`) passed the hosted CI
+promotion gate on [PR
+#151](https://github.com/toddlar00/rag-pipeline/pull/151), which merged into
+`main` as `584c4a5`. The provider-transport promotion source `aab0326` makes
+urllib3 a governed direct input and moves it from 2.7.0 to 2.8.0
+(CVE-2026-97687, CVE-2026-97688 and CVE-2026-97689) in the core, full, test,
+service, smoke and security locks, and supersedes the `6b97fc5` pair.
 Its Windows and
 Linux CPython 3.12.13 reports were
-generated after the same strict hash-locked synchronization and
-dependency-consistency checks: 193 marker-resolved distributions on
-Windows and 191 on Linux. They bind that one clean source, the same eight
+generated after the same strict hash-locked synchronization, to its locks
+(urllib3 2.8.0), and dependency-consistency checks: 193 marker-resolved
+distributions on Windows and 191 on Linux. They bind that one clean
+source, the same eight
 LF and `HEAD`-identical dependency/model inputs, and the complete 9×5
 scenario contract. Each passes an independent complete local same-platform
 comparison. The direct gate-only evidence child contains only the reports
@@ -601,15 +611,16 @@ then the stacked post-series documentation source `578a13a`,
 then the stacked post-series documentation source `f3ec23a`,
 then the stacked heartbeat test fix source `e5966e1`,
 then the stacked static-security S324 retirement source `3af52f8`,
-then the stacked hosted-flake fix source `6b97fc5`.
+then the stacked hosted-flake fix source `6b97fc5`,
+then the stacked urllib3 promotion source `aab0326`.
 Its Windows report
-is 51,028 bytes (file SHA-256
-`f5c1619508f1f48b57a2aa6155aa029f96f1534e9c8cf6eefefd95be8a6f93a5`;
+is 51,022 bytes (file SHA-256
+`c51cbdcefdc545d5bf52b84ab8ab4757e8bbbe5d84f8f5a62a5d110d00ce4d3b`;
 embedded report SHA-256
-`3e3ca58f00790063a570d212d1e977f9ba703eb3db3c40aaf53b5ed323d1b2da`).
-Its Linux report is 50,422 bytes (file SHA-256
-`14fd224a77d66f40024695c13cb206ae0fcc52ca3420fe5f4ae77a80c39434e0`;
+`51b1e2a76b8594886be0a6165bdfb4bea799beb4b05a97ac40a5396422183767`).
+Its Linux report is 50,427 bytes (file SHA-256
+`8dda5377cf369dff5048cf6ae6b5b58719fb516421e8f85115800191d88d3e57`;
 embedded report SHA-256
-`d682054f464a2ecdb89976c97d5d58b76183ce76b96efbad72aa0168a6c42349`).
+`06a063f3dcb538eaf951d897889ed4e8e562446559c43dc208e003f02fc9e57c`).
 Both use CPython 3.12.13 and pass their complete local same-platform 9×5
 comparisons. Hosted promotion remains pending.
