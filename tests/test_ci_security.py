@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import textwrap
@@ -1632,11 +1633,755 @@ def test_block_scalar_content_is_not_interpreted_as_workflow_yaml(tmp_path):
         + "          payload = {\n"
         + '              "uses": "actions/checkout@main",\n'
         + '              "permissions": "write-all",\n'
-        + "          }\n",
+        + "          }\n"
+        + "          &anchor uses: actions/checkout@main\n"
+        + "          - *alias\n"
+        + "          !!str permissions: write-all\n"
+        + "          <<: *merged\n"
+        + "          ls dist/*.whl && test ! -e build\n",
         encoding="utf-8",
     )
 
     assert check_ci_security.validate(tmp_path) == []
+
+
+@pytest.mark.parametrize(
+    "header",
+    ["run: >-", "run: |+", "run: |2", "run: | # inert payload"],
+)
+def test_block_scalar_header_forms_hide_only_their_bodies(tmp_path, header):
+    _policy_data, workflow_path = _valid_tree(tmp_path)
+    workflow_path.write_text(
+        workflow_path.read_text(encoding="utf-8")
+        + "      - name: Render inert fixture\n"
+        + f"        {header}\n"
+        + "            uses: actions/checkout@main\n"
+        + "            permissions: write-all\n",
+        encoding="utf-8",
+    )
+
+    assert check_ci_security.validate(tmp_path) == []
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        pytest.param(
+            "  merge_group:\n",
+            '      - "**/*.py"\n'
+            "      - '!docs/**'\n"
+            "  merge_group:\n",
+            id="quoted-glob-and-negated-paths",
+        ),
+        pytest.param(
+            "  push:\n",
+            "  schedule:\n"
+            "    - cron: '0 * * * *'\n"
+            "  push:\n",
+            id="quoted-cron",
+        ),
+        pytest.param(
+            "  test:\n    runs-on: ubuntu-latest\n",
+            "  test:\n    runs-on: ubuntu-latest\n"
+            "    if: ${{ !cancelled() && github.event_name == 'push' }}\n"
+            "    strategy:\n"
+            "      matrix:\n"
+            "        os: [ubuntu-24.04, windows-latest]\n",
+            id="negated-expression-and-flow-sequence-matrix",
+        ),
+        pytest.param(
+            "          persist-credentials: false\n",
+            "          persist-credentials: false\n"
+            "      - name: List built wheels & sdists\n"
+            "        run: ls dist/*.whl dist/*.tar.gz && test ! -e build\n",
+            id="single-line-run-globs",
+        ),
+    ],
+)
+def test_yaml_indicator_characters_inside_scalars_stay_supported(
+    tmp_path, old, new
+):
+    _policy_data, workflow_path = _valid_tree(tmp_path)
+    text = workflow_path.read_text(encoding="utf-8")
+    assert text.count(old) == 1
+    workflow_path.write_text(text.replace(old, new), encoding="utf-8")
+
+    assert check_ci_security.validate(tmp_path) == []
+
+
+_REVIEWED_BLOCK_SCALAR_RE = re.compile(
+    r"(?:^|:)\s*[>|](?:[1-9]?[-+]?|[-+]?[1-9]?)\s*(?:#.*)?$"
+)
+
+
+def _reviewed_structural_workflow_lines(lines: list[str]) -> list[str]:
+    """Frozen block-scalar blanking reviewed before the strict header rule."""
+    structural: list[str] = []
+    block_parent_indent: int | None = None
+    for line in lines:
+        stripped = line.strip()
+        indentation = len(line) - len(line.lstrip(" "))
+        if block_parent_indent is not None:
+            if not stripped or indentation > block_parent_indent:
+                structural.append("")
+                continue
+            block_parent_indent = None
+        structural.append(line)
+        if stripped and _REVIEWED_BLOCK_SCALAR_RE.search(stripped):
+            block_parent_indent = indentation
+    return structural
+
+
+def _tracked_workflow_texts() -> dict[str, str]:
+    root = check_ci_security.PROJECT_ROOT
+    texts = {
+        path.relative_to(root).as_posix(): path.read_text(encoding="utf-8")
+        for path in sorted((root / ".github").rglob("*"))
+        if path.is_file() and path.suffix in {".yml", ".yaml"}
+    }
+    texts["rendered force-full bootstrap"] = _bootstrap_ci_workflow_text()
+    return texts
+
+
+def test_structural_lines_match_reviewed_blanking_on_tracked_workflows():
+    texts = _tracked_workflow_texts()
+    assert {
+        check_ci_security.ACTIVE_CI_FIXTURE_PATH,
+        check_ci_security.CI_WORKFLOW_PATH,
+        check_ci_security.DEPENDENCY_WORKFLOW_PATH,
+        check_ci_security.SECRET_WORKFLOW_PATH,
+        check_ci_security.SECURITY_WORKFLOW_PATH,
+        check_ci_security.STATIC_WORKFLOW_PATH,
+    } <= set(texts)
+    blanked = 0
+    for name, text in texts.items():
+        lines = text.splitlines()
+        expected = _reviewed_structural_workflow_lines(lines)
+        assert (
+            check_ci_security._structural_workflow_lines(lines) == expected
+        ), name
+        blanked += sum(
+            1 for raw, kept in zip(lines, expected) if raw.strip() and not kept
+        )
+    assert blanked > 0
+
+
+_CHECKOUT_STEP = (
+    "      - name: Check out repository\n"
+    f"        uses: actions/checkout@{_CHECKOUT_SHA}\n"
+    "        with:\n"
+    "          persist-credentials: false\n"
+)
+_ANCHOR_ERROR = "YAML anchors and aliases are unsupported"
+_TAG_ERROR = "YAML tags are unsupported"
+_MERGE_KEY_ERROR = "YAML merge keys are unsupported"
+_AMBIGUOUS_HEADER_ERROR = "ambiguous block scalar headers are unsupported"
+_NON_SPACE_INDENT_ERROR = "non-space indentation is unsupported"
+# Python's str.strip() and re's \s treat these as whitespace, but YAML
+# separates tokens only with ASCII spaces and tabs, so to YAML they are
+# ordinary plain-scalar characters.
+_UNICODE_SPACES = [
+    pytest.param("\u00a0", id="no-break-space"),
+    pytest.param("\u2003", id="em-space"),
+    pytest.param("\u3000", id="ideographic-space"),
+    pytest.param("\u202f", id="narrow-no-break-space"),
+]
+# YAML never indents with tabs, and PyYAML rejects a tab where a token
+# starts, so the validator must not measure columns across one either.
+_NON_SPACE_WHITESPACE = [*_UNICODE_SPACES, pytest.param("\t", id="tab")]
+_NON_ASCII_WHITESPACE_ERROR = "non-ASCII whitespace is unsupported"
+_LINE_BREAK_ERROR = "line breaks other than LF and CR are unsupported"
+
+
+def _validate_mutated_security_workflow(
+    root: Path,
+    old: str,
+    new: str,
+) -> tuple[list[str], list[str]]:
+    _policy_data, workflow_path = _valid_tree(root)
+    text = workflow_path.read_text(encoding="utf-8")
+    assert text.count(old) == 1
+    text = text.replace(old, new)
+    workflow_path.write_text(text, encoding="utf-8")
+    return check_ci_security.validate(root), text.splitlines()
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "flagged", "message"),
+    [
+        pytest.param(
+            _CHECKOUT_STEP,
+            "      - &checkout uses: actions/checkout@main\n"
+            "        with:\n"
+            "          persist-credentials: true\n",
+            "- &checkout uses: actions/checkout@main",
+            _ANCHOR_ERROR,
+            id="anchored-uses-key-hides-unpinned-checkout",
+        ),
+        pytest.param(
+            "  test:\n    runs-on:",
+            "  test:\n    &grant permissions: write-all\n    runs-on:",
+            "&grant permissions: write-all",
+            _ANCHOR_ERROR,
+            id="anchored-job-permissions-key",
+        ),
+        pytest.param(
+            "    runs-on: ubuntu-latest\n",
+            "    runs-on: &runner ubuntu-latest\n",
+            "runs-on: &runner ubuntu-latest",
+            _ANCHOR_ERROR,
+            id="anchored-value",
+        ),
+        pytest.param(
+            "permissions:\n  contents: read\n\njobs:\n"
+            "  test:\n    runs-on: ubuntu-latest\n    steps:\n"
+            + _CHECKOUT_STEP,
+            "permissions:\n  contents: read\n\n"
+            "env:\n  CHECKOUT: &checkout actions/checkout@main\n\njobs:\n"
+            "  test:\n    runs-on: ubuntu-latest\n    steps:\n"
+            "      - uses: *checkout\n"
+            "        with:\n"
+            "          persist-credentials: false\n",
+            "- uses: *checkout",
+            _ANCHOR_ERROR,
+            id="aliased-uses-value",
+        ),
+        pytest.param(
+            _CHECKOUT_STEP,
+            _CHECKOUT_STEP.replace(
+                "      - name:", "      - &checkout\n        name:"
+            )
+            + "      - *checkout\n",
+            "- *checkout",
+            _ANCHOR_ERROR,
+            id="aliased-whole-step",
+        ),
+        pytest.param(
+            "    runs-on: ubuntu-latest\n",
+            "    runs-on: ubuntu-latest\n"
+            "    strategy:\n"
+            "      matrix:\n"
+            "        os: [ubuntu-24.04, *runner]\n",
+            "os: [ubuntu-24.04, *runner]",
+            _ANCHOR_ERROR,
+            id="aliased-flow-sequence-entry",
+        ),
+        pytest.param(
+            "          persist-credentials: false\n",
+            "          persist-credentials: false\n"
+            "      - - &nested uses: evil/action@main\n",
+            "- - &nested uses: evil/action@main",
+            _ANCHOR_ERROR,
+            id="anchored-key-in-nested-sequence",
+        ),
+        pytest.param(
+            f"        uses: actions/checkout@{_CHECKOUT_SHA}\n",
+            "        !!str uses: actions/checkout@main\n",
+            "!!str uses: actions/checkout@main",
+            _TAG_ERROR,
+            id="tagged-uses-key-hides-unpinned-checkout",
+        ),
+        pytest.param(
+            "  test:\n    runs-on:",
+            "  test:\n    !!str permissions: write-all\n    runs-on:",
+            "!!str permissions: write-all",
+            _TAG_ERROR,
+            id="tagged-job-permissions-key",
+        ),
+        pytest.param(
+            "  test:\n    runs-on:",
+            "  test:\n"
+            "    !<tag:yaml.org,2002:str> permissions: write-all\n"
+            "    runs-on:",
+            "!<tag:yaml.org,2002:str> permissions: write-all",
+            _TAG_ERROR,
+            id="verbatim-tagged-job-permissions-key",
+        ),
+        pytest.param(
+            "    runs-on: ubuntu-latest\n",
+            "    runs-on: ubuntu-latest\n    if: !cancelled()\n",
+            "if: !cancelled()",
+            _TAG_ERROR,
+            id="unwrapped-negated-expression-is-a-tag",
+        ),
+        pytest.param(
+            "    runs-on: ubuntu-latest\n",
+            "    runs-on: ubuntu-latest\n    <<: *defaults\n",
+            "<<: *defaults",
+            _MERGE_KEY_ERROR,
+            id="merge-key-in-job",
+        ),
+        pytest.param(
+            "          persist-credentials: false\n",
+            "          persist-credentials: false\n          <<: *inputs\n",
+            "<<: *inputs",
+            _MERGE_KEY_ERROR,
+            id="merge-key-in-with",
+        ),
+        pytest.param(
+            "name: Security fixture\n",
+            "--- &root\nname: Security fixture\n",
+            "--- &root",
+            _ANCHOR_ERROR,
+            id="anchored-document-root",
+        ),
+        pytest.param(
+            "name: Security fixture\n",
+            "--- !!map\nname: Security fixture\n",
+            "--- !!map",
+            _TAG_ERROR,
+            id="tagged-document-root",
+        ),
+    ],
+)
+def test_yaml_node_properties_and_merge_keys_are_rejected(
+    tmp_path, old, new, flagged, message
+):
+    errors, lines = _validate_mutated_security_workflow(tmp_path, old, new)
+
+    stripped = [line.strip() for line in lines]
+    assert stripped.count(flagged) == 1
+    assert (
+        f"{check_ci_security.SECURITY_WORKFLOW_PATH}:"
+        f"{stripped.index(flagged) + 1}: {message} by the security validator"
+    ) in errors
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "expected"),
+    [
+        pytest.param(
+            "  test:\n    runs-on:",
+            "  test: # note: |\n    permissions: write-all\n    runs-on:",
+            "require one top-level permissions mapping and no job-level "
+            "overrides",
+            id="job-comment-ending-in-literal-indicator",
+        ),
+        pytest.param(
+            _CHECKOUT_STEP,
+            "      - name: Check out repository # see: >\n"
+            "        uses: actions/checkout@main\n"
+            "        with:\n"
+            "          persist-credentials: true\n",
+            "40-character commit SHA: actions/checkout@main",
+            id="step-comment-ending-in-folded-indicator",
+        ),
+        pytest.param(
+            _CHECKOUT_STEP,
+            '      - name: "x: | #"\n'
+            "        uses: actions/checkout@main\n"
+            "        with:\n"
+            "          persist-credentials: false\n",
+            "40-character commit SHA: actions/checkout@main",
+            id="quoted-value-ending-in-literal-indicator",
+        ),
+        pytest.param(
+            "    steps:\n" + _CHECKOUT_STEP,
+            "    steps: # body: |\n"
+            "      - uses: actions/checkout@main\n"
+            "        with:\n"
+            "          persist-credentials: true\n",
+            "actions/checkout must set persist-credentials: false exactly once",
+            id="sequence-comment-ending-in-literal-indicator",
+        ),
+    ],
+)
+def test_comments_and_quoted_values_cannot_open_block_scalars(
+    tmp_path, old, new, expected
+):
+    errors, _lines = _validate_mutated_security_workflow(tmp_path, old, new)
+
+    assert any(expected in error for error in errors)
+
+
+@pytest.mark.parametrize(
+    ("header", "body"),
+    [
+        pytest.param(
+            "          my note: |\n",
+            "            persist-credentials: false\n",
+            id="input-key-with-space",
+        ),
+        pytest.param(
+            "          note/x: >-\n",
+            "            persist-credentials: false\n",
+            id="input-key-with-slash",
+        ),
+        pytest.param(
+            "          résumé: |\n",
+            "            persist-credentials: false\n",
+            id="non-ascii-input-key",
+        ),
+        pytest.param(
+            "          note:\n            |\n",
+            "            persist-credentials: false\n",
+            id="bare-indicator-under-input-key",
+        ),
+        pytest.param(
+            "          note:\n            - |\n",
+            "              persist-credentials: false\n",
+            id="sequence-entry",
+        ),
+        pytest.param(
+            "          note:\n            - - text: |\n",
+            "                  persist-credentials: false\n",
+            id="nested-compact-sequence-entry",
+        ),
+    ],
+)
+def test_block_scalars_the_validator_cannot_blank_fail_closed(
+    tmp_path, header, body
+):
+    errors, lines = _validate_mutated_security_workflow(
+        tmp_path,
+        _CHECKOUT_STEP,
+        "      - name: Check out repository\n"
+        f"        uses: actions/checkout@{_CHECKOUT_SHA}\n"
+        "        with:\n"
+        + header
+        + body,
+    )
+
+    flagged = header.splitlines()[-1].strip()
+    stripped = [line.strip() for line in lines]
+    assert stripped.count(flagged) == 1
+    assert (
+        f"{check_ci_security.SECURITY_WORKFLOW_PATH}:"
+        f"{stripped.index(flagged) + 1}: {_AMBIGUOUS_HEADER_ERROR} "
+        "by the security validator"
+    ) in errors
+
+
+def _assert_flagged(
+    errors: list[str],
+    lines: list[str],
+    flagged: str,
+    messages: tuple[str, ...],
+) -> None:
+    assert lines.count(flagged) == 1
+    prefix = (
+        f"{check_ci_security.SECURITY_WORKFLOW_PATH}:"
+        f"{lines.index(flagged) + 1}: "
+    )
+    for message in messages:
+        assert f"{prefix}{message} by the security validator" in errors
+
+
+@pytest.mark.parametrize("space", _NON_SPACE_WHITESPACE)
+@pytest.mark.parametrize(
+    ("header", "messages"),
+    [
+        # YAML reads '-<space>note' as one plain key, not a sequence entry.
+        pytest.param(
+            "-{space}note: |",
+            (_AMBIGUOUS_HEADER_ERROR,),
+            id="after-dash",
+        ),
+        # YAML reads '<space>- note' as one plain key at the space's column.
+        pytest.param(
+            "{space}- note: |",
+            (_NON_SPACE_INDENT_ERROR, _AMBIGUOUS_HEADER_ERROR),
+            id="before-dash",
+        ),
+    ],
+)
+def test_non_space_whitespace_cannot_move_a_block_scalar_key_column(
+    tmp_path, header, messages, space
+):
+    header = header.format(space=space)
+    errors, lines = _validate_mutated_security_workflow(
+        tmp_path,
+        _CHECKOUT_STEP,
+        "      - name: Check out repository\n"
+        f"        uses: actions/checkout@{_CHECKOUT_SHA}\n"
+        "        with:\n"
+        f"          {header}\n"
+        "            persist-credentials: false\n",
+    )
+
+    _assert_flagged(errors, lines, f"          {header}", messages)
+
+
+@pytest.mark.parametrize("space", _NON_SPACE_WHITESPACE)
+@pytest.mark.parametrize(
+    ("new", "flagged"),
+    [
+        # YAML reads the key as '<space>persist-credentials', so the real
+        # input is absent and credentials persist.
+        pytest.param(
+            "          {space}persist-credentials: false\n",
+            "          {space}persist-credentials: false",
+            id="required-input-key",
+        ),
+        # '<space>#x' is a plain key to YAML, not a comment, so its block
+        # scalar swallows the line the checker would otherwise count.
+        pytest.param(
+            "          {space}#x: |\n"
+            "            persist-credentials: false\n",
+            "          {space}#x: |",
+            id="comment-looking-block-scalar-key",
+        ),
+    ],
+)
+def test_structural_lines_indented_with_non_spaces_fail_closed(
+    tmp_path, new, flagged, space
+):
+    errors, lines = _validate_mutated_security_workflow(
+        tmp_path,
+        "          persist-credentials: false\n",
+        new.format(space=space),
+    )
+
+    _assert_flagged(
+        errors, lines, flagged.format(space=space), (_NON_SPACE_INDENT_ERROR,)
+    )
+
+
+@pytest.mark.parametrize("space", _NON_SPACE_WHITESPACE)
+def test_blank_looking_lines_with_non_spaces_end_block_scalar_bodies(space):
+    lines = [
+        "steps:",
+        "  - run: |",
+        "      echo inert",
+        space,
+        "      permissions: write-all",
+    ]
+
+    structural = check_ci_security._structural_workflow_lines(lines)
+
+    assert structural == [
+        "steps:",
+        "  - run: |",
+        "",
+        space,
+        "      permissions: write-all",
+    ]
+    assert check_ci_security._validate_supported_workflow_syntax(
+        "workflow.yml", structural
+    ) == [
+        f"workflow.yml:4: {_NON_SPACE_INDENT_ERROR} by the security validator"
+    ]
+
+
+@pytest.mark.parametrize("space", _UNICODE_SPACES)
+@pytest.mark.parametrize(
+    ("old", "new", "flagged", "messages"),
+    [
+        # PyYAML reads the key as 'persist-credentials<space>', so the
+        # real input is absent and credentials persist.
+        pytest.param(
+            "          persist-credentials: false\n",
+            "          persist-credentials{space}: false\n",
+            "          persist-credentials{space}: false",
+            (_NON_ASCII_WHITESPACE_ERROR,),
+            id="checkout-input-key",
+        ),
+        # PyYAML reads 'permissions<space>', so the workflow has no
+        # permissions mapping and gets the default token permissions.
+        pytest.param(
+            "permissions:\n  contents: read\n",
+            "permissions{space}:\n  contents: read\n",
+            "permissions{space}:",
+            (_NON_ASCII_WHITESPACE_ERROR,),
+            id="top-level-permissions-key",
+        ),
+        # A YAML 1.2 anchor name may hold any non-space character, so this
+        # anchors a 'uses' key that hides an unpinned checkout.
+        pytest.param(
+            _CHECKOUT_STEP,
+            "      - &{space} uses: actions/checkout@main\n"
+            "        with:\n"
+            "          persist-credentials: true\n",
+            "      - &{space} uses: actions/checkout@main",
+            (_ANCHOR_ERROR, _NON_ASCII_WHITESPACE_ERROR),
+            id="anchor-name",
+        ),
+    ],
+)
+def test_non_ascii_whitespace_inside_structural_lines_fails_closed(
+    tmp_path, old, new, flagged, messages, space
+):
+    errors, lines = _validate_mutated_security_workflow(
+        tmp_path, old, new.format(space=space)
+    )
+
+    _assert_flagged(errors, lines, flagged.format(space=space), messages)
+
+
+@pytest.mark.parametrize("space", _UNICODE_SPACES)
+@pytest.mark.parametrize(
+    "entry",
+    [
+        pytest.param("      - tools/check_ci_security.py{space}", id="trailing"),
+        pytest.param("      - {space}tools/check_ci_security.py", id="leading"),
+    ],
+)
+def test_security_trigger_paths_with_non_ascii_whitespace_fail_closed(
+    tmp_path, entry, space
+):
+    # The plain scalar keeps the Unicode space, so the path filter no longer
+    # names the file, but event_paths() strips it and reports it covered.
+    _policy_data, workflow_path = _valid_tree(tmp_path)
+    text = workflow_path.read_text(encoding="utf-8")
+    covered = '      - "tools/check_ci_security.py"\n'
+    assert text.count(covered) == 2
+    entry = entry.format(space=space)
+    text = text.replace(covered, entry + "\n", 1)
+    workflow_path.write_text(text, encoding="utf-8")
+
+    errors = check_ci_security.validate(tmp_path)
+
+    _assert_flagged(
+        errors, text.splitlines(), entry, (_NON_ASCII_WHITESPACE_ERROR,)
+    )
+
+
+@pytest.mark.parametrize(
+    "separator",
+    [
+        pytest.param("\x0b", id="vertical-tab"),
+        pytest.param("\x0c", id="form-feed"),
+        pytest.param("\x1c", id="file-separator"),
+        pytest.param("\x1d", id="group-separator"),
+        pytest.param("\x1e", id="record-separator"),
+        pytest.param("\x85", id="next-line"),
+        pytest.param("\u2028", id="line-separator"),
+        pytest.param("\u2029", id="paragraph-separator"),
+    ],
+)
+def test_line_breaks_other_than_lf_and_cr_fail_closed(tmp_path, separator):
+    # str.splitlines() starts a new line at each of these. YAML 1.2 does not,
+    # and YAML 1.1 folds NEL, LS and PS into the quoted scalar, so the fake
+    # 'persist-credentials: false #"' line is never a with: input.
+    errors, lines = _validate_mutated_security_workflow(
+        tmp_path,
+        "          persist-credentials: false\n",
+        f'          note: "x{separator}          persist-credentials: false #"\n',
+    )
+
+    _assert_flagged(errors, lines, '          note: "x', (_LINE_BREAK_ERROR,))
+
+
+def test_tracked_workflows_pass_the_structural_whitespace_rules():
+    for name, text in _tracked_workflow_texts().items():
+        lines = check_ci_security._structural_workflow_lines(text.splitlines())
+        assert check_ci_security._validate_supported_workflow_syntax(
+            name, lines
+        ) == [], name
+        if name != ".github/dependabot.yml":
+            assert check_ci_security.validate_workflow(name, text) == [], name
+    assert check_ci_security.validate() == []
+
+
+def test_compact_sequence_block_scalar_ends_at_the_key_column():
+    lines = [
+        "steps:",
+        "  - run: |",
+        "      echo inert",
+        "",
+        "    uses: actions/checkout@main",
+        "  - name: next",
+    ]
+
+    assert check_ci_security._structural_workflow_lines(lines) == [
+        "steps:",
+        "  - run: |",
+        "",
+        "",
+        "    uses: actions/checkout@main",
+        "  - name: next",
+    ]
+
+
+def test_compact_sequence_block_scalar_cannot_hide_sibling_keys(tmp_path):
+    errors, lines = _validate_mutated_security_workflow(
+        tmp_path,
+        _CHECKOUT_STEP,
+        "      - name: |\n"
+        "        uses: actions/checkout@main\n"
+        "        with:\n"
+        "          persist-credentials: true\n",
+    )
+
+    stripped = [line.strip() for line in lines]
+    assert stripped.count("uses: actions/checkout@main") == 1
+    line_number = stripped.index("uses: actions/checkout@main") + 1
+    prefix = f"{check_ci_security.SECURITY_WORKFLOW_PATH}:{line_number}: "
+    assert (
+        prefix + "action must use a full 40-character commit SHA: "
+        "actions/checkout@main"
+    ) in errors
+    assert (
+        prefix + "actions/checkout must set persist-credentials: false "
+        "exactly once"
+    ) in errors
+
+
+@pytest.mark.parametrize(
+    ("header", "rejection"),
+    [
+        ("run: |", None),
+        ("run: >-", None),
+        ("run: |2+", None),
+        ("run: |+ # keep", None),
+        ("- run: |", None),
+        ("SCRIPT_BODY: >", None),
+        ("|", _AMBIGUOUS_HEADER_ERROR),
+        ("- |", _AMBIGUOUS_HEADER_ERROR),
+        ("--- |", _AMBIGUOUS_HEADER_ERROR),
+        ("- - run: |", _AMBIGUOUS_HEADER_ERROR),
+        ("run:|", _AMBIGUOUS_HEADER_ERROR),
+        ("my key: |", _AMBIGUOUS_HEADER_ERROR),
+        ("? run\n: |", _AMBIGUOUS_HEADER_ERROR),
+        ("run: &body |", _ANCHOR_ERROR),
+        ("run: !!str >", _TAG_ERROR),
+        ("build: # note: |", _AMBIGUOUS_HEADER_ERROR),
+        ("- name: Checkout # see: >", _AMBIGUOUS_HEADER_ERROR),
+        ('- name: "x: | #"', _AMBIGUOUS_HEADER_ERROR),
+        ("steps: # body: |", _AMBIGUOUS_HEADER_ERROR),
+    ],
+)
+def test_block_scalar_headers_are_blanked_or_rejected(header, rejection):
+    lines = [
+        "jobs:",
+        *(f"  {line}" for line in header.splitlines()),
+        "      uses: actions/checkout@main",
+        "",
+        "        permissions: write-all",
+        "  steps:",
+    ]
+    header_index = len(header.splitlines())
+
+    structural = check_ci_security._structural_workflow_lines(lines)
+
+    hidden = [
+        index for index, line in enumerate(structural)
+        if lines[index].strip() and not line
+    ]
+    assert hidden == (
+        [header_index + 1, header_index + 3] if rejection is None else []
+    )
+    reviewed = _reviewed_structural_workflow_lines(lines)
+    assert all(
+        line == lines[index]
+        for index, line in enumerate(structural)
+        if reviewed[index]
+    )
+    header_errors = [
+        error
+        for error in check_ci_security._validate_supported_workflow_syntax(
+            "workflow.yml", structural
+        )
+        if error.startswith(f"workflow.yml:{header_index + 1}: ")
+    ]
+    assert header_errors == (
+        []
+        if rejection is None
+        else [
+            f"workflow.yml:{header_index + 1}: {rejection} "
+            "by the security validator"
+        ]
+    )
 
 
 def test_all_declared_current_and_future_owners_need_both_filters(tmp_path):

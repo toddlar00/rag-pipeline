@@ -28458,7 +28458,7 @@
   "schema_version": 3,
   "source_architecture": {
     "class_count": 337,
-    "function_count": 4451,
+    "function_count": 4455,
     "import_graph": {
       "cyclic_components": [],
       "edge_count": 650,
@@ -62122,8 +62122,8 @@
             "scope": "top_level"
           }
         ],
-        "definition_locations_sha256": "92e01c839a4603dc890a521e14dcbfb4a8d9fba0941f0b36d14fc67a34007f35",
-        "function_count": 41,
+        "definition_locations_sha256": "d5c04f41a1394629e0e7d84b878bf5f4bd0e4f5295b05efa29fb0a673c34dcec",
+        "function_count": 43,
         "functions": [
           {
             "kind": "function",
@@ -62136,6 +62136,12 @@
             "name": "_allowed_group_assignment",
             "scope": "top_level",
             "signature_sha256": "e69a48fb10879307f19493ced176ad6c02b6c04fcb12bf95f084e9e382ea3947"
+          },
+          {
+            "kind": "function",
+            "name": "_block_scalar_header",
+            "scope": "top_level",
+            "signature_sha256": "388a47dd1d58c1fc73722d38a894ab6f518ef0c7a4fe59082b232cdcbdc5116a"
           },
           {
             "kind": "function",
@@ -62289,6 +62295,12 @@
           },
           {
             "kind": "function",
+            "name": "_validate_line_breaks",
+            "scope": "top_level",
+            "signature_sha256": "b3340c72fb77f24b1aaa1bba789fc66a90fbaf9051799865d0a8399a2b4605da"
+          },
+          {
+            "kind": "function",
             "name": "_validate_permissions",
             "scope": "top_level",
             "signature_sha256": "5023c386f8b7334f67bb952c62c262d7ee7bc23572ebcea866ad6d3d66055e22"
@@ -62374,10 +62386,10 @@
         ],
         "import_edges": [],
         "module": "tools.check_ci_security",
-        "non_blank_lines": 1834,
+        "non_blank_lines": 1915,
         "path": "tools/check_ci_security.py",
-        "physical_lines": 1960,
-        "top_level_function_count": 40
+        "physical_lines": 2045,
+        "top_level_function_count": 42
       },
       {
         "class_count": 0,
@@ -62743,8 +62755,8 @@
       {
         "class_count": 0,
         "classes": [],
-        "definition_locations_sha256": "edd9881a4b0028bc190709400f121a08b619f59251531288e0daa38307874def",
-        "function_count": 11,
+        "definition_locations_sha256": "faba0acf30c9b3f4ac0b34e1d2230da64d7f09aa885bebcc3437aec8d6fdd332",
+        "function_count": 13,
         "functions": [
           {
             "kind": "function",
@@ -62772,9 +62784,21 @@
           },
           {
             "kind": "function",
+            "name": "_per_object_document",
+            "scope": "top_level",
+            "signature_sha256": "232e46e077b1107278dc5a26e467c229f99e07e75abea17a4ee24df30cf38350"
+          },
+          {
+            "kind": "function",
             "name": "_plausible_secret",
             "scope": "top_level",
             "signature_sha256": "c5ee4ad11f684f51f3b216b9352295cfc1437ec1d028f11d67f6c32436e2c92d"
+          },
+          {
+            "kind": "function",
+            "name": "_read_batch_record",
+            "scope": "top_level",
+            "signature_sha256": "c9e36c87ff0e1d80938729c5147f52b24be04eff2b636c45a2b37c6192f8189c"
           },
           {
             "kind": "function",
@@ -62815,10 +62839,10 @@
         ],
         "import_edges": [],
         "module": "tools.check_secrets",
-        "non_blank_lines": 397,
+        "non_blank_lines": 470,
         "path": "tools/check_secrets.py",
-        "physical_lines": 428,
-        "top_level_function_count": 11
+        "physical_lines": 509,
+        "top_level_function_count": 13
       },
       {
         "class_count": 0,
@@ -65416,13 +65440,13 @@
         "top_level_function_count": 2
       }
     ],
-    "physical_line_count": 131485,
+    "physical_line_count": 131651,
     "source_groups": [
       "production",
       "tools",
       "other"
     ],
-    "top_level_function_count": 2947
+    "top_level_function_count": 2951
   },
   "tracked_sources": {
     "count": 503,

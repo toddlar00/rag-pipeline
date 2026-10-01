@@ -30,9 +30,11 @@
   (merged through `cc39af5`), the stacked ingestion speedup pair at source
   `6fc0c36` passed on PR #159 (merged through `139e2dc`), the stacked
   Docling conversion hardening pair at source `18de7d6` passed on PR #160
-  (merged through `4994191`), and the stacked job-manager transient-write
-  tolerance pair at source `9e4d7be` is pending; exact-head human review
-  and separate R8 owner authorization are not recorded
+  (merged through `4994191`), the stacked job-manager transient-write
+  tolerance pair at source `9e4d7be` passed on PR #161 (merged through
+  `d27af15`), and the stacked CI and secret-scan tooling pair at source
+  `e706fd2` is pending; exact-head human review and separate R8 owner
+  authorization are not recorded
 - **Milestone:** R10 prerequisite for the R8 pipeline-ownership move
 - **Report schema:** `phase-a0` v3
 
@@ -163,15 +165,17 @@ gate-only child `32153e9` and merge `376277c`
 Task 0.8 static-security pair at source `8891e1b` repeated it through
 gate-only child `1533164` and merge `e34103f`
 ([PR #107](https://github.com/toddlar00/rag-pipeline/pull/107)). The
-current replacement pair uses the clean job-manager transient-write
-tolerance source `9e4d7be97bedadc110cec96844d9bd92e7242bf5` (tree
-`6689c11820cf72a678892cdac2c25ae23ad827f9`), a durable-job manager
-tolerance of transient Windows replace failures whose success path makes
-the same writes in the same order, after a series of one-domain dependency
-updates, on `main` after the merges of the Docling conversion hardening
-#160 (`4994191`, whose second parent `6b2e3f9` is the base this source's
-five commits are stacked on), the ingestion speedups #159 (`139e2dc`), the
-model-load speedups #158 (`cc39af5`), the query-path speedups #157
+current replacement pair uses the clean CI and secret-scan tooling source
+`e706fd2106a9d39982e644599b96b03b394ff650` (tree
+`5697016a9eb41d26019ea30e3b150b108eb8c8f6`), a fail-closed hardening of
+the workflow security validator and a single-process history reader for
+the secret scanner that change no pipeline output, after a series of
+one-domain dependency updates, on `main` after the merges of the
+job-manager transient-write tolerance #161 (`d27af15`, whose second parent
+`209767c` is the base this source's twelve commits are stacked on), the
+Docling conversion hardening #160 (`4994191`), the ingestion speedups #159
+(`139e2dc`), the model-load speedups #158 (`cc39af5`), the query-path
+speedups #157
 (`d3754d5`), the urllib3 promotion #152 (`25f9ba1`), the hosted-flake fixes
 #151 (`584c4a5`), the static-security S324 retirement #150 (`76f98d6`), the
 heartbeat test fix #148 (`3aede7d`), the post-series
@@ -522,6 +526,28 @@ commit writes are not retried, the heartbeat keeps its own tolerance, and
 the success path makes the same writes in the same order. It changes no
 pipeline output, dependency or lock and supersedes the `18de7d6` pair for
 its own pull request.
+The `9e4d7be` pair (gate-only child `209767c`) passed the hosted CI
+promotion gate on [PR
+#161](https://github.com/toddlar00/rag-pipeline/pull/161), which merged into
+`main` as `d27af15`. The stacked CI and secret-scan tooling source
+`e706fd2` makes two fail-closed security-tooling changes. The workflow
+security validator (`tools/check_ci_security.py`) now rejects YAML
+anchors, aliases, tags and merge keys at every node start, which could
+hide unpinned actions and write-all permissions from its line-based
+checks; rejects every block-scalar header it cannot blank, and measures a
+compact `- key: |` body from the key column; and rejects non-space
+indentation, non-ASCII whitespace after a structural line's indentation
+and line breaks other than LF and CR, where Python's string handling and
+YAML read a line differently. The tracked workflows and the rendered
+bootstrap keep identical structural lines and still validate cleanly. The
+secret scanner's history mode (`tools/check_secrets.py`) reads the objects
+`git rev-list` lists through one lock-step `git cat-file --batch` process
+instead of two git processes per object, with identical documents and
+findings; a framing fault, a missing or ambiguous reply, trailing output
+or a non-zero exit now fails the scan with an error, where the old reader
+silently skipped a vanished object. It changes no pipeline output,
+dependency or lock and supersedes the `9e4d7be` pair for its own pull
+request.
 Its Windows and
 Linux CPython 3.12.13 reports were
 generated after the same strict hash-locked synchronization, to its locks
@@ -725,15 +751,16 @@ then the stacked query-path speedup source `18a70ab`,
 then the stacked model-load speedup source `8ce1a8d`,
 then the stacked ingestion speedup source `6fc0c36`,
 then the stacked Docling conversion hardening source `18de7d6`,
-then the stacked job-manager transient-write tolerance source `9e4d7be`.
+then the stacked job-manager transient-write tolerance source `9e4d7be`,
+then the stacked CI and secret-scan tooling source `e706fd2`.
 Its Windows report
-is 51,176 bytes (file SHA-256
-`69eaa5795659b6879b72a422088bfb9420a061256ce6f6ad78584e4a862cceec`;
+is 51,173 bytes (file SHA-256
+`0900566ab2fa5b376e8f8b65d34519fd70faed73472b94fe8a8f75e6c7d4986a`;
 embedded report SHA-256
-`572c5ff0d83c0b3dfb8f01aab804455b0a66190b68ef54f0892f931085e1b549`).
-Its Linux report is 50,575 bytes (file SHA-256
-`625d9f42031f8c8a5d48845b0bb5539e55a492c9c02d4d5defb6be0460abfee5`;
+`6fc23e578f9ea838ccd42fc2003081b376f5324b2c0339852fa0999d7018e624`).
+Its Linux report is 50,574 bytes (file SHA-256
+`9ad3571a14e715b1171dfd724375cd3ea98112ff1e5f43daa0a3803544bb8909`;
 embedded report SHA-256
-`c27487131fa707979e88f93e7e8e5cad6d8e345749afcb86499da8f2d55711b3`).
+`6e3f58f1f6d98f2500fac6acd29c35710e9901dbd7843251c34bd3ff3da75302`).
 Both use CPython 3.12.13 and pass their complete local same-platform 9×5
 comparisons. Hosted promotion remains pending.
