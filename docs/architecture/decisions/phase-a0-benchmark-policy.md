@@ -27,9 +27,11 @@
   #152 (merged through `25f9ba1`), the stacked query-path speedup pair at
   source `18a70ab` passed on PR #157 (merged through `d3754d5`), the
   stacked model-load speedup pair at source `8ce1a8d` passed on PR #158
-  (merged through `cc39af5`), and the stacked ingestion speedup pair at
-  source `6fc0c36` is pending; exact-head human review and separate R8
-  owner authorization are not recorded
+  (merged through `cc39af5`), the stacked ingestion speedup pair at source
+  `6fc0c36` passed on PR #159 (merged through `139e2dc`), and the stacked
+  Docling conversion hardening pair at source `18de7d6` is pending;
+  exact-head human review and separate R8 owner authorization are not
+  recorded
 - **Milestone:** R10 prerequisite for the R8 pipeline-ownership move
 - **Report schema:** `phase-a0` v3
 
@@ -160,13 +162,15 @@ gate-only child `32153e9` and merge `376277c`
 Task 0.8 static-security pair at source `8891e1b` repeated it through
 gate-only child `1533164` and merge `e34103f`
 ([PR #107](https://github.com/toddlar00/rag-pipeline/pull/107)). The
-current replacement pair uses the clean ingestion speedup source
-`6fc0c364d338ae260e9085970ec2d72dfd1ba704` (tree
-`4d9ebf1bea4423a4a6fa115ed42c6bd8e488fa39`), four output-identical
-ingestion and indexing speedups after a series of one-domain dependency
-updates, on `main` after the merges of the model-load speedups #158
-(`cc39af5`, whose second parent `33d6a26` is the base this source's
-thirteen commits are stacked on), the query-path speedups #157
+current replacement pair uses the clean Docling conversion hardening
+source `18de7d6862a7dbfb618db087e3342c9bbc37bcfa` (tree
+`117c105fe52a81f5b247a296ec09a5b3bcb36101`), a fail-closed Docling
+conversion hardening that keeps complete conversions byte-identical in the
+default environment, after a series of one-domain dependency updates,
+on `main` after the merges of the ingestion speedups #159 (`139e2dc`,
+whose second parent `0d7b128` is the base this source's seven commits
+are stacked on), the model-load speedups #158 (`cc39af5`), the query-path
+speedups #157
 (`d3754d5`), the urllib3 promotion #152 (`25f9ba1`), the hosted-flake fixes
 #151 (`584c4a5`), the static-security S324 retirement #150 (`76f98d6`), the
 heartbeat test fix #148 (`3aede7d`), the post-series
@@ -475,6 +479,26 @@ proceeds with the first verified snapshot instead of failing with "source
 oracle registry file binding changed". It changes no pipeline output,
 dependency or lock and supersedes the `8ce1a8d` pair for its own pull
 request.
+The `6fc0c36` pair (gate-only child `0d7b128`) passed the hosted CI
+promotion gate on [PR
+#159](https://github.com/toddlar00/rag-pipeline/pull/159), which merged into
+`main` as `139e2dc`; the networked vulnerability/SBOM jobs passed at that
+head. The stacked Docling conversion hardening source `18de7d6` makes PDF
+conversion fail closed on incomplete results and pins Docling's runtime
+knobs against the ambient environment: a Docling result that is not a clean
+success, including Docling 2.121's PARTIAL_SUCCESS with the failed pages
+re-added empty, now raises `DoclingConversionIncompleteError` with a
+bounded, content-free summary before any Docling JSON, Markdown or
+conversion manifest is written, instead of publishing; conversion passes
+explicit accelerator options (4 threads, CPU or CUDA) and runs inside
+Docling's scoped default settings, so `OMP_NUM_THREADS` and `DOCLING_*`
+variables no longer change its output or write debug renders; the inert
+`DOCLING_PDF_BACKEND` write is removed and the log names the backend
+Docling actually uses; and the progress bar counts Docling's profiling
+records while their DEBUG flood is dropped at INFO, with `--verbose` output
+unchanged. In the default environment, complete conversions keep
+byte-identical artifacts and receipt digests. It changes no dependency or
+lock and supersedes the `6fc0c36` pair for its own pull request.
 Its Windows and
 Linux CPython 3.12.13 reports were
 generated after the same strict hash-locked synchronization, to its locks
@@ -676,15 +700,16 @@ then the stacked hosted-flake fix source `6b97fc5`,
 then the stacked urllib3 promotion source `aab0326`,
 then the stacked query-path speedup source `18a70ab`,
 then the stacked model-load speedup source `8ce1a8d`,
-then the stacked ingestion speedup source `6fc0c36`.
+then the stacked ingestion speedup source `6fc0c36`,
+then the stacked Docling conversion hardening source `18de7d6`.
 Its Windows report
-is 51,170 bytes (file SHA-256
-`8be9849c9f54a05eba06312042be72af35c0bc4593c39e7a8c52606947e634a3`;
+is 51,174 bytes (file SHA-256
+`641657d456e0f7bfd8612ae75680dbe67fdd1937caf07b4c032e9832edf6d9e1`;
 embedded report SHA-256
-`b1fbf8e3c9541c648d20dff517c9476486390f040d3ea28f16d47f3a4e9c9938`).
-Its Linux report is 50,574 bytes (file SHA-256
-`4fd801bab61abd36972ec715e2d262d53745b783e3fa00b82a09d2c3c3e037b1`;
+`950367cb53525087463932302e1f74b062f1fbc48f2970ce486db23e1994674d`).
+Its Linux report is 50,572 bytes (file SHA-256
+`ed9a9e7b56e92568362d245723ef9492c75fa3b8c7d88c3783536290f190ae25`;
 embedded report SHA-256
-`bf83aeaaec41f8d5794b3d3f3abab766fc627199d5e9fe014fa56a38451e787d`).
+`dccde38ed230b896f6279acb687322f73f6457faad97e25c23c0f768a40788ef`).
 Both use CPython 3.12.13 and pass their complete local same-platform 9×5
 comparisons. Hosted promotion remains pending.

@@ -7,11 +7,12 @@ fresh-process repetitions.
 
 ## Provenance
 
-Both current reports were generated from the clean ingestion speedup
-source checkpoint `6fc0c364d338ae260e9085970ec2d72dfd1ba704` (tree
-`4d9ebf1bea4423a4a6fa115ed42c6bd8e488fa39`), four output-identical
-ingestion and indexing speedups after a series of one-domain dependency
-updates on `main` after the history-preserving merges of #121 (`602bec1`),
+Both current reports were generated from the clean Docling conversion
+hardening source checkpoint `18de7d6862a7dbfb618db087e3342c9bbc37bcfa` (tree
+`117c105fe52a81f5b247a296ec09a5b3bcb36101`), a fail-closed Docling
+conversion hardening that keeps complete conversions byte-identical in the
+default environment, after a series of one-domain dependency updates on
+`main` after the history-preserving merges of #121 (`602bec1`),
 of that series, #122 to #130 (`1cffc58`), of its documentation follow-up #135
 (`9eb6f94`), of the TOC glyph-leader fix #138 (`a2c5629`), of the
 job-heartbeat hardening #137 (`634c38b`), of the Nomic contract test #136
@@ -22,9 +23,9 @@ oracle fix #145 (`ce73b61`), of the soft-hyphen item-seam fix #146
 heartbeat test fix #148 (`3aede7d`), of the static-security S324
 retirement #150 (`76f98d6`), of the hosted-flake fixes #151 (`584c4a5`), of
 the urllib3 promotion #152 (`25f9ba1`), of the query-path speedups #157
-(`d3754d5`) and of the model-load speedups #158 (`cc39af5`, whose second
-parent `33d6a26` is the base this source's thirteen commits are stacked
-on). That source contains
+(`d3754d5`), of the model-load speedups #158 (`cc39af5`) and of the
+ingestion speedups #159 (`139e2dc`, whose second parent `0d7b128` is the
+base this source's seven commits are stacked on). That source contains
 everything through the
 Task 0.8 static-security merge `e34103f` plus the local OCR accuracy, retry
 and guided-review program, opt-in AI evidence search, the passive cleanup
@@ -70,7 +71,8 @@ S324 retirement changes no lock; the stacked hosted-flake fixes change no
 lock; the stacked urllib3 promotion moves urllib3 from 2.7.0 to 2.8.0 in the
 core, full, test, service, smoke and security locks; the stacked query-path
 speedups change no lock; the stacked model-load speedups change no lock; the
-stacked ingestion speedups change no lock; no model lock changed.
+stacked ingestion speedups change no lock; the stacked Docling conversion
+hardening changes no lock; no model lock changed.
 The executing environments were synchronized to this source's locks
 (urllib3 2.8.0) with repository-pinned uv 0.12.20 against the exact CPU
 application/test lock union plus its retained bootstrapper:
@@ -88,8 +90,8 @@ marker-resolved distributions before generation.
 
 | Platform | Runtime | Report | Bytes | File SHA-256 | Embedded report SHA-256 |
 |---|---:|---|---:|---|---|
-| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,170 | `8be9849c9f54a05eba06312042be72af35c0bc4593c39e7a8c52606947e634a3` | `b1fbf8e3c9541c648d20dff517c9476486390f040d3ea28f16d47f3a4e9c9938` |
-| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,574 | `4fd801bab61abd36972ec715e2d262d53745b783e3fa00b82a09d2c3c3e037b1` | `bf83aeaaec41f8d5794b3d3f3abab766fc627199d5e9fe014fa56a38451e787d` |
+| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,174 | `641657d456e0f7bfd8612ae75680dbe67fdd1937caf07b4c032e9832edf6d9e1` | `950367cb53525087463932302e1f74b062f1fbc48f2970ce486db23e1994674d` |
+| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,572 | `ed9a9e7b56e92568362d245723ef9492c75fa3b8c7d88c3783536290f190ae25` | `dccde38ed230b896f6279acb687322f73f6457faad97e25c23c0f768a40788ef` |
 
 The reports attest the same source commit, clean-worktree state, tracked-diff
 digest, eight LF and `HEAD`-identical dependency/model-lock inputs, authoritative
@@ -504,6 +506,26 @@ proceeds with the first verified snapshot instead of failing with "source
 oracle registry file binding changed". It changes no pipeline output,
 dependency or lock and supersedes the `8ce1a8d` pair for its own pull
 request.
+The `6fc0c36` pair (gate-only child `0d7b128`) passed the hosted CI
+promotion gate on [PR
+#159](https://github.com/toddlar00/rag-pipeline/pull/159), which merged into
+`main` as `139e2dc`; the networked vulnerability/SBOM jobs passed at that
+head. The stacked Docling conversion hardening source `18de7d6` makes PDF
+conversion fail closed on incomplete results and pins Docling's runtime
+knobs against the ambient environment: a Docling result that is not a clean
+success, including Docling 2.121's PARTIAL_SUCCESS with the failed pages
+re-added empty, now raises `DoclingConversionIncompleteError` with a
+bounded, content-free summary before any Docling JSON, Markdown or
+conversion manifest is written, instead of publishing; conversion passes
+explicit accelerator options (4 threads, CPU or CUDA) and runs inside
+Docling's scoped default settings, so `OMP_NUM_THREADS` and `DOCLING_*`
+variables no longer change its output or write debug renders; the inert
+`DOCLING_PDF_BACKEND` write is removed and the log names the backend
+Docling actually uses; and the progress bar counts Docling's profiling
+records while their DEBUG flood is dropped at INFO, with `--verbose` output
+unchanged. In the default environment, complete conversions keep
+byte-identical artifacts and receipt digests. It changes no dependency or
+lock and supersedes the `6fc0c36` pair for its own pull request.
 The current reports above
 bind
 that exact clean source and each passes an independent complete

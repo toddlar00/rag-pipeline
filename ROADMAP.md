@@ -1705,6 +1705,18 @@ embedding code's Transformers names and clear two new advisories.
     merged into `main` through [PR
     #151](https://github.com/toddlar00/rag-pipeline/pull/151) as `584c4a5`
     (see "Research improvement pass (2026-09-30, prepared)").
+  - Local Windows full suites under `-n 8` intermittently fail a
+    `tests/test_ocr_hardscan_io.py` test with a transient `PermissionError`
+    (WinError 32) while `artifact_io.immutable_file_snapshot` unlinks
+    `.rag-snapshot-owner.json` in the shared temp scratch root. It was seen
+    in the full suites at `3af52f8` (#150) and at `18de7d6`, neither of
+    which touches `artifact_io.py` or that test module. It is pre-existing:
+    that module alone under `-n 8` on the owner's Windows host failed in 3
+    of 24 runs at `3aede7d`, 1 of 12 at each of `f0513b7`, `19b9ef9` and
+    `e91d42f`, and 3 of 12 at both `main` `139e2dc` and `18de7d6`. The
+    snapshot's owner-file cleanup has no bounded transient-error retry, the
+    same class of gap as the durable-job manager's transient replace writes
+    (see "Corpus audit follow-ups").
 
 ### Research improvement pass (2026-09-30, prepared)
 
@@ -1738,16 +1750,21 @@ their shared Phase A0 pair at source `8ce1a8d` passed the hosted CI
 promotion gate there. The four ingestion speed branches
 (`agent/imp-chunk-dedup-bitset`, `agent/imp-pdf-enrichment-word-cache`,
 `agent/imp-quality-attestation-single-pass` and
-`agent/imp-embedding-token-counter-cache`) are now proposed together in one
-pull request from `agent/ingestion-speedups`, which is stacked on PR #158's
-evidence head `33d6a26` and carries its own Phase A0 pair at source
-`6fc0c36`, its hosted checks pending. The other 5 have no pull request, so
+`agent/imp-embedding-token-counter-cache`) merged together into `main`
+through [PR #159](https://github.com/toddlar00/rag-pipeline/pull/159) as
+`139e2dc`; their shared Phase A0 pair at source `6fc0c36` passed the hosted
+CI promotion gate there. `agent/imp-docling-conversion-hardening` is now
+proposed in its own pull request from
+`agent/docling-conversion-hardening-pr`, which is stacked on PR #159's
+evidence head `0d7b128` and carries its own Phase A0 pair at source
+`18de7d6`, its hosted checks pending. The other 4 have no pull request, so
 none of them is "Implemented (draft)"; of the 18, only the static-security
 branch, the three hosted-flake fix branches, the three query-path speed
-branches and the two model-load speed branches are integrated. The
-integration branch `agent/research-improvements` merges all 18 only to
-validate the combination; each other branch lands through its own pull
-request. Branch names below omit the `agent/imp-` prefix.
+branches, the two model-load speed branches and the four ingestion speed
+branches are integrated. The integration branch
+`agent/research-improvements` merges all 18 only to validate the
+combination; each other branch lands through its own pull request. Branch
+names below omit the `agent/imp-` prefix.
 
 - **Method.** Codebase mapping and external research produced 78
   candidates. A synthesis pass ranked 32, and one adversarial verifier per
@@ -1770,30 +1787,27 @@ request. Branch names below omit the `agent/imp-` prefix.
     Jaccard in `chunking_core._deduplicate_chunks`. 42-55x at 2,831
     synthetic chunks (184 s to 3.3-4.4 s). Deduplication takes about 54 s
     of the private tort-law casebook's chunk stage; the saving there is
-    expected, not measured. It is now proposed together with
+    expected, not measured. It merged together with
     `pdf-enrichment-word-cache`, `quality-attestation-single-pass` and
-    `embedding-token-counter-cache` in one stacked pull request, with their
-    shared Phase A0 pair at source `6fc0c36` (hosted checks pending), and is
-    not integrated.
+    `embedding-token-counter-cache` through PR #159 as `139e2dc`, with their
+    shared Phase A0 pair at source `6fc0c36`, which passed the hosted CI
+    promotion gate.
   - `pdf-enrichment-word-cache`: extracts each page's sorted native words
     once per enrichment call instead of 6-7 times. 29-34 s off each
     enrichment pass on the tort-law casebook, for about 139 MB more peak
-    memory. It is now proposed in the same stacked pull request (hosted
-    checks pending) and is not integrated.
+    memory. It merged through the same pull request (#159).
   - `embedding-token-counter-cache`: caches the verified token-counter
     tokenizer and counts in batches. A stage simulation drops from 23-26 s
-    to 2.2-2.7 s, for about 250 MB more resident memory. It is now proposed
-    in the same stacked pull request (hosted checks pending) and is not
-    integrated.
+    to 2.2-2.7 s, for about 250 MB more resident memory. It merged through
+    the same pull request (#159).
   - `legal-tokenizer-literal-guards`: literal guards and literal-first
     regex forms in `_legal_search_tokens`. 2.2-2.3x, identical over a
     280,000-string differential fuzz; about 1 s of CPU off each cold Chroma
     hybrid query. It merged through the same pull request (#157).
   - `quality-attestation-single-pass`: attests each record once and reads
     the oracle registry once per binding. 35-45% (about 0.7-1.5 s) off each
-    quality binding on the index, search and publication paths. It is now
-    proposed in the same stacked pull request as `chunk-dedup-bitset`
-    (hosted checks pending) and is not integrated.
+    quality binding on the index, search and publication paths. It merged
+    through the same pull request as `chunk-dedup-bitset` (#159).
   - `model-verify-readinto-hash`: hashes model bundles with `readinto` into
     a reused buffer. 1.4-1.55x, about 0.4-0.8 s per model load. It merged
     together with `embedding-skip-random-init` through PR #158 as
@@ -1830,7 +1844,9 @@ request. Branch names below omit the `agent/imp-` prefix.
     67 logged conversions, but such a run now stops instead of publishing.
     The branch also pins Docling's ambient environment knobs
     (`OMP_NUM_THREADS` and `DOCLING_*` changed output bytes) and stops the
-    DEBUG log flood.
+    DEBUG log flood. It is now proposed in its own stacked pull request,
+    with its own Phase A0 pair at source `18de7d6` (hosted checks pending),
+    and is not integrated.
   - `review-ocr-close-deadline-clamp`: clamps the crop archive's remaining
     close time (see the hosted-runner follow-up above). It merged together
     with `a0-capture-cleanup-retry` and `posix-sigterm-test-deflake` through
@@ -1889,14 +1905,13 @@ request. Branch names below omit the `agent/imp-` prefix.
     path differ. The scratch copies were deleted.
 - **Before integration.** Each remaining branch needs a draft pull request
   and its own Phase A0 source/evidence pair (the three hosted-flake fix
-  branches, the three query-path speed branches and the two model-load
-  speed branches each shared one stacked pull request and pair, and the
-  four ingestion speed branches are proposed with another). The combined
-  query-path, model-load and ingestion pull requests depart from the A1
-  owner-decision row's condition that each slice is its own pull request
-  with its own Phase A0 source/evidence pair; the query-path and model-load
-  ones merged as #157 and #158, and splitting the ingestion one is the
-  owner's call. Every branch
+  branches, the three query-path speed branches, the two model-load speed
+  branches and the four ingestion speed branches each shared one stacked
+  pull request and pair, and the Docling hardening branch is proposed with
+  its own). The combined query-path, model-load and ingestion pull requests
+  departed from the A1 owner-decision row's condition that each slice is
+  its own pull request with its own Phase A0 source/evidence pair; they
+  merged as #157, #158 and #159. Every branch
   changes `architecture-inventory.json`, so after each merge the next
   branch is rebased and its inventory refreshed. Twelve branches change
   paths that `ci-security-ownership.json` owns or governs (every `rag.py`,
@@ -2346,6 +2361,26 @@ proceeds with the first verified snapshot instead of failing with "source
 oracle registry file binding changed". It changes no pipeline output,
 dependency or lock and supersedes the `8ce1a8d` pair for its own pull
 request.
+The `6fc0c36` pair (gate-only child `0d7b128`) passed the hosted CI
+promotion gate on [PR
+#159](https://github.com/toddlar00/rag-pipeline/pull/159), which merged into
+`main` as `139e2dc`; the networked vulnerability/SBOM jobs passed at that
+head. The stacked Docling conversion hardening source `18de7d6` makes PDF
+conversion fail closed on incomplete results and pins Docling's runtime
+knobs against the ambient environment: a Docling result that is not a clean
+success, including Docling 2.121's PARTIAL_SUCCESS with the failed pages
+re-added empty, now raises `DoclingConversionIncompleteError` with a
+bounded, content-free summary before any Docling JSON, Markdown or
+conversion manifest is written, instead of publishing; conversion passes
+explicit accelerator options (4 threads, CPU or CUDA) and runs inside
+Docling's scoped default settings, so `OMP_NUM_THREADS` and `DOCLING_*`
+variables no longer change its output or write debug renders; the inert
+`DOCLING_PDF_BACKEND` write is removed and the log names the backend
+Docling actually uses; and the progress bar counts Docling's profiling
+records while their DEBUG flood is dropped at INFO, with `--verbose` output
+unchanged. In the default environment, complete conversions keep
+byte-identical artifacts and receipt digests. It changes no dependency or
+lock and supersedes the `6fc0c36` pair for its own pull request.
 Its Windows/Linux
 pair (independent local same-platform comparisons passed) is that branch's
 candidate; its hosted checks and exact-SHA record are pending, and the
@@ -2412,7 +2447,7 @@ release-qualified support.
 | Private retrieval/answer qualification | Corpus-owner judgments, family aliases, floors, and promotion statistics remain unresolved | No production-qualified corpus or generalized quality claim. Portable generated/CC0 suites validate mechanics only. |
 | First version and platform/support tiers | Not selected | Development-only identity; no release tag or Tier-1 claim. |
 | Dependabot `ignore` rules for rejected versions | The strict `dependabot.yml` policy admits no `ignore` field, so closed grouped proposals (#141-#144) may reopen | Add no `ignore` rule and do not widen the policy; close a reopened proposal with its recorded reason. |
-| Retrieval accuracy and runtime defaults examined by the 2026-09-30 research pass: reranking hybrid results by default, `function-words-v1` as the default query policy, fusion weights, the Qdrant sparse/fusion defects, a CUDA runtime, length-sorted embedding batches, a warm search worker, and a Docling `--allow-partial-conversion` escape hatch | Measured or estimated by that pass, not on the owner's private judged sets (see "Research improvement pass"); none selected | Keep every current default and adopt none of these changes; the prepared Docling fail-closed fix is a robustness change outside this row. Change a default only through its own owner decision and pull request, with a versioned re-index where vectors or indexes change. |
+| Retrieval accuracy and runtime defaults examined by the 2026-09-30 research pass: reranking hybrid results by default, `function-words-v1` as the default query policy, fusion weights, the Qdrant sparse/fusion defects, a CUDA runtime, length-sorted embedding batches, a warm search worker, and a Docling `--allow-partial-conversion` escape hatch | Measured or estimated by that pass, not on the owner's private judged sets (see "Research improvement pass"); none selected | Keep every current default and adopt none of these changes; the Docling fail-closed fix, now proposed in its own pull request and not integrated, is a robustness change outside this row. Change a default only through its own owner decision and pull request, with a versioned re-index where vectors or indexes change. |
 
 Owner decisions are gates, not checkboxes an implementation agent may infer.
 A technical change may prepare a bounded decision mechanism, but it must pause
