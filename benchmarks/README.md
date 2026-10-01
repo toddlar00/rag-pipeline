@@ -7,18 +7,19 @@ fresh-process repetitions.
 
 ## Provenance
 
-Both current reports were generated from the clean heartbeat test fix source
-checkpoint `e5966e1305cf5d58d2b01d32b96f453798f0ef27` (tree
-`0f4037acb3598c6c6e3c89078fe068094b222f3b`), a test-only follow-up after a
-series of one-domain dependency updates on `main` after the
-history-preserving merges of #121 (`602bec1`), of that series, #122 to #130
-(`1cffc58`), of its documentation follow-up #135 (`9eb6f94`), of the TOC
-glyph-leader fix #138 (`a2c5629`), of the job-heartbeat hardening #137
+Both current reports were generated from the clean static-security S324
+retirement source checkpoint `3af52f8cbe41b9c3872e6af6c5c7230659243018`
+(tree `02da93a1d8de080254ceef63ed7ae02ed0053bfc`), a static-security gate
+follow-up after a series of one-domain dependency updates on `main` after
+the history-preserving merges of #121 (`602bec1`), of that series, #122 to
+#130 (`1cffc58`), of its documentation follow-up #135 (`9eb6f94`), of the
+TOC glyph-leader fix #138 (`a2c5629`), of the job-heartbeat hardening #137
 (`634c38b`), of the Nomic contract test #136 (`2f07510`), of the oauthlib
 promotion #139 (`123bedb`), of the tokenless-glyph rotation fix #140
 (`6baf14b`), of the table header-row oracle fix #145 (`ce73b61`), of the
-soft-hyphen item-seam fix #146 (`8cc89b0`) and of the post-series
-documentation #147 (`9fff7bb`). That source contains everything through the
+soft-hyphen item-seam fix #146 (`8cc89b0`), of the post-series
+documentation #147 (`9fff7bb`) and of the heartbeat test fix #148
+(`3aede7d`). That source contains everything through the
 Task 0.8 static-security merge `e34103f` plus the local OCR accuracy, retry
 and guided-review program, opt-in AI evidence search, the passive cleanup
 audits, the LLM transport and worker-launch repairs, the casebook
@@ -58,10 +59,10 @@ lock; the Nomic contract test changes no lock; the stacked oauthlib
 promotion moves oauthlib from 3.3.1 to 4.0.0; the tokenless-glyph rotation
 fix changes no lock; the table header-row oracle fix changes no lock; the
 soft-hyphen item-seam fix changes no lock; the post-series documentation
-changes no lock; the heartbeat test fix changes no lock; no model lock
-changed. The executing environments were synchronized with repository-pinned
-uv 0.12.20 against the exact CPU application/test lock union plus its
-retained bootstrapper:
+changes no lock; the heartbeat test fix changes no lock; the static-security
+S324 retirement changes no lock; no model lock changed. The executing
+environments were synchronized with repository-pinned uv 0.12.20 against the
+exact CPU application/test lock union plus its retained bootstrapper:
 
 - `requirements-full.lock`
 - `requirements-test.lock`
@@ -76,8 +77,8 @@ marker-resolved distributions before generation.
 
 | Platform | Runtime | Report | Bytes | File SHA-256 | Embedded report SHA-256 |
 |---|---:|---|---:|---|---|
-| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,082 | `379ccaf31cd0d9b21e39e3939adc579c995a73dc103641637bece0c6c03439d2` | `03796f9dff2bd56f3f38f6f6a369e10b64d2881d085cdfa60e45b7a2ba48876b` |
-| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,478 | `f85aa81149aa321378490d6c64d6cb0a3e47c56efff557420b618b9ccd745911` | `bab24b5f26612766985900a24b551b1ff990c60822241bf885cafc9439549365` |
+| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,079 | `2152ee96bcc52c716aabde1714c93d2e133f9e33bf2a10444b7cf4d507d2d661` | `ed4f99984f1cb7f2818933556cce705201a9e9f94326321308f2f7a063c989ad` |
+| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,486 | `d6ad0f18151ddfee025862804d8ad889846abbee7c4cfd8f623f1c299a138ff3` | `6726e05ae916102c5fa7a55be5f64412c2115088c972726b45a8e76b5bb861bd` |
 
 The reports attest the same source commit, clean-worktree state, tracked-diff
 digest, eight LF and `HEAD`-identical dependency/model-lock inputs, authoritative
@@ -403,6 +404,20 @@ promotion gate on [PR
 failure-budget tests independent of runner speed and raises the Node
 subprocess ceilings of three OCR review UI tests; it changes no pipeline
 behavior, dependency or lock and supersedes the `f3ec23a` pair.
+The `e5966e1` pair (gate-only child `b93eb1f`) passed the hosted CI
+promotion gate on [PR
+#148](https://github.com/toddlar00/rag-pipeline/pull/148), which merged into
+`main` as `3aede7d`. The static-security source `3af52f8` retires the only
+static-security suppression (S324 on the non-cryptographic MD5
+sparse-vector token hash, expiring 2026-11-30) by marking that hash
+`usedforsecurity=False`, which keeps its digests byte-identical, so no
+index migration or Qdrant re-index is needed. It runs ruff with
+`--isolated --ignore-noqa`, so inline, file-level and range suppression
+comments and project ruff configuration cannot hide findings, covers every
+blocking rule (including S604 and S606) with positive and negative
+fixtures, removes the dead `evaluation/` exemption and pins the Hub Git
+blob identity to `git hash-object` values. It changes no pipeline output,
+dependency or lock and supersedes the `e5966e1` pair.
 The current reports above
 bind
 that exact clean source and each passes an independent complete
