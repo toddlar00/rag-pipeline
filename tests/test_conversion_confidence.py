@@ -1,6 +1,6 @@
 """Tests for advisory Docling confidence surfacing."""
 
-from contextlib import ExitStack
+from contextlib import ExitStack, nullcontext
 import itertools
 import logging
 import math
@@ -102,6 +102,8 @@ def _install_fake_docling(monkeypatch, *, fake_confidence):
     class FakeResult:
         document = FakeDoclingDocument()
         confidence = fake_confidence
+        status = "success"
+        errors = []
 
     class FakeDocumentConverter:
         def __init__(self, **kwargs):
@@ -119,9 +121,14 @@ def _install_fake_docling(monkeypatch, *, fake_confidence):
     accelerator_options = ModuleType(
         "docling.datamodel.accelerator_options")
     accelerator_options.AcceleratorDevice = AcceleratorDevice
-    accelerator_options.AcceleratorOptions = object
+    accelerator_options.AcceleratorOptions = SimpleNamespace
     base_models = ModuleType("docling.datamodel.base_models")
     base_models.InputFormat = SimpleNamespace(PDF="pdf")
+    settings = ModuleType("docling.datamodel.settings")
+    settings.scoped = lambda **_kwargs: nullcontext()
+    settings.BatchConcurrencySettings = SimpleNamespace
+    settings.DebugSettings = SimpleNamespace
+    settings.InferenceSettings = SimpleNamespace
 
     monkeypatch.setitem(
         sys.modules, "docling.document_converter", document_converter)
@@ -132,6 +139,7 @@ def _install_fake_docling(monkeypatch, *, fake_confidence):
         accelerator_options)
     monkeypatch.setitem(
         sys.modules, "docling.datamodel.base_models", base_models)
+    monkeypatch.setitem(sys.modules, "docling.datamodel.settings", settings)
 
     monkeypatch.setattr(
         rag, "_detect_gpu", lambda: (AcceleratorDevice.CPU, 1, "CPU"))

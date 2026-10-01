@@ -7750,6 +7750,101 @@ def _conversion_parameters(*, batch_size_override: int | None,
     return parameters
 
 
+def _docling_default_settings_scope():
+    """Run Docling with its default perf, debug, and inference settings.
+
+    ``docling.datamodel.settings.settings`` is populated from DOCLING_*
+    variables when Docling is imported: an ambient
+    DOCLING_INFERENCE_COMPILE_TORCH_MODELS would compile the layout model and
+    DOCLING_DEBUG_VISUALIZE_* would write page renders into the working
+    directory.  ``scoped`` restores the previous values on exit.
+    """
+    from docling.datamodel.settings import (
+        BatchConcurrencySettings,
+        DebugSettings,
+        InferenceSettings,
+        scoped,
+    )
+
+    return scoped(perf=BatchConcurrencySettings(), debug=DebugSettings(),
+                  inference=InferenceSettings())
+
+
+_DOCLING_PIPELINE_LOGGER = "docling.pipeline.standard_pdf_pipeline"
+
+
+class _DoclingProgressFilter(logging.Filter):
+    """Advance conversion progress from Docling's assemble-stage records.
+
+    Docling emits its PIPELINE_PROFILING records only while its pipeline
+    logger is enabled for DEBUG, so conversion raises that logger's level.
+    The filter then drops every record below *floor*, the level in effect
+    before, which keeps the per-page flood out of INFO logs, leaves --verbose
+    output unchanged, and still propagates warnings and errors.  Docling logs
+    from stage threads inside ``except Exception``, so counting must never
+    raise into them.
+    """
+
+    def __init__(self, floor: int, on_pages: Callable[[int], None]) -> None:
+        super().__init__()
+        self._floor = floor
+        self._on_pages = on_pages
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            if (isinstance(record.msg, str) and record.msg.startswith(
+                    _ingestion_core.DOCLING_PROFILING_PREFIX)):
+                pages = _ingestion_core.docling_assembled_page_count(
+                    record.getMessage())
+                if pages:
+                    self._on_pages(pages)
+        except Exception:
+            pass  # progress is advisory; a failure here would fail a page
+        return record.levelno >= self._floor
+
+
+@contextmanager
+def _docling_conversion_progress(total_pages: int):
+    """Show page progress and bound Docling's pipeline log for one run."""
+    from tqdm import tqdm
+
+    try:
+        interactive = bool(sys.stderr and sys.stderr.isatty())
+    except (AttributeError, OSError, ValueError):
+        interactive = False
+    # A redirected stream such as a job's worker.log keeps every refresh.
+    refresh = ({} if interactive
+               else {"mininterval": 30.0, "maxinterval": 30.0})
+    pbar = tqdm(total=total_pages, desc="Converting", unit="pg",
+                bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} pages "
+                           "[{elapsed}<{remaining}, {rate_fmt}]",
+                **refresh)
+    lock = _threading.Lock()
+    seen = 0
+
+    def advance(pages: int) -> None:
+        nonlocal seen
+        with lock:
+            pages = min(pages, total_pages - seen)
+            if pages > 0:
+                seen += pages
+                pbar.update(pages)
+
+    dl_logger = logging.getLogger(_DOCLING_PIPELINE_LOGGER)
+    previous_level = dl_logger.level
+    progress_filter = _DoclingProgressFilter(
+        dl_logger.getEffectiveLevel(), advance)
+    dl_logger.addFilter(progress_filter)
+    dl_logger.setLevel(logging.DEBUG)
+    try:
+        yield
+        advance(total_pages)  # ensure the bar reaches 100%
+    finally:
+        dl_logger.removeFilter(progress_filter)
+        dl_logger.setLevel(previous_level)
+        pbar.close()
+
+
 def _pin_docling_layout_revision(pipeline_options) -> str | None:
     """Replace Docling's mutable layout ref with the reviewed commit hash."""
     layout_options = pipeline_options.layout_options
@@ -8282,6 +8377,26 @@ def _confidence_summary(confidence) -> tuple[dict, list[int]]:
     return metrics, poor_pages
 
 
+def _docling_error_evidence(
+        result) -> tuple[_ingestion_core.ConversionErrorEvidence, ...]:
+    """Content-free evidence for each Docling ErrorItem, never its message."""
+    def identifier(value) -> str:
+        value = getattr(value, "value", value)
+        return "" if value is None else str(value)
+
+    evidence = []
+    for error in getattr(result, "errors", None) or ():
+        page_no = getattr(error, "page_no", None)
+        evidence.append(_ingestion_core.conversion_error_evidence(
+            page_no=page_no if type(page_no) is int else None,
+            component=identifier(getattr(error, "component_type", None)),
+            module=identifier(getattr(error, "module_name", None)),
+            category=identifier(getattr(error, "category", None)),
+            message=identifier(getattr(error, "error_message", None)),
+        ))
+    return tuple(evidence)
+
+
 def _convert_pdf_generation(
                 pdf_path: Path, doc_output: Path, *,
                 snapshot_stack: ExitStack,
@@ -8302,8 +8417,6 @@ def _convert_pdf_generation(
                 telemetry: _run_telemetry.RunTelemetry | None = None,
                 ) -> "ConversionInputBinding":
     """Convert an already-pinned PDF pathname generation."""
-    import os
-
     md_path = markdown_output or doc_output.with_name(
         f"{doc_output.stem}_docling.md")
     effective_input = original_input
@@ -8386,10 +8499,7 @@ def _convert_pdf_generation(
             "remove OCR source pixels."
         )
 
-    if backend == "pypdfium2":
-        os.environ["DOCLING_PDF_BACKEND"] = "pypdfium2"
-        log.info("Backend: pypdfium2")
-    elif backend != "auto":
+    if backend not in ("pypdfium2", "auto"):
         log.warning(f"Unknown backend '{backend}', using auto")
 
     # Validate/read the source before importing Docling's heavyweight runtime.
@@ -8442,83 +8552,95 @@ def _convert_pdf_generation(
             "running for this PDF.")
     log.info(f"OCR: {ocr_mode}")
 
-    if use_gpu:
-        log.info(f"Mode: GPU ({gpu_name}), layout_batch_size={batch_size}")
-        pipeline_opts = ThreadedPdfPipelineOptions(
-            accelerator_options=AcceleratorOptions(device=AcceleratorDevice.CUDA),
-            layout_batch_size=batch_size,
-            table_batch_size=4,
-            ocr_batch_size=batch_size,
-            queue_max_size=8,
-            **common_opts,
+    # Explicit accelerator options beat OMP_NUM_THREADS and DOCLING_*
+    # variables.  Docling's settings singleton reads DOCLING_* at import, so
+    # reset it for option construction (the layout engine resolves
+    # compile_model then) through conversion (debug output is read then).
+    with _docling_default_settings_scope():
+        if use_gpu:
+            log.info(f"Mode: GPU ({gpu_name}), layout_batch_size={batch_size}")
+            pipeline_opts = ThreadedPdfPipelineOptions(
+                accelerator_options=AcceleratorOptions(
+                    num_threads=_ingestion_core.DOCLING_INFERENCE_THREADS,
+                    device=AcceleratorDevice.CUDA),
+                layout_batch_size=batch_size,
+                table_batch_size=4,
+                ocr_batch_size=batch_size,
+                queue_max_size=8,
+                **common_opts,
+            )
+        else:
+            log.info(f"Mode: CPU ({total_pages} pages — "
+                     "this may take a while)")
+            if batch_size_override is not None:
+                log.warning(
+                    "--batch-size has no effect on the CPU conversion path")
+            pipeline_opts = PdfPipelineOptions(
+                accelerator_options=AcceleratorOptions(
+                    num_threads=_ingestion_core.DOCLING_INFERENCE_THREADS,
+                    device=AcceleratorDevice.CPU),
+                **common_opts,
+            )
+
+        if revision := _pin_docling_layout_revision(pipeline_opts):
+            log.info(f"Docling layout revision: {revision}")
+        artifacts_root = _configure_docling_model_artifacts(
+            pipeline_opts, include_ocr=effective_ocr,
+            ocr_full_page=force_full_page_ocr,
+            ocr_angle_classifier=ocr_angle_classifier,
+            security_policy=security_policy)
+        log.info(f"Docling verified model artifacts: {artifacts_root}")
+
+        # Without the opt-in merge, Docling keeps its default pipeline class.
+        format_option = {"pipeline_options": pipeline_opts}
+        if merge_interleaved_regions:
+            format_option["pipeline_cls"] = (
+                _interleaved_region_merge_pipeline_cls())
+        pdf_format_option = PdfFormatOption(**format_option)
+        # Docling never reads DOCLING_PDF_BACKEND.  --backend stays in the
+        # conversion parameters only so existing receipt digests still match.
+        effective_backend = getattr(pdf_format_option, "backend", None)
+        log.info(
+            "Docling PDF backend: "
+            f"{getattr(effective_backend, '__name__', 'unknown')} "
+            f"(requested --backend={backend} is recorded but not used)")
+        converter = DocumentConverter(
+            format_options={
+                InputFormat.PDF: pdf_format_option,
+            },
         )
-    else:
-        log.info(f"Mode: CPU ({total_pages} pages — this may take a while)")
-        pipeline_opts = PdfPipelineOptions(**common_opts)
 
-    if revision := _pin_docling_layout_revision(pipeline_opts):
-        log.info(f"Docling layout revision: {revision}")
-    artifacts_root = _configure_docling_model_artifacts(
-        pipeline_opts, include_ocr=effective_ocr,
-        ocr_full_page=force_full_page_ocr,
-        ocr_angle_classifier=ocr_angle_classifier,
-        security_policy=security_policy)
-    log.info(f"Docling verified model artifacts: {artifacts_root}")
+        # --- Run conversion (progress from Docling's profiling records) ---
+        with _docling_conversion_progress(total_pages):
+            t0 = time.time()
+            try:
+                result = converter.convert(str(pdf_path))
+            except RuntimeError as e:
+                if "out of memory" in str(e).lower():
+                    log.error(
+                        f"CUDA out of memory! Current batch_size={batch_size}")
+                    log.error(f"  Retry with: --batch-size "
+                              f"{max(1, batch_size // 2)}")
+                    sys.exit(1)
+                raise
+            elapsed = time.time() - t0
 
-    # Without the opt-in merge, Docling keeps its own default pipeline class.
-    format_option = {"pipeline_options": pipeline_opts}
-    if merge_interleaved_regions:
-        format_option["pipeline_cls"] = (
-            _interleaved_region_merge_pipeline_cls())
-    converter = DocumentConverter(
-        format_options={
-            InputFormat.PDF: PdfFormatOption(**format_option),
-        },
-    )
-
-    # --- Progress bar via log interception ---
-    from tqdm import tqdm
-    import threading
-
-    pbar = tqdm(total=total_pages, desc="Converting", unit="pg",
-                bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} pages "
-                           "[{elapsed}<{remaining}, {rate_fmt}]")
-    _seen = {"n": 0, "lock": threading.Lock()}
-
-    class _ProgressHandler(logging.Handler):
-        def emit(self, record):
-            m = re.search(r"pages \[([^\]]+)\]", record.getMessage())
-            if m:
-                count = len(m.group(1).split(","))
-                with _seen["lock"]:
-                    _seen["n"] += count
-                    pbar.update(count)
-
-    handler = _ProgressHandler()
-    handler.setLevel(logging.DEBUG)
-    dl_logger = logging.getLogger("docling.pipeline.standard_pdf_pipeline")
-    dl_logger.addHandler(handler)
-    dl_logger.setLevel(logging.DEBUG)
-
-    # --- Run conversion ---
-    t0 = time.time()
-    try:
-        result = converter.convert(str(pdf_path))
-    except RuntimeError as e:
-        if "out of memory" in str(e).lower():
-            log.error(f"CUDA out of memory! Current batch_size={batch_size}")
+    # Docling reports a failed pipeline stage as PARTIAL_SUCCESS, re-adding
+    # the page empty, instead of raising.  The READY gates use the Docling
+    # JSON as their source oracle and cannot see that loss, so fail closed
+    # here: outside the raised-OOM handler, before any Docling output exists.
+    status = getattr(result, "status", None)
+    error_evidence = _docling_error_evidence(result)
+    incomplete = _ingestion_core.docling_conversion_failure(
+        None if status is None else str(getattr(status, "value", status)),
+        error_evidence)
+    if incomplete is not None:
+        if use_gpu and any(item.memory_exhausted for item in error_evidence):
+            log.error(
+                "CUDA out of memory during conversion! "
+                f"Current batch_size={batch_size}")
             log.error(f"  Retry with: --batch-size {max(1, batch_size // 2)}")
-            sys.exit(1)
-        raise
-    elapsed = time.time() - t0
-
-    # Ensure bar reaches 100%
-    with _seen["lock"]:
-        remaining = total_pages - _seen["n"]
-        if remaining > 0:
-            pbar.update(remaining)
-    pbar.close()
-    dl_logger.removeHandler(handler)
+        raise _ingestion_core.DoclingConversionIncompleteError(incomplete)
 
     log.info(f"Conversion complete in {elapsed:.0f}s "
              f"({total_pages / elapsed:.1f} pages/sec)")
@@ -33201,6 +33323,9 @@ def main(argv: list[str] | None = None):
                         help="Overwrite existing output")
 
     # convert
+    backend_help = (
+        "Kept for compatibility: recorded in conversion receipts but does not "
+        "change Docling's PDF backend")
     p_conv = sub.add_parser("convert", help="PDF to DoclingDocument")
     p_conv.add_argument("--pdf", type=Path, required=True)
     p_conv.add_argument("--out", type=Path, default=DEFAULT_DOC_PATH)
@@ -33208,7 +33333,7 @@ def main(argv: list[str] | None = None):
                         help="Override GPU layout_batch_size (auto by VRAM)")
     p_conv.add_argument("--backend", default="pypdfium2",
                         choices=["pypdfium2", "auto"],
-                        help="PDF backend ('pypdfium2' avoids std::bad_alloc)")
+                        help=backend_help)
     p_conv.add_argument("--force", action="store_true",
                         help="Overwrite existing output")
     p_conv.add_argument("--no-preprocess", action="store_true",
@@ -33525,7 +33650,7 @@ def main(argv: list[str] | None = None):
     p_full.add_argument("--pdf", type=Path, required=True)
     p_full.add_argument("--batch-size", type=int, default=None)
     p_full.add_argument("--backend", default="pypdfium2",
-                        choices=["pypdfium2", "auto"])
+                        choices=["pypdfium2", "auto"], help=backend_help)
     p_full.add_argument("--force", action="store_true")
     p_full.add_argument("--no-preprocess", action="store_true",
                         help="Skip auto-detection of background scan images")
@@ -33573,7 +33698,7 @@ def main(argv: list[str] | None = None):
                          help="PDF files to process")
     p_batch.add_argument("--batch-size", type=int, default=None)
     p_batch.add_argument("--backend", default="pypdfium2",
-                         choices=["pypdfium2", "auto"])
+                         choices=["pypdfium2", "auto"], help=backend_help)
     p_batch.add_argument("--force", action="store_true")
     p_batch.add_argument("--no-preprocess", action="store_true")
     p_batch.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)

@@ -7,7 +7,7 @@ override is recorded in the parameters digest and the conversion manifest
 only when it can affect OCR.
 """
 
-from contextlib import ExitStack
+from contextlib import ExitStack, nullcontext
 import hashlib
 import json
 import logging
@@ -176,9 +176,14 @@ def _capture_generation_options(monkeypatch, *, usable_text):
             ThreadedPdfPipelineOptions=PipelineOptions),
         "docling.datamodel.accelerator_options": dict(
             AcceleratorDevice=SimpleNamespace(CPU="cpu", CUDA="cuda"),
-            AcceleratorOptions=object),
+            AcceleratorOptions=SimpleNamespace),
         "docling.datamodel.base_models": dict(
             InputFormat=SimpleNamespace(PDF="pdf")),
+        "docling.datamodel.settings": dict(
+            scoped=lambda **_kwargs: nullcontext(),
+            BatchConcurrencySettings=SimpleNamespace,
+            DebugSettings=SimpleNamespace,
+            InferenceSettings=SimpleNamespace),
     }
     for name, attributes in modules.items():
         module = ModuleType(name)
