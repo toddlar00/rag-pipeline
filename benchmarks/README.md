@@ -7,12 +7,13 @@ fresh-process repetitions.
 
 ## Provenance
 
-Both current reports were generated from the clean Docling conversion
-hardening source checkpoint `18de7d6862a7dbfb618db087e3342c9bbc37bcfa` (tree
-`117c105fe52a81f5b247a296ec09a5b3bcb36101`), a fail-closed Docling
-conversion hardening that keeps complete conversions byte-identical in the
-default environment, after a series of one-domain dependency updates on
-`main` after the history-preserving merges of #121 (`602bec1`),
+Both current reports were generated from the clean job-manager
+transient-write tolerance source checkpoint
+`9e4d7be97bedadc110cec96844d9bd92e7242bf5` (tree
+`6689c11820cf72a678892cdac2c25ae23ad827f9`), a durable-job manager
+tolerance of transient Windows replace failures whose success path makes
+the same writes in the same order, after a series of one-domain dependency
+updates on `main` after the history-preserving merges of #121 (`602bec1`),
 of that series, #122 to #130 (`1cffc58`), of its documentation follow-up #135
 (`9eb6f94`), of the TOC glyph-leader fix #138 (`a2c5629`), of the
 job-heartbeat hardening #137 (`634c38b`), of the Nomic contract test #136
@@ -23,9 +24,10 @@ oracle fix #145 (`ce73b61`), of the soft-hyphen item-seam fix #146
 heartbeat test fix #148 (`3aede7d`), of the static-security S324
 retirement #150 (`76f98d6`), of the hosted-flake fixes #151 (`584c4a5`), of
 the urllib3 promotion #152 (`25f9ba1`), of the query-path speedups #157
-(`d3754d5`), of the model-load speedups #158 (`cc39af5`) and of the
-ingestion speedups #159 (`139e2dc`, whose second parent `0d7b128` is the
-base this source's seven commits are stacked on). That source contains
+(`d3754d5`), of the model-load speedups #158 (`cc39af5`), of the ingestion
+speedups #159 (`139e2dc`) and of the Docling conversion hardening #160
+(`4994191`, whose second parent `6b2e3f9` is the base this source's five
+commits are stacked on). That source contains
 everything through the
 Task 0.8 static-security merge `e34103f` plus the local OCR accuracy, retry
 and guided-review program, opt-in AI evidence search, the passive cleanup
@@ -72,7 +74,8 @@ lock; the stacked urllib3 promotion moves urllib3 from 2.7.0 to 2.8.0 in the
 core, full, test, service, smoke and security locks; the stacked query-path
 speedups change no lock; the stacked model-load speedups change no lock; the
 stacked ingestion speedups change no lock; the stacked Docling conversion
-hardening changes no lock; no model lock changed.
+hardening changes no lock; the stacked job-manager transient-write
+tolerance changes no lock; no model lock changed.
 The executing environments were synchronized to this source's locks
 (urllib3 2.8.0) with repository-pinned uv 0.12.20 against the exact CPU
 application/test lock union plus its retained bootstrapper:
@@ -90,8 +93,8 @@ marker-resolved distributions before generation.
 
 | Platform | Runtime | Report | Bytes | File SHA-256 | Embedded report SHA-256 |
 |---|---:|---|---:|---|---|
-| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,174 | `641657d456e0f7bfd8612ae75680dbe67fdd1937caf07b4c032e9832edf6d9e1` | `950367cb53525087463932302e1f74b062f1fbc48f2970ce486db23e1994674d` |
-| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,572 | `ed9a9e7b56e92568362d245723ef9492c75fa3b8c7d88c3783536290f190ae25` | `dccde38ed230b896f6279acb687322f73f6457faad97e25c23c0f768a40788ef` |
+| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,176 | `69eaa5795659b6879b72a422088bfb9420a061256ce6f6ad78584e4a862cceec` | `572c5ff0d83c0b3dfb8f01aab804455b0a66190b68ef54f0892f931085e1b549` |
+| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,575 | `625d9f42031f8c8a5d48845b0bb5539e55a492c9c02d4d5defb6be0460abfee5` | `c27487131fa707979e88f93e7e8e5cad6d8e345749afcb86499da8f2d55711b3` |
 
 The reports attest the same source commit, clean-worktree state, tracked-diff
 digest, eight LF and `HEAD`-identical dependency/model-lock inputs, authoritative
@@ -526,6 +529,28 @@ records while their DEBUG flood is dropped at INFO, with `--verbose` output
 unchanged. In the default environment, complete conversions keep
 byte-identical artifacts and receipt digests. It changes no dependency or
 lock and supersedes the `6fc0c36` pair for its own pull request.
+The `18de7d6` pair (gate-only child `6b2e3f9`) passed the hosted CI
+promotion gate on [PR
+#160](https://github.com/toddlar00/rag-pipeline/pull/160), which merged into
+`main` as `4994191`; the networked vulnerability/SBOM jobs passed at that
+head. The stacked job-manager transient-write tolerance source `9e4d7be`
+makes the durable-job manager retry transient Windows replace failures of
+its state writes: a write whose two-path atomic replace fails with WinError
+5, 32 or 33, exactly as `storage_policy.is_transient_replace_error` accepts,
+is retried as a fresh atomic write that repeats every storage identity and
+DACL check, with backoff of 0.05, 0.1, 0.25, 0.5 and then 1.0 s until a
+monotonic deadline, while any other error still propagates at once; the
+writes before the ready marker share 3 s (within the UI's default 5 s
+`--job-ready-timeout`), the two cancellation-evidence writes share 2 s, and
+each later write (the terminal runtime and attempt report, the pre-launch
+cancellation's terminal writes and the closed worker-log cap) has its own
+8 s. A held `runtime.json` or `attempt.report.json` therefore no longer
+fails a healthy job, or makes `run_job` raise `PermissionError` after the
+store has committed `succeeded`, while the hold fits those budgets. Store
+commit writes are not retried, the heartbeat keeps its own tolerance, and
+the success path makes the same writes in the same order. It changes no
+pipeline output, dependency or lock and supersedes the `18de7d6` pair for
+its own pull request.
 The current reports above
 bind
 that exact clean source and each passes an independent complete

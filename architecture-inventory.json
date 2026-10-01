@@ -28458,7 +28458,7 @@
   "schema_version": 3,
   "source_architecture": {
     "class_count": 337,
-    "function_count": 4449,
+    "function_count": 4451,
     "import_graph": {
       "cyclic_components": [],
       "edge_count": 650,
@@ -32373,8 +32373,8 @@
             "scope": "top_level"
           }
         ],
-        "definition_locations_sha256": "aedc1bed28312913829c096e7a048f1365c223fc3ec3bf8f45058448f10cda84",
-        "function_count": 61,
+        "definition_locations_sha256": "398b3303289550b4ae9ffd27599f4d6496025bc263f50c6f44d4dfaedf945f22",
+        "function_count": 63,
         "functions": [
           {
             "kind": "function",
@@ -32678,6 +32678,12 @@
           },
           {
             "kind": "function",
+            "name": "_write_tolerating_transient_replace",
+            "scope": "top_level",
+            "signature_sha256": "2b15b162ad609dacc822e17e3021b38a7f64c05788591f3f007955caa6bd1f00"
+          },
+          {
+            "kind": "function",
             "name": "default_service_job_coordination_binding",
             "scope": "top_level",
             "signature_sha256": "b4f3d9aca5d93dfd20ce5087c31cb9cfe9a7fa350b8c2570db3a059ef3727556"
@@ -32741,6 +32747,12 @@
             "name": "run_job.heartbeat",
             "scope": "nested",
             "signature_sha256": "a5f835070639f51d3f8c494ec14f92d343b7b9c041ee9779cc4364abea7cf6ec"
+          },
+          {
+            "kind": "function",
+            "name": "run_job.tolerant_write",
+            "scope": "nested",
+            "signature_sha256": "b233f0e4be751e3b09fac307bba03c8a623eedfe2fa35f20b0b579ed7f3d47af"
           }
         ],
         "import_edges": [
@@ -32809,10 +32821,10 @@
           }
         ],
         "module": "job_coordination",
-        "non_blank_lines": 2131,
+        "non_blank_lines": 2197,
         "path": "job_coordination.py",
-        "physical_lines": 2297,
-        "top_level_function_count": 53
+        "physical_lines": 2368,
+        "top_level_function_count": 54
       },
       {
         "class_count": 7,
@@ -65404,16 +65416,16 @@
         "top_level_function_count": 2
       }
     ],
-    "physical_line_count": 131414,
+    "physical_line_count": 131485,
     "source_groups": [
       "production",
       "tools",
       "other"
     ],
-    "top_level_function_count": 2946
+    "top_level_function_count": 2947
   },
   "tracked_sources": {
-    "count": 502,
+    "count": 503,
     "groups": [
       {
         "count": 153,
@@ -65575,7 +65587,7 @@
         ]
       },
       {
-        "count": 306,
+        "count": 307,
         "name": "tests",
         "paths": [
           "tests/conftest.py",
@@ -65654,6 +65666,7 @@
           "tests/test_job_heartbeat_transient.py",
           "tests/test_job_manager.py",
           "tests/test_job_manager_python_launch.py",
+          "tests/test_job_manager_transient_writes.py",
           "tests/test_job_runtime.py",
           "tests/test_jobs_cli.py",
           "tests/test_launcher_scripts.py",
