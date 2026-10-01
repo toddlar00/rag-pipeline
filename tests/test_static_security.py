@@ -25,15 +25,24 @@ _POSITIVE_SOURCES = {
         "import subprocess\n"
         "subprocess.run(command, shell=True)\n"
     ),
+    "S604": (
+        "def run(command, shell=False):\n"
+        "    return command\n"
+        "run(command, shell=True)\n"
+    ),
     "S605": 'import os\nos.system("ls " + name)\n',
+    "S606": "import os\nos.execl(program, program)\n",
     "S608": (
         'QUERY = "SELECT * FROM users WHERE name = \'%s\'" % name\n'
     ),
 }
 
 _NEGATIVE_SOURCES = {
+    "S102": 'compile(source, "<fixture>", "exec")\n',
     "S104": 'HOST = "127.0.0.1"\n',
     "S301": "import json\njson.loads(payload)\n",
+    "S302": "import marshal\nmarshal.dumps(value)\n",
+    "S307": "import ast\nast.literal_eval(payload)\n",
     "S324": "import hashlib\nhashlib.sha256(payload)\n",
     "S501": (
         "import requests\n"
@@ -43,6 +52,23 @@ _NEGATIVE_SOURCES = {
     "S602": (
         "import subprocess\n"
         "subprocess.run(command, check=True)\n"
+    ),
+    "S604": (
+        "def run(command, shell=False):\n"
+        "    return command\n"
+        "run(command, shell=False)\n"
+    ),
+    "S605": (
+        "import subprocess\n"
+        'subprocess.run(["ls", name], check=True)\n'
+    ),
+    "S606": (
+        "import subprocess\n"
+        "subprocess.run([program], check=True)\n"
+    ),
+    "S608": (
+        'QUERY = "SELECT * FROM users WHERE name = ?"\n'
+        "cursor.execute(QUERY, (name,))\n"
     ),
 }
 
@@ -79,18 +105,28 @@ def _finding(rule="S324", path="module.py", row=10):
     return {"path": path, "row": row, "rule": rule}
 
 
+def test_every_blocking_rule_has_positive_and_negative_fixtures():
+    policy = check_static_security._load_policy(
+        Path("static-security-policy.json")
+    )
+
+    assert sorted(_POSITIVE_SOURCES) == policy["blocking_rules"]
+    assert sorted(_NEGATIVE_SOURCES) == policy["blocking_rules"]
+
+
 def test_per_rule_positive_fixtures_alert(tmp_path):
+    expected = set()
     for index, (rule, source) in enumerate(_POSITIVE_SOURCES.items()):
-        (tmp_path / f"positive_{index}_{rule.lower()}.py").write_text(
-            source, encoding="utf-8"
-        )
+        name = f"positive_{index}_{rule.lower()}.py"
+        (tmp_path / name).write_text(source, encoding="utf-8")
+        expected.add((name, rule))
 
     raw = check_static_security._run_ruff(
         sorted(_POSITIVE_SOURCES), tmp_path
     )
-    caught = {item["code"] for item in raw}
+    caught = {(Path(item["filename"]).name, item["code"]) for item in raw}
 
-    assert caught == set(_POSITIVE_SOURCES)
+    assert caught == expected
 
 
 def test_per_rule_negative_fixtures_stay_quiet(tmp_path):
@@ -104,6 +140,73 @@ def test_per_rule_negative_fixtures_stay_quiet(tmp_path):
     )
 
     assert raw == []
+
+
+_MD5_SOURCE = "import hashlib\nhashlib.md5(payload)\n"
+
+
+@pytest.mark.parametrize("source", (
+    "import hashlib\nhashlib.md5(payload)  # noqa: S324\n",
+    "import hashlib\nhashlib.md5(payload)  # noqa\n",
+    "# ruff: noqa: S324\n" + _MD5_SOURCE,
+    "# ruff: noqa\n" + _MD5_SOURCE,
+    "# flake8: noqa\n" + _MD5_SOURCE,
+    (
+        "import hashlib\n"
+        "# ruff: disable[S324]\n"
+        "hashlib.md5(payload)\n"
+        "# ruff: enable[S324]\n"
+    ),
+), ids=(
+    "inline-code", "inline-blanket", "file-code", "file-blanket",
+    "flake8-file-blanket", "range",
+))
+def test_inline_suppression_comments_cannot_bypass_the_gate(tmp_path, source):
+    (tmp_path / "bypass.py").write_text(source, encoding="utf-8")
+
+    raw = check_static_security._run_ruff(["S324"], tmp_path)
+
+    assert [item["code"] for item in raw] == ["S324"]
+
+
+def test_project_ruff_config_cannot_bypass_the_gate(tmp_path):
+    (tmp_path / "pyproject.toml").write_text(
+        "[tool.ruff]\n"
+        'extend-exclude = ["excluded.py"]\n'
+        "\n"
+        "[tool.ruff.lint.per-file-ignores]\n"
+        '"ignored.py" = ["S324"]\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "nested").mkdir()
+    (tmp_path / "nested" / "ruff.toml").write_text(
+        'extend-exclude = ["hidden.py"]\n', encoding="utf-8"
+    )
+    for name in ("excluded.py", "ignored.py", "nested/hidden.py"):
+        (tmp_path / name).write_text(_MD5_SOURCE, encoding="utf-8")
+
+    raw = check_static_security._run_ruff(["S324"], tmp_path)
+
+    assert sorted(
+        (Path(item["filename"]).resolve().relative_to(tmp_path.resolve())
+         .as_posix(), item["code"])
+        for item in raw
+    ) == [
+        ("excluded.py", "S324"),
+        ("ignored.py", "S324"),
+        ("nested/hidden.py", "S324"),
+    ]
+
+
+def test_explicit_non_security_digest_marking_is_accepted(tmp_path):
+    (tmp_path / "marked.py").write_text(
+        "import hashlib\n"
+        "hashlib.md5(payload, usedforsecurity=False)\n"
+        "hashlib.sha1(payload, usedforsecurity=False)\n",
+        encoding="utf-8",
+    )
+
+    assert check_static_security._run_ruff(["S324"], tmp_path) == []
 
 
 def test_unaccepted_finding_fails():
@@ -167,6 +270,7 @@ def test_exempt_rules_skip_test_paths_only():
         _finding(rule="S301", path="tests/test_something.py"),
         _finding(rule="S301", path="module.py"),
         _finding(rule="S324", path="tests/test_other.py"),
+        _finding(rule="S301", path="evaluation/fixture.py"),
     ]
 
     errors, reported = check_static_security.evaluate(
@@ -176,8 +280,9 @@ def test_exempt_rules_skip_test_paths_only():
     assert errors == [
         "module.py:10: S301 is not accepted by policy",
         "tests/test_other.py:10: S324 is not accepted by policy",
+        "evaluation/fixture.py:10: S301 is not accepted by policy",
     ]
-    assert len(reported) == 2
+    assert len(reported) == 3
 
 
 @pytest.mark.parametrize("mutate", (
@@ -225,8 +330,7 @@ def test_repository_policy_is_valid_and_narrow():
     assert policy["ruff_version"] == "0.16.9"
     assert "S101" not in policy["blocking_rules"]
     assert "S603" not in policy["blocking_rules"]
-    assert len(policy["suppressions"]) == 1
-    assert policy["suppressions"][0]["path"] == "retrieval_core.py"
+    assert policy["suppressions"] == []
 
 
 def test_normalize_relativizes_and_orders(tmp_path):
@@ -276,14 +380,7 @@ def test_repository_tree_passes_with_committed_policy(tmp_path, capsys):
     assert status == 0
     envelope = json.loads(envelope_path.read_text(encoding="utf-8"))
     assert envelope["violations"] == 0
-    assert envelope["findings"] == [
-        {
-            "path": "retrieval_core.py",
-            "row": 166,
-            "rule": "S324",
-            "suppressed_through": "2026-11-30",
-        }
-    ]
+    assert envelope["findings"] == []
     payload = json.dumps(envelope)
     assert "\\\\" not in payload
     assert "message" not in payload

@@ -163,7 +163,10 @@ def _metadata_text(value: object) -> str:
 
 def _stable_token_hash(token: str) -> int:
     """Return a deterministic sparse-vector index for a token."""
-    return int(hashlib.md5(token.encode("utf-8")).hexdigest()[:8], 16)
+    # MD5 is a stable, non-cryptographic index function here; the digests
+    # are persisted as Qdrant sparse-vector indices and must not change.
+    digest = hashlib.md5(token.encode("utf-8"), usedforsecurity=False)
+    return int(digest.hexdigest()[:8], 16)
 
 
 _LEGAL_SEARCH_ALIASES = (

@@ -19,9 +19,10 @@
   fix pair passed on PR #145 (merged through `ce73b61`), the soft-hyphen
   item-seam fix pair passed on PR #146 (merged through `8cc89b0`), the
   post-series documentation pair passed on PR #147 (merged through
-  `9fff7bb`), and the heartbeat test fix pair at source `e5966e1` is
-  pending; exact-head human review and separate R8 owner authorization are
-  not recorded
+  `9fff7bb`), the heartbeat test fix pair passed on PR #148 (merged through
+  `3aede7d`), and the static-security S324 retirement pair at source
+  `3af52f8` is pending; exact-head human review and separate R8 owner
+  authorization are not recorded
 - **Milestone:** R10 prerequisite for the R8 pipeline-ownership move
 - **Report schema:** `phase-a0` v3
 
@@ -152,11 +153,12 @@ gate-only child `32153e9` and merge `376277c`
 Task 0.8 static-security pair at source `8891e1b` repeated it through
 gate-only child `1533164` and merge `e34103f`
 ([PR #107](https://github.com/toddlar00/rag-pipeline/pull/107)). The
-current replacement pair uses the clean heartbeat test fix source
-`e5966e1305cf5d58d2b01d32b96f453798f0ef27` (tree
-`0f4037acb3598c6c6e3c89078fe068094b222f3b`), a test-only follow-up after a
-series of one-domain dependency updates, on `main` after the merges of the
-post-series documentation #147 (`9fff7bb`), the soft-hyphen item-seam fix
+current replacement pair uses the clean static-security S324 retirement
+source `3af52f8cbe41b9c3872e6af6c5c7230659243018` (tree
+`02da93a1d8de080254ceef63ed7ae02ed0053bfc`), a static-security gate
+follow-up after a series of one-domain dependency updates, on `main` after
+the merges of the heartbeat test fix #148 (`3aede7d`), the post-series
+documentation #147 (`9fff7bb`), the soft-hyphen item-seam fix
 #146 (`8cc89b0`), the table header-row oracle fix #145 (`ce73b61`), the
 tokenless-glyph rotation fix #140 (`6baf14b`), the oauthlib promotion #139
 (`123bedb`), the Nomic contract test #136 (`2f07510`), the job-heartbeat
@@ -372,6 +374,20 @@ promotion gate on [PR
 failure-budget tests independent of runner speed and raises the Node
 subprocess ceilings of three OCR review UI tests; it changes no pipeline
 behavior, dependency or lock and supersedes the `f3ec23a` pair.
+The `e5966e1` pair (gate-only child `b93eb1f`) passed the hosted CI
+promotion gate on [PR
+#148](https://github.com/toddlar00/rag-pipeline/pull/148), which merged into
+`main` as `3aede7d`. The static-security source `3af52f8` retires the only
+static-security suppression (S324 on the non-cryptographic MD5
+sparse-vector token hash, expiring 2026-11-30) by marking that hash
+`usedforsecurity=False`, which keeps its digests byte-identical, so no
+index migration or Qdrant re-index is needed. It runs ruff with
+`--isolated --ignore-noqa`, so inline, file-level and range suppression
+comments and project ruff configuration cannot hide findings, covers every
+blocking rule (including S604 and S606) with positive and negative
+fixtures, removes the dead `evaluation/` exemption and pins the Hub Git
+blob identity to `git hash-object` values. It changes no pipeline output,
+dependency or lock and supersedes the `e5966e1` pair.
 Its Windows and
 Linux CPython 3.12.13 reports were
 generated after the same strict hash-locked synchronization and
@@ -566,15 +582,16 @@ then the stacked table header-row oracle fix source `09340ed`,
 then the stacked soft-hyphen item-seam fix source `a7847ce`,
 then the stacked post-series documentation source `578a13a`,
 then the stacked post-series documentation source `f3ec23a`,
-then the stacked heartbeat test fix source `e5966e1`.
+then the stacked heartbeat test fix source `e5966e1`,
+then the stacked static-security S324 retirement source `3af52f8`.
 Its Windows report
-is 51,082 bytes (file SHA-256
-`379ccaf31cd0d9b21e39e3939adc579c995a73dc103641637bece0c6c03439d2`;
+is 51,079 bytes (file SHA-256
+`2152ee96bcc52c716aabde1714c93d2e133f9e33bf2a10444b7cf4d507d2d661`;
 embedded report SHA-256
-`03796f9dff2bd56f3f38f6f6a369e10b64d2881d085cdfa60e45b7a2ba48876b`).
-Its Linux report is 50,478 bytes (file SHA-256
-`f85aa81149aa321378490d6c64d6cb0a3e47c56efff557420b618b9ccd745911`;
+`ed4f99984f1cb7f2818933556cce705201a9e9f94326321308f2f7a063c989ad`).
+Its Linux report is 50,486 bytes (file SHA-256
+`d6ad0f18151ddfee025862804d8ad889846abbee7c4cfd8f623f1c299a138ff3`;
 embedded report SHA-256
-`bab24b5f26612766985900a24b551b1ff990c60822241bf885cafc9439549365`).
+`6726e05ae916102c5fa7a55be5f64412c2115088c972726b45a8e76b5bb861bd`).
 Both use CPython 3.12.13 and pass their complete local same-platform 9×5
 comparisons. Hosted promotion remains pending.
