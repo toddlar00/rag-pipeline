@@ -24,9 +24,11 @@
   passed on PR #150 (merged through `76f98d6`), the stacked hosted-flake
   fix pair at source `6b97fc5` passed on PR #151 (merged through
   `584c4a5`), the urllib3 promotion pair at source `aab0326` passed on PR
-  #152 (merged through `25f9ba1`), and the stacked query-path speedup pair
-  at source `18a70ab` is pending; exact-head human review and separate R8
-  owner authorization are not recorded
+  #152 (merged through `25f9ba1`), the stacked query-path speedup pair at
+  source `18a70ab` passed on PR #157 (merged through `d3754d5`), and the
+  stacked model-load speedup pair at source `8ce1a8d` is pending;
+  exact-head human review and separate R8 owner authorization are not
+  recorded
 - **Milestone:** R10 prerequisite for the R8 pipeline-ownership move
 - **Report schema:** `phase-a0` v3
 
@@ -157,13 +159,13 @@ gate-only child `32153e9` and merge `376277c`
 Task 0.8 static-security pair at source `8891e1b` repeated it through
 gate-only child `1533164` and merge `e34103f`
 ([PR #107](https://github.com/toddlar00/rag-pipeline/pull/107)). The
-current replacement pair uses the clean query-path speedup source
-`18a70ab0b57b7958a2e098be609232f233dceb6c` (tree
-`0de647885d98a8f86349239231c529e3d3a2cdd1`), three output-identical
-query-path speedups after a series of one-domain dependency updates, on
-`main` after the merges of the urllib3 promotion #152 (`25f9ba1`, whose
-second parent `19b9ef9` is the base this source's ten commits are stacked
-on), the hosted-flake fixes
+current replacement pair uses the clean model-load speedup source
+`8ce1a8d538270e629399d8031226175e269a5b5c` (tree
+`ee92b533bb4c3afe61e6e195316d649da63298d9`), two output-identical
+model-load speedups after a series of one-domain dependency updates, on
+`main` after the merges of the query-path speedups #157 (`d3754d5`, whose
+second parent `e91d42f` is the base this source's nine commits are stacked
+on), the urllib3 promotion #152 (`25f9ba1`), the hosted-flake fixes
 #151 (`584c4a5`), the static-security S324 retirement #150 (`76f98d6`), the
 heartbeat test fix #148 (`3aede7d`), the post-series
 documentation #147 (`9fff7bb`), the soft-hyphen item-seam fix
@@ -432,6 +434,23 @@ strict chunks parser runs a path-free non-finite scan before its field-path
 walk, with identical records and error text. It changes no pipeline output,
 dependency or lock and supersedes the `aab0326` pair for its own pull
 request.
+The `18a70ab` pair (gate-only child `e91d42f`) passed the hosted CI
+promotion gate on [PR
+#157](https://github.com/toddlar00/rag-pipeline/pull/157), which merged into
+`main` as `d3754d5`; the networked vulnerability/SBOM jobs passed at that
+head. The stacked model-load speedup source `8ce1a8d` makes two
+output-identical model-load speedups: model-artifact verification hashes
+each file with `readinto` into one reused 1 MiB buffer instead of
+allocating a new block per read, with identical sizes, digests and error
+text; and a verified load of the pinned Nomic embedding model skips the
+`torch.nn.init` calls that its remote code runs before the verified
+checkpoint overwrites them, and caches the model only after a
+fail-closed proof that the checkpoint header declares every transformer
+state-dict entry at its exact shape and that no parameter lies outside the
+transformer, with bitwise-identical weights and embeddings. A checkpoint
+that omits a parameter now fails closed instead of silently keeping random
+weights. It changes no pipeline output, dependency or lock and supersedes
+the `18a70ab` pair for its own pull request.
 Its Windows and
 Linux CPython 3.12.13 reports were
 generated after the same strict hash-locked synchronization, to its locks
@@ -631,15 +650,16 @@ then the stacked heartbeat test fix source `e5966e1`,
 then the stacked static-security S324 retirement source `3af52f8`,
 then the stacked hosted-flake fix source `6b97fc5`,
 then the stacked urllib3 promotion source `aab0326`,
-then the stacked query-path speedup source `18a70ab`.
+then the stacked query-path speedup source `18a70ab`,
+then the stacked model-load speedup source `8ce1a8d`.
 Its Windows report
 is 51,176 bytes (file SHA-256
-`f4585ce198a04dfd20cf31d122930dc1e5a1b12308d1c8c8374b243058f9dca5`;
+`7deb37ccce660121373c16bdfdcb974b3d801b40f0ef63f7a0ee50414bdebea1`;
 embedded report SHA-256
-`8e994328de744953319b49a5a50ac945c78d51f375a6b87f6ce51527fd5f6439`).
-Its Linux report is 50,574 bytes (file SHA-256
-`8868172b3f36a4716b2a177f156d7b627610b0eaf7fb0d7fc5a5afd7b221b158`;
+`251e1096e540654d208563c14ae0c9cb1c42633180d6e3fce1072b4163555331`).
+Its Linux report is 50,572 bytes (file SHA-256
+`12888698652adbd40cf06a90da307d7e0f3fc146bf41d824dd19668b8dbb7897`;
 embedded report SHA-256
-`613eaa4ee4f260947973745cdc22bd90c3192648dac2c3f8218f650f0de33396`).
+`ced7325fd07f6d059f131d48bc0138b511360380a5711094813b7853a144571d`).
 Both use CPython 3.12.13 and pass their complete local same-platform 9×5
 comparisons. Hosted promotion remains pending.
