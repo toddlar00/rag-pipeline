@@ -1431,14 +1431,16 @@ read by fresh layout-aware OCR of an image-only derivative, using
     report, the ready marker, and the terminal runtime write. When a
     handle is held across worker exit, the terminal write's
     `PermissionError` escapes `run_job` after the store has recorded
-    `succeeded`, and reconciliation repairs the report later. The prepared
-    branch `agent/imp-windows-transient-replace-tolerance` supersedes this
-    follow-up but is not on `main` (see "Research improvement pass
-    (2026-09-30, prepared)"). It retries only transient replace errors of
-    these writes: within one 3-second budget until the ready marker is
-    published, 2 seconds for the cancellation evidence and 8 seconds for each
-    later write. Store commit writes, reconciliation writes and
-    launcher-side reads stay uncovered.
+    `succeeded`, and reconciliation repairs the report later. The branch
+    `agent/imp-windows-transient-replace-tolerance` resolves this follow-up
+    once it lands; it is now proposed in its own stacked pull request from
+    `agent/job-transient-write-tolerance`, with its own Phase A0 pair at
+    source `9e4d7be` (hosted checks pending), and is not integrated (see
+    "Research improvement pass (2026-09-30, prepared)"). It retries only
+    transient replace errors of these writes: within one 3-second budget
+    until the ready marker is published, 2 seconds for the cancellation
+    evidence and 8 seconds for each later write. Store commit writes,
+    reconciliation writes and launcher-side reads stay uncovered.
   - *Born-digital structure.* The born-digital supplement shows the same
     heading and opinion attribution errors, so attribution is a structure
     problem, not only an OCR one.
@@ -1614,7 +1616,8 @@ embedding code's Transformers names and clear two new advisories.
   write made the durable job kill a healthy worker and report
   `permission_denied`. Transient Windows replace failures (WinError 5, 32 or
   33) of the heartbeat are now tolerated for up to 60 seconds; the manager's
-  other writes remain a follow-up under "Corpus audit follow-ups".
+  other writes remain a follow-up under "Corpus audit follow-ups", where a
+  fix is now proposed, not integrated.
 - [#136](https://github.com/toddlar00/rag-pipeline/pull/136) (`2f07510`):
   Nomic Transformers name-contract test.
   `tests/test_embedding_runtime_compat.py` pins every Transformers name the
@@ -1753,15 +1756,19 @@ promotion gate there. The four ingestion speed branches
 `agent/imp-embedding-token-counter-cache`) merged together into `main`
 through [PR #159](https://github.com/toddlar00/rag-pipeline/pull/159) as
 `139e2dc`; their shared Phase A0 pair at source `6fc0c36` passed the hosted
-CI promotion gate there. `agent/imp-docling-conversion-hardening` is now
-proposed in its own pull request from
-`agent/docling-conversion-hardening-pr`, which is stacked on PR #159's
-evidence head `0d7b128` and carries its own Phase A0 pair at source
-`18de7d6`, its hosted checks pending. The other 4 have no pull request, so
-none of them is "Implemented (draft)"; of the 18, only the static-security
-branch, the three hosted-flake fix branches, the three query-path speed
-branches, the two model-load speed branches and the four ingestion speed
-branches are integrated. The integration branch
+CI promotion gate there. `agent/imp-docling-conversion-hardening` merged
+into `main` through [PR
+#160](https://github.com/toddlar00/rag-pipeline/pull/160) as `4994191`; its
+Phase A0 pair at source `18de7d6` passed the hosted CI promotion gate there.
+`agent/imp-windows-transient-replace-tolerance` is now proposed in its own
+pull request from `agent/job-transient-write-tolerance`, which is stacked
+on PR #160's evidence head `6b2e3f9` and carries its own Phase A0 pair at
+source `9e4d7be`, its hosted checks pending. The other 3 have no pull
+request, so none of them is "Implemented (draft)"; of the 18, only the
+static-security branch, the three hosted-flake fix branches, the three
+query-path speed branches, the two model-load speed branches, the four
+ingestion speed branches and the Docling hardening branch are integrated.
+The integration branch
 `agent/research-improvements` merges all 18 only to validate the
 combination; each other branch lands through its own pull request. Branch
 names below omit the `agent/imp-` prefix.
@@ -1844,9 +1851,9 @@ names below omit the `agent/imp-` prefix.
     67 logged conversions, but such a run now stops instead of publishing.
     The branch also pins Docling's ambient environment knobs
     (`OMP_NUM_THREADS` and `DOCLING_*` changed output bytes) and stops the
-    DEBUG log flood. It is now proposed in its own stacked pull request,
-    with its own Phase A0 pair at source `18de7d6` (hosted checks pending),
-    and is not integrated.
+    DEBUG log flood. It merged through PR #160 as `4994191`, with its own
+    Phase A0 pair at source `18de7d6`, which passed the hosted CI promotion
+    gate.
   - `review-ocr-close-deadline-clamp`: clamps the crop archive's remaining
     close time (see the hosted-runner follow-up above). It merged together
     with `a0-capture-cleanup-retry` and `posix-sigterm-test-deflake` through
@@ -1875,7 +1882,9 @@ names below omit the `agent/imp-` prefix.
     branch, holds within the budgets (0.5-2 s before the ready marker,
     0.5-5 s after it) succeed in 29 of 29; a 5 s pre-ready hold and a 10 s
     terminal hold still fail once their 3 s and 8 s budgets run out (after
-    3.48 s and about 8.35 s).
+    3.48 s and about 8.35 s). It is now proposed in its own stacked pull
+    request, with its own Phase A0 pair at source `9e4d7be` (hosted checks
+    pending), and is not integrated.
 - **Accuracy tooling.** `lexical-accuracy-toolkit` adds
   `eval.py --retriever lexical`, which scores through the production BM25
   leg (`rag._bm25_search`); the existing `--retriever bm25` is an offline
@@ -1907,8 +1916,9 @@ names below omit the `agent/imp-` prefix.
   and its own Phase A0 source/evidence pair (the three hosted-flake fix
   branches, the three query-path speed branches, the two model-load speed
   branches and the four ingestion speed branches each shared one stacked
-  pull request and pair, and the Docling hardening branch is proposed with
-  its own). The combined query-path, model-load and ingestion pull requests
+  pull request and pair, the Docling hardening branch merged with its own,
+  and the job-manager transient-write branch is proposed with its own). The
+  combined query-path, model-load and ingestion pull requests
   departed from the A1 owner-decision row's condition that each slice is
   its own pull request with its own Phase A0 source/evidence pair; they
   merged as #157, #158 and #159. Every branch
@@ -1948,7 +1958,10 @@ names below omit the `agent/imp-` prefix.
 - **Follow-ups found (not fixed).**
   - Job manager (also at `3aede7d`): when a cancellation-evidence write
     fails, `run_job` raises `ValueError` from `attempt_reporting` after
-    `interrupted` and the terminal runtime have committed.
+    `interrupted` and the terminal runtime have committed. With
+    `windows-transient-replace-tolerance` this takes a non-transient failure
+    or transient ones past the 2 s cancellation budget; that branch does not
+    fix it.
   - Embedding (also at `3aede7d`): the `EMBEDDING_MAX_TOKENS` check raises
     after the model is cached, so a retry skips it (fail-open on retry).
     The token counter's bare `except` turns a tampered or missing bundle
@@ -2381,6 +2394,28 @@ records while their DEBUG flood is dropped at INFO, with `--verbose` output
 unchanged. In the default environment, complete conversions keep
 byte-identical artifacts and receipt digests. It changes no dependency or
 lock and supersedes the `6fc0c36` pair for its own pull request.
+The `18de7d6` pair (gate-only child `6b2e3f9`) passed the hosted CI
+promotion gate on [PR
+#160](https://github.com/toddlar00/rag-pipeline/pull/160), which merged into
+`main` as `4994191`; the networked vulnerability/SBOM jobs passed at that
+head. The stacked job-manager transient-write tolerance source `9e4d7be`
+makes the durable-job manager retry transient Windows replace failures of
+its state writes: a write whose two-path atomic replace fails with WinError
+5, 32 or 33, exactly as `storage_policy.is_transient_replace_error` accepts,
+is retried as a fresh atomic write that repeats every storage identity and
+DACL check, with backoff of 0.05, 0.1, 0.25, 0.5 and then 1.0 s until a
+monotonic deadline, while any other error still propagates at once; the
+writes before the ready marker share 3 s (within the UI's default 5 s
+`--job-ready-timeout`), the two cancellation-evidence writes share 2 s, and
+each later write (the terminal runtime and attempt report, the pre-launch
+cancellation's terminal writes and the closed worker-log cap) has its own
+8 s. A held `runtime.json` or `attempt.report.json` therefore no longer
+fails a healthy job, or makes `run_job` raise `PermissionError` after the
+store has committed `succeeded`, while the hold fits those budgets. Store
+commit writes are not retried, the heartbeat keeps its own tolerance, and
+the success path makes the same writes in the same order. It changes no
+pipeline output, dependency or lock and supersedes the `18de7d6` pair for
+its own pull request.
 Its Windows/Linux
 pair (independent local same-platform comparisons passed) is that branch's
 candidate; its hosted checks and exact-SHA record are pending, and the
@@ -2447,7 +2482,7 @@ release-qualified support.
 | Private retrieval/answer qualification | Corpus-owner judgments, family aliases, floors, and promotion statistics remain unresolved | No production-qualified corpus or generalized quality claim. Portable generated/CC0 suites validate mechanics only. |
 | First version and platform/support tiers | Not selected | Development-only identity; no release tag or Tier-1 claim. |
 | Dependabot `ignore` rules for rejected versions | The strict `dependabot.yml` policy admits no `ignore` field, so closed grouped proposals (#141-#144) may reopen | Add no `ignore` rule and do not widen the policy; close a reopened proposal with its recorded reason. |
-| Retrieval accuracy and runtime defaults examined by the 2026-09-30 research pass: reranking hybrid results by default, `function-words-v1` as the default query policy, fusion weights, the Qdrant sparse/fusion defects, a CUDA runtime, length-sorted embedding batches, a warm search worker, and a Docling `--allow-partial-conversion` escape hatch | Measured or estimated by that pass, not on the owner's private judged sets (see "Research improvement pass"); none selected | Keep every current default and adopt none of these changes; the Docling fail-closed fix, now proposed in its own pull request and not integrated, is a robustness change outside this row. Change a default only through its own owner decision and pull request, with a versioned re-index where vectors or indexes change. |
+| Retrieval accuracy and runtime defaults examined by the 2026-09-30 research pass: reranking hybrid results by default, `function-words-v1` as the default query policy, fusion weights, the Qdrant sparse/fusion defects, a CUDA runtime, length-sorted embedding batches, a warm search worker, and a Docling `--allow-partial-conversion` escape hatch | Measured or estimated by that pass, not on the owner's private judged sets (see "Research improvement pass"); none selected | Keep every current default and adopt none of these changes; the Docling fail-closed fix, merged through PR #160, is a robustness change outside this row. Change a default only through its own owner decision and pull request, with a versioned re-index where vectors or indexes change. |
 
 Owner decisions are gates, not checkboxes an implementation agent may infer.
 A technical change may prepare a bounded decision mechanism, but it must pause
