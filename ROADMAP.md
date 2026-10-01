@@ -1426,21 +1426,22 @@ read by fresh layout-aware OCR of an image-only derivative, using
     run on it.
   - *Durable-job manager writes on Windows.* The advisory heartbeat now
     tolerates transient replace failures (WinError 5, 32 or 33) for up to
-    60 seconds. The manager's other writes still fail on the first such
-    error: the child-started and cancellation runtime writes, the attempt
-    report, the ready marker, and the terminal runtime write. When a
-    handle is held across worker exit, the terminal write's
-    `PermissionError` escapes `run_job` after the store has recorded
-    `succeeded`, and reconciliation repairs the report later. The branch
-    `agent/imp-windows-transient-replace-tolerance` resolves this follow-up
-    once it lands; it is now proposed in its own stacked pull request from
-    `agent/job-transient-write-tolerance`, with its own Phase A0 pair at
-    source `9e4d7be` (hosted checks pending), and is not integrated (see
-    "Research improvement pass (2026-09-30, prepared)"). It retries only
-    transient replace errors of these writes: within one 3-second budget
-    until the ready marker is published, 2 seconds for the cancellation
-    evidence and 8 seconds for each later write. Store commit writes,
-    reconciliation writes and launcher-side reads stay uncovered.
+    60 seconds. Before #161, the manager's other writes failed on the
+    first such error: the child-started and cancellation runtime writes,
+    the attempt report, the ready marker, and the terminal runtime write.
+    When a handle was held across worker exit, the terminal write's
+    `PermissionError` escaped `run_job` after the store had recorded
+    `succeeded`, and reconciliation repaired the report later. The branch
+    `agent/imp-windows-transient-replace-tolerance` resolved this
+    follow-up: it merged into `main` through [PR
+    #161](https://github.com/toddlar00/rag-pipeline/pull/161) as `d27af15`,
+    where its own Phase A0 pair at source `9e4d7be` passed the hosted CI
+    promotion gate (see "Research improvement pass (2026-09-30,
+    prepared)"). It retries only transient replace errors of these writes:
+    within one 3-second budget until the ready marker is published, 2
+    seconds for the cancellation evidence and 8 seconds for each later
+    write. Store commit writes, reconciliation writes and launcher-side
+    reads stay uncovered.
   - *Born-digital structure.* The born-digital supplement shows the same
     heading and opinion attribution errors, so attribution is a structure
     problem, not only an OCR one.
@@ -1616,8 +1617,8 @@ embedding code's Transformers names and clear two new advisories.
   write made the durable job kill a healthy worker and report
   `permission_denied`. Transient Windows replace failures (WinError 5, 32 or
   33) of the heartbeat are now tolerated for up to 60 seconds; the manager's
-  other writes remain a follow-up under "Corpus audit follow-ups", where a
-  fix is now proposed, not integrated.
+  other writes were a follow-up under "Corpus audit follow-ups", which the
+  fix merged through #161 resolved.
 - [#136](https://github.com/toddlar00/rag-pipeline/pull/136) (`2f07510`):
   Nomic Transformers name-contract test.
   `tests/test_embedding_runtime_compat.py` pins every Transformers name the
@@ -1760,14 +1761,21 @@ CI promotion gate there. `agent/imp-docling-conversion-hardening` merged
 into `main` through [PR
 #160](https://github.com/toddlar00/rag-pipeline/pull/160) as `4994191`; its
 Phase A0 pair at source `18de7d6` passed the hosted CI promotion gate there.
-`agent/imp-windows-transient-replace-tolerance` is now proposed in its own
-pull request from `agent/job-transient-write-tolerance`, which is stacked
-on PR #160's evidence head `6b2e3f9` and carries its own Phase A0 pair at
-source `9e4d7be`, its hosted checks pending. The other 3 have no pull
-request, so none of them is "Implemented (draft)"; of the 18, only the
-static-security branch, the three hosted-flake fix branches, the three
-query-path speed branches, the two model-load speed branches, the four
-ingestion speed branches and the Docling hardening branch are integrated.
+`agent/imp-windows-transient-replace-tolerance` merged into `main` through
+[PR #161](https://github.com/toddlar00/rag-pipeline/pull/161) as
+`d27af15`; its Phase A0 pair at source `9e4d7be` passed the hosted CI
+promotion gate there. The CI-validator and secret-scan branches
+(`agent/imp-ci-validator-yaml-anchors` and
+`agent/imp-secret-scan-history-batch`) are now proposed together in one
+pull request from `agent/ci-security-tooling`, which is stacked on PR
+#161's evidence head `209767c` and carries their shared Phase A0 pair at
+source `e706fd2`, its hosted checks pending. The other one,
+`agent/imp-lexical-accuracy-toolkit`, has no pull request, so it is not
+"Implemented (draft)"; of the 18, only the static-security branch, the
+three hosted-flake fix branches, the three query-path speed branches, the
+two model-load speed branches, the four ingestion speed branches, the
+Docling hardening branch and the job-manager transient-write branch are
+integrated.
 The integration branch
 `agent/research-improvements` merges all 18 only to validate the
 combination; each other branch lands through its own pull request. Branch
@@ -1832,6 +1840,9 @@ names below omit the `agent/imp-` prefix.
   - `secret-scan-history-batch`: the secret scanner's history mode reads
     blobs through one `git cat-file --batch`. Windows blob reading drops
     from 106 s to 1.1 s (about 6-7x end to end), with identical findings.
+    It is now proposed together with `ci-validator-yaml-anchors` in one
+    stacked pull request, with their shared Phase A0 pair at source
+    `e706fd2` (hosted checks pending), and is not integrated.
 - **Robustness and correctness.** No published artifact changes.
   - `static-security-s324-noqa`: retires the only static-security
     suppression (S324, expiring 2026-11-30) by using
@@ -1875,6 +1886,9 @@ names below omit the `agent/imp-` prefix.
     documents found no new fail-open against `3aede7d` in any shape GitHub
     accepts; all 27 newly accepted unsafe documents write the checkout's
     `with:` as a sequence, which GitHub rejects (see the follow-ups below).
+    It is now proposed together with `secret-scan-history-batch` in one
+    stacked pull request, with their shared Phase A0 pair at source
+    `e706fd2` (hosted checks pending), and is not integrated.
   - `windows-transient-replace-tolerance`: the durable-job manager's
     transient-write follow-up (see "Corpus audit follow-ups"). On
     `3aede7d`, holds of 0.5-10 s on `runtime.json` or `attempt.report.json`
@@ -1882,9 +1896,9 @@ names below omit the `agent/imp-` prefix.
     branch, holds within the budgets (0.5-2 s before the ready marker,
     0.5-5 s after it) succeed in 29 of 29; a 5 s pre-ready hold and a 10 s
     terminal hold still fail once their 3 s and 8 s budgets run out (after
-    3.48 s and about 8.35 s). It is now proposed in its own stacked pull
-    request, with its own Phase A0 pair at source `9e4d7be` (hosted checks
-    pending), and is not integrated.
+    3.48 s and about 8.35 s). It merged through PR #161 as `d27af15`, with
+    its own Phase A0 pair at source `9e4d7be`, which passed the hosted CI
+    promotion gate.
 - **Accuracy tooling.** `lexical-accuracy-toolkit` adds
   `eval.py --retriever lexical`, which scores through the production BM25
   leg (`rag._bm25_search`); the existing `--retriever bm25` is an offline
@@ -1916,12 +1930,16 @@ names below omit the `agent/imp-` prefix.
   and its own Phase A0 source/evidence pair (the three hosted-flake fix
   branches, the three query-path speed branches, the two model-load speed
   branches and the four ingestion speed branches each shared one stacked
-  pull request and pair, the Docling hardening branch merged with its own,
-  and the job-manager transient-write branch is proposed with its own). The
+  pull request and pair, the Docling hardening and job-manager
+  transient-write branches each merged with their own, and the CI-validator
+  and secret-scan branches are proposed together with one shared pair). The
   combined query-path, model-load and ingestion pull requests
   departed from the A1 owner-decision row's condition that each slice is
   its own pull request with its own Phase A0 source/evidence pair; they
-  merged as #157, #158 and #159. Every branch
+  merged as #157, #158 and #159. The proposed CI-validator and secret-scan
+  pull request departs from it in the same way, because
+  `secret-scan-history-batch` is one of the ten speed branches; splitting
+  it is the owner's call. Every branch
   changes `architecture-inventory.json`, so after each merge the next
   branch is rebased and its inventory refreshed. Twelve branches change
   paths that `ci-security-ownership.json` owns or governs (every `rag.py`,
@@ -2416,6 +2434,28 @@ commit writes are not retried, the heartbeat keeps its own tolerance, and
 the success path makes the same writes in the same order. It changes no
 pipeline output, dependency or lock and supersedes the `18de7d6` pair for
 its own pull request.
+The `9e4d7be` pair (gate-only child `209767c`) passed the hosted CI
+promotion gate on [PR
+#161](https://github.com/toddlar00/rag-pipeline/pull/161), which merged into
+`main` as `d27af15`. The stacked CI and secret-scan tooling source
+`e706fd2` makes two fail-closed security-tooling changes. The workflow
+security validator (`tools/check_ci_security.py`) now rejects YAML
+anchors, aliases, tags and merge keys at every node start, which could
+hide unpinned actions and write-all permissions from its line-based
+checks; rejects every block-scalar header it cannot blank, and measures a
+compact `- key: |` body from the key column; and rejects non-space
+indentation, non-ASCII whitespace after a structural line's indentation
+and line breaks other than LF and CR, where Python's string handling and
+YAML read a line differently. The tracked workflows and the rendered
+bootstrap keep identical structural lines and still validate cleanly. The
+secret scanner's history mode (`tools/check_secrets.py`) reads the objects
+`git rev-list` lists through one lock-step `git cat-file --batch` process
+instead of two git processes per object, with identical documents and
+findings; a framing fault, a missing or ambiguous reply, trailing output
+or a non-zero exit now fails the scan with an error, where the old reader
+silently skipped a vanished object. It changes no pipeline output,
+dependency or lock and supersedes the `9e4d7be` pair for its own pull
+request.
 Its Windows/Linux
 pair (independent local same-platform comparisons passed) is that branch's
 candidate; its hosted checks and exact-SHA record are pending, and the
@@ -2554,8 +2594,12 @@ accepted that exact candidate. Classification is live; every execution job
 tests the bound candidate; the aggregate is exact-SHA promotable. F4
 (workflow-syntax validator anchor/alias rejection) is a checker-hardening
 follow-up recorded in the promotion evidence record. It is still open on
-`main`; the prepared branch `agent/imp-ci-validator-yaml-anchors` closes it
-(see "Research improvement pass (2026-09-30, prepared)").
+`main`; the branch `agent/imp-ci-validator-yaml-anchors` closes it once it
+lands. That branch is now proposed together with
+`agent/imp-secret-scan-history-batch` in one stacked pull request, with
+their shared Phase A0 pair at source `e706fd2` (hosted checks pending), and
+is not integrated (see "Research improvement pass (2026-09-30,
+prepared)").
 The next actions, in order: supersede the open Dependabot group PRs with
 ordered, policy-compliant one-domain PRs — each with regenerated locks,
 installed-lock testing, domain gates, and its own Phase A0 source/evidence
