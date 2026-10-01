@@ -1431,7 +1431,14 @@ read by fresh layout-aware OCR of an image-only derivative, using
     report, the ready marker, and the terminal runtime write. When a
     handle is held across worker exit, the terminal write's
     `PermissionError` escapes `run_job` after the store has recorded
-    `succeeded`, and reconciliation repairs the report later.
+    `succeeded`, and reconciliation repairs the report later. The prepared
+    branch `agent/imp-windows-transient-replace-tolerance` supersedes this
+    follow-up but is not on `main` (see "Research improvement pass
+    (2026-09-30, prepared)"). It retries only transient replace errors of
+    these writes: within one 3-second budget until the ready marker is
+    published, 2 seconds for the cancellation evidence and 8 seconds for each
+    later write. Store commit writes, reconciliation writes and
+    launcher-side reads stay uncovered.
   - *Born-digital structure.* The born-digital supplement shows the same
     heading and opinion attribution errors, so attribution is a structure
     problem, not only an OCR one.
@@ -1690,6 +1697,204 @@ embedding code's Transformers names and clear two new advisories.
     `tests/test_ocr_review_crop_uncertainty_editor.py`, and once
     `test_opt_in_launcher_installs_only_fixed_preview_script_and_preserves_security[archive]`
     with the launcher's generic exit 2. Each passed on re-run and locally.
+    #148 (`3aede7d`) raised those Node subprocess ceilings to 60 seconds.
+    The prepared branch `agent/imp-review-ocr-close-deadline-clamp` (not on
+    `main`) fixes the likely cause of the exit 2: Windows monotonic-clock
+    rounding can push the remaining close time just above its 40-second
+    limit. No stderr was retained from the hosted run, so that cause is not
+    proven.
+
+### Research improvement pass (2026-09-30, prepared)
+
+Eighteen branches `agent/imp-*`, each based on `main` `3aede7d` and pushed,
+are prepared: each was independently reviewed, but none has a pull request,
+so none is "Implemented (draft)" or integrated. The integration branch
+`agent/research-improvements` merges all 18 only to validate the
+combination; each branch lands through its own pull request. Branch names
+below omit the `agent/imp-` prefix.
+
+- **Method.** Codebase mapping and external research produced 78
+  candidates. A synthesis pass ranked 32, and one adversarial verifier per
+  candidate checked the top 14 before any implementation; 13 survived. A
+  second round added the lexical evaluation toolkit, and a third round
+  verified and built four more. On every branch, characterization or
+  differential tests were written before the change, and an independent
+  adversarial review approved the result, with fixes and re-review where
+  needed (the workflow-validator branch took three rounds).
+- **Speed (A1 performance work).** All ten leave pipeline artifacts,
+  rankings and scores unchanged.
+  - `reranker-single-pass`: scores rerank pairs in one forward pass,
+    without FlagEmbedding 1.4.2's discarded batch-size probe. `--rerank`
+    scoring is 1.9-2.1x faster with float.hex-identical scores.
+  - `chunk-dedup-bitset`: an exact size-ratio bound and integer-bitset
+    Jaccard in `chunking_core._deduplicate_chunks`. 42-55x at 2,831
+    synthetic chunks (184 s to 3.3-4.4 s). Deduplication takes about 54 s
+    of the private tort-law casebook's chunk stage; the saving there is
+    expected, not re-measured.
+  - `pdf-enrichment-word-cache`: extracts each page's sorted native words
+    once per enrichment call instead of 6-7 times. 29-34 s off each
+    enrichment pass on the tort-law casebook, for about 139 MB more peak
+    memory.
+  - `embedding-token-counter-cache`: caches the verified token-counter
+    tokenizer and counts in batches. A stage simulation drops from 23-26 s
+    to 2.2-2.7 s, for about 250 MB more resident memory.
+  - `legal-tokenizer-literal-guards`: literal guards and literal-first
+    regex forms in `_legal_search_tokens`. 2.2-2.3x, identical over a
+    280,000-string differential fuzz; about 1 s of CPU off each cold Chroma
+    hybrid query.
+  - `quality-attestation-single-pass`: attests each record once and reads
+    the oracle registry once per binding. 35-45% (about 0.7-1.5 s) off each
+    quality binding on the index, search and publication paths.
+  - `model-verify-readinto-hash`: hashes model bundles with `readinto` into
+    a reused buffer. 1.4-1.55x, about 0.4-0.8 s per model load.
+  - `embedding-skip-random-init`: skips the 211 discarded `torch.nn.init`
+    calls when the pinned Nomic model is built, behind a fail-closed
+    checkpoint-header guard. 1.47 s off each cold embedder load, with
+    bitwise-identical embeddings.
+  - `strict-parse-nonfinite-flag`: a path-free non-finite scan ahead of the
+    strict JSONL parser's metadata walk. 23-31% off each parse, about
+    50-70 ms on the largest real corpus.
+  - `secret-scan-history-batch`: the secret scanner's history mode reads
+    blobs through one `git cat-file --batch`. Windows blob reading drops
+    from 106 s to 1.1 s (about 6-7x end to end), with identical findings.
+- **Robustness and correctness.** No published artifact changes.
+  - `static-security-s324-noqa`: retires the only static-security
+    suppression (S324, expiring 2026-11-30) by using
+    `md5(..., usedforsecurity=False)`, which gives byte-identical sparse
+    indices, so no index migration is needed. It also closes a fail-open in
+    which inline `# noqa`, ruff range suppressions and project ruff
+    configuration could hide blocking findings: the gate now runs
+    `ruff --isolated --ignore-noqa`.
+  - `docling-conversion-hardening`: a Docling PARTIAL_SUCCESS, failure or
+    success-with-errors result now raises
+    `DoclingConversionIncompleteError` instead of publishing. Docling 2.121
+    swallows stage errors and returns an empty page that the READY gates
+    could not see; an injected failure reproduced this. It never occurred in
+    67 logged conversions, but such a run now stops instead of publishing.
+    The branch also pins Docling's ambient environment knobs
+    (`OMP_NUM_THREADS` and `DOCLING_*` changed output bytes) and stops the
+    DEBUG log flood.
+  - `review-ocr-close-deadline-clamp`: clamps the crop archive's remaining
+    close time (see the hosted-runner follow-up above).
+  - `a0-capture-cleanup-retry`: the Phase A0 contained runner retries
+    transient Windows errors when it removes its capture directory, so a
+    WinError 32 no longer masks the primary error. This was the hosted
+    "contained-runner regex" flake: 11 of 640 stressed runs failed before,
+    0 of 640 after.
+  - `posix-sigterm-test-deflake`: test-only; removes a startup race in
+    `test_posix_escalation_kills_descendant_that_ignores_sigterm` (see
+    Phase A0 below).
+  - `ci-validator-yaml-anchors`: closes workflow-validator F4 by rejecting
+    YAML anchors, aliases, tags and merge keys that hid unpinned actions or
+    write-all permissions. Its review rounds also closed fake block-scalar
+    headers and Unicode-whitespace fail-opens. About 2.7 million
+    PyYAML-oracle fuzzed documents found no new fail-open against
+    `3aede7d`.
+  - `windows-transient-replace-tolerance`: the durable-job manager's
+    transient-write follow-up (see "Corpus audit follow-ups"). Holds of
+    0.5-10 s that failed or raised after `succeeded` in 32 of 32 trials now
+    succeed in 29 of 29; longer holds fail within the budget.
+- **Accuracy tooling.** `lexical-accuracy-toolkit` adds
+  `eval.py --retriever lexical`, which scores through the production BM25
+  leg (`rag._bm25_search`); the existing `--retriever bm25` is an offline
+  fixture adapter that diverges from production. It also adds an opt-in
+  `function-words-v1` query policy that drops pure function words from the
+  query only, keeps modals and negation, and needs no re-index. The default
+  stays `none`, bitwise identical over 8,000 fuzzed calls. On public
+  yardsticks run locally and never committed, nDCG@10 moves from 0.225 to
+  0.293 on Legal RAG Bench (p=0.0004), by +0.011 on SciFact (p=0.098) and
+  by -0.009 on LegalBench-RAG-mini (p=0.08).
+- **Integration validation at `092ef8c`.**
+  - Full locked suites: Windows 16,234 passed and 8 skipped; Linux (WSL)
+    16,152 passed and 90 skipped; none failed. `main` `3aede7d` gave 15,555
+    passed and 8 skipped on Windows.
+  - The ruff, Python-source, static-security, dependency-policy,
+    model-artifact, CI-security and architecture-inventory gates pass, with
+    0 static-security suppressions (was 1).
+  - The three CC0 evaluation suites pass against their committed
+    baselines, and `--retriever bm25` results are unchanged.
+  - Private data, counts only: a fixed query smoke on three published h26
+    runs, plain and reranked, returns the same order with a maximum score
+    delta of 0. A `full` run with the published arguments on three published
+    h26 readings is READY. Its Docling JSON and Markdown, conversion
+    manifest, chunks, quality report and publication receipt are
+    byte-identical to the base code's, and 413 of 413 stored embeddings are
+    bitwise identical; only timestamps, UUIDs, lock names and the scratch
+    path differ. The scratch copies were deleted.
+- **Before integration.** Each branch needs a draft pull request and its own
+  Phase A0 source/evidence pair. Every branch changes
+  `architecture-inventory.json`, so after each merge the next branch is
+  rebased and its inventory refreshed. Twelve branches change paths that
+  `ci-security-ownership.json` owns or governs (every `rag.py`,
+  `retrieval_core.py` or `model_artifacts.py` change, and the CI-validator,
+  secret-scan and static-security tools), so they also need owned-path
+  review. The A1 authorization covers the ten speed branches; whether the
+  opt-in query policy lands before the deferred retrieval-experiments phase
+  is the owner's call.
+- **Owner decisions examined, not changed** (see the owner-decision table).
+  None of the accuracy candidates was measured on the owner's private judged
+  sets.
+  - Reranking hybrid results by default: Legal RAG Bench nDCG@10 0.282 to
+    0.386 (p=0.0013). The README's "reranking hurts hybrid" result was
+    measured at 80 candidates, while production reranks 20, and
+    `reranker-single-pass` halves the cost.
+  - `function-words-v1` as the default query policy (numbers above).
+  - Fusion weights: public yardsticks favor a dense weight at least equal
+    to the sparse one, which conflicts with the recorded private
+    calibration; the defaults are dense 0.5 and sparse 1.0.
+  - Qdrant hybrid (service path): its sparse leg is raw TF×IDF, not BM25
+    (SciFact nDCG@10 0.489, against 0.670 for the BM25 leg), and its fusion
+    ignores `--rrf-k` and the weights. No published run uses Qdrant; a fix
+    needs a versioned re-index for service users only.
+  - A CUDA build of the pinned torch for the local GPU: the only
+    order-of-magnitude indexing lever found (estimated, not measured), but
+    it needs a new hash-locked runtime variant and a re-index of every
+    published run.
+  - Globally length-sorted embedding batches: 16-24% less encode time, but
+    vectors change by about 1e-7.
+  - A warm per-corpus search worker: removes a 35-40 s cold start per query,
+    but changes the isolation model.
+  - An opt-in `--allow-partial-conversion` escape hatch for the Docling
+    fail-closed behavior (proposed, not built).
+- **Follow-ups found (not fixed).**
+  - Job manager (also at `3aede7d`): when a cancellation-evidence write
+    fails, `run_job` raises `ValueError` from `attempt_reporting` after
+    `interrupted` and the terminal runtime have committed.
+  - Embedding (also at `3aede7d`): the `EMBEDDING_MAX_TOKENS` check raises
+    after the model is cached, so a retry skips it (fail-open on retry).
+    The token counter's bare `except` turns a tampered or missing bundle
+    into estimated counts, which can trigger a silent full re-embed (owner
+    call).
+  - Reranker: once `reranker-single-pass` lands, `reranker_scoring.py`
+    replays FlagEmbedding 1.4.2 internals, so every FlagEmbedding bump must
+    re-verify it during the lock refresh.
+  - Workflow-validator gaps that also exist at `3aede7d`: a line-start BOM,
+    `persist-credentials` nested under `env:`, `_yaml_scalar` applying
+    Python escapes to quoted path filters (`\x5f`, `\N`), multi-line quoted
+    scalars, explicit `?` keys, a `uses:` value on the next line, and flow
+    mappings inside flow sequences.
+  - Secret scanner (also at `3aede7d`): rev-list output is split with
+    `splitlines()`, so file names containing U+2028 or similar separators
+    are truncated; blobs that a ref names directly are skipped; and the #106
+    concurrency-group cancellation is unaddressed.
+  - Static-security gate: with `static-security-s324-noqa`,
+    `ruff --isolated` still honours `.gitignore` and ruff's default
+    excludes, so a force-added tracked file under `build/` or `.venv/`
+    escapes.
+  - Evaluation: when the toolkit lands, CI also needs
+    `eval.py --retriever lexical` steps and baselines. The production
+    lexical leg fails the CC0 abstention cases, which CI runs only through
+    the offline adapter. `function-words-v1` also drops
+    enumerators ("Article I") and the "in" of fixed phrases, and the Qdrant
+    sparse query leg applies no lexical policy.
+  - Quality (also at `3aede7d`): `validate_quality_report` re-validates the
+    oracle registry, and `source_oracle_root_sha256` re-canonicalizes every
+    oracle.
+  - Governance: `tests/test_legal_tokenizer_differential.py` is not in
+    `ci-risk-policy.json`, so it falls in the unknown group and runs the
+    full lane.
+  - README: it calls pypdfium2 the conversion backend, but Docling uses
+    `DoclingParseDocumentBackend` and `--backend` is only recorded.
 
 ### Integrated convergence
 
@@ -1987,7 +2192,13 @@ gate-only allowed set or classifier-aware push handling — is a
 security-owned workflow change requiring its own review); and
 `test_posix_escalation_kills_descendant_that_ignores_sigterm` showed one
 cleanup-confirmation flake on a busy hosted runner at `b3c7cf7` (tree
-identical to the fully green pull-request run; rerun requested).
+identical to the fully green pull-request run; rerun requested). The
+prepared branch `agent/imp-posix-sigterm-test-deflake` removes that test's
+separate startup race but does not address this cleanup-confirmation flake.
+Its only reproductions were SIGKILLed grandchildren held in uninterruptible
+(D-state) sleep for more than 1 s. The proposed fix is a production change
+in `process_supervision.py` that separates the post-SIGKILL confirmation
+window from the SIGTERM grace.
 
 No submitted exact-head human review or separate owner authorization for the
 R8c-6 ownership move was found. Technical A0 success is therefore not that
@@ -2030,6 +2241,7 @@ release-qualified support.
 | Private retrieval/answer qualification | Corpus-owner judgments, family aliases, floors, and promotion statistics remain unresolved | No production-qualified corpus or generalized quality claim. Portable generated/CC0 suites validate mechanics only. |
 | First version and platform/support tiers | Not selected | Development-only identity; no release tag or Tier-1 claim. |
 | Dependabot `ignore` rules for rejected versions | The strict `dependabot.yml` policy admits no `ignore` field, so closed grouped proposals (#141-#144) may reopen | Add no `ignore` rule and do not widen the policy; close a reopened proposal with its recorded reason. |
+| Retrieval accuracy and runtime defaults examined by the 2026-09-30 research pass: reranking hybrid results by default, `function-words-v1` as the default query policy, fusion weights, the Qdrant sparse/fusion defects, a CUDA runtime, length-sorted embedding batches, a warm search worker, and a Docling `--allow-partial-conversion` escape hatch | Measured or estimated by that pass, not on the owner's private judged sets (see "Research improvement pass"); none selected | Keep every current default and behavior. Change one only through its own owner decision and pull request, with a versioned re-index where vectors or indexes change. |
 
 Owner decisions are gates, not checkboxes an implementation agent may infer.
 A technical change may prepare a bounded decision mechanism, but it must pause
@@ -2050,7 +2262,8 @@ authorize broader work. Anything not allowed below remains held.
 | Tasks 0.6-0.8 Node, secret, and static-security gates | Yes in sequence after their prerequisites | Pinned tools, synthetic canaries, redaction, security ownership, and no private source retention |
 | Phase 1 installable packaging/product work | No | All Phase 0 gates plus explicit product-work and distribution authorization |
 | Phase 2 private qualification and release | No | Private-source choice, owner-reviewed labels/floors, licensing, packaging, and exact-head release gates |
-| Broader R7 coverage/typing/lint and A1 performance work | No | Recorded authorization after the preceding release-readiness gates in the active plan |
+| Broader R7 coverage/typing/lint | No | Recorded authorization after the preceding release-readiness gates in the active plan |
+| A1 performance work | Yes; authorized by the owner on 2026-09-30 | Each slice is its own pull request with an independent review, output-identity evidence (pipeline artifacts, rankings and scores unchanged) and its own Phase A0 source/evidence pair, plus owned-path review where it touches owned or governance paths. It authorizes nothing else: not R7 work, accuracy-default changes, Phase 1-4 product work, a release or any other owner gate. |
 | R8c-6/R9 ownership and decomposition | No | Recorded owner/reviewer, current guard evidence, A1 prerequisite for the affected slice, bounded manifest, and tested rollback |
 | Deferred run catalog, unified commands, observability, retrieval explanations, and experiments | No | Reach their ordered phase and satisfy its privacy, qualification, and compatibility gates |
 
@@ -2098,8 +2311,10 @@ the full lane, all eight execution jobs tested synthetic candidate
 `18caf7d0885c483da5e3096f2cc112e4cf55f2d3`, and the promotion aggregate
 accepted that exact candidate. Classification is live; every execution job
 tests the bound candidate; the aggregate is exact-SHA promotable. F4
-(workflow-syntax validator anchor/alias rejection) remains an open
-checker-hardening follow-up recorded in the promotion evidence record.
+(workflow-syntax validator anchor/alias rejection) is a checker-hardening
+follow-up recorded in the promotion evidence record. It is still open on
+`main`; the prepared branch `agent/imp-ci-validator-yaml-anchors` closes it
+(see "Research improvement pass (2026-09-30, prepared)").
 The next actions, in order: supersede the open Dependabot group PRs with
 ordered, policy-compliant one-domain PRs — each with regenerated locks,
 installed-lock testing, domain gates, and its own Phase A0 source/evidence
@@ -2141,9 +2356,13 @@ through `tools/check_static_security.py` and the dedicated unfiltered
 exemptions for deliberate rejection-path constructs, content-free
 rule/path/line findings, and exactly one counted expiring suppression
 (the non-cryptographic MD5 sparse-vector token index in
-`retrieval_core.py`, whose replacement is a separate versioned
-index-migration follow-up). This completes the Task 0.6-0.8 gate
-sequence, while
+`retrieval_core.py`, which expires on 2026-11-30). The separate versioned
+index-migration follow-up once planned to replace it is superseded by the
+prepared branch `agent/imp-static-security-s324-noqa`, not yet on `main`:
+`md5(..., usedforsecurity=False)` keeps the sparse indices byte-identical,
+so the suppression retires without an index migration (see "Research
+improvement pass (2026-09-30, prepared)"). This completes the Task 0.6-0.8
+gate sequence, while
 [PR #88](https://github.com/toddlar00/rag-pipeline/pull/88) (Google GenAI 2)
 stays parked on its recorded owner decision; then begin Task 0.6's Node
 audit/SBOM gate. Task 0.3's activation prerequisite is now met, but it
