@@ -35,7 +35,8 @@
     "provider-transport": [
       "cryptography",
       "google-genai",
-      "requests"
+      "requests",
+      "urllib3"
     ],
     "test-audit-tooling": [
       "pip",

@@ -37,7 +37,7 @@ input manifests belongs to exactly one declared compatibility domain:
 | Vector stores | `chromadb`, `h2`, `oauthlib`, `onnxruntime`, `qdrant-client` |
 | ML/runtime | `aiohttp`, `datasets`, `einops`, `flagembedding`, `numpy`, `rank-bm25`, `sentence-transformers`, `torch`, `torchvision`, `tqdm`, `transformers` |
 | Service/UI | `fastapi`, `gradio`, `uvicorn` |
-| Provider transport | `cryptography`, `google-genai`, `requests` |
+| Provider transport | `cryptography`, `google-genai`, `requests`, `urllib3` |
 | Test/audit tooling | `pip`, `pip-audit`, `pip-licenses`, `pytest`, `pytest-xdist`, `ruff`, `uv` |
 
 [`dependency-compatibility-domains.json`](../../../dependency-compatibility-domains.json)

@@ -3114,6 +3114,7 @@ aiohttp>=3.14.3,<4                 # Governed ML input (advisory fix)
 rank-bm25>=0.2,<0.3                # BM25 keyword search
 tqdm>=4.70.1,<5                    # Progress bars
 requests>=2.31,<3                  # Cloud embedding and LLM HTTP calls
+urllib3>=2.8.0,<3                  # Governed input (requests, advisory fix)
 numpy>=1.26,<3                     # RAPTOR clustering
 ```
 
