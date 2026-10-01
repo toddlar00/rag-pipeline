@@ -1730,7 +1730,7 @@ below omit the `agent/imp-` prefix.
     Jaccard in `chunking_core._deduplicate_chunks`. 42-55x at 2,831
     synthetic chunks (184 s to 3.3-4.4 s). Deduplication takes about 54 s
     of the private tort-law casebook's chunk stage; the saving there is
-    expected, not re-measured.
+    expected, not measured.
   - `pdf-enrichment-word-cache`: extracts each page's sorted native words
     once per enrichment call instead of 6-7 times. 29-34 s off each
     enrichment pass on the tort-law casebook, for about 139 MB more peak
@@ -1752,8 +1752,8 @@ below omit the `agent/imp-` prefix.
     checkpoint-header guard. 1.47 s off each cold embedder load, with
     bitwise-identical embeddings.
   - `strict-parse-nonfinite-flag`: a path-free non-finite scan ahead of the
-    strict JSONL parser's metadata walk. 23-31% off each parse, about
-    50-70 ms on the largest real corpus.
+    strict JSONL parser's metadata walk. 23-31% off each parse on
+    synthetic corpora (19-21%, about 50-70 ms, on the largest real corpus).
   - `secret-scan-history-batch`: the secret scanner's history mode reads
     blobs through one `git cat-file --batch`. Windows blob reading drops
     from 106 s to 1.1 s (about 6-7x end to end), with identical findings.
@@ -1786,14 +1786,20 @@ below omit the `agent/imp-` prefix.
     Phase A0 below).
   - `ci-validator-yaml-anchors`: closes workflow-validator F4 by rejecting
     YAML anchors, aliases, tags and merge keys that hid unpinned actions or
-    write-all permissions. Its review rounds also closed fake block-scalar
-    headers and Unicode-whitespace fail-opens. About 2.7 million
-    PyYAML-oracle fuzzed documents found no new fail-open against
-    `3aede7d`.
+    write-all permissions. It also rejects fake block-scalar headers, and
+    its review rounds closed the block-scalar and Unicode-whitespace
+    fail-opens found along the way. About 2.7 million PyYAML-oracle fuzzed
+    documents found no new fail-open against `3aede7d` in any shape GitHub
+    accepts; all 27 newly accepted unsafe documents write the checkout's
+    `with:` as a sequence, which GitHub rejects (see the follow-ups below).
   - `windows-transient-replace-tolerance`: the durable-job manager's
-    transient-write follow-up (see "Corpus audit follow-ups"). Holds of
-    0.5-10 s that failed or raised after `succeeded` in 32 of 32 trials now
-    succeed in 29 of 29; longer holds fail within the budget.
+    transient-write follow-up (see "Corpus audit follow-ups"). On
+    `3aede7d`, holds of 0.5-10 s on `runtime.json` or `attempt.report.json`
+    failed the job or raised after `succeeded` in 32 of 32 trials. With the
+    branch, holds within the budgets (0.5-2 s before the ready marker,
+    0.5-5 s after it) succeed in 29 of 29; a 5 s pre-ready hold and a 10 s
+    terminal hold still fail once their 3 s and 8 s budgets run out (after
+    3.48 s and about 8.35 s).
 - **Accuracy tooling.** `lexical-accuracy-toolkit` adds
   `eval.py --retriever lexical`, which scores through the production BM25
   leg (`rag._bm25_search`); the existing `--retriever bm25` is an offline
@@ -1872,7 +1878,12 @@ below omit the `agent/imp-` prefix.
     `persist-credentials` nested under `env:`, `_yaml_scalar` applying
     Python escapes to quoted path filters (`\x5f`, `\N`), multi-line quoted
     scalars, explicit `?` keys, a `uses:` value on the next line, and flow
-    mappings inside flow sequences.
+    mappings inside flow sequences. `ci-validator-yaml-anchors` also newly
+    accepts a `persist-credentials: false` line under a checkout `with:`
+    written as a sequence (a `- note: |` entry above it), which `3aede7d`
+    rejected. GitHub rejects that shape, so it is not exploitable. Binding
+    `persist-credentials` to a direct child of the checkout's `with:`
+    mapping would close both it and the `env:` gap.
   - Secret scanner (also at `3aede7d`): rev-list output is split with
     `splitlines()`, so file names containing U+2028 or similar separators
     are truncated; blobs that a ref names directly are skipped; and the #106
@@ -2178,10 +2189,11 @@ promotion gate on [PR
 failure-budget tests independent of runner speed and raises the Node
 subprocess ceilings of three OCR review UI tests; it changes no pipeline
 behavior, dependency or lock and supersedes the `f3ec23a` pair.
-Its Windows/Linux
-pair (independent local same-platform comparisons passed) is that branch's
-candidate; its hosted checks and exact-SHA record are pending, and the
-merged pull requests carry theirs as PR comments.
+The `e5966e1` pair (gate-only child `b93eb1f`) passed the hosted CI
+promotion gate on [PR
+#148](https://github.com/toddlar00/rag-pipeline/pull/148), which merged into
+`main` as `3aede7d`. The merged pull requests carry their exact-SHA records
+as PR comments.
 
 Two operational follow-ups from the post-merge `main` push runs are open:
 a documentation-only merge passes its fast-lane pull-request run but then
@@ -2195,10 +2207,12 @@ cleanup-confirmation flake on a busy hosted runner at `b3c7cf7` (tree
 identical to the fully green pull-request run; rerun requested). The
 prepared branch `agent/imp-posix-sigterm-test-deflake` removes that test's
 separate startup race but does not address this cleanup-confirmation flake.
-Its only reproductions were SIGKILLed grandchildren held in uninterruptible
-(D-state) sleep for more than 1 s. The proposed fix is a production change
-in `process_supervision.py` that separates the post-SIGKILL confirmation
-window from the SIGTERM grace.
+The only diagnosed reproduction was one of two cleanup-confirmation failures
+in a variant with a 1.0 s grace: a SIGKILLed grandchild held in
+uninterruptible (D-state) sleep 2.66 s past the confirmation window. Two
+more appeared on the unchanged test under host load and were not diagnosed.
+The proposed fix is a production change in `process_supervision.py` that
+separates the post-SIGKILL confirmation window from the SIGTERM grace.
 
 No submitted exact-head human review or separate owner authorization for the
 R8c-6 ownership move was found. Technical A0 success is therefore not that
@@ -2241,7 +2255,7 @@ release-qualified support.
 | Private retrieval/answer qualification | Corpus-owner judgments, family aliases, floors, and promotion statistics remain unresolved | No production-qualified corpus or generalized quality claim. Portable generated/CC0 suites validate mechanics only. |
 | First version and platform/support tiers | Not selected | Development-only identity; no release tag or Tier-1 claim. |
 | Dependabot `ignore` rules for rejected versions | The strict `dependabot.yml` policy admits no `ignore` field, so closed grouped proposals (#141-#144) may reopen | Add no `ignore` rule and do not widen the policy; close a reopened proposal with its recorded reason. |
-| Retrieval accuracy and runtime defaults examined by the 2026-09-30 research pass: reranking hybrid results by default, `function-words-v1` as the default query policy, fusion weights, the Qdrant sparse/fusion defects, a CUDA runtime, length-sorted embedding batches, a warm search worker, and a Docling `--allow-partial-conversion` escape hatch | Measured or estimated by that pass, not on the owner's private judged sets (see "Research improvement pass"); none selected | Keep every current default and behavior. Change one only through its own owner decision and pull request, with a versioned re-index where vectors or indexes change. |
+| Retrieval accuracy and runtime defaults examined by the 2026-09-30 research pass: reranking hybrid results by default, `function-words-v1` as the default query policy, fusion weights, the Qdrant sparse/fusion defects, a CUDA runtime, length-sorted embedding batches, a warm search worker, and a Docling `--allow-partial-conversion` escape hatch | Measured or estimated by that pass, not on the owner's private judged sets (see "Research improvement pass"); none selected | Keep every current default and adopt none of these changes; the prepared Docling fail-closed fix is a robustness change outside this row. Change a default only through its own owner decision and pull request, with a versioned re-index where vectors or indexes change. |
 
 Owner decisions are gates, not checkboxes an implementation agent may infer.
 A technical change may prepare a bounded decision mechanism, but it must pause
@@ -2263,7 +2277,7 @@ authorize broader work. Anything not allowed below remains held.
 | Phase 1 installable packaging/product work | No | All Phase 0 gates plus explicit product-work and distribution authorization |
 | Phase 2 private qualification and release | No | Private-source choice, owner-reviewed labels/floors, licensing, packaging, and exact-head release gates |
 | Broader R7 coverage/typing/lint | No | Recorded authorization after the preceding release-readiness gates in the active plan |
-| A1 performance work | Yes; authorized by the owner on 2026-09-30 | Each slice is its own pull request with an independent review, output-identity evidence (pipeline artifacts, rankings and scores unchanged) and its own Phase A0 source/evidence pair, plus owned-path review where it touches owned or governance paths. It authorizes nothing else: not R7 work, accuracy-default changes, Phase 1-4 product work, a release or any other owner gate. |
+| A1 performance work | Yes; authorized by the owner on 2026-09-30 | Each slice is its own pull request with an independent review, output-identity evidence (pipeline artifacts, rankings and scores unchanged) and its own Phase A0 source/evidence pair, plus owned-path review where it touches owned or governance paths. It covers output-identical performance optimizations such as the ten prepared speed branches; the Phase 3 A1a/A1b/A1c capacity benchmarks and timing budgets keep their Phase 3 entry condition. It authorizes nothing else: not R7 or other Phase 3 coverage/typing/lint ratchets, accuracy-default changes, Phase 1 product work, Phase 2 qualification or release, Phase 4 ownership work or any other owner gate. |
 | R8c-6/R9 ownership and decomposition | No | Recorded owner/reviewer, current guard evidence, A1 prerequisite for the affected slice, bounded manifest, and tested rollback |
 | Deferred run catalog, unified commands, observability, retrieval explanations, and experiments | No | Reach their ordered phase and satisfy its privacy, qualification, and compatibility gates |
 
@@ -2356,9 +2370,9 @@ through `tools/check_static_security.py` and the dedicated unfiltered
 exemptions for deliberate rejection-path constructs, content-free
 rule/path/line findings, and exactly one counted expiring suppression
 (the non-cryptographic MD5 sparse-vector token index in
-`retrieval_core.py`, which expires on 2026-11-30). The separate versioned
-index-migration follow-up once planned to replace it is superseded by the
-prepared branch `agent/imp-static-security-s324-noqa`, not yet on `main`:
+`retrieval_core.py`, whose suppression expires on 2026-11-30). The separate
+versioned index-migration follow-up once planned to replace it is superseded
+by the prepared branch `agent/imp-static-security-s324-noqa`, not yet on `main`:
 `md5(..., usedforsecurity=False)` keeps the sparse indices byte-identical,
 so the suppression retires without an index migration (see "Research
 improvement pass (2026-09-30, prepared)"). This completes the Task 0.6-0.8
