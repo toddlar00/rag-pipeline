@@ -64,6 +64,7 @@ import publication_core as _publication_core
 import provider_transport as _provider_transport
 import quality_core as _quality_core
 import release_security as _release_security
+import reranker_scoring as _reranker_scoring
 import resource_lease as _resource_lease
 import retention as _retention
 import retrieval_core as _retrieval_core
@@ -6455,7 +6456,7 @@ def _rerank(query: str, documents: list[str], metadatas: list[dict],
     reranker = _get_reranker(
         reranker_model, security_policy=security_policy)
     pairs = [[query, document] for document in reranker_documents]
-    scores = reranker.compute_score(pairs, normalize=True)
+    scores = _reranker_scoring.score_pairs(reranker, pairs, normalize=True)
     if isinstance(scores, float):
         scores = [scores]
 
