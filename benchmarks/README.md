@@ -7,12 +7,12 @@ fresh-process repetitions.
 
 ## Provenance
 
-Both current reports were generated from the clean model-load speedup
-source checkpoint `8ce1a8d538270e629399d8031226175e269a5b5c` (tree
-`ee92b533bb4c3afe61e6e195316d649da63298d9`), two output-identical
-model-load speedups after a series of one-domain dependency updates on
-`main` after the history-preserving merges of #121 (`602bec1`), of that
-series, #122 to #130 (`1cffc58`), of its documentation follow-up #135
+Both current reports were generated from the clean ingestion speedup
+source checkpoint `6fc0c364d338ae260e9085970ec2d72dfd1ba704` (tree
+`4d9ebf1bea4423a4a6fa115ed42c6bd8e488fa39`), four output-identical
+ingestion and indexing speedups after a series of one-domain dependency
+updates on `main` after the history-preserving merges of #121 (`602bec1`),
+of that series, #122 to #130 (`1cffc58`), of its documentation follow-up #135
 (`9eb6f94`), of the TOC glyph-leader fix #138 (`a2c5629`), of the
 job-heartbeat hardening #137 (`634c38b`), of the Nomic contract test #136
 (`2f07510`), of the oauthlib promotion #139 (`123bedb`), of the
@@ -21,9 +21,10 @@ oracle fix #145 (`ce73b61`), of the soft-hyphen item-seam fix #146
 (`8cc89b0`), of the post-series documentation #147 (`9fff7bb`), of the
 heartbeat test fix #148 (`3aede7d`), of the static-security S324
 retirement #150 (`76f98d6`), of the hosted-flake fixes #151 (`584c4a5`), of
-the urllib3 promotion #152 (`25f9ba1`) and of the query-path speedups #157
-(`d3754d5`, whose second parent `e91d42f` is the base this source's nine
-commits are stacked on). That source contains
+the urllib3 promotion #152 (`25f9ba1`), of the query-path speedups #157
+(`d3754d5`) and of the model-load speedups #158 (`cc39af5`, whose second
+parent `33d6a26` is the base this source's thirteen commits are stacked
+on). That source contains
 everything through the
 Task 0.8 static-security merge `e34103f` plus the local OCR accuracy, retry
 and guided-review program, opt-in AI evidence search, the passive cleanup
@@ -68,8 +69,8 @@ changes no lock; the heartbeat test fix changes no lock; the static-security
 S324 retirement changes no lock; the stacked hosted-flake fixes change no
 lock; the stacked urllib3 promotion moves urllib3 from 2.7.0 to 2.8.0 in the
 core, full, test, service, smoke and security locks; the stacked query-path
-speedups change no lock; the stacked model-load speedups change no lock; no
-model lock changed.
+speedups change no lock; the stacked model-load speedups change no lock; the
+stacked ingestion speedups change no lock; no model lock changed.
 The executing environments were synchronized to this source's locks
 (urllib3 2.8.0) with repository-pinned uv 0.12.20 against the exact CPU
 application/test lock union plus its retained bootstrapper:
@@ -87,8 +88,8 @@ marker-resolved distributions before generation.
 
 | Platform | Runtime | Report | Bytes | File SHA-256 | Embedded report SHA-256 |
 |---|---:|---|---:|---|---|
-| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,176 | `7deb37ccce660121373c16bdfdcb974b3d801b40f0ef63f7a0ee50414bdebea1` | `251e1096e540654d208563c14ae0c9cb1c42633180d6e3fce1072b4163555331` |
-| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,572 | `12888698652adbd40cf06a90da307d7e0f3fc146bf41d824dd19668b8dbb7897` | `ced7325fd07f6d059f131d48bc0138b511360380a5711094813b7853a144571d` |
+| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,170 | `8be9849c9f54a05eba06312042be72af35c0bc4593c39e7a8c52606947e634a3` | `b1fbf8e3c9541c648d20dff517c9476486390f040d3ea28f16d47f3a4e9c9938` |
+| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,574 | `4fd801bab61abd36972ec715e2d262d53745b783e3fa00b82a09d2c3c3e037b1` | `bf83aeaaec41f8d5794b3d3f3abab766fc627199d5e9fe014fa56a38451e787d` |
 
 The reports attest the same source commit, clean-worktree state, tracked-diff
 digest, eight LF and `HEAD`-identical dependency/model-lock inputs, authoritative
@@ -481,6 +482,28 @@ transformer, with bitwise-identical weights and embeddings. A checkpoint
 that omits a parameter now fails closed instead of silently keeping random
 weights. It changes no pipeline output, dependency or lock and supersedes
 the `18a70ab` pair for its own pull request.
+The `8ce1a8d` pair (gate-only child `33d6a26`) passed the hosted CI
+promotion gate on [PR
+#158](https://github.com/toddlar00/rag-pipeline/pull/158), which merged into
+`main` as `cc39af5`; the networked vulnerability/SBOM jobs passed at that
+head. The stacked ingestion speedup source `6fc0c36` makes four
+output-identical ingestion and indexing speedups: chunk near-duplicate
+removal skips each pair whose trigram-count ratio is already below the
+threshold and compares the rest with integer bitsets, with identical
+keep/remove decisions and audit stream; source enrichment extracts each
+page's sorted native words and the hard-hyphen attestations once per
+enrichment call through a snapshot-bound, fail-closed cache that is
+cleared when the native text-group stages finish; quality validation
+attests each record once, and the index quality binding reads and verifies
+the source-oracle registry once instead of twice when it loads the chunk
+completion itself; and the embedding token counter keeps one verified
+tokenizer resident, still re-verifying its bundle on every call, and counts
+in fixed slices of 256 texts, with identical counts. If the registry
+sidecar is replaced between what used to be two reads, the binding now
+proceeds with the first verified snapshot instead of failing with "source
+oracle registry file binding changed". It changes no pipeline output,
+dependency or lock and supersedes the `8ce1a8d` pair for its own pull
+request.
 The current reports above
 bind
 that exact clean source and each passes an independent complete

@@ -552,9 +552,31 @@ def _conservative_token_estimate(text: str) -> int:
     return max(1, byte_estimate, lexical_estimate)
 
 
+# Building the exact tokenizer takes seconds and transformers does not reuse
+# it, yet chunking, validation, prefix bounding and indexing each count the
+# same model's inputs.  One verified tokenizer therefore stays resident for the
+# life of the process (a few hundred MiB for the default model), including
+# later conversions and embedding-model loads in a batch.  It is keyed by its
+# content-addressed verified path and the AutoTokenizer class that built it;
+# the bundle is still re-verified on every call, and unverified development
+# sources are never cached.  Tokenizer calls reset shared truncation state, so
+# every use is serialized under the lock.
+_EMBEDDING_TOKEN_COUNT_SLICE = 256
+_embedding_token_counter_entry: tuple[tuple[str, type], object] | None = None
+_embedding_token_counter_lock = _threading.Lock()
+
+
+def _clear_embedding_token_counter_cache() -> None:
+    """Release the resident verified token-counter tokenizer."""
+    global _embedding_token_counter_entry
+    with _embedding_token_counter_lock:
+        _embedding_token_counter_entry = None
+
+
 def _count_embedding_text_tokens(texts: list[str],
                                  embedding_model: str) -> tuple[list[int], bool]:
     """Count model input tokens, returning ``(counts, exact_tokenizer)``."""
+    global _embedding_token_counter_entry
     texts = _prepare_embedding_inputs(
         texts, embedding_model, "document")
     try:
@@ -571,13 +593,35 @@ def _count_embedding_text_tokens(texts: list[str],
                 "trust_remote_code": not verified,
                 **({"local_files_only": True} if verified else {}),
             }
-            tokenizer = AutoTokenizer.from_pretrained(
-                model_source, **loader_kwargs)
-            return [
-                len(tokenizer.encode(
-                    text, add_special_tokens=True, truncation=False))
-                for text in texts
-            ], True
+            cache_key = (str(model_source), AutoTokenizer)
+            with _embedding_token_counter_lock:
+                entry = _embedding_token_counter_entry
+                if verified and entry is not None and entry[0] == cache_key:
+                    tokenizer = entry[1]
+                else:
+                    tokenizer = AutoTokenizer.from_pretrained(
+                        model_source, **loader_kwargs)
+                    if verified:
+                        _embedding_token_counter_entry = (
+                            cache_key, tokenizer)
+                if not callable(tokenizer):
+                    return [
+                        len(tokenizer.encode(
+                            text, add_special_tokens=True, truncation=False))
+                        for text in texts
+                    ], True
+                # Batched encoding yields the same ids as per-text encode.
+                # Fixed slices bound the encodings held at once, and an empty
+                # input never reaches the tokenizer, which rejects [].
+                counts = []
+                for start in range(
+                        0, len(texts), _EMBEDDING_TOKEN_COUNT_SLICE):
+                    encoded = tokenizer(
+                        texts[start:start + _EMBEDDING_TOKEN_COUNT_SLICE],
+                        add_special_tokens=True, truncation=False,
+                        return_attention_mask=False)
+                    counts.extend(len(ids) for ids in encoded["input_ids"])
+                return counts, True
     except Exception as exc:
         log.warning(
             "Could not load the exact tokenizer for %s (%s); using a "
@@ -1662,6 +1706,21 @@ def _load_index_chunk_completion_inputs(
     a quality report whose provenance was detached from the chunk completion
     that committed this exact JSONL generation.
     """
+    inputs, parameters_sha256, _ = _load_index_chunk_completion_bindings(
+        chunks_path, chunks_sha256=chunks_sha256, chunks_size=chunks_size,
+        records=records)
+    return inputs, parameters_sha256
+
+
+def _load_index_chunk_completion_bindings(
+        chunks_path: Path, *, chunks_sha256: str, chunks_size: int,
+        records: list[dict]) -> tuple[dict, str, dict]:
+    """Validate the chunk completion and return its verified oracle registry.
+
+    The registry is the exact sidecar snapshot checked against this
+    completion, so a quality binding can validate against it without reading
+    the sidecar again.
+    """
     chunks_path = Path(chunks_path)
     manifest_path = _artifact_completion_path(
         chunks_path, stage="chunking")
@@ -1724,7 +1783,7 @@ def _load_index_chunk_completion_inputs(
                    for key in ("name", "size", "sha256"))):
         raise ValueError(
             "chunk completion does not bind this chunks generation")
-    _load_source_oracle_registry(chunks_path, inputs)
+    source_oracle_registry = _load_source_oracle_registry(chunks_path, inputs)
 
     if (any(
             isinstance(metadata := record.get("metadata"), dict)
@@ -1733,7 +1792,7 @@ def _load_index_chunk_completion_inputs(
             and inputs.get("table_recovery") is None):
         raise ValueError(
             "recovered tables lack a bound source-PDF input")
-    return inputs, payload["parameters_sha256"]
+    return inputs, payload["parameters_sha256"], source_oracle_registry
 
 
 def _validated_quality_report_binding(
@@ -1761,16 +1820,20 @@ def _validated_quality_report_binding(
     completion_parameters_sha256 = None
     effective_input_bindings = input_bindings
     if effective_input_bindings is None:
+        # The completion check already loaded and validated the registry
+        # its inputs bind; reuse that snapshot instead of rereading it.
         (effective_input_bindings,
-         completion_parameters_sha256) = (
-            _load_index_chunk_completion_inputs(
+         completion_parameters_sha256,
+         source_oracle_registry) = (
+            _load_index_chunk_completion_bindings(
                 chunks_path,
                 chunks_sha256=chunks_sha256,
                 chunks_size=chunks_size,
                 records=records,
             ))
-    source_oracle_registry = _load_source_oracle_registry(
-        chunks_path, effective_input_bindings)
+    else:
+        source_oracle_registry = _load_source_oracle_registry(
+            chunks_path, effective_input_bindings)
     payload = _quality_core.parse_quality_report_bytes(
         report_raw,
         chunks_name=chunks_path.name,
@@ -1950,6 +2013,7 @@ def _reset_rag_caches_after_fork() -> None:
     global _artifact_sha256_cache, _artifact_sha256_cache_lock
     global _bm25_cache, _bm25_cache_lock
     global _reranker_instances, _reranker_lock
+    global _embedding_token_counter_entry, _embedding_token_counter_lock
     _sync_vector_store_lock_facades()
     if "_artifact_sha256_cache" in globals():
         _artifact_sha256_cache = {}
@@ -1962,6 +2026,11 @@ def _reset_rag_caches_after_fork() -> None:
         # not safe to reuse in the child. Reload lazily on first use instead.
         _reranker_instances = {}
         _reranker_lock = _threading.Lock()
+    if "_embedding_token_counter_entry" in globals():
+        # Like the reranker, a tokenizer and a mutex inherited from a
+        # multithreaded parent are rebuilt lazily in the child.
+        _embedding_token_counter_entry = None
+        _embedding_token_counter_lock = _threading.Lock()
 
 
 def _reset_vector_store_locks_after_fork() -> None:
@@ -13182,14 +13251,15 @@ def _native_hard_hyphen_key(value: str) -> str:
     return "".join(pieces)
 
 
-def _native_hard_hyphen_attestations(pdf) -> set[str]:
-    """Collect whole hard-hyphenated words from this exact native PDF."""
+def _native_hard_hyphen_attestations_from_words(
+        page_words: Iterable[Iterable[tuple]]) -> set[str]:
+    """Collect whole hard-hyphenated words from each page's sorted words."""
     attestations: set[str] = set()
     plain_native_keys: set[str] = set()
     hard_dash = re.compile(
         r"[-\N{HYPHEN}\N{NON-BREAKING HYPHEN}]")
-    for page in pdf:
-        for word in page.get_text("words", sort=True):
+    for words in page_words:
+        for word in words:
             text = str(word[4])
             lexemes = list(_NATIVE_LEXEME_RE.finditer(text))
             key = _native_hard_hyphen_key(text)
@@ -13206,6 +13276,85 @@ def _native_hard_hyphen_attestations(pdf) -> set[str]:
         key for key in attestations
         if key.replace("-", "") not in plain_native_keys
     }
+
+
+def _native_hard_hyphen_attestations(pdf) -> set[str]:
+    """Collect whole hard-hyphenated words from this exact native PDF."""
+    return _native_hard_hyphen_attestations_from_words(
+        page.get_text("words", sort=True) for page in pdf)
+
+
+class _NativePdfWordCache:
+    """One source snapshot's sorted native page words, extracted once.
+
+    The native text-group stages of ``_recover_bound_source_enrichments``
+    each open the same private, hash-verified snapshot and read every
+    page's unclipped ``get_text("words", sort=True)``; four of them also
+    recompute the hard-hyphen attestations.  This cache performs each of
+    those extractions once per enrichment call.  It belongs to one snapshot
+    path and page count, and every stage binds the document it opened, so
+    another PDF fails closed.  An entry is stored only after its extraction
+    returns, and callers receive copies.  Clipped, block, dict and
+    flag-specific extractions are never cached.
+    """
+
+    __slots__ = ("path", "page_count", "_page_words", "_attestations")
+
+    def __init__(self, pdf_path: Path) -> None:
+        self.path = Path(pdf_path)
+        self.page_count: int | None = None
+        self._page_words: dict[int, tuple[tuple, ...]] = {}
+        self._attestations: frozenset[str] | None = None
+
+    def bind(self, pdf_path: Path, pdf) -> None:
+        """Accept one opened document of this cache's snapshot."""
+        page_count = len(pdf)
+        if (Path(pdf_path) != self.path
+                or self.page_count not in (None, page_count)):
+            raise ValueError(
+                "native word cache belongs to another PDF snapshot")
+        self.page_count = page_count
+
+    def page_words(self, page) -> list[tuple]:
+        """Return a copy of one page's unclipped sorted native words."""
+        number = page.number
+        words = self._page_words.get(number)
+        if words is None:
+            if self.page_count is None or not 0 <= number < self.page_count:
+                raise ValueError(
+                    "native word cache belongs to another PDF snapshot")
+            words = tuple(page.get_text("words", sort=True))
+            self._page_words[number] = words
+        return list(words)
+
+    def hard_hyphen_attestations(self, pdf) -> set[str]:
+        """Return a copy of the snapshot's hard-hyphen attestations."""
+        if self._attestations is None:
+            self._attestations = frozenset(
+                _native_hard_hyphen_attestations_from_words(
+                    self.page_words(page) for page in pdf))
+        return set(self._attestations)
+
+    def clear(self) -> None:
+        """Release the cached words once the group stages are done."""
+        self._page_words.clear()
+        self._attestations = None
+
+
+def _sorted_native_page_words(
+        page, word_cache: _NativePdfWordCache | None) -> list[tuple]:
+    """Return one page's unclipped sorted native words."""
+    if word_cache is None:
+        return list(page.get_text("words", sort=True))
+    return word_cache.page_words(page)
+
+
+def _bound_hard_hyphen_attestations(
+        pdf, word_cache: _NativePdfWordCache | None) -> set[str]:
+    """Return the PDF's hard-hyphen attestations."""
+    if word_cache is None:
+        return _native_hard_hyphen_attestations(pdf)
+    return word_cache.hard_hyphen_attestations(pdf)
 
 
 _SOURCE_SPLIT_HYPHEN_WORD_RE = re.compile(
@@ -15201,6 +15350,7 @@ def _recover_native_text_repairs(
         structural_ranges: set[tuple[int, int]] | None = None,
         letter_spaced_retries: (
             dict[str, _LetterSpacedLayerRetry] | None) = None,
+        word_cache: _NativePdfWordCache | None = None,
 ) -> dict[str, str]:
     """Repair Docling token splits using position- and style-bound PDF text.
 
@@ -15208,7 +15358,9 @@ def _recover_native_text_repairs(
     repairs for letter-spaced text layers
     (``_letter_spaced_layer_retry_applies``).  They are not applied here:
     ``_recover_bound_source_enrichments`` commits them after its native group
-    stages (``_apply_letter_spaced_layer_retries``).
+    stages (``_apply_letter_spaced_layer_retries``).  ``word_cache``, when
+    given, shares one snapshot's sorted page words and hard-hyphen
+    attestations with those stages (``_NativePdfWordCache``).
     """
     import pymupdf
 
@@ -15224,14 +15376,17 @@ def _recover_native_text_repairs(
         page_items.setdefault(int(provenance[0].page_no), []).append(item)
 
     with pymupdf.open(str(pdf_path)) as pdf:
-        hard_hyphen_attestations = _native_hard_hyphen_attestations(pdf)
+        if word_cache is not None:
+            word_cache.bind(pdf_path, pdf)
+        hard_hyphen_attestations = _bound_hard_hyphen_attestations(
+            pdf, word_cache)
         pdf_plain_word_keys: set[str] = set()
         plain_native_word_keys: set[str] = set()
         all_hard_native_word_keys: set[str] = set()
         hard_dash = re.compile(
             r"[-\N{HYPHEN}\N{NON-BREAKING HYPHEN}]")
         for native_page in pdf:
-            for word in native_page.get_text("words", sort=True):
+            for word in _sorted_native_page_words(native_page, word_cache):
                 word_text = str(word[4]).replace("\N{SOFT HYPHEN}", "")
                 lexemes = list(_NATIVE_LEXEME_RE.finditer(word_text))
                 key = _native_lexeme_key(word_text)
@@ -15260,7 +15415,7 @@ def _recover_native_text_repairs(
             if not 1 <= page_number <= len(pdf):
                 continue
             page = pdf[page_number - 1]
-            page_words = list(page.get_text("words", sort=True))
+            page_words = _sorted_native_page_words(page, word_cache)
             page_spans = [
                 span
                 for block in page.get_text("dict", sort=True).get(
@@ -15462,6 +15617,7 @@ def _recover_overlapping_native_text_groups(
         structural_ranges: set[tuple[int, int]] | None = None,
         reading_order_violations: frozenset[tuple[str, int]] = frozenset(),
         deferred_groups: list[SourceTextGroupRecovery] | None = None,
+        word_cache: _NativePdfWordCache | None = None,
 ) -> tuple[SourceTextGroupRecovery, ...]:
     """Recover reading order only for source fragments with overlapping bboxes.
 
@@ -15614,7 +15770,10 @@ def _recover_overlapping_native_text_groups(
     recoveries: list[SourceTextGroupRecovery] = []
     deferred: list[SourceTextGroupRecovery] = []
     with pymupdf.open(str(pdf_path)) as pdf:
-        hard_hyphen_attestations = _native_hard_hyphen_attestations(pdf)
+        if word_cache is not None:
+            word_cache.bind(pdf_path, pdf)
+        hard_hyphen_attestations = _bound_hard_hyphen_attestations(
+            pdf, word_cache)
         for group in candidates:
             rectangles = [
                 pair for item in group
@@ -15696,7 +15855,7 @@ def _recover_overlapping_native_text_groups(
             if intersects_heading:
                 continue
 
-            page_words = list(page.get_text("words", sort=True))
+            page_words = _sorted_native_page_words(page, word_cache)
             page_spans = [
                 span
                 for block in page.get_text("dict", sort=True).get(
@@ -15859,6 +16018,7 @@ def _recover_adjacent_native_split_word_groups(
         text_overrides: dict[str, str] | None = None,
         structural_ranges: set[tuple[int, int]] | None = None,
         claimed_refs: set[str] | None = None,
+        word_cache: _NativePdfWordCache | None = None,
 ) -> tuple[SourceTextGroupRecovery, ...]:
     """Join adjacent items only when the exact PDF proves one plain word.
 
@@ -15923,6 +16083,8 @@ def _recover_adjacent_native_split_word_groups(
 
     recoveries: list[SourceTextGroupRecovery] = []
     with pymupdf.open(str(pdf_path)) as pdf:
+        if word_cache is not None:
+            word_cache.bind(pdf_path, pdf)
         plain_word_keys: set[str] = set()
         hard_hyphen_word_keys: set[str] = set()
         hard_dash = re.compile(
@@ -15930,7 +16092,7 @@ def _recover_adjacent_native_split_word_groups(
         )
         page_words: dict[int, list[tuple]] = {}
         for page_number, page in enumerate(pdf, start=1):
-            words = list(page.get_text("words", sort=True))
+            words = _sorted_native_page_words(page, word_cache)
             page_words[page_number] = words
             for word in words:
                 value = str(word[4]).replace("\N{SOFT HYPHEN}", "")
@@ -16106,6 +16268,7 @@ def _recover_cross_page_native_word_groups(
         text_overrides: dict[str, str] | None = None,
         structural_ranges: set[tuple[int, int]] | None = None,
         claimed_refs: set[str] | None = None,
+        word_cache: _NativePdfWordCache | None = None,
 ) -> tuple[SourceTextGroupRecovery, ...]:
     """Join source items split through an attested hard-hyphenated word."""
     import pymupdf
@@ -16151,7 +16314,7 @@ def _recover_cross_page_native_word_groups(
         for value in provenance:
             clip = _pdf_clip_for_provenance(page, value)
             words.extend(
-                word for word in page.get_text("words", sort=True)
+                word for word in _sorted_native_page_words(page, word_cache)
                 if (clip.x0 - 0.5
                     <= (float(word[0]) + float(word[2])) / 2
                     <= clip.x1 + 0.5
@@ -16166,7 +16329,9 @@ def _recover_cross_page_native_word_groups(
     leading_word = re.compile(r"^\s*([A-Za-z0-9]+(?:-[A-Za-z0-9]+)*)")
     recoveries: list[SourceTextGroupRecovery] = []
     with pymupdf.open(str(pdf_path)) as pdf:
-        attestations = _native_hard_hyphen_attestations(pdf)
+        if word_cache is not None:
+            word_cache.bind(pdf_path, pdf)
+        attestations = _bound_hard_hyphen_attestations(pdf, word_cache)
         for page_number in sorted(page_items):
             if page_number + 1 not in page_items:
                 continue
@@ -16209,6 +16374,7 @@ def _recover_cross_page_native_word_groups(
 def _recover_disjoint_section_flow_groups(
         dl_doc, pdf_path: Path, *,
         structural_ranges: set[tuple[int, int]] | None = None,
+        word_cache: _NativePdfWordCache | None = None,
 ) -> tuple[SourceTextGroupRecovery, ...]:
     """Repair a reversed multi-provenance item split by a section heading."""
     import pymupdf
@@ -16231,7 +16397,7 @@ def _recover_disjoint_section_flow_groups(
         if len(blocks) != 1:
             return None
         words = [
-            word for word in page.get_text("words", sort=True)
+            word for word in _sorted_native_page_words(page, word_cache)
             if (clip.x0 - 0.5
                 <= (float(word[0]) + float(word[2])) / 2
                 <= clip.x1 + 0.5
@@ -16281,7 +16447,9 @@ def _recover_disjoint_section_flow_groups(
     recoveries: list[SourceTextGroupRecovery] = []
     claimed_refs: set[str] = set()
     with pymupdf.open(str(pdf_path)) as pdf:
-        attestations = _native_hard_hyphen_attestations(pdf)
+        if word_cache is not None:
+            word_cache.bind(pdf_path, pdf)
+        attestations = _bound_hard_hyphen_attestations(pdf, word_cache)
         for candidate_index, item in enumerate(texts):
             if _doc_item_label(item) != "text":
                 continue
@@ -17105,61 +17273,74 @@ def _recover_bound_source_enrichments(
                 str, tuple[tuple[str, str], ...]] = {}
             native_text_rebuild_refs: set[str] = set()
             letter_spaced_retries: dict[str, _LetterSpacedLayerRetry] = {}
-            native_text_overrides = optional_stage(
-                "native-PDF text repairs",
-                lambda: _recover_native_text_repairs(
-                    dl_doc, recovery_source.pdf.path,
-                    repair_edits=native_repair_edits,
-                    rebuild_refs=native_text_rebuild_refs,
-                    structural_ranges=structural_ranges,
-                    letter_spaced_retries=letter_spaced_retries),
-                None,
-            )
-            if native_text_overrides is None:
-                # A failed optional stage must not leak partial retries.
-                native_text_overrides = {}
-                letter_spaced_retries.clear()
-            deferred_text_groups: list[SourceTextGroupRecovery] = []
-            text_group_recoveries = optional_stage(
-                "overlapping native-PDF text groups",
-                lambda: _recover_overlapping_native_text_groups(
-                    dl_doc, recovery_source.pdf.path,
-                    structural_ranges=structural_ranges,
-                    reading_order_violations=reading_order_violations,
-                    deferred_groups=deferred_text_groups),
-                (),
-            )
-            text_group_recoveries += optional_stage(
-                "adjacent native-PDF split-word groups",
-                lambda: _recover_adjacent_native_split_word_groups(
-                    dl_doc, recovery_source.pdf.path,
-                    text_overrides=native_text_overrides,
-                    structural_ranges=structural_ranges,
-                    claimed_refs={
-                        ref for recovery in text_group_recoveries
-                        for ref in recovery.refs
-                    }),
-                (),
-            )
-            text_group_recoveries += optional_stage(
-                "cross-page native-PDF word groups",
-                lambda: _recover_cross_page_native_word_groups(
-                    dl_doc, recovery_source.pdf.path,
-                    text_overrides=native_text_overrides,
-                    structural_ranges=structural_ranges,
-                    claimed_refs={
-                        ref for recovery in text_group_recoveries
-                        for ref in recovery.refs
-                    }),
-                (),
-            )
-            text_group_recoveries += optional_stage(
-                "disjoint section-flow text groups",
-                lambda: _recover_disjoint_section_flow_groups(
-                    dl_doc, recovery_source.pdf.path,
-                    structural_ranges=structural_ranges),
-                (),
-            )
+            # The native text-group stages below read every page's sorted
+            # words from this one snapshot; extract each page only once.
+            word_cache = _NativePdfWordCache(recovery_source.pdf.path)
+            try:
+                native_text_overrides = optional_stage(
+                    "native-PDF text repairs",
+                    lambda: _recover_native_text_repairs(
+                        dl_doc, recovery_source.pdf.path,
+                        repair_edits=native_repair_edits,
+                        rebuild_refs=native_text_rebuild_refs,
+                        structural_ranges=structural_ranges,
+                        letter_spaced_retries=letter_spaced_retries,
+                        word_cache=word_cache),
+                    None,
+                )
+                if native_text_overrides is None:
+                    # A failed optional stage must not leak partial retries.
+                    native_text_overrides = {}
+                    letter_spaced_retries.clear()
+                deferred_text_groups: list[SourceTextGroupRecovery] = []
+                text_group_recoveries = optional_stage(
+                    "overlapping native-PDF text groups",
+                    lambda: _recover_overlapping_native_text_groups(
+                        dl_doc, recovery_source.pdf.path,
+                        structural_ranges=structural_ranges,
+                        reading_order_violations=reading_order_violations,
+                        deferred_groups=deferred_text_groups,
+                        word_cache=word_cache),
+                    (),
+                )
+                text_group_recoveries += optional_stage(
+                    "adjacent native-PDF split-word groups",
+                    lambda: _recover_adjacent_native_split_word_groups(
+                        dl_doc, recovery_source.pdf.path,
+                        text_overrides=native_text_overrides,
+                        structural_ranges=structural_ranges,
+                        claimed_refs={
+                            ref for recovery in text_group_recoveries
+                            for ref in recovery.refs
+                        },
+                        word_cache=word_cache),
+                    (),
+                )
+                text_group_recoveries += optional_stage(
+                    "cross-page native-PDF word groups",
+                    lambda: _recover_cross_page_native_word_groups(
+                        dl_doc, recovery_source.pdf.path,
+                        text_overrides=native_text_overrides,
+                        structural_ranges=structural_ranges,
+                        claimed_refs={
+                            ref for recovery in text_group_recoveries
+                            for ref in recovery.refs
+                        },
+                        word_cache=word_cache),
+                    (),
+                )
+                text_group_recoveries += optional_stage(
+                    "disjoint section-flow text groups",
+                    lambda: _recover_disjoint_section_flow_groups(
+                        dl_doc, recovery_source.pdf.path,
+                        structural_ranges=structural_ranges,
+                        word_cache=word_cache),
+                    (),
+                )
+            finally:
+                # Release the words on every path, so that a required
+                # stage's propagating failure does not keep them alive.
+                word_cache.clear()
             # Every group stage above decided on today's overrides.  A
             # recovered group's oracle replaces its members' overrides, and a
             # deferred group's members may be admitted by the order replay, so

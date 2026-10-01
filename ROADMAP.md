@@ -1732,16 +1732,22 @@ promotion gate there. The three query-path speed branches
 their shared Phase A0 pair at source `18a70ab` passed the hosted CI
 promotion gate there. The two model-load speed branches
 (`agent/imp-model-verify-readinto-hash` and
-`agent/imp-embedding-skip-random-init`) are now proposed together in one
-pull request from `agent/model-load-speedups`, which is stacked on PR #157's
-evidence head `e91d42f` and carries its own Phase A0 pair at source
-`8ce1a8d`, its hosted checks pending. The other 9 have no pull request, so
+`agent/imp-embedding-skip-random-init`) merged together into `main` through
+[PR #158](https://github.com/toddlar00/rag-pipeline/pull/158) as `cc39af5`;
+their shared Phase A0 pair at source `8ce1a8d` passed the hosted CI
+promotion gate there. The four ingestion speed branches
+(`agent/imp-chunk-dedup-bitset`, `agent/imp-pdf-enrichment-word-cache`,
+`agent/imp-quality-attestation-single-pass` and
+`agent/imp-embedding-token-counter-cache`) are now proposed together in one
+pull request from `agent/ingestion-speedups`, which is stacked on PR #158's
+evidence head `33d6a26` and carries its own Phase A0 pair at source
+`6fc0c36`, its hosted checks pending. The other 5 have no pull request, so
 none of them is "Implemented (draft)"; of the 18, only the static-security
-branch, the three hosted-flake fix branches and the three query-path speed
-branches are integrated. The integration
-branch `agent/research-improvements` merges all 18 only to validate the
-combination; each other branch lands through its own pull request. Branch
-names below omit the `agent/imp-` prefix.
+branch, the three hosted-flake fix branches, the three query-path speed
+branches and the two model-load speed branches are integrated. The
+integration branch `agent/research-improvements` merges all 18 only to
+validate the combination; each other branch lands through its own pull
+request. Branch names below omit the `agent/imp-` prefix.
 
 - **Method.** Codebase mapping and external research produced 78
   candidates. A synthesis pass ranked 32, and one adversarial verifier per
@@ -1764,31 +1770,40 @@ names below omit the `agent/imp-` prefix.
     Jaccard in `chunking_core._deduplicate_chunks`. 42-55x at 2,831
     synthetic chunks (184 s to 3.3-4.4 s). Deduplication takes about 54 s
     of the private tort-law casebook's chunk stage; the saving there is
-    expected, not measured.
+    expected, not measured. It is now proposed together with
+    `pdf-enrichment-word-cache`, `quality-attestation-single-pass` and
+    `embedding-token-counter-cache` in one stacked pull request, with their
+    shared Phase A0 pair at source `6fc0c36` (hosted checks pending), and is
+    not integrated.
   - `pdf-enrichment-word-cache`: extracts each page's sorted native words
     once per enrichment call instead of 6-7 times. 29-34 s off each
     enrichment pass on the tort-law casebook, for about 139 MB more peak
-    memory.
+    memory. It is now proposed in the same stacked pull request (hosted
+    checks pending) and is not integrated.
   - `embedding-token-counter-cache`: caches the verified token-counter
     tokenizer and counts in batches. A stage simulation drops from 23-26 s
-    to 2.2-2.7 s, for about 250 MB more resident memory.
+    to 2.2-2.7 s, for about 250 MB more resident memory. It is now proposed
+    in the same stacked pull request (hosted checks pending) and is not
+    integrated.
   - `legal-tokenizer-literal-guards`: literal guards and literal-first
     regex forms in `_legal_search_tokens`. 2.2-2.3x, identical over a
     280,000-string differential fuzz; about 1 s of CPU off each cold Chroma
     hybrid query. It merged through the same pull request (#157).
   - `quality-attestation-single-pass`: attests each record once and reads
     the oracle registry once per binding. 35-45% (about 0.7-1.5 s) off each
-    quality binding on the index, search and publication paths.
+    quality binding on the index, search and publication paths. It is now
+    proposed in the same stacked pull request as `chunk-dedup-bitset`
+    (hosted checks pending) and is not integrated.
   - `model-verify-readinto-hash`: hashes model bundles with `readinto` into
-    a reused buffer. 1.4-1.55x, about 0.4-0.8 s per model load. It is now
-    proposed together with `embedding-skip-random-init` in one stacked pull
-    request, with their shared Phase A0 pair at source `8ce1a8d` (hosted
-    checks pending), and is not integrated.
+    a reused buffer. 1.4-1.55x, about 0.4-0.8 s per model load. It merged
+    together with `embedding-skip-random-init` through PR #158 as
+    `cc39af5`, with their shared Phase A0 pair at source `8ce1a8d`, which
+    passed the hosted CI promotion gate.
   - `embedding-skip-random-init`: skips the 211 discarded `torch.nn.init`
     calls when the pinned Nomic model is built, behind a fail-closed
     checkpoint-header guard. 1.47 s off each cold embedder load, with
-    bitwise-identical embeddings. It is now proposed in the same stacked
-    pull request (hosted checks pending) and is not integrated.
+    bitwise-identical embeddings. It merged through the same pull request
+    (#158).
   - `strict-parse-nonfinite-flag`: a path-free non-finite scan ahead of the
     strict JSONL parser's metadata walk. 23-31% off each parse on
     synthetic corpora (19-21%, about 50-70 ms, on the largest real corpus).
@@ -1874,13 +1889,14 @@ names below omit the `agent/imp-` prefix.
     path differ. The scratch copies were deleted.
 - **Before integration.** Each remaining branch needs a draft pull request
   and its own Phase A0 source/evidence pair (the three hosted-flake fix
-  branches and the three query-path speed branches each shared one stacked
-  pull request and pair, and the two model-load speed branches are
-  proposed with another). The combined query-path and model-load pull
-  requests depart from the A1 owner-decision row's condition that each
-  slice is its own pull request with its own Phase A0 source/evidence
-  pair; the query-path one merged as #157, and splitting the model-load one
-  is the owner's call. Every branch
+  branches, the three query-path speed branches and the two model-load
+  speed branches each shared one stacked pull request and pair, and the
+  four ingestion speed branches are proposed with another). The combined
+  query-path, model-load and ingestion pull requests depart from the A1
+  owner-decision row's condition that each slice is its own pull request
+  with its own Phase A0 source/evidence pair; the query-path and model-load
+  ones merged as #157 and #158, and splitting the ingestion one is the
+  owner's call. Every branch
   changes `architecture-inventory.json`, so after each merge the next
   branch is rebased and its inventory refreshed. Twelve branches change
   paths that `ci-security-ownership.json` owns or governs (every `rag.py`,
@@ -2308,6 +2324,28 @@ transformer, with bitwise-identical weights and embeddings. A checkpoint
 that omits a parameter now fails closed instead of silently keeping random
 weights. It changes no pipeline output, dependency or lock and supersedes
 the `18a70ab` pair for its own pull request.
+The `8ce1a8d` pair (gate-only child `33d6a26`) passed the hosted CI
+promotion gate on [PR
+#158](https://github.com/toddlar00/rag-pipeline/pull/158), which merged into
+`main` as `cc39af5`; the networked vulnerability/SBOM jobs passed at that
+head. The stacked ingestion speedup source `6fc0c36` makes four
+output-identical ingestion and indexing speedups: chunk near-duplicate
+removal skips each pair whose trigram-count ratio is already below the
+threshold and compares the rest with integer bitsets, with identical
+keep/remove decisions and audit stream; source enrichment extracts each
+page's sorted native words and the hard-hyphen attestations once per
+enrichment call through a snapshot-bound, fail-closed cache that is
+cleared when the native text-group stages finish; quality validation
+attests each record once, and the index quality binding reads and verifies
+the source-oracle registry once instead of twice when it loads the chunk
+completion itself; and the embedding token counter keeps one verified
+tokenizer resident, still re-verifying its bundle on every call, and counts
+in fixed slices of 256 texts, with identical counts. If the registry
+sidecar is replaced between what used to be two reads, the binding now
+proceeds with the first verified snapshot instead of failing with "source
+oracle registry file binding changed". It changes no pipeline output,
+dependency or lock and supersedes the `8ce1a8d` pair for its own pull
+request.
 Its Windows/Linux
 pair (independent local same-platform comparisons passed) is that branch's
 candidate; its hosted checks and exact-SHA record are pending, and the

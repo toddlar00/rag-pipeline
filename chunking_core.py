@@ -1193,6 +1193,31 @@ def _make_trigrams(fingerprint: str) -> frozenset[str]:
     )
 
 
+def _trigram_mask(trigrams: object, bit_positions: dict[str, int]) -> int | None:
+    """Return an exact membership bitset, or ``None`` outside the fast path.
+
+    Only an exact ``frozenset`` of exact ``str`` members qualifies, so no
+    caller-defined hashing, equality or container method runs; any other value
+    keeps the original set-algebra comparison and its dispatch.
+    """
+    if type(trigrams) is not frozenset:
+        return None
+    positions: list[int] = []
+    for gram in trigrams:
+        if type(gram) is not str:
+            return None
+        position = bit_positions.get(gram)
+        if position is None:
+            position = bit_positions[gram] = len(bit_positions)
+        positions.append(position)
+    if not positions:
+        return 0
+    bitmap = bytearray((max(positions) >> 3) + 1)
+    for position in positions:
+        bitmap[position >> 3] |= 1 << (position & 7)
+    return int.from_bytes(bitmap, "little")
+
+
 def _deduplicate_chunks(
         chunks: list[dict], threshold: float = DEDUP_THRESHOLD, *,
         text_fingerprint_fn: FingerprintFn | None = None,
@@ -1217,8 +1242,18 @@ def _deduplicate_chunks(
         if text_fingerprint_fn is None else text_fingerprint_fn
     )
     trigrams_fn = _make_trigrams if make_trigrams_fn is None else make_trigrams_fn
+    # Jaccard similarity is at most min(|A|, |B|) / max(|A|, |B|) because the
+    # intersection is no larger than the smaller set and the union no smaller
+    # than the larger one.  Correctly rounded division is monotone, so a pair
+    # whose size ratio is below the threshold can never reach it.  The bound
+    # is applied only to exact built-in numbers so that comparison dispatch
+    # for any other threshold object is unchanged.
+    size_bound = type(threshold) is float or type(threshold) is int
+    # Per call, never shared: bit positions are meaningful only within one
+    # corpus, and concurrent calls must not grow a common table.
+    bit_positions: dict[str, int] = {}
     kept: list[dict] = []
-    seen: list[tuple[int, frozenset[str], dict, int]] = []
+    seen: list[tuple[int, object, int | None, int | None, dict, int]] = []
     for index, chunk in enumerate(chunks):
         if audit_hook is None:
             fingerprint = fingerprint_fn(chunk["text"])
@@ -1231,15 +1266,29 @@ def _deduplicate_chunks(
             if audit_hook is not None:
                 audit_hook("keep", index, None)
             continue
+        mask_a = _trigram_mask(trigrams_a, bit_positions)
+        count_a = None if mask_a is None else len(trigrams_a)
 
         is_duplicate = False
-        for seen_length, trigrams_b, seen_chunk, seen_index in seen:
+        for (seen_length, trigrams_b, count_b, mask_b, seen_chunk,
+                seen_index) in seen:
             if (abs(fingerprint_length - seen_length)
                     / max(fingerprint_length, seen_length) > 0.2):
                 continue
             if not trigrams_b:
                 continue
-            jaccard = len(trigrams_a & trigrams_b) / len(trigrams_a | trigrams_b)
+            if count_a is not None and count_b is not None:
+                if size_bound and (min(count_a, count_b)
+                                   / max(count_a, count_b) < threshold):
+                    continue
+                # Both sides are exact frozensets of exact strings, so the
+                # shared bits count the intersection and this is the same
+                # correctly rounded quotient as the set-algebra expression.
+                shared = (mask_a & mask_b).bit_count()
+                jaccard = shared / (count_a + count_b - shared)
+            else:
+                jaccard = (len(trigrams_a & trigrams_b)
+                           / len(trigrams_a | trigrams_b))
             if (jaccard >= threshold
                     and (can_deduplicate_fn is None
                          or can_deduplicate_fn(seen_chunk, chunk))):
@@ -1250,7 +1299,8 @@ def _deduplicate_chunks(
 
         if not is_duplicate:
             kept.append(chunk)
-            seen.append((fingerprint_length, trigrams_a, chunk, index))
+            seen.append((fingerprint_length, trigrams_a, count_a, mask_a,
+                         chunk, index))
             if audit_hook is not None:
                 audit_hook("keep", index, None)
 
