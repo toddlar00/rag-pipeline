@@ -600,12 +600,17 @@ bitwise identical over 8,000 fuzzed comparisons, and the offline-BM25 and
 index report shapes and committed baselines are unchanged. It changes no
 pipeline output, dependency or lock and supersedes the `e706fd2` pair for
 its own pull request.
+The `5d22bb9` pair (gate-only child `9b243c3`) passed the hosted CI
+promotion gate on [PR
+#163](https://github.com/toddlar00/rag-pipeline/pull/163), which merged into
+`main` as `6303d8b`; the networked vulnerability/SBOM jobs passed at that
+head.
 The current reports above
 bind
 that exact clean source and each passes an independent complete
-same-platform 9×5 comparison. No hosted result for this replacement pair
-is claimed here yet; its hosted checks and external exact-SHA record
-remain pending.
+same-platform 9×5 comparison. Both hosted Phase A0 cells passed with
+retained current-report artifacts, and the external exact-SHA record is a
+comment on PR #163.
 
 ## Checking
 

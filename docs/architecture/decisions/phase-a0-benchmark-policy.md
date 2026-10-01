@@ -34,8 +34,9 @@
   tolerance pair at source `9e4d7be` passed on PR #161 (merged through
   `d27af15`), the stacked CI and secret-scan tooling pair at source
   `e706fd2` passed on PR #162 (merged through `40994b4`), and the stacked
-  lexical accuracy toolkit pair at source `5d22bb9` is pending; exact-head
-  human review and separate R8 owner authorization are not recorded
+  lexical accuracy toolkit pair at source `5d22bb9` passed on PR #163
+  (merged through `6303d8b`); exact-head human review and separate R8 owner
+  authorization are not recorded
 - **Milestone:** R10 prerequisite for the R8 pipeline-ownership move
 - **Report schema:** `phase-a0` v3
 
@@ -581,10 +582,14 @@ distributions on Windows and 191 on Linux. They bind that one clean
 source, the same eight
 LF and `HEAD`-identical dependency/model inputs, and the complete 9×5
 scenario contract. Each passes an independent complete local same-platform
-comparison. The direct gate-only evidence child contains only the reports
-and permitted provenance/status documentation; its hosted checks, retained
-current-report artifacts, external exact-SHA promotion record, and own
-commit identity are still pending.
+comparison. The direct gate-only evidence child `9b243c3` contains only
+the reports and permitted provenance/status documentation.
+The `5d22bb9` pair (gate-only child `9b243c3`) passed the hosted CI
+promotion gate on [PR
+#163](https://github.com/toddlar00/rag-pipeline/pull/163), which merged into
+`main` as `6303d8b`; the networked vulnerability/SBOM jobs passed at that
+head. Both Phase A0 cells retained their current-report artifacts, and the
+external exact-SHA promotion record is a comment on that pull request.
 
 The temporary force-full seed matrix explicitly checks out the exact PR head
 rather than the synthetic merge ref so its report can bind immutable evidence
@@ -789,4 +794,5 @@ Its Linux report is 50,570 bytes (file SHA-256
 embedded report SHA-256
 `db8d546a6f5059c85cf5704ad910cff711bba7de2ddfc6160ddb2b26cdd5ccc4`).
 Both use CPython 3.12.13 and pass their complete local same-platform 9×5
-comparisons. Hosted promotion remains pending.
+comparisons. Hosted promotion passed on PR #163 (gate-only child
+`9b243c3`, merged through `6303d8b`).

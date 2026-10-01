@@ -1437,7 +1437,7 @@ read by fresh layout-aware OCR of an image-only derivative, using
     #161](https://github.com/toddlar00/rag-pipeline/pull/161) as `d27af15`,
     where its own Phase A0 pair at source `9e4d7be` passed the hosted CI
     promotion gate (see "Research improvement pass (2026-09-30,
-    prepared)"). It retries only transient replace errors of these writes:
+    integrated)"). It retries only transient replace errors of these writes:
     within one 3-second budget until the ready marker is published, 2
     seconds for the cancellation evidence and 8 seconds for each later
     write. Store commit writes, reconciliation writes and launcher-side
@@ -1708,7 +1708,7 @@ embedding code's Transformers names and clear two new advisories.
     retained from the hosted run, so that cause is not proven. The fix
     merged into `main` through [PR
     #151](https://github.com/toddlar00/rag-pipeline/pull/151) as `584c4a5`
-    (see "Research improvement pass (2026-09-30, prepared)").
+    (see "Research improvement pass (2026-09-30, integrated)").
   - Local Windows full suites under `-n 8` intermittently fail a
     `tests/test_ocr_hardscan_io.py` test with a transient `PermissionError`
     (WinError 32) while `artifact_io.immutable_file_snapshot` unlinks
@@ -1722,10 +1722,10 @@ embedding code's Transformers names and clear two new advisories.
     same class of gap as the durable-job manager's transient replace writes
     (see "Corpus audit follow-ups").
 
-### Research improvement pass (2026-09-30, prepared)
+### Research improvement pass (2026-09-30, integrated)
 
 Eighteen branches `agent/imp-*`, each based on `main` `3aede7d` and pushed,
-are prepared, and each was independently reviewed.
+were prepared, and each was independently reviewed.
 `agent/imp-static-security-s324-noqa` merged into `main` through [PR
 #150](https://github.com/toddlar00/rag-pipeline/pull/150) as `76f98d6`; its
 Phase A0 pair passed the hosted CI promotion gate there, and the separate
@@ -1770,19 +1770,16 @@ promotion gate there. The CI-validator and secret-scan branches
 [PR #162](https://github.com/toddlar00/rag-pipeline/pull/162) as
 `40994b4`; their shared Phase A0 pair at source `e706fd2` passed the hosted
 CI promotion gate there, and the networked vulnerability/SBOM jobs passed
-at that head. The last one, `agent/imp-lexical-accuracy-toolkit`, is now
-proposed in its own pull request from `agent/lexical-accuracy-toolkit-pr`,
-which is stacked on PR #162's evidence head `78777a8` and carries its own
-Phase A0 pair at source `5d22bb9`, its hosted checks pending, and is not
-integrated. The other 17 of the 18 are integrated: the static-security
-branch, the three hosted-flake fix branches, the three query-path speed
-branches, the two model-load speed branches, the four ingestion speed
-branches, the Docling hardening branch, the job-manager transient-write
-branch and the CI-validator and secret-scan branches.
-The integration branch
-`agent/research-improvements` merges all 18 only to validate the
-combination; each other branch lands through its own pull request. Branch
-names below omit the `agent/imp-` prefix.
+at that head. The last one, `agent/imp-lexical-accuracy-toolkit`, merged
+into `main` from `agent/lexical-accuracy-toolkit-pr` through [PR
+#163](https://github.com/toddlar00/rag-pipeline/pull/163) as `6303d8b`; its
+Phase A0 pair at source `5d22bb9` passed the hosted CI promotion gate there,
+and the networked vulnerability/SBOM jobs passed at that head. All 18 are
+now integrated through history-preserving pull-request merges, and the pass
+is complete. The integration branch
+`agent/research-improvements` merged all 18 only to validate the
+combination and was not itself merged; the branches landed through the
+pull requests above. Branch names below omit the `agent/imp-` prefix.
 
 - **Method.** Codebase mapping and external research produced 78
   candidates. A synthesis pass ranked 32, and one adversarial verifier per
@@ -1910,12 +1907,12 @@ names below omit the `agent/imp-` prefix.
   stays `none`, bitwise identical over 8,000 fuzzed calls. On public
   yardsticks run locally and never committed, nDCG@10 moves from 0.225 to
   0.293 on Legal RAG Bench (p=0.0004), by +0.011 on SciFact (p=0.098) and
-  by -0.009 on LegalBench-RAG-mini (p=0.08). It is now proposed in its own
-  stacked pull request, with its own Phase A0 pair at source `5d22bb9`
-  (hosted checks pending), and is not integrated. That pull request adds
-  measurement tooling and the opt-in policy only: no production CLI, UI or
-  service flag and no default changes, and adopting the policy or adding
-  CI lexical baselines is the owner's call.
+  by -0.009 on LegalBench-RAG-mini (p=0.08). It merged through PR #163 as
+  `6303d8b`, with its own Phase A0 pair at source `5d22bb9`, which passed
+  the hosted CI promotion gate. It adds measurement tooling and the opt-in
+  policy only: no production CLI, UI or service flag and no default
+  changes, and adopting the policy or adding CI lexical baselines remains
+  the owner's call.
 - **Integration validation at `092ef8c`.**
   - Full locked suites: Windows 16,234 passed and 8 skipped; Linux (WSL)
     16,152 passed and 90 skipped; none failed. `main` `3aede7d` gave 15,555
@@ -1933,14 +1930,13 @@ names below omit the `agent/imp-` prefix.
     byte-identical to the base code's, and 413 of 413 stored embeddings are
     bitwise identical; only timestamps, UUIDs, lock names and the scratch
     path differ. The scratch copies were deleted.
-- **Before integration.** Each remaining branch needs a draft pull request
-  and its own Phase A0 source/evidence pair (the three hosted-flake fix
+- **Integration (complete).** Each branch landed through a pull request
+  with a Phase A0 source/evidence pair (the three hosted-flake fix
   branches, the three query-path speed branches, the two model-load speed
   branches, the four ingestion speed branches and the CI-validator and
-  secret-scan branches each shared one stacked pull request and pair, the
-  Docling hardening and job-manager transient-write branches each merged
-  with their own, and the lexical accuracy toolkit, the last remaining
-  branch, is proposed with its own). The
+  secret-scan branches each shared one stacked pull request and pair; the
+  static-security, Docling hardening, job-manager transient-write and
+  lexical accuracy toolkit branches each merged with their own). The
   combined query-path, model-load and ingestion pull requests
   departed from the A1 owner-decision row's condition that each slice is
   its own pull request with its own Phase A0 source/evidence pair; they
@@ -1949,13 +1945,13 @@ names below omit the `agent/imp-` prefix.
   `secret-scan-history-batch` is one of the ten speed branches; it merged
   as #162. Every branch
   changes `architecture-inventory.json`, so after each merge the next
-  branch is rebased and its inventory refreshed. Twelve branches change
+  branch was rebased and its inventory refreshed. Twelve branches change
   paths that `ci-security-ownership.json` owns or governs (every `rag.py`,
   `retrieval_core.py` or `model_artifacts.py` change, and the CI-validator,
-  secret-scan and static-security tools), so they also need owned-path
-  review. The A1 authorization covers the ten speed branches; whether the
-  opt-in query policy lands before the deferred retrieval-experiments phase
-  is the owner's call.
+  secret-scan and static-security tools), so they also needed owned-path
+  review. The A1 authorization covers the ten speed branches; the opt-in
+  query policy landed default-off, and whether to adopt it before the
+  deferred retrieval-experiments phase remains the owner's call.
 - **Owner decisions examined, not changed** (see the owner-decision table).
   None of the accuracy candidates was measured on the owner's private judged
   sets.
@@ -1993,9 +1989,9 @@ names below omit the `agent/imp-` prefix.
     The token counter's bare `except` turns a tampered or missing bundle
     into estimated counts, which can trigger a silent full re-embed (owner
     call).
-  - Reranker: once `reranker-single-pass` lands, `reranker_scoring.py`
-    replays FlagEmbedding 1.4.2 internals, so every FlagEmbedding bump must
-    re-verify it during the lock refresh.
+  - Reranker: since `reranker-single-pass` landed (#157),
+    `reranker_scoring.py` replays FlagEmbedding 1.4.2 internals, so every
+    FlagEmbedding bump must re-verify it during the lock refresh.
   - Workflow-validator gaps that also exist at `3aede7d`: a line-start BOM,
     `persist-credentials` nested under `env:`, `_yaml_scalar` applying
     Python escapes to quoted path filters (`\x5f`, `\N`), multi-line quoted
@@ -2014,10 +2010,9 @@ names below omit the `agent/imp-` prefix.
     `ruff --isolated` still honours `.gitignore` and ruff's default
     excludes, so a force-added tracked file under `build/` or `.venv/`
     escapes.
-  - Evaluation: the toolkit is now proposed, not integrated, and its pull
-    request adds no CI step. Once it lands, adding
-    `eval.py --retriever lexical` steps and baselines to CI remains a
-    follow-up for the owner. The production
+  - Evaluation: the toolkit merged through #163 without a CI step, so
+    adding `eval.py --retriever lexical` steps and baselines to CI remains
+    a follow-up for the owner. The production
     lexical leg fails the CC0 abstention cases, which CI runs only through
     the offline adapter. `function-words-v1` also drops
     enumerators ("Article I") and the "in" of fixed phrases, and the Qdrant
@@ -2489,21 +2484,38 @@ bitwise identical over 8,000 fuzzed comparisons, and the offline-BM25 and
 index report shapes and committed baselines are unchanged. It changes no
 pipeline output, dependency or lock and supersedes the `e706fd2` pair for
 its own pull request.
-Its Windows/Linux
-pair (independent local same-platform comparisons passed) is that branch's
-candidate; its hosted checks and exact-SHA record are pending, and the
-merged pull requests carry theirs as PR comments.
+The `5d22bb9` pair (gate-only child `9b243c3`) passed the hosted CI
+promotion gate on [PR
+#163](https://github.com/toddlar00/rag-pipeline/pull/163), which merged into
+`main` as `6303d8b`; the networked vulnerability/SBOM jobs passed at that
+head. That pair is the current baseline, and the merged pull requests,
+#163 included, carry their exact-SHA records as PR comments.
 
-Two operational follow-ups from the post-merge `main` push runs are open:
+Four operational follow-ups from the post-merge `main` push runs are open:
 a documentation-only merge passes its fast-lane pull-request run but then
 fails the forced-heavy `main` push run's ancestor-bound Phase A0 delta
 check until the next source checkpoint supersedes the baseline (observed at
 `48b47fd`; cured by the `0703dde` checkpoint; a fix path — extending the
 gate-only allowed set or classifier-aware push handling — is a
-security-owned workflow change requiring its own review); and
+security-owned workflow change requiring its own review); a new hosted
+flake in
+`tests/test_job_manager.py::test_resumed_attempt_runs_from_bound_submission_directory`,
+which failed once in the Python 3.11 Linux unit job of the push run at
+`76f98d6` (#150's merge) with `job_runtime.JobCorruptError: job state
+changed while being read` (the reader saw the state file change mid-read;
+#150 does not touch the job manager, no later push run through `40994b4`
+failed the test, and the race is not diagnosed); a hosted failure of
+`tests/test_job_manager.py::test_run_job_success_persists_private_attempt_and_exact_worker_env`
+in the Python 3.11 Linux unit job of the first push run at `cc39af5`
+(#158's merge; run 36905319851, later cancelled; a second push run on that
+SHA passed), where the check that the worker PID `2932` is absent from the
+private attempt report failed and the assertion output shows those digits
+inside a float value (`...878534.3229322`; cause not diagnosed); and
 `test_posix_escalation_kills_descendant_that_ignores_sigterm` showed one
 cleanup-confirmation flake on a busy hosted runner at `b3c7cf7` (tree
-identical to the fully green pull-request run; rerun requested). The
+identical to the fully green pull-request run; rerun requested), and the
+same cleanup-confirmation failure recurred in the Python 3.14 Linux unit
+job of the push run at `d27af15` (#161's merge). The
 branch `agent/imp-posix-sigterm-test-deflake`, merged through PR #151 as
 `584c4a5`, removes that test's separate startup race but does not address
 this cleanup-confirmation flake.
@@ -2631,7 +2643,7 @@ follow-up recorded in the promotion evidence record. The branch
 together with `agent/imp-secret-scan-history-batch` through [PR
 #162](https://github.com/toddlar00/rag-pipeline/pull/162) as `40994b4`,
 where their shared Phase A0 pair at source `e706fd2` passed the hosted CI
-promotion gate (see "Research improvement pass (2026-09-30, prepared)").
+promotion gate (see "Research improvement pass (2026-09-30, integrated)").
 The next actions, in order: supersede the open Dependabot group PRs with
 ordered, policy-compliant one-domain PRs — each with regenerated locks,
 installed-lock testing, domain gates, and its own Phase A0 source/evidence
@@ -2679,7 +2691,7 @@ by the branch `agent/imp-static-security-s324-noqa`, which merged through
 PR #150 as `76f98d6`:
 `md5(..., usedforsecurity=False)` keeps the sparse indices byte-identical,
 so the suppression retires without an index migration (see "Research
-improvement pass (2026-09-30, prepared)"). This completes the Task 0.6-0.8
+improvement pass (2026-09-30, integrated)"). This completes the Task 0.6-0.8
 gate sequence, while
 [PR #88](https://github.com/toddlar00/rag-pipeline/pull/88) (Google GenAI 2)
 stays parked on its recorded owner decision; then begin Task 0.6's Node
