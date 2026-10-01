@@ -7,42 +7,52 @@
           {
             "binding": "rag",
             "kind": "import",
-            "line": 171
+            "line": 178
           },
           {
             "binding": "rag_module",
             "kind": "import",
-            "line": 257
+            "line": 264
           },
           {
             "binding": "rag_module",
             "kind": "import",
-            "line": 363
+            "line": 370
           },
           {
             "binding": "rag",
             "kind": "import",
-            "line": 510
+            "line": 517
           },
           {
             "binding": "rag",
             "kind": "import",
-            "line": 1399
+            "line": 1406
           },
           {
             "binding": "rag",
             "kind": "import",
-            "line": 1623
+            "line": 1505
           },
           {
             "binding": "rag",
             "kind": "import",
-            "line": 2314
+            "line": 1710
           },
           {
             "binding": "rag",
             "kind": "import",
-            "line": 2341
+            "line": 2211
+          },
+          {
+            "binding": "rag",
+            "kind": "import",
+            "line": 2449
+          },
+          {
+            "binding": "rag",
+            "kind": "import",
+            "line": 2476
           }
         ],
         "facade_roots": [
@@ -59,7 +69,7 @@
             "kinds": [
               "attribute"
             ],
-            "locations_sha256": "5d01c70eb641821083342045a57ad62b3f09551803f5ec18d8baa850fa78e765",
+            "locations_sha256": "b7c898f47934fafc520408fdb888fc2a367a4cad23e9afcaadc23eee1e0224a6",
             "name": "VectorStoreBusyError",
             "occurrence_count": 1,
             "paths": [
@@ -79,7 +89,7 @@
             "kinds": [
               "attribute"
             ],
-            "locations_sha256": "c43b243ba6ea46120f92941b182bd7afbcf5e91c6ba7f153be44f5c47235787d",
+            "locations_sha256": "be1a79b7b7b0770ca4232526636d1cd6275a6f4c00b865f0872f4a637219dd6e",
             "name": "_SUPERVISED_CHILD_ENV",
             "occurrence_count": 1,
             "paths": [
@@ -99,7 +109,7 @@
             "kinds": [
               "attribute"
             ],
-            "locations_sha256": "73fabfdea94a9f04eb42cc8d075306648c851876f9006991c02f6ad50a5c3657",
+            "locations_sha256": "089409660514a31e5290334e90d731decf1d2f3898f94a8c88f7d73bda99a759",
             "name": "_atomic_write_text",
             "occurrence_count": 1,
             "paths": [
@@ -119,7 +129,47 @@
             "kinds": [
               "attribute"
             ],
-            "locations_sha256": "7fc323854ec2c160ee0d5c8e3d995e8ef5f64068e81c9701dc96e2f5b8884abe",
+            "locations_sha256": "4c78999c2807ea89089f36616f17e4e589bccf6ae46f5ab2ede78ec519086556",
+            "name": "_bm25_search",
+            "occurrence_count": 1,
+            "paths": [
+              "_bm25_search"
+            ],
+            "source_counts": [
+              {
+                "count": 1,
+                "path": "eval.py"
+              }
+            ]
+          },
+          {
+            "contexts": [
+              "load"
+            ],
+            "kinds": [
+              "attribute"
+            ],
+            "locations_sha256": "62f67fdd0097ed5f5e542f6407a478cfcf1ecf27df17494e3a4e73a3fb12af46",
+            "name": "_chunk_id",
+            "occurrence_count": 2,
+            "paths": [
+              "_chunk_id"
+            ],
+            "source_counts": [
+              {
+                "count": 2,
+                "path": "eval.py"
+              }
+            ]
+          },
+          {
+            "contexts": [
+              "load"
+            ],
+            "kinds": [
+              "attribute"
+            ],
+            "locations_sha256": "9857a8816236ce66c22362ff367298eec58cd29eee81ae84e5e869beee95e7c2",
             "name": "_cli_operation_timeout",
             "occurrence_count": 1,
             "paths": [
@@ -139,7 +189,7 @@
             "kinds": [
               "attribute"
             ],
-            "locations_sha256": "f49fb2eb6053ff84a72be5a502df06675b0494254e766baa1e1df5af0722c3cc",
+            "locations_sha256": "61edff9872263949123530211c71b8e6c325eab93a403aca9b82df1e1ad7002e",
             "name": "_normalize_db_lock_timeout",
             "occurrence_count": 1,
             "paths": [
@@ -159,7 +209,7 @@
             "kinds": [
               "attribute"
             ],
-            "locations_sha256": "e11f0699059ba74f61c1f658e6c470d44f73a283a135e8c5d1623a4a766179e5",
+            "locations_sha256": "30b336e927732a4af49caa4f741ea7111095cffd9d87bd4fab7a6ed0fb9bbefd",
             "name": "_normalize_operation_timeout",
             "occurrence_count": 1,
             "paths": [
@@ -179,7 +229,7 @@
             "kinds": [
               "attribute"
             ],
-            "locations_sha256": "cf896fd030a808ff052b497839108cc947f8155d031545f6a3cfac5a682047f8",
+            "locations_sha256": "e5ebdff3c5d3c75cc8303a3a1589af0b3b5a33f8702efb87b71d864511102da7",
             "name": "_read_index_artifact_snapshot",
             "occurrence_count": 1,
             "paths": [
@@ -199,7 +249,7 @@
             "kinds": [
               "attribute"
             ],
-            "locations_sha256": "234f8a7bdb8d85d2fc147ff3a3494df433c9e400bb320fdb52d8b4b64c117e43",
+            "locations_sha256": "0a7241f1becbceaa04cb7624c68d8db8dd728f47642ea310c23e57aa7002956a",
             "name": "_run_cli_with_deadline",
             "occurrence_count": 1,
             "paths": [
@@ -219,7 +269,7 @@
             "kinds": [
               "attribute"
             ],
-            "locations_sha256": "5019fcc82e50ca442b267e793ba36f8cf9874f6e681c0cf67858db82a6a3800a",
+            "locations_sha256": "c8d87c4a226f973a2ae4903b5788262d36816424bcff4051c45969b6feb8defa",
             "name": "_vector_store_lock",
             "occurrence_count": 2,
             "paths": [
@@ -239,7 +289,7 @@
             "kinds": [
               "attribute"
             ],
-            "locations_sha256": "ecfb612a17b3e31679000fb891a2e4fd784705a447ff6da8e2521e17e11f9a15",
+            "locations_sha256": "ef472fc774058546cecc9a6a7501d15adde96eb2ab389cc55eadcc98eeeb5c6a",
             "name": "search_index",
             "occurrence_count": 1,
             "paths": [
@@ -1663,7 +1713,7 @@
             "source": "tests/test_process_supervision_module.py"
           },
           {
-            "line": 305,
+            "line": 306,
             "operation": "setattr",
             "source": "tests/test_search.py"
           },
@@ -2008,7 +2058,7 @@
             "target": "operating.getenv"
           },
           {
-            "locations_sha256": "9ca41bc6ae46c9f0fcfa0358749976c6e1d2d1b7d2fadb43fd733c74358522b0",
+            "locations_sha256": "179dbcb2a5be3e86895df28d062914dc1d7deb19689498f0ec22ce244cabdf79",
             "occurrence_count": 6,
             "operations": [
               "setattr"
@@ -2596,7 +2646,7 @@
             "target": "_api_throttle"
           },
           {
-            "locations_sha256": "6090fab79c61c97945b848f939774a1743d7e7a373d142799adb553641e29753",
+            "locations_sha256": "379c8d7f33d2b25de488aef3bd799cc6a8ea7c6fac51a8371234d908b4375fe5",
             "occurrence_count": 2,
             "operations": [
               "setattr"
@@ -2720,7 +2770,7 @@
             "target": "_begin_qdrant_index_update"
           },
           {
-            "locations_sha256": "4558d9f8a16e3f1c059728104fa127b09b83ccebbea4e0c54aaf52d646691481",
+            "locations_sha256": "91636ac10035f46349a08be34997404bcb929b7dc9f62f618304ffa3034963e9",
             "occurrence_count": 3,
             "operations": [
               "setattr"
@@ -3254,7 +3304,7 @@
             "target": "_embed_fn_cache"
           },
           {
-            "locations_sha256": "72bcfc3065388fdb1c2c519be207666f906a2af2a473e4caf45f1343fdf0aecd",
+            "locations_sha256": "6e29527d44a95b9cfe7d04ae4f6b12ff0bc7b65c3a0933c1078620a7133e60d5",
             "occurrence_count": 20,
             "operations": [
               "setattr"
@@ -3390,7 +3440,7 @@
             "target": "_get_embedding_fn"
           },
           {
-            "locations_sha256": "f406e78fb772ab01064ad170532e309ce16667908f57a309314d77daf4ea3199",
+            "locations_sha256": "9ad247660d1b8eadc8e74c8f93fb1dce678c6273c6b77c9bfb0c0d11a8ac59cf",
             "occurrence_count": 3,
             "operations": [
               "setattr"
@@ -3480,7 +3530,7 @@
             "target": "_index_chunks_for_backend"
           },
           {
-            "locations_sha256": "ed5d565cc497f59dc1a5729bf306c50f98cdb29aaf2af56479de32c5ec91ef33",
+            "locations_sha256": "68a0bd595ce96ad2c3ce1932fee2bac56df223a9b2919b0d44665309e87c37da",
             "occurrence_count": 6,
             "operations": [
               "setattr"
@@ -3722,7 +3772,7 @@
             "target": "_load_index_manifest"
           },
           {
-            "locations_sha256": "93a63039b9a876a81083ad3465cfc2b8501b45b0fffcd9fa2f72232b59e2a3ad",
+            "locations_sha256": "739df151bbe7c824447e663f1257ff869111e8667e3205002cd00723fc6d0564",
             "occurrence_count": 3,
             "operations": [
               "setattr"
@@ -4020,7 +4070,7 @@
             "target": "_page_count"
           },
           {
-            "locations_sha256": "36ba6c9d227a90a00e13d8d62b84276b1e372ab8894db51ba1b4908fd97f2b18",
+            "locations_sha256": "de40364179219a204b9c67023279022e415963fb75b8e41f7296e79f9f676b8e",
             "occurrence_count": 3,
             "operations": [
               "setattr"
@@ -4114,7 +4164,7 @@
             "target": "_pipeline_publication_complete"
           },
           {
-            "locations_sha256": "c6421d5007b488fde9656838cf5e1d081c1eba17e45425d0e29af7d9904c096d",
+            "locations_sha256": "b10833c52974567a1af7a5ac8eabc0678360c5a7cd5d5814f040f7f572c7a82b",
             "occurrence_count": 9,
             "operations": [
               "setattr"
@@ -4294,7 +4344,7 @@
             "target": "_quality_report_complete"
           },
           {
-            "locations_sha256": "337def440cd3d2cd1bd932a252ce5043694fcb1f8a9c69945b3d366f9f46f222",
+            "locations_sha256": "68475787b47bf7c0433adaea52c9f79c2af3ba8f8405e954e77aa18df60a2cb9",
             "occurrence_count": 2,
             "operations": [
               "setattr"
@@ -4482,7 +4532,7 @@
             "target": "_require_chroma_stable_ids"
           },
           {
-            "locations_sha256": "63653078b639dc913d50b4a52817ec38d1b1d97982a2a1226f696bd2f3e530bd",
+            "locations_sha256": "47bfb3d1e436e71b63caaed9c6d59781ccb157202cafb69a9246acfbc258693e",
             "occurrence_count": 2,
             "operations": [
               "setattr"
@@ -4496,7 +4546,7 @@
             "target": "_require_hybrid_chunks_snapshot"
           },
           {
-            "locations_sha256": "30323c4fa0db7f6534322a50b19956b1c3c6b8db0e2570d1fd669ffde96005b3",
+            "locations_sha256": "28e04fe053821ccb1f30c383b3967efa6d586bd0248296421d2703d93a60db97",
             "occurrence_count": 3,
             "operations": [
               "setattr"
@@ -4510,7 +4560,7 @@
             "target": "_rerank"
           },
           {
-            "locations_sha256": "f942366877287ecdeff4d7258019129b1db6f307bfe3b0d390e522dfc2b479c7",
+            "locations_sha256": "6260f9b13a82f75d60f06d75609810c8131c88203d3b46b2539528fca075c7c5",
             "occurrence_count": 4,
             "operations": [
               "setattr"
@@ -4704,7 +4754,7 @@
             "target": "_save_index_manifest"
           },
           {
-            "locations_sha256": "77b9a18f49d9508cf4cd66f78599439f927f7f549be1e00726a3866e77175322",
+            "locations_sha256": "e0620fe8a899fa5bd0d21b2f4b1066235500c3b609d6164af30ff0e8b5e8833c",
             "occurrence_count": 2,
             "operations": [
               "setattr"
@@ -4800,7 +4850,7 @@
             "target": "_toc_verification_source_json"
           },
           {
-            "locations_sha256": "8088dffa06cebded2cfdff146ca221e6eca85e6bb8a0fe992acb4799f5f9ed87",
+            "locations_sha256": "b0edc3f7e9ff8625159288630aa17bc2bb4c5a0688836648641b3fc4278edb99",
             "occurrence_count": 3,
             "operations": [
               "setattr"
@@ -4832,7 +4882,7 @@
             "target": "_unified_export_complete"
           },
           {
-            "locations_sha256": "f6627495649fd38bf65275d3c51bf801c3c2d478a406eedbad9152ca44537d51",
+            "locations_sha256": "c23750b38de6905cfadc267a7b7b018cdf74571912293027028ed6b30cfaa23b",
             "occurrence_count": 5,
             "operations": [
               "setattr"
@@ -4850,7 +4900,7 @@
             "target": "_unlock_vector_file"
           },
           {
-            "locations_sha256": "ae7df2ccb7d22005fbbf88cce5101dda5b0548bf3d2d2c1233c36da6747daf9b",
+            "locations_sha256": "e8b66492d538a9a65a42418a30c6a73f70658d54d7970e4b9e5be561a614b5bb",
             "occurrence_count": 3,
             "operations": [
               "setattr"
@@ -4922,12 +4972,16 @@
             "target": "_validate_pipeline_publication_generation"
           },
           {
-            "locations_sha256": "ae84ac6c13db232e4d2139188233fc06e4c66fca38b1df58144c43f0598ee14c",
-            "occurrence_count": 2,
+            "locations_sha256": "085ddaa32fd5482890cc9c35e585001a5df630e1652a2753dcef648800b3b4c3",
+            "occurrence_count": 3,
             "operations": [
               "setattr"
             ],
             "source_counts": [
+              {
+                "count": 1,
+                "path": "tests/test_eval.py"
+              },
               {
                 "count": 1,
                 "path": "tests/test_phase_a0_benchmark.py"
@@ -5228,7 +5282,7 @@
             "target": "scan_pdf"
           },
           {
-            "locations_sha256": "062c895bef95d9a2c8719b5bccc95d7068eda2d6cc94efd792ffcd45a972cc70",
+            "locations_sha256": "1f762495b316fa695ecd6bdd00d58ecbc0ea0e263d79a7d89844bcbdde6c62e0",
             "occurrence_count": 11,
             "operations": [
               "setattr"
@@ -6984,7 +7038,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "3e176832f43b0f22800dc6e48608b07ed57c91fc2c78fd61fb40bc1d2333e3ca",
+          "locations_sha256": "196058bfc6acfbb64c977baf318a1cc219530bafa9c7071a4e46796b5d5ba2ac",
           "name": "_atomic_write_jsonl",
           "occurrence_count": 15,
           "paths": [
@@ -7136,7 +7190,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "188c2879069e23f06162b0f08f3a31bc2a9bf6e2d6570ec21f63accf64456ceb",
+          "locations_sha256": "fae765bdf9c1364d2120e66abe2f6a15d7baebe87507f9e7ce20f13c846f3675",
           "name": "_begin_index_update",
           "occurrence_count": 7,
           "paths": [
@@ -7188,15 +7242,19 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "f87f764c95735eb8d9c194cb1b5f94694da1fa1e8d9d3677b6c3f12517a51799",
+          "locations_sha256": "ce6974449c454bb86ff3722c22c043906def3c923d3af8f89517131896d2e4d2",
           "name": "_bm25_cache",
-          "occurrence_count": 4,
+          "occurrence_count": 8,
           "paths": [
             "_bm25_cache.clear"
           ],
           "source_counts": [
             {
-              "count": 4,
+              "count": 1,
+              "path": "tests/test_eval.py"
+            },
+            {
+              "count": 7,
               "path": "tests/test_search.py"
             }
           ]
@@ -7208,15 +7266,19 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "1ef752391298bea4fe25e24e53e48623f50b0e5194b2ef0833c3361b97cf7fd7",
+          "locations_sha256": "fd67bf84f5978aebf4b8683be25209fab4b2a91d0f66e6984b17bcc51593130f",
           "name": "_bm25_search",
-          "occurrence_count": 5,
+          "occurrence_count": 14,
           "paths": [
             "_bm25_search"
           ],
           "source_counts": [
             {
-              "count": 5,
+              "count": 2,
+              "path": "tests/test_eval.py"
+            },
+            {
+              "count": 12,
               "path": "tests/test_search.py"
             }
           ]
@@ -7872,7 +7934,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "eddaeb0bfbf06804111f32da35c36f809df4774eab2d9116832b34f156929e09",
+          "locations_sha256": "ddc7d41e3f04c05d649521db0ca87d769c3215c0edf938b59efe79097d6acf8b",
           "name": "_chunk_hash",
           "occurrence_count": 16,
           "paths": [
@@ -7904,9 +7966,9 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "e34914beaf15c69d36c3bce3797a4832a4291f16be7d8e147ca7be1f22657546",
+          "locations_sha256": "245aa20e9ab96131353a4d2312237470e4edf1510f800c42bc30f4e1a2d2e082",
           "name": "_chunk_id",
-          "occurrence_count": 52,
+          "occurrence_count": 54,
           "paths": [
             "_chunk_id"
           ],
@@ -7924,7 +7986,7 @@
               "path": "tests/test_core_helpers.py"
             },
             {
-              "count": 29,
+              "count": 30,
               "path": "tests/test_eval.py"
             },
             {
@@ -7932,7 +7994,7 @@
               "path": "tests/test_index_manifests.py"
             },
             {
-              "count": 4,
+              "count": 5,
               "path": "tests/test_search.py"
             },
             {
@@ -9176,7 +9238,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "b340a3feda18b4f75b1dc841278f1b47248f2928be6071e573af7acd4a059be6",
+          "locations_sha256": "dcdf4dc6f314633031ecb14c7f01567a160114885f69b3460e375863d7185c73",
           "name": "_get_reranker",
           "occurrence_count": 6,
           "paths": [
@@ -9248,7 +9310,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "a27518004e47c4c0cca79b058c18dbdb1a7c667a8c809d75e049d7300076bc65",
+          "locations_sha256": "360dc79940e5ecea601dbd1c66ba1592b52f78718233885abbb944bb7a0b9884",
           "name": "_grounded_sources",
           "occurrence_count": 10,
           "paths": [
@@ -9412,7 +9474,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "71f92917760fd5bd2e6217d03df3079be3b79a9606ecd3fe80313ae075f96db9",
+          "locations_sha256": "dd8ef66365c80d80765c26d581388e05175a6e1ea49cba9289f2f2e4ef0a8353",
           "name": "_index_manifest_path",
           "occurrence_count": 13,
           "paths": [
@@ -9816,9 +9878,9 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "691b4bebc3c87d2762ed39b4847a88151fcc06de9a92aaa2f03e327cea2c738e",
+          "locations_sha256": "3ab508c542ab5b6f579204c29c3c2b1a3889310ea5f9c6d482a3386e0d31cd4f",
           "name": "_legal_search_tokens",
-          "occurrence_count": 3,
+          "occurrence_count": 5,
           "paths": [
             "_legal_search_tokens"
           ],
@@ -9828,7 +9890,27 @@
               "path": "tests/test_legal_tokenizer_differential.py"
             },
             {
-              "count": 2,
+              "count": 4,
+              "path": "tests/test_search.py"
+            }
+          ]
+        },
+        {
+          "contexts": [
+            "load"
+          ],
+          "kinds": [
+            "attribute"
+          ],
+          "locations_sha256": "5d4e93bbb9b7ab2b1d12170ebc66272fa6d805051d12d63cd78ca4c743ba04ca",
+          "name": "_lexical_document_text",
+          "occurrence_count": 1,
+          "paths": [
+            "_lexical_document_text"
+          ],
+          "source_counts": [
+            {
+              "count": 1,
               "path": "tests/test_search.py"
             }
           ]
@@ -9860,7 +9942,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "38e0577f938aff3437b0b009dd67b03fe707ae00c0b78f7e94f3b6828da9cf8b",
+          "locations_sha256": "8a48bd604cd0f313f464178422bd10b74b546f4bb19a0e1165cede23bae29edf",
           "name": "_llm_adapters",
           "occurrence_count": 6,
           "paths": [
@@ -10590,7 +10672,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "9fdd8ed0a573b97dfcb7cb3d949dfb85b947afae78fdf6c6dc0b83cded802b0c",
+          "locations_sha256": "59e0c35af741e880be3d2160ef76735969fd7fe155806b1c8f738c1a07f7a422",
           "name": "_model_artifact_lock_sha256",
           "occurrence_count": 11,
           "paths": [
@@ -11202,7 +11284,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "00560c4cfa73ebd82281bdcc7a39597839b9ffe0a6fdbe0d5d2f3ce30029461c",
+          "locations_sha256": "6207de431af922a47972a39041337030293f52896bb166ed9c922116ba84c7b7",
           "name": "_parse_index_records_strict",
           "occurrence_count": 6,
           "paths": [
@@ -11430,7 +11512,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "d6a01ffb2967b3d103be610b13dedb42df71b39241b0cb066ccf85ab174ad013",
+          "locations_sha256": "2ea0c8719b057dd29f8047a7c1d0b76da3b081643b95dc149921caa9a41b732c",
           "name": "_prepare_chroma_batch",
           "occurrence_count": 4,
           "paths": [
@@ -11975,7 +12057,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "7057fdec12b903bd68e5a683ae7b44bd5222f02c605bd265b9d688178c38325d",
+          "locations_sha256": "22c7217447da9f1bcb40f2c65d7bdd19a8cf929a3d3bf0e8d0c62db3a7b8036e",
           "name": "_quality_core",
           "occurrence_count": 43,
           "paths": [
@@ -12247,7 +12329,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "d12c756c0e687d081a1338d30e5d3a165df0dcaeb8b1f49d2204e0da8806047b",
+          "locations_sha256": "145eb5341f6c3cbeebd89d86b84faa9e7cc9c082369b5d5d970498cbcfacf9e7",
           "name": "_reciprocal_rank_fusion",
           "occurrence_count": 4,
           "paths": [
@@ -13059,7 +13141,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "08f9f6a79ff67a50af144e729bab9679f1683466fa1e97e1f0d1d83fedf2cb72",
+          "locations_sha256": "0ee47773e902793d0e41265329404950b99d5fc303530f2b170763c220449b8a",
           "name": "_rerank",
           "occurrence_count": 9,
           "paths": [
@@ -13399,7 +13481,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "5ccc2daf0eff9062dd1fc5014e617643a801470c2879b458af5a03c6e9d5b9e6",
+          "locations_sha256": "6a4cdf6b3f6d2e235f98a756427a65cfbcc37017a47808d3fe573dc590e45f35",
           "name": "_retrieval_core",
           "occurrence_count": 8,
           "paths": [
@@ -13650,7 +13732,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "6d9a6e4764a33d7d64df0e17dd69524dd82dd36aed3e5df09a2395232e299570",
+          "locations_sha256": "5d89aab475f0f193b61e0199758c29fe893a9961d19fd65da780f3a2340abec5",
           "name": "_save_index_manifest",
           "occurrence_count": 40,
           "paths": [
@@ -14052,7 +14134,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "7b6b8c483428c5a5e04708b9c78d01731f1088f4383b5837cb141975fe9e716c",
+          "locations_sha256": "fbe91528e379fc13004bc90de1189e735e0d583020b62206399ea5a801dcc0ec",
           "name": "_sparse_token_vector",
           "occurrence_count": 2,
           "paths": [
@@ -14410,7 +14492,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "e771bfd14a66ee0a3b7d84724f5de7d16433107890d8a3281f59f748a4fec370",
+          "locations_sha256": "5cde6d54ba2dc79adaa3f637ecdbaf50cff5ead75fda5e3fa426bfeff0cca0d4",
           "name": "_try_vector_file_lock",
           "occurrence_count": 2,
           "paths": [
@@ -14454,7 +14536,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "f94c00aa6c5e3c5c8080baba2ca294cd91b06e32945b303713fc705da4f81c65",
+          "locations_sha256": "fc034cc69969ec82004f69987df4633f4956ade6636d6d32aa8564848b31161d",
           "name": "_unlock_vector_file",
           "occurrence_count": 2,
           "paths": [
@@ -14478,7 +14560,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "add489b3f9915ad5e706e2232a04555ca85ca1136ca4412b7ef9b62a67acca97",
+          "locations_sha256": "026b7a14f73def390e0050236266f513b0b8f5230f5f1e99a3cc9bfa95661e67",
           "name": "_unpack_chroma_results",
           "occurrence_count": 1,
           "paths": [
@@ -14750,7 +14832,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "7b3407487e529662b33f6fd869078b42789685ec07484bce0ca56c2ef35fcbdb",
+          "locations_sha256": "bfbced7da07c0ae158fd1835613be00664d16a56c3e1438f00c5624ceffc37b6",
           "name": "_vector_store_lock",
           "occurrence_count": 19,
           "paths": [
@@ -15534,7 +15616,7 @@
         "qualname": "_begin_qdrant_index_update"
       },
       {
-        "contract_sha256": "1fe7ba6b313a9e83fe16fda53fb547e5dda8d30b3b8e9a4d07d55e3c62352111",
+        "contract_sha256": "940176f362c09e58f23414e19d5e56074c16f8ea468ef9b186a97a3b0a8fb651",
         "kind": "function",
         "module": "rag",
         "name": "_bm25_search",
@@ -27233,1223 +27315,1223 @@
         "name": "_bm25_search",
         "span": [
           25438,
-          25521
+          25528
         ]
       },
       {
         "kind": "function",
         "name": "_record_search_warning",
         "span": [
-          25530,
-          25533
+          25537,
+          25540
         ]
       },
       {
         "kind": "function",
         "name": "_unpack_chroma_results",
         "span": [
-          25536,
-          25553
+          25543,
+          25560
         ]
       },
       {
         "kind": "function",
         "name": "_search_chroma_candidates_impl",
         "span": [
-          25556,
-          25653
+          25563,
+          25660
         ]
       },
       {
         "kind": "function",
         "name": "_search_chroma_candidates",
         "span": [
-          25656,
-          25691
+          25663,
+          25698
         ]
       },
       {
         "kind": "function",
         "name": "_search_qdrant_candidates",
         "span": [
-          25694,
-          25790
+          25701,
+          25797
         ]
       },
       {
         "kind": "function",
         "name": "_search_hit_source_id",
         "span": [
-          25793,
-          25796
+          25800,
+          25803
         ]
       },
       {
         "kind": "function",
         "name": "_search_index_impl",
         "span": [
-          25799,
-          26034
+          25806,
+          26041
         ]
       },
       {
         "kind": "function",
         "name": "search_index",
         "span": [
-          26037,
-          26092
+          26044,
+          26099
         ]
       },
       {
         "kind": "function",
         "name": "_grounded_sources",
         "span": [
-          26109,
-          26113
+          26116,
+          26120
         ]
       },
       {
         "kind": "function",
         "name": "_answer_search_results",
         "span": [
-          26122,
-          26159
+          26129,
+          26166
         ]
       },
       {
         "kind": "function",
         "name": "_write_search_output",
         "span": [
-          26162,
-          26286
+          26169,
+          26293
         ]
       },
       {
         "kind": "function",
         "name": "query_index",
         "span": [
-          26289,
-          26354
+          26296,
+          26361
         ]
       },
       {
         "kind": "function",
         "name": "_escape_markdown_currency",
         "span": [
-          26463,
-          26507
+          26470,
+          26514
         ]
       },
       {
         "kind": "function",
         "name": "_escape_markdown_source_line_literals",
         "span": [
-          26510,
-          26595
+          26517,
+          26602
         ]
       },
       {
         "kind": "function",
         "name": "_escape_markdown_pandoc_literals",
         "span": [
-          26598,
-          26622
+          26605,
+          26629
         ]
       },
       {
         "kind": "function",
         "name": "_is_markdown_source_omission_record",
         "span": [
-          26625,
-          26631
+          26632,
+          26638
         ]
       },
       {
         "kind": "function",
         "name": "_is_markdown_endnote_record",
         "span": [
-          26634,
-          26639
+          26641,
+          26646
         ]
       },
       {
         "kind": "function",
         "name": "_markdown_emphasis",
         "span": [
-          26642,
-          26650
+          26649,
+          26657
         ]
       },
       {
         "kind": "function",
         "name": "_normalize_markdown_thematic_breaks",
         "span": [
-          26653,
-          26696
+          26660,
+          26703
         ]
       },
       {
         "kind": "function",
         "name": "_escape_markdown_large_ordered_list_literals",
         "span": [
-          26699,
-          26731
+          26706,
+          26738
         ]
       },
       {
         "kind": "function",
         "name": "_escape_markdown_implicit_reference_literals",
         "span": [
-          26734,
-          26804
+          26741,
+          26811
         ]
       },
       {
         "kind": "function",
         "name": "_normalize_markdown_blank_lines",
         "span": [
-          26807,
-          26814
+          26814,
+          26821
         ]
       },
       {
         "kind": "function",
         "name": "_normalize_markdown_table_cell_padding",
         "span": [
-          26817,
-          26844
+          26824,
+          26851
         ]
       },
       {
         "kind": "function",
         "name": "_markdown_source_bound_case_name",
         "span": [
-          26847,
-          26875
+          26854,
+          26882
         ]
       },
       {
         "kind": "function",
         "name": "_markdown_pdf_page_marker",
         "span": [
-          26878,
-          26888
+          26885,
+          26895
         ]
       },
       {
         "kind": "function",
         "name": "_format_chunk",
         "span": [
-          26891,
-          26988
+          26898,
+          26995
         ]
       },
       {
         "kind": "function",
         "name": "_filter_chunk_records",
         "span": [
-          26991,
-          27016
+          26998,
+          27023
         ]
       },
       {
         "kind": "function",
         "name": "_load_and_filter_chunks",
         "span": [
-          27019,
-          27028
+          27026,
+          27035
         ]
       },
       {
         "kind": "function",
         "name": "_section_heading_level",
         "span": [
-          27031,
-          27049
+          27038,
+          27056
         ]
       },
       {
         "kind": "function",
         "name": "_display_division_title",
         "span": [
-          27052,
-          27062
+          27059,
+          27069
         ]
       },
       {
         "kind": "function",
         "name": "_footnote_source_ref_numbers",
         "span": [
-          27065,
-          27074
+          27072,
+          27081
         ]
       },
       {
         "kind": "function",
         "name": "_footnote_source_refs",
         "span": [
-          27077,
-          27082
+          27084,
+          27089
         ]
       },
       {
         "kind": "function",
         "name": "_footnote_has_opening_marker",
         "span": [
-          27085,
-          27088
+          27092,
+          27095
         ]
       },
       {
         "kind": "function",
         "name": "_footnote_opening_match",
         "span": [
-          27091,
-          27094
+          27098,
+          27101
         ]
       },
       {
         "kind": "function",
         "name": "_footnote_edge_source_span",
         "span": [
-          27097,
-          27119
+          27104,
+          27126
         ]
       },
       {
         "kind": "function",
         "name": "_footnote_displaced_opening",
         "span": [
-          27122,
-          27136
+          27129,
+          27143
         ]
       },
       {
         "kind": "function",
         "name": "_footnote_false_structural_opening",
         "span": [
-          27139,
-          27181
+          27146,
+          27188
         ]
       },
       {
         "kind": "function",
         "name": "_markdown_footnote_continuation",
         "span": [
-          27184,
-          27253
+          27191,
+          27260
         ]
       },
       {
         "kind": "function",
         "name": "_merge_markdown_footnote_group",
         "span": [
-          27256,
-          27320
+          27263,
+          27327
         ]
       },
       {
         "kind": "function",
         "name": "_markdown_footnote_group_tail",
         "span": [
-          27323,
-          27349
+          27330,
+          27356
         ]
       },
       {
         "kind": "function",
         "name": "_logical_markdown_footnote_records",
         "span": [
-          27352,
-          27409
+          27359,
+          27416
         ]
       },
       {
         "kind": "function",
         "name": "_markdown_endnote_records",
         "span": [
-          27412,
-          27459
+          27419,
+          27466
         ]
       },
       {
         "kind": "function",
         "name": "_markdown_exact_source_segments",
         "span": [
-          27462,
-          27542
+          27469,
+          27549
         ]
       },
       {
         "kind": "function",
         "name": "_markdown_source_callout_candidates",
         "span": [
-          27545,
-          27586
+          27552,
+          27593
         ]
       },
       {
         "kind": "function",
         "name": "_markdown_rendered_section_parts",
         "span": [
-          27589,
-          27601
+          27596,
+          27608
         ]
       },
       {
         "kind": "function",
         "name": "_markdown_heading_callout_candidates",
         "span": [
-          27604,
-          27658
+          27611,
+          27665
         ]
       },
       {
         "kind": "function",
         "name": "_markdown_endnote_reference_replacements",
         "span": [
-          27661,
-          27736
+          27668,
+          27743
         ]
       },
       {
         "kind": "function",
         "name": "_markdown_with_endnote_references",
         "span": [
-          27739,
-          27752
+          27746,
+          27759
         ]
       },
       {
         "kind": "function",
         "name": "_append_markdown_endnotes",
         "span": [
-          27755,
-          27808
+          27762,
+          27815
         ]
       },
       {
         "kind": "function",
         "name": "_validate_markdown_endnote_links",
         "span": [
-          27811,
-          27853
+          27818,
+          27860
         ]
       },
       {
         "kind": "function",
         "name": "_assemble_markdown",
         "span": [
-          27856,
-          28058
+          27863,
+          28065
         ]
       },
       {
         "kind": "function",
         "name": "_export_plaintext",
         "span": [
-          28061,
-          28133
+          28068,
+          28140
         ]
       },
       {
         "kind": "function",
         "name": "_markdown_export_parameters",
         "span": [
-          28136,
-          28178
+          28143,
+          28185
         ]
       },
       {
         "kind": "function",
         "name": "_chunks_identity",
         "span": [
-          28181,
-          28186
+          28188,
+          28193
         ]
       },
       {
         "kind": "function",
         "name": "_markdown_validation_manifest_complete",
         "span": [
-          28189,
-          28207
+          28196,
+          28214
         ]
       },
       {
         "kind": "function",
         "name": "_unified_export_complete",
         "span": [
-          28210,
-          28233
+          28217,
+          28240
         ]
       },
       {
         "kind": "function",
         "name": "_record_source_page",
         "span": [
-          28236,
-          28246
+          28243,
+          28253
         ]
       },
       {
         "kind": "function",
         "name": "_group_split_markdown_records",
         "span": [
-          28249,
-          28298
+          28256,
+          28305
         ]
       },
       {
         "kind": "function",
         "name": "_split_markdown_group_sort_key",
         "span": [
-          28301,
-          28309
+          28308,
+          28316
         ]
       },
       {
         "kind": "function",
         "name": "_owned_chapter_filename",
         "span": [
-          28312,
-          28315
+          28319,
+          28322
         ]
       },
       {
         "kind": "function",
         "name": "_split_export_complete",
         "span": [
-          28318,
-          28358
+          28325,
+          28365
         ]
       },
       {
         "kind": "function",
         "name": "_markdown_table_record_count",
         "span": [
-          28361,
-          28364
+          28368,
+          28371
         ]
       },
       {
         "kind": "function",
         "name": "_log_markdown_validation_receipt",
         "span": [
-          28367,
-          28375
+          28374,
+          28382
         ]
       },
       {
         "kind": "function",
         "name": "_verified_markdown_figure_assets",
         "span": [
-          28378,
-          28405
+          28385,
+          28412
         ]
       },
       {
         "kind": "function",
         "name": "export_markdown",
         "span": [
-          28408,
-          28634
+          28415,
+          28641
         ]
       },
       {
         "kind": "function",
         "name": "_pipeline_paths_from_published_chunks",
         "span": [
-          28637,
-          28665
+          28644,
+          28672
         ]
       },
       {
         "kind": "function",
         "name": "_ai_project_receipt_path",
         "span": [
-          28668,
-          28671
+          28675,
+          28678
         ]
       },
       {
         "kind": "function",
         "name": "_ai_project_source_lease",
         "span": [
-          28674,
-          28698
+          28681,
+          28705
         ]
       },
       {
         "kind": "function",
         "name": "_ai_project_output_lease",
         "span": [
-          28701,
-          28714
+          28708,
+          28721
         ]
       },
       {
         "kind": "function",
         "name": "_load_ready_ai_project_source",
         "span": [
-          28717,
-          28772
+          28724,
+          28779
         ]
       },
       {
         "kind": "function",
         "name": "_ai_project_record_matches",
         "span": [
-          28775,
-          28786
+          28782,
+          28793
         ]
       },
       {
         "kind": "function",
         "name": "_existing_ai_project_owned_records",
         "span": [
-          28789,
-          28890
+          28796,
+          28897
         ]
       },
       {
         "kind": "function",
         "name": "_reject_nested_ai_project_target",
         "span": [
-          28893,
-          28907
+          28900,
+          28914
         ]
       },
       {
         "kind": "function",
         "name": "_ai_project_output_records",
         "span": [
-          28910,
-          28921
+          28917,
+          28928
         ]
       },
       {
         "kind": "function",
         "name": "_validate_ai_project_documents",
         "span": [
-          28924,
-          28954
+          28931,
+          28961
         ]
       },
       {
         "kind": "function",
         "name": "_remove_ai_project_staging",
         "span": [
-          28957,
-          28970
+          28964,
+          28977
         ]
       },
       {
         "kind": "function",
         "name": "_promote_ai_project_staging",
         "span": [
-          28973,
-          29011
+          28980,
+          29018
         ]
       },
       {
         "kind": "function",
         "name": "_ai_project_export_complete_locked",
         "span": [
-          29014,
-          29074
+          29021,
+          29081
         ]
       },
       {
         "kind": "function",
         "name": "_ai_project_export_complete",
         "span": [
-          29077,
-          29095
+          29084,
+          29102
         ]
       },
       {
         "kind": "function",
         "name": "export_ai_project",
         "span": [
-          29098,
-          29218
+          29105,
+          29225
         ]
       },
       {
         "kind": "function",
         "name": "extract_questions",
         "span": [
-          29229,
-          29289
+          29236,
+          29296
         ]
       },
       {
         "kind": "function",
         "name": "generate_exam_questions",
         "span": [
-          29322,
-          29449
+          29329,
+          29456
         ]
       },
       {
         "kind": "function",
         "name": "build_citation_graph",
         "span": [
-          29474,
-          29601
+          29481,
+          29608
         ]
       },
       {
         "kind": "function",
         "name": "generate_briefs",
         "span": [
-          29621,
-          29717
+          29628,
+          29724
         ]
       },
       {
         "kind": "function",
         "name": "_score_chunk_quality",
         "span": [
-          29740,
-          29749
+          29747,
+          29756
         ]
       },
       {
         "kind": "function",
         "name": "_export_flashcards",
         "span": [
-          29768,
-          29862
+          29775,
+          29869
         ]
       },
       {
         "kind": "function",
         "name": "_cluster_embeddings",
         "span": [
-          29879,
-          29924
+          29886,
+          29931
         ]
       },
       {
         "kind": "function",
         "name": "_raptor_parameters",
         "span": [
-          29927,
-          29949
+          29934,
+          29956
         ]
       },
       {
         "kind": "function",
         "name": "_raptor_output_complete",
         "span": [
-          29952,
-          30017
+          29959,
+          30024
         ]
       },
       {
         "kind": "function",
         "name": "build_raptor_tree",
         "span": [
-          30020,
-          30250
+          30027,
+          30257
         ]
       },
       {
         "kind": "function",
         "name": "_pipeline_run_is_ready",
         "span": [
-          30257,
-          30293
+          30264,
+          30300
         ]
       },
       {
         "kind": "function",
         "name": "show_info",
         "span": [
-          30296,
-          30508
+          30303,
+          30515
         ]
       },
       {
         "kind": "class",
         "name": "_PipelineStageError",
         "span": [
-          30515,
-          30521
+          30522,
+          30528
         ]
       },
       {
         "kind": "function",
         "name": "_background_pipeline_plan",
         "span": [
-          30524,
-          30552
+          30531,
+          30559
         ]
       },
       {
         "kind": "function",
         "name": "_mark_background_pipeline_binding",
         "span": [
-          30555,
-          30581
+          30562,
+          30588
         ]
       },
       {
         "kind": "function",
         "name": "_resolve_cloud_endpoint",
         "span": [
-          30584,
-          30590
+          30591,
+          30597
         ]
       },
       {
         "kind": "function",
         "name": "_cloud_endpoint_arg",
         "span": [
-          30593,
-          30599
+          30600,
+          30606
         ]
       },
       {
         "kind": "function",
         "name": "_resolve_cloud_key",
         "span": [
-          30602,
-          30612
+          30609,
+          30619
         ]
       },
       {
         "kind": "function",
         "name": "_llm_kwargs_from_args",
         "span": [
-          30615,
-          30626
+          30622,
+          30633
         ]
       },
       {
         "kind": "function",
         "name": "_configure_llm_runtime_from_args",
         "span": [
-          30632,
-          30637
+          30639,
+          30644
         ]
       },
       {
         "kind": "function",
         "name": "_index_chunks_for_backend",
         "span": [
-          30640,
-          30679
+          30647,
+          30686
         ]
       },
       {
         "kind": "function",
         "name": "_query_index_for_backend",
         "span": [
-          30682,
-          30688
+          30689,
+          30695
         ]
       },
       {
         "kind": "function",
         "name": "_publication_relative_path",
         "span": [
-          30776,
-          30789
+          30783,
+          30796
         ]
       },
       {
         "kind": "function",
         "name": "_publication_file_binding",
         "span": [
-          30792,
-          30804
+          30799,
+          30811
         ]
       },
       {
         "kind": "function",
         "name": "_publication_input_binding",
         "span": [
-          30807,
-          30819
+          30814,
+          30826
         ]
       },
       {
         "kind": "function",
         "name": "_publication_manifest_payload",
         "span": [
-          30822,
-          30825
+          30829,
+          30832
         ]
       },
       {
         "kind": "function",
         "name": "_publication_check_map",
         "span": [
-          30828,
-          30839
+          30835,
+          30846
         ]
       },
       {
         "kind": "function",
         "name": "_require_publication_checks",
         "span": [
-          30842,
-          30853
+          30849,
+          30860
         ]
       },
       {
         "kind": "function",
         "name": "_publication_markdown_artifacts",
         "span": [
-          30856,
-          30904
+          30863,
+          30911
         ]
       },
       {
         "kind": "function",
         "name": "_verify_publication_vector_store",
         "span": [
-          30907,
-          30977
+          30914,
+          30984
         ]
       },
       {
         "kind": "function",
         "name": "_index_publication_evidence",
         "span": [
-          30980,
-          31053
+          30987,
+          31060
         ]
       },
       {
         "kind": "function",
         "name": "_build_pipeline_publication_receipt",
         "span": [
-          31056,
-          31305
+          31063,
+          31312
         ]
       },
       {
         "kind": "function",
         "name": "_valid_publication_sha256",
         "span": [
-          31308,
-          31312
+          31315,
+          31319
         ]
       },
       {
         "kind": "function",
         "name": "_publication_evidence_contract",
         "span": [
-          31315,
-          31504
+          31322,
+          31511
         ]
       },
       {
         "kind": "function",
         "name": "_publication_binding_path",
         "span": [
-          31507,
-          31521
+          31514,
+          31528
         ]
       },
       {
         "kind": "function",
         "name": "_publication_receipt_gate",
         "span": [
-          31524,
-          31526
+          31531,
+          31533
         ]
       },
       {
         "kind": "function",
         "name": "_require_publication_manifest_output",
         "span": [
-          31529,
-          31545
+          31536,
+          31552
         ]
       },
       {
         "kind": "function",
         "name": "_require_publication_artifact_inventory",
         "span": [
-          31548,
-          31555
+          31555,
+          31562
         ]
       },
       {
         "kind": "function",
         "name": "_validate_pipeline_vector_publication_generation",
         "span": [
-          31558,
-          31626
+          31565,
+          31633
         ]
       },
       {
         "kind": "function",
         "name": "_validate_pipeline_publication_generation",
         "span": [
-          31629,
-          31938
+          31636,
+          31945
         ]
       },
       {
         "kind": "function",
         "name": "_pipeline_publication_complete",
         "span": [
-          31941,
-          32012
+          31948,
+          32019
         ]
       },
       {
         "kind": "function",
         "name": "_publish_pipeline_publication",
         "span": [
-          32015,
-          32035
+          32022,
+          32042
         ]
       },
       {
         "kind": "function",
         "name": "_run_pipeline_stages",
         "span": [
-          32038,
-          32427
+          32045,
+          32434
         ]
       },
       {
         "kind": "function",
         "name": "_run_pipeline_job",
         "span": [
-          32430,
-          32523
+          32437,
+          32530
         ]
       },
       {
         "kind": "function",
         "name": "_normalize_operation_timeout",
         "span": [
-          32530,
-          32533
+          32537,
+          32540
         ]
       },
       {
         "kind": "function",
         "name": "_cli_operation_timeout",
         "span": [
-          32536,
-          32543
+          32543,
+          32550
         ]
       },
       {
         "kind": "function",
         "name": "_new_supervised_start_gate",
         "span": [
-          32553,
-          32556
+          32560,
+          32563
         ]
       },
       {
         "kind": "function",
         "name": "_supervision_config",
         "span": [
-          32559,
-          32567
+          32566,
+          32574
         ]
       },
       {
         "kind": "function",
         "name": "_terminate_supervised_process",
         "span": [
-          32570,
-          32576
+          32577,
+          32583
         ]
       },
       {
         "kind": "function",
         "name": "_supervised_telemetry_requested",
         "span": [
-          32579,
-          32583
+          32586,
+          32590
         ]
       },
       {
         "kind": "function",
         "name": "_finalize_supervised_run_telemetry",
         "span": [
-          32586,
-          32602
+          32593,
+          32609
         ]
       },
       {
         "kind": "function",
         "name": "_start_supervised_run_telemetry",
         "span": [
-          32605,
-          32611
+          32612,
+          32618
         ]
       },
       {
         "kind": "function",
         "name": "_run_cli_with_deadline",
         "span": [
-          32614,
-          32658
+          32621,
+          32665
         ]
       },
       {
         "kind": "function",
         "name": "_run_rag_entrypoint",
         "span": [
-          32665,
-          32682
+          32672,
+          32689
         ]
       },
       {
         "kind": "function",
         "name": "_render_storage_outcome",
         "span": [
-          32685,
-          32701
+          32692,
+          32708
         ]
       },
       {
         "kind": "function",
         "name": "_apply_pipeline_deletion_with_leases",
         "span": [
-          32704,
-          32730
+          32711,
+          32737
         ]
       },
       {
         "kind": "function",
         "name": "_run_storage_command",
         "span": [
-          32733,
-          32828
+          32740,
+          32835
         ]
       },
       {
         "kind": "function",
         "name": "_render_job_summaries",
         "span": [
-          32831,
-          32839
+          32838,
+          32846
         ]
       },
       {
         "kind": "function",
         "name": "_background_submit_tokens",
         "span": [
-          32842,
-          32856
+          32849,
+          32863
         ]
       },
       {
         "kind": "function",
         "name": "_canonical_background_security_argv",
         "span": [
-          32870,
-          32937
+          32877,
+          32944
         ]
       },
       {
         "kind": "function",
         "name": "_run_jobs_command",
         "span": [
-          32944,
-          33058
+          32951,
+          33065
         ]
       },
       {
         "kind": "class",
         "name": "_StrictArgumentParser",
         "span": [
-          33068,
-          33078
+          33075,
+          33085
         ]
       },
       {
         "kind": "function",
         "name": "main",
         "span": [
-          33081,
-          34312
+          33088,
+          34319
         ]
       },
       {
         "kind": "function",
         "name": "_menu_choose",
         "span": [
-          34315,
-          34341
+          34322,
+          34348
         ]
       },
       {
         "kind": "function",
         "name": "_menu_yesno",
         "span": [
-          34344,
-          34353
+          34351,
+          34360
         ]
       },
       {
         "kind": "function",
         "name": "_menu_file",
         "span": [
-          34356,
-          34429
+          34363,
+          34436
         ]
       },
       {
         "kind": "function",
         "name": "_menu_cloud_consent_args",
         "span": [
-          34435,
-          34446
+          34442,
+          34453
         ]
       },
       {
         "kind": "function",
         "name": "_menu_cache_namespace_args",
         "span": [
-          34449,
-          34459
+          34456,
+          34466
         ]
       },
       {
         "kind": "function",
         "name": "_menu_llm_provider_args",
         "span": [
-          34462,
-          34577
+          34469,
+          34584
         ]
       },
       {
         "kind": "function",
         "name": "_menu_secrets_to_environment",
         "span": [
-          34583,
-          34591
+          34590,
+          34598
         ]
       },
       {
         "kind": "function",
         "name": "_menu_structure_profile",
         "span": [
-          34594,
-          34599
+          34601,
+          34606
         ]
       },
       {
         "kind": "function",
         "name": "interactive_menu",
         "span": [
-          34602,
-          34967
+          34609,
+          34974
         ]
       }
     ],
@@ -28458,7 +28540,7 @@
   "schema_version": 3,
   "source_architecture": {
     "class_count": 337,
-    "function_count": 4455,
+    "function_count": 4461,
     "import_graph": {
       "cyclic_components": [],
       "edge_count": 650,
@@ -30283,8 +30365,8 @@
       {
         "class_count": 0,
         "classes": [],
-        "definition_locations_sha256": "518059d3cf88d261cbb82628900c93e359dbf3c05459e4e8f2caf943a7b45cdc",
-        "function_count": 52,
+        "definition_locations_sha256": "9a666cd9ac611e39954cec6a9e5b2b33e417057eb5c4b535436e371663bcd96e",
+        "function_count": 56,
         "functions": [
           {
             "kind": "function",
@@ -30390,9 +30472,21 @@
           },
           {
             "kind": "function",
+            "name": "_lexical_index_snapshot",
+            "scope": "top_level",
+            "signature_sha256": "dd86e8bd259fe717dec144ceb8add5497136c51a64f50806f1c6fe28773e1800"
+          },
+          {
+            "kind": "function",
             "name": "_load_baseline_metrics",
             "scope": "top_level",
             "signature_sha256": "96a79f1aac98601ed1df27887559c479c3a4b09529d26ab984174d5f01c3b234"
+          },
+          {
+            "kind": "function",
+            "name": "_load_lexical_corpus",
+            "scope": "top_level",
+            "signature_sha256": "1871cfbf1e04be1f8ba69a552b08339bd8a715fe7b692d594709f3d0c5c8f0f7"
           },
           {
             "kind": "function",
@@ -30564,6 +30658,18 @@
           },
           {
             "kind": "function",
+            "name": "evaluate_lexical",
+            "scope": "top_level",
+            "signature_sha256": "c8031b27b791256cb047dd49a56b7b7e96d05db2acee5947ff7f2b4641d9ba0c"
+          },
+          {
+            "kind": "function",
+            "name": "evaluate_lexical.lexical_search",
+            "scope": "nested",
+            "signature_sha256": "9fdf741012e2d3f95bdcb0cf7bad043b290d7cd36c18d09f2e9f4d02e146140d"
+          },
+          {
+            "kind": "function",
             "name": "evaluate_offline_bm25",
             "scope": "top_level",
             "signature_sha256": "dcc32d4f7bfbf9fc36e49db9d454384401fa1f2bdcfe6598de23da7952b713fb"
@@ -30714,10 +30820,10 @@
           }
         ],
         "module": "eval",
-        "non_blank_lines": 2190,
+        "non_blank_lines": 2313,
         "path": "eval.py",
-        "physical_lines": 2352,
-        "top_level_function_count": 50
+        "physical_lines": 2487,
+        "top_level_function_count": 53
       },
       {
         "class_count": 1,
@@ -31113,7 +31219,7 @@
       {
         "class_count": 0,
         "classes": [],
-        "definition_locations_sha256": "7d5e7dfbd4b15a7536bd00428649dde2f2fb3c0fa5254d9f187342d7569908ce",
+        "definition_locations_sha256": "fee812ae8d411b3c44491115a802f770d2e8e6d06c0c68f424165af7ef023b3b",
         "function_count": 12,
         "functions": [
           {
@@ -31228,9 +31334,9 @@
           }
         ],
         "module": "evaluation_release",
-        "non_blank_lines": 366,
+        "non_blank_lines": 368,
         "path": "evaluation_release.py",
-        "physical_lines": 405,
+        "physical_lines": 407,
         "top_level_function_count": 12
       },
       {
@@ -50164,7 +50270,7 @@
             "scope": "nested"
           }
         ],
-        "definition_locations_sha256": "3aa6530c18aedc94332905c883d0896df9ce00e633dc100b0cfc04f0833050eb",
+        "definition_locations_sha256": "829fb00b453e81a6775d4cced52dfd523579f36381c246ce7e5a3f2b1a5bea05",
         "function_count": 853,
         "functions": [
           {
@@ -50609,7 +50715,7 @@
             "kind": "function",
             "name": "_bm25_search",
             "scope": "top_level",
-            "signature_sha256": "240a7bcf0c89ba7f75f854adbd347f4fabc59d04e5615d478a59f07fd806dbf6"
+            "signature_sha256": "afedd8fa52b1e66b4fc154d0f602aacd81e3c1b46ef79164a60cb2a98b831759"
           },
           {
             "kind": "function",
@@ -55613,9 +55719,9 @@
           }
         ],
         "module": "rag",
-        "non_blank_lines": 31977,
+        "non_blank_lines": 31984,
         "path": "rag.py",
-        "physical_lines": 34984,
+        "physical_lines": 34991,
         "top_level_function_count": 579
       },
       {
@@ -56253,8 +56359,8 @@
             "scope": "top_level"
           }
         ],
-        "definition_locations_sha256": "9283d6d6cc6c04f349d0151688b4f4e5f1d7a73b70bff4d82041af86b1fd0dfd",
-        "function_count": 45,
+        "definition_locations_sha256": "2d4e1e42fbe6e857f98d17583c4f756df331d7a67ffae427f46ecf46b37be3fb",
+        "function_count": 47,
         "functions": [
           {
             "kind": "function",
@@ -56420,6 +56526,12 @@
           },
           {
             "kind": "function",
+            "name": "_lexical_query_tokens",
+            "scope": "top_level",
+            "signature_sha256": "faa197dd6832af4a281b26152132f89a5035cbe967191eccaf7879717d1807d3"
+          },
+          {
+            "kind": "function",
             "name": "_metadata_text",
             "scope": "top_level",
             "signature_sha256": "d04ea95a2054903ef12343336180c3dedf233f340e4546099cd1ba0a470163e9"
@@ -56522,6 +56634,12 @@
           },
           {
             "kind": "function",
+            "name": "_validate_lexical_query_policy",
+            "scope": "top_level",
+            "signature_sha256": "a2ad1115cd1bc3e08b801ea92ba6e4317f2ca0ffbbcb534c3040507c2e3b6691"
+          },
+          {
+            "kind": "function",
             "name": "_validated_stable_id_source",
             "scope": "top_level",
             "signature_sha256": "4affb6c87630275f535968e2f89efdb9d43ed2cf803d9d33195d957c223b3ad4"
@@ -56539,10 +56657,10 @@
           }
         ],
         "module": "retrieval_core",
-        "non_blank_lines": 1307,
+        "non_blank_lines": 1347,
         "path": "retrieval_core.py",
-        "physical_lines": 1447,
-        "top_level_function_count": 39
+        "physical_lines": 1494,
+        "top_level_function_count": 41
       },
       {
         "class_count": 1,
@@ -65440,13 +65558,13 @@
         "top_level_function_count": 2
       }
     ],
-    "physical_line_count": 131651,
+    "physical_line_count": 131842,
     "source_groups": [
       "production",
       "tools",
       "other"
     ],
-    "top_level_function_count": 2951
+    "top_level_function_count": 2956
   },
   "tracked_sources": {
     "count": 503,

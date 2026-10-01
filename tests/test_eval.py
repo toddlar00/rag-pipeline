@@ -1,5 +1,7 @@
+import copy
 import hashlib
 import json
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -8,6 +10,7 @@ import pytest
 import eval as retrieval_eval
 import rag
 import table_retrieval_core
+from offline_retrieval import OfflineBM25Index
 
 
 def _judged_query():
@@ -2260,6 +2263,441 @@ def test_offline_cli_runs_without_database_and_writes_redacted_telemetry(
     assert payload["costs"]["embedding"]["status"] == "not_used"
     assert "query" not in payload["query_details"][0]
     assert "text_preview" not in payload["query_details"][0]["results"][0]
+
+
+def test_offline_bm25_report_provenance_shape_is_characterized(tmp_path):
+    # Captured from the fixture adapter before the production lexical
+    # retriever existed; committed CI baselines depend on this exact shape.
+    root = Path(__file__).resolve().parents[1]
+    suite = root / "evaluation" / "suites" / "property"
+    report_path = tmp_path / "property-report.json"
+
+    assert retrieval_eval.main([
+        "--retriever", "bm25",
+        "--queries", str(suite / "queries.jsonl"),
+        "--chunks", str(suite / "chunks.jsonl"),
+        "--k", "1", "3", "5",
+        "--depth", "10",
+        "--json-report", str(report_path),
+    ]) == 0
+
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+    configuration = payload["configuration"]
+    assert sorted(configuration) == [
+        "context_max_characters", "context_segment_characters",
+        "context_window", "cost_rates", "db_backend", "db_lock_timeout",
+        "dense_weight", "embedding_model", "grounding_scorer_version",
+        "hybrid", "index_snapshot", "judgment_scorer_version", "k_values",
+        "llm_report_sha256", "model_artifact_lock_sha256",
+        "operation_timeout", "overfetch", "queries_sha256",
+        "release_security", "report_detail", "reranker_model",
+        "retrieval_depth", "retriever", "rrf_k", "sparse_weight",
+        "table_family_judgment_schema_version", "table_retrieval_policy",
+        "use_reranker",
+    ]
+    assert configuration["index_snapshot"] == {
+        "source_sha256": (
+            "606ea787c06e32b8b0a8b0e31a96900c5e2996839e8ed384cda291e0693776a8"),
+        "source_record_count": 11,
+        "record_count": 11,
+        "table_child_count": 0,
+        "id_scheme": "retrieval_core._chunk_id",
+        "retriever_implementation": "offline_retrieval.OfflineBM25Index/v2",
+        "scoring": "BM25 Okapi with non-negative Robertson IDF",
+        "minimum_content_term_matches": 2,
+        "stop_words_sha256": (
+            "0ea48becd93d2fca663ea0f82865f254488b0ff9a61e91e434dc2e2565a09a6f"),
+    }
+    baseline = json.loads(
+        (root / "evaluation" / "baselines" / "property-bm25.json")
+        .read_text(encoding="utf-8"))
+    assert configuration["index_snapshot"] == (
+        baseline["configuration"]["index_snapshot"])
+
+
+_CC0_SUITES = ("property", "constitutional_law", "table_family")
+_LEXICAL_RECORDS = [
+    {"text": "The statute of frauds requires a signed writing for a sale "
+             "of land.",
+     "metadata": {"source_file": "synthetic-contracts", "chunk_index": 0,
+                  "content_type": "doctrine", "chapter_num": 1}},
+    {"text": "What the writing means is a question for the jury when the "
+             "parties dispute it.",
+     "metadata": {"source_file": "synthetic-contracts", "chunk_index": 1,
+                  "content_type": "doctrine", "chapter_num": 1}},
+    {"text": "A contract requires an offer, an acceptance, and "
+             "consideration.",
+     "metadata": {"source_file": "synthetic-contracts", "chunk_index": 2,
+                  "content_type": "doctrine", "chapter_num": 2}},
+    {"text": "The mailbox rule makes an acceptance effective on dispatch.",
+     "metadata": {"source_file": "synthetic-contracts", "chunk_index": 3,
+                  "content_type": "rule", "chapter_num": 2}},
+]
+
+
+def _suite_dir(name):
+    return Path(__file__).resolve().parents[1] / "evaluation" / "suites" / name
+
+
+def _write_lexical_fixture(tmp_path, *, pinned=True):
+    chunks = tmp_path / "chunks.jsonl"
+    chunks.write_text(
+        "".join(json.dumps(record) + "\n" for record in _LEXICAL_RECORDS),
+        encoding="utf-8")
+    corpus = {
+        "sha256": hashlib.sha256(chunks.read_bytes()).hexdigest(),
+        "record_count": len(_LEXICAL_RECORDS),
+    }
+    ids = [rag._chunk_id(record) for record in _LEXICAL_RECORDS]
+    queries = [
+        {"query_id": "writing",
+         "query": "what is the writing requirement for a sale of land",
+         "judgments": [{"chunk_id": ids[0], "relevance": 3}],
+         "expected_type": "doctrine"},
+        {"query_id": "dispatch",
+         "query": "when is an acceptance effective",
+         "judgments": [{"chunk_id": ids[3], "relevance": 3}],
+         "expected_type": "rule"},
+        {"query_id": "jury",
+         "query": "what does the jury decide about the writing",
+         "judgments": [{"chunk_id": ids[1], "relevance": 2}],
+         "filters": {"content_type": "doctrine"}},
+    ]
+    if pinned:
+        for query in queries:
+            query["corpus"] = dict(corpus)
+    queries_path = tmp_path / "queries.jsonl"
+    queries_path.write_text(
+        "".join(json.dumps(query) + "\n" for query in queries),
+        encoding="utf-8")
+    return queries_path, chunks
+
+
+def _lexical_cli(queries_path, chunks, report_path, *extra):
+    return retrieval_eval.main([
+        "--retriever", "lexical",
+        "--queries", str(queries_path),
+        "--chunks", str(chunks),
+        "--k", "1", "3",
+        "--depth", "5",
+        "--report-detail", "full",
+        "--json-report", str(report_path),
+        *extra,
+    ])
+
+
+def _assert_details_match_production_leg(
+        queries, details, chunks, depth, query_policy="none"):
+    rag._bm25_cache.clear()
+    assert len(details) == len(queries)
+    for query, detail in zip(queries, details):
+        _documents, metadatas, scores = rag._bm25_search(
+            query["query"], chunks, depth, **(query.get("filters") or {}),
+            query_policy=query_policy)
+        assert [result["chunk_id"] for result in detail["results"]] == [
+            metadata["stable_id"] for metadata in metadatas]
+        assert [result["score"] for result in detail["results"]] == scores
+
+
+@pytest.mark.parametrize("query_policy", ["none", "function-words-v1"])
+@pytest.mark.parametrize("suite_name", _CC0_SUITES)
+def test_lexical_retriever_ranks_exactly_like_the_production_leg(
+        monkeypatch, tmp_path, suite_name, query_policy):
+    # The lexical evaluator must stay model-free for the dependency-light
+    # CI lanes: any import of a vector or model stack fails this test.
+    for module in ("chromadb", "qdrant_client", "sentence_transformers",
+                   "torch", "transformers"):
+        monkeypatch.setitem(sys.modules, module, None)
+    suite = _suite_dir(suite_name)
+    report_path = tmp_path / "lexical.json"
+
+    assert retrieval_eval.main([
+        "--retriever", "lexical",
+        "--lexical-query-policy", query_policy,
+        "--queries", str(suite / "queries.jsonl"),
+        "--chunks", str(suite / "chunks.jsonl"),
+        "--k", "1", "3", "5",
+        "--depth", "10",
+        "--report-detail", "full",
+        "--json-report", str(report_path),
+    ]) == 0
+
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+    _assert_details_match_production_leg(
+        retrieval_eval.load_queries(suite / "queries.jsonl"),
+        payload["query_details"], suite / "chunks.jsonl", 10,
+        query_policy=query_policy)
+    configuration = payload["configuration"]
+    assert configuration["retriever"] == "lexical"
+    assert configuration["lexical_query_policy"] == query_policy
+    assert configuration["use_reranker"] is False
+    assert configuration["hybrid"] is False
+    assert configuration["embedding_model"] is None
+    assert configuration["model_artifact_lock_sha256"] is None
+    snapshot = configuration["index_snapshot"]
+    assert snapshot["retriever_implementation"] == "rag._bm25_search"
+    assert snapshot["source_sha256"] == hashlib.sha256(
+        (suite / "chunks.jsonl").read_bytes()).hexdigest()
+    assert snapshot["scoring_library_version"]
+    assert payload["measurements"]["index_storage"]["kind"] == (
+        "ephemeral_bm25_source_corpus")
+    assert payload["costs"]["embedding"]["status"] == "not_used"
+
+
+def test_lexical_retriever_scores_a_synthetic_fixture_through_the_shared_path(
+        tmp_path):
+    queries_path, chunks = _write_lexical_fixture(tmp_path)
+    queries = retrieval_eval.load_queries(queries_path)
+    report_path = tmp_path / "lexical.json"
+
+    assert _lexical_cli(queries_path, chunks, report_path) == 0
+
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+    _assert_details_match_production_leg(
+        queries, payload["query_details"], chunks, 5)
+
+    class ProductionLexicalAdapter:
+        def search(self, query, *, n_results, content_type=None,
+                   chapter_num=None):
+            documents, metadatas, scores = rag._bm25_search(
+                query, chunks, n_results, content_type, chapter_num)
+            return [
+                {"text": document, "metadata": metadata, "score": score,
+                 "chunk_id": metadata["stable_id"]}
+                for document, metadata, score in zip(
+                    documents, metadatas, scores)
+            ]
+
+    options = {"k_values": [1, 3], "include_details": True,
+               "report_detail": "full", "n_results": 5}
+    direct = retrieval_eval.evaluate_lexical(
+        queries, chunks,
+        expected_source_sha256=hashlib.sha256(
+            chunks.read_bytes()).hexdigest(),
+        **options)
+    through_adapter = retrieval_eval.evaluate_offline_bm25(
+        queries, ProductionLexicalAdapter(), **options)
+    assert direct == through_adapter
+    assert payload["metrics"] == {
+        key: value for key, value in direct.items()
+        if key != "query_details"}
+    # The production leg keeps function words, so an early function-word
+    # match outranks the judged rule; the offline fixture adapter differs.
+    assert direct["mrr"] == pytest.approx(0.833)
+    offline = retrieval_eval.evaluate_offline_bm25(
+        queries, OfflineBM25Index.from_jsonl(chunks), **options)
+    assert [
+        [result["chunk_id"] for result in detail["results"]]
+        for detail in offline["query_details"]
+    ] != [
+        [result["chunk_id"] for result in detail["results"]]
+        for detail in direct["query_details"]
+    ]
+
+
+def test_lexical_evaluation_fails_closed_when_the_snapshot_changes(tmp_path):
+    queries_path, chunks = _write_lexical_fixture(tmp_path)
+    queries = retrieval_eval.load_queries(queries_path)
+
+    with pytest.raises(ValueError, match="snapshot changed"):
+        retrieval_eval.evaluate_lexical(
+            queries, chunks, expected_source_sha256="0" * 64,
+            k_values=[1], n_results=5)
+
+
+def test_lexical_cli_requires_pinned_matching_corpus(tmp_path):
+    unpinned_queries, chunks = _write_lexical_fixture(
+        tmp_path, pinned=False)
+    assert _lexical_cli(
+        unpinned_queries, chunks, tmp_path / "unpinned.json") == 1
+
+    pinned_queries, chunks = _write_lexical_fixture(tmp_path)
+    chunks.write_text(
+        chunks.read_text(encoding="utf-8").replace("land", "lands"),
+        encoding="utf-8")
+    assert _lexical_cli(
+        pinned_queries, chunks, tmp_path / "mismatch.json") == 1
+
+
+@pytest.mark.parametrize("flag", [
+    ["--compare"], ["--hybrid"], ["--vector-only"], ["--rerank"],
+    ["--no-rerank"], ["--context-window", "1"],
+])
+def test_lexical_cli_rejects_index_only_modes(tmp_path, flag):
+    queries_path, chunks = _write_lexical_fixture(tmp_path)
+
+    with pytest.raises(SystemExit) as error:
+        _lexical_cli(queries_path, chunks, tmp_path / "report.json", *flag)
+
+    assert error.value.code == 2
+
+
+def test_lexical_cli_does_not_lease_a_vector_store(monkeypatch, tmp_path):
+    queries_path, chunks = _write_lexical_fixture(tmp_path)
+
+    def fail_lock(*_args, **_kwargs):
+        pytest.fail("the lexical retriever must not lease a vector store")
+
+    monkeypatch.setattr(rag, "_vector_store_lock", fail_lock)
+
+    assert _lexical_cli(
+        queries_path, chunks, tmp_path / "report.json",
+        "--db", str(tmp_path / "db"), "--collection", "book") == 0
+
+
+def test_lexical_baseline_round_trips_and_rejects_other_retrievers(
+        tmp_path):
+    queries_path, chunks = _write_lexical_fixture(tmp_path)
+    baseline_path = tmp_path / "baseline.json"
+    assert _lexical_cli(queries_path, chunks, baseline_path) == 0
+
+    assert _lexical_cli(
+        queries_path, chunks, tmp_path / "current.json",
+        "--baseline-report", str(baseline_path),
+        "--max-regression", "mrr=0") == 0
+
+    baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+    offline_baseline = copy.deepcopy(baseline)
+    offline_baseline["configuration"]["retriever"] = "bm25"
+    offline_baseline["configuration"].pop("lexical_query_policy")
+    offline_path = tmp_path / "offline-baseline.json"
+    offline_path.write_text(json.dumps(offline_baseline), encoding="utf-8")
+    assert _lexical_cli(
+        queries_path, chunks, tmp_path / "rejected.json",
+        "--baseline-report", str(offline_path),
+        "--max-regression", "mrr=0") == 1
+
+
+def test_lexical_baseline_provenance_is_strict_and_comparable(tmp_path):
+    configuration = {
+        "retriever": "lexical",
+        "k_values": [1],
+        "retrieval_depth": 5,
+        "queries_sha256": "a" * 64,
+        "index_snapshot": {"source_sha256": "b" * 64},
+        "use_reranker": False,
+        "hybrid": False,
+        "grounding_scorer_version": retrieval_eval.GROUNDING_SCORER_VERSION,
+        "judgment_scorer_version": retrieval_eval.JUDGMENT_SCORER_VERSION,
+        "table_family_judgment_schema_version": (
+            retrieval_eval.TABLE_FAMILY_JUDGMENT_SCHEMA_VERSION),
+        "table_retrieval_policy": (
+            retrieval_eval._table_retrieval_policy_contract()),
+        "context_window": 0,
+        "context_max_characters": 8000,
+        "context_segment_characters": 1600,
+        "lexical_query_policy": "none",
+    }
+
+    def load(baseline_configuration, expected=configuration):
+        path = tmp_path / "baseline.json"
+        path.write_text(json.dumps({
+            "schema_version": retrieval_eval.REPORT_SCHEMA_VERSION,
+            "mode": "single",
+            "configuration": baseline_configuration,
+            "metrics": {"mrr": 1.0},
+        }), encoding="utf-8")
+        return retrieval_eval._load_baseline_metrics(
+            path, expected_configuration=expected)
+
+    assert load(dict(configuration)) == {"mrr": 1.0}
+
+    missing = dict(configuration)
+    missing.pop("lexical_query_policy")
+    with pytest.raises(
+            ValueError, match="lacks required provenance: lexical_query_policy"):
+        load(missing)
+
+    incomplete_current = dict(configuration, lexical_query_policy=None)
+    with pytest.raises(ValueError, match="Current evaluation lacks"):
+        load(dict(configuration), expected=incomplete_current)
+
+    offline_current = dict(configuration, retriever="bm25")
+    offline_current.pop("lexical_query_policy")
+    with pytest.raises(ValueError, match="differs for") as error:
+        load(dict(configuration), expected=offline_current)
+    assert "retriever" in str(error.value)
+    assert "lexical_query_policy" in str(error.value)
+
+    filtered_current = dict(
+        configuration, lexical_query_policy="function-words-v1")
+    with pytest.raises(
+            ValueError, match="differs for: lexical_query_policy$"):
+        load(dict(configuration), expected=filtered_current)
+
+
+def test_function_word_policy_is_opt_in_and_bound_into_reports(tmp_path):
+    queries_path, chunks = _write_lexical_fixture(tmp_path)
+    queries = retrieval_eval.load_queries(queries_path)
+    default_path = tmp_path / "none.json"
+    filtered_path = tmp_path / "function-words.json"
+
+    assert _lexical_cli(queries_path, chunks, default_path) == 0
+    assert _lexical_cli(
+        queries_path, chunks, filtered_path,
+        "--lexical-query-policy", "function-words-v1") == 0
+
+    default = json.loads(default_path.read_text(encoding="utf-8"))
+    filtered = json.loads(filtered_path.read_text(encoding="utf-8"))
+    assert default["configuration"]["lexical_query_policy"] == "none"
+    assert filtered["configuration"]["lexical_query_policy"] == (
+        "function-words-v1")
+    _assert_details_match_production_leg(
+        queries, filtered["query_details"], chunks, 5,
+        query_policy="function-words-v1")
+    # Dropping "is" and "an" from the query lets the judged mailbox rule
+    # outrank a passage that matched mostly through function words.
+    assert default["metrics"]["mrr"] == pytest.approx(0.833)
+    assert filtered["metrics"]["mrr"] == 1.0
+    # Reports from different policies are never silently comparable.
+    assert _lexical_cli(
+        queries_path, chunks, tmp_path / "rejected.json",
+        "--lexical-query-policy", "function-words-v1",
+        "--baseline-report", str(default_path),
+        "--max-regression", "mrr=0") == 1
+
+
+def test_evaluate_lexical_rejects_an_unknown_query_policy(tmp_path):
+    queries_path, chunks = _write_lexical_fixture(tmp_path)
+
+    with pytest.raises(ValueError, match="lexical query policy"):
+        retrieval_eval.evaluate_lexical(
+            retrieval_eval.load_queries(queries_path), chunks,
+            expected_source_sha256=hashlib.sha256(
+                chunks.read_bytes()).hexdigest(),
+            query_policy="stopwords", k_values=[1], n_results=5)
+
+
+@pytest.mark.parametrize("retriever_args", [
+    ["--retriever", "bm25"],
+    ["--retriever", "index", "--collection", "book"],
+])
+def test_lexical_query_policy_requires_the_lexical_retriever(
+        tmp_path, capsys, retriever_args):
+    queries_path, chunks = _write_lexical_fixture(tmp_path)
+
+    with pytest.raises(SystemExit) as error:
+        retrieval_eval.main([
+            *retriever_args,
+            "--db", str(tmp_path / "db"),
+            "--lexical-query-policy", "function-words-v1",
+            "--queries", str(queries_path),
+            "--chunks", str(chunks),
+        ])
+
+    assert error.value.code == 2
+    assert "--lexical-query-policy" in capsys.readouterr().err
+
+
+def test_lexical_query_policy_choices_fail_closed(tmp_path):
+    queries_path, chunks = _write_lexical_fixture(tmp_path)
+
+    with pytest.raises(SystemExit) as error:
+        _lexical_cli(
+            queries_path, chunks, tmp_path / "report.json",
+            "--lexical-query-policy", "stopwords")
+
+    assert error.value.code == 2
 
 
 def test_report_query_digest_uses_the_scored_snapshot(

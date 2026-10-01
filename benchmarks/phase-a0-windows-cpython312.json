@@ -50,7 +50,7 @@
     "python_major_minor": "3.12"
   },
   "repetitions": 5,
-  "report_sha256": "6fc23e578f9ea838ccd42fc2003081b376f5324b2c0339852fa0999d7018e624",
+  "report_sha256": "2bd7f087d1cf75222c43beedc7b81fd7615f9afd90b45efd8d543e5b03a6fa89",
   "runtime": {
     "implementation": "CPython",
     "pointer_bits": 64,
@@ -142,10 +142,10 @@
         "output": null,
         "peak_rss_bytes": {
           "available": true,
-          "maximum": 119037952,
-          "median": 118562816,
-          "minimum": 117678080,
-          "p95": 119037952,
+          "maximum": 119042048,
+          "median": 118513664,
+          "minimum": 117915648,
+          "p95": 119042048,
           "scope": "process_only_excludes_descendants"
         },
         "stdlib_loaded_count": {
@@ -278,10 +278,10 @@
         ],
         "third_party_loaded_sha256": "b1285ec0d2e4ea22465cb6bfe542c6236fcb703c5e4e20254547c3a92d5c433e",
         "wall_time_ms": {
-          "maximum": 1698.385,
-          "median": 1681.743,
-          "minimum": 1658.43,
-          "p95": 1698.385
+          "maximum": 1648.695,
+          "median": 1541.799,
+          "minimum": 1480.379,
+          "p95": 1648.695
         }
       },
       "name": "cold_import_rag",
@@ -370,10 +370,10 @@
         },
         "peak_rss_bytes": {
           "available": true,
-          "maximum": 120487936,
-          "median": 120254464,
-          "minimum": 119631872,
-          "p95": 120487936,
+          "maximum": 120332288,
+          "median": 120066048,
+          "minimum": 119558144,
+          "p95": 120332288,
           "scope": "process_only_excludes_descendants"
         },
         "stdlib_loaded_count": {
@@ -506,10 +506,10 @@
         ],
         "third_party_loaded_sha256": "b1285ec0d2e4ea22465cb6bfe542c6236fcb703c5e4e20254547c3a92d5c433e",
         "wall_time_ms": {
-          "maximum": 1665.689,
-          "median": 1657.015,
-          "minimum": 1630.787,
-          "p95": 1665.689
+          "maximum": 1693.978,
+          "median": 1675.108,
+          "minimum": 1644.657,
+          "p95": 1693.978
         }
       },
       "name": "cli_help",
@@ -566,10 +566,10 @@
         },
         "peak_rss_bytes": {
           "available": true,
-          "maximum": 27537408,
-          "median": 26877952,
-          "minimum": 26632192,
-          "p95": 27537408,
+          "maximum": 27701248,
+          "median": 26988544,
+          "minimum": 26890240,
+          "p95": 27701248,
           "scope": "process_only_excludes_descendants"
         },
         "stdlib_loaded_count": {
@@ -665,10 +665,10 @@
         ],
         "third_party_loaded_sha256": "a757c8aea456ab56dddab71852924acc569e4b3f834cbdb5ef9695ddfcce0a5a",
         "wall_time_ms": {
-          "maximum": 3765.42,
-          "median": 3410.405,
-          "minimum": 3180.79,
-          "p95": 3765.42
+          "maximum": 3434.592,
+          "median": 3396.78,
+          "minimum": 3331.21,
+          "p95": 3434.592
         }
       },
       "name": "cli_info_empty",
@@ -725,10 +725,10 @@
         "output": null,
         "peak_rss_bytes": {
           "available": true,
-          "maximum": 50270208,
-          "median": 49672192,
-          "minimum": 49311744,
-          "p95": 50270208,
+          "maximum": 49963008,
+          "median": 49823744,
+          "minimum": 49594368,
+          "p95": 49963008,
           "scope": "process_only_excludes_descendants"
         },
         "stdlib_loaded_count": {
@@ -867,10 +867,10 @@
         ],
         "third_party_loaded_sha256": "12ea7e9a2d80aef71b45444a9c1525cbf17122e2dc917d113fef8d984b611d2c",
         "wall_time_ms": {
-          "maximum": 574.582,
-          "median": 561.668,
-          "minimum": 550.024,
-          "p95": 574.582
+          "maximum": 572.938,
+          "median": 540.01,
+          "minimum": 530.338,
+          "p95": 572.938
         }
       },
       "name": "service_composition",
@@ -950,10 +950,10 @@
         "output": null,
         "peak_rss_bytes": {
           "available": true,
-          "maximum": 119848960,
-          "median": 119185408,
-          "minimum": 118652928,
-          "p95": 119848960,
+          "maximum": 119828480,
+          "median": 119181312,
+          "minimum": 118456320,
+          "p95": 119828480,
           "scope": "process_only_excludes_descendants"
         },
         "stdlib_loaded_count": {
@@ -1086,10 +1086,10 @@
         ],
         "third_party_loaded_sha256": "b1285ec0d2e4ea22465cb6bfe542c6236fcb703c5e4e20254547c3a92d5c433e",
         "wall_time_ms": {
-          "maximum": 1770.255,
-          "median": 1756.694,
-          "minimum": 1732.209,
-          "p95": 1770.255
+          "maximum": 1854.835,
+          "median": 1761.947,
+          "minimum": 1710.768,
+          "p95": 1854.835
         }
       },
       "name": "worker_imports",
@@ -1143,10 +1143,10 @@
         "output": null,
         "peak_rss_bytes": {
           "available": true,
-          "maximum": 27566080,
-          "median": 26972160,
-          "minimum": 26513408,
-          "p95": 27566080,
+          "maximum": 27549696,
+          "median": 27123712,
+          "minimum": 26849280,
+          "p95": 27549696,
           "scope": "process_only_excludes_descendants"
         },
         "stdlib_loaded_count": {
@@ -1246,10 +1246,10 @@
         ],
         "third_party_loaded_sha256": "a757c8aea456ab56dddab71852924acc569e4b3f834cbdb5ef9695ddfcce0a5a",
         "wall_time_ms": {
-          "maximum": 3600.059,
-          "median": 3563.768,
-          "minimum": 3537.149,
-          "p95": 3600.059
+          "maximum": 3861.205,
+          "median": 3339.694,
+          "minimum": 3255.958,
+          "p95": 3861.205
         }
       },
       "name": "worker_entrypoints",
@@ -1289,10 +1289,10 @@
         "output": null,
         "peak_rss_bytes": {
           "available": true,
-          "maximum": 27734016,
-          "median": 27299840,
-          "minimum": 26419200,
-          "p95": 27734016,
+          "maximum": 27918336,
+          "median": 27189248,
+          "minimum": 26587136,
+          "p95": 27918336,
           "scope": "process_only_excludes_descendants"
         },
         "stdlib_loaded_count": {
@@ -1388,10 +1388,10 @@
         ],
         "third_party_loaded_sha256": "a757c8aea456ab56dddab71852924acc569e4b3f834cbdb5ef9695ddfcce0a5a",
         "wall_time_ms": {
-          "maximum": 376.847,
-          "median": 371.535,
-          "minimum": 361.924,
-          "p95": 376.847
+          "maximum": 406.009,
+          "median": 387.657,
+          "minimum": 376.024,
+          "p95": 406.009
         }
       },
       "name": "isolation_guard",
@@ -1584,10 +1584,10 @@
         "output": null,
         "peak_rss_bytes": {
           "available": true,
-          "maximum": 119181312,
-          "median": 118575104,
-          "minimum": 118013952,
-          "p95": 119181312,
+          "maximum": 118562816,
+          "median": 118226944,
+          "minimum": 117972992,
+          "p95": 118562816,
           "scope": "process_only_excludes_descendants"
         },
         "stdlib_loaded_count": {
@@ -1720,10 +1720,10 @@
         ],
         "third_party_loaded_sha256": "b1285ec0d2e4ea22465cb6bfe542c6236fcb703c5e4e20254547c3a92d5c433e",
         "wall_time_ms": {
-          "maximum": 5913.381,
-          "median": 5838.351,
-          "minimum": 5779.648,
-          "p95": 5913.381
+          "maximum": 5554.054,
+          "median": 5536.535,
+          "minimum": 5499.342,
+          "p95": 5554.054
         }
       },
       "name": "noop_resume",
@@ -1798,10 +1798,10 @@
         "output": null,
         "peak_rss_bytes": {
           "available": true,
-          "maximum": 119328768,
-          "median": 118452224,
-          "minimum": 117817344,
-          "p95": 119328768,
+          "maximum": 119652352,
+          "median": 118849536,
+          "minimum": 118325248,
+          "p95": 119652352,
           "scope": "process_only_excludes_descendants"
         },
         "stdlib_loaded_count": {
@@ -1934,10 +1934,10 @@
         ],
         "third_party_loaded_sha256": "b1285ec0d2e4ea22465cb6bfe542c6236fcb703c5e4e20254547c3a92d5c433e",
         "wall_time_ms": {
-          "maximum": 1649.457,
-          "median": 1635.97,
-          "minimum": 1611.121,
-          "p95": 1649.457
+          "maximum": 1564.522,
+          "median": 1561.049,
+          "minimum": 1551.451,
+          "p95": 1564.522
         }
       },
       "name": "offline_export_retrieval",
@@ -1946,7 +1946,7 @@
   ],
   "schema_version": 3,
   "source": {
-    "commit": "e706fd2106a9d39982e644599b96b03b394ff650",
+    "commit": "5d22bb93fdc835075a4fd6d4a5179667af5349b4",
     "tracked_diff_sha256": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d",
     "worktree_clean": true
   },

@@ -25438,12 +25438,17 @@ _BM25_CACHE_MAX = 5  # evict oldest when exceeded
 def _bm25_search(query: str, chunks_path: Path, n_results: int,
                  content_type: Optional[str] = None,
                  chapter_num: Optional[int] = None, *,
-                 expected_source_sha256: str | None = None) -> tuple:
+                 expected_source_sha256: str | None = None,
+                 query_policy: str = "none") -> tuple:
     """BM25 keyword search over chunks JSONL.
 
     Caches the BM25 index per file (reloads only if file changed).
     Returns (documents, metadatas, scores) sorted by BM25 score descending.
+    ``query_policy`` names a versioned query-side lexical policy from
+    ``retrieval_core.LEXICAL_QUERY_POLICIES``; it filters only the query
+    tokens used for scoring and matching, so the cached index is shared.
     """
+    _retrieval_core._validate_lexical_query_policy(query_policy)
     from rank_bm25 import BM25Okapi
 
     cache_key = str(chunks_path.resolve())
@@ -25499,6 +25504,8 @@ def _bm25_search(query: str, chunks_path: Path, n_results: int,
     query_tokens = _legal_search_tokens(query)
     if not query_tokens:
         return [], [], []
+    query_tokens = _retrieval_core._lexical_query_tokens(
+        query_tokens, query_policy)
     all_scores = bm25.get_scores(query_tokens)
 
     scored = [

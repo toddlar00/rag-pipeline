@@ -37,6 +37,7 @@ REQUIRED_MAXIMUMS = frozenset({"false_answer_rate"})
 _POLICY_ID_RE = re.compile(r"[a-z0-9][a-z0-9._-]{2,63}")
 _CONFLICTING_EVAL_OPTIONS = frozenset({
     "--retriever",
+    "--lexical-query-policy",
     "--compare",
     "--bootstrap",
     "--hybrid",
@@ -317,6 +318,7 @@ def apply_release_policy(args, *, argv: list[str]) -> dict:
     configuration = policy["configuration"]
     mode = policy["modes"][mode_name]
     args.retriever = "index"
+    args.lexical_query_policy = retrieval_core.LEXICAL_QUERY_POLICY_NONE
     args.compare = False
     args.embedding_model = configuration["embedding_model"]
     args.db_backend = configuration["db_backend"]
