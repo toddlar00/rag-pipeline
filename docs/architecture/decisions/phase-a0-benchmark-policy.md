@@ -32,9 +32,10 @@
   Docling conversion hardening pair at source `18de7d6` passed on PR #160
   (merged through `4994191`), the stacked job-manager transient-write
   tolerance pair at source `9e4d7be` passed on PR #161 (merged through
-  `d27af15`), and the stacked CI and secret-scan tooling pair at source
-  `e706fd2` is pending; exact-head human review and separate R8 owner
-  authorization are not recorded
+  `d27af15`), the stacked CI and secret-scan tooling pair at source
+  `e706fd2` passed on PR #162 (merged through `40994b4`), and the stacked
+  lexical accuracy toolkit pair at source `5d22bb9` is pending; exact-head
+  human review and separate R8 owner authorization are not recorded
 - **Milestone:** R10 prerequisite for the R8 pipeline-ownership move
 - **Report schema:** `phase-a0` v3
 
@@ -165,14 +166,15 @@ gate-only child `32153e9` and merge `376277c`
 Task 0.8 static-security pair at source `8891e1b` repeated it through
 gate-only child `1533164` and merge `e34103f`
 ([PR #107](https://github.com/toddlar00/rag-pipeline/pull/107)). The
-current replacement pair uses the clean CI and secret-scan tooling source
-`e706fd2106a9d39982e644599b96b03b394ff650` (tree
-`5697016a9eb41d26019ea30e3b150b108eb8c8f6`), a fail-closed hardening of
-the workflow security validator and a single-process history reader for
-the secret scanner that change no pipeline output, after a series of
-one-domain dependency updates, on `main` after the merges of the
-job-manager transient-write tolerance #161 (`d27af15`, whose second parent
-`209767c` is the base this source's twelve commits are stacked on), the
+current replacement pair uses the clean lexical accuracy toolkit source
+`5d22bb93fdc835075a4fd6d4a5179667af5349b4` (tree
+`f831900949921861abcb0ac4b39282a3ec80ab40`), an evaluation-only production
+lexical retriever and an opt-in, default-off lexical query policy that
+change no default and no pipeline output, after a series of one-domain
+dependency updates, on `main` after the merges of the CI and secret-scan
+tooling #162 (`40994b4`, whose second parent `78777a8` is the base this
+source's five commits are stacked on), the job-manager transient-write
+tolerance #161 (`d27af15`), the
 Docling conversion hardening #160 (`4994191`), the ingestion speedups #159
 (`139e2dc`), the model-load speedups #158 (`cc39af5`), the query-path
 speedups #157
@@ -548,6 +550,29 @@ or a non-zero exit now fails the scan with an error, where the old reader
 silently skipped a vanished object. It changes no pipeline output,
 dependency or lock and supersedes the `9e4d7be` pair for its own pull
 request.
+The `e706fd2` pair (gate-only child `78777a8`) passed the hosted CI
+promotion gate on [PR
+#162](https://github.com/toddlar00/rag-pipeline/pull/162), which merged into
+`main` as `40994b4`; the networked vulnerability/SBOM jobs passed at that
+head. The stacked lexical accuracy toolkit source `5d22bb9` adds
+evaluation-only lexical tooling and changes no default.
+`eval.py --retriever lexical` scores each query through the production
+lexical leg (`rag._bm25_search`), pinned to the chunks snapshot SHA-256 it
+validated, instead of the offline fixture adapter that `--retriever bm25`
+uses; its reports record the scorer, the rank-bm25 version and the lexical
+query policy, and lexical baselines are strict and never compare silently
+with offline-BM25 or index reports. An opt-in, default-off query policy,
+`function-words-v1` (a versioned, frozen 49-word function-word list in
+`retrieval_core` that keeps modals, negation and conditionals), filters
+only the query tokens, keeping order and duplicates and falling back to the
+unfiltered tokens when nothing would remain, so no chunk or index changes.
+`rag._bm25_search` gains a keyword-only `query_policy` that defaults to
+`none` and is validated before any I/O, and only
+`eval.py --lexical-query-policy` selects another; the default path is
+bitwise identical over 8,000 fuzzed comparisons, and the offline-BM25 and
+index report shapes and committed baselines are unchanged. It changes no
+pipeline output, dependency or lock and supersedes the `e706fd2` pair for
+its own pull request.
 Its Windows and
 Linux CPython 3.12.13 reports were
 generated after the same strict hash-locked synchronization, to its locks
@@ -752,15 +777,16 @@ then the stacked model-load speedup source `8ce1a8d`,
 then the stacked ingestion speedup source `6fc0c36`,
 then the stacked Docling conversion hardening source `18de7d6`,
 then the stacked job-manager transient-write tolerance source `9e4d7be`,
-then the stacked CI and secret-scan tooling source `e706fd2`.
+then the stacked CI and secret-scan tooling source `e706fd2`,
+then the stacked lexical accuracy toolkit source `5d22bb9`.
 Its Windows report
-is 51,173 bytes (file SHA-256
-`0900566ab2fa5b376e8f8b65d34519fd70faed73472b94fe8a8f75e6c7d4986a`;
+is 51,175 bytes (file SHA-256
+`96ec769422427a589c1217051706429b1fb6787520fc20b1bdcec4c8f8bb4173`;
 embedded report SHA-256
-`6fc23e578f9ea838ccd42fc2003081b376f5324b2c0339852fa0999d7018e624`).
-Its Linux report is 50,574 bytes (file SHA-256
-`9ad3571a14e715b1171dfd724375cd3ea98112ff1e5f43daa0a3803544bb8909`;
+`2bd7f087d1cf75222c43beedc7b81fd7615f9afd90b45efd8d543e5b03a6fa89`).
+Its Linux report is 50,570 bytes (file SHA-256
+`f821ff348bb033e4b6b523cb606bfecb08bea82981bd85992bb555dca7d52615`;
 embedded report SHA-256
-`6e3f58f1f6d98f2500fac6acd29c35710e9901dbd7843251c34bd3ff3da75302`).
+`db8d546a6f5059c85cf5704ad910cff711bba7de2ddfc6160ddb2b26cdd5ccc4`).
 Both use CPython 3.12.13 and pass their complete local same-platform 9×5
 comparisons. Hosted promotion remains pending.

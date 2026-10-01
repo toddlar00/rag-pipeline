@@ -1766,16 +1766,19 @@ Phase A0 pair at source `18de7d6` passed the hosted CI promotion gate there.
 `d27af15`; its Phase A0 pair at source `9e4d7be` passed the hosted CI
 promotion gate there. The CI-validator and secret-scan branches
 (`agent/imp-ci-validator-yaml-anchors` and
-`agent/imp-secret-scan-history-batch`) are now proposed together in one
-pull request from `agent/ci-security-tooling`, which is stacked on PR
-#161's evidence head `209767c` and carries their shared Phase A0 pair at
-source `e706fd2`, its hosted checks pending. The other one,
-`agent/imp-lexical-accuracy-toolkit`, has no pull request, so it is not
-"Implemented (draft)"; of the 18, only the static-security branch, the
-three hosted-flake fix branches, the three query-path speed branches, the
-two model-load speed branches, the four ingestion speed branches, the
-Docling hardening branch and the job-manager transient-write branch are
-integrated.
+`agent/imp-secret-scan-history-batch`) merged together into `main` through
+[PR #162](https://github.com/toddlar00/rag-pipeline/pull/162) as
+`40994b4`; their shared Phase A0 pair at source `e706fd2` passed the hosted
+CI promotion gate there, and the networked vulnerability/SBOM jobs passed
+at that head. The last one, `agent/imp-lexical-accuracy-toolkit`, is now
+proposed in its own pull request from `agent/lexical-accuracy-toolkit-pr`,
+which is stacked on PR #162's evidence head `78777a8` and carries its own
+Phase A0 pair at source `5d22bb9`, its hosted checks pending, and is not
+integrated. The other 17 of the 18 are integrated: the static-security
+branch, the three hosted-flake fix branches, the three query-path speed
+branches, the two model-load speed branches, the four ingestion speed
+branches, the Docling hardening branch, the job-manager transient-write
+branch and the CI-validator and secret-scan branches.
 The integration branch
 `agent/research-improvements` merges all 18 only to validate the
 combination; each other branch lands through its own pull request. Branch
@@ -1840,9 +1843,9 @@ names below omit the `agent/imp-` prefix.
   - `secret-scan-history-batch`: the secret scanner's history mode reads
     blobs through one `git cat-file --batch`. Windows blob reading drops
     from 106 s to 1.1 s (about 6-7x end to end), with identical findings.
-    It is now proposed together with `ci-validator-yaml-anchors` in one
-    stacked pull request, with their shared Phase A0 pair at source
-    `e706fd2` (hosted checks pending), and is not integrated.
+    It merged together with `ci-validator-yaml-anchors` through PR #162 as
+    `40994b4`, with their shared Phase A0 pair at source `e706fd2`, which
+    passed the hosted CI promotion gate.
 - **Robustness and correctness.** No published artifact changes.
   - `static-security-s324-noqa`: retires the only static-security
     suppression (S324, expiring 2026-11-30) by using
@@ -1886,9 +1889,8 @@ names below omit the `agent/imp-` prefix.
     documents found no new fail-open against `3aede7d` in any shape GitHub
     accepts; all 27 newly accepted unsafe documents write the checkout's
     `with:` as a sequence, which GitHub rejects (see the follow-ups below).
-    It is now proposed together with `secret-scan-history-batch` in one
-    stacked pull request, with their shared Phase A0 pair at source
-    `e706fd2` (hosted checks pending), and is not integrated.
+    It merged through the same pull request as `secret-scan-history-batch`
+    (#162).
   - `windows-transient-replace-tolerance`: the durable-job manager's
     transient-write follow-up (see "Corpus audit follow-ups"). On
     `3aede7d`, holds of 0.5-10 s on `runtime.json` or `attempt.report.json`
@@ -1908,7 +1910,12 @@ names below omit the `agent/imp-` prefix.
   stays `none`, bitwise identical over 8,000 fuzzed calls. On public
   yardsticks run locally and never committed, nDCG@10 moves from 0.225 to
   0.293 on Legal RAG Bench (p=0.0004), by +0.011 on SciFact (p=0.098) and
-  by -0.009 on LegalBench-RAG-mini (p=0.08).
+  by -0.009 on LegalBench-RAG-mini (p=0.08). It is now proposed in its own
+  stacked pull request, with its own Phase A0 pair at source `5d22bb9`
+  (hosted checks pending), and is not integrated. That pull request adds
+  measurement tooling and the opt-in policy only: no production CLI, UI or
+  service flag and no default changes, and adopting the policy or adding
+  CI lexical baselines is the owner's call.
 - **Integration validation at `092ef8c`.**
   - Full locked suites: Windows 16,234 passed and 8 skipped; Linux (WSL)
     16,152 passed and 90 skipped; none failed. `main` `3aede7d` gave 15,555
@@ -1929,17 +1936,18 @@ names below omit the `agent/imp-` prefix.
 - **Before integration.** Each remaining branch needs a draft pull request
   and its own Phase A0 source/evidence pair (the three hosted-flake fix
   branches, the three query-path speed branches, the two model-load speed
-  branches and the four ingestion speed branches each shared one stacked
-  pull request and pair, the Docling hardening and job-manager
-  transient-write branches each merged with their own, and the CI-validator
-  and secret-scan branches are proposed together with one shared pair). The
+  branches, the four ingestion speed branches and the CI-validator and
+  secret-scan branches each shared one stacked pull request and pair, the
+  Docling hardening and job-manager transient-write branches each merged
+  with their own, and the lexical accuracy toolkit, the last remaining
+  branch, is proposed with its own). The
   combined query-path, model-load and ingestion pull requests
   departed from the A1 owner-decision row's condition that each slice is
   its own pull request with its own Phase A0 source/evidence pair; they
-  merged as #157, #158 and #159. The proposed CI-validator and secret-scan
-  pull request departs from it in the same way, because
-  `secret-scan-history-batch` is one of the ten speed branches; splitting
-  it is the owner's call. Every branch
+  merged as #157, #158 and #159. The CI-validator and secret-scan pull
+  request departed from it in the same way, because
+  `secret-scan-history-batch` is one of the ten speed branches; it merged
+  as #162. Every branch
   changes `architecture-inventory.json`, so after each merge the next
   branch is rebased and its inventory refreshed. Twelve branches change
   paths that `ci-security-ownership.json` owns or governs (every `rag.py`,
@@ -2006,8 +2014,10 @@ names below omit the `agent/imp-` prefix.
     `ruff --isolated` still honours `.gitignore` and ruff's default
     excludes, so a force-added tracked file under `build/` or `.venv/`
     escapes.
-  - Evaluation: when the toolkit lands, CI also needs
-    `eval.py --retriever lexical` steps and baselines. The production
+  - Evaluation: the toolkit is now proposed, not integrated, and its pull
+    request adds no CI step. Once it lands, adding
+    `eval.py --retriever lexical` steps and baselines to CI remains a
+    follow-up for the owner. The production
     lexical leg fails the CC0 abstention cases, which CI runs only through
     the offline adapter. `function-words-v1` also drops
     enumerators ("Article I") and the "in" of fixed phrases, and the Qdrant
@@ -2456,6 +2466,29 @@ or a non-zero exit now fails the scan with an error, where the old reader
 silently skipped a vanished object. It changes no pipeline output,
 dependency or lock and supersedes the `9e4d7be` pair for its own pull
 request.
+The `e706fd2` pair (gate-only child `78777a8`) passed the hosted CI
+promotion gate on [PR
+#162](https://github.com/toddlar00/rag-pipeline/pull/162), which merged into
+`main` as `40994b4`; the networked vulnerability/SBOM jobs passed at that
+head. The stacked lexical accuracy toolkit source `5d22bb9` adds
+evaluation-only lexical tooling and changes no default.
+`eval.py --retriever lexical` scores each query through the production
+lexical leg (`rag._bm25_search`), pinned to the chunks snapshot SHA-256 it
+validated, instead of the offline fixture adapter that `--retriever bm25`
+uses; its reports record the scorer, the rank-bm25 version and the lexical
+query policy, and lexical baselines are strict and never compare silently
+with offline-BM25 or index reports. An opt-in, default-off query policy,
+`function-words-v1` (a versioned, frozen 49-word function-word list in
+`retrieval_core` that keeps modals, negation and conditionals), filters
+only the query tokens, keeping order and duplicates and falling back to the
+unfiltered tokens when nothing would remain, so no chunk or index changes.
+`rag._bm25_search` gains a keyword-only `query_policy` that defaults to
+`none` and is validated before any I/O, and only
+`eval.py --lexical-query-policy` selects another; the default path is
+bitwise identical over 8,000 fuzzed comparisons, and the offline-BM25 and
+index report shapes and committed baselines are unchanged. It changes no
+pipeline output, dependency or lock and supersedes the `e706fd2` pair for
+its own pull request.
 Its Windows/Linux
 pair (independent local same-platform comparisons passed) is that branch's
 candidate; its hosted checks and exact-SHA record are pending, and the
@@ -2592,14 +2625,13 @@ the full lane, all eight execution jobs tested synthetic candidate
 `18caf7d0885c483da5e3096f2cc112e4cf55f2d3`, and the promotion aggregate
 accepted that exact candidate. Classification is live; every execution job
 tests the bound candidate; the aggregate is exact-SHA promotable. F4
-(workflow-syntax validator anchor/alias rejection) is a checker-hardening
-follow-up recorded in the promotion evidence record. It is still open on
-`main`; the branch `agent/imp-ci-validator-yaml-anchors` closes it once it
-lands. That branch is now proposed together with
-`agent/imp-secret-scan-history-batch` in one stacked pull request, with
-their shared Phase A0 pair at source `e706fd2` (hosted checks pending), and
-is not integrated (see "Research improvement pass (2026-09-30,
-prepared)").
+(workflow-syntax validator anchor/alias rejection) was a checker-hardening
+follow-up recorded in the promotion evidence record. The branch
+`agent/imp-ci-validator-yaml-anchors` closed it: it merged into `main`
+together with `agent/imp-secret-scan-history-batch` through [PR
+#162](https://github.com/toddlar00/rag-pipeline/pull/162) as `40994b4`,
+where their shared Phase A0 pair at source `e706fd2` passed the hosted CI
+promotion gate (see "Research improvement pass (2026-09-30, prepared)").
 The next actions, in order: supersede the open Dependabot group PRs with
 ordered, policy-compliant one-domain PRs — each with regenerated locks,
 installed-lock testing, domain gates, and its own Phase A0 source/evidence
