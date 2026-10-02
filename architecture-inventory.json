@@ -29037,7 +29037,7 @@
             "scope": "nested"
           }
         ],
-        "definition_locations_sha256": "bc745b67f6e793aa611f93e318a1b78da3c98bbb52ef7b9e7e28327e6e5eebd8",
+        "definition_locations_sha256": "7646485313bfa083adbc33542d4ef446178c19ea8e89d0d79cfb4688c7c556c3",
         "function_count": 47,
         "functions": [
           {
@@ -29335,9 +29335,9 @@
           }
         ],
         "module": "artifact_io",
-        "non_blank_lines": 1373,
+        "non_blank_lines": 1401,
         "path": "artifact_io.py",
-        "physical_lines": 1495,
+        "physical_lines": 1524,
         "top_level_function_count": 34
       },
       {
@@ -65558,7 +65558,7 @@
         "top_level_function_count": 2
       }
     ],
-    "physical_line_count": 131842,
+    "physical_line_count": 131871,
     "source_groups": [
       "production",
       "tools",
