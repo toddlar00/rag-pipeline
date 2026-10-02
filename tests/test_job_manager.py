@@ -326,7 +326,7 @@ class _PidDigitClock:
     """job_coordination's time module, pinned to an instant that holds a PID.
 
     The wall clock is real until ``pin`` receives the worker's PID. Every later
-    read returns one instant, less than 10 ** len(str(pid)) seconds ahead,
+    read returns one instant, at most 10 ** len(str(pid)) + 2 seconds ahead,
     whose whole seconds end in that PID. Each timestamp the manager records
     from the worker's start on then carries the PID's digits inside an
     unrelated float. Monotonic reads and sleeps stay real.
