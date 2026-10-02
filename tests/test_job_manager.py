@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import stat
+import string
 import subprocess
 import threading
 import time
@@ -79,9 +81,40 @@ def _assert_private(path: Path, *, directory: bool) -> None:
         assert stat.S_IMODE(path.stat().st_mode) == expected
 
 
+_ALPHANUMERIC_RUN = re.compile(r"[0-9A-Za-z]+")
+
+
+def _json_scalars(value):
+    """Yield every key and every leaf value of a decoded JSON document."""
+    if isinstance(value, dict):
+        for key, item in value.items():
+            yield key
+            yield from _json_scalars(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _json_scalars(item)
+    else:
+        yield value
+
+
 def _assert_report_omits_process_id(report_text: str, pid: int) -> None:
-    """Fail if the persisted attempt report holds the process ID *pid*."""
-    assert str(pid) not in report_text
+    """Fail if the persisted attempt report holds the process ID *pid*.
+
+    A substring search of the text also finds the PID's digits inside
+    unrelated values, such as a fractional timestamp or the random hex job
+    ID. The decoded report is checked instead, under every key. A number
+    fails if it equals the PID. A key or string fails if one of its
+    alphanumeric runs is the PID's digits with only letters around them, as
+    in "2932", "pid=2932" or "pid2932". A random hex ID almost always holds
+    other digits in the same run, so it does not match.
+    """
+    digits = str(pid)
+    for scalar in _json_scalars(json.loads(report_text)):
+        if isinstance(scalar, str):
+            for run in _ALPHANUMERIC_RUN.findall(scalar):
+                assert run.strip(string.ascii_letters) != digits, scalar
+        elif isinstance(scalar, (int, float)) and not isinstance(scalar, bool):
+            assert scalar != pid, scalar
 
 
 def _attempt_outcome(store, job_id):
