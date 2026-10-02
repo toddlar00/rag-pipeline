@@ -897,6 +897,17 @@ def create_app(
         redoc_url=None,
         openapi_url=None,
         lifespan=lifespan,
+        # FastAPI's native OpenTelemetry would record raw paths, query values
+        # and exception text, and at startup adds OTLP exporters chosen by
+        # OTEL_* variables. Keep it off whatever the environment holds or any
+        # other component installs.
+        telemetry={
+            "auto_configure": False,
+            "tracing": False,
+            "metrics": False,
+            "logs": False,
+            "operation_spans": False,
+        },
     )
     app.state.runtime = runtime
     app.state.credentials = credentials

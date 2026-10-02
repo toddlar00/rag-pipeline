@@ -903,6 +903,15 @@ def main(argv: list[str] | None = None):
         server_port=args.port,
         share=False,
         enable_monitoring=False,
+        # Gradio passes app_kwargs to its FastAPI app. Keep FastAPI's native
+        # OpenTelemetry and its OTEL_*-driven OTLP export off.
+        app_kwargs={"telemetry": {
+            "auto_configure": False,
+            "tracing": False,
+            "metrics": False,
+            "logs": False,
+            "operation_spans": False,
+        }},
     )
 
 

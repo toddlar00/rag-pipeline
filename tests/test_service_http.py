@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import pickle
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -574,3 +575,88 @@ def test_cancelled_real_service_start_releases_instance_lease_for_successor(tmp_
     successor = create()
     successor.start()
     successor.close()
+
+
+# FastAPI 0.142 instruments every app by default and, at lifespan startup, adds
+# OTLP exporters selected by OTEL_* environment variables. The service turns
+# all of it off; these variables must therefore change nothing.
+_FASTAPI_TELEMETRY_OFF = {
+    "auto_configure": False,
+    "tracing": False,
+    "metrics": False,
+    "logs": False,
+    "operation_spans": False,
+}
+_OTEL_EXPORT_ENVIRONMENT = {
+    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:9",
+    "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "http://127.0.0.1:9/v1/traces",
+    "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT": "http://127.0.0.1:9/v1/metrics",
+    "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT": "http://127.0.0.1:9/v1/logs",
+}
+
+
+def _otel_global_providers():
+    from opentelemetry import _logs, metrics, trace
+
+    return (
+        trace.get_tracer_provider(),
+        metrics.get_meter_provider(),
+        _logs.get_logger_provider(),
+    )
+
+
+def test_service_app_is_constructed_with_fastapi_telemetry_off(monkeypatch):
+    observed = []
+
+    class RecordingFastAPI(service_http.FastAPI):
+        def __init__(self, **kwargs):
+            observed.append(kwargs.get("telemetry"))
+            super().__init__(**kwargs)
+
+    monkeypatch.setattr(service_http, "FastAPI", RecordingFastAPI)
+
+    _app(StructuralRuntime())
+
+    assert observed == [_FASTAPI_TELEMETRY_OFF]
+
+
+def test_service_lifespan_does_not_configure_export_from_otel_environment(
+        monkeypatch, caplog):
+    for name, value in _OTEL_EXPORT_ENVIRONMENT.items():
+        monkeypatch.setenv(name, value)
+    for name in (
+            "OTEL_SDK_DISABLED", "OTEL_PYTHON_TRACER_PROVIDER",
+            "OTEL_PYTHON_METER_PROVIDER", "OTEL_PYTHON_LOGGER_PROVIDER"):
+        monkeypatch.delenv(name, raising=False)
+    providers = _otel_global_providers()
+    runtime = StructuralRuntime()
+
+    with caplog.at_level(logging.DEBUG, logger="fastapi"):
+        with TestClient(_app(runtime), base_url="http://127.0.0.1") as client:
+            assert client.get("/health/live").status_code == 200
+
+    assert runtime.started and runtime.closed
+    # No automatic-configuration attempt (it would warn, or install exporters
+    # if an OTLP exporter distribution were ever present).
+    assert [record.getMessage() for record in caplog.records
+            if record.name.startswith("fastapi")] == []
+    assert all(
+        after is before
+        for after, before in zip(_otel_global_providers(), providers))
+
+
+def test_service_requests_never_resolve_ambient_otel_providers(monkeypatch):
+    # A default FastAPI 0.142 app resolves the global providers on every
+    # request, so an unloadable OTEL_PYTHON_*_PROVIDER fails each one.
+    for signal in ("TRACER", "METER", "LOGGER"):
+        monkeypatch.setenv(
+            f"OTEL_PYTHON_{signal}_PROVIDER", "rag_pipeline_missing_provider")
+    runtime = StructuralRuntime()
+
+    with TestClient(_app(runtime), base_url="http://127.0.0.1") as client:
+        live = client.get("/health/live")
+        unauthenticated = client.get("/v1/jobs")
+
+    assert live.status_code == 200
+    assert live.json() == {"status": "live"}
+    assert unauthenticated.status_code == 401

@@ -12,6 +12,17 @@ import release_security
 import ui
 
 
+# FastAPI 0.142 instruments every app by default and configures OTLP export
+# from OTEL_* environment variables; the local UI turns all of it off.
+_FASTAPI_TELEMETRY_OFF = {
+    "auto_configure": False,
+    "tracing": False,
+    "metrics": False,
+    "logs": False,
+    "operation_spans": False,
+}
+
+
 def test_search_uses_backend_bound_to_config(monkeypatch, tmp_path):
     observed = {}
     monkeypatch.setitem(ui._config, "db_path", tmp_path)
@@ -733,8 +744,47 @@ def test_main_binds_literal_loopback_and_disables_public_sharing(
         "server_port": 8877,
         "share": False,
         "enable_monitoring": False,
+        "app_kwargs": {"telemetry": _FASTAPI_TELEMETRY_OFF},
     }
     assert ui._config["share"] is False
+
+
+def test_launched_gradio_app_ignores_otel_environment(
+        monkeypatch, tmp_path, caplog):
+    import logging
+
+    routes = pytest.importorskip("gradio.routes")
+    from fastapi.testclient import TestClient
+
+    observed = {}
+
+    class App:
+        def launch(self, **kwargs):
+            observed.update(kwargs)
+
+    monkeypatch.setattr(ui, "build_app", lambda: App())
+    ui.main([
+        "--chunks", str(tmp_path / "chunks.jsonl"),
+        "--db", str(tmp_path / "db"),
+        "--collection", "book",
+        "--trust-local-user",
+    ])
+    # Gradio forwards app_kwargs to its FastAPI App. With FastAPI 0.142's
+    # defaults, an OTLP endpoint is configured at startup and an unloadable
+    # OTEL_PYTHON_*_PROVIDER fails every request.
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:9")
+    monkeypatch.delenv("OTEL_SDK_DISABLED", raising=False)
+    for signal in ("TRACER", "METER", "LOGGER"):
+        monkeypatch.setenv(
+            f"OTEL_PYTHON_{signal}_PROVIDER", "rag_pipeline_missing_provider")
+    app = routes.App(**observed["app_kwargs"])
+
+    with caplog.at_level(logging.DEBUG, logger="fastapi"):
+        with TestClient(app) as client:
+            assert client.get("/no-route").status_code == 404
+
+    assert [record.getMessage() for record in caplog.records
+            if record.name.startswith("fastapi")] == []
 
 
 def test_main_requires_explicit_trusted_single_user_boundary(

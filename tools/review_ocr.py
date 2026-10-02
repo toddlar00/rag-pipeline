@@ -112,7 +112,13 @@ def main(argv=None) -> int:
                                 getattr(pack_service, "private_root", None),
                                 getattr(pack_service, "preview_private_root", None),
                                 args.installation_evidence) if path is not None],
-                           footer_links=[], quiet=True, inbrowser=False, **preview_style)
+                           footer_links=[], quiet=True, inbrowser=False,
+                           # Keep FastAPI's native OpenTelemetry and its
+                           # OTEL_*-driven OTLP export off in Gradio's app.
+                           app_kwargs={"telemetry": {
+                               "auto_configure": False, "tracing": False, "metrics": False,
+                               "logs": False, "operation_spans": False}},
+                           **preview_style)
             finally:
                 # Revoke approval/new starts and supervise worker shutdown before
                 # closing the UI. Attempt both cleanups even if either fails.
