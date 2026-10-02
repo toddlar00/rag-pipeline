@@ -987,7 +987,10 @@ def test_cancel_and_delete_validate_optimistic_preconditions(
 # Strict document reads racing a legitimate atomic replace.  JobStore writers
 # publish every job document by temporary file + rename under the store lease,
 # while get_job and load_execution read without it.  These tests pin which
-# observations the strict reader treats as corruption.
+# observations the strict reader re-reads (a bounded number of times) and
+# which it treats as corruption at once.
+
+_STRICT_READ_ATTEMPTS = 5
 
 _REPLACE_WHILE_OPEN = pytest.mark.skipif(
     os.name == "nt",
@@ -1100,29 +1103,27 @@ def test_strict_read_opens_an_unchanged_document_once(tmp_path, monkeypatch):
 
 @_REPLACE_WHILE_OPEN
 @pytest.mark.parametrize("reader", ["get_job", "load_execution"])
-def test_replace_during_strict_read_fails_closed(
+def test_replace_during_strict_read_rereads_the_new_generation(
         tmp_path, monkeypatch, reader):
     store, summary, state_path = _job_state_path(tmp_path)
     probe = _DocumentProbe(
         monkeypatch, state_path,
         during_read=lambda: _publish_next_state(state_path))
-    with pytest.raises(JobCorruptError,
-                       match="^job state changed while being read$"):
-        getattr(store, reader)(summary.job_id)
-    assert probe.opens == 1
+    assert getattr(store, reader)(summary.job_id).revision == (
+        summary.revision + 1)
+    assert probe.opens == 2
 
 
 @pytest.mark.parametrize("reader", ["get_job", "load_execution"])
-def test_replace_between_lstat_and_open_fails_closed(
+def test_replace_between_lstat_and_open_rereads_the_new_generation(
         tmp_path, monkeypatch, reader):
     store, summary, state_path = _job_state_path(tmp_path)
     probe = _DocumentProbe(
         monkeypatch, state_path,
         before_open=lambda: _publish_next_state(state_path))
-    with pytest.raises(JobCorruptError,
-                       match="^job state changed while being opened$"):
-        getattr(store, reader)(summary.job_id)
-    assert probe.opens == 1
+    assert getattr(store, reader)(summary.job_id).revision == (
+        summary.revision + 1)
+    assert probe.opens == 2
 
 
 @_REPLACE_WHILE_OPEN
@@ -1137,7 +1138,7 @@ def test_persistent_replace_during_strict_read_fails_closed(
         store.get_job(summary.job_id)
     assert type(raised.value) is JobCorruptError
     assert raised.value.__cause__ is None
-    assert probe.opens == 1
+    assert probe.opens == _STRICT_READ_ATTEMPTS
 
 
 def test_persistent_replace_before_open_fails_closed(tmp_path, monkeypatch):
@@ -1149,17 +1150,16 @@ def test_persistent_replace_before_open_fails_closed(tmp_path, monkeypatch):
                        match="^job state changed while being opened$") as raised:
         store.get_job(summary.job_id)
     assert type(raised.value) is JobCorruptError
-    assert probe.opens == 1
+    assert probe.opens == _STRICT_READ_ATTEMPTS
 
 
-def test_unlinked_inode_observation_fails_closed(tmp_path, monkeypatch):
+def test_unlinked_inode_observation_rereads_the_document(
+        tmp_path, monkeypatch):
     store, summary, state_path = _job_state_path(tmp_path)
     attempts = _observe_unlinked_inode(monkeypatch, state_path)
     probe = _DocumentProbe(monkeypatch, state_path)
-    with pytest.raises(JobCorruptError,
-                       match="^job state is not one bounded private file$"):
-        store.get_job(summary.job_id)
-    assert (len(attempts), probe.opens) == (1, 0)
+    assert store.get_job(summary.job_id) == summary
+    assert (len(attempts), probe.opens) == (2, 1)
 
 
 def test_persistent_unlinked_inode_observation_fails_closed(
@@ -1172,7 +1172,7 @@ def test_persistent_unlinked_inode_observation_fails_closed(
                        match="^job state is not one bounded private file$") as raised:
         store.get_job(summary.job_id)
     assert type(raised.value) is JobCorruptError
-    assert (len(attempts), probe.opens) == (1, 0)
+    assert (len(attempts), probe.opens) == (_STRICT_READ_ATTEMPTS, 0)
 
 
 def test_unlinked_inode_with_another_violation_fails_closed_at_once(
@@ -1293,10 +1293,22 @@ def test_persistently_denied_open_fails_closed(tmp_path, monkeypatch):
         store.get_job(summary.job_id)
     assert type(raised.value) is JobCorruptError
     assert isinstance(raised.value.__cause__, PermissionError)
-    assert probe.opens == 1
+    # Only Windows reports an open racing a replace (the old file is
+    # delete-pending) as a permission error.
+    assert probe.opens == (_STRICT_READ_ATTEMPTS if os.name == "nt" else 1)
 
 
-def test_transiently_denied_open_fails_closed(tmp_path, monkeypatch):
+@pytest.mark.skipif(os.name != "nt", reason="POSIX denial is never a replace")
+def test_transiently_denied_open_rereads_on_windows(tmp_path, monkeypatch):
+    store, summary, state_path = _job_state_path(tmp_path)
+    probe = _DocumentProbe(
+        monkeypatch, state_path, before_open=_deny_open(state_path))
+    assert store.get_job(summary.job_id) == summary
+    assert probe.opens == 2
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows denial may be a replace")
+def test_transiently_denied_open_fails_closed_on_posix(tmp_path, monkeypatch):
     store, summary, state_path = _job_state_path(tmp_path)
     probe = _DocumentProbe(
         monkeypatch, state_path, before_open=_deny_open(state_path))
