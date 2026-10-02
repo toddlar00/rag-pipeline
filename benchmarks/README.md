@@ -7,11 +7,14 @@ fresh-process repetitions.
 
 ## Provenance
 
-Both current reports were generated from the clean provider-transport
-cryptography source checkpoint `0b1bbe7f6abc825340296f5836a87f2d9ba3b64d`
-(tree `ed8d02400aad48f42ad771a69bc1862838d075f8`), a lock-only move of
-cryptography to 50.0.2 that changes no Python source and is the first of
-three stacked one-domain dependency upgrades, after a series of one-domain
+Both current reports were generated from the clean Service/UI dependency
+source checkpoint `f4204f8d543d93cd54c04cdb2d596edd6cace03d` (tree
+`9f392e802d21bcb4e7af4aae3f484a32a636c0fc`), which moves fastapi to
+0.142.2 and gradio to 6.29.1 and keeps FastAPI 0.142's native
+OpenTelemetry off at every app the repository launches, the second of
+three stacked one-domain dependency upgrades, stacked on the
+provider-transport cryptography 50.0.2 source `0b1bbe7` (gate-only child
+`488c848`, pending on #166, not merged), after a series of one-domain
 dependency updates on `main` after the history-preserving merges of #121
 (`602bec1`),
 of that series, #122 to #130 (`1cffc58`), of its documentation follow-up #135
@@ -30,7 +33,7 @@ speedups #159 (`139e2dc`), of the Docling conversion hardening #160
 of the CI and secret-scan tooling #162 (`40994b4`), of the lexical accuracy
 toolkit #163 (`6303d8b`), of the research-pass status update #164
 (`1c348da`) and of the robustness follow-ups #165 (`717ac9e`, the base of
-this source's single commit). That
+the provider-transport source's single commit). That
 source contains
 everything through the
 Task 0.8 static-security merge `e34103f` plus the local OCR accuracy, retry
@@ -50,8 +53,9 @@ seven OCR review test modules, FlagEmbedding 1.4.2 for Transformers 5
 reranking and the fresh-OCR token fidelity fixes, followed by stacked
 one-domain dependency updates for vector stores, Service/UI, test-audit
 tooling, ML/runtime, docling-core, ML advisory promotions, h2, cryptography,
-supply-chain policy renewals, oauthlib, urllib3 and the cryptography 50.0.2
-refresh. The lock changes add
+supply-chain policy renewals, oauthlib, urllib3, the cryptography 50.0.2
+refresh and the fastapi 0.142.2 and gradio 6.29.1 refresh. The lock
+changes add
 pytest-xdist 3.8.0 and execnet 2.1.2 to `requirements-test.lock` and
 `requirements-smoke.lock` and move FlagEmbedding from 1.4.0 to 1.4.2 in
 `requirements-core.lock` and `requirements-full.lock`; the stacked
@@ -84,10 +88,16 @@ tolerance changes no lock; the stacked CI and secret-scan tooling changes
 no lock; the stacked lexical accuracy toolkit changes no lock; the
 robustness follow-ups change no lock; the provider-transport cryptography
 refresh moves cryptography from 50.0.1 to 50.0.2 in
-`requirements-full.lock` and changes no other record; no model lock changed.
+`requirements-full.lock` and changes no other record; the stacked
+Service/UI refresh moves fastapi from 0.141.1 to 0.142.2 and starlette
+from 1.3.1 to 1.7.0 in `requirements-service.lock` and
+`requirements-full.lock`, moves gradio from 6.28.0 to 6.29.1 and
+gradio-client from 2.7.1 to 2.7.2 in `requirements-full.lock`, and adds
+opentelemetry-api 1.45.0 to `requirements-service.lock`; no model lock
+changed.
 The executing environments were synchronized to this source's locks
-(urllib3 2.8.0 and cryptography 50.0.2) with repository-pinned uv 0.12.20
-against the exact CPU
+(urllib3 2.8.0, cryptography 50.0.2, fastapi 0.142.2 and gradio 6.29.1)
+with repository-pinned uv 0.12.20 against the exact CPU
 application/test lock union plus its retained bootstrapper:
 
 - `requirements-full.lock`
@@ -103,8 +113,8 @@ marker-resolved distributions before generation.
 
 | Platform | Runtime | Report | Bytes | File SHA-256 | Embedded report SHA-256 |
 |---|---:|---|---:|---|---|
-| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,176 | `6205b02765c9573be021fb3ee9c15e096cd28d7e6eb1be81f563682ba2ac5f54` | `394f17ea3c3853eb4ba7049c70d5c5cdc41e685da957460f92f4d4f29c517e33` |
-| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,571 | `4f1878fbac7c6c48a9a368e1376370d5bc239e39ac11e7425b6ac2ce21eba324` | `ec55f61701a332190017383d631f7fc479ad19492f7eeb16f21b7903dfd49a9b` |
+| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,205 | `1a7a5a13b294e69ed9401bac77ea1ac5582ebdbdf57f47664e68cfd1b92d84fa` | `5c0ccf77d653083393ada8ca9f99b4e0a885a8d4f5fd5e95328c5f7ae89a0b54` |
+| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,602 | `0a360a05d88d01dbcd1c7bb3f3545cd0ad03f770aceb375bef2be8bb503a5aa4` | `18eef78f38040ae6a4581e639311f63f6d4884d046a15a30da197a9c6d2cdda3` |
 
 The reports attest the same source commit, clean-worktree state, tracked-diff
 digest, eight LF and `HEAD`-identical dependency/model-lock inputs, authoritative
@@ -649,6 +659,33 @@ no other record, and a second plain regeneration is byte-stable.
 no manifest changes. cryptography 50.0.2 rebuilds its Windows, macOS and
 Linux wheels against OpenSSL 4.0.3 (50.0.1 bundled 4.0.2) and names no
 CVE. It changes no Python source, pipeline output or model lock.
+The `0b1bbe7` pair (gate-only child `488c848`) passed the hosted CI
+promotion gate on [PR
+#166](https://github.com/toddlar00/rag-pipeline/pull/166), whose hosted
+checks are green; that pull request is pending and not merged. The stacked
+Service/UI source `f4204f8` supersedes the `0b1bbe7` pair for its own pull
+request and is the second of the three stacked one-domain dependency
+upgrades. Its first commit, `a377dcb`, moves the exact fastapi pin in
+`requirements-service.txt` from 0.141.1 to 0.142.2, while gradio stays
+within the `>=6.28.0,<7` range of `requirements-optional.txt`. Under the
+pinned uv 0.12.20, `tools/refresh_locks.py --upgrade-package fastapi
+--upgrade-package gradio --upgrade-package starlette` moves fastapi to
+0.142.2 and starlette from 1.3.1 to 1.7.0 in `requirements-service.lock`
+and `requirements-full.lock`, moves gradio from 6.28.0 to 6.29.1 and
+gradio-client from 2.7.1 to 2.7.2 in `requirements-full.lock`, and adds
+opentelemetry-api 1.45.0, the API package that fastapi 0.142 requires (no
+SDK or exporter), to `requirements-service.lock`; no other version moves,
+and a second plain regeneration is byte-stable. fastapi 0.142 instruments
+every FastAPI app by default and, at lifespan startup, adds OTLP exporters
+chosen by `OTEL_*` variables; 0.141.1 had none of this. Its second commit,
+`f4204f8`, therefore passes FastAPI's `telemetry` argument with
+auto-configuration, tracing, metrics, logs and operation spans all off at
+the service app (`service_http.create_app`) and, through Gradio's
+`app_kwargs`, at the UI launches in `ui.main` and `tools/review_ocr.main`,
+restoring the pre-upgrade behaviour; it adds a FastAPI row to the
+release-security policy and six new or updated tests that fail before the
+change and pass after it. OSV lists no advisory for the replaced or new
+versions. It changes no pipeline output or model lock.
 The current reports above
 bind
 that exact clean source and each passes an independent complete
