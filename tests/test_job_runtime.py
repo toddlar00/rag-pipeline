@@ -6,6 +6,7 @@ import multiprocessing
 import os
 import stat
 import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1056,6 +1057,88 @@ class _DocumentProbe:
         return self._real_close(descriptor)
 
 
+def _stat_view(result, **overrides) -> SimpleNamespace:
+    """Copy one stat result, replacing the named st_* fields."""
+    view = {name: getattr(result, name)
+            for name in dir(result) if name.startswith("st_")}
+    view.update(overrides)
+    return SimpleNamespace(**view)
+
+
+def _intercept_next_stat(monkeypatch, name: str, *, path: Path | None = None,
+                         action=None, **overrides):
+    """Return arm(); once armed, the next os.<name> call (on path, if given)
+    first runs action, then reports its real result with overrides."""
+    real = getattr(os, name)
+    target = None if path is None else os.fspath(path)
+    armed: list[bool] = []
+
+    def intercepted(subject, *args, **kwargs):
+        if not armed or (target is not None and os.fspath(subject) != target):
+            return real(subject, *args, **kwargs)
+        armed.clear()
+        if action is not None:
+            action()
+        return _stat_view(real(subject, *args, **kwargs), **overrides)
+
+    monkeypatch.setattr(job_runtime.os, name, intercepted)
+    return lambda: armed.append(True)
+
+
+def _await_newer_timestamps(scratch: Path, document: Path) -> None:
+    """Wait until a new write gets newer mtime and ctime than document's.
+
+    Filesystems stamp times from a coarse clock, so a change made in the same
+    tick as the document's own write can leave its times unchanged.  Fresh
+    names avoid NTFS creation-time tunnelling.
+    """
+    baseline = os.lstat(document)
+    deadline = time.monotonic() + 5.0
+    for attempt in range(100_000):
+        marker = scratch / f"clock-tick-{attempt}"
+        marker.write_bytes(b"")
+        stamped = os.lstat(marker)
+        marker.unlink()
+        if (stamped.st_mtime_ns > baseline.st_mtime_ns
+                and stamped.st_ctime_ns > baseline.st_ctime_ns):
+            return
+        assert time.monotonic() < deadline, "filesystem clock did not advance"
+        time.sleep(0.001)
+
+
+def _append_in_place(path: Path) -> None:
+    with open(path, "ab") as handle:
+        handle.write(b" ")
+
+
+def _touch_in_place(path: Path) -> None:
+    os.utime(path, ns=(1, 1))
+
+
+def _hard_link_document(path: Path) -> None:
+    os.link(path, path.with_name("state-copy.json"))
+
+
+def _rewrite_in_place(path: Path, *, grow: bool) -> None:
+    """Overwrite the document's own inode with its next valid generation.
+
+    A reader observes exactly this when two legitimate replaces land between
+    its lstat and its open and the filesystem reuses the freed inode number
+    for the second temporary file (ext4 alternates between two numbers).
+    The explicit mtime keeps the change observable within one clock tick.
+    """
+    size = os.lstat(path).st_size
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["revision"] += 1
+    encoded = json.dumps(
+        payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    assert len(encoded) <= size
+    with open(path, "r+b") as handle:
+        handle.write(encoded.ljust(size + (8 if grow else 0)))
+        handle.truncate()
+    os.utime(path, ns=(1, 1))
+
+
 def _observe_unlinked_inode(monkeypatch, state_path: Path, *,
                             persistent=False, oversize=False) -> list:
     """Make the reader's pathname lstat report link count zero.
@@ -1082,12 +1165,10 @@ def _observe_unlinked_inode(monkeypatch, state_path: Path, *,
         if not armed or os.fspath(path) != target:
             return result
         armed.clear()
-        view = {name: getattr(result, name)
-                for name in dir(result) if name.startswith("st_")}
-        view["st_nlink"] = 0
+        overrides = {"st_nlink": 0}
         if oversize:
-            view["st_size"] = job_runtime._MAX_STATE_BYTES + 1
-        return SimpleNamespace(**view)
+            overrides["st_size"] = job_runtime._MAX_STATE_BYTES + 1
+        return _stat_view(result, **overrides)
 
     monkeypatch.setattr(job_runtime, "_private_mode_ok", private_probe)
     monkeypatch.setattr(job_runtime.os, "lstat", unlinked_lstat)
@@ -1124,6 +1205,116 @@ def test_replace_between_lstat_and_open_rereads_the_new_generation(
     assert getattr(store, reader)(summary.job_id).revision == (
         summary.revision + 1)
     assert probe.opens == 2
+
+
+@pytest.mark.parametrize(("grow", "message"), [
+    pytest.param(True, "changed while being opened", id="other-size"),
+    pytest.param(False, "changed while being read", id="same-size"),
+])
+def test_same_inode_with_new_content_before_open_fails_closed(
+        tmp_path, monkeypatch, grow, message):
+    store, summary, state_path = _job_state_path(tmp_path)
+    probe = _DocumentProbe(
+        monkeypatch, state_path,
+        before_open=lambda: _rewrite_in_place(state_path, grow=grow))
+    with pytest.raises(JobCorruptError, match=f"^job state {message}$"):
+        store.get_job(summary.job_id)
+    assert probe.opens == 1
+
+
+def test_hard_link_made_before_open_fails_closed_at_once(
+        tmp_path, monkeypatch):
+    store, summary, state_path = _job_state_path(tmp_path)
+    probe = _DocumentProbe(
+        monkeypatch, state_path,
+        before_open=lambda: _hard_link_document(state_path))
+    with pytest.raises(JobCorruptError,
+                       match="^job state changed while being opened$"):
+        store.get_job(summary.job_id)
+    assert probe.opens == 1
+
+
+def test_non_regular_descriptor_fails_closed_at_once(tmp_path, monkeypatch):
+    store, summary, state_path = _job_state_path(tmp_path)
+    arm = _intercept_next_stat(
+        monkeypatch, "fstat", st_mode=stat.S_IFDIR | 0o700)
+    probe = _DocumentProbe(monkeypatch, state_path, before_open=arm)
+    with pytest.raises(JobCorruptError,
+                       match="^job state changed while being opened$"):
+        store.get_job(summary.job_id)
+    assert probe.opens == 1
+
+
+def test_descriptor_caught_mid_unlink_rereads_the_document(
+        tmp_path, monkeypatch):
+    store, summary, state_path = _job_state_path(tmp_path)
+    arm = _intercept_next_stat(monkeypatch, "fstat", st_nlink=0)
+    probe = _DocumentProbe(monkeypatch, state_path, before_open=arm)
+    assert store.get_job(summary.job_id) == summary
+    assert probe.opens == 2
+
+
+def test_pathname_caught_mid_unlink_after_read_rereads_the_document(
+        tmp_path, monkeypatch):
+    store, summary, state_path = _job_state_path(tmp_path)
+    arm = _intercept_next_stat(
+        monkeypatch, "lstat", path=state_path, st_nlink=0)
+    probe = _DocumentProbe(monkeypatch, state_path, during_read=arm)
+    assert store.get_job(summary.job_id) == summary
+    assert probe.opens == 2
+
+
+def test_document_missing_at_open_fails_closed_at_once(tmp_path, monkeypatch):
+    # A rename never removes the name it replaces, on any platform.
+    store, summary, state_path = _job_state_path(tmp_path)
+
+    def vanish() -> None:
+        raise FileNotFoundError(
+            errno.ENOENT, "missing", os.fspath(state_path))
+
+    probe = _DocumentProbe(monkeypatch, state_path, before_open=vanish)
+    with pytest.raises(JobCorruptError,
+                       match="^job state is missing$") as raised:
+        store.get_job(summary.job_id)
+    assert isinstance(raised.value.__cause__, FileNotFoundError)
+    assert probe.opens == 1
+
+
+@_REPLACE_WHILE_OPEN
+def test_second_link_then_replace_during_read_fails_closed_at_once(
+        tmp_path, monkeypatch):
+    # The extra link changes the descriptor's ctime and keeps its link count
+    # at one, so the rename did not unlink the inode this reader holds.
+    store, summary, state_path = _job_state_path(tmp_path)
+    _await_newer_timestamps(tmp_path, state_path)
+
+    def link_then_replace() -> None:
+        _hard_link_document(state_path)
+        _publish_next_state(state_path)
+
+    probe = _DocumentProbe(
+        monkeypatch, state_path, during_read=link_then_replace)
+    with pytest.raises(JobCorruptError,
+                       match="^job state changed while being read$"):
+        store.get_job(summary.job_id)
+    assert probe.opens == 1
+
+
+@pytest.mark.parametrize("change", [_append_in_place, _hard_link_document])
+def test_in_place_change_after_read_fails_closed_at_once(
+        tmp_path, monkeypatch, change):
+    # Made between the descriptor's last fstat and the pathname's last lstat:
+    # the pathname still names the inode this reader holds, so its number
+    # cannot have been reused.
+    store, summary, state_path = _job_state_path(tmp_path)
+    arm = _intercept_next_stat(
+        monkeypatch, "lstat", path=state_path,
+        action=lambda: change(state_path))
+    probe = _DocumentProbe(monkeypatch, state_path, during_read=arm)
+    with pytest.raises(JobCorruptError,
+                       match="^job state changed while being read$"):
+        store.get_job(summary.job_id)
+    assert probe.opens == 1
 
 
 @_REPLACE_WHILE_OPEN
@@ -1190,13 +1381,9 @@ def test_unlinked_inode_with_another_violation_fails_closed_at_once(
 def test_in_place_change_during_strict_read_fails_closed_at_once(
         tmp_path, monkeypatch):
     store, summary, state_path = _job_state_path(tmp_path)
-
-    def append_in_place():
-        with open(state_path, "ab") as handle:
-            handle.write(b" ")
-
     probe = _DocumentProbe(
-        monkeypatch, state_path, during_read=append_in_place)
+        monkeypatch, state_path,
+        during_read=lambda: _append_in_place(state_path))
     with pytest.raises(JobCorruptError,
                        match="^job state changed while being read$"):
         store.get_job(summary.job_id)
@@ -1208,7 +1395,7 @@ def test_metadata_change_on_same_inode_fails_closed_at_once(
     store, summary, state_path = _job_state_path(tmp_path)
     probe = _DocumentProbe(
         monkeypatch, state_path,
-        during_read=lambda: os.utime(state_path, ns=(1, 1)))
+        during_read=lambda: _touch_in_place(state_path))
     with pytest.raises(JobCorruptError,
                        match="^job state changed while being read$"):
         store.get_job(summary.job_id)
@@ -1216,17 +1403,17 @@ def test_metadata_change_on_same_inode_fails_closed_at_once(
 
 
 @_REPLACE_WHILE_OPEN
+@pytest.mark.parametrize("change", [_append_in_place, _touch_in_place])
 def test_in_place_change_then_replace_fails_closed_at_once(
-        tmp_path, monkeypatch):
+        tmp_path, monkeypatch, change):
     store, summary, state_path = _job_state_path(tmp_path)
 
-    def append_then_replace():
-        with open(state_path, "ab") as handle:
-            handle.write(b" ")
+    def change_then_replace():
+        change(state_path)
         _publish_next_state(state_path)
 
     probe = _DocumentProbe(
-        monkeypatch, state_path, during_read=append_then_replace)
+        monkeypatch, state_path, during_read=change_then_replace)
     with pytest.raises(JobCorruptError,
                        match="^job state changed while being read$"):
         store.get_job(summary.job_id)
@@ -1240,10 +1427,6 @@ def _remove_document(path: Path) -> None:
 def _oversize_document(path: Path) -> None:
     storage_policy.atomic_write_private_text(
         path, " " * (job_runtime._MAX_STATE_BYTES + 1))
-
-
-def _hard_link_document(path: Path) -> None:
-    os.link(path, path.with_name("state-copy.json"))
 
 
 def _expose_document(path: Path) -> None:
