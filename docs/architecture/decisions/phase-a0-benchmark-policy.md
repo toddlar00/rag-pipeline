@@ -33,9 +33,10 @@
   (merged through `4994191`), the stacked job-manager transient-write
   tolerance pair at source `9e4d7be` passed on PR #161 (merged through
   `d27af15`), the stacked CI and secret-scan tooling pair at source
-  `e706fd2` passed on PR #162 (merged through `40994b4`), and the stacked
+  `e706fd2` passed on PR #162 (merged through `40994b4`), the stacked
   lexical accuracy toolkit pair at source `5d22bb9` passed on PR #163
-  (merged through `6303d8b`); exact-head human review and separate R8 owner
+  (merged through `6303d8b`), and the robustness follow-up pair at source
+  `6e7a1e7` is pending; exact-head human review and separate R8 owner
   authorization are not recorded
 - **Milestone:** R10 prerequisite for the R8 pipeline-ownership move
 - **Report schema:** `phase-a0` v3
@@ -167,14 +168,15 @@ gate-only child `32153e9` and merge `376277c`
 Task 0.8 static-security pair at source `8891e1b` repeated it through
 gate-only child `1533164` and merge `e34103f`
 ([PR #107](https://github.com/toddlar00/rag-pipeline/pull/107)). The
-current replacement pair uses the clean lexical accuracy toolkit source
-`5d22bb93fdc835075a4fd6d4a5179667af5349b4` (tree
-`f831900949921861abcb0ac4b39282a3ec80ab40`), an evaluation-only production
-lexical retriever and an opt-in, default-off lexical query policy that
-change no default and no pipeline output, after a series of one-domain
-dependency updates, on `main` after the merges of the CI and secret-scan
-tooling #162 (`40994b4`, whose second parent `78777a8` is the base this
-source's five commits are stacked on), the job-manager transient-write
+current replacement pair uses the clean robustness follow-up source
+`6e7a1e7de7423c8e4705da6074e568102cb7bf8d` (tree
+`aadcc8124ff0ac7204ff7b49716cfb294fe2d0bf`), a bounded snapshot-cleanup
+retry, a structural worker-PID test check and a bounded job-document
+re-read that change no pipeline output, after a series of one-domain
+dependency updates, on `main` after the merges of the research-pass status
+update #164 (`1c348da`, the base this source's thirteen commits are
+stacked on), the lexical accuracy toolkit #163 (`6303d8b`), the CI and
+secret-scan tooling #162 (`40994b4`), the job-manager transient-write
 tolerance #161 (`d27af15`), the
 Docling conversion hardening #160 (`4994191`), the ingestion speedups #159
 (`139e2dc`), the model-load speedups #158 (`cc39af5`), the query-path
@@ -574,6 +576,35 @@ bitwise identical over 8,000 fuzzed comparisons, and the offline-BM25 and
 index report shapes and committed baselines are unchanged. It changes no
 pipeline output, dependency or lock and supersedes the `e706fd2` pair for
 its own pull request.
+The `5d22bb9` pair (gate-only child `9b243c3`) passed the hosted CI
+promotion gate on [PR
+#163](https://github.com/toddlar00/rag-pipeline/pull/163), which merged into
+`main` as `6303d8b`; the networked vulnerability/SBOM jobs passed at that
+head. The status-only [PR
+#164](https://github.com/toddlar00/rag-pipeline/pull/164) then merged into
+`main` as `1c348da` without changing the pair. The robustness follow-up
+source `6e7a1e7`, on `main` after #164, fixes three causes of intermittent
+test failures, two of them product races. Snapshot cleanup
+(`artifact_io._PinnedSnapshotDirectory.unlink_regular`) now retries an
+unlink that Windows refuses with WinError 5, 32 or 33 after 0.01, 0.05 and
+0.15 s, re-validating the pinned directory and the entry's type, link
+count and identity before each retry and re-raising the last attempt's
+error unchanged if the hold persists, so cleanup still fails closed: each
+snapshot first runs a stale-scratch janitor over the shared scratch root,
+and another process's janitor briefly reading a live run's owner marker
+without `FILE_SHARE_DELETE` made the owner's unlink fail with WinError 32.
+The job-manager test's check that the private attempt report omits the
+worker PID now decodes the report and compares its keys and values
+structurally instead of searching its JSON text for the PID's digits,
+which also matched inside timestamps. The strict job-document reader
+(`job_runtime._read_private_json`) re-reads, at most four more times
+within about 62 ms, when it observes the signature of a legitimate atomic
+replace, so an unleased `get_job` or `load_execution` no longer reports a
+racing state transition as `JobCorruptError`; every other violation,
+including an in-place change the open descriptor shows during the read,
+still fails closed at once, and a replace that persists through every
+re-read raises the same error. It changes no pipeline output, dependency
+or lock and supersedes the `5d22bb9` pair.
 Its Windows and
 Linux CPython 3.12.13 reports were
 generated after the same strict hash-locked synchronization, to its locks
@@ -582,14 +613,10 @@ distributions on Windows and 191 on Linux. They bind that one clean
 source, the same eight
 LF and `HEAD`-identical dependency/model inputs, and the complete 9×5
 scenario contract. Each passes an independent complete local same-platform
-comparison. The direct gate-only evidence child `9b243c3` contains only
-the reports and permitted provenance/status documentation.
-The `5d22bb9` pair (gate-only child `9b243c3`) passed the hosted CI
-promotion gate on [PR
-#163](https://github.com/toddlar00/rag-pipeline/pull/163), which merged into
-`main` as `6303d8b`; the networked vulnerability/SBOM jobs passed at that
-head. Both Phase A0 cells retained their current-report artifacts, and the
-external exact-SHA promotion record is a comment on that pull request.
+comparison. The direct gate-only evidence child contains only the reports
+and permitted provenance/status documentation; its hosted checks, retained
+current-report artifacts, external exact-SHA promotion record, and own
+commit identity are still pending.
 
 The temporary force-full seed matrix explicitly checks out the exact PR head
 rather than the synthetic merge ref so its report can bind immutable evidence
@@ -783,16 +810,16 @@ then the stacked ingestion speedup source `6fc0c36`,
 then the stacked Docling conversion hardening source `18de7d6`,
 then the stacked job-manager transient-write tolerance source `9e4d7be`,
 then the stacked CI and secret-scan tooling source `e706fd2`,
-then the stacked lexical accuracy toolkit source `5d22bb9`.
+then the stacked lexical accuracy toolkit source `5d22bb9`,
+then the stacked robustness follow-up source `6e7a1e7`.
 Its Windows report
-is 51,175 bytes (file SHA-256
-`96ec769422427a589c1217051706429b1fb6787520fc20b1bdcec4c8f8bb4173`;
+is 51,173 bytes (file SHA-256
+`ac2793a78bedb344a9ae8b123a21c50f1b8eb40c3770c7baaf0cd2416c2dab0c`;
 embedded report SHA-256
-`2bd7f087d1cf75222c43beedc7b81fd7615f9afd90b45efd8d543e5b03a6fa89`).
-Its Linux report is 50,570 bytes (file SHA-256
-`f821ff348bb033e4b6b523cb606bfecb08bea82981bd85992bb555dca7d52615`;
+`a1f1ad8c3e3f6221d104667c1bb88eacbd2b8247293f7231f88a2d5cfa0808a7`).
+Its Linux report is 50,575 bytes (file SHA-256
+`80a00eae44706b2e7bb36be1412e2eed828adcb23c3a4c2012dcca787ca048c3`;
 embedded report SHA-256
-`db8d546a6f5059c85cf5704ad910cff711bba7de2ddfc6160ddb2b26cdd5ccc4`).
+`2b98804e19284b4c2714e6a4890b406a9ee1de840449be412f3c1bee922a4eb8`).
 Both use CPython 3.12.13 and pass their complete local same-platform 9×5
-comparisons. Hosted promotion passed on PR #163 (gate-only child
-`9b243c3`, merged through `6303d8b`).
+comparisons. Hosted promotion remains pending.

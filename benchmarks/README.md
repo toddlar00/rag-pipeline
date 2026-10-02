@@ -7,11 +7,11 @@ fresh-process repetitions.
 
 ## Provenance
 
-Both current reports were generated from the clean lexical accuracy
-toolkit source checkpoint `5d22bb93fdc835075a4fd6d4a5179667af5349b4` (tree
-`f831900949921861abcb0ac4b39282a3ec80ab40`), an evaluation-only production
-lexical retriever and an opt-in, default-off lexical query policy that
-change no default and no pipeline output, after a series of one-domain
+Both current reports were generated from the clean robustness follow-up
+source checkpoint `6e7a1e7de7423c8e4705da6074e568102cb7bf8d` (tree
+`aadcc8124ff0ac7204ff7b49716cfb294fe2d0bf`), a bounded snapshot-cleanup
+retry, a structural worker-PID test check and a bounded job-document
+re-read that change no pipeline output, after a series of one-domain
 dependency updates on `main` after the history-preserving merges of #121
 (`602bec1`),
 of that series, #122 to #130 (`1cffc58`), of its documentation follow-up #135
@@ -26,9 +26,10 @@ retirement #150 (`76f98d6`), of the hosted-flake fixes #151 (`584c4a5`), of
 the urllib3 promotion #152 (`25f9ba1`), of the query-path speedups #157
 (`d3754d5`), of the model-load speedups #158 (`cc39af5`), of the ingestion
 speedups #159 (`139e2dc`), of the Docling conversion hardening #160
-(`4994191`), of the job-manager transient-write tolerance #161 (`d27af15`)
-and of the CI and secret-scan tooling #162 (`40994b4`, whose second parent
-`78777a8` is the base this source's five commits are stacked on). That
+(`4994191`), of the job-manager transient-write tolerance #161 (`d27af15`),
+of the CI and secret-scan tooling #162 (`40994b4`), of the lexical accuracy
+toolkit #163 (`6303d8b`) and of the research-pass status update #164
+(`1c348da`, the base this source's thirteen commits are stacked on). That
 source contains
 everything through the
 Task 0.8 static-security merge `e34103f` plus the local OCR accuracy, retry
@@ -78,8 +79,8 @@ speedups change no lock; the stacked model-load speedups change no lock; the
 stacked ingestion speedups change no lock; the stacked Docling conversion
 hardening changes no lock; the stacked job-manager transient-write
 tolerance changes no lock; the stacked CI and secret-scan tooling changes
-no lock; the stacked lexical accuracy toolkit changes no lock; no model
-lock changed.
+no lock; the stacked lexical accuracy toolkit changes no lock; the
+robustness follow-ups change no lock; no model lock changed.
 The executing environments were synchronized to this source's locks
 (urllib3 2.8.0) with repository-pinned uv 0.12.20 against the exact CPU
 application/test lock union plus its retained bootstrapper:
@@ -97,8 +98,8 @@ marker-resolved distributions before generation.
 
 | Platform | Runtime | Report | Bytes | File SHA-256 | Embedded report SHA-256 |
 |---|---:|---|---:|---|---|
-| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,175 | `96ec769422427a589c1217051706429b1fb6787520fc20b1bdcec4c8f8bb4173` | `2bd7f087d1cf75222c43beedc7b81fd7615f9afd90b45efd8d543e5b03a6fa89` |
-| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,570 | `f821ff348bb033e4b6b523cb606bfecb08bea82981bd85992bb555dca7d52615` | `db8d546a6f5059c85cf5704ad910cff711bba7de2ddfc6160ddb2b26cdd5ccc4` |
+| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,173 | `ac2793a78bedb344a9ae8b123a21c50f1b8eb40c3770c7baaf0cd2416c2dab0c` | `a1f1ad8c3e3f6221d104667c1bb88eacbd2b8247293f7231f88a2d5cfa0808a7` |
+| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,575 | `80a00eae44706b2e7bb36be1412e2eed828adcb23c3a4c2012dcca787ca048c3` | `2b98804e19284b4c2714e6a4890b406a9ee1de840449be412f3c1bee922a4eb8` |
 
 The reports attest the same source commit, clean-worktree state, tracked-diff
 digest, eight LF and `HEAD`-identical dependency/model-lock inputs, authoritative
@@ -604,13 +605,37 @@ The `5d22bb9` pair (gate-only child `9b243c3`) passed the hosted CI
 promotion gate on [PR
 #163](https://github.com/toddlar00/rag-pipeline/pull/163), which merged into
 `main` as `6303d8b`; the networked vulnerability/SBOM jobs passed at that
-head.
+head. The status-only [PR
+#164](https://github.com/toddlar00/rag-pipeline/pull/164) then merged into
+`main` as `1c348da` without changing the pair. The robustness follow-up
+source `6e7a1e7`, on `main` after #164, fixes three causes of intermittent
+test failures, two of them product races. Snapshot cleanup
+(`artifact_io._PinnedSnapshotDirectory.unlink_regular`) now retries an
+unlink that Windows refuses with WinError 5, 32 or 33 after 0.01, 0.05 and
+0.15 s, re-validating the pinned directory and the entry's type, link
+count and identity before each retry and re-raising the last attempt's
+error unchanged if the hold persists, so cleanup still fails closed: each
+snapshot first runs a stale-scratch janitor over the shared scratch root,
+and another process's janitor briefly reading a live run's owner marker
+without `FILE_SHARE_DELETE` made the owner's unlink fail with WinError 32.
+The job-manager test's check that the private attempt report omits the
+worker PID now decodes the report and compares its keys and values
+structurally instead of searching its JSON text for the PID's digits,
+which also matched inside timestamps. The strict job-document reader
+(`job_runtime._read_private_json`) re-reads, at most four more times
+within about 62 ms, when it observes the signature of a legitimate atomic
+replace, so an unleased `get_job` or `load_execution` no longer reports a
+racing state transition as `JobCorruptError`; every other violation,
+including an in-place change the open descriptor shows during the read,
+still fails closed at once, and a replace that persists through every
+re-read raises the same error. It changes no pipeline output, dependency
+or lock and supersedes the `5d22bb9` pair.
 The current reports above
 bind
 that exact clean source and each passes an independent complete
-same-platform 9×5 comparison. Both hosted Phase A0 cells passed with
-retained current-report artifacts, and the external exact-SHA record is a
-comment on PR #163.
+same-platform 9×5 comparison. No hosted result for this replacement pair
+is claimed here yet; its hosted checks and external exact-SHA record
+remain pending.
 
 ## Checking
 

@@ -50,6 +50,11 @@ _SNAPSHOT_OWNER_MARKER = ".rag-snapshot-owner.json"
 _SNAPSHOT_OWNER_SCHEMA_VERSION = 2
 _SNAPSHOT_STALE_AGE_SECONDS = 15 * 60
 _MAX_SNAPSHOT_OWNER_MARKER_BYTES = 4096
+# Another process's stale-scratch janitor (or a scanner) can briefly hold a
+# scratch file open without FILE_SHARE_DELETE. Only the unlink itself retries
+# these Windows errors, and every attempt revalidates the pinned entry.
+_SNAPSHOT_CLEANUP_RETRY_DELAYS = (0.01, 0.05, 0.15)
+_TRANSIENT_WINDOWS_CLEANUP_ERRORS = frozenset({5, 32, 33})
 
 
 class _ArtifactCtimeChanged(RuntimeError):
@@ -501,26 +506,58 @@ class _PinnedSnapshotDirectory:
             expected_identity: tuple[int, int, int, int, int] | None = None,
             expected_content_identity: tuple[int, int, int, int] | None = None,
             missing_ok: bool = False) -> None:
-        try:
-            result = self.stat_entry(name)
-        except FileNotFoundError:
-            if missing_ok:
+        """Unlink one validated regular entry, outlasting brief foreign holds.
+
+        A transient Windows hold on the entry is retried on a bounded
+        schedule. Each retry first re-checks the pinned directory, the
+        entry's type, link count and identity, and a refusal after a backoff
+        is chained to the hold that caused the retry. A persistent hold still
+        raises the last attempt's error unchanged, so cleanup fails closed.
+        """
+        retry_error: OSError | None = None
+        for attempt in range(len(_SNAPSHOT_CLEANUP_RETRY_DELAYS) + 1):
+            if attempt:
+                time.sleep(_SNAPSHOT_CLEANUP_RETRY_DELAYS[attempt - 1])
+                if not self.path_matches():
+                    raise OSError(
+                        "snapshot scratch root changed before cleanup"
+                    ) from retry_error
+            try:
+                try:
+                    result = self.stat_entry(name)
+                except FileNotFoundError:
+                    if missing_ok:
+                        return
+                    raise
+                identity = _snapshot_tree_identity(result)
+                if not stat.S_ISREG(result.st_mode) or result.st_nlink != 1:
+                    raise OSError(
+                        "refusing non-regular or multiply-linked scratch file")
+                if (expected_identity is not None
+                        and identity != expected_identity):
+                    raise OSError(
+                        "snapshot scratch file changed before cleanup")
+                if (expected_content_identity is not None
+                        and _artifact_content_identity(result)
+                        != expected_content_identity):
+                    raise OSError(
+                        "snapshot scratch file changed before cleanup")
+            except OSError as exc:
+                if retry_error is None:
+                    raise
+                raise exc from retry_error
+            try:
+                if self.directory_descriptor is not None:
+                    os.unlink(name, dir_fd=self.directory_descriptor)
+                else:
+                    (self.path / name).unlink()
                 return
-            raise
-        identity = _snapshot_tree_identity(result)
-        if not stat.S_ISREG(result.st_mode) or result.st_nlink != 1:
-            raise OSError(
-                "refusing non-regular or multiply-linked scratch file")
-        if expected_identity is not None and identity != expected_identity:
-            raise OSError("snapshot scratch file changed before cleanup")
-        if (expected_content_identity is not None
-                and _artifact_content_identity(result)
-                != expected_content_identity):
-            raise OSError("snapshot scratch file changed before cleanup")
-        if self.directory_descriptor is not None:
-            os.unlink(name, dir_fd=self.directory_descriptor)
-        else:
-            (self.path / name).unlink()
+            except OSError as exc:
+                if (getattr(exc, "winerror", None)
+                        not in _TRANSIENT_WINDOWS_CLEANUP_ERRORS
+                        or attempt == len(_SNAPSHOT_CLEANUP_RETRY_DELAYS)):
+                    raise
+                retry_error = exc
 
     def remove_root(self) -> None:
         if not self.path_matches():
