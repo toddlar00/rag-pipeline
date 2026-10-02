@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import errno
 import json
 import multiprocessing
 import os
 import stat
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -980,3 +982,326 @@ def test_cancel_and_delete_validate_optimistic_preconditions(
     assert not any(
         path.name.startswith("cancel.a")
         for path in (store.root / submitted.job_id).iterdir())
+
+
+# Strict document reads racing a legitimate atomic replace.  JobStore writers
+# publish every job document by temporary file + rename under the store lease,
+# while get_job and load_execution read without it.  These tests pin which
+# observations the strict reader treats as corruption.
+
+_REPLACE_WHILE_OPEN = pytest.mark.skipif(
+    os.name == "nt",
+    reason="Windows refuses to replace a file another handle holds open")
+
+
+def _job_state_path(tmp_path):
+    store = JobStore(tmp_path / "jobs")
+    summary = store.submit_job("convert", ["--pdf", "book.pdf"])
+    return store, summary, store.root / summary.job_id / "state.json"
+
+
+def _publish_next_state(state_path: Path) -> None:
+    """Publish one valid next generation exactly as JobStore writers do."""
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    payload["revision"] += 1
+    payload["updated_at"] += 1
+    storage_policy.atomic_write_private_json(state_path, payload)
+
+
+class _DocumentProbe:
+    """Count strict opens of one document and act just before or mid-read."""
+
+    def __init__(self, monkeypatch, path: Path, *, before_open=None,
+                 during_read=None, persistent=False):
+        self.target = os.fspath(path)
+        self.opens = 0
+        self._before_open = before_open
+        self._during_read = during_read
+        self._persistent = persistent
+        self._fired = 0
+        self._active: set[int] = set()
+        self._real_open = os.open
+        self._real_read = os.read
+        self._real_close = os.close
+        monkeypatch.setattr(job_runtime.os, "open", self._open)
+        monkeypatch.setattr(job_runtime.os, "read", self._read)
+        monkeypatch.setattr(job_runtime.os, "close", self._close)
+
+    def _fire(self, action) -> None:
+        if action is not None and (self._persistent or not self._fired):
+            self._fired += 1
+            action()
+
+    def _open(self, name, flags, *args, **kwargs):
+        targeted = os.fspath(name) == self.target
+        if targeted:
+            self.opens += 1
+            self._fire(self._before_open)
+        descriptor = self._real_open(name, flags, *args, **kwargs)
+        if targeted:
+            self._active.add(descriptor)
+        return descriptor
+
+    def _read(self, descriptor, size):
+        data = self._real_read(descriptor, size)
+        if descriptor in self._active:
+            self._fire(self._during_read)
+        return data
+
+    def _close(self, descriptor):
+        self._active.discard(descriptor)
+        return self._real_close(descriptor)
+
+
+def _observe_unlinked_inode(monkeypatch, state_path: Path, *,
+                            persistent=False, oversize=False) -> list:
+    """Make the reader's pathname lstat report link count zero.
+
+    That is what lstat returns when it resolves the inode a concurrent rename
+    is unlinking.  Returns one entry per strict read attempt.
+    """
+    target = os.fspath(state_path)
+    real_private = job_runtime._private_mode_ok
+    real_lstat = os.lstat
+    attempts: list[str] = []
+    armed: list[bool] = []
+
+    def private_probe(path, *, directory):
+        result = real_private(path, directory=directory)
+        if os.fspath(path) == target:
+            attempts.append(target)
+            if persistent or len(attempts) == 1:
+                armed.append(True)
+        return result
+
+    def unlinked_lstat(path, *args, **kwargs):
+        result = real_lstat(path, *args, **kwargs)
+        if not armed or os.fspath(path) != target:
+            return result
+        armed.clear()
+        view = {name: getattr(result, name)
+                for name in dir(result) if name.startswith("st_")}
+        view["st_nlink"] = 0
+        if oversize:
+            view["st_size"] = job_runtime._MAX_STATE_BYTES + 1
+        return SimpleNamespace(**view)
+
+    monkeypatch.setattr(job_runtime, "_private_mode_ok", private_probe)
+    monkeypatch.setattr(job_runtime.os, "lstat", unlinked_lstat)
+    return attempts
+
+
+def test_strict_read_opens_an_unchanged_document_once(tmp_path, monkeypatch):
+    store, summary, state_path = _job_state_path(tmp_path)
+    probe = _DocumentProbe(monkeypatch, state_path)
+    assert store.get_job(summary.job_id) == summary
+    assert probe.opens == 1
+
+
+@_REPLACE_WHILE_OPEN
+@pytest.mark.parametrize("reader", ["get_job", "load_execution"])
+def test_replace_during_strict_read_fails_closed(
+        tmp_path, monkeypatch, reader):
+    store, summary, state_path = _job_state_path(tmp_path)
+    probe = _DocumentProbe(
+        monkeypatch, state_path,
+        during_read=lambda: _publish_next_state(state_path))
+    with pytest.raises(JobCorruptError,
+                       match="^job state changed while being read$"):
+        getattr(store, reader)(summary.job_id)
+    assert probe.opens == 1
+
+
+@pytest.mark.parametrize("reader", ["get_job", "load_execution"])
+def test_replace_between_lstat_and_open_fails_closed(
+        tmp_path, monkeypatch, reader):
+    store, summary, state_path = _job_state_path(tmp_path)
+    probe = _DocumentProbe(
+        monkeypatch, state_path,
+        before_open=lambda: _publish_next_state(state_path))
+    with pytest.raises(JobCorruptError,
+                       match="^job state changed while being opened$"):
+        getattr(store, reader)(summary.job_id)
+    assert probe.opens == 1
+
+
+@_REPLACE_WHILE_OPEN
+def test_persistent_replace_during_strict_read_fails_closed(
+        tmp_path, monkeypatch):
+    store, summary, state_path = _job_state_path(tmp_path)
+    probe = _DocumentProbe(
+        monkeypatch, state_path, persistent=True,
+        during_read=lambda: _publish_next_state(state_path))
+    with pytest.raises(JobCorruptError,
+                       match="^job state changed while being read$") as raised:
+        store.get_job(summary.job_id)
+    assert type(raised.value) is JobCorruptError
+    assert raised.value.__cause__ is None
+    assert probe.opens == 1
+
+
+def test_persistent_replace_before_open_fails_closed(tmp_path, monkeypatch):
+    store, summary, state_path = _job_state_path(tmp_path)
+    probe = _DocumentProbe(
+        monkeypatch, state_path, persistent=True,
+        before_open=lambda: _publish_next_state(state_path))
+    with pytest.raises(JobCorruptError,
+                       match="^job state changed while being opened$") as raised:
+        store.get_job(summary.job_id)
+    assert type(raised.value) is JobCorruptError
+    assert probe.opens == 1
+
+
+def test_unlinked_inode_observation_fails_closed(tmp_path, monkeypatch):
+    store, summary, state_path = _job_state_path(tmp_path)
+    attempts = _observe_unlinked_inode(monkeypatch, state_path)
+    probe = _DocumentProbe(monkeypatch, state_path)
+    with pytest.raises(JobCorruptError,
+                       match="^job state is not one bounded private file$"):
+        store.get_job(summary.job_id)
+    assert (len(attempts), probe.opens) == (1, 0)
+
+
+def test_persistent_unlinked_inode_observation_fails_closed(
+        tmp_path, monkeypatch):
+    store, summary, state_path = _job_state_path(tmp_path)
+    attempts = _observe_unlinked_inode(
+        monkeypatch, state_path, persistent=True)
+    probe = _DocumentProbe(monkeypatch, state_path)
+    with pytest.raises(JobCorruptError,
+                       match="^job state is not one bounded private file$") as raised:
+        store.get_job(summary.job_id)
+    assert type(raised.value) is JobCorruptError
+    assert (len(attempts), probe.opens) == (1, 0)
+
+
+def test_unlinked_inode_with_another_violation_fails_closed_at_once(
+        tmp_path, monkeypatch):
+    store, summary, state_path = _job_state_path(tmp_path)
+    attempts = _observe_unlinked_inode(
+        monkeypatch, state_path, persistent=True, oversize=True)
+    probe = _DocumentProbe(monkeypatch, state_path)
+    with pytest.raises(JobCorruptError,
+                       match="^job state is not one bounded private file$"):
+        store.get_job(summary.job_id)
+    assert (len(attempts), probe.opens) == (1, 0)
+
+
+def test_in_place_change_during_strict_read_fails_closed_at_once(
+        tmp_path, monkeypatch):
+    store, summary, state_path = _job_state_path(tmp_path)
+
+    def append_in_place():
+        with open(state_path, "ab") as handle:
+            handle.write(b" ")
+
+    probe = _DocumentProbe(
+        monkeypatch, state_path, during_read=append_in_place)
+    with pytest.raises(JobCorruptError,
+                       match="^job state changed while being read$"):
+        store.get_job(summary.job_id)
+    assert probe.opens == 1
+
+
+def test_metadata_change_on_same_inode_fails_closed_at_once(
+        tmp_path, monkeypatch):
+    store, summary, state_path = _job_state_path(tmp_path)
+    probe = _DocumentProbe(
+        monkeypatch, state_path,
+        during_read=lambda: os.utime(state_path, ns=(1, 1)))
+    with pytest.raises(JobCorruptError,
+                       match="^job state changed while being read$"):
+        store.get_job(summary.job_id)
+    assert probe.opens == 1
+
+
+@_REPLACE_WHILE_OPEN
+def test_in_place_change_then_replace_fails_closed_at_once(
+        tmp_path, monkeypatch):
+    store, summary, state_path = _job_state_path(tmp_path)
+
+    def append_then_replace():
+        with open(state_path, "ab") as handle:
+            handle.write(b" ")
+        _publish_next_state(state_path)
+
+    probe = _DocumentProbe(
+        monkeypatch, state_path, during_read=append_then_replace)
+    with pytest.raises(JobCorruptError,
+                       match="^job state changed while being read$"):
+        store.get_job(summary.job_id)
+    assert probe.opens == 1
+
+
+def _remove_document(path: Path) -> None:
+    path.unlink()
+
+
+def _oversize_document(path: Path) -> None:
+    storage_policy.atomic_write_private_text(
+        path, " " * (job_runtime._MAX_STATE_BYTES + 1))
+
+
+def _hard_link_document(path: Path) -> None:
+    os.link(path, path.with_name("state-copy.json"))
+
+
+def _expose_document(path: Path) -> None:
+    os.chmod(path, 0o640)
+
+
+def _malformed_document(path: Path) -> None:
+    storage_policy.atomic_write_private_text(path, "{not json")
+
+
+_POSIX_ONLY = pytest.mark.skipif(
+    os.name == "nt", reason="POSIX link count and mode semantics")
+
+
+@pytest.mark.parametrize(("violation", "message", "opens"), [
+    (_remove_document, "is missing", 0),
+    (_oversize_document, "is not one bounded private file", 0),
+    pytest.param(_hard_link_document, "is not one bounded private file", 0,
+                 marks=_POSIX_ONLY),
+    pytest.param(_expose_document, "is not one bounded private file", 0,
+                 marks=_POSIX_ONLY),
+    (_malformed_document, "could not be parsed safely", 1),
+])
+def test_document_violations_fail_closed_at_once(
+        tmp_path, monkeypatch, violation, message, opens):
+    store, summary, state_path = _job_state_path(tmp_path)
+    violation(state_path)
+    probe = _DocumentProbe(monkeypatch, state_path)
+    with pytest.raises(JobCorruptError, match=f"^job state {message}$"):
+        store.get_job(summary.job_id)
+    assert probe.opens == opens
+
+
+def _deny_open(path: Path):
+    def deny() -> None:
+        raise PermissionError(errno.EACCES, "access denied", os.fspath(path))
+    return deny
+
+
+def test_persistently_denied_open_fails_closed(tmp_path, monkeypatch):
+    store, summary, state_path = _job_state_path(tmp_path)
+    probe = _DocumentProbe(
+        monkeypatch, state_path, persistent=True,
+        before_open=_deny_open(state_path))
+    with pytest.raises(JobCorruptError,
+                       match="^job state could not be parsed safely$") as raised:
+        store.get_job(summary.job_id)
+    assert type(raised.value) is JobCorruptError
+    assert isinstance(raised.value.__cause__, PermissionError)
+    assert probe.opens == 1
+
+
+def test_transiently_denied_open_fails_closed(tmp_path, monkeypatch):
+    store, summary, state_path = _job_state_path(tmp_path)
+    probe = _DocumentProbe(
+        monkeypatch, state_path, before_open=_deny_open(state_path))
+    with pytest.raises(JobCorruptError,
+                       match="^job state could not be parsed safely$") as raised:
+        store.get_job(summary.job_id)
+    assert isinstance(raised.value.__cause__, PermissionError)
+    assert probe.opens == 1
