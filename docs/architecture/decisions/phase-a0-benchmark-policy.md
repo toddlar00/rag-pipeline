@@ -35,9 +35,11 @@
   `d27af15`), the stacked CI and secret-scan tooling pair at source
   `e706fd2` passed on PR #162 (merged through `40994b4`), the stacked
   lexical accuracy toolkit pair at source `5d22bb9` passed on PR #163
-  (merged through `6303d8b`), and the robustness follow-up pair at source
-  `6e7a1e7` is pending; exact-head human review and separate R8 owner
-  authorization are not recorded
+  (merged through `6303d8b`), the robustness follow-up pair at source
+  `6e7a1e7` passed on PR #165 (merged through `717ac9e`), and the
+  provider-transport cryptography 50.0.2 pair at source `0b1bbe7` is
+  pending; exact-head human review and separate R8 owner authorization are
+  not recorded
 - **Milestone:** R10 prerequisite for the R8 pipeline-ownership move
 - **Report schema:** `phase-a0` v3
 
@@ -168,14 +170,15 @@ gate-only child `32153e9` and merge `376277c`
 Task 0.8 static-security pair at source `8891e1b` repeated it through
 gate-only child `1533164` and merge `e34103f`
 ([PR #107](https://github.com/toddlar00/rag-pipeline/pull/107)). The
-current replacement pair uses the clean robustness follow-up source
-`6e7a1e7de7423c8e4705da6074e568102cb7bf8d` (tree
-`aadcc8124ff0ac7204ff7b49716cfb294fe2d0bf`), a bounded snapshot-cleanup
-retry, a structural worker-PID test check and a bounded job-document
-re-read that change no pipeline output, after a series of one-domain
-dependency updates, on `main` after the merges of the research-pass status
-update #164 (`1c348da`, the base this source's thirteen commits are
-stacked on), the lexical accuracy toolkit #163 (`6303d8b`), the CI and
+current replacement pair uses the clean provider-transport cryptography
+source `0b1bbe7f6abc825340296f5836a87f2d9ba3b64d` (tree
+`ed8d02400aad48f42ad771a69bc1862838d075f8`), a lock-only move of
+cryptography to 50.0.2 that changes no Python source and is the first of
+three stacked one-domain dependency upgrades, after a series of one-domain
+dependency updates, on `main` after the merges of the robustness
+follow-ups #165 (`717ac9e`, the base of this source's single commit), the
+research-pass status update #164 (`1c348da`), the lexical accuracy toolkit
+#163 (`6303d8b`), the CI and
 secret-scan tooling #162 (`40994b4`), the job-manager transient-write
 tolerance #161 (`d27af15`), the
 Docling conversion hardening #160 (`4994191`), the ingestion speedups #159
@@ -200,7 +203,9 @@ test-tooling locks (pytest-xdist and execnet in `requirements-test.lock` and
 dependency updates also change the vector-stores, Service/UI, test-audit
 tooling, ML/runtime, PDF/Docling (docling-core), promoted ML/runtime,
 promoted h2, promoted cryptography, promoted oauthlib and promoted urllib3
-records of their mapped locks, but no model lock. It supersedes the
+records of their mapped locks, and the provider-transport refresh changes
+the cryptography record of `requirements-full.lock`, but no model lock. It
+supersedes the
 earlier `1ae8502` pair, whose child `766feaf` passed both hosted Phase A0
 cells but whose dependency-light unit lanes failed at collection. Source
 `a15232d` then passed both hosted Phase A0 cells on [PR
@@ -605,12 +610,26 @@ including an in-place change the open descriptor shows during the read,
 still fails closed at once, and a replace that persists through every
 re-read raises the same error. It changes no pipeline output, dependency
 or lock and supersedes the `5d22bb9` pair.
+The `6e7a1e7` pair (gate-only child `91db280`) passed the hosted CI
+promotion gate on [PR
+#165](https://github.com/toddlar00/rag-pipeline/pull/165), which merged into
+`main` as `717ac9e`. The provider-transport cryptography 50.0.2 source
+`0b1bbe7`, on `main` after #165, supersedes the `6e7a1e7` pair and is the
+first of three stacked one-domain dependency upgrades (provider transport,
+then Service/UI, then ML/runtime). It is lock-only: under the pinned uv
+0.12.20, `tools/refresh_locks.py --upgrade-package cryptography` moves
+cryptography from 50.0.1 to 50.0.2 in `requirements-full.lock` and changes
+no other record, and a second plain regeneration is byte-stable.
+`requirements-optional.txt` already allows `cryptography>=50.0.0,<51`, so
+no manifest changes. cryptography 50.0.2 rebuilds its Windows, macOS and
+Linux wheels against OpenSSL 4.0.3 (50.0.1 bundled 4.0.2) and names no
+CVE. It changes no Python source, pipeline output or model lock.
 Its Windows and
 Linux CPython 3.12.13 reports were
 generated after the same strict hash-locked synchronization, to its locks
-(urllib3 2.8.0), and dependency-consistency checks: 193 marker-resolved
-distributions on Windows and 191 on Linux. They bind that one clean
-source, the same eight
+(urllib3 2.8.0 and cryptography 50.0.2), and dependency-consistency
+checks: 193 marker-resolved distributions on Windows and 191 on Linux.
+They bind that one clean source, the same eight
 LF and `HEAD`-identical dependency/model inputs, and the complete 9×5
 scenario contract. Each passes an independent complete local same-platform
 comparison. The direct gate-only evidence child contains only the reports
@@ -811,15 +830,16 @@ then the stacked Docling conversion hardening source `18de7d6`,
 then the stacked job-manager transient-write tolerance source `9e4d7be`,
 then the stacked CI and secret-scan tooling source `e706fd2`,
 then the stacked lexical accuracy toolkit source `5d22bb9`,
-then the stacked robustness follow-up source `6e7a1e7`.
+then the stacked robustness follow-up source `6e7a1e7`,
+then the stacked provider-transport cryptography 50.0.2 source `0b1bbe7`.
 Its Windows report
-is 51,173 bytes (file SHA-256
-`ac2793a78bedb344a9ae8b123a21c50f1b8eb40c3770c7baaf0cd2416c2dab0c`;
+is 51,176 bytes (file SHA-256
+`6205b02765c9573be021fb3ee9c15e096cd28d7e6eb1be81f563682ba2ac5f54`;
 embedded report SHA-256
-`a1f1ad8c3e3f6221d104667c1bb88eacbd2b8247293f7231f88a2d5cfa0808a7`).
-Its Linux report is 50,575 bytes (file SHA-256
-`80a00eae44706b2e7bb36be1412e2eed828adcb23c3a4c2012dcca787ca048c3`;
+`394f17ea3c3853eb4ba7049c70d5c5cdc41e685da957460f92f4d4f29c517e33`).
+Its Linux report is 50,571 bytes (file SHA-256
+`4f1878fbac7c6c48a9a368e1376370d5bc239e39ac11e7425b6ac2ce21eba324`;
 embedded report SHA-256
-`2b98804e19284b4c2714e6a4890b406a9ee1de840449be412f3c1bee922a4eb8`).
+`ec55f61701a332190017383d631f7fc479ad19492f7eeb16f21b7903dfd49a9b`).
 Both use CPython 3.12.13 and pass their complete local same-platform 9×5
 comparisons. Hosted promotion remains pending.

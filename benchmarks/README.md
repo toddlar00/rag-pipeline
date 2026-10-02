@@ -7,11 +7,11 @@ fresh-process repetitions.
 
 ## Provenance
 
-Both current reports were generated from the clean robustness follow-up
-source checkpoint `6e7a1e7de7423c8e4705da6074e568102cb7bf8d` (tree
-`aadcc8124ff0ac7204ff7b49716cfb294fe2d0bf`), a bounded snapshot-cleanup
-retry, a structural worker-PID test check and a bounded job-document
-re-read that change no pipeline output, after a series of one-domain
+Both current reports were generated from the clean provider-transport
+cryptography source checkpoint `0b1bbe7f6abc825340296f5836a87f2d9ba3b64d`
+(tree `ed8d02400aad48f42ad771a69bc1862838d075f8`), a lock-only move of
+cryptography to 50.0.2 that changes no Python source and is the first of
+three stacked one-domain dependency upgrades, after a series of one-domain
 dependency updates on `main` after the history-preserving merges of #121
 (`602bec1`),
 of that series, #122 to #130 (`1cffc58`), of its documentation follow-up #135
@@ -28,8 +28,9 @@ the urllib3 promotion #152 (`25f9ba1`), of the query-path speedups #157
 speedups #159 (`139e2dc`), of the Docling conversion hardening #160
 (`4994191`), of the job-manager transient-write tolerance #161 (`d27af15`),
 of the CI and secret-scan tooling #162 (`40994b4`), of the lexical accuracy
-toolkit #163 (`6303d8b`) and of the research-pass status update #164
-(`1c348da`, the base this source's thirteen commits are stacked on). That
+toolkit #163 (`6303d8b`), of the research-pass status update #164
+(`1c348da`) and of the robustness follow-ups #165 (`717ac9e`, the base of
+this source's single commit). That
 source contains
 everything through the
 Task 0.8 static-security merge `e34103f` plus the local OCR accuracy, retry
@@ -49,7 +50,8 @@ seven OCR review test modules, FlagEmbedding 1.4.2 for Transformers 5
 reranking and the fresh-OCR token fidelity fixes, followed by stacked
 one-domain dependency updates for vector stores, Service/UI, test-audit
 tooling, ML/runtime, docling-core, ML advisory promotions, h2, cryptography,
-supply-chain policy renewals, oauthlib and urllib3. The lock changes add
+supply-chain policy renewals, oauthlib, urllib3 and the cryptography 50.0.2
+refresh. The lock changes add
 pytest-xdist 3.8.0 and execnet 2.1.2 to `requirements-test.lock` and
 `requirements-smoke.lock` and move FlagEmbedding from 1.4.0 to 1.4.2 in
 `requirements-core.lock` and `requirements-full.lock`; the stacked
@@ -80,9 +82,12 @@ stacked ingestion speedups change no lock; the stacked Docling conversion
 hardening changes no lock; the stacked job-manager transient-write
 tolerance changes no lock; the stacked CI and secret-scan tooling changes
 no lock; the stacked lexical accuracy toolkit changes no lock; the
-robustness follow-ups change no lock; no model lock changed.
+robustness follow-ups change no lock; the provider-transport cryptography
+refresh moves cryptography from 50.0.1 to 50.0.2 in
+`requirements-full.lock` and changes no other record; no model lock changed.
 The executing environments were synchronized to this source's locks
-(urllib3 2.8.0) with repository-pinned uv 0.12.20 against the exact CPU
+(urllib3 2.8.0 and cryptography 50.0.2) with repository-pinned uv 0.12.20
+against the exact CPU
 application/test lock union plus its retained bootstrapper:
 
 - `requirements-full.lock`
@@ -98,8 +103,8 @@ marker-resolved distributions before generation.
 
 | Platform | Runtime | Report | Bytes | File SHA-256 | Embedded report SHA-256 |
 |---|---:|---|---:|---|---|
-| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,173 | `ac2793a78bedb344a9ae8b123a21c50f1b8eb40c3770c7baaf0cd2416c2dab0c` | `a1f1ad8c3e3f6221d104667c1bb88eacbd2b8247293f7231f88a2d5cfa0808a7` |
-| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,575 | `80a00eae44706b2e7bb36be1412e2eed828adcb23c3a4c2012dcca787ca048c3` | `2b98804e19284b4c2714e6a4890b406a9ee1de840449be412f3c1bee922a4eb8` |
+| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,176 | `6205b02765c9573be021fb3ee9c15e096cd28d7e6eb1be81f563682ba2ac5f54` | `394f17ea3c3853eb4ba7049c70d5c5cdc41e685da957460f92f4d4f29c517e33` |
+| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,571 | `4f1878fbac7c6c48a9a368e1376370d5bc239e39ac11e7425b6ac2ce21eba324` | `ec55f61701a332190017383d631f7fc479ad19492f7eeb16f21b7903dfd49a9b` |
 
 The reports attest the same source commit, clean-worktree state, tracked-diff
 digest, eight LF and `HEAD`-identical dependency/model-lock inputs, authoritative
@@ -630,6 +635,20 @@ including an in-place change the open descriptor shows during the read,
 still fails closed at once, and a replace that persists through every
 re-read raises the same error. It changes no pipeline output, dependency
 or lock and supersedes the `5d22bb9` pair.
+The `6e7a1e7` pair (gate-only child `91db280`) passed the hosted CI
+promotion gate on [PR
+#165](https://github.com/toddlar00/rag-pipeline/pull/165), which merged into
+`main` as `717ac9e`. The provider-transport cryptography 50.0.2 source
+`0b1bbe7`, on `main` after #165, supersedes the `6e7a1e7` pair and is the
+first of three stacked one-domain dependency upgrades (provider transport,
+then Service/UI, then ML/runtime). It is lock-only: under the pinned uv
+0.12.20, `tools/refresh_locks.py --upgrade-package cryptography` moves
+cryptography from 50.0.1 to 50.0.2 in `requirements-full.lock` and changes
+no other record, and a second plain regeneration is byte-stable.
+`requirements-optional.txt` already allows `cryptography>=50.0.0,<51`, so
+no manifest changes. cryptography 50.0.2 rebuilds its Windows, macOS and
+Linux wheels against OpenSSL 4.0.3 (50.0.1 bundled 4.0.2) and names no
+CVE. It changes no Python source, pipeline output or model lock.
 The current reports above
 bind
 that exact clean source and each passes an independent complete
