@@ -764,8 +764,11 @@ def test_snapshot_cleanup_hold_keeps_body_error_precedence(
     assert len(blocked) == len(delays) + 1
     assert sleeps == list(delays)
     assert [kwargs["error"] for _, kwargs in reports] == [blocked[-1]]
-    assert raised.value.__notes__ == [
-        f"Snapshot cleanup also failed: {blocked[-1]}"]
+    # CPython 3.10 has no add_note, so artifact_io attaches no note there.
+    expected_notes = (
+        [f"Snapshot cleanup also failed: {blocked[-1]}"]
+        if hasattr(BaseException, "add_note") else None)
+    assert getattr(raised.value, "__notes__", None) == expected_notes
     assert snapshot_path is not None
     assert not snapshot_path.exists()
     assert (snapshot_path.parent
