@@ -1717,10 +1717,20 @@ embedding code's Transformers names and clear two new advisories.
     which touches `artifact_io.py` or that test module. It is pre-existing:
     that module alone under `-n 8` on the owner's Windows host failed in 3
     of 24 runs at `3aede7d`, 1 of 12 at each of `f0513b7`, `19b9ef9` and
-    `e91d42f`, and 3 of 12 at both `main` `139e2dc` and `18de7d6`. The
-    snapshot's owner-file cleanup has no bounded transient-error retry, the
-    same class of gap as the durable-job manager's transient replace writes
-    (see "Corpus audit follow-ups").
+    `e91d42f`, and 3 of 12 at both `main` `139e2dc` and `18de7d6`. On
+    `main`, the snapshot's owner-file cleanup has no bounded transient-error
+    retry, the same class of gap as the durable-job manager's transient
+    replace writes (see "Corpus audit follow-ups"). The cause is now
+    diagnosed: every snapshot first runs `cleanup_stale_snapshot_directories`
+    over that shared root, and another process's janitor briefly reads each
+    live run's owner marker with a plain `open()`, which on Windows never
+    grants `FILE_SHARE_DELETE`, so the owner's unlink fails with WinError
+    32. Concurrent pipeline processes that share the default root can hit
+    the same race; POSIX is unaffected. It also failed the first attempt of
+    `main`'s push run at `1c348da` (see "Phase A0"). A bounded owner-side
+    retry is proposed, not integrated, in the robustness follow-up pull
+    request (source `6e7a1e7`; hosted checks pending), and the deeper
+    shared-delete janitor read remains an open follow-up (see "Phase A0").
 
 ### Research improvement pass (2026-09-30, integrated)
 
@@ -2488,10 +2498,39 @@ The `5d22bb9` pair (gate-only child `9b243c3`) passed the hosted CI
 promotion gate on [PR
 #163](https://github.com/toddlar00/rag-pipeline/pull/163), which merged into
 `main` as `6303d8b`; the networked vulnerability/SBOM jobs passed at that
-head. That pair is the current baseline, and the merged pull requests,
-#163 included, carry their exact-SHA records as PR comments.
+head. The status-only [PR
+#164](https://github.com/toddlar00/rag-pipeline/pull/164) then merged into
+`main` as `1c348da` without changing the pair. The robustness follow-up
+source `6e7a1e7`, on `main` after #164, fixes three causes of intermittent
+test failures, two of them product races. Snapshot cleanup
+(`artifact_io._PinnedSnapshotDirectory.unlink_regular`) now retries an
+unlink that Windows refuses with WinError 5, 32 or 33 after 0.01, 0.05 and
+0.15 s, re-validating the pinned directory and the entry's type, link
+count and identity before each retry and re-raising the last attempt's
+error unchanged if the hold persists, so cleanup still fails closed: each
+snapshot first runs a stale-scratch janitor over the shared scratch root,
+and another process's janitor briefly reading a live run's owner marker
+without `FILE_SHARE_DELETE` made the owner's unlink fail with WinError 32.
+The job-manager test's check that the private attempt report omits the
+worker PID now decodes the report and compares its keys and values
+structurally instead of searching its JSON text for the PID's digits,
+which also matched inside timestamps. The strict job-document reader
+(`job_runtime._read_private_json`) re-reads, at most four more times
+within about 62 ms, when it observes the signature of a legitimate atomic
+replace, so an unleased `get_job` or `load_execution` no longer reports a
+racing state transition as `JobCorruptError`; every other violation,
+including an in-place change the open descriptor shows during the read,
+still fails closed at once, and a replace that persists through every
+re-read raises the same error. It changes no pipeline output, dependency
+or lock and supersedes the `5d22bb9` pair.
+Its Windows/Linux
+pair (independent local same-platform comparisons passed) is that branch's
+candidate; its hosted checks and exact-SHA record are pending, and the
+merged pull requests carry theirs as PR comments.
 
-Four operational follow-ups from the post-merge `main` push runs are open:
+Four operational follow-ups from the post-merge `main` push runs are
+recorded; two remain open, and two are proposed fixed in the robustness
+follow-up pull request described below, not integrated:
 a documentation-only merge passes its fast-lane pull-request run but then
 fails the forced-heavy `main` push run's ancestor-bound Phase A0 delta
 check until the next source checkpoint supersedes the baseline (observed at
@@ -2503,14 +2542,16 @@ flake in
 which failed once in the Python 3.11 Linux unit job of the push run at
 `76f98d6` (#150's merge) with `job_runtime.JobCorruptError: job state
 changed while being read` (the reader saw the state file change mid-read;
-#150 does not touch the job manager, no later push run through `40994b4`
-failed the test, and the race is not diagnosed); a hosted failure of
+#150 does not touch the job manager, and no later push run through
+`40994b4` failed the test), now diagnosed as a product race and proposed
+fixed; a hosted failure of
 `tests/test_job_manager.py::test_run_job_success_persists_private_attempt_and_exact_worker_env`
 in the Python 3.11 Linux unit job of the first push run at `cc39af5`
 (#158's merge; run 36905319851, later cancelled; a second push run on that
 SHA passed), where the check that the worker PID `2932` is absent from the
 private attempt report failed and the assertion output shows those digits
-inside a float value (`...878534.3229322`; cause not diagnosed); and
+inside a float value (`...878534.3229322`), now diagnosed as a test-only
+false positive and proposed fixed; and
 `test_posix_escalation_kills_descendant_that_ignores_sigterm` showed one
 cleanup-confirmation flake on a busy hosted runner at `b3c7cf7` (tree
 identical to the fully green pull-request run; rerun requested), and the
@@ -2525,6 +2566,54 @@ uninterruptible (D-state) sleep 2.66 s past the confirmation window. Two
 more appeared on the unchanged test under host load and were not diagnosed.
 The proposed fix is a production change in `process_supervision.py` that
 separates the post-SIGKILL confirmation window from the SIGTERM grace.
+
+The robustness follow-up source `6e7a1e7` proposes fixes for the
+`JobCorruptError` and worker-PID failures and for the Windows
+snapshot-cleanup flake recorded under "Post-series fixes", together in one
+pull request stacked on `main` `1c348da` with its own Phase A0 pair. Its
+hosted checks are pending, and none of the three fixes is integrated. That
+flake also failed the Python 3.12 Windows unit shard 2/3 in the first
+attempt of the push run at `1c348da` (#164's merge; run 36940890769; the
+re-run attempt passed). Each fix was diagnosed with evidence, written
+test-first and approved by an independent adversarial review, the
+snapshot and job-state fixes after one fix round:
+- `JobCorruptError`: `JobStore.get_job` and `load_execution` read
+  `spec.json` and `state.json` without the store lease, while every writer
+  publishes them by atomic replace, so an unleased reader that overlapped
+  a legitimate transition failed closed. Taking the lease in these readers
+  would self-deadlock: it is non-reentrant, and `list_jobs`,
+  `reconcile_job` and `prepare_delete` already call them under it. Outside
+  tests, one lost race marks the service unhealthy until it restarts, and
+  `launch_detached`'s post-ready `get_job` can report a successful launch
+  as failed. The reader now re-reads on replace signatures only, including
+  ext4's reuse of an inode number across consecutive replaces. In a Linux
+  harness the unchanged reader failed 4,439 of 521,610 unleased `get_job`
+  reads; under 30 CPU burners the final reader had 0 errors in 3,744,311
+  reads, where the first-round fix still had 20 in 1,574,432.
+- Worker PID: the substring check over the report's JSON text matched the
+  PID's digits inside `time.time()` floats or the hex job ID, while the
+  report never held the PID. On recorded reports, false failures fall from
+  11 of 3,000 (Linux) and 1 of 400 (Windows) to 0.
+- Snapshot cleanup: on the owner's Windows host,
+  `tests/test_ocr_hardscan_io.py` under `-n 8` failed 5 of 48 runs before
+  the retry and 0 of 96 after it.
+
+These fixes found four further follow-ups, all open:
+- The stale-scratch janitor could read owner markers with
+  `FILE_SHARE_DELETE` on Windows. That deeper fix needs its own review: a
+  bounded retry cannot outlast a continuously held handle, which still
+  fails closed, while on filesystems without POSIX delete semantics the
+  shared-delete read would only move the failure to `rmdir`.
+- `job_coordination._read_private_json` (runtime heartbeats, attempt
+  reports and the ready marker) and `service_runtime._read_private_json`
+  may have the same unleased-reader replace race; neither was
+  investigated.
+- On Windows, writers can hit WinError 5 at `MoveFileEx` while readers
+  hold the target open, exhausting `storage_policy`'s replace retry (about
+  210 ms). It is pre-existing, and the re-read neither causes nor fixes it.
+- In the same job-manager test, the `environment_marker` and root
+  substring checks can never fail on Windows, because JSON escapes
+  backslashes; the Linux lanes still enforce them.
 
 No submitted exact-head human review or separate owner authorization for the
 R8c-6 ownership move was found. Technical A0 success is therefore not that
