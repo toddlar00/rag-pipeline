@@ -79,6 +79,11 @@ def _assert_private(path: Path, *, directory: bool) -> None:
         assert stat.S_IMODE(path.stat().st_mode) == expected
 
 
+def _assert_report_omits_process_id(report_text: str, pid: int) -> None:
+    """Fail if the persisted attempt report holds the process ID *pid*."""
+    assert str(pid) not in report_text
+
+
 def _attempt_outcome(store, job_id):
     execution = store.load_execution(job_id)
     paths = job_manager._attempt_paths(
@@ -277,11 +282,161 @@ print("private worker output")
     assert str(environment_marker) not in private_outcome
     assert str(root) not in private_outcome
     assert execution.attempt_token not in private_outcome
-    assert str(runtime.worker_pid) not in private_outcome
+    _assert_report_omits_process_id(private_outcome, runtime.worker_pid)
     public = json.dumps(result.as_dict())
     assert str(root) not in public
     assert execution.attempt_token not in public
     assert "worker_pid" not in public
+
+
+class _PidDigitClock:
+    """job_coordination's time module, pinned to an instant that holds a PID.
+
+    The wall clock is real until ``pin`` receives the worker's PID. Every later
+    read returns one instant, less than 10 ** len(str(pid)) seconds ahead,
+    whose whole seconds end in that PID. Each timestamp the manager records
+    from the worker's start on then carries the PID's digits inside an
+    unrelated float. Monotonic reads and sleeps stay real.
+    """
+
+    def __init__(self):
+        self.pinned = None
+
+    def pin(self, pid):
+        modulus = 10 ** len(str(pid))
+        earliest = int(time.time()) + 2
+        seconds = earliest - earliest % modulus + pid
+        if seconds < earliest:
+            seconds += modulus
+        self.pinned = seconds + 0.5
+
+    def time(self):
+        return time.time() if self.pinned is None else self.pinned
+
+    def __getattr__(self, name):
+        return getattr(time, name)
+
+
+def test_run_job_report_pid_check_ignores_pid_digits_in_timestamps(
+        tmp_path, monkeypatch):
+    # Hosted run 36905319851 failed the success test above because the worker
+    # PID 2932 occurred inside worker_started_at=1790878534.3229322. Pinning
+    # the manager's clock reproduces that collision for any worker PID.
+    worker = _write_worker(tmp_path / "quick_worker.py", "print('done')\n")
+    clock = _PidDigitClock()
+    monkeypatch.setattr(job_manager, "time", clock)
+    supervise = job_manager._default_runtime_binding().supervisor
+
+    def supervisor(script_path, argv, **options):
+        started = options["on_child_started"]
+
+        def on_child_started(process):
+            clock.pin(int(process.pid))
+            started(process)
+
+        return supervise(
+            script_path, argv,
+            **{**options, "on_child_started": on_child_started})
+
+    store = job_runtime.JobStore(tmp_path / "jobs")
+    submitted = store.submit_job("full", [], timeout_seconds=5)
+    execution = store.load_execution(submitted.job_id)
+
+    result = job_manager.run_job(
+        store, submitted.job_id, script_path=worker, supervisor=supervisor)
+
+    assert result.status == "succeeded"
+    paths = job_manager._attempt_paths(
+        store, submitted.job_id, 1, create=False)
+    runtime = job_manager._load_runtime(paths.runtime, execution=execution)
+    outcome = job_manager._load_attempt_report(paths, execution=execution)
+    assert outcome is not None
+    assert outcome.worker_started_at == clock.pinned
+    assert outcome.finished_at == clock.pinned
+    report_text = paths.attempt_report.read_text(encoding="utf-8")
+    assert str(runtime.worker_pid) in report_text
+    _assert_report_omits_process_id(report_text, runtime.worker_pid)
+
+
+# The hosted run persisted the last two of these four times (worker start and
+# finish) for the attempt whose worker had PID 2932.
+_FIXED_REPORT_TIMES = (
+    1790878533.8817444,  # submitted
+    1790878534.0068514,  # manager started
+    1790878534.3229322,  # worker started
+    1790878534.4429212,  # finished
+)
+_FIXED_JOB_ID = "5d3c0b7e9a1f4e6d8c6b4a0f1e3d5c7b"
+
+
+def _published_success_report(path: Path, *, job_id: str = _FIXED_JOB_ID
+                              ) -> str:
+    """Publish a manager success report with fixed times and return its text."""
+    submitted, manager_started, worker_started, finished = _FIXED_REPORT_TIMES
+    report = attempt_reporting.new_report(
+        job_id=job_id, attempt_number=1, run_id=f"{job_id}.a1",
+        operation="full", status="queued", submitted_at=submitted,
+        observed_at=manager_started, manager_started_at=manager_started)
+    report = attempt_reporting.advance(
+        report, observed_at=manager_started, status="starting")
+    report = attempt_reporting.advance(
+        report, observed_at=worker_started, status="running",
+        worker_started=True, worker_started_at=worker_started)
+    report = attempt_reporting.advance(
+        report, observed_at=finished, status="succeeded",
+        cleanup_confirmed=True, cleanup_confirmed_at=finished,
+        finished_at=finished, worker_telemetry_status="succeeded",
+        terminal_reason="completed", exit_code=0)
+    attempt_reporting.publish(path, report)
+    return path.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(("pid", "job_id"), [
+    pytest.param(2932, _FIXED_JOB_ID, id="hosted-run-worker-start"),
+    pytest.param(1790, _FIXED_JOB_ID, id="epoch-prefix-of-every-time"),
+    pytest.param(1841, "1841ea694f0c4b1d8e2a7c3b9d5f6a10", id="hex-job-id"),
+])
+def test_report_pid_check_ignores_pid_digits_inside_other_values(
+        tmp_path, pid, job_id):
+    report_text = _published_success_report(
+        tmp_path / "attempt.json", job_id=job_id)
+
+    assert str(pid) in report_text
+    _assert_report_omits_process_id(report_text, pid)
+
+
+@pytest.mark.parametrize(("where", "value"), [
+    pytest.param(("outcome", "exit_code"), int, id="existing-field-int"),
+    pytest.param(("outcome", "worker_pid"), int, id="new-field-int"),
+    pytest.param(("outcome", "worker_pid"), float, id="new-field-float"),
+    pytest.param(("outcome", "worker_pid"), str, id="new-field-str"),
+    pytest.param(("outcome", "worker"), "pid={}".format, id="str-token"),
+    pytest.param(("outcome", "worker"), "pid{}".format, id="str-glued"),
+    pytest.param(("outcome", "workers"), lambda pid: [pid], id="list-item"),
+    pytest.param(
+        ("outcome", "workers"), lambda pid: {"pid": pid}, id="nested-value"),
+    pytest.param(
+        ("outcome", "workers"), lambda pid: {str(pid): True}, id="key"),
+    pytest.param(("worker_pid",), int, id="new-top-level-field"),
+])
+def test_report_pid_check_rejects_a_persisted_pid(tmp_path, where, value):
+    pid = 4057
+    report_text = _published_success_report(tmp_path / "attempt.json")
+    assert str(pid) not in report_text
+    _assert_report_omits_process_id(report_text, pid)
+
+    payload = json.loads(report_text)
+    *parents, name = where
+    target = payload
+    for parent in parents:
+        target = target[parent]
+    target[name] = value(pid)
+    mutant = tmp_path / "mutant.json"
+    storage_policy.atomic_write_private_json(mutant, payload)
+
+    with pytest.raises(AssertionError):
+        _assert_report_omits_process_id(
+            mutant.read_text(encoding="utf-8"), pid)
 
 
 def test_direct_run_job_executes_from_persisted_working_directory(
