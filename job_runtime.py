@@ -729,11 +729,17 @@ def _read_private_json(path: Path, *, maximum: int, label: str) -> dict:
 
     Writers publish every job document by temporary file + rename under the
     store lease, but get_job and load_execution read without it, so a strict
-    read can observe a legitimate replace in progress.  Only the exact
-    signatures of that replace are re-read, a bounded number of times.  Every
-    other violation fails closed on its first observation, and a replace that
-    persists through every re-read fails closed with the same type, message
-    and cause as a single strict read.
+    read can observe a legitimate replace in progress.  Observations that a
+    replace can produce are re-read, a bounded number of times.  Filesystems
+    such as ext4 reuse a freed inode number for the next temporary file, so
+    two replaces between lstat and open can present the same inode number
+    with other content.  That cannot be told apart from an in-place change
+    made before the open (or one that alters only timestamps after the
+    read), and both are re-read.  A change that the open descriptor itself
+    shows during the read, other than its unlink, and every other violation
+    fail closed on their first observation.  A replace that persists through
+    every re-read fails closed with the same type, message and cause as a
+    single strict read.
     """
     replaced: _ConcurrentReplaceError | None = None
     for delay in (*_REPLACE_REREAD_DELAYS, None):
@@ -794,12 +800,11 @@ def _read_private_json_once(path: Path, *, maximum: int, label: str) -> dict:
         if (not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1
                 or opened_binding != before_binding):
             # A replace between lstat and open hands this descriptor another
-            # unlinked regular file, or the same inode caught mid-unlink.
-            rebound = (
-                stat.S_ISREG(opened.st_mode) and opened.st_nlink <= 1
-                and ((int(opened.st_dev), int(opened.st_ino))
-                     != (int(before.st_dev), int(before.st_ino))
-                     or opened.st_nlink == 0))
+            # regular file, the same inode caught mid-unlink, or -- after two
+            # replaces that reuse the freed inode number -- the same number
+            # with other content.  Only a non-regular or multiply linked
+            # descriptor can never come from a replace.
+            rebound = stat.S_ISREG(opened.st_mode) and opened.st_nlink <= 1
             error = _ConcurrentReplaceError if rebound else JobCorruptError
             raise error(f"{label} changed while being opened")
         chunks = []
@@ -829,10 +834,9 @@ def _read_private_json_once(path: Path, *, maximum: int, label: str) -> dict:
         )
         if (after_identity != opened_identity
                 or named_after_identity != before_identity):
-            # A rename never changes the descriptor's content and can only
-            # drop its link count to zero; the pathname then names another
-            # inode, or this one caught mid-unlink.  Any other difference is
-            # an in-place change and fails closed.
+            # A rename during the read never changes the descriptor's content
+            # and can only drop its link count to zero; the pathname then
+            # names another inode, or this one caught mid-unlink.
             content_stable = after_identity[:4] == opened_identity[:4]
             descriptor_stable = (
                 after_identity == opened_identity or after.st_nlink == 0)
@@ -840,8 +844,23 @@ def _read_private_json_once(path: Path, *, maximum: int, label: str) -> dict:
                 (int(named_after.st_dev), int(named_after.st_ino))
                 != (int(before.st_dev), int(before.st_ino))
                 or named_after.st_nlink == 0)
+            # If the descriptor never changed and the pathname still names it
+            # with the same binding, only timestamps differ from the pre-open
+            # lstat: the document changed before it was opened, which inode
+            # number reuse makes indistinguishable from two replaces (or only
+            # its timestamps changed after the read).  The held descriptor
+            # pins its inode number, so any other difference is an in-place
+            # change and fails closed.
+            named_after_binding = (
+                int(named_after.st_dev), int(named_after.st_ino),
+                int(named_after.st_size), int(named_after.st_nlink),
+            )
+            changed_before_open = (
+                after_identity == opened_identity
+                and named_after_binding == opened_binding)
             error = (_ConcurrentReplaceError
-                     if content_stable and descriptor_stable and rebound
+                     if (content_stable and descriptor_stable and rebound)
+                     or changed_before_open
                      else JobCorruptError)
             raise error(f"{label} changed while being read")
         payload = json.loads(

@@ -1207,19 +1207,35 @@ def test_replace_between_lstat_and_open_rereads_the_new_generation(
     assert probe.opens == 2
 
 
-@pytest.mark.parametrize(("grow", "message"), [
-    pytest.param(True, "changed while being opened", id="other-size"),
-    pytest.param(False, "changed while being read", id="same-size"),
+@pytest.mark.parametrize("reader", ["get_job", "load_execution"])
+def test_two_replaces_between_lstat_and_open_reread_the_newest_generation(
+        tmp_path, monkeypatch, reader):
+    # On ext4 the second replace reuses the first generation's inode number.
+    store, summary, state_path = _job_state_path(tmp_path)
+    _await_newer_timestamps(tmp_path, state_path)
+
+    def publish_twice() -> None:
+        _publish_next_state(state_path)
+        _publish_next_state(state_path)
+
+    probe = _DocumentProbe(monkeypatch, state_path, before_open=publish_twice)
+    assert getattr(store, reader)(summary.job_id).revision == (
+        summary.revision + 2)
+    assert probe.opens == 2
+
+
+@pytest.mark.parametrize("grow", [
+    pytest.param(True, id="other-size"),
+    pytest.param(False, id="same-size"),
 ])
-def test_same_inode_with_new_content_before_open_fails_closed(
-        tmp_path, monkeypatch, grow, message):
+def test_same_inode_with_new_content_before_open_rereads_the_new_generation(
+        tmp_path, monkeypatch, grow):
     store, summary, state_path = _job_state_path(tmp_path)
     probe = _DocumentProbe(
         monkeypatch, state_path,
         before_open=lambda: _rewrite_in_place(state_path, grow=grow))
-    with pytest.raises(JobCorruptError, match=f"^job state {message}$"):
-        store.get_job(summary.job_id)
-    assert probe.opens == 1
+    assert store.get_job(summary.job_id).revision == summary.revision + 1
+    assert probe.opens == 2
 
 
 def test_hard_link_made_before_open_fails_closed_at_once(

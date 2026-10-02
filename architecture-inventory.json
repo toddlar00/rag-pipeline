@@ -33108,7 +33108,7 @@
             "scope": "top_level"
           }
         ],
-        "definition_locations_sha256": "3a84dd5139762021d15ee2d4ff326dd201af3243ee79cad9e75c1a3a3d6cf9fe",
+        "definition_locations_sha256": "6caedb5aab5a8116f8ea23835b21c64567f615e0a7c1eceacae87a86ca8cbccf",
         "function_count": 83,
         "functions": [
           {
@@ -33640,9 +33640,9 @@
           }
         ],
         "module": "job_runtime",
-        "non_blank_lines": 1758,
+        "non_blank_lines": 1777,
         "path": "job_runtime.py",
-        "physical_lines": 1950,
+        "physical_lines": 1969,
         "top_level_function_count": 43
       },
       {
@@ -65568,7 +65568,7 @@
         "top_level_function_count": 2
       }
     ],
-    "physical_line_count": 131909,
+    "physical_line_count": 131928,
     "source_groups": [
       "production",
       "tools",
