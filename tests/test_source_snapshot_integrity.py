@@ -701,6 +701,124 @@ def test_snapshot_cleanup_retry_never_unlinks_a_swapped_marker(
     assert current != original
 
 
+# Spelled out rather than read from the module so that dropping a code from
+# the retry set fails a case instead of silently removing it.
+@pytest.mark.parametrize(
+    "winerror", [5, 32, 33],
+    ids=["access-denied", "sharing-violation", "lock-violation"])
+def test_snapshot_cleanup_outlasts_each_transient_windows_hold(
+        monkeypatch, tmp_path, winerror):
+    source = tmp_path / "book.pdf"
+    source.write_bytes(b"source")
+    sleeps = []
+
+    with artifact_io.immutable_file_snapshot(
+            source, temporary_root=tmp_path) as snapshot:
+        blocked = _fail_unlink(
+            monkeypatch, artifact_io._SNAPSHOT_OWNER_MARKER,
+            lambda: _sharing_violation(winerror), failures=1)
+        monkeypatch.setattr(artifact_io.time, "sleep", sleeps.append)
+    monkeypatch.undo()
+
+    assert [error.winerror for error in blocked] == [winerror]
+    assert sleeps == [artifact_io._SNAPSHOT_CLEANUP_RETRY_DELAYS[0]]
+    assert not snapshot.path.parent.exists()
+
+
+def test_snapshot_cleanup_retry_never_unlinks_a_rewritten_payload(
+        monkeypatch, tmp_path):
+    source = tmp_path / "book.pdf"
+    source.write_bytes(b"source")
+    sleeps = []
+    snapshot_path = None
+
+    def rewrite_payload(delay):
+        sleeps.append(delay)
+        if len(sleeps) == 1:
+            snapshot_path.write_bytes(b"rewritten generation")
+
+    with pytest.raises(
+            OSError, match="snapshot scratch file changed before cleanup"):
+        with artifact_io.immutable_file_snapshot(
+                source, temporary_root=tmp_path) as snapshot:
+            snapshot_path = snapshot.path
+            blocked = _fail_unlink(
+                monkeypatch, snapshot_path.name, _sharing_violation,
+                failures=1)
+            monkeypatch.setattr(artifact_io.time, "sleep", rewrite_payload)
+    monkeypatch.undo()
+
+    assert len(blocked) == 1
+    assert sleeps == [artifact_io._SNAPSHOT_CLEANUP_RETRY_DELAYS[0]]
+    # Same entry, type and link count: only the content identity differs,
+    # and the rewritten generation is kept under its ownership marker.
+    assert snapshot_path.read_bytes() == b"rewritten generation"
+    assert (snapshot_path.parent
+            / artifact_io._SNAPSHOT_OWNER_MARKER).is_file()
+
+
+def test_snapshot_cleanup_retry_refuses_a_payload_linked_during_backoff(
+        monkeypatch, tmp_path):
+    source = tmp_path / "book.pdf"
+    source.write_bytes(b"source")
+    alias = tmp_path / "alias.pdf"
+    sleeps = []
+    snapshot_path = None
+
+    def link_payload(delay):
+        sleeps.append(delay)
+        if len(sleeps) == 1:
+            os.link(snapshot_path, alias)
+
+    with pytest.raises(
+            OSError,
+            match="refusing non-regular or multiply-linked scratch file"):
+        with artifact_io.immutable_file_snapshot(
+                source, temporary_root=tmp_path) as snapshot:
+            snapshot_path = snapshot.path
+            blocked = _fail_unlink(
+                monkeypatch, snapshot_path.name, _sharing_violation,
+                failures=1)
+            monkeypatch.setattr(artifact_io.time, "sleep", link_payload)
+    monkeypatch.undo()
+
+    assert len(blocked) == 1
+    assert sleeps == [artifact_io._SNAPSHOT_CLEANUP_RETRY_DELAYS[0]]
+    # The payload's content identity omits the link count, so only the
+    # recheck keeps a retry from unlinking one name of an aliased payload.
+    assert os.lstat(snapshot_path).st_nlink == 2
+    assert alias.read_bytes() == b"source"
+    assert (snapshot_path.parent
+            / artifact_io._SNAPSHOT_OWNER_MARKER).is_file()
+
+
+def test_snapshot_cleanup_retry_accepts_a_payload_that_vanished(
+        monkeypatch, tmp_path):
+    source = tmp_path / "book.pdf"
+    source.write_bytes(b"source")
+    real_unlink = os.unlink
+    sleeps = []
+    snapshot_path = None
+
+    def remove_payload(delay):
+        sleeps.append(delay)
+        if len(sleeps) == 1:
+            real_unlink(snapshot_path)
+
+    with artifact_io.immutable_file_snapshot(
+            source, temporary_root=tmp_path) as snapshot:
+        snapshot_path = snapshot.path
+        blocked = _fail_unlink(
+            monkeypatch, snapshot_path.name, _sharing_violation, failures=1)
+        monkeypatch.setattr(artifact_io.time, "sleep", remove_payload)
+    monkeypatch.undo()
+
+    # The payload unlink is missing_ok on every attempt, not only the first.
+    assert len(blocked) == 1
+    assert sleeps == [artifact_io._SNAPSHOT_CLEANUP_RETRY_DELAYS[0]]
+    assert not snapshot_path.parent.exists()
+
+
 def test_snapshot_cleanup_retry_rechecks_the_pinned_directory(
         monkeypatch, tmp_path):
     source = tmp_path / "book.pdf"
