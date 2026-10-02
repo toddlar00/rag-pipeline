@@ -523,6 +523,286 @@ def test_snapshot_cleanup_failure_after_success_is_an_error(
     assert not snapshot_path.parent.exists()
 
 
+def _sharing_violation(winerror: int = 32) -> PermissionError:
+    # OSError's four-argument form maps winerror only on Windows builds.
+    error = PermissionError(errno.EACCES, "simulated sharing violation")
+    error.winerror = winerror
+    return error
+
+
+def _fail_unlink(monkeypatch, basename, error_factory, *, failures=None):
+    """Fail unlinks of one scratch leaf; ``failures=None`` never releases it.
+
+    Windows pathlib unlinks through the same ``os`` module, so filtering by
+    basename covers both the pathname and the POSIX ``dir_fd`` branches.
+    """
+    real_unlink = os.unlink
+    raised = []
+
+    def unlink(path, *args, **kwargs):
+        if (os.path.basename(os.fspath(path)) == basename
+                and (failures is None or len(raised) < failures)):
+            raised.append(error_factory())
+            raise raised[-1]
+        return real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(artifact_io.os, "unlink", unlink)
+    return raised
+
+
+def _expire_snapshot_owner(marker_path):
+    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    marker["pid"] = 2_147_483_647
+    marker["created_ns"] = 1
+    artifact_io.atomic_write_private_json(marker_path, marker)
+
+
+@pytest.mark.skipif(
+    os.name != "nt", reason="POSIX unlink ignores open readers")
+def test_snapshot_cleanup_outlasts_a_foreign_marker_reader(
+        monkeypatch, tmp_path):
+    # Every snapshot first runs the stale-scratch janitor over the shared
+    # root, which reads each live run's owner marker with a plain open().
+    # On Windows that handle never grants FILE_SHARE_DELETE, so the owner's
+    # marker unlink fails with WinError 32 while another process reads it.
+    source = tmp_path / "book.pdf"
+    source.write_bytes(b"source")
+    held = []
+    sleeps = []
+
+    def release_on_backoff(delay):
+        sleeps.append(delay)
+        while held:
+            held.pop().close()
+
+    try:
+        with artifact_io.immutable_file_snapshot(
+                source, temporary_root=tmp_path) as snapshot:
+            marker = snapshot.path.parent / artifact_io._SNAPSHOT_OWNER_MARKER
+            held.append(marker.open("rb"))
+            monkeypatch.setattr(artifact_io.time, "sleep", release_on_backoff)
+    finally:
+        while held:
+            held.pop().close()
+
+    assert sleeps == [artifact_io._SNAPSHOT_CLEANUP_RETRY_DELAYS[0]]
+    assert not snapshot.path.parent.exists()
+
+
+def test_snapshot_cleanup_fails_closed_when_a_marker_hold_persists(
+        monkeypatch, tmp_path):
+    source = tmp_path / "book.pdf"
+    source.write_bytes(b"source")
+    sleeps = []
+    snapshot_path = None
+
+    with pytest.raises(PermissionError) as raised:
+        with artifact_io.immutable_file_snapshot(
+                source, temporary_root=tmp_path) as snapshot:
+            snapshot_path = snapshot.path
+            blocked = _fail_unlink(
+                monkeypatch, artifact_io._SNAPSHOT_OWNER_MARKER,
+                _sharing_violation)
+            monkeypatch.setattr(artifact_io.time, "sleep", sleeps.append)
+    monkeypatch.undo()
+
+    delays = artifact_io._SNAPSHOT_CLEANUP_RETRY_DELAYS
+    assert len(blocked) == len(delays) + 1
+    assert sleeps == list(delays)
+    # The last attempt's error surfaces unchanged and unchained.
+    assert raised.value is blocked[-1]
+    assert raised.value.winerror == 32
+    assert raised.value.__cause__ is None
+    assert snapshot_path is not None
+    assert not snapshot_path.exists()
+    directory = snapshot_path.parent
+    marker_path = directory / artifact_io._SNAPSHOT_OWNER_MARKER
+    assert json.loads(
+        marker_path.read_text(encoding="utf-8"))["nonce"] == directory.name
+
+    # The retained marker still lets the stale-owner janitor collect the run.
+    _expire_snapshot_owner(marker_path)
+    assert artifact_io.cleanup_stale_snapshot_directories(
+        tmp_path, min_age_seconds=0, now_ns=10, apply=True) == [directory]
+    assert not directory.exists()
+
+
+@pytest.mark.parametrize(
+    "error_factory",
+    [
+        lambda: _sharing_violation(1032),
+        lambda: PermissionError(errno.EACCES, "permission denied"),
+        lambda: OSError(errno.EIO, "unlink blocked"),
+    ],
+    ids=["other-winerror", "no-winerror", "plain-oserror"],
+)
+def test_snapshot_cleanup_does_not_retry_other_unlink_errors(
+        monkeypatch, tmp_path, error_factory):
+    source = tmp_path / "book.pdf"
+    source.write_bytes(b"source")
+    sleeps = []
+    snapshot_path = None
+
+    with pytest.raises(OSError) as raised:
+        with artifact_io.immutable_file_snapshot(
+                source, temporary_root=tmp_path) as snapshot:
+            snapshot_path = snapshot.path
+            blocked = _fail_unlink(
+                monkeypatch, artifact_io._SNAPSHOT_OWNER_MARKER, error_factory)
+            monkeypatch.setattr(artifact_io.time, "sleep", sleeps.append)
+    monkeypatch.undo()
+
+    assert len(blocked) == 1
+    assert raised.value is blocked[0]
+    assert raised.value.__cause__ is None
+    assert sleeps == []
+    assert snapshot_path is not None
+    assert not snapshot_path.exists()
+    assert (snapshot_path.parent
+            / artifact_io._SNAPSHOT_OWNER_MARKER).is_file()
+
+
+def test_snapshot_cleanup_retry_never_unlinks_a_swapped_marker(
+        monkeypatch, tmp_path):
+    source = tmp_path / "book.pdf"
+    source.write_bytes(b"source")
+    sleeps = []
+    swap = {}
+
+    def replace_marker(delay):
+        sleeps.append(delay)
+        if "identity" not in swap:
+            marker_path = swap["path"]
+            artifact_io.atomic_write_private_json(
+                marker_path,
+                json.loads(marker_path.read_text(encoding="utf-8")))
+            swap["identity"] = artifact_io._snapshot_tree_identity(
+                os.lstat(marker_path))
+
+    with pytest.raises(
+            OSError, match="snapshot scratch file changed before cleanup"):
+        with artifact_io.immutable_file_snapshot(
+                source, temporary_root=tmp_path) as snapshot:
+            swap["path"] = (
+                snapshot.path.parent / artifact_io._SNAPSHOT_OWNER_MARKER)
+            original = artifact_io._snapshot_tree_identity(
+                os.lstat(swap["path"]))
+            blocked = _fail_unlink(
+                monkeypatch, artifact_io._SNAPSHOT_OWNER_MARKER,
+                _sharing_violation, failures=1)
+            monkeypatch.setattr(artifact_io.time, "sleep", replace_marker)
+    monkeypatch.undo()
+
+    assert len(blocked) == 1
+    assert sleeps == [artifact_io._SNAPSHOT_CLEANUP_RETRY_DELAYS[0]]
+    # The swapped generation is never deleted; it stays marker-owned.
+    current = artifact_io._snapshot_tree_identity(os.lstat(swap["path"]))
+    assert current == swap["identity"]
+    assert current != original
+
+
+def test_snapshot_cleanup_retry_rechecks_the_pinned_directory(
+        monkeypatch, tmp_path):
+    source = tmp_path / "book.pdf"
+    source.write_bytes(b"source")
+    real_path_matches = artifact_io._PinnedSnapshotDirectory.path_matches
+    moved = []
+    snapshot_path = None
+
+    def path_matches(pinned):
+        return not moved and real_path_matches(pinned)
+
+    monkeypatch.setattr(
+        artifact_io._PinnedSnapshotDirectory, "path_matches", path_matches)
+
+    with pytest.raises(
+            OSError,
+            match="snapshot scratch root changed before cleanup") as raised:
+        with artifact_io.immutable_file_snapshot(
+                source, temporary_root=tmp_path) as snapshot:
+            snapshot_path = snapshot.path
+            blocked = _fail_unlink(
+                monkeypatch, artifact_io._SNAPSHOT_OWNER_MARKER,
+                _sharing_violation)
+            monkeypatch.setattr(artifact_io.time, "sleep", moved.append)
+    monkeypatch.undo()
+
+    assert len(blocked) == 1
+    assert moved == [artifact_io._SNAPSHOT_CLEANUP_RETRY_DELAYS[0]]
+    assert raised.value.__cause__ is blocked[0]
+    assert snapshot_path is not None
+    assert (snapshot_path.parent
+            / artifact_io._SNAPSHOT_OWNER_MARKER).is_file()
+
+
+def test_snapshot_cleanup_hold_keeps_body_error_precedence(
+        monkeypatch, tmp_path):
+    source = tmp_path / "book.pdf"
+    source.write_bytes(b"source")
+    sleeps = []
+    reports = []
+    snapshot_path = None
+
+    class BodyFailure(RuntimeError):
+        pass
+
+    with pytest.raises(BodyFailure, match="body failed") as raised:
+        with artifact_io.immutable_file_snapshot(
+                source, temporary_root=tmp_path,
+                cleanup_error_fn=lambda *args, **kwargs: reports.append(
+                    (args, kwargs)),
+        ) as snapshot:
+            snapshot_path = snapshot.path
+            blocked = _fail_unlink(
+                monkeypatch, artifact_io._SNAPSHOT_OWNER_MARKER,
+                _sharing_violation)
+            monkeypatch.setattr(artifact_io.time, "sleep", sleeps.append)
+            raise BodyFailure("body failed")
+    monkeypatch.undo()
+
+    delays = artifact_io._SNAPSHOT_CLEANUP_RETRY_DELAYS
+    assert len(blocked) == len(delays) + 1
+    assert sleeps == list(delays)
+    assert [kwargs["error"] for _, kwargs in reports] == [blocked[-1]]
+    assert raised.value.__notes__ == [
+        f"Snapshot cleanup also failed: {blocked[-1]}"]
+    assert snapshot_path is not None
+    assert not snapshot_path.exists()
+    assert (snapshot_path.parent
+            / artifact_io._SNAPSHOT_OWNER_MARKER).is_file()
+
+
+def test_stale_snapshot_cleanup_outlasts_a_transient_payload_hold(
+        monkeypatch, tmp_path):
+    owned_root = artifact_io._snapshot_scratch_root(tmp_path)
+    owned = artifact_io.ensure_private_directory(owned_root / "run-owned")
+    artifact_io.atomic_write_private_json(
+        owned / artifact_io._SNAPSHOT_OWNER_MARKER,
+        {
+            "schema_version": artifact_io._SNAPSHOT_OWNER_SCHEMA_VERSION,
+            "kind": "rag_snapshot_scratch",
+            "pid": 2_147_483_647,
+            "process_birth": None,
+            "created_ns": 1,
+            "nonce": owned.name,
+        },
+    )
+    (owned / "sensitive.pdf").write_bytes(b"sensitive")
+    sleeps = []
+    blocked = _fail_unlink(
+        monkeypatch, "sensitive.pdf", _sharing_violation, failures=1)
+    monkeypatch.setattr(artifact_io.time, "sleep", sleeps.append)
+
+    removed = artifact_io.cleanup_stale_snapshot_directories(
+        tmp_path, min_age_seconds=0, now_ns=10, apply=True)
+    monkeypatch.undo()
+
+    assert removed == [owned]
+    assert not owned.exists()
+    assert len(blocked) == 1
+    assert sleeps == [artifact_io._SNAPSHOT_CLEANUP_RETRY_DELAYS[0]]
+
+
 def test_stale_snapshot_cleanup_removes_only_marker_owned_dead_runs(tmp_path):
     owned_root = artifact_io._snapshot_scratch_root(tmp_path)
     owned = artifact_io.ensure_private_directory(owned_root / "run-owned")

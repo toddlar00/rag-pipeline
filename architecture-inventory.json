@@ -2904,7 +2904,7 @@
             "target": "_call_openai_compatible"
           },
           {
-            "locations_sha256": "9f8fcc02842ddd9ec1465d77a32ff1eb1c261f71b8409f59649ba4a3ecabfa8f",
+            "locations_sha256": "4ebaaf28c24154a8f169f3a902069ff3e8f21e226a2eec2dff7884b8ca23cbbe",
             "occurrence_count": 8,
             "operations": [
               "setattr"
@@ -3108,7 +3108,7 @@
             "target": "_convert_pdf_generation"
           },
           {
-            "locations_sha256": "2c70cac4c122ae4bf418f7f8df3e097b2940f73ba06ead56122e5cff0eaaa451",
+            "locations_sha256": "e981d1e48fe9c3f684e15cc0177bc28523b1cd4d4a3d17e1b119bd6bdd532983",
             "occurrence_count": 3,
             "operations": [
               "setattr"
@@ -3148,7 +3148,7 @@
             "target": "_converted_outputs_complete"
           },
           {
-            "locations_sha256": "8c7dd2d0910f13b723040e0722532acd566f538977797ad5ce78029cbc499acb",
+            "locations_sha256": "88bafb0001e1b348254018b518ddff0e68a39a67f00b25866be3e01f150ba0b4",
             "occurrence_count": 1,
             "operations": [
               "setattr"
@@ -4010,7 +4010,7 @@
             "target": "_normalize_source_markdown_text"
           },
           {
-            "locations_sha256": "983ffd26e9047c881e5f0d93e781072c8b61f32aca5aaa83df19106dd82981cf",
+            "locations_sha256": "6cb153f0dce8f208bf06574b5e8169e1bf89eae53b482ed59666dd69331451be",
             "occurrence_count": 8,
             "operations": [
               "setattr"
@@ -4376,7 +4376,7 @@
             "target": "_raptor_output_complete"
           },
           {
-            "locations_sha256": "a23ff96f8b01eaf7485594af0f51d92c94b5175f7ccd3f6264ebe3effd82b079",
+            "locations_sha256": "d7da3bfa6760c377afc0684d09de56622a763663ba35aa002f7c99f4a13acc29",
             "occurrence_count": 7,
             "operations": [
               "setattr"
@@ -4444,7 +4444,7 @@
             "target": "_recover_disjoint_section_flow_groups"
           },
           {
-            "locations_sha256": "921793dc2866417b4d80e1b70d3aec33bbcba6504afa2e9c005a8ad7483a277b",
+            "locations_sha256": "93d971c41f069dab9375f12434b67307e2f9e75c6ff1b3d07ad287893269a213",
             "occurrence_count": 5,
             "operations": [
               "setattr"
@@ -6102,7 +6102,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "30ad91fad0543a529b9e8157763981b90d87233d1fa55bb1cde4cda6ba2b37e5",
+          "locations_sha256": "4bc09bd506e256eb4c6b36edc808df5057fc1b90c30b2f9addc20751e2886e9e",
           "name": "_SourceOutputAliasError",
           "occurrence_count": 1,
           "paths": [
@@ -6750,7 +6750,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "43b92224930d2cdd9f957a9db6aa65ce30029cd1a588a203981cf0071df3a3f2",
+          "locations_sha256": "afbb6982de9750830fb19509050bb187730516745fb146719a292cde1922acdd",
           "name": "_artifact_completion_path",
           "occurrence_count": 26,
           "paths": [
@@ -6798,7 +6798,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "219659704fe98682afc9d69241bc4e23ad8b260b164c6c8e6aff2a79ffee61b3",
+          "locations_sha256": "52ad9c2e6795e0383e16b02646deb3a94b4ab58adec24b4b19cb174ab054e12f",
           "name": "_artifact_parameters_sha256",
           "occurrence_count": 17,
           "paths": [
@@ -6978,7 +6978,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "587ecd935750c5c5c8f4dd537a8a336b65e9feb4a21b527228c9c6e35d2f7a9f",
+          "locations_sha256": "860be481fae4be014849f0fe86951cef434b10def8e792fe282219bae431f8e4",
           "name": "_atomic_write_json",
           "occurrence_count": 39,
           "paths": [
@@ -7038,7 +7038,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "196058bfc6acfbb64c977baf318a1cc219530bafa9c7071a4e46796b5d5ba2ac",
+          "locations_sha256": "83c5cc942be62a19903cf903e0e73dbe1d15c813744aacd4d603aadcf4311cd5",
           "name": "_atomic_write_jsonl",
           "occurrence_count": 15,
           "paths": [
@@ -7506,7 +7506,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "6ffce1b54216993483cdc344dbb7dac230f7da700c8993f728421871d8734fd2",
+          "locations_sha256": "e1d2779b15f1b6584729e565943245fec3986e8b2e128718c5fc4d1933571ec9",
           "name": "_cached_artifact_sha256",
           "occurrence_count": 13,
           "paths": [
@@ -8010,7 +8010,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "c8e2f839eaed8f5e28d8f4cd31f8c1cbabb423d337d3ee3eb20e71c5451298b7",
+          "locations_sha256": "1fb82d5eccb9a5070972670c0504f60a93f54063355768e2c85bf9d674f52d84",
           "name": "_chunk_output_lease",
           "occurrence_count": 2,
           "paths": [
@@ -8101,7 +8101,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "6d065e4f108ad254059e4ed9e9c5464b5505095359ec05fcc5db74bac5735372",
+          "locations_sha256": "b147308224ee96b5f87f05d8a74ef42834779d12ec2dd209132531b3ad44eca9",
           "name": "_chunks_complete",
           "occurrence_count": 21,
           "paths": [
@@ -8357,7 +8357,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "018d2917890bb20c6f7e3324ccebc8ea7523dca586a70dcae0d8ff8808bc03e8",
+          "locations_sha256": "75398a028df017a0996c2139b3b9ac9ace4739692e004a789becb9605d7ba138",
           "name": "_conversion_output_lease",
           "occurrence_count": 1,
           "paths": [
@@ -8461,7 +8461,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "1278d4ac9a952c752acff76ba5c5ed0303a09b735830ecd14601ad5edc89d264",
+          "locations_sha256": "0ec4464bc99b53ea72caf186e3bf8ccdf39e727e5be04f417dacbdbf27069f76",
           "name": "_converted_outputs_complete",
           "occurrence_count": 14,
           "paths": [
@@ -8753,7 +8753,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "19601a2bbc5e88539f753923d9d95e4300e545760e4e63f3bd05fefc6dd4c017",
+          "locations_sha256": "7dca1d5bda6a8db4c44792d0ee0197ca656878fa7e014e7c66011ebd3ed85d61",
           "name": "_document_profiles",
           "occurrence_count": 15,
           "paths": [
@@ -9338,7 +9338,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "c2926da2ceb3e2a8ad22bd3b99cf1ea15733fdfd30b5aa593e24bd0bafa7f80b",
+          "locations_sha256": "1efbf1da546697add8e9c53a44ae975902ec29df6cf1062079a95c59f5744806",
           "name": "_heading_lineage",
           "occurrence_count": 17,
           "paths": [
@@ -10143,7 +10143,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "be2b1ed1e28316de91123b0cbdbadfe35e6a3d7f5b3d4d592662d5923ef60bd5",
+          "locations_sha256": "6c1ec42578ff47e9173c9c5965f49cb453e668b6cc94cd5b63b1f922487cc085",
           "name": "_load_conversion_source_binding",
           "occurrence_count": 7,
           "paths": [
@@ -10311,7 +10311,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "4c2c9f9ca9fb27b581e6b9040b9c58482c8ecc8d2b719c8332fbf9d2797f86f0",
+          "locations_sha256": "29f9e4bc1acf0b79123d1067a5320f56b0f94f5a004059abd245b73eccb5dfba",
           "name": "_load_index_snapshot_with_quality",
           "occurrence_count": 6,
           "paths": [
@@ -11813,7 +11813,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "c1900e1f0bc690770865b576fe1e986daa6e727156591915b8d22b7846f581ef",
+          "locations_sha256": "648838ad5941e8d35e545fdc1712e38da3ef9246f8d4b88f6f2856654ab8df92",
           "name": "_publish_corpus_quality_report",
           "occurrence_count": 16,
           "paths": [
@@ -12057,7 +12057,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "22c7217447da9f1bcb40f2c65d7bdd19a8cf929a3d3bf0e8d0c62db3a7b8036e",
+          "locations_sha256": "5a3d71cef22929dc5c1e4565db7e82ca73fb53fecee9f25ae6919c427da31a54",
           "name": "_quality_core",
           "occurrence_count": 43,
           "paths": [
@@ -12301,7 +12301,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "4937c06eb3642a5d8e2941f4c3bfa5a3e3c32237de56aaa3e4132628f712dd79",
+          "locations_sha256": "fe165828772fb45e781b064f4cae5e9d869d8620b9e092b7e3efc89fc4cb1091",
           "name": "_read_index_artifact_snapshot",
           "occurrence_count": 6,
           "paths": [
@@ -12477,7 +12477,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "ca1926d816d6ed32c11c19d7d6faf52435d9b869be1ff7c502878992267b38cf",
+          "locations_sha256": "18614a894cdd7121fd165d1ed995cad933cd6703bb6939525d063e3c74b33148",
           "name": "_recover_bound_table_markdown",
           "occurrence_count": 4,
           "paths": [
@@ -13481,7 +13481,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "6a4cdf6b3f6d2e235f98a756427a65cfbcc37017a47808d3fe573dc590e45f35",
+          "locations_sha256": "262094fbd16d7b3bf68e7c1aae3cc62e3c3b72adbb53b8b1bd49d033f5c8d66f",
           "name": "_retrieval_core",
           "occurrence_count": 8,
           "paths": [
@@ -13856,7 +13856,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "d0024e26a83ed00f5b7e2bef8fa635ecf45d801903d493782229143071e36607",
+          "locations_sha256": "2383b0477ef9fb443d2479c2775373dd1ab66fba1b921a61b7429544b529b790",
           "name": "_source_fidelity_core",
           "occurrence_count": 17,
           "paths": [
@@ -14054,7 +14054,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "bbccfb82e41a835d18d594b04506a5f8f40f3bfd7305935a70137d2378d4c779",
+          "locations_sha256": "cd3feb91d07d8254c61f261df0d37a6293661e862fc881409d75dfd346374bf9",
           "name": "_source_oracle_registry_binding",
           "occurrence_count": 4,
           "paths": [
@@ -14082,7 +14082,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "620609520a5f89cf02c026c7cf7c97e5ff0d66d9e1c2fbf4e8d66b24e371ecca",
+          "locations_sha256": "9b5372dbcb1ff4ae96a6bfa447dc995645057b3284ac777234b2dfccdab0e90b",
           "name": "_source_oracle_registry_path",
           "occurrence_count": 9,
           "paths": [
@@ -14342,7 +14342,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "c33246ba2e9bc8bcb0d8a8ee92a22245b9a1b8ef618cd4f5383cf628563bf944",
+          "locations_sha256": "38522f72e186ddafde8c04de6cda7b39de6beecfb176b022449b2d001dd65a1e",
           "name": "_structure_profile_parameters_binding",
           "occurrence_count": 4,
           "paths": [
@@ -14916,7 +14916,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "1dceaf976efae2757374b86218a029242b4caedd35c038e8f74bfd1426498f18",
+          "locations_sha256": "a3f01f07e156c48d362749595ffcbece1c1c50f72f972b3802e614db7ac5dfe6",
           "name": "_write_artifact_completion",
           "occurrence_count": 9,
           "paths": [
