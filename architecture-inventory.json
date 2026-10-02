@@ -2904,7 +2904,7 @@
             "target": "_call_openai_compatible"
           },
           {
-            "locations_sha256": "19e85d750c41142ac3a13bd265af1a715fc072de8446ddd7da9fb4c35f7d7cd2",
+            "locations_sha256": "2dfc8a81971aef1140063588e49606da1d6738f7f8fcc8735fc9d1ba6aa9b0bb",
             "occurrence_count": 8,
             "operations": [
               "setattr"
@@ -3108,7 +3108,7 @@
             "target": "_convert_pdf_generation"
           },
           {
-            "locations_sha256": "0bb1f25ec186a75c4d048113019385c9bfcefa0603aa0f7e87915647878da29b",
+            "locations_sha256": "8273286a6a569b800262b782c6b3766d424d08b589e73c9c7a1ffad83227cb73",
             "occurrence_count": 3,
             "operations": [
               "setattr"
@@ -3148,7 +3148,7 @@
             "target": "_converted_outputs_complete"
           },
           {
-            "locations_sha256": "284a9067141b6ad8ea1f6d5c1a0f41443b1cf2dfa1acc2e5435408b006c88d21",
+            "locations_sha256": "8b4697704d7bd79a0b1da239204addcb3f5d42adf7411c2bf127ec36fe268d13",
             "occurrence_count": 1,
             "operations": [
               "setattr"
@@ -4010,7 +4010,7 @@
             "target": "_normalize_source_markdown_text"
           },
           {
-            "locations_sha256": "374db5c173f1d2fd0adca1f9b910587b7715e1679b9889ef31f3fb4d0fcc89d4",
+            "locations_sha256": "0f73e4bf789d093a5f4038ed554161ee7c174c92858c1e54b39896e67dfdbd40",
             "occurrence_count": 8,
             "operations": [
               "setattr"
@@ -4376,7 +4376,7 @@
             "target": "_raptor_output_complete"
           },
           {
-            "locations_sha256": "3e123146314b69aef40a54eca769bbd45358e1ebe438e6bfe6155504f783a5fc",
+            "locations_sha256": "0a73ce0823339de81ec29f5ce96a5f24db0e2eed3ba4c99d98dd69ebbf845db6",
             "occurrence_count": 7,
             "operations": [
               "setattr"
@@ -4444,7 +4444,7 @@
             "target": "_recover_disjoint_section_flow_groups"
           },
           {
-            "locations_sha256": "e49d9724e9f4aee82be86b62d1326b946205d1126eeed6e91afdb402f3561f44",
+            "locations_sha256": "44bb12018037592e171b73a0f3636263a155a980b1be2ee764533e4c96b90dd4",
             "occurrence_count": 5,
             "operations": [
               "setattr"
@@ -6102,7 +6102,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "73e313347dfd029444e4bfc7d21b1f94f9f7cf8c883611086abf2e0bdf79c8e8",
+          "locations_sha256": "c733a62b7e0fe10de3f1cb7efd1d4014a2de632a6138638f4e71b0820fe3cc05",
           "name": "_SourceOutputAliasError",
           "occurrence_count": 1,
           "paths": [
@@ -6750,7 +6750,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "e26bcb587fee02631268144e12f64eae22b1815c9ec74532bf83677f6589b690",
+          "locations_sha256": "e754fdfb0d09cfb3379032fbee4a7042097324a08b699c2f13b0704cbf8d6f6d",
           "name": "_artifact_completion_path",
           "occurrence_count": 26,
           "paths": [
@@ -6798,7 +6798,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "a183d3faa55f588db2fd391a50cb3728b9d18086524ff43c1dac8db2c31dee3a",
+          "locations_sha256": "6c50759456aa3b1d2245a9bda69f9ef679497912c9768e3516c74d3bf1dba6fc",
           "name": "_artifact_parameters_sha256",
           "occurrence_count": 17,
           "paths": [
@@ -6978,7 +6978,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "8c855d8b1999335f6cb994a365ac9886d3c94c9677cd582468efe934b42c9941",
+          "locations_sha256": "17dd6540b19fd8d059984be5b8401c45ac34bc07ee26a124c4c4e462f4cab1ca",
           "name": "_atomic_write_json",
           "occurrence_count": 39,
           "paths": [
@@ -7038,7 +7038,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "6e6a59ad863dcb91d38ba1811e94d5a901dff5a49e64c8cee0eafaa106a7dd87",
+          "locations_sha256": "4f83999ce535d9f92a5d7a8c148c58f26d0e96adbee8b471d1efe68009807cdb",
           "name": "_atomic_write_jsonl",
           "occurrence_count": 15,
           "paths": [
@@ -7506,7 +7506,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "145bb21ed01e56f0dbad1ea4fe90c3d3c5790c2d80f80508e694fb6b0437167e",
+          "locations_sha256": "eb4d5e4e0ab5b0322f48928ebe74d7625208c71af4586cb2cb135c0940743311",
           "name": "_cached_artifact_sha256",
           "occurrence_count": 13,
           "paths": [
@@ -8010,7 +8010,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "9d7091d4cfab7441d1f71f28c99489cbd6231020771f4c747632d453b6ce3a39",
+          "locations_sha256": "378196cbd1b12303e87b9ef8ed7febef09995613e6fae2cfcf7465608bce71a9",
           "name": "_chunk_output_lease",
           "occurrence_count": 2,
           "paths": [
@@ -8101,7 +8101,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "60c48697ab3ce6152f2066debc2cdb0a34298f97a675fb0ac55620b5bbfc7884",
+          "locations_sha256": "f2dcd71f97ed6c5a21e2cdb83ad8fd03c3ed82779351bbb9252b6cca8f45f945",
           "name": "_chunks_complete",
           "occurrence_count": 21,
           "paths": [
@@ -8357,7 +8357,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "1ed8f7019e2c1abdad2920455ab2437e0c5bb40051a10c3025cf53ad843dfc04",
+          "locations_sha256": "5c3a08ed94e0d931588cde658110f588d173a5860aee863ee994cd57a4a0d706",
           "name": "_conversion_output_lease",
           "occurrence_count": 1,
           "paths": [
@@ -8461,7 +8461,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "56db9bd38a24b25806c5713eb9bfb893551309b05b25ac3fc6b4b33dc91576c3",
+          "locations_sha256": "13a061630285d6dc15f5d9116cf48413bca927a566eaa5ef8743d9132ef88b75",
           "name": "_converted_outputs_complete",
           "occurrence_count": 14,
           "paths": [
@@ -8753,7 +8753,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "7a8c232a2dbb8dd6a8cc6dd0163d0da87d904564715187ef7747e0b5ee50ddd9",
+          "locations_sha256": "4ecf6a26250fa9918beed084058c92e7a6dbd04d52ff65651dce8849bba4f2b7",
           "name": "_document_profiles",
           "occurrence_count": 15,
           "paths": [
@@ -9338,7 +9338,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "101d8f319e80942f54e033baada6a9c74b3db814af6456081aea8a1f29b74848",
+          "locations_sha256": "bf843b77e8c38b8627dd399eb9db242c4f351dde5590a554d144543f222c8331",
           "name": "_heading_lineage",
           "occurrence_count": 17,
           "paths": [
@@ -10143,7 +10143,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "55c5dfb4464548990e2acf60889af69366c8fc02d86b911a08b23ebc463b9f4c",
+          "locations_sha256": "c841094bb0a208204bda2fea3572dc5e9d0b281bdbee9e5c2998817d7b621296",
           "name": "_load_conversion_source_binding",
           "occurrence_count": 7,
           "paths": [
@@ -10311,7 +10311,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "f4853d8f37eeda969d80c369066f103029fb2419aced9632127b472a66dde923",
+          "locations_sha256": "7012411410b8e7e430cc189afd19ef3c604b93b2475f5e2570e24eca068079b0",
           "name": "_load_index_snapshot_with_quality",
           "occurrence_count": 6,
           "paths": [
@@ -11813,7 +11813,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "e563e788db50afb68751c334c06a73417fe7a4fe68b23950ef567816b36e3e33",
+          "locations_sha256": "18b6fe0e4e7e22e229782c0871ba4fb12b5a0f8ee7520043932e195dd01770bf",
           "name": "_publish_corpus_quality_report",
           "occurrence_count": 16,
           "paths": [
@@ -12057,7 +12057,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "5631a87b49c665e1734ab8a7175c6856cc7ac11657cdf37cfbd51874432aba25",
+          "locations_sha256": "acae4ac09b2071e4bb532eb111a8e7ac0ae8161d70addb7e032562f69b5141a0",
           "name": "_quality_core",
           "occurrence_count": 43,
           "paths": [
@@ -12301,7 +12301,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "43bac94bf5a2ed5c9a2134fa643a84bd69920f3e9d09ba641c82709b9a2d3ead",
+          "locations_sha256": "bdf4d5f1e5e720815568cb5be99ac89a180e74b233c92f2b5fe53c2aeea677fd",
           "name": "_read_index_artifact_snapshot",
           "occurrence_count": 6,
           "paths": [
@@ -12477,7 +12477,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "06f30ca5d0369291e1cfad340420c98aa5824af11cffd1b1a6b071d22894f3e2",
+          "locations_sha256": "a3a56fad9f9899025065f8869c343fe3589fd6e5e316058a66c1acd0e66f2542",
           "name": "_recover_bound_table_markdown",
           "occurrence_count": 4,
           "paths": [
@@ -13481,7 +13481,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "b9969afd77feead5848a9ecbe4008d1d1a9fae9c5285a8bc55a849344a675a01",
+          "locations_sha256": "157b9c36fa968b9794c93f791310ee762344f7f352636a06e207551a09e1c2bc",
           "name": "_retrieval_core",
           "occurrence_count": 8,
           "paths": [
@@ -13856,7 +13856,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "c977f2b388c94a20402eca506b3d5301de741d6e858f6ff4f4f69fc812f2af21",
+          "locations_sha256": "2fefa64d2767ba43e75c29cd90113c67cf0324bdc27333279ae190bff625cef3",
           "name": "_source_fidelity_core",
           "occurrence_count": 17,
           "paths": [
@@ -14054,7 +14054,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "c5cd22c02f13545ca4402385454cab6924363fa87a9c36175fb61f67f332037f",
+          "locations_sha256": "23d44bc8c9c7616fdccb22e2a0f69106fa9f97ca0a78ba0e0006be96173d2a29",
           "name": "_source_oracle_registry_binding",
           "occurrence_count": 4,
           "paths": [
@@ -14082,7 +14082,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "85b16831ca6acfeefc6c071216c20f1674476c45a060b21a48e470ed632a594e",
+          "locations_sha256": "7327e53a287bf232e9beb152ee390ba86b343f77e3843972cd4f3c8ab7930ed2",
           "name": "_source_oracle_registry_path",
           "occurrence_count": 9,
           "paths": [
@@ -14342,7 +14342,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "1596f36e50d30a0142bf3c7663c6316e76fd4220753c18dfc55fd59b131d32fa",
+          "locations_sha256": "3ea023c0525772a2423f7a8d274b5f9f998140a0792358adbb9906c21fb0ccf2",
           "name": "_structure_profile_parameters_binding",
           "occurrence_count": 4,
           "paths": [
@@ -14916,7 +14916,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "a2d723a88dc7bfcec85d65ea26715e6bdfdc079b364c232e5cc10326d85721bb",
+          "locations_sha256": "b25bd590ca393b4966004295b9fd967c4d9b5a784af3252de8d75b5e1b9d5307",
           "name": "_write_artifact_completion",
           "occurrence_count": 9,
           "paths": [
@@ -29037,7 +29037,7 @@
             "scope": "nested"
           }
         ],
-        "definition_locations_sha256": "7646485313bfa083adbc33542d4ef446178c19ea8e89d0d79cfb4688c7c556c3",
+        "definition_locations_sha256": "d488c3af9725734c8060bb8cf18becbbe5c28ea8bb95b7c3710cb9722a0f8667",
         "function_count": 47,
         "functions": [
           {
@@ -29335,9 +29335,9 @@
           }
         ],
         "module": "artifact_io",
-        "non_blank_lines": 1401,
+        "non_blank_lines": 1409,
         "path": "artifact_io.py",
-        "physical_lines": 1524,
+        "physical_lines": 1532,
         "top_level_function_count": 34
       },
       {
@@ -65558,7 +65558,7 @@
         "top_level_function_count": 2
       }
     ],
-    "physical_line_count": 131871,
+    "physical_line_count": 131879,
     "source_groups": [
       "production",
       "tools",

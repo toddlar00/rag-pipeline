@@ -510,8 +510,9 @@ class _PinnedSnapshotDirectory:
 
         A transient Windows hold on the entry is retried on a bounded
         schedule. Each retry first re-checks the pinned directory, the
-        entry's type, link count and identity. A persistent hold still raises
-        the last attempt's error unchanged, so cleanup fails closed.
+        entry's type, link count and identity, and a refusal after a backoff
+        is chained to the hold that caused the retry. A persistent hold still
+        raises the last attempt's error unchanged, so cleanup fails closed.
         """
         retry_error: OSError | None = None
         for attempt in range(len(_SNAPSHOT_CLEANUP_RETRY_DELAYS) + 1):
@@ -522,22 +523,29 @@ class _PinnedSnapshotDirectory:
                         "snapshot scratch root changed before cleanup"
                     ) from retry_error
             try:
-                result = self.stat_entry(name)
-            except FileNotFoundError:
-                if missing_ok:
-                    return
-                raise
-            identity = _snapshot_tree_identity(result)
-            if not stat.S_ISREG(result.st_mode) or result.st_nlink != 1:
-                raise OSError(
-                    "refusing non-regular or multiply-linked scratch file")
-            if (expected_identity is not None
-                    and identity != expected_identity):
-                raise OSError("snapshot scratch file changed before cleanup")
-            if (expected_content_identity is not None
-                    and _artifact_content_identity(result)
-                    != expected_content_identity):
-                raise OSError("snapshot scratch file changed before cleanup")
+                try:
+                    result = self.stat_entry(name)
+                except FileNotFoundError:
+                    if missing_ok:
+                        return
+                    raise
+                identity = _snapshot_tree_identity(result)
+                if not stat.S_ISREG(result.st_mode) or result.st_nlink != 1:
+                    raise OSError(
+                        "refusing non-regular or multiply-linked scratch file")
+                if (expected_identity is not None
+                        and identity != expected_identity):
+                    raise OSError(
+                        "snapshot scratch file changed before cleanup")
+                if (expected_content_identity is not None
+                        and _artifact_content_identity(result)
+                        != expected_content_identity):
+                    raise OSError(
+                        "snapshot scratch file changed before cleanup")
+            except OSError as exc:
+                if retry_error is None:
+                    raise
+                raise exc from retry_error
             try:
                 if self.directory_descriptor is not None:
                     os.unlink(name, dir_fd=self.directory_descriptor)

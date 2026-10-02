@@ -680,7 +680,8 @@ def test_snapshot_cleanup_retry_never_unlinks_a_swapped_marker(
                 os.lstat(marker_path))
 
     with pytest.raises(
-            OSError, match="snapshot scratch file changed before cleanup"):
+            OSError,
+            match="snapshot scratch file changed before cleanup") as raised:
         with artifact_io.immutable_file_snapshot(
                 source, temporary_root=tmp_path) as snapshot:
             swap["path"] = (
@@ -695,6 +696,8 @@ def test_snapshot_cleanup_retry_never_unlinks_a_swapped_marker(
 
     assert len(blocked) == 1
     assert sleeps == [artifact_io._SNAPSHOT_CLEANUP_RETRY_DELAYS[0]]
+    # A refusal after a backoff is chained to the hold behind the retry.
+    assert raised.value.__cause__ is blocked[0]
     # The swapped generation is never deleted; it stays marker-owned.
     current = artifact_io._snapshot_tree_identity(os.lstat(swap["path"]))
     assert current == swap["identity"]
@@ -738,7 +741,8 @@ def test_snapshot_cleanup_retry_never_unlinks_a_rewritten_payload(
             snapshot_path.write_bytes(b"rewritten generation")
 
     with pytest.raises(
-            OSError, match="snapshot scratch file changed before cleanup"):
+            OSError,
+            match="snapshot scratch file changed before cleanup") as raised:
         with artifact_io.immutable_file_snapshot(
                 source, temporary_root=tmp_path) as snapshot:
             snapshot_path = snapshot.path
@@ -750,6 +754,7 @@ def test_snapshot_cleanup_retry_never_unlinks_a_rewritten_payload(
 
     assert len(blocked) == 1
     assert sleeps == [artifact_io._SNAPSHOT_CLEANUP_RETRY_DELAYS[0]]
+    assert raised.value.__cause__ is blocked[0]
     # Same entry, type and link count: only the content identity differs,
     # and the rewritten generation is kept under its ownership marker.
     assert snapshot_path.read_bytes() == b"rewritten generation"
@@ -772,7 +777,8 @@ def test_snapshot_cleanup_retry_refuses_a_payload_linked_during_backoff(
 
     with pytest.raises(
             OSError,
-            match="refusing non-regular or multiply-linked scratch file"):
+            match="refusing non-regular or multiply-linked scratch file",
+    ) as raised:
         with artifact_io.immutable_file_snapshot(
                 source, temporary_root=tmp_path) as snapshot:
             snapshot_path = snapshot.path
@@ -784,6 +790,7 @@ def test_snapshot_cleanup_retry_refuses_a_payload_linked_during_backoff(
 
     assert len(blocked) == 1
     assert sleeps == [artifact_io._SNAPSHOT_CLEANUP_RETRY_DELAYS[0]]
+    assert raised.value.__cause__ is blocked[0]
     # The payload's content identity omits the link count, so only the
     # recheck keeps a retry from unlinking one name of an aliased payload.
     assert os.lstat(snapshot_path).st_nlink == 2
@@ -817,6 +824,41 @@ def test_snapshot_cleanup_retry_accepts_a_payload_that_vanished(
     assert len(blocked) == 1
     assert sleeps == [artifact_io._SNAPSHOT_CLEANUP_RETRY_DELAYS[0]]
     assert not snapshot_path.parent.exists()
+
+
+def test_snapshot_cleanup_retry_fails_closed_when_the_marker_vanished(
+        monkeypatch, tmp_path):
+    source = tmp_path / "book.pdf"
+    source.write_bytes(b"source")
+    real_unlink = os.unlink
+    sleeps = []
+    marker_path = None
+
+    def remove_marker(delay):
+        sleeps.append(delay)
+        if len(sleeps) == 1:
+            real_unlink(marker_path)
+
+    with pytest.raises(FileNotFoundError) as raised:
+        with artifact_io.immutable_file_snapshot(
+                source, temporary_root=tmp_path) as snapshot:
+            marker_path = (
+                snapshot.path.parent / artifact_io._SNAPSHOT_OWNER_MARKER)
+            blocked = _fail_unlink(
+                monkeypatch, artifact_io._SNAPSHOT_OWNER_MARKER,
+                _sharing_violation, failures=1)
+            monkeypatch.setattr(artifact_io.time, "sleep", remove_marker)
+    monkeypatch.undo()
+
+    # Unlike the payload, the marker is never missing_ok: the run keeps its
+    # directory and a restored marker, so the stale-owner janitor owns it.
+    assert len(blocked) == 1
+    assert sleeps == [artifact_io._SNAPSHOT_CLEANUP_RETRY_DELAYS[0]]
+    assert raised.value.__cause__ is blocked[0]
+    assert not snapshot.path.exists()
+    directory = snapshot.path.parent
+    assert json.loads(
+        marker_path.read_text(encoding="utf-8"))["nonce"] == directory.name
 
 
 def test_snapshot_cleanup_retry_rechecks_the_pinned_directory(
