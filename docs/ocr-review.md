@@ -29,9 +29,11 @@ python tools/review_ocr.py `
 
 The output directory must already exist and be approved for private annotations.
 Open `http://127.0.0.1:7861` and sign in as `review` with that password. The
-listener is fixed to literal loopback; sharing, public API discovery, monitoring
-and MCP serving are disabled. This is trusted single-user local operation, not
-a sandbox or a remotely deployable review service. Do not tunnel it.
+listener is fixed to literal loopback; sharing, public API discovery, monitoring,
+MCP serving, run history and server-side rendering are disabled, the root path
+is fixed, and startup refuses a set `GRADIO_ALLOWED_PATHS`. This is trusted
+single-user local operation, not a sandbox or a remotely deployable review
+service. Do not tunnel it.
 
 ## Opt-in random spot audits (development preview)
 

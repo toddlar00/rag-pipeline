@@ -717,7 +717,7 @@
             "kinds": [
               "attribute"
             ],
-            "locations_sha256": "76d6ca28b37c1b0970fc8510a6ad7c885cf0fe25633b117c203e9601235c3b1e",
+            "locations_sha256": "664c5ca27bac610664a9701e7cb39cbf8b8105def44cc5aac95a1e7970fe93f4",
             "name": "_API_EMBEDDING_MODEL_PREFIXES",
             "occurrence_count": 1,
             "paths": [
@@ -777,7 +777,7 @@
             "kinds": [
               "attribute"
             ],
-            "locations_sha256": "0fcc2ee6221f10101a0835403dc90c90dd6473acb1c0c883788a245bcaf9c453",
+            "locations_sha256": "5459fe057357ec5d615288b61e27fea76d5cecd5bc566b588dc9c5ebd9c04248",
             "name": "_normalize_db_lock_timeout",
             "occurrence_count": 1,
             "paths": [
@@ -797,7 +797,7 @@
             "kinds": [
               "attribute"
             ],
-            "locations_sha256": "e7732a1ffcdad09910092f4717f8adfcd4ae1976fc6c161fd63a523dc02c94a7",
+            "locations_sha256": "4ebfe5a1f149d5ef29a61b9ac8ccdae313df3937a5a0ba0c2557cf43f75a39f4",
             "name": "_normalize_operation_timeout",
             "occurrence_count": 3,
             "paths": [
@@ -4642,7 +4642,7 @@
             "target": "_retry_after_seconds"
           },
           {
-            "locations_sha256": "9785c663c5693feca61e04bdb1e4d41d4553c21b3ffa61ad7cb43d77f2b4685f",
+            "locations_sha256": "449c12da76be32217dbb6a24ffd97eb89f6cc2b8665add29f7dd484469e2947f",
             "occurrence_count": 6,
             "operations": [
               "setattr"
@@ -5128,7 +5128,7 @@
             "target": "export_ai_project"
           },
           {
-            "locations_sha256": "032e5ddbe4a7395d14a5690912d69b7e83b003e2951172edc9a7dad269c331a5",
+            "locations_sha256": "0facd290474cb2a8427ac8be98874579c3ac05e131cc31bde845abdfcb627f24",
             "occurrence_count": 12,
             "operations": [
               "setattr"
@@ -5282,7 +5282,7 @@
             "target": "scan_pdf"
           },
           {
-            "locations_sha256": "411064c67a7bb11c79937897db98012bc774cb606171ef69b29be6ba47e14204",
+            "locations_sha256": "546a316cabfd895314dd4123edf599640c2d234fd294004148b71bc2c4da0461",
             "occurrence_count": 11,
             "operations": [
               "setattr"
@@ -6978,7 +6978,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "7b3280644de5078134984becb379a74e371e122132e8dcb18783228e65849b7e",
+          "locations_sha256": "f7a75599d8999e0a6a9e478bc90febdf0334c7e961249b7e77cbcd08b79f45b5",
           "name": "_atomic_write_json",
           "occurrence_count": 39,
           "paths": [
@@ -64715,7 +64715,7 @@
             "scope": "top_level"
           }
         ],
-        "definition_locations_sha256": "4ebf86df6fe63ccbf81ecec5606d8454102f281b1b2577802adf3bf18261290e",
+        "definition_locations_sha256": "07706a3a40fd8646749326a5a8abf03750f7f103e64a6fb7e826800245f50230",
         "function_count": 2,
         "functions": [
           {
@@ -64788,9 +64788,9 @@
           }
         ],
         "module": "tools.review_ocr",
-        "non_blank_lines": 147,
+        "non_blank_lines": 155,
         "path": "tools/review_ocr.py",
-        "physical_lines": 162,
+        "physical_lines": 170,
         "top_level_function_count": 1
       },
       {
@@ -65203,7 +65203,7 @@
             "scope": "top_level"
           }
         ],
-        "definition_locations_sha256": "f67b4c1a86410fecd837fbcd10d19d6b5bce2bfae42db871cbc51512b7f97c29",
+        "definition_locations_sha256": "fe68fd24733760858bbe7c6dc33ce9dde93ec592230b9c8fd4088764b60d203a",
         "function_count": 21,
         "functions": [
           {
@@ -65381,9 +65381,9 @@
           }
         ],
         "module": "ui",
-        "non_blank_lines": 828,
+        "non_blank_lines": 845,
         "path": "ui.py",
-        "physical_lines": 921,
+        "physical_lines": 938,
         "top_level_function_count": 19
       },
       {
@@ -65600,7 +65600,7 @@
         "top_level_function_count": 2
       }
     ],
-    "physical_line_count": 132106,
+    "physical_line_count": 132131,
     "source_groups": [
       "production",
       "tools",

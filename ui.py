@@ -870,6 +870,14 @@ def main(argv: list[str] | None = None):
             schema_version=args.release_security_policy_version,
         )
         release_security.require_trusted_ui(policy)
+        # Gradio treats allowed_paths None or [] as unset and then serves every
+        # directory in a non-empty GRADIO_ALLOWED_PATHS. This private UI serves
+        # no extra paths, so refuse rather than silently widen serving, and
+        # never echo the value, which may be a private path.
+        if os.environ.get("GRADIO_ALLOWED_PATHS", ""):
+            raise ValueError(
+                "GRADIO_ALLOWED_PATHS must be unset; the private UI serves no "
+                "additional paths")
         if args.embedding_model.startswith(rag._API_EMBEDDING_MODEL_PREFIXES):
             release_security.require_cloud_egress(
                 policy, feature="cloud embedding")
@@ -903,6 +911,15 @@ def main(argv: list[str] | None = None):
         server_port=args.port,
         share=False,
         enable_monitoring=False,
+        # Explicit values outrank Gradio's GRADIO_* environment fallbacks.
+        # No run-history page or Hugging Face bucket upload of results.
+        run_history=False,
+        # No MCP tool endpoint for the search and job handlers.
+        mcp_server=False,
+        # Client-side rendering only; never start a Node server.
+        ssr_mode=False,
+        # A full-URL root path would redirect the browser's API calls.
+        root_path="",
         # Gradio passes app_kwargs to its FastAPI app. Keep FastAPI's native
         # OpenTelemetry and its OTEL_*-driven OTLP export off.
         app_kwargs={"telemetry": {

@@ -47,7 +47,7 @@ Policy version 1 has these defaults:
 | Inline key arguments | rejected | development profile only; still discouraged |
 | Custom gateway tenant identity | required, nonsecret | `--llm-cache-namespace LABEL`; only its SHA-256 identity persists |
 | Proxy/custom-CA/SDK endpoint environment | ignored or rejected | `--trust-environment-network` after operator review |
-| SDK implementation and test-mode environment (Chroma's settings environment: `CHROMA_*` and unprefixed variables, and a working-directory `.env`; google-genai's record/replay variables `GOOGLE_GENAI_CLIENT_MODE`, `GOOGLE_GENAI_REPLAYS_DIRECTORY`, and `GOOGLE_GENAI_REPLAY_ID`) | pinned in code (ignored) | no release override; not covered by `--trust-environment-network` |
+| SDK implementation, test-mode, and UI launch environment (Chroma's settings environment: `CHROMA_*` and unprefixed variables, and a working-directory `.env`; google-genai's record/replay variables `GOOGLE_GENAI_CLIENT_MODE`, `GOOGLE_GENAI_REPLAYS_DIRECTORY`, and `GOOGLE_GENAI_REPLAY_ID`; Gradio's launch variables `GRADIO_RUN_HISTORY`, `GRADIO_MCP_SERVER`, `GRADIO_SSR_MODE`, `GRADIO_ROOT_PATH`, and `GRADIO_ALLOWED_PATHS`) | pinned in code (ignored); a non-empty `GRADIO_ALLOWED_PATHS` is rejected at UI startup | no release override; not covered by `--trust-environment-network` |
 | Gradio principal boundary | disabled | `--trust-local-user` for a trusted single-user OS session |
 | Auxiliary analytics/telemetry | disabled | no release override |
 
@@ -96,6 +96,7 @@ receipts are containment and consistency mechanisms, not a sandbox.
 | UI search/reindex | query or chunks according to configured providers | same destinations as runtime | trusted UI plus the relevant network policy | strict policy receipt crosses worker/job boundary |
 | Chroma/Gradio/Hugging Face auxiliary telemetry | none | disabled | no override | process environment and explicit client settings disable it; Chroma's product telemetry implementation and OpenTelemetry fields are pinned, so their `CHROMA_*` variables are ignored, and Chroma reads no working-directory `.env` |
 | FastAPI native OpenTelemetry (service app and Gradio UIs) | none | disabled | no override | each app the repository launches passes `telemetry` with auto-configuration, tracing, metrics, logs, and operation spans off, so `OTEL_*` variables, an installed OTLP exporter, or another component's provider cannot attach export |
+| Gradio run history, MCP, SSR, and root path (local UI and OCR review UI) | none | disabled | no override | both launchers pass `run_history=False`, `mcp_server=False`, `ssr_mode=False`, and `root_path=""`, which outrank `GRADIO_RUN_HISTORY`, `GRADIO_MCP_SERVER`, `GRADIO_SSR_MODE`, and `GRADIO_ROOT_PATH`: Gradio's run-history routes and its Hugging Face bucket upload, which uses the host's saved login on loopback, are absent, no Node server starts, and a full-URL root path cannot redirect the browser's API calls; startup refuses a non-empty `GRADIO_ALLOWED_PATHS` without echoing it, because Gradio treats `allowed_paths=[]` as unset and would serve every listed directory |
 
 Cloud feature gates execute before credential lookup, provider import,
 tokenizer import, cache lookup, worker launch, or transport construction. API
@@ -271,6 +272,11 @@ with old defaults.
 - Cloud commands must add `--network-policy allow-cloud` and may need
   `--trust-environment-network` after reviewing active proxy/CA configuration.
 - UI commands must add `--trust-local-user`.
+- Both UIs lose Gradio's run-history page; the local UI also loses its footer
+  link. With `run_history=False`, Gradio deletes runs it had saved in the
+  browser for these apps. `GRADIO_MCP_SERVER`, `GRADIO_SSR_MODE`, and
+  `GRADIO_ROOT_PATH` no longer affect either UI. Unset `GRADIO_ALLOWED_PATHS`
+  before starting either UI.
 - Local models must be planned offline and synchronized by explicit task/model
   selection (or explicit `--all`) before first private-data use.
 - Runtime-bundle identity schema v2 binds the complete primary, transform, and
@@ -335,3 +341,11 @@ class name is closed and rejected before it is cached. That check reads the
 private `_debug_config` and `_api_client` attributes and fails closed when
 either is missing, so a google-genai upgrade must re-run the installed-SDK
 client tests.
+
+The Gradio launch pins rely on Gradio 6.29's rule that an explicit launch
+argument outranks its `GRADIO_*` fallback, and the `GRADIO_ALLOWED_PATHS`
+refusal mirrors its rule that a non-empty value, whitespace included, replaces
+an empty `allowed_paths`. Launching cannot assert the resolved settings before
+it serves, so the real-Gradio tests stop each launcher at Gradio's server start
+and inspect the built app instead. A Service/UI dependency upgrade must re-run
+them.

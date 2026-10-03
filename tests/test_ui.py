@@ -2,6 +2,7 @@ from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 import json
+import socket
 
 import pytest
 
@@ -744,6 +745,10 @@ def test_main_binds_literal_loopback_and_disables_public_sharing(
         "server_port": 8877,
         "share": False,
         "enable_monitoring": False,
+        "run_history": False,
+        "mcp_server": False,
+        "ssr_mode": False,
+        "root_path": "",
         "app_kwargs": {"telemetry": _FASTAPI_TELEMETRY_OFF},
     }
     assert ui._config["share"] is False
@@ -785,6 +790,137 @@ def test_launched_gradio_app_ignores_otel_environment(
 
     assert [record.getMessage() for record in caplog.records
             if record.name.startswith("fastapi")] == []
+
+
+# Each would otherwise change what the launched UI serves or where its browser
+# client sends API calls. The values are synthetic.
+_HOSTILE_GRADIO_ENVIRONMENT = {
+    "GRADIO_RUN_HISTORY": "true",
+    "GRADIO_HISTORY_BUCKET": "synthetic-owner/private-runs",
+    "GRADIO_MCP_SERVER": "true",
+    "GRADIO_SSR_MODE": "true",
+    "GRADIO_ROOT_PATH": "https://sink.invalid/app",
+}
+
+
+class _StopBeforeBind(BaseException):
+    """Raised in place of Gradio's server start.
+
+    Blocks.launch resolves every setting and builds its FastAPI app before it
+    calls http_server.start_server, so tests inspect both without a socket.
+    """
+
+
+def _unbindable_gradio_app(monkeypatch, tmp_path):
+    gradio = pytest.importorskip("gradio")
+    from gradio import http_server
+
+    def refuse_bind(**_kwargs):
+        raise _StopBeforeBind()
+
+    monkeypatch.setattr(http_server, "start_server", refuse_bind)
+    # A future Gradio that bound without start_server would block here.
+    monkeypatch.setattr(
+        gradio.Blocks, "block_thread",
+        lambda self: pytest.fail("Gradio bound without start_server"))
+    # An environment-enabled SSR mode must not reach Node before the stop.
+    monkeypatch.delenv("GRADIO_LOCAL_DEV_MODE", raising=False)
+    monkeypatch.setenv("GRADIO_NODE_PATH", str(tmp_path / "missing-node"))
+    with gradio.Blocks(analytics_enabled=False) as app:
+        query = gradio.Textbox()
+        answer = gradio.Textbox()
+        gradio.Button().click(lambda text: text, query, answer)
+    return app
+
+
+def _launch_unbound_ui(monkeypatch, tmp_path, app):
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    monkeypatch.setattr(ui, "build_app", lambda: app)
+    with pytest.raises(_StopBeforeBind):
+        ui.main([
+            "--chunks", str(tmp_path / "chunks.jsonl"),
+            "--db", str(tmp_path / "db"),
+            "--collection", "book",
+            "--port", str(port),
+            "--trust-local-user",
+        ])
+
+
+def test_launched_ui_serves_no_extra_paths_in_clean_environment(
+        monkeypatch, tmp_path):
+    app = _unbindable_gradio_app(monkeypatch, tmp_path)
+    from fastapi.testclient import TestClient
+
+    for name in ("GRADIO_ALLOWED_PATHS", "GRADIO_SSR_MODE", "GRADIO_ROOT_PATH"):
+        monkeypatch.delenv(name, raising=False)
+    try:
+        _launch_unbound_ui(monkeypatch, tmp_path, app)
+
+        assert app.allowed_paths == []
+        assert app.ssr_mode is False
+        with TestClient(app.server_app) as client:
+            assert client.get("/config").json()["root"] == "http://testserver"
+    finally:
+        app.close()
+
+
+def test_launched_ui_ignores_gradio_history_mcp_ssr_and_root_environment(
+        monkeypatch, tmp_path):
+    app = _unbindable_gradio_app(monkeypatch, tmp_path)
+    from fastapi.testclient import TestClient
+
+    monkeypatch.delenv("GRADIO_ALLOWED_PATHS", raising=False)
+    for name, value in _HOSTILE_GRADIO_ENVIRONMENT.items():
+        monkeypatch.setenv(name, value)
+    try:
+        _launch_unbound_ui(monkeypatch, tmp_path, app)
+
+        assert app.run_history is False
+        assert app.ssr_mode is False
+        assert app.root_path == ""
+        assert app.allowed_paths == []
+        # Gradio never tried an MCP server; without the optional mcp package
+        # an attempt is recorded in mcp_error instead of enabling one.
+        assert app.mcp_server is False and app.mcp_error is None
+        with TestClient(app.server_app) as client:
+            # Neither the run-history page nor its Hugging Face bucket routes,
+            # which use the host's saved login on loopback, exist.
+            assert client.get("/gradio_api/runs").status_code == 404
+            assert client.get(
+                "/gradio_api/run-history/buckets").status_code == 404
+            # A full-URL root path would redirect the browser's API calls.
+            assert client.get("/config").json()["root"] == "http://testserver"
+    finally:
+        app.close()
+
+
+@pytest.mark.parametrize("value", ["private-directory", "whitespace"])
+def test_main_refuses_ambient_gradio_allowed_paths_before_building(
+        monkeypatch, tmp_path, capsys, value):
+    # Gradio treats allowed_paths None or [] as unset and then serves every
+    # directory in a non-empty GRADIO_ALLOWED_PATHS, whitespace included.
+    monkeypatch.setenv(
+        "GRADIO_ALLOWED_PATHS",
+        str(tmp_path / "SYNTHETIC_PRIVATE_DIR")
+        if value == "private-directory" else " ")
+    monkeypatch.setattr(
+        ui, "build_app", lambda: pytest.fail(
+            "an environment-widened UI must not be built"))
+
+    with pytest.raises(SystemExit) as exited:
+        ui.main([
+            "--chunks", str(tmp_path / "chunks.jsonl"),
+            "--db", str(tmp_path / "db"),
+            "--collection", "book",
+            "--trust-local-user",
+        ])
+
+    assert exited.value.code == 2
+    err = capsys.readouterr().err
+    assert "GRADIO_ALLOWED_PATHS must be unset" in err
+    assert "SYNTHETIC_PRIVATE_DIR" not in err
 
 
 def test_main_requires_explicit_trusted_single_user_boundary(

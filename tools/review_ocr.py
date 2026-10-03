@@ -57,6 +57,10 @@ def main(argv=None) -> int:
             raise ValueError("execution options require explicit enablement")
         if args.ocr_timeout_seconds is not None and not 1 <= args.ocr_timeout_seconds <= 3600:
             raise ValueError("invalid review OCR deadline")
+        # Gradio treats allowed_paths=[] as unset and then serves every directory
+        # in a non-empty GRADIO_ALLOWED_PATHS; refuse before any workspace exists.
+        if os.environ.get("GRADIO_ALLOWED_PATHS", ""):
+            raise ValueError("invalid review launch configuration")
         from ocr_review_runtime import ReviewWorkspace
         import storage_policy
 
@@ -113,6 +117,9 @@ def main(argv=None) -> int:
                                 getattr(pack_service, "preview_private_root", None),
                                 args.installation_evidence) if path is not None],
                            footer_links=[], quiet=True, inbrowser=False,
+                           # Explicit values outrank GRADIO_* fallbacks: no run history or
+                           # bucket upload, no Node SSR, and no full-URL API root.
+                           run_history=False, ssr_mode=False, root_path="",
                            # Keep FastAPI's native OpenTelemetry and its
                            # OTEL_*-driven OTLP export off in Gradio's app.
                            app_kwargs={"telemetry": {
@@ -150,7 +157,8 @@ def main(argv=None) -> int:
         return 130
     except Exception:
         print("OCR review unavailable. Check matching inputs, output directory, optional dependencies, port, and "
-              "RAG_OCR_REVIEW_TOKEN (32-256 printable characters). No canonical text was changed. "
+              "RAG_OCR_REVIEW_TOKEN (32-256 printable characters). GRADIO_ALLOWED_PATHS must be unset. "
+              "No canonical text was changed. "
               "OCR options require --enable-ocr-execution and a 1-3600 second deadline. "
               "Crop Save/Open requires an existing private --crop-review-pack-dir. "
               "If startup or shutdown cleanup failed, a private scan cache may remain in the configured output directory "
