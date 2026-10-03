@@ -1426,7 +1426,7 @@ def _json_file_is_valid(path: Path) -> bool:
 
 
 def _chroma_settings_kwargs(chromadb_module) -> dict[str, object]:
-    """Construct an explicit no-telemetry Chroma settings object."""
+    """Construct an explicit, local, no-telemetry Chroma settings object."""
     settings_factory = getattr(chromadb_module, "Settings", None)
     if settings_factory is None:
         # Lightweight unit fakes intentionally expose only PersistentClient.
@@ -1435,9 +1435,35 @@ def _chroma_settings_kwargs(chromadb_module) -> dict[str, object]:
             return {}
         raise RuntimeError(
             "installed Chroma does not expose telemetry controls")
-    settings = settings_factory(anonymized_telemetry=False)
+    pinned = {
+        "anonymized_telemetry": False,
+        "chroma_api_impl": "chromadb.api.rust.RustBindingsAPI",
+        "chroma_product_telemetry_impl":
+            "chromadb.telemetry.product.posthog.Posthog",
+        "chroma_telemetry_impl": "chromadb.telemetry.product.posthog.Posthog",
+        "chroma_otel_collection_endpoint": "",
+        "chroma_otel_collection_headers": {},
+        "chroma_otel_granularity": None,
+    }
+    # Chroma's pydantic Settings reads environment variables (CHROMA_* and
+    # unprefixed names such as ANONYMIZED_TELEMETRY) and a .env file in the
+    # working directory. Explicit values outrank the environment, and
+    # _env_file=None removes the .env source. The pins keep the in-process
+    # Rust client local: CHROMA_API_IMPL could otherwise make PersistentClient
+    # an HTTP client (chunk text and embeddings sent to CHROMA_SERVER_HOST),
+    # SegmentAPI plus CHROMA_OTEL_GRANULARITY installs a global OTLP tracer
+    # provider, and *_TELEMETRY_IMPL names a class Chroma would import.
+    settings = settings_factory(_env_file=None, **pinned)
+    # pydantic-settings deep-merges a dict keyword into a dict read from the
+    # environment, so the explicit {} keeps CHROMA_OTEL_COLLECTION_HEADERS
+    # entries. Assign the pin, as chromadb.PersistentClient assigns its fields.
+    settings.chroma_otel_collection_headers = {}
     if getattr(settings, "anonymized_telemetry", None) is not False:
         raise RuntimeError("Chroma telemetry could not be disabled")
+    missing = object()
+    for name, expected in pinned.items():
+        if getattr(settings, name, missing) != expected:
+            raise RuntimeError("Chroma settings could not be pinned")
     return {"settings": settings}
 
 
@@ -5954,6 +5980,16 @@ def _load_gemini_client(
         from google.genai import types
         types.HttpOptions
         types.HttpRetryOptions
+        # Without an explicit DebugConfig, genai.Client reads
+        # GOOGLE_GENAI_CLIENT_MODE, GOOGLE_GENAI_REPLAYS_DIRECTORY and
+        # GOOGLE_GENAI_REPLAY_ID, and record/replay/auto select the SDK's
+        # test-only ReplayApiClient. Lightweight unit fakes omit DebugConfig;
+        # an installed SDK must expose it or fail closed.
+        debug_config_factory = getattr(
+            getattr(genai, "client", None), "DebugConfig", None)
+        installed_sdk = getattr(genai, "__file__", None) is not None
+        if debug_config_factory is None and installed_sdk:
+            raise AttributeError("google-genai DebugConfig")
     except (ImportError, AttributeError):
         raise ProviderCallError(
             "configuration_error", transport_attempts=0) from None
@@ -5969,6 +6005,12 @@ def _load_gemini_client(
                     "follow_redirects": False,
                     "verify": True,
                 }
+                client_kwargs = {}
+                if debug_config_factory is not None:
+                    # Explicit None outranks DebugConfig's os.getenv defaults.
+                    client_kwargs["debug_config"] = debug_config_factory(
+                        client_mode=None, replays_directory=None,
+                        replay_id=None)
                 new_client = genai.Client(
                     vertexai=False,
                     api_key=api_key,
@@ -5980,7 +6022,30 @@ def _load_gemini_client(
                         client_args=dict(transport_args),
                         async_client_args=dict(transport_args),
                     ),
+                    **client_kwargs,
                 )
+                if installed_sdk:
+                    # Verify the pin held before caching: in record mode, or
+                    # auto mode without a replay file, a replay client prints
+                    # each request, API key header included, and records
+                    # prompts to a replay file; otherwise it answers from a
+                    # local file. Matching the class name keeps a moved
+                    # private module from breaking construction.
+                    missing = object()
+                    debug_config = getattr(new_client, "_debug_config", None)
+                    api_client = getattr(new_client, "_api_client", None)
+                    if (debug_config is None
+                            or getattr(debug_config, "client_mode", missing)
+                            is not None
+                            or api_client is None
+                            or any(cls.__name__ == "ReplayApiClient"
+                                   for cls in type(api_client).__mro__)):
+                        try:
+                            new_client.close()
+                        except Exception:
+                            pass
+                        raise RuntimeError(
+                            "Gemini SDK client mode could not be verified")
                 _gemini_client_cache = new_client
                 _gemini_client_key = api_key
                 _gemini_client_trust_environment = (

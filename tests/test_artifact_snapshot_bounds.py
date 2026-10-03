@@ -2,6 +2,7 @@
 
 import hashlib
 import io
+import tracemalloc
 from types import SimpleNamespace
 
 import pytest
@@ -73,7 +74,7 @@ def test_snapshot_success_preserves_bytes_digest_fingerprint(monkeypatch, tmp_pa
     result = artifact_io._read_index_artifact_snapshot(path, max_bytes=limit)
 
     assert result == (raw, hashlib.sha256(raw).hexdigest(), (3, 7, len(raw), 11, 13))
-    assert reader.reads[0] == (False, -1 if limit is None else limit + 1)
+    assert reader.reads[0] == (False, -1 if limit is None else min(limit + 1, len(raw) + 1))
     assert len(stats) == 2 and sleeps == [] and reader.closed
 
 
@@ -193,3 +194,144 @@ def test_snapshot_first_read_over_limit_never_enters_verification(
     assert reader.reads == [(False, 4)]
     assert not reader.verifying
     assert len(stats) == 1 and sleeps == [] and reader.closed
+
+
+@pytest.mark.parametrize("platform", ["nt", "posix"])
+def test_snapshot_growth_past_limit_during_read_raises_size_error(
+        monkeypatch, tmp_path, platform):
+    # The file stats at 4 bytes but holds 20 by the time it is read. The
+    # bounded capture consumes exactly limit + 1 bytes and reports the size
+    # violation before verification or the identity checks can run.
+    reader = _Reader(b"x" * 20)
+    path, stats, sleeps = _install(
+        monkeypatch, tmp_path, [reader], declared_size=4, platform=platform)
+    monkeypatch.setattr(artifact_io, "_FILE_STREAM_CHUNK_SIZE", 4)
+
+    with pytest.raises(ValueError, match="Artifact exceeds 10 bytes"):
+        artifact_io._read_index_artifact_snapshot(path, max_bytes=10)
+
+    assert reader.initial.tell() == 11
+    assert not reader.verifying
+    assert len(stats) == 1 and sleeps == [] and reader.closed
+
+
+@pytest.mark.parametrize("platform", ["nt", "posix"])
+def test_snapshot_growth_within_limit_during_read_reports_change(
+        monkeypatch, tmp_path, platform):
+    reader = _Reader(b"y" * 8)
+    path, stats, sleeps = _install(
+        monkeypatch, tmp_path, [reader], declared_size=4, platform=platform)
+
+    with pytest.raises(RuntimeError, match="Artifact changed while it was being read"):
+        artifact_io._read_index_artifact_snapshot(path, max_bytes=100)
+
+    assert reader.initial.tell() == 8
+    assert len(stats) == 2 and sleeps == [] and reader.closed
+
+
+def _patterned_bytes(size):
+    pattern = bytes(range(256))
+    return (pattern * (size // len(pattern) + 1))[:size]
+
+
+@pytest.mark.parametrize("size,limit", [
+    (0, 0), (1, 1), (7, 8), (8, 8),
+    (3 * 1024 * 1024 + 5, 4 * 1024 * 1024),
+])
+def test_snapshot_real_file_boundaries_return_exact_bytes(tmp_path, size, limit):
+    data = _patterned_bytes(size)
+    path = tmp_path / "synthetic-artifact.bin"
+    path.write_bytes(data)
+
+    raw, digest, fingerprint = artifact_io._read_index_artifact_snapshot(
+        path, max_bytes=limit)
+
+    assert raw == data
+    assert digest == hashlib.sha256(data).hexdigest()
+    assert fingerprint[2] == size
+
+
+def test_snapshot_real_file_over_limit_raises_size_error(tmp_path):
+    path = tmp_path / "synthetic-artifact.bin"
+    path.write_bytes(_patterned_bytes(9))
+
+    with pytest.raises(ValueError, match="Artifact exceeds 8 bytes"):
+        artifact_io._read_index_artifact_snapshot(path, max_bytes=8)
+
+
+@pytest.mark.parametrize("platform", ["nt", "posix"])
+def test_snapshot_first_request_is_bounded_by_file_size(monkeypatch, tmp_path, platform):
+    raw = b"12345678"
+    reader = _Reader(raw)
+    path, _, _ = _install(
+        monkeypatch, tmp_path, [reader], declared_size=len(raw), platform=platform)
+
+    result = artifact_io._read_index_artifact_snapshot(path, max_bytes=256 * 1024 * 1024)
+
+    assert result[0] == raw
+    assert max(size for verifying, size in reader.reads if not verifying) <= len(raw) + 1
+
+
+class _GrowingHandle:
+    """Answers every request in full, as a file that keeps growing would."""
+
+    def __init__(self):
+        self.requests = []
+
+    def read(self, size):
+        self.requests.append(size)
+        if self.requests.count(0) > 1:
+            raise AssertionError("bounded read repeated an empty request")
+        return b"x" * size
+
+
+def test_bounded_read_stops_at_an_empty_block(monkeypatch):
+    # Only a test seam can make the block size zero; the read must still end.
+    monkeypatch.setattr(artifact_io, "_FILE_STREAM_CHUNK_SIZE", 0)
+    handle = _GrowingHandle()
+
+    assert artifact_io._read_at_most(handle, 100, size_hint=4) == b"x" * 5
+    assert handle.requests == [5, 0]
+
+
+def _traced_peak_bytes(operation):
+    # Measure growth above the current traced total, so a tracer that is
+    # already running cannot inflate the result; stop only a tracer we start.
+    started = not tracemalloc.is_tracing()
+    if started:
+        tracemalloc.start()
+    try:
+        tracemalloc.reset_peak()
+        baseline = tracemalloc.get_traced_memory()[0]
+        operation()
+        return tracemalloc.get_traced_memory()[1] - baseline
+    finally:
+        if started:
+            tracemalloc.stop()
+
+
+def _plain_read_peak_bytes(path, size):
+    # The file object's own buffer is sized from st_blksize, which some
+    # network and parallel filesystems report as 1 MiB or more, so the bound
+    # is relative to a plain small read of the same file.
+    def read():
+        with path.open("rb") as handle:
+            handle.read(size)
+
+    return _traced_peak_bytes(read)
+
+
+@pytest.mark.parametrize("limit", [16 * 1024 * 1024, 64 * 1024 * 1024])
+def test_bounded_snapshot_read_does_not_preallocate_the_limit(tmp_path, limit):
+    # BufferedReader.read(n) allocates an n-byte buffer before reading, so a
+    # limit-sized request would cost the whole limit for an eight-byte file.
+    path = tmp_path / "synthetic-artifact.bin"
+    path.write_bytes(b"12345678")
+    results = []
+    baseline = _plain_read_peak_bytes(path, 9)
+
+    peak = _traced_peak_bytes(lambda: results.append(
+        artifact_io._read_index_artifact_snapshot(path, max_bytes=limit)))
+
+    assert results[0][0] == b"12345678"
+    assert peak < baseline + 1024 * 1024

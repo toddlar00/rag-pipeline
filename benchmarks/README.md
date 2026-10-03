@@ -7,11 +7,17 @@ fresh-process repetitions.
 
 ## Provenance
 
-Both current reports were generated from the clean ML/runtime dependency
-source checkpoint `718ee9f1eac2bbb4e149141f666ca839d86a18fc` (tree
-`57832a08c64f896577a886ccfca1aa20ff321641`), which moves torch to 2.14.1
-and torchvision to 0.29.1 and changes no Python source, the last of three
-stacked one-domain dependency upgrades, stacked on the Service/UI fastapi
+Both current reports were generated from the clean resource-safety and
+environment-isolation hardening source checkpoint
+`b48be4cdd67c1dd486f90e3968357e2fbaa64044` (tree
+`3b7440ad434f0e335158cc1aa1e58bbe2a2cdbac`), a behavior-preserving
+bounded-read fix plus fail-closed hardening that keeps environment
+variables (and, for Chroma, a working-directory `.env`) from selecting
+the Chroma, google-genai and Gradio implementations, telemetry and
+launch settings, changing no dependency or lock, stacked
+on the ML/runtime torch 2.14.1 source `718ee9f` (gate-only child
+`c6ad4ee`, pending on #168, not merged), the last of three stacked
+one-domain dependency upgrades, which is stacked on the Service/UI fastapi
 0.142.2 source `f4204f8` (gate-only child `43a93e1`, pending on #167, not
 merged), which is stacked on the provider-transport cryptography 50.0.2
 source `0b1bbe7` (gate-only child `488c848`, pending on #166, not merged),
@@ -98,7 +104,8 @@ gradio-client from 2.7.1 to 2.7.2 in `requirements-full.lock`, and adds
 opentelemetry-api 1.45.0 to `requirements-service.lock`; the stacked
 ML/runtime refresh moves torch from 2.14.0 to 2.14.1 and torchvision from
 0.29.0 to 0.29.1 in `requirements-core.lock` and `requirements-full.lock`
-and changes no other record; no model lock changed.
+and changes no other record; the stacked resource-safety and
+environment-isolation hardening changes no lock; no model lock changed.
 The executing environments were synchronized to this source's locks
 (urllib3 2.8.0, cryptography 50.0.2, fastapi 0.142.2, gradio 6.29.1,
 torch 2.14.1 and torchvision 0.29.1) with repository-pinned uv 0.12.20
@@ -118,8 +125,8 @@ marker-resolved distributions before generation.
 
 | Platform | Runtime | Report | Bytes | File SHA-256 | Embedded report SHA-256 |
 |---|---:|---|---:|---|---|
-| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,202 | `273209a72e4ab5bfbf91c1c37d41861c8ba16d21afcc7e5301051551f02b804d` | `81f9c7272807c659a0731cc81bc7643a969809d8ca19a884e198ceb89b820c43` |
-| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,601 | `2138cb4993f1317dc1d97fb5df15cc8088efe1ba1cbbaf8b4dddb04e542fa2be` | `d7090eaf95c8e81a16f2459c6e8e35e671166cb5af27a51ed566980f21a5ce8d` |
+| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,202 | `210ff86c641958fe9ca6541873114da92407b8921fdc3926d2afb150ad6f61f5` | `7371ff43804e016ce78e7e8ce8b5d77f13f0fbe0945c56aae4b297fe50a751ae` |
+| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,603 | `71c1b4210b418e4a312c82ce3fb9944a9fa85051d31c592c151ca6fb3952b158` | `bad3014693e9a24e2775f4ff0f6f633bac4dd714bf5bf776b9dd43e39774373e` |
 
 The reports attest the same source commit, clean-worktree state, tracked-diff
 digest, eight LF and `HEAD`-identical dependency/model-lock inputs, authoritative
@@ -716,6 +723,34 @@ and recorded scores; scratch re-conversions of three runs with their
 published jobs' arguments (batch jobs narrowed to the one PDF) reached
 READY with identical chunk text (38, 50 and 325 chunks); and their stored
 embeddings were bitwise equal to the published ones. It changes no Python source or model lock.
+The `718ee9f` pair (gate-only child `c6ad4ee`) passed the hosted CI
+promotion gate on [PR
+#168](https://github.com/toddlar00/rag-pipeline/pull/168), whose hosted
+checks are green; that pull request is stacked on #167 and #166, whose
+hosted checks are also green, and none of the three is merged. The stacked
+resource-safety and environment-isolation hardening source `b48be4c`
+supersedes the `718ee9f` pair for its own pull request. `artifact_io`'s
+bounded snapshot reader and `quality_core.read_quality_report` now size
+the first read from the opened file's size and follow growth in blocks,
+never past the limit, instead of one `read(limit + 1)` that made CPython
+preallocate the whole limit (under tracemalloc an 8-byte artifact peaked
+at 16,787,398 B with a 16 MiB limit, and now peaks at about 10 KB); the
+bytes, the exceptions and their order are unchanged. The settings that
+every Chroma open shares no longer read a working-directory `.env`, and
+explicit values pin the API implementation (`RustBindingsAPI`), both
+telemetry implementations and the OpenTelemetry endpoint, headers and
+granularity against Chroma's `CHROMA_*` and unprefixed variables, failing
+closed when a pin does not hold. The Gemini client passes google-genai's
+`DebugConfig` with its test modes off, so `GOOGLE_GENAI_CLIENT_MODE` can
+no longer select the SDK's record/replay client, and a constructed replay
+client is rejected before it is cached. Both Gradio launchers pass
+`run_history=False`, `ssr_mode=False`, `root_path=""` and
+`mcp_server=False` (which the review UI already passed), and both refuse
+to start while `GRADIO_ALLOWED_PATHS` is non-empty or
+`GRADIO_LOCAL_DEV_MODE` is set. In a clean environment only the UIs'
+run-history page, and the local UI's footer link to it, disappear, and
+Gradio deletes the runs it had saved in the browser for these apps. It
+changes no dependency or lock.
 The current reports above
 bind
 that exact clean source and each passes an independent complete

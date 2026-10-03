@@ -2721,13 +2721,18 @@ The UI always binds the literal loopback address `127.0.0.1` and explicitly
 disables Gradio sharing. Because loopback does not authenticate another local
 OS user, the UI refuses to build or launch without the explicit
 `--trust-local-user` acknowledgement and is supported only in a trusted
-single-user OS session. There is no supported public-share flag. Remote access
-requires a separately reviewed deployment boundary with authentication, TLS,
+single-user OS session. There is no supported public-share flag. Gradio's run
+history, MCP server, server-side rendering, and an environment-supplied root
+path are off. The UI refuses to start while `GRADIO_ALLOWED_PATHS` has a
+non-empty value, or while `GRADIO_LOCAL_DEV_MODE` is set at all, even to an
+empty value: Gradio would then serve the listed directories, or let a page
+with a `null` origin read the UI's responses. Remote access requires a
+separately reviewed deployment boundary with authentication, TLS,
 authorization, origin protections, rate isolation, audit policy, and corpus
 distribution approval. Search retrieval and Info's exact vector count execute
-in killable workers. Use `--search-timeout SECONDS`, `--info-timeout SECONDS`, and
-`--db-lock-timeout SECONDS` to tune their hard deadlines and local lease wait
-independently.
+in killable workers. Use `--search-timeout SECONDS`, `--info-timeout SECONDS`,
+and `--db-lock-timeout SECONDS` to tune their hard deadlines and local lease
+wait independently.
 
 **Search tab**: query box, content type/chapter filters, three-state retrieval
 and reranker controls (Auto/forced/disabled), a Neighbor context slider from

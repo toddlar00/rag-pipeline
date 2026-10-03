@@ -1,6 +1,8 @@
 import copy
 import json
+import tracemalloc
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -1802,28 +1804,9 @@ def test_report_byte_parser_rejects_duplicate_keys_and_nonfinite_numbers():
             raw[:-1] + b',"not_finite":NaN}', **kwargs)
 
 
-def test_quality_report_file_reader_uses_bounded_read(monkeypatch):
-    requested_sizes = []
-
-    class GuardedFile:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return False
-
-        def read(self, size=-1):
-            requested_sizes.append(size)
-            return b"{}"
-
-    monkeypatch.setattr(
-        Path, "open", lambda *_args, **_kwargs: GuardedFile())
-    monkeypatch.setattr(
-        quality_core, "parse_quality_report_bytes",
-        lambda raw, **_kwargs: raw)
-
-    result = quality_core.read_quality_report(
-        Path("report.json"),
+def _read_report_bytes(path):
+    return quality_core.read_quality_report(
+        path,
         chunks_name="chunks.jsonl",
         chunks_sha256="a" * 64,
         chunks_size=1,
@@ -1832,8 +1815,168 @@ def test_quality_report_file_reader_uses_bounded_read(monkeypatch):
         chunk_hashes=["b" * 16],
     )
 
-    assert result == b"{}"
-    assert requested_sizes == [quality_core.MAX_QUALITY_REPORT_BYTES + 1]
+
+def test_quality_report_file_reader_uses_bounded_read(monkeypatch, tmp_path):
+    report = tmp_path / "report.json"
+    report.write_bytes(b"{}")
+    real_open = Path.open
+    requested_sizes = []
+
+    class GuardedReader:
+        def __init__(self, handle):
+            self.handle = handle
+
+        def __enter__(self):
+            self.handle.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return self.handle.__exit__(*args)
+
+        def read(self, size=-1):
+            requested_sizes.append(size)
+            return self.handle.read(size)
+
+        def __getattr__(self, name):
+            return getattr(self.handle, name)
+
+    def guarded_open(path, *args, **kwargs):
+        handle = real_open(path, *args, **kwargs)
+        return GuardedReader(handle) if Path(path) == report else handle
+
+    monkeypatch.setattr(Path, "open", guarded_open)
+    monkeypatch.setattr(
+        quality_core, "parse_quality_report_bytes",
+        lambda raw, **_kwargs: raw)
+
+    assert _read_report_bytes(report) == b"{}"
+    # The first request is sized from the opened file, not from the limit.
+    assert requested_sizes == [3]
+    assert all(0 < size <= quality_core.MAX_QUALITY_REPORT_BYTES + 1
+               for size in requested_sizes)
+
+
+def _traced_peak_bytes(operation):
+    # Measure growth above the current traced total, so a tracer that is
+    # already running cannot inflate the result; stop only a tracer we start.
+    started = not tracemalloc.is_tracing()
+    if started:
+        tracemalloc.start()
+    try:
+        tracemalloc.reset_peak()
+        baseline = tracemalloc.get_traced_memory()[0]
+        operation()
+        return tracemalloc.get_traced_memory()[1] - baseline
+    finally:
+        if started:
+            tracemalloc.stop()
+
+
+def _plain_read_peak_bytes(path, size):
+    # The file object's own buffer is sized from st_blksize, which some
+    # network and parallel filesystems report as 1 MiB or more, so the bound
+    # is relative to a plain small read of the same file.
+    def read():
+        with path.open("rb") as handle:
+            handle.read(size)
+
+    return _traced_peak_bytes(read)
+
+
+def test_quality_report_reader_does_not_preallocate_the_limit(
+        monkeypatch, tmp_path):
+    path = tmp_path / "report.json"
+    path.write_bytes(b"{}")
+    monkeypatch.setattr(
+        quality_core, "parse_quality_report_bytes",
+        lambda raw, **_kwargs: raw)
+    results = []
+    baseline = _plain_read_peak_bytes(path, 3)
+
+    peak = _traced_peak_bytes(
+        lambda: results.append(_read_report_bytes(path)))
+
+    assert results == [b"{}"]
+    assert peak < baseline + 1024 * 1024
+
+
+class _GrowingReport:
+    """Answers every request in full, as a report that keeps growing would."""
+
+    def __init__(self):
+        self.requests = []
+
+    def fileno(self):
+        return 17
+
+    def read(self, size):
+        self.requests.append(size)
+        if self.requests.count(0) > 1:
+            raise AssertionError("bounded read repeated an empty request")
+        return b"x" * size
+
+
+def test_quality_report_prefix_stops_at_an_empty_block(monkeypatch):
+    # Only a test seam can make the block size zero; the read must still end.
+    # Replace only this module's OS capability, not the global os.fstat.
+    monkeypatch.setattr(quality_core, "_QUALITY_REPORT_READ_BLOCK_BYTES", 0)
+    monkeypatch.setattr(quality_core, "os", SimpleNamespace(
+        fstat=lambda _descriptor: SimpleNamespace(st_size=4)))
+    handle = _GrowingReport()
+
+    assert quality_core._read_report_prefix(handle, 100) == b"x" * 5
+    assert handle.requests == [5, 0]
+
+
+@pytest.mark.parametrize("size", [0, 7, 8, 9, 20])
+def test_quality_report_reader_passes_exact_bytes(monkeypatch, tmp_path, size):
+    # The reader hands the parser at most MAX + 1 bytes: the whole file up to
+    # the limit, and only a one-byte-over prefix of a larger file.
+    data = (b'{"k":1}' * 3)[:size]
+    path = tmp_path / "report.json"
+    path.write_bytes(data)
+    monkeypatch.setattr(quality_core, "MAX_QUALITY_REPORT_BYTES", 8)
+    monkeypatch.setattr(
+        quality_core, "parse_quality_report_bytes",
+        lambda raw, **_kwargs: raw)
+
+    assert _read_report_bytes(path) == data[:9]
+
+
+def test_quality_report_reader_rejects_oversized_file_at_parse(
+        monkeypatch, tmp_path):
+    path = tmp_path / "report.json"
+    path.write_bytes(b'{"k":12} ')
+    monkeypatch.setattr(quality_core, "MAX_QUALITY_REPORT_BYTES", 8)
+
+    with pytest.raises(ValueError, match="corpus quality report is too large"):
+        _read_report_bytes(path)
+
+
+@pytest.mark.parametrize("kind", ["missing", "directory", "fstat"])
+def test_quality_report_reader_wraps_os_errors(monkeypatch, tmp_path, kind):
+    path = tmp_path / "report.json"
+    failure = None
+    if kind == "directory":
+        path.mkdir()
+    elif kind == "fstat":
+        # The opened file's size probe runs inside the same try as open().
+        path.write_bytes(b"{}")
+        failure = OSError("synthetic fstat failure")
+
+        def failing_fstat(_descriptor):
+            raise failure
+
+        monkeypatch.setattr(
+            quality_core, "os", SimpleNamespace(fstat=failing_fstat))
+
+    with pytest.raises(
+            ValueError, match="cannot read corpus quality report") as caught:
+        _read_report_bytes(path)
+
+    assert isinstance(caught.value.__cause__, OSError)
+    if failure is not None:
+        assert caught.value.__cause__ is failure
 
 
 def test_quality_report_rejects_nonstring_case_name_summary():

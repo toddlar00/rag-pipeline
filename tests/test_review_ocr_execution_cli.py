@@ -1,5 +1,6 @@
 """Opt-in review launch/lifecycle wiring; no server, PDF parser or OCR starts."""
 
+import socket
 import sys
 from types import SimpleNamespace
 
@@ -66,6 +67,9 @@ def launch_case(tmp_path, monkeypatch):
     monkeypatch.setitem(sys.modules, "ocr_review_execution", SimpleNamespace(ReviewRunCoordinator=Coordinator))
     monkeypatch.setitem(sys.modules, "ocr_review_ui", SimpleNamespace(build_app=build))
     monkeypatch.setenv("RAG_OCR_REVIEW_TOKEN", "r_" + "x" * 32)
+    # main refuses both; a developer shell must not fail unrelated launch tests.
+    monkeypatch.delenv("GRADIO_ALLOWED_PATHS", raising=False)
+    monkeypatch.delenv("GRADIO_LOCAL_DEV_MODE", raising=False)
     arguments = ["--pdf", str(workspace.pdf_path), "--recovery", str(workspace.recovery_path),
                  "--output-dir", str(tmp_path), "--trusted-local-session"]
     return SimpleNamespace(events=events, failures=failures, constructed=constructed, builds=builds,
@@ -86,6 +90,80 @@ def test_review_launch_turns_off_fastapi_native_telemetry(launch_case):
     assert launch_case.launches[0]["app_kwargs"] == {"telemetry": {
         "auto_configure": False, "tracing": False, "metrics": False,
         "logs": False, "operation_spans": False}}
+
+
+def test_review_launch_pins_history_ssr_and_root_path(launch_case):
+    assert review_ocr.main(launch_case.args) == 0
+    launch = launch_case.launches[0]
+    assert launch["run_history"] is launch["ssr_mode"] is launch["mcp_server"] is False
+    assert launch["root_path"] == ""
+
+
+def test_review_refuses_ambient_gradio_allowed_paths_before_workspace(launch_case, monkeypatch, capsys, tmp_path):
+    # Gradio treats allowed_paths=[] as unset and would serve this directory.
+    monkeypatch.setenv("GRADIO_ALLOWED_PATHS", str(tmp_path / "SYNTHETIC_PRIVATE_DIR"))
+    assert review_ocr.main(launch_case.args) == 2
+    assert launch_case.events == []
+    err = capsys.readouterr().err
+    assert "GRADIO_ALLOWED_PATHS and GRADIO_LOCAL_DEV_MODE must be unset" in err and "SYNTHETIC_PRIVATE_DIR" not in err
+
+
+@pytest.mark.parametrize("value", ["SYNTHETIC_DEV_MODE_VALUE", ""], ids=["non-empty", "empty"])
+def test_review_refuses_gradio_local_dev_mode_before_workspace(launch_case, monkeypatch, capsys, value):
+    # Any set value, empty included, adds the "null" origin to Gradio's CORS allow list despite strict_cors=True.
+    monkeypatch.setenv("GRADIO_LOCAL_DEV_MODE", value)
+    assert review_ocr.main(launch_case.args) == 2
+    assert launch_case.events == []
+    err = capsys.readouterr().err
+    assert "GRADIO_LOCAL_DEV_MODE must be unset" in err and "SYNTHETIC_DEV_MODE_VALUE" not in err
+
+
+class _StopBeforeBind(BaseException):
+    """Raised in place of Gradio's server start; main's handlers cannot mask it."""
+
+
+def test_review_launched_app_ignores_gradio_history_ssr_and_root_environment(launch_case, monkeypatch, tmp_path):
+    gradio = pytest.importorskip("gradio")
+    from gradio import http_server
+
+    def refuse_bind(**_kwargs):
+        raise _StopBeforeBind()
+
+    # Blocks.launch resolves every setting before it starts the server. A
+    # future Gradio that bound without start_server would block instead.
+    monkeypatch.setattr(http_server, "start_server", refuse_bind)
+    monkeypatch.setattr(gradio.Blocks, "block_thread", lambda self: pytest.fail("Gradio bound without start_server"))
+    monkeypatch.delenv("GRADIO_LOCAL_DEV_MODE", raising=False)
+    monkeypatch.delenv("GRADIO_ALLOWED_PATHS", raising=False)
+    monkeypatch.setenv("GRADIO_NODE_PATH", str(tmp_path / "missing-node"))
+    monkeypatch.setenv("GRADIO_TEMP_DIR", str(tmp_path))  # main replaces it; restore it afterwards
+    for name, value in {"GRADIO_RUN_HISTORY": "true", "GRADIO_HISTORY_BUCKET": "synthetic-owner/private-runs",
+                        "GRADIO_MCP_SERVER": "true", "GRADIO_SSR_MODE": "true",
+                        "GRADIO_ROOT_PATH": "https://sink.invalid/app"}.items():
+        monkeypatch.setenv(name, value)
+    with gradio.Blocks(analytics_enabled=False) as app:
+        gradio.Textbox()
+    monkeypatch.setitem(sys.modules, "ocr_review_ui", SimpleNamespace(build_app=lambda _workspace, **_options: app))
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    # main closes the unbound app in its finally block.
+    with pytest.raises(_StopBeforeBind):
+        review_ocr.main(launch_case.args + ["--port", str(port)])
+    assert launch_case.events == ["workspace"]
+    # The app requires auth, so check the resolved settings and route table.
+    assert app.run_history is False and app.ssr_mode is False
+    assert app.root_path == "" and app.allowed_paths == []
+    assert app.mcp_server is False and app.mcp_error is None
+    assert not any("run-history" in getattr(route, "path", "") for route in app.server_app.routes)
+    # Gradio's CORS middleware answers a preflight before auth: a loopback origin, never a null one.
+    from fastapi.testclient import TestClient
+
+    local = f"http://127.0.0.1:{port}"
+    client = TestClient(app.server_app, base_url=local)
+    for origin, granted in (("null", None), (local, local)):
+        preflight = client.options("/config", headers={"Origin": origin, "Access-Control-Request-Method": "GET"})
+        assert preflight.headers.get("access-control-allow-origin") == granted
 
 
 def test_explicit_execution_wires_fixed_options_and_shutdown_order(launch_case):

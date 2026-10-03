@@ -39,8 +39,10 @@
   `6e7a1e7` passed on PR #165 (merged through `717ac9e`), the
   provider-transport cryptography 50.0.2 pair at source `0b1bbe7` passed
   on PR #166 (pending, not merged), the stacked Service/UI fastapi 0.142.2
-  pair at source `f4204f8` passed on PR #167 (pending, not merged), and
-  the stacked ML/runtime torch 2.14.1 pair at source `718ee9f` is pending;
+  pair at source `f4204f8` passed on PR #167 (pending, not merged), the
+  stacked ML/runtime torch 2.14.1 pair at source `718ee9f` passed on PR
+  #168 (pending, not merged), and the stacked resource-safety and
+  environment-isolation hardening pair at source `b48be4c` is pending;
   exact-head human review and separate R8 owner authorization are not
   recorded
 - **Milestone:** R10 prerequisite for the R8 pipeline-ownership move
@@ -173,11 +175,17 @@ gate-only child `32153e9` and merge `376277c`
 Task 0.8 static-security pair at source `8891e1b` repeated it through
 gate-only child `1533164` and merge `e34103f`
 ([PR #107](https://github.com/toddlar00/rag-pipeline/pull/107)). The
-current replacement pair uses the clean ML/runtime dependency source
-`718ee9f1eac2bbb4e149141f666ca839d86a18fc` (tree
-`57832a08c64f896577a886ccfca1aa20ff321641`), which moves torch to 2.14.1
-and torchvision to 0.29.1 and changes no Python source, the last of three
-stacked one-domain dependency upgrades, stacked on the Service/UI fastapi
+current replacement pair uses the clean resource-safety and
+environment-isolation hardening source
+`b48be4cdd67c1dd486f90e3968357e2fbaa64044` (tree
+`3b7440ad434f0e335158cc1aa1e58bbe2a2cdbac`), a behavior-preserving
+bounded-read fix plus fail-closed hardening that keeps environment
+variables (and, for Chroma, a working-directory `.env`) from selecting
+the Chroma, google-genai and Gradio implementations, telemetry and
+launch settings, changing no dependency or lock, stacked
+on the ML/runtime torch 2.14.1 source `718ee9f` (gate-only child
+`c6ad4ee`, pending on PR #168, not merged), the last of three stacked
+one-domain dependency upgrades, which is stacked on the Service/UI fastapi
 0.142.2 source `f4204f8` (gate-only child `43a93e1`, pending on PR #167,
 not merged), which is stacked on the provider-transport cryptography
 50.0.2 source `0b1bbe7` (gate-only child `488c848`, pending on PR #166,
@@ -690,6 +698,34 @@ and recorded scores; scratch re-conversions of three runs with their
 published jobs' arguments (batch jobs narrowed to the one PDF) reached
 READY with identical chunk text (38, 50 and 325 chunks); and their stored
 embeddings were bitwise equal to the published ones. It changes no Python source or model lock.
+The `718ee9f` pair (gate-only child `c6ad4ee`) passed the hosted CI
+promotion gate on [PR
+#168](https://github.com/toddlar00/rag-pipeline/pull/168), whose hosted
+checks are green; that pull request is stacked on #167 and #166, whose
+hosted checks are also green, and none of the three is merged. The stacked
+resource-safety and environment-isolation hardening source `b48be4c`
+supersedes the `718ee9f` pair for its own pull request. `artifact_io`'s
+bounded snapshot reader and `quality_core.read_quality_report` now size
+the first read from the opened file's size and follow growth in blocks,
+never past the limit, instead of one `read(limit + 1)` that made CPython
+preallocate the whole limit (under tracemalloc an 8-byte artifact peaked
+at 16,787,398 B with a 16 MiB limit, and now peaks at about 10 KB); the
+bytes, the exceptions and their order are unchanged. The settings that
+every Chroma open shares no longer read a working-directory `.env`, and
+explicit values pin the API implementation (`RustBindingsAPI`), both
+telemetry implementations and the OpenTelemetry endpoint, headers and
+granularity against Chroma's `CHROMA_*` and unprefixed variables, failing
+closed when a pin does not hold. The Gemini client passes google-genai's
+`DebugConfig` with its test modes off, so `GOOGLE_GENAI_CLIENT_MODE` can
+no longer select the SDK's record/replay client, and a constructed replay
+client is rejected before it is cached. Both Gradio launchers pass
+`run_history=False`, `ssr_mode=False`, `root_path=""` and
+`mcp_server=False` (which the review UI already passed), and both refuse
+to start while `GRADIO_ALLOWED_PATHS` is non-empty or
+`GRADIO_LOCAL_DEV_MODE` is set. In a clean environment only the UIs'
+run-history page, and the local UI's footer link to it, disappear, and
+Gradio deletes the runs it had saved in the browser for these apps. It
+changes no dependency or lock.
 Its Windows and
 Linux CPython 3.12.13 reports were
 generated after the same strict hash-locked synchronization, to its locks
@@ -900,15 +936,17 @@ then the stacked lexical accuracy toolkit source `5d22bb9`,
 then the stacked robustness follow-up source `6e7a1e7`,
 then the stacked provider-transport cryptography 50.0.2 source `0b1bbe7`,
 then the stacked Service/UI fastapi 0.142.2 source `f4204f8`,
-then the stacked ML/runtime torch 2.14.1 source `718ee9f`.
+then the stacked ML/runtime torch 2.14.1 source `718ee9f`,
+then the stacked resource-safety and environment-isolation hardening
+source `b48be4c`.
 Its Windows report
 is 51,202 bytes (file SHA-256
-`273209a72e4ab5bfbf91c1c37d41861c8ba16d21afcc7e5301051551f02b804d`;
+`210ff86c641958fe9ca6541873114da92407b8921fdc3926d2afb150ad6f61f5`;
 embedded report SHA-256
-`81f9c7272807c659a0731cc81bc7643a969809d8ca19a884e198ceb89b820c43`).
-Its Linux report is 50,601 bytes (file SHA-256
-`2138cb4993f1317dc1d97fb5df15cc8088efe1ba1cbbaf8b4dddb04e542fa2be`;
+`7371ff43804e016ce78e7e8ce8b5d77f13f0fbe0945c56aae4b297fe50a751ae`).
+Its Linux report is 50,603 bytes (file SHA-256
+`71c1b4210b418e4a312c82ce3fb9944a9fa85051d31c592c151ca6fb3952b158`;
 embedded report SHA-256
-`d7090eaf95c8e81a16f2459c6e8e35e671166cb5af27a51ed566980f21a5ce8d`).
+`bad3014693e9a24e2775f4ff0f6f633bac4dd714bf5bf776b9dd43e39774373e`).
 Both use CPython 3.12.13 and pass their complete local same-platform 9×5
 comparisons. Hosted promotion remains pending.

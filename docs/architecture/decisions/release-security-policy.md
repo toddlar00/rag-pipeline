@@ -47,6 +47,7 @@ Policy version 1 has these defaults:
 | Inline key arguments | rejected | development profile only; still discouraged |
 | Custom gateway tenant identity | required, nonsecret | `--llm-cache-namespace LABEL`; only its SHA-256 identity persists |
 | Proxy/custom-CA/SDK endpoint environment | ignored or rejected | `--trust-environment-network` after operator review |
+| SDK implementation, test-mode, and UI launch environment (Chroma's implementation, telemetry, and OpenTelemetry selections from `CHROMA_*` and unprefixed variables, and a working-directory `.env` for the client's settings, while other settings such as `migrations`, `migrations_hash_algorithm`, `allow_reset`, `chroma_memory_limit_bytes`, and `chroma_server_nofile` still follow the process environment, and a legacy `CHROMA_DB_IMPL` makes the open fail closed; google-genai's record/replay variables `GOOGLE_GENAI_CLIENT_MODE`, `GOOGLE_GENAI_REPLAYS_DIRECTORY`, and `GOOGLE_GENAI_REPLAY_ID`; Gradio's launch variables `GRADIO_RUN_HISTORY`, `GRADIO_MCP_SERVER`, `GRADIO_SSR_MODE`, `GRADIO_ROOT_PATH`, `GRADIO_ALLOWED_PATHS`, and `GRADIO_LOCAL_DEV_MODE`) | pinned in code (ignored); a non-empty `GRADIO_ALLOWED_PATHS`, or a `GRADIO_LOCAL_DEV_MODE` set to any value, empty included, is rejected at UI startup | no release override; not covered by `--trust-environment-network` |
 | Gradio principal boundary | disabled | `--trust-local-user` for a trusted single-user OS session |
 | Auxiliary analytics/telemetry | disabled | no release override |
 
@@ -81,19 +82,21 @@ receipts are containment and consistency mechanisms, not a sandbox.
 |---|---|---|---|---|
 | Deterministic conversion/chunk/export | none | local files only | default | artifact receipts bind policy where it changes output |
 | Local embeddings/reranker/zero-shot models | none at runtime | verified local model tree | default `cache-only` | model-lock digest binds generated artifacts |
+| Local Chroma index | none | the local index directory, through the in-process Rust bindings | default | the API implementation is pinned to `RustBindingsAPI` and verified after construction, so `CHROMA_API_IMPL` cannot turn the persistent client into an HTTP client sending chunk text and embeddings to `CHROMA_SERVER_HOST` |
 | Offline model-sync planning | none | reviewed lock, local cache, and local filesystem-capacity metadata | default; no network policy opt-in | schema-v1 plan binds the lock, selection, bundle identities/statuses, blocked consumers, and space contract |
 | Reviewed model synchronization | reviewed public model IDs and file requests; no corpus text | official Hugging Face or explicitly reviewed mirror plus required CDN redirects | explicit reviewed sync; reviewed environment trust when overrides exist | bytes are size-bounded, allowlisted, hash-verified, and atomically published |
 | Voyage/OpenAI/Cohere embeddings | full chunk text during indexing; query text during search | literal reviewed provider origin | `allow-cloud` | policy receipt binds jobs/evaluation; no provider SDK endpoint selection; MiniMax embedding IDs fail closed pending a reviewed current contract |
 | Cohere/Jina reranking | query plus bounded candidate text and metadata | literal reviewed provider origin | `allow-cloud` | reranker response is not separately cached |
 | OpenAI-compatible generation | prompts containing chunks, query/evidence, or generated-work inputs | validated official/custom endpoint | `allow-cloud`; custom release gateways also require namespace | release cache defaults off; events/reports carry only opaque identities |
-| Gemini generation | the same feature-specific prompt | pinned Gemini origin with Vertex mode disabled | `allow-cloud` | finite one-attempt SDK request; policy-aware client cache |
+| Gemini generation | the same feature-specific prompt | pinned Gemini origin with Vertex mode disabled | `allow-cloud` | finite one-attempt SDK request; policy-aware client cache; the SDK's record/replay/auto debug modes are pinned off (`GOOGLE_GENAI_CLIENT_MODE`, `GOOGLE_GENAI_REPLAYS_DIRECTORY`, and `GOOGLE_GENAI_REPLAY_ID` are ignored), and a constructed replay client fails closed before caching |
 | Ollama on literal loopback | prompt to a local process | canonical loopback IP | default | proxy and ambient credential lookup disabled |
 | Ollama on a public HTTPS endpoint | prompt | validated public endpoint | `allow-cloud`; custom release gateway namespace required | same LLM cache/receipt rules |
 | Evaluation | query, candidate, and optional answer data according to selected providers | same destinations as runtime | same policy as runtime | report configuration includes value-free policy provenance |
 | Service search/reindex | query or chunks according to configured embedding provider | same destinations as runtime | one immutable server policy | strict policy receipt crosses worker boundary; reindex argv pins it |
 | UI search/reindex | query or chunks according to configured providers | same destinations as runtime | trusted UI plus the relevant network policy | strict policy receipt crosses worker/job boundary |
-| Chroma/Gradio/Hugging Face auxiliary telemetry | none | disabled | no override | process environment and explicit client settings disable it |
+| Chroma/Gradio/Hugging Face auxiliary telemetry | none | disabled | no override | process environment and explicit client settings disable it; Chroma's telemetry implementations and its OpenTelemetry endpoint, headers, and granularity are pinned, so their `CHROMA_*` variables are ignored (`CHROMA_OTEL_SERVICE_NAME` is still read but has no effect, because the Rust bindings never construct Chroma's OpenTelemetry client), and the client's settings never read a working-directory `.env` |
 | FastAPI native OpenTelemetry (service app and Gradio UIs) | none | disabled | no override | each app the repository launches passes `telemetry` with auto-configuration, tracing, metrics, logs, and operation spans off, so `OTEL_*` variables, an installed OTLP exporter, or another component's provider cannot attach export |
+| Gradio run history, MCP, SSR, and root path (local UI and OCR review UI) | none | disabled | no override | both launchers pass `run_history=False`, `mcp_server=False`, `ssr_mode=False`, and `root_path=""`, which outrank `GRADIO_RUN_HISTORY`, `GRADIO_MCP_SERVER`, `GRADIO_SSR_MODE`, and `GRADIO_ROOT_PATH`: Gradio's run-history routes and its Hugging Face bucket upload, which uses the host's saved login on loopback, are absent, no Node server starts, and a full-URL root path cannot redirect the browser's API calls; startup refuses a non-empty `GRADIO_ALLOWED_PATHS` without echoing it, because Gradio treats `allowed_paths=[]` as unset and would serve every listed directory; startup also refuses `GRADIO_LOCAL_DEV_MODE` when it is set at all, even to an empty value, because Gradio then adds the `null` origin, with credentials, to its CORS allow list whatever `strict_cors` says, so a sandboxed or `file:` page could read either UI's responses |
 
 Cloud feature gates execute before credential lookup, provider import,
 tokenizer import, cache lookup, worker launch, or transport construction. API
@@ -269,6 +272,13 @@ with old defaults.
 - Cloud commands must add `--network-policy allow-cloud` and may need
   `--trust-environment-network` after reviewing active proxy/CA configuration.
 - UI commands must add `--trust-local-user`.
+- Both UIs lose Gradio's run-history page; the local UI also loses its footer
+  link. With `run_history=False`, Gradio deletes runs it had saved in the
+  browser for these apps. `GRADIO_MCP_SERVER` no longer affects the local UI
+  (the OCR review UI already ignored it), and `GRADIO_SSR_MODE` and
+  `GRADIO_ROOT_PATH` no longer affect either UI. Unset `GRADIO_ALLOWED_PATHS`
+  and `GRADIO_LOCAL_DEV_MODE` before starting either UI; an empty
+  `GRADIO_LOCAL_DEV_MODE` is refused too.
 - Local models must be planned offline and synchronized by explicit task/model
   selection (or explicit `--all`) before first private-data use.
 - Runtime-bundle identity schema v2 binds the complete primary, transform, and
@@ -301,3 +311,52 @@ R2 must close the Gemini response-ceiling gap and re-audit these transport assum
 google-genai, Hugging Face Hub, or provider packages change. R5 must compose
 this record into the first release manifest, and R7 must keep the provider
 transport and no-network matrices as security-critical coverage targets.
+
+Apart from the existing `anonymized_telemetry=False`, every pinned Chroma
+setting is Chroma 1.5.9's own default. Client construction fails closed when
+a pin no longer holds, so a vector-store dependency upgrade must re-verify
+them. The OpenTelemetry headers pin is
+assigned after construction, because pydantic-settings merges an explicit
+empty mapping into headers read from `CHROMA_OTEL_COLLECTION_HEADERS` instead
+of replacing them. With the Rust bindings pinned, the client never consults
+Chroma's server-host, SysDB, producer, or executor settings.
+
+The client's settings never read a working-directory `.env`, for any
+setting. That includes a store whose `sha256` migration hash algorithm was
+selected through a `.env`: such a store must now set
+`MIGRATIONS_HASH_ALGORITHM` in the process environment, or its open fails with
+an inconsistent-hash error. `import chromadb` still parses such a file for its
+module-level default settings, which the client never uses, so a malformed
+value there makes the import fail, as it did before. The unpinned
+`migrations`, `migrations_hash_algorithm`, and `allow_reset` settings follow
+the unprefixed `MIGRATIONS`, `MIGRATIONS_HASH_ALGORITHM`, and `ALLOW_RESET`
+process variables, and local resource settings such as
+`chroma_memory_limit_bytes` and `chroma_server_nofile` follow their
+`CHROMA_*` variables. None of them selects an implementation
+class or a destination. Pinning the first three is an option offered to the
+owner and not chosen here, because a pinned hash algorithm could lock out a
+store deliberately created with another one.
+
+The Gemini client passes google-genai 1.75's `client.DebugConfig` with its
+client mode, replay directory, and replay ID set to `None`, because the SDK
+otherwise reads them from `GOOGLE_GENAI_*` variables and its record, replay,
+or auto mode builds a test-only replay client. In record mode, or auto mode
+without a replay file, that client prints each request, API key header
+included, and records prompts and responses to a replay file; otherwise it
+answers from a local replay file. An installed SDK without `DebugConfig`
+fails closed, and a constructed client whose debug mode is set or whose API
+client is a `ReplayApiClient` by class name is closed and rejected before it
+is cached. That check reads the private `_debug_config` and `_api_client`
+attributes and fails closed when either is missing, so a google-genai upgrade
+must re-run the installed-SDK client tests.
+
+The Gradio launch pins rely on Gradio 6.29's rule that an explicit launch
+argument outranks its `GRADIO_*` fallback, and the `GRADIO_ALLOWED_PATHS`
+refusal mirrors its rule that a non-empty value, whitespace included, replaces
+an empty `allowed_paths`. The `GRADIO_LOCAL_DEV_MODE` refusal mirrors its rule
+that any set value, empty included, adds the `null` origin to its CORS allow
+list; no launch argument overrides that. Launching cannot assert the resolved
+settings before it serves, so the real-Gradio tests stop each launcher at
+Gradio's server start and inspect the built app instead, including its answer
+to an `Origin: null` CORS request. A Service/UI dependency upgrade must re-run
+them.
