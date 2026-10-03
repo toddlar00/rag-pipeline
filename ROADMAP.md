@@ -2077,8 +2077,9 @@ docling (2.132.0 is now available but not evaluated; 2.130 and the 2.131
 evaluation in #149 made audited readings worse), numpy 2.5.3, transformers
 5.17 and Google GenAI 2 (#88).
 
-Follow-ups found by the Service/UI pull request (not fixed; both are
-outside its domain):
+Follow-ups found by the Service/UI pull request (not fixed there; both
+are outside its domain, and the hardening pull request below proposes a
+fix for the first):
 
 - Chroma's own OpenTelemetry trigger: in supervised Chroma workers,
   `CHROMA_API_IMPL=chromadb.api.segment.SegmentAPI` together with
@@ -2087,7 +2088,14 @@ outside its domain):
   OpenTelemetry SDK tracer provider with a gRPC exporter. Today the client
   then fails only because no lock contains `hnswlib`. It predates the
   upgrade (`main` already locks chromadb 1.5.9 with the SDK and the gRPC
-  exporter) and belongs to the `vector_runtime` owner.
+  exporter) and belongs to the `vector_runtime` owner. Proposed fixed, not
+  integrated, by `808031a` in the hardening pull request below. That pass
+  found a wider hole in the same settings path:
+  `CHROMA_API_IMPL=chromadb.api.fastapi.FastAPI` turned the persistent
+  client into an HTTP client for `CHROMA_SERVER_HOST`, which would send
+  chunk text and embeddings off the machine, and
+  `CHROMA_PRODUCT_TELEMETRY_IMPL` or `CHROMA_TELEMETRY_IMPL` named a class
+  that Chroma imports and constructs.
 - An optional `tools/check_dependency_policy.py` rule rejecting
   `opentelemetry-exporter-otlp-proto-http`,
   `opentelemetry-instrumentation*` and `opentelemetry-distro`, as defence
@@ -2095,8 +2103,9 @@ outside its domain):
   absence from every lock stops FastAPI's environment-driven OTLP export,
   and nothing enforces that absence.
 
-Follow-up found by the ML/runtime pull request (not fixed; it predates the
-upgrade, and `artifact_io.py` is unchanged since `main` `717ac9e`):
+Follow-up found by the ML/runtime pull request (not fixed there; it
+predates the upgrade, and `artifact_io.py` is unchanged since `main`
+`717ac9e`; the hardening pull request below proposes a fix):
 
 - `artifact_io._read_index_artifact_snapshot_once` calls
   `handle.read(max_bytes + 1)`, which preallocates `max_bytes + 1` bytes
@@ -2107,7 +2116,175 @@ upgrade, and `artifact_io.py` is unchanged since `main` `717ac9e`):
   at the same commit, that module alone and together with
   `tests/test_ocr_review_runtime.py` under `-n 8` then passed. Bound the
   read by the file's stat size (keeping the post-read size and
-  fingerprint checks) or read in chunks.
+  fingerprint checks) or read in chunks. Proposed fixed, not integrated,
+  by `8b41db7` in the hardening pull request below.
+  `quality_core.read_quality_report` had the same pattern with its 16 MiB
+  limit, and the same commit fixes it.
+
+### Resource-safety and environment-isolation hardening (2026-10-02, proposed)
+
+The hardening pull request (branch
+`agent/robustness-hardening-2026-10`, stacked on the ML/runtime pull
+request [#168](https://github.com/toddlar00/rag-pipeline/pull/168)) fixes
+the two follow-ups above and the sibling holes found while fixing them.
+It changes no dependency, lock, model-artifact lock or dependency policy.
+Its source checkpoint is the commit that adds this entry. Its Phase A0
+pair, hosted checks and exact-SHA record are pending, and none of its
+changes is merged or integrated. Its four source commits:
+
+- Bounded reads (`8b41db7`; behavior-preserving): `artifact_io`'s bounded
+  snapshot reader and `quality_core.read_quality_report` size the first
+  read from the opened file's size and follow growth in blocks, never
+  past the limit. Before, one `read(limit + 1)` made CPython preallocate
+  the whole limit: under tracemalloc an 8-byte artifact peaked at
+  16,787,398 B with a 16 MiB limit. It now peaks at about 10 KB. The
+  bytes, the exceptions and their order are unchanged.
+- Chroma settings (`808031a`; intentional fail-closed hardening): the
+  settings that every Chroma open shares no longer read a working-directory
+  `.env`. Explicit values pin the API implementation (`RustBindingsAPI`),
+  both telemetry implementations and the OpenTelemetry endpoint, headers
+  and granularity to Chroma 1.5.9's own defaults, and each pin is read
+  back after construction, failing closed on a mismatch. Behavior change:
+  `CHROMA_*` variables no longer affect those settings. Chroma reads no
+  `.env` for any setting, so a store whose sha256 migration hash
+  algorithm came from a `.env` must set `MIGRATIONS_HASH_ALGORITHM` in the
+  process environment. In a clean environment the settings equal the
+  former ones.
+- Gemini client (`7fdffad`; intentional fail-closed hardening):
+  `_load_gemini_client` passes google-genai 1.75's `DebugConfig` with the
+  client mode, replay directory and replay ID set to `None`. Before caching
+  a client, it rejects one that still reports a test mode or a replay
+  client. Before, `GOOGLE_GENAI_CLIENT_MODE` set to record, replay or auto
+  selected the SDK's test-only replay client. In record mode that client
+  printed each request, including the `x-goog-api-key` header and the
+  prompt, to standard output, and wrote the prompt and response to a
+  plaintext replay file. Behavior change: `GOOGLE_GENAI_CLIENT_MODE`,
+  `GOOGLE_GENAI_REPLAYS_DIRECTORY` and `GOOGLE_GENAI_REPLAY_ID` are
+  ignored. An installed SDK without `DebugConfig` fails with
+  `configuration_error` before any request. The GenAI 2 decision (#88) is
+  untouched.
+- Gradio launches (`a6393fa`; intentional fail-closed hardening): gradio
+  6.29.1 reads every unset launch argument from the environment, so
+  `ui.main` and `tools/review_ocr.main` now pass `run_history=False`,
+  `ssr_mode=False` and `root_path=""`, and `ui.main` also
+  `mcp_server=False`. Before, both UIs served Gradio's run-history page.
+  They also registered `/gradio_api/run-history/*` routes whose Hugging
+  Face bucket upload uses the host's saved Hugging Face login for a
+  browser on loopback. `GRADIO_MCP_SERVER` would expose the local UI's
+  search and job handlers as MCP tools, and `GRADIO_SSR_MODE` started a
+  Node front proxy. A full-URL `GRADIO_ROOT_PATH` sent the browser's API
+  calls, queries included, to another origin. Gradio also treats an
+  explicit `allowed_paths=[]` as unset and serves every directory in
+  `GRADIO_ALLOWED_PATHS`. Both launchers therefore refuse a non-empty
+  value before building anything, without echoing it. Behavior change:
+  both UIs lose the run-history page, and Gradio deletes the runs it saved
+  in the browser for these apps. The four variables are ignored, and a
+  non-empty `GRADIO_ALLOWED_PATHS` stops either UI from starting.
+
+Each commit carries its characterization tests, regression tests that
+fail on its parent and pass on it, and its architecture-inventory
+refresh. The three hardening commits also update the release-security
+ADR, and the Gradio commit also updates the README and
+`docs/ocr-review.md`. The real-Chroma, real-GenAI and real-Gradio tests
+skip in the dependency-light lanes. `full-integration` (Linux) and the
+local Phase A0 full suites run them. `rag.py` belongs to
+`vector_runtime`, so the Chroma and Gemini commits need owned-path
+review. No governance path changes, and `ui.py` places the pull request
+in the `service` risk group, so hosted CI runs the full job set. The
+authorization basis is the same as for the merged robustness follow-ups
+#150-#165: decision-neutral defect and ADR-conformance fixes. It is not
+an A1 performance slice and selects no owner decision.
+
+One option is offered to the owner and not chosen: also pinning Chroma's
+`migrations`, `migrations_hash_algorithm` and `allow_reset` (see the
+release-security ADR). They still follow the unprefixed `MIGRATIONS`,
+`MIGRATIONS_HASH_ALGORITHM` and `ALLOW_RESET` process variables, and a
+pinned hash algorithm could lock out a store deliberately created with
+another one.
+
+Follow-ups that this pass found or re-examined but did not fix (all
+open):
+
+- Durable-job and model fail-closed hardening, intended as the next pull
+  request. It has three parts:
+  - Route reconciliation's post-transition runtime and attempt-report
+    writes, and the terminal-report repair writes, through
+    `job_coordination`'s bounded transient-replace retry. These are the
+    reconciliation writes still uncovered under "Corpus audit follow-ups".
+  - Make the terminal attempt report constructible when a
+    cancellation-evidence write fails. Characterize every cancel, timeout
+    and manager-error report first.
+  - Cache the embedding model only after its `EMBEDDING_MAX_TOKENS`
+    check.
+
+  The last two are recorded under "Research improvement pass".
+- A test-only privacy-assertion pass:
+  - About 20 negative path checks over JSON text, besides the job-manager
+    case under "Phase A0", can never fail on Windows, because JSON escapes
+    backslashes. Examples are in `tests/test_job_runtime.py`,
+    `tests/test_service_runtime.py`, `tests/test_service_api.py` and
+    `tests/test_jobs_cli.py`. A probe leaked a private path into
+    `CorpusConfig.public_dict` and `JobSummary.as_dict`, and all four
+    targeted tests still passed on Windows.
+  - The codepoint-leak check in `tests/test_ocr_detection_disposition.py`
+    can never fail on any platform, because JSON always escapes its NUL.
+  - The fix is one shared helper that checks the raw, JSON-escaped and
+    parsed forms, with mutation self-tests. Triage separately any
+    Windows-only leak it exposes.
+- A security-tooling pass on governance paths, with owned-path review. It
+  covers the workflow-validator, secret-scanner and static-security gaps
+  under "Research improvement pass", and adds a PyYAML-oracle
+  differential test and temporary-repository fixtures. The secret-scanner
+  and static-security gaps are latent today: no ref names a blob, and the
+  gate checks every tracked Python file.
+- The stale-scratch janitor's marker read and the Windows WinError 5 at
+  `MoveFileEx` (both under "Phase A0") each need their own review. The
+  #165 retry remains the janitor's backstop. NTFS probes showed the
+  replace fix needs two halves. `os.replace` fails against any open
+  reader, even one opened with `FILE_SHARE_DELETE`. A POSIX-semantics
+  rename succeeds only against such a share-delete reader.
+- The split-export and AI-export completeness checks in `rag.py` read the
+  publication and AI-export receipts and the split manifest whole. They
+  check the 4 MiB and 2 MiB bounds only afterwards, or not at all. On a
+  40 MiB manifest, `_split_export_complete` peaked at 80 MiB before
+  returning False. Route these reads through the bounded snapshot reader
+  after characterizing their current error text. This pull request makes
+  that reader cheap.
+- ONNX Runtime's Windows TraceLogging telemetry is never turned off. No
+  first-party code calls `onnxruntime.disable_telemetry_events()`,
+  although Docling's RapidOCR and the OCR runtimes create ONNX Runtime
+  sessions. The release-security ADR's telemetry row does not list ONNX
+  Runtime. The fix is a telemetry-inventory change with an ADR row.
+- The post-SIGKILL confirmation window (under "Phase A0") stays a
+  separate, characterized change to the frozen supervision core.
+- `model_artifacts` reads Hugging Face Hub and PyPI metadata responses
+  with `response.read(limit + 1)`, the same pattern, with 10 MiB and 5 MiB
+  limits. CPython's `http.client` clips that request to a declared
+  `Content-Length` and reads chunked bodies chunk by chunk. Only a body
+  delimited by connection close reserves the whole limit. This code
+  belongs to the `model_supply_chain` owner.
+- `GRADIO_NUM_WORKERS` set to 1 or more starts loopback static-file worker
+  processes for the local UI, which has no authentication. Gradio starts
+  none when authentication is set, so the review UI is unaffected. The
+  workers bind `127.0.0.1` and apply the same allowed and blocked paths,
+  so the risk is lower. Pinning `num_workers=0` in `ui.main` is a small
+  follow-up.
+- Optional, as a governance change to `ci.yml`: extend
+  `vector-store-smoke`'s `-k` selection so the real-Chroma
+  hostile-configuration test also runs on hosted Windows. The Windows
+  unit lanes there are dependency-light.
+- These stay open and unchanged:
+  - The optional OTLP dependency-policy rule above. It is a new policy
+    rule and needs agreement first.
+  - The oracle-root recompute under "Research improvement pass". It is an
+    A1 performance slice for its own pull request.
+  - Three latent or opportunistic items already recorded:
+    `_pipeline_run_is_ready`'s path resolution ("Corpus audit
+    follow-ups"), `build_save_feedback`'s gradio import order ("Fresh-OCR
+    token fidelity"), and the README's pypdfium2 note ("Research
+    improvement pass"). The README note should ride with a source change,
+    because a documentation-only merge trips the recorded Phase A0
+    push-run issue.
 
 ### Integrated convergence
 
