@@ -79,6 +79,15 @@ def test_default_review_never_imports_or_constructs_execution(launch_case, monke
     assert launch_case.events == ["workspace", "build", "launch", "app-close"]
 
 
+def test_review_launch_turns_off_fastapi_native_telemetry(launch_case):
+    # Gradio forwards app_kwargs to its FastAPI App; FastAPI 0.142 otherwise
+    # instruments it and configures OTLP export from OTEL_* variables.
+    assert review_ocr.main(launch_case.args) == 0
+    assert launch_case.launches[0]["app_kwargs"] == {"telemetry": {
+        "auto_configure": False, "tracing": False, "metrics": False,
+        "logs": False, "operation_spans": False}}
+
+
 def test_explicit_execution_wires_fixed_options_and_shutdown_order(launch_case):
     evidence = launch_case.workspace.output_dir / "installation.json"
     assert review_ocr.main(launch_case.args + ["--enable-ocr-execution", "--ocr-timeout-seconds", "120",

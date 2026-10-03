@@ -4642,7 +4642,7 @@
             "target": "_retry_after_seconds"
           },
           {
-            "locations_sha256": "3010cbe88d8f919c580e6d80785245e2600e26eac55e99fc8fca0a54b461a4b5",
+            "locations_sha256": "9785c663c5693feca61e04bdb1e4d41d4553c21b3ffa61ad7cb43d77f2b4685f",
             "occurrence_count": 6,
             "operations": [
               "setattr"
@@ -5128,7 +5128,7 @@
             "target": "export_ai_project"
           },
           {
-            "locations_sha256": "265cb2ae9e7e813288cafa9bbf1d36289e7010075f564ca01749cb32d865d75d",
+            "locations_sha256": "032e5ddbe4a7395d14a5690912d69b7e83b003e2951172edc9a7dad269c331a5",
             "occurrence_count": 12,
             "operations": [
               "setattr"
@@ -5282,7 +5282,7 @@
             "target": "scan_pdf"
           },
           {
-            "locations_sha256": "1f762495b316fa695ecd6bdd00d58ecbc0ea0e263d79a7d89844bcbdde6c62e0",
+            "locations_sha256": "411064c67a7bb11c79937897db98012bc774cb606171ef69b29be6ba47e14204",
             "occurrence_count": 11,
             "operations": [
               "setattr"
@@ -6978,7 +6978,7 @@
           "kinds": [
             "attribute"
           ],
-          "locations_sha256": "17dd6540b19fd8d059984be5b8401c45ac34bc07ee26a124c4c4e462f4cab1ca",
+          "locations_sha256": "7b3280644de5078134984becb379a74e371e122132e8dcb18783228e65849b7e",
           "name": "_atomic_write_json",
           "occurrence_count": 39,
           "paths": [
@@ -58105,7 +58105,7 @@
             "scope": "top_level"
           }
         ],
-        "definition_locations_sha256": "555cf8d97a92c8141413a397b10c29b2bf0dcfcb84bf58e5c34f5517178ec711",
+        "definition_locations_sha256": "55b306bd0e07e1e8b332b15fbd806d59e33562b4868856fb417c237793135bb9",
         "function_count": 61,
         "functions": [
           {
@@ -58487,9 +58487,9 @@
           }
         ],
         "module": "service_http",
-        "non_blank_lines": 1022,
+        "non_blank_lines": 1033,
         "path": "service_http.py",
-        "physical_lines": 1111,
+        "physical_lines": 1122,
         "top_level_function_count": 16
       },
       {
@@ -64683,7 +64683,7 @@
             "scope": "top_level"
           }
         ],
-        "definition_locations_sha256": "37ec9bdd57846d957b0c5ee500d2cc497bfbc88ab9b80a4529bbc8427009cc1a",
+        "definition_locations_sha256": "4ebf86df6fe63ccbf81ecec5606d8454102f281b1b2577802adf3bf18261290e",
         "function_count": 2,
         "functions": [
           {
@@ -64756,9 +64756,9 @@
           }
         ],
         "module": "tools.review_ocr",
-        "non_blank_lines": 141,
+        "non_blank_lines": 147,
         "path": "tools/review_ocr.py",
-        "physical_lines": 156,
+        "physical_lines": 162,
         "top_level_function_count": 1
       },
       {
@@ -65171,7 +65171,7 @@
             "scope": "top_level"
           }
         ],
-        "definition_locations_sha256": "89d415622dcb5fd1f33516f6310f77ff962c45767301fb542e2cde00bacb1144",
+        "definition_locations_sha256": "f67b4c1a86410fecd837fbcd10d19d6b5bce2bfae42db871cbc51512b7f97c29",
         "function_count": 21,
         "functions": [
           {
@@ -65349,9 +65349,9 @@
           }
         ],
         "module": "ui",
-        "non_blank_lines": 819,
+        "non_blank_lines": 828,
         "path": "ui.py",
-        "physical_lines": 912,
+        "physical_lines": 921,
         "top_level_function_count": 19
       },
       {
@@ -65568,7 +65568,7 @@
         "top_level_function_count": 2
       }
     ],
-    "physical_line_count": 131965,
+    "physical_line_count": 131991,
     "source_groups": [
       "production",
       "tools",

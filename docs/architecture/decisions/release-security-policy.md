@@ -93,6 +93,7 @@ receipts are containment and consistency mechanisms, not a sandbox.
 | Service search/reindex | query or chunks according to configured embedding provider | same destinations as runtime | one immutable server policy | strict policy receipt crosses worker boundary; reindex argv pins it |
 | UI search/reindex | query or chunks according to configured providers | same destinations as runtime | trusted UI plus the relevant network policy | strict policy receipt crosses worker/job boundary |
 | Chroma/Gradio/Hugging Face auxiliary telemetry | none | disabled | no override | process environment and explicit client settings disable it |
+| FastAPI native OpenTelemetry (service app and Gradio UIs) | none | disabled | no override | each app the repository launches passes `telemetry` with auto-configuration, tracing, metrics, logs, and operation spans off, so `OTEL_*` variables, an installed OTLP exporter, or another component's provider cannot attach export |
 
 Cloud feature gates execute before credential lookup, provider import,
 tokenizer import, cache lookup, worker launch, or transport construction. API
