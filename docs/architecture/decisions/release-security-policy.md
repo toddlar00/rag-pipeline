@@ -47,6 +47,7 @@ Policy version 1 has these defaults:
 | Inline key arguments | rejected | development profile only; still discouraged |
 | Custom gateway tenant identity | required, nonsecret | `--llm-cache-namespace LABEL`; only its SHA-256 identity persists |
 | Proxy/custom-CA/SDK endpoint environment | ignored or rejected | `--trust-environment-network` after operator review |
+| SDK implementation environment (Chroma's settings environment: `CHROMA_*` and unprefixed variables, and a working-directory `.env`) | pinned in code (ignored) | no release override; not covered by `--trust-environment-network` |
 | Gradio principal boundary | disabled | `--trust-local-user` for a trusted single-user OS session |
 | Auxiliary analytics/telemetry | disabled | no release override |
 
@@ -81,6 +82,7 @@ receipts are containment and consistency mechanisms, not a sandbox.
 |---|---|---|---|---|
 | Deterministic conversion/chunk/export | none | local files only | default | artifact receipts bind policy where it changes output |
 | Local embeddings/reranker/zero-shot models | none at runtime | verified local model tree | default `cache-only` | model-lock digest binds generated artifacts |
+| Local Chroma index | none | the local index directory, through the in-process Rust bindings | default | the API implementation is pinned to `RustBindingsAPI` and verified after construction, so `CHROMA_API_IMPL` cannot turn the persistent client into an HTTP client sending chunk text and embeddings to `CHROMA_SERVER_HOST` |
 | Offline model-sync planning | none | reviewed lock, local cache, and local filesystem-capacity metadata | default; no network policy opt-in | schema-v1 plan binds the lock, selection, bundle identities/statuses, blocked consumers, and space contract |
 | Reviewed model synchronization | reviewed public model IDs and file requests; no corpus text | official Hugging Face or explicitly reviewed mirror plus required CDN redirects | explicit reviewed sync; reviewed environment trust when overrides exist | bytes are size-bounded, allowlisted, hash-verified, and atomically published |
 | Voyage/OpenAI/Cohere embeddings | full chunk text during indexing; query text during search | literal reviewed provider origin | `allow-cloud` | policy receipt binds jobs/evaluation; no provider SDK endpoint selection; MiniMax embedding IDs fail closed pending a reviewed current contract |
@@ -92,7 +94,7 @@ receipts are containment and consistency mechanisms, not a sandbox.
 | Evaluation | query, candidate, and optional answer data according to selected providers | same destinations as runtime | same policy as runtime | report configuration includes value-free policy provenance |
 | Service search/reindex | query or chunks according to configured embedding provider | same destinations as runtime | one immutable server policy | strict policy receipt crosses worker boundary; reindex argv pins it |
 | UI search/reindex | query or chunks according to configured providers | same destinations as runtime | trusted UI plus the relevant network policy | strict policy receipt crosses worker/job boundary |
-| Chroma/Gradio/Hugging Face auxiliary telemetry | none | disabled | no override | process environment and explicit client settings disable it |
+| Chroma/Gradio/Hugging Face auxiliary telemetry | none | disabled | no override | process environment and explicit client settings disable it; Chroma's product telemetry implementation and OpenTelemetry fields are pinned, so their `CHROMA_*` variables are ignored, and Chroma reads no working-directory `.env` |
 | FastAPI native OpenTelemetry (service app and Gradio UIs) | none | disabled | no override | each app the repository launches passes `telemetry` with auto-configuration, tracing, metrics, logs, and operation spans off, so `OTEL_*` variables, an installed OTLP exporter, or another component's provider cannot attach export |
 
 Cloud feature gates execute before credential lookup, provider import,
@@ -301,3 +303,23 @@ R2 must close the Gemini response-ceiling gap and re-audit these transport assum
 google-genai, Hugging Face Hub, or provider packages change. R5 must compose
 this record into the first release manifest, and R7 must keep the provider
 transport and no-network matrices as security-critical coverage targets.
+
+The pinned Chroma settings are Chroma 1.5.9's own defaults, and client
+construction fails closed when one no longer holds, so a vector-store
+dependency upgrade must re-verify them. The OpenTelemetry headers pin is
+assigned after construction, because pydantic-settings merges an explicit
+empty mapping into headers read from `CHROMA_OTEL_COLLECTION_HEADERS` instead
+of replacing them. With the Rust bindings pinned, the client never consults
+Chroma's server-host, SysDB, producer, or executor settings.
+
+Chroma no longer reads a working-directory `.env` for any setting. That
+includes a store whose `sha256` migration hash algorithm was selected through
+a `.env`: such a store must now set `MIGRATIONS_HASH_ALGORITHM` in the process
+environment, or its open fails with an inconsistent-hash error. The unpinned
+`migrations`, `migrations_hash_algorithm`, and `allow_reset` settings follow
+the unprefixed `MIGRATIONS`, `MIGRATIONS_HASH_ALGORITHM`, and `ALLOW_RESET`
+process variables, and local resource settings such as `chroma_server_nofile`
+follow their `CHROMA_*` variables. None of them selects an implementation
+class or a destination. Pinning the first three is an option offered to the
+owner and not chosen here, because a pinned hash algorithm could lock out a
+store deliberately created with another one.

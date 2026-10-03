@@ -1426,7 +1426,7 @@ def _json_file_is_valid(path: Path) -> bool:
 
 
 def _chroma_settings_kwargs(chromadb_module) -> dict[str, object]:
-    """Construct an explicit no-telemetry Chroma settings object."""
+    """Construct an explicit, local, no-telemetry Chroma settings object."""
     settings_factory = getattr(chromadb_module, "Settings", None)
     if settings_factory is None:
         # Lightweight unit fakes intentionally expose only PersistentClient.
@@ -1435,9 +1435,35 @@ def _chroma_settings_kwargs(chromadb_module) -> dict[str, object]:
             return {}
         raise RuntimeError(
             "installed Chroma does not expose telemetry controls")
-    settings = settings_factory(anonymized_telemetry=False)
+    pinned = {
+        "anonymized_telemetry": False,
+        "chroma_api_impl": "chromadb.api.rust.RustBindingsAPI",
+        "chroma_product_telemetry_impl":
+            "chromadb.telemetry.product.posthog.Posthog",
+        "chroma_telemetry_impl": "chromadb.telemetry.product.posthog.Posthog",
+        "chroma_otel_collection_endpoint": "",
+        "chroma_otel_collection_headers": {},
+        "chroma_otel_granularity": None,
+    }
+    # Chroma's pydantic Settings reads environment variables (CHROMA_* and
+    # unprefixed names such as ANONYMIZED_TELEMETRY) and a .env file in the
+    # working directory. Explicit values outrank the environment, and
+    # _env_file=None removes the .env source. The pins keep the in-process
+    # Rust client local: CHROMA_API_IMPL could otherwise make PersistentClient
+    # an HTTP client (chunk text and embeddings sent to CHROMA_SERVER_HOST),
+    # SegmentAPI plus CHROMA_OTEL_GRANULARITY installs a global OTLP tracer
+    # provider, and *_TELEMETRY_IMPL names a class Chroma would import.
+    settings = settings_factory(_env_file=None, **pinned)
+    # pydantic-settings deep-merges a dict keyword into a dict read from the
+    # environment, so the explicit {} keeps CHROMA_OTEL_COLLECTION_HEADERS
+    # entries. Assign the pin, as chromadb.PersistentClient assigns its fields.
+    settings.chroma_otel_collection_headers = {}
     if getattr(settings, "anonymized_telemetry", None) is not False:
         raise RuntimeError("Chroma telemetry could not be disabled")
+    missing = object()
+    for name, expected in pinned.items():
+        if getattr(settings, name, missing) != expected:
+            raise RuntimeError("Chroma settings could not be pinned")
     return {"settings": settings}
 
 

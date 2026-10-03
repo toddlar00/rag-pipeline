@@ -1,6 +1,12 @@
 import builtins
+import importlib.util
 import json
+import os
+from pathlib import Path
+import socket
+import subprocess
 import sys
+import textwrap
 import threading
 from types import ModuleType, SimpleNamespace
 
@@ -9,6 +15,9 @@ import pytest
 from llm_runtime import ProviderResponse
 import rag
 import release_security
+
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.mark.parametrize("model_name", [
@@ -215,21 +224,243 @@ def test_api_token_counting_never_imports_provider_tokenizers(monkeypatch):
     assert exact is False
 
 
+_CHROMA_PINNED_SETTINGS = {
+    "anonymized_telemetry": False,
+    "chroma_api_impl": "chromadb.api.rust.RustBindingsAPI",
+    "chroma_product_telemetry_impl":
+        "chromadb.telemetry.product.posthog.Posthog",
+    "chroma_telemetry_impl": "chromadb.telemetry.product.posthog.Posthog",
+    "chroma_otel_collection_endpoint": "",
+    "chroma_otel_collection_headers": {},
+    "chroma_otel_granularity": None,
+}
+
+# Each would change the client if Chroma's Settings honored it: FastAPI makes
+# the persistent client an HTTP client, the OTel fields install an exporting
+# tracer provider, and the *_TELEMETRY_IMPL fields name a class to import.
+_HOSTILE_CHROMA_CONFIGURATION = {
+    "CHROMA_API_IMPL": "chromadb.api.fastapi.FastAPI",
+    "CHROMA_SERVER_HOST": "127.0.0.1",
+    "CHROMA_OTEL_GRANULARITY": "all",
+    "CHROMA_OTEL_COLLECTION_ENDPOINT": "http://127.0.0.1:9",
+    "CHROMA_OTEL_COLLECTION_HEADERS": '{"x-probe":"synthetic"}',
+    "CHROMA_PRODUCT_TELEMETRY_IMPL": "rag_pipeline_missing.Telemetry",
+    "CHROMA_TELEMETRY_IMPL": "rag_pipeline_missing.Telemetry",
+    "ANONYMIZED_TELEMETRY": "true",
+}
+
+
+def _isolate_from_chroma_configuration(monkeypatch, work_dir):
+    for name in list(os.environ):
+        if name.upper().startswith("CHROMA_"):
+            monkeypatch.delenv(name)
+    monkeypatch.chdir(work_dir)
+
+
+def _assert_pinned_chroma_settings(settings):
+    for name, expected in _CHROMA_PINNED_SETTINGS.items():
+        assert getattr(settings, name) == expected, name
+
+
 def test_chroma_settings_explicitly_disable_anonymized_telemetry():
     observed = {}
 
     class Settings:
         def __init__(self, **kwargs):
             observed.update(kwargs)
-            self.anonymized_telemetry = kwargs["anonymized_telemetry"]
+            self.__dict__.update(kwargs)
 
     module = ModuleType("chromadb")
     module.Settings = Settings
 
     kwargs = rag._chroma_settings_kwargs(module)
 
-    assert observed == {"anonymized_telemetry": False}
+    assert observed == {"_env_file": None, **_CHROMA_PINNED_SETTINGS}
     assert kwargs["settings"].anonymized_telemetry is False
+
+
+def test_chroma_settings_without_settings_factory_follow_fake_or_fail_closed():
+    fake = ModuleType("chromadb")
+
+    assert rag._chroma_settings_kwargs(fake) == {}
+
+    installed = ModuleType("chromadb")
+    installed.__file__ = "chromadb/__init__.py"
+    with pytest.raises(
+            RuntimeError,
+            match="installed Chroma does not expose telemetry controls"):
+        rag._chroma_settings_kwargs(installed)
+
+
+def test_chroma_settings_fail_closed_when_a_pin_does_not_hold():
+    class Settings:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+            self.chroma_api_impl = "chromadb.api.fastapi.FastAPI"
+
+    module = ModuleType("chromadb")
+    module.Settings = Settings
+
+    with pytest.raises(
+            RuntimeError, match="^Chroma settings could not be pinned$"):
+        rag._chroma_settings_kwargs(module)
+
+
+def test_chroma_settings_replace_otel_headers_merged_from_environment():
+    class Settings:
+        # pydantic-settings deep-merges a dict keyword into the dict that
+        # CHROMA_OTEL_COLLECTION_HEADERS supplies, so an explicit {} keeps it.
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+            self.chroma_otel_collection_headers = {
+                "x-probe": "synthetic",
+                **kwargs.get("chroma_otel_collection_headers", {})}
+
+    module = ModuleType("chromadb")
+    module.Settings = Settings
+
+    settings = rag._chroma_settings_kwargs(module)["settings"]
+
+    assert settings.chroma_otel_collection_headers == {}
+
+
+def test_installed_chroma_settings_equal_plain_settings_in_clean_environment(
+        monkeypatch, tmp_path):
+    chromadb = pytest.importorskip("chromadb")
+    _isolate_from_chroma_configuration(monkeypatch, tmp_path)
+
+    settings = rag._chroma_settings_kwargs(chromadb)["settings"]
+
+    # SharedSystemClient compares settings by equality, so an ordinary run
+    # must resolve to exactly the settings it resolved to before the pins.
+    assert settings == chromadb.Settings(anonymized_telemetry=False)
+
+
+def test_installed_chroma_settings_ignore_chroma_environment(
+        monkeypatch, tmp_path):
+    chromadb = pytest.importorskip("chromadb")
+    _isolate_from_chroma_configuration(monkeypatch, tmp_path)
+    for name, value in _HOSTILE_CHROMA_CONFIGURATION.items():
+        monkeypatch.setenv(name, value)
+
+    _assert_pinned_chroma_settings(
+        rag._chroma_settings_kwargs(chromadb)["settings"])
+
+
+def test_installed_chroma_settings_ignore_working_directory_dotenv(
+        monkeypatch, tmp_path):
+    chromadb = pytest.importorskip("chromadb")
+    _isolate_from_chroma_configuration(monkeypatch, tmp_path)
+    # rag sets ANONYMIZED_TELEMETRY at import, which would shadow the .env.
+    monkeypatch.delenv("ANONYMIZED_TELEMETRY", raising=False)
+    (tmp_path / ".env").write_text(
+        "".join(f"{name}={value}\n"
+                for name, value in _HOSTILE_CHROMA_CONFIGURATION.items()),
+        encoding="utf-8")
+
+    _assert_pinned_chroma_settings(
+        rag._chroma_settings_kwargs(chromadb)["settings"])
+
+
+# Runs in a child so the process-global OpenTelemetry provider and Chroma's
+# SharedSystemClient registry never touch the pytest worker.
+_LOCAL_CHROMA_OPEN_PROBE = textwrap.dedent(
+    r"""
+    import os
+    from pathlib import Path
+    import sys
+
+    # "-c" resolves first-party imports from the working directory, which
+    # changes below, so bind the project root before importing rag.
+    sys.path.insert(0, os.getcwd())
+    import rag
+
+    work_dir = Path(sys.argv[1])
+    os.chdir(work_dir)
+
+    import chromadb
+    from opentelemetry import trace
+
+    db_dir = work_dir / "db"
+    client = None
+    operation_error = None
+    try:
+        client = chromadb.PersistentClient(
+            path=str(db_dir), **rag._chroma_settings_kwargs(chromadb))
+        print(f"API:{client.get_settings().chroma_api_impl}")
+        print(
+            f"HEADERS:{client.get_settings().chroma_otel_collection_headers}")
+        client.get_or_create_collection(
+            name="probe", metadata={"hnsw:space": "cosine"}).add(
+                ids=["synthetic-1"], embeddings=[[0.0, 1.0]],
+                documents=["synthetic probe text"])
+    except BaseException as exc:
+        operation_error = exc
+        raise
+    finally:
+        rag._finish_vector_client(
+            client, client_name="Chroma", primary_error=operation_error)
+    print(f"COUNT:{rag._index_collection_count_impl(db_dir, 'probe')}")
+    print(f"TRACER:{type(trace.get_tracer_provider()).__name__}")
+    """
+)
+
+
+def _closed_loopback_port():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        return listener.getsockname()[1]
+
+
+@pytest.mark.parametrize("source", [
+    # Before the pins, PersistentClient became an HTTP client for this host
+    # and failed with "Could not connect to a Chroma server". The headers
+    # variable is inert for the Rust client and must not block the open.
+    pytest.param("environment", id="environment-http-api"),
+    # Before the pins, a global SDK TracerProvider exporting to the endpoint
+    # was installed, then SegmentAPI failed to import hnswlib.
+    pytest.param("dotenv", id="dotenv-segment-otel"),
+])
+def test_local_chroma_open_stays_in_process_under_hostile_configuration(
+        tmp_path, source):
+    if importlib.util.find_spec("chromadb") is None:
+        pytest.skip("optional dependency 'chromadb' is not installed")
+    env = {
+        name: value for name, value in os.environ.items()
+        if not name.upper().startswith(("CHROMA_", "OTEL_"))}
+    if source == "environment":
+        env.update({
+            "CHROMA_API_IMPL": "chromadb.api.fastapi.FastAPI",
+            "CHROMA_SERVER_HOST": "127.0.0.1",
+            "CHROMA_SERVER_HTTP_PORT": str(_closed_loopback_port()),
+            "CHROMA_OTEL_COLLECTION_HEADERS": '{"x-probe":"synthetic"}',
+        })
+    else:
+        (tmp_path / ".env").write_text(
+            "CHROMA_API_IMPL=chromadb.api.segment.SegmentAPI\n"
+            "CHROMA_OTEL_GRANULARITY=all\n"
+            "CHROMA_OTEL_COLLECTION_ENDPOINT=http://127.0.0.1:9\n",
+            encoding="utf-8")
+
+    completed = subprocess.run(
+        [sys.executable, "-c", _LOCAL_CHROMA_OPEN_PROBE, str(tmp_path)],
+        cwd=_PROJECT_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=120,
+    )
+
+    assert completed.returncode == 0, (
+        f"child stdout:\n{completed.stdout}\n"
+        f"child stderr:\n{completed.stderr}"
+    )
+    lines = completed.stdout.splitlines()
+    assert "API:chromadb.api.rust.RustBindingsAPI" in lines
+    assert "HEADERS:{}" in lines
+    assert "COUNT:1" in lines
+    assert "TRACER:ProxyTracerProvider" in lines
 
 
 def test_release_cli_rejects_inline_secret_before_operation(monkeypatch, capsys):
