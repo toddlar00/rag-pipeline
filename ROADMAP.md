@@ -2128,9 +2128,9 @@ The hardening pull request (branch
 request [#168](https://github.com/toddlar00/rag-pipeline/pull/168)) fixes
 the two follow-ups above and the sibling holes found while fixing them.
 It changes no dependency, lock, model-artifact lock or dependency policy.
-Its source checkpoint is the commit that adds this entry. Its Phase A0
-pair, hosted checks and exact-SHA record are pending, and none of its
-changes is merged or integrated. Its four source commits:
+Its source checkpoint is the review follow-up commit in the last bullet
+below. Its Phase A0 pair, hosted checks and exact-SHA record are pending,
+and none of its changes is merged or integrated. Its source commits:
 
 - Bounded reads (`8b41db7`; behavior-preserving): `artifact_io`'s bounded
   snapshot reader and `quality_core.read_quality_report` size the first
@@ -2143,22 +2143,26 @@ changes is merged or integrated. Its four source commits:
   settings that every Chroma open shares no longer read a working-directory
   `.env`. Explicit values pin the API implementation (`RustBindingsAPI`),
   both telemetry implementations and the OpenTelemetry endpoint, headers
-  and granularity to Chroma 1.5.9's own defaults, and each pin is read
-  back after construction, failing closed on a mismatch. Behavior change:
-  `CHROMA_*` variables no longer affect those settings. Chroma reads no
+  and granularity; apart from the existing `anonymized_telemetry=False`,
+  each pin is Chroma 1.5.9's own default. Each pin is read back after
+  construction, failing closed on a mismatch. Behavior change: `CHROMA_*`
+  variables no longer affect those settings. The client's settings read no
   `.env` for any setting, so a store whose sha256 migration hash
   algorithm came from a `.env` must set `MIGRATIONS_HASH_ALGORITHM` in the
-  process environment. In a clean environment the settings equal the
-  former ones.
+  process environment. `import chromadb` still parses a working-directory
+  `.env` for its unused module-level defaults, so a malformed value there
+  makes the import fail, as before. In a clean environment the settings
+  equal the former ones.
 - Gemini client (`7fdffad`; intentional fail-closed hardening):
   `_load_gemini_client` passes google-genai 1.75's `DebugConfig` with the
   client mode, replay directory and replay ID set to `None`. Before caching
   a client, it rejects one that still reports a test mode or a replay
   client. Before, `GOOGLE_GENAI_CLIENT_MODE` set to record, replay or auto
-  selected the SDK's test-only replay client. In record mode that client
-  printed each request, including the `x-goog-api-key` header and the
-  prompt, to standard output, and wrote the prompt and response to a
-  plaintext replay file. Behavior change: `GOOGLE_GENAI_CLIENT_MODE`,
+  selected the SDK's test-only replay client. In record mode, and in auto
+  mode without a replay file, that client printed each request, including
+  the `x-goog-api-key` header and the prompt, to standard output, and wrote
+  the prompt and response to a plaintext replay file; otherwise it answered
+  from a local replay file. Behavior change: `GOOGLE_GENAI_CLIENT_MODE`,
   `GOOGLE_GENAI_REPLAYS_DIRECTORY` and `GOOGLE_GENAI_REPLAY_ID` are
   ignored. An installed SDK without `DebugConfig` fails with
   `configuration_error` before any request. The GenAI 2 decision (#88) is
@@ -2178,17 +2182,33 @@ changes is merged or integrated. Its four source commits:
   `GRADIO_ALLOWED_PATHS`. Both launchers therefore refuse a non-empty
   value before building anything, without echoing it. Behavior change:
   both UIs lose the run-history page, and Gradio deletes the runs it saved
-  in the browser for these apps. The four variables are ignored, and a
-  non-empty `GRADIO_ALLOWED_PATHS` stops either UI from starting.
+  in the browser for these apps. The four variables are ignored (the review
+  UI already ignored `GRADIO_MCP_SERVER`), and a non-empty
+  `GRADIO_ALLOWED_PATHS` stops either UI from starting.
+- Review follow-ups (the commit after `3d43b1d`, which added this entry;
+  fail-closed for one variable, otherwise behavior-preserving): both
+  launchers also refuse `GRADIO_LOCAL_DEV_MODE` when it is set at all, even
+  to an empty value, before building anything and without echoing it. With
+  it set, gradio 6.29.1 adds the `null` origin, with credentials, to its
+  CORS allow list whatever `strict_cors` says, so a sandboxed or `file:`
+  page could read either UI's responses. Behavior change: neither UI starts
+  until it is unset. The same commit stops both bounded-read loops at an
+  empty block, measures the two tracemalloc tests against a plain read of
+  the same file so a large filesystem block size cannot fail them, pins the
+  quality reader's wrapping of an `fstat` failure, keeps a developer
+  shell's `GRADIO_ALLOWED_PATHS` or `GRADIO_LOCAL_DEV_MODE` from failing
+  unrelated launch tests, rewords the Gemini drift error, and corrects the
+  wording the reviews flagged.
 
 Each commit carries its characterization tests, regression tests that
 fail on its parent and pass on it, and its architecture-inventory
-refresh. The three hardening commits also update the release-security
-ADR, and the Gradio commit also updates the README and
-`docs/ocr-review.md`. The real-Chroma, real-GenAI and real-Gradio tests
-skip in the dependency-light lanes. `full-integration` (Linux) and the
-local Phase A0 full suites run them. `rag.py` belongs to
-`vector_runtime`, so the Chroma and Gemini commits need owned-path
+refresh. The three hardening commits and the review follow-ups also
+update the release-security ADR, and the Gradio commit and the review
+follow-ups also update the README and `docs/ocr-review.md`. The
+real-Chroma, real-GenAI and real-Gradio tests skip in the
+dependency-light lanes. `full-integration` (Linux) and the local Phase A0
+full suites run them. `rag.py` belongs to `vector_runtime`, so the
+Chroma and Gemini commits and the review follow-ups need owned-path
 review. No governance path changes, and `ui.py` places the pull request
 in the `service` risk group, so hosted CI runs the full job set. The
 authorization basis is the same as for the merged robustness follow-ups
@@ -2267,7 +2287,9 @@ open):
   processes for the local UI, which has no authentication. Gradio starts
   none when authentication is set, so the review UI is unaffected. The
   workers bind `127.0.0.1` and apply the same allowed and blocked paths,
-  so the risk is lower. Pinning `num_workers=0` in `ui.main` is a small
+  but each answers every origin, its upload route included, with
+  `Access-Control-Allow-Origin: *`, so the `GRADIO_LOCAL_DEV_MODE` refusal
+  does not cover them. Pinning `num_workers=0` in `ui.main` is a small
   follow-up.
 - Optional, as a governance change to `ci.yml`: extend
   `vector-store-smoke`'s `-k` selection so the real-Chroma

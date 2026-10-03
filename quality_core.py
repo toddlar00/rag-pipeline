@@ -2647,16 +2647,17 @@ def _read_report_prefix(handle, limit: int) -> bytes:
     request is sized from the opened file and growth is followed in bounded
     blocks. A short buffered read means EOF, as it does inside
     ``read(limit)``. This mirrors ``artifact_io._read_at_most``; importing
-    that module here would add a first-party edge to this leaf.
+    that module here would add a new first-party import edge.
     """
     request = min(limit, max(0, int(os.fstat(handle.fileno()).st_size)) + 1)
     parts: list[bytes] = []
     total = 0
     while total < limit:
         block = handle.read(request)
-        if block:
-            parts.append(block)
-            total += len(block)
+        if not block:
+            break
+        parts.append(block)
+        total += len(block)
         if len(block) < request:
             break
         request = min(_QUALITY_REPORT_READ_BLOCK_BYTES, limit - total)

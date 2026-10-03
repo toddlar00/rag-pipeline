@@ -1247,9 +1247,10 @@ def _read_at_most(handle, limit: int, *, size_hint: int) -> bytes:
     total = 0
     while total < limit:
         block = handle.read(request)
-        if block:
-            parts.append(block)
-            total += len(block)
+        if not block:
+            break
+        parts.append(block)
+        total += len(block)
         if len(block) < request:
             break
         request = min(_FILE_STREAM_CHUNK_SIZE, limit - total)

@@ -272,6 +272,28 @@ def test_snapshot_first_request_is_bounded_by_file_size(monkeypatch, tmp_path, p
     assert max(size for verifying, size in reader.reads if not verifying) <= len(raw) + 1
 
 
+class _GrowingHandle:
+    """Answers every request in full, as a file that keeps growing would."""
+
+    def __init__(self):
+        self.requests = []
+
+    def read(self, size):
+        self.requests.append(size)
+        if self.requests.count(0) > 1:
+            raise AssertionError("bounded read repeated an empty request")
+        return b"x" * size
+
+
+def test_bounded_read_stops_at_an_empty_block(monkeypatch):
+    # Only a test seam can make the block size zero; the read must still end.
+    monkeypatch.setattr(artifact_io, "_FILE_STREAM_CHUNK_SIZE", 0)
+    handle = _GrowingHandle()
+
+    assert artifact_io._read_at_most(handle, 100, size_hint=4) == b"x" * 5
+    assert handle.requests == [5, 0]
+
+
 def _traced_peak_bytes(operation):
     # Measure growth above the current traced total, so a tracer that is
     # already running cannot inflate the result; stop only a tracer we start.
@@ -288,6 +310,17 @@ def _traced_peak_bytes(operation):
             tracemalloc.stop()
 
 
+def _plain_read_peak_bytes(path, size):
+    # The file object's own buffer is sized from st_blksize, which some
+    # network and parallel filesystems report as 1 MiB or more, so the bound
+    # is relative to a plain small read of the same file.
+    def read():
+        with path.open("rb") as handle:
+            handle.read(size)
+
+    return _traced_peak_bytes(read)
+
+
 @pytest.mark.parametrize("limit", [16 * 1024 * 1024, 64 * 1024 * 1024])
 def test_bounded_snapshot_read_does_not_preallocate_the_limit(tmp_path, limit):
     # BufferedReader.read(n) allocates an n-byte buffer before reading, so a
@@ -295,9 +328,10 @@ def test_bounded_snapshot_read_does_not_preallocate_the_limit(tmp_path, limit):
     path = tmp_path / "synthetic-artifact.bin"
     path.write_bytes(b"12345678")
     results = []
+    baseline = _plain_read_peak_bytes(path, 9)
 
     peak = _traced_peak_bytes(lambda: results.append(
         artifact_io._read_index_artifact_snapshot(path, max_bytes=limit)))
 
     assert results[0][0] == b"12345678"
-    assert peak < 1024 * 1024
+    assert peak < baseline + 1024 * 1024

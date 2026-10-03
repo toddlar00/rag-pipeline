@@ -878,6 +878,14 @@ def main(argv: list[str] | None = None):
             raise ValueError(
                 "GRADIO_ALLOWED_PATHS must be unset; the private UI serves no "
                 "additional paths")
+        # Gradio adds the "null" origin, with credentials, to its CORS allow
+        # list whenever GRADIO_LOCAL_DEV_MODE is set, even to an empty value
+        # and whatever strict_cors says, so a sandboxed or file: page could
+        # read this unauthenticated UI's responses. Refuse it the same way.
+        if os.environ.get("GRADIO_LOCAL_DEV_MODE") is not None:
+            raise ValueError(
+                "GRADIO_LOCAL_DEV_MODE must be unset; the private UI grants no "
+                "cross-origin access to a null origin")
         if args.embedding_model.startswith(rag._API_EMBEDDING_MODEL_PREFIXES):
             release_security.require_cloud_egress(
                 policy, feature="cloud embedding")

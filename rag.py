@@ -6025,11 +6025,12 @@ def _load_gemini_client(
                     **client_kwargs,
                 )
                 if installed_sdk:
-                    # Verify the pin held before caching: a replay client
-                    # prints requests, API key header included, and records
-                    # prompts to or answers from a local replay file. Matching
-                    # the class name keeps a moved private module from
-                    # breaking construction.
+                    # Verify the pin held before caching: in record mode, or
+                    # auto mode without a replay file, a replay client prints
+                    # each request, API key header included, and records
+                    # prompts to a replay file; otherwise it answers from a
+                    # local file. Matching the class name keeps a moved
+                    # private module from breaking construction.
                     missing = object()
                     debug_config = getattr(new_client, "_debug_config", None)
                     api_client = getattr(new_client, "_api_client", None)
@@ -6044,7 +6045,7 @@ def _load_gemini_client(
                         except Exception:
                             pass
                         raise RuntimeError(
-                            "Gemini SDK test client modes are not allowed")
+                            "Gemini SDK client mode could not be verified")
                 _gemini_client_cache = new_client
                 _gemini_client_key = api_key
                 _gemini_client_trust_environment = (

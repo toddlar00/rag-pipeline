@@ -24,6 +24,13 @@ _FASTAPI_TELEMETRY_OFF = {
 }
 
 
+@pytest.fixture(autouse=True)
+def _without_refused_gradio_environment(monkeypatch):
+    # ui.main refuses both; a developer shell must not fail unrelated tests.
+    for name in ("GRADIO_ALLOWED_PATHS", "GRADIO_LOCAL_DEV_MODE"):
+        monkeypatch.delenv(name, raising=False)
+
+
 def test_search_uses_backend_bound_to_config(monkeypatch, tmp_path):
     observed = {}
     monkeypatch.setitem(ui._config, "db_path", tmp_path)
@@ -833,12 +840,12 @@ def _unbindable_gradio_app(monkeypatch, tmp_path):
     return app
 
 
-def _launch_unbound_ui(monkeypatch, tmp_path, app):
+def _launch_unbound_ui(monkeypatch, tmp_path, app, *, stops=_StopBeforeBind):
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
     monkeypatch.setattr(ui, "build_app", lambda: app)
-    with pytest.raises(_StopBeforeBind):
+    with pytest.raises(stops):
         ui.main([
             "--chunks", str(tmp_path / "chunks.jsonl"),
             "--db", str(tmp_path / "db"),
@@ -846,6 +853,7 @@ def _launch_unbound_ui(monkeypatch, tmp_path, app):
             "--port", str(port),
             "--trust-local-user",
         ])
+    return port
 
 
 def test_launched_ui_serves_no_extra_paths_in_clean_environment(
@@ -921,6 +929,61 @@ def test_main_refuses_ambient_gradio_allowed_paths_before_building(
     err = capsys.readouterr().err
     assert "GRADIO_ALLOWED_PATHS must be unset" in err
     assert "SYNTHETIC_PRIVATE_DIR" not in err
+
+
+@pytest.mark.parametrize(
+    "value", ["SYNTHETIC_DEV_MODE_VALUE", ""], ids=["non-empty", "empty"])
+def test_main_refuses_gradio_local_dev_mode_before_building(
+        monkeypatch, tmp_path, capsys, value):
+    # Gradio adds the "null" origin to its CORS allow list whenever this
+    # variable is set, an empty value included.
+    monkeypatch.setenv("GRADIO_LOCAL_DEV_MODE", value)
+    monkeypatch.setattr(
+        ui, "build_app", lambda: pytest.fail(
+            "a development-mode UI must not be built"))
+
+    with pytest.raises(SystemExit) as exited:
+        ui.main([
+            "--chunks", str(tmp_path / "chunks.jsonl"),
+            "--db", str(tmp_path / "db"),
+            "--collection", "book",
+            "--trust-local-user",
+        ])
+
+    assert exited.value.code == 2
+    err = capsys.readouterr().err
+    assert "GRADIO_LOCAL_DEV_MODE must be unset" in err
+    assert "SYNTHETIC_DEV_MODE_VALUE" not in err
+
+
+def test_launched_ui_grants_no_cross_origin_access_to_a_null_origin(
+        monkeypatch, tmp_path):
+    app = _unbindable_gradio_app(monkeypatch, tmp_path)
+    from fastapi.testclient import TestClient
+
+    try:
+        # A sandboxed or file: page sends Origin: null. With
+        # GRADIO_LOCAL_DEV_MODE set, Gradio would answer it with credentials,
+        # so the launcher stops before Gradio sees the variable.
+        monkeypatch.setenv("GRADIO_LOCAL_DEV_MODE", "1")
+        _launch_unbound_ui(monkeypatch, tmp_path, app, stops=SystemExit)
+        monkeypatch.delenv("GRADIO_LOCAL_DEV_MODE")
+        port = _launch_unbound_ui(monkeypatch, tmp_path, app)
+        local = f"http://127.0.0.1:{port}"
+
+        with TestClient(app.server_app, base_url=local) as client:
+            preflight = client.options("/config", headers={
+                "Origin": "null", "Access-Control-Request-Method": "GET"})
+            config = client.get("/config", headers={"Origin": "null"})
+            loopback = client.get("/config", headers={"Origin": local})
+
+        assert "access-control-allow-origin" not in preflight.headers
+        assert config.status_code == 200
+        assert "access-control-allow-origin" not in config.headers
+        # Gradio's CORS middleware is active: it answers a loopback origin.
+        assert loopback.headers["access-control-allow-origin"] == local
+    finally:
+        app.close()
 
 
 def test_main_requires_explicit_trusted_single_user_boundary(

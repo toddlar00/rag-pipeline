@@ -304,6 +304,9 @@ def test_cli_scan_bundle_is_fixed_opt_in_and_directory_is_blocked_from_serving(t
     monkeypatch.setattr(ocr_review_runtime, "ReviewWorkspace", workspace)
     monkeypatch.setitem(sys.modules, "ocr_review_ui", SimpleNamespace(build_app=lambda _workspace: app))
     monkeypatch.setenv("RAG_OCR_REVIEW_TOKEN", "r_" + "x" * 32)
+    # main refuses both; a developer shell must not fail this launch.
+    monkeypatch.delenv("GRADIO_ALLOWED_PATHS", raising=False)
+    monkeypatch.delenv("GRADIO_LOCAL_DEV_MODE", raising=False)
     args = ["--pdf", "synthetic.pdf", "--recovery", "recovery.json", "--output-dir", str(tmp_path), "--trusted-local-session"]
     if enabled:
         args += ["--scan-bundle", str(bundle)]

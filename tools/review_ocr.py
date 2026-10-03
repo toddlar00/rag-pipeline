@@ -61,6 +61,10 @@ def main(argv=None) -> int:
         # in a non-empty GRADIO_ALLOWED_PATHS; refuse before any workspace exists.
         if os.environ.get("GRADIO_ALLOWED_PATHS", ""):
             raise ValueError("invalid review launch configuration")
+        # Any set GRADIO_LOCAL_DEV_MODE, even an empty one, adds the "null" origin
+        # to Gradio's CORS allow list despite strict_cors=True; refuse it too.
+        if os.environ.get("GRADIO_LOCAL_DEV_MODE") is not None:
+            raise ValueError("invalid review launch configuration")
         from ocr_review_runtime import ReviewWorkspace
         import storage_policy
 
@@ -157,7 +161,8 @@ def main(argv=None) -> int:
         return 130
     except Exception:
         print("OCR review unavailable. Check matching inputs, output directory, optional dependencies, port, and "
-              "RAG_OCR_REVIEW_TOKEN (32-256 printable characters). GRADIO_ALLOWED_PATHS must be unset. "
+              "RAG_OCR_REVIEW_TOKEN (32-256 printable characters). GRADIO_ALLOWED_PATHS and "
+              "GRADIO_LOCAL_DEV_MODE must be unset. "
               "No canonical text was changed. "
               "OCR options require --enable-ocr-execution and a 1-3600 second deadline. "
               "Crop Save/Open requires an existing private --crop-review-pack-dir. "

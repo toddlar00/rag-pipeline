@@ -67,6 +67,9 @@ def launch_case(tmp_path, monkeypatch):
     monkeypatch.setitem(sys.modules, "ocr_review_execution", SimpleNamespace(ReviewRunCoordinator=Coordinator))
     monkeypatch.setitem(sys.modules, "ocr_review_ui", SimpleNamespace(build_app=build))
     monkeypatch.setenv("RAG_OCR_REVIEW_TOKEN", "r_" + "x" * 32)
+    # main refuses both; a developer shell must not fail unrelated launch tests.
+    monkeypatch.delenv("GRADIO_ALLOWED_PATHS", raising=False)
+    monkeypatch.delenv("GRADIO_LOCAL_DEV_MODE", raising=False)
     arguments = ["--pdf", str(workspace.pdf_path), "--recovery", str(workspace.recovery_path),
                  "--output-dir", str(tmp_path), "--trusted-local-session"]
     return SimpleNamespace(events=events, failures=failures, constructed=constructed, builds=builds,
@@ -102,7 +105,17 @@ def test_review_refuses_ambient_gradio_allowed_paths_before_workspace(launch_cas
     assert review_ocr.main(launch_case.args) == 2
     assert launch_case.events == []
     err = capsys.readouterr().err
-    assert "GRADIO_ALLOWED_PATHS must be unset" in err and "SYNTHETIC_PRIVATE_DIR" not in err
+    assert "GRADIO_ALLOWED_PATHS and GRADIO_LOCAL_DEV_MODE must be unset" in err and "SYNTHETIC_PRIVATE_DIR" not in err
+
+
+@pytest.mark.parametrize("value", ["SYNTHETIC_DEV_MODE_VALUE", ""], ids=["non-empty", "empty"])
+def test_review_refuses_gradio_local_dev_mode_before_workspace(launch_case, monkeypatch, capsys, value):
+    # Any set value, empty included, adds the "null" origin to Gradio's CORS allow list despite strict_cors=True.
+    monkeypatch.setenv("GRADIO_LOCAL_DEV_MODE", value)
+    assert review_ocr.main(launch_case.args) == 2
+    assert launch_case.events == []
+    err = capsys.readouterr().err
+    assert "GRADIO_LOCAL_DEV_MODE must be unset" in err and "SYNTHETIC_DEV_MODE_VALUE" not in err
 
 
 class _StopBeforeBind(BaseException):
@@ -138,10 +151,19 @@ def test_review_launched_app_ignores_gradio_history_ssr_and_root_environment(lau
     with pytest.raises(_StopBeforeBind):
         review_ocr.main(launch_case.args + ["--port", str(port)])
     assert launch_case.events == ["workspace"]
-    # The app requires auth, so check the resolved settings, not routes.
+    # The app requires auth, so check the resolved settings and route table.
     assert app.run_history is False and app.ssr_mode is False
     assert app.root_path == "" and app.allowed_paths == []
     assert app.mcp_server is False and app.mcp_error is None
+    assert not any("run-history" in getattr(route, "path", "") for route in app.server_app.routes)
+    # Gradio's CORS middleware answers a preflight before auth: a loopback origin, never a null one.
+    from fastapi.testclient import TestClient
+
+    local = f"http://127.0.0.1:{port}"
+    client = TestClient(app.server_app, base_url=local)
+    for origin, granted in (("null", None), (local, local)):
+        preflight = client.options("/config", headers={"Origin": origin, "Access-Control-Request-Method": "GET"})
+        assert preflight.headers.get("access-control-allow-origin") == granted
 
 
 def test_explicit_execution_wires_fixed_options_and_shutdown_order(launch_case):

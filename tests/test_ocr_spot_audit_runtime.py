@@ -348,6 +348,9 @@ def test_cli_fixed_audit_opt_in_keeps_loopback_and_blocks_input(tmp_path, monkey
     monkeypatch.setattr(runtime, "ReviewWorkspace", make_workspace)
     monkeypatch.setitem(sys.modules, "ocr_review_ui", SimpleNamespace(build_app=build))
     monkeypatch.setenv("RAG_OCR_REVIEW_TOKEN", "r_" + "x" * 32)
+    # main refuses both; a developer shell must not fail this launch.
+    monkeypatch.delenv("GRADIO_ALLOWED_PATHS", raising=False)
+    monkeypatch.delenv("GRADIO_LOCAL_DEV_MODE", raising=False)
     args = ["--pdf", "synthetic.pdf", "--recovery", "recovery.json", "--output-dir", str(tmp_path),
             "--trusted-local-session"]
     if mode == "enable":
