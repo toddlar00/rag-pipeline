@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import hashlib
 import math
+import os
 import re
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -31,6 +32,7 @@ PAGE_ORDER_REASON_FIELD = "page_order_reason"
 FOOTNOTE_AFTER_CONTINUATION_REASON = (
     "footnote_after_cross_page_continuation")
 MAX_QUALITY_REPORT_BYTES = 16 * 1024 * 1024
+_QUALITY_REPORT_READ_BLOCK_BYTES = 1024 * 1024
 _QUALITY_REPORT_FIELDS = {
     "schema_version", "kind", "status", "source", "parameters_sha256",
     "inputs", "embedding", "source_lineage", "tables", "corpus",
@@ -2638,6 +2640,29 @@ def validate_quality_report(
     return payload
 
 
+def _read_report_prefix(handle, limit: int) -> bytes:
+    """Return the bytes ``handle.read(limit)`` returns, without preallocating.
+
+    ``BufferedReader.read(n)`` allocates ``n`` bytes up front, so the first
+    request is sized from the opened file and growth is followed in bounded
+    blocks. A short buffered read means EOF, as it does inside
+    ``read(limit)``. This mirrors ``artifact_io._read_at_most``; importing
+    that module here would add a first-party edge to this leaf.
+    """
+    request = min(limit, max(0, int(os.fstat(handle.fileno()).st_size)) + 1)
+    parts: list[bytes] = []
+    total = 0
+    while total < limit:
+        block = handle.read(request)
+        if block:
+            parts.append(block)
+            total += len(block)
+        if len(block) < request:
+            break
+        request = min(_QUALITY_REPORT_READ_BLOCK_BYTES, limit - total)
+    return parts[0] if len(parts) == 1 else b"".join(parts)
+
+
 def read_quality_report(
         path: Path, *, chunks_name: str, chunks_sha256: str,
         chunks_size: int, record_count: int, stable_ids: Sequence[str],
@@ -2657,7 +2682,7 @@ def read_quality_report(
 ) -> dict:
     try:
         with Path(path).open("rb") as handle:
-            raw = handle.read(MAX_QUALITY_REPORT_BYTES + 1)
+            raw = _read_report_prefix(handle, MAX_QUALITY_REPORT_BYTES + 1)
     except OSError as exc:
         raise ValueError(f"cannot read corpus quality report: {path}") from exc
     return parse_quality_report_bytes(

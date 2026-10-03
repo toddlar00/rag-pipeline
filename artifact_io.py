@@ -1231,6 +1231,31 @@ def _artifact_content_identity(stat_result) -> tuple[int, int, int, int]:
     )
 
 
+def _read_at_most(handle, limit: int, *, size_hint: int) -> bytes:
+    """Return the bytes ``handle.read(limit)`` returns, without preallocating.
+
+    ``BufferedReader.read(n)`` allocates ``n`` bytes before reading, so a
+    limit-sized request costs the whole limit even for a tiny file. The first
+    request is instead sized from the opened file's ``fstat`` size, which
+    reads an unchanged file with one exact allocation, and growth is followed
+    in ``_FILE_STREAM_CHUNK_SIZE`` blocks. A short buffered read means EOF, as
+    it does inside ``read(limit)``, so this observes the same EOF event and
+    never reads past ``limit``.
+    """
+    request = min(limit, max(0, size_hint) + 1)
+    parts: list[bytes] = []
+    total = 0
+    while total < limit:
+        block = handle.read(request)
+        if block:
+            parts.append(block)
+            total += len(block)
+        if len(block) < request:
+            break
+        request = min(_FILE_STREAM_CHUNK_SIZE, limit - total)
+    return parts[0] if len(parts) == 1 else b"".join(parts)
+
+
 def _read_index_artifact_snapshot_once(
         path: Path, *,
         expected_snapshot: ArtifactContentSnapshot | None,
@@ -1240,7 +1265,8 @@ def _read_index_artifact_snapshot_once(
         before_stat = os.fstat(handle.fileno())
         if max_bytes is not None and int(before_stat.st_size) > max_bytes:
             raise ValueError(f"Artifact exceeds {max_bytes} bytes: {path}")
-        raw = handle.read() if max_bytes is None else handle.read(max_bytes + 1)
+        raw = handle.read() if max_bytes is None else _read_at_most(
+            handle, max_bytes + 1, size_hint=int(before_stat.st_size))
         if max_bytes is not None and len(raw) > max_bytes:
             raise ValueError(f"Artifact exceeds {max_bytes} bytes: {path}")
         digest = hashlib.sha256(raw)

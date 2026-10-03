@@ -28540,7 +28540,7 @@
   "schema_version": 3,
   "source_architecture": {
     "class_count": 338,
-    "function_count": 4462,
+    "function_count": 4464,
     "import_graph": {
       "cyclic_components": [],
       "edge_count": 650,
@@ -29037,8 +29037,8 @@
             "scope": "nested"
           }
         ],
-        "definition_locations_sha256": "d488c3af9725734c8060bb8cf18becbbe5c28ea8bb95b7c3710cb9722a0f8667",
-        "function_count": 47,
+        "definition_locations_sha256": "768e0f78b43d1bd29ac4fc1d62fcf5ea534d0c97b04488a253956a6d2d75a46b",
+        "function_count": 48,
         "functions": [
           {
             "kind": "function",
@@ -29228,6 +29228,12 @@
           },
           {
             "kind": "function",
+            "name": "_read_at_most",
+            "scope": "top_level",
+            "signature_sha256": "c1c38a86b9e4faaf0a343650ccc7a25a47f850cb62dcd0eb60765d630f13036e"
+          },
+          {
+            "kind": "function",
             "name": "_read_index_artifact_snapshot",
             "scope": "top_level",
             "signature_sha256": "63bc69be929212b675484cda7d9c45619b86b8dff32ef9323849c27c2d9a86cc"
@@ -29335,10 +29341,10 @@
           }
         ],
         "module": "artifact_io",
-        "non_blank_lines": 1409,
+        "non_blank_lines": 1432,
         "path": "artifact_io.py",
-        "physical_lines": 1532,
-        "top_level_function_count": 34
+        "physical_lines": 1558,
+        "top_level_function_count": 35
       },
       {
         "class_count": 1,
@@ -49763,8 +49769,8 @@
             "scope": "top_level"
           }
         ],
-        "definition_locations_sha256": "29de200a84e0c86f32c4ce0089a94449dbf4def5210e894486d88d14dea2151e",
-        "function_count": 56,
+        "definition_locations_sha256": "016c80f42d22881a13afdbd226f1d43e78eaa9793228ed9035ecadb870de735c",
+        "function_count": 57,
         "functions": [
           {
             "kind": "function",
@@ -49885,6 +49891,12 @@
             "name": "_printed_page_number_evidence",
             "scope": "top_level",
             "signature_sha256": "aa85e8093c8a889e02130425d7fc3d7816b9797b3e530f44601c1ca6df619c10"
+          },
+          {
+            "kind": "function",
+            "name": "_read_report_prefix",
+            "scope": "top_level",
+            "signature_sha256": "3662557dfa98a67a8caf186df1c2932836dbc1a4cdc548e2b484494f88352a73"
           },
           {
             "kind": "function",
@@ -50151,10 +50163,10 @@
           }
         ],
         "module": "quality_core",
-        "non_blank_lines": 2591,
+        "non_blank_lines": 2613,
         "path": "quality_core.py",
-        "physical_lines": 2733,
-        "top_level_function_count": 52
+        "physical_lines": 2758,
+        "top_level_function_count": 53
       },
       {
         "class_count": 30,
@@ -65568,13 +65580,13 @@
         "top_level_function_count": 2
       }
     ],
-    "physical_line_count": 131991,
+    "physical_line_count": 132042,
     "source_groups": [
       "production",
       "tools",
       "other"
     ],
-    "top_level_function_count": 2957
+    "top_level_function_count": 2959
   },
   "tracked_sources": {
     "count": 503,
