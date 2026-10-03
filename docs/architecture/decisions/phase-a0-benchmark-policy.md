@@ -38,9 +38,11 @@
   (merged through `6303d8b`), the robustness follow-up pair at source
   `6e7a1e7` passed on PR #165 (merged through `717ac9e`), the
   provider-transport cryptography 50.0.2 pair at source `0b1bbe7` passed
-  on PR #166 (pending, not merged), and the stacked Service/UI fastapi
-  0.142.2 pair at source `f4204f8` is pending; exact-head human review and
-  separate R8 owner authorization are not recorded
+  on PR #166 (pending, not merged), the stacked Service/UI fastapi 0.142.2
+  pair at source `f4204f8` passed on PR #167 (pending, not merged), and
+  the stacked ML/runtime torch 2.14.1 pair at source `718ee9f` is pending;
+  exact-head human review and separate R8 owner authorization are not
+  recorded
 - **Milestone:** R10 prerequisite for the R8 pipeline-ownership move
 - **Report schema:** `phase-a0` v3
 
@@ -171,14 +173,15 @@ gate-only child `32153e9` and merge `376277c`
 Task 0.8 static-security pair at source `8891e1b` repeated it through
 gate-only child `1533164` and merge `e34103f`
 ([PR #107](https://github.com/toddlar00/rag-pipeline/pull/107)). The
-current replacement pair uses the clean Service/UI dependency source
-`f4204f8d543d93cd54c04cdb2d596edd6cace03d` (tree
-`9f392e802d21bcb4e7af4aae3f484a32a636c0fc`), which moves fastapi to
-0.142.2 and gradio to 6.29.1 and changes Python source to keep FastAPI
-0.142's native OpenTelemetry off at every app the repository launches, the
-second of three stacked one-domain dependency upgrades, stacked on the
-provider-transport cryptography 50.0.2 source `0b1bbe7` (gate-only child
-`488c848`, pending on PR #166, not merged), after a series of one-domain
+current replacement pair uses the clean ML/runtime dependency source
+`718ee9f1eac2bbb4e149141f666ca839d86a18fc` (tree
+`57832a08c64f896577a886ccfca1aa20ff321641`), which moves torch to 2.14.1
+and torchvision to 0.29.1 and changes no Python source, the last of three
+stacked one-domain dependency upgrades, stacked on the Service/UI fastapi
+0.142.2 source `f4204f8` (gate-only child `43a93e1`, pending on PR #167,
+not merged), which is stacked on the provider-transport cryptography
+50.0.2 source `0b1bbe7` (gate-only child `488c848`, pending on PR #166,
+not merged), after a series of one-domain
 dependency updates, on `main` after the merges of the robustness
 follow-ups #165 (`717ac9e`, the base of the provider-transport source's
 single commit), the
@@ -209,11 +212,13 @@ dependency updates also change the vector-stores, Service/UI, test-audit
 tooling, ML/runtime, PDF/Docling (docling-core), promoted ML/runtime,
 promoted h2, promoted cryptography, promoted oauthlib and promoted urllib3
 records of their mapped locks, the provider-transport refresh changes the
-cryptography record of `requirements-full.lock`, and the stacked
-Service/UI refresh changes the fastapi and starlette records of
+cryptography record of `requirements-full.lock`, the stacked Service/UI
+refresh changes the fastapi and starlette records of
 `requirements-service.lock` and `requirements-full.lock`, the gradio and
 gradio-client records of `requirements-full.lock` and adds an
-opentelemetry-api record to `requirements-service.lock`, but no model
+opentelemetry-api record to `requirements-service.lock`, and the stacked
+ML/runtime refresh changes the torch and torchvision records of
+`requirements-core.lock` and `requirements-full.lock`, but no model
 lock. It supersedes the
 earlier `1ae8502` pair, whose child `766feaf` passed both hosted Phase A0
 cells but whose dependency-light unit lanes failed at collection. Source
@@ -660,12 +665,37 @@ restoring the pre-upgrade behaviour; it adds a FastAPI row to the
 release-security policy and six new or updated tests that fail before the
 change and pass after it. OSV lists no advisory for the replaced or new
 versions. It changes no pipeline output or model lock.
+The `f4204f8` pair (gate-only child `43a93e1`) passed the hosted CI
+promotion gate on [PR
+#167](https://github.com/toddlar00/rag-pipeline/pull/167), whose hosted
+checks are green; that pull request is stacked on #166, whose hosted
+checks are also green, and neither is merged. The stacked ML/runtime
+source `718ee9f` supersedes the `f4204f8` pair for its own pull request
+and is the last of the three stacked one-domain dependency upgrades. Under
+the pinned uv 0.12.20, `tools/refresh_locks.py --upgrade-package torch
+--upgrade-package torchvision` moves torch from 2.14.0 to 2.14.1 and
+torchvision from 0.29.0 to 0.29.1 (the `+cpu` records and the macOS
+records) in `requirements-core.lock` and `requirements-full.lock` and
+changes no other record, and a second plain regeneration is byte-stable.
+`requirements-audit.txt` moves the normalized versions that pip-audit
+checks for the `+cpu` wheels to torch 2.14.1 and torchvision 0.29.1, and
+`dependency-vulnerability-policy.json` moves the two `+cpu`
+`allowed_skips` (version and expected reason pattern) to the same
+versions, keeping their reasons and expiries. numpy stays 2.5.2 (the OCR
+observer recipe pin) and transformers 5.16.1 (below 5.17 for the Nomic
+embedding). OSV lists no advisory for torch 2.14.0 or torchvision 0.29.0.
+Real-model checks on local published runs found no output change: fixed
+queries on three runs, plain and reranked, kept the same results, order
+and recorded scores; scratch re-conversions of three runs with their
+published jobs' arguments (batch jobs narrowed to the one PDF) reached
+READY with identical chunk text (38, 50 and 325 chunks); and their stored
+embeddings were bitwise equal to the published ones. It changes no Python source or model lock.
 Its Windows and
 Linux CPython 3.12.13 reports were
 generated after the same strict hash-locked synchronization, to its locks
-(urllib3 2.8.0, cryptography 50.0.2, fastapi 0.142.2 and gradio 6.29.1),
-and dependency-consistency checks: 193 marker-resolved distributions on
-Windows and 191 on Linux.
+(urllib3 2.8.0, cryptography 50.0.2, fastapi 0.142.2, gradio 6.29.1,
+torch 2.14.1 and torchvision 0.29.1), and dependency-consistency checks:
+193 marker-resolved distributions on Windows and 191 on Linux.
 They bind that one clean source, the same eight
 LF and `HEAD`-identical dependency/model inputs, and the complete 9×5
 scenario contract. Each passes an independent complete local same-platform
@@ -869,15 +899,16 @@ then the stacked CI and secret-scan tooling source `e706fd2`,
 then the stacked lexical accuracy toolkit source `5d22bb9`,
 then the stacked robustness follow-up source `6e7a1e7`,
 then the stacked provider-transport cryptography 50.0.2 source `0b1bbe7`,
-then the stacked Service/UI fastapi 0.142.2 source `f4204f8`.
+then the stacked Service/UI fastapi 0.142.2 source `f4204f8`,
+then the stacked ML/runtime torch 2.14.1 source `718ee9f`.
 Its Windows report
-is 51,205 bytes (file SHA-256
-`1a7a5a13b294e69ed9401bac77ea1ac5582ebdbdf57f47664e68cfd1b92d84fa`;
+is 51,202 bytes (file SHA-256
+`273209a72e4ab5bfbf91c1c37d41861c8ba16d21afcc7e5301051551f02b804d`;
 embedded report SHA-256
-`5c0ccf77d653083393ada8ca9f99b4e0a885a8d4f5fd5e95328c5f7ae89a0b54`).
-Its Linux report is 50,602 bytes (file SHA-256
-`0a360a05d88d01dbcd1c7bb3f3545cd0ad03f770aceb375bef2be8bb503a5aa4`;
+`81f9c7272807c659a0731cc81bc7643a969809d8ca19a884e198ceb89b820c43`).
+Its Linux report is 50,601 bytes (file SHA-256
+`2138cb4993f1317dc1d97fb5df15cc8088efe1ba1cbbaf8b4dddb04e542fa2be`;
 embedded report SHA-256
-`18eef78f38040ae6a4581e639311f63f6d4884d046a15a30da197a9c6d2cdda3`).
+`d7090eaf95c8e81a16f2459c6e8e35e671166cb5af27a51ed566980f21a5ce8d`).
 Both use CPython 3.12.13 and pass their complete local same-platform 9×5
 comparisons. Hosted promotion remains pending.
