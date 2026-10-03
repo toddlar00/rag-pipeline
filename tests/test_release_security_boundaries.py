@@ -12,7 +12,7 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
-from llm_runtime import ProviderResponse
+from llm_runtime import ProviderCallError, ProviderResponse
 import rag
 import release_security
 
@@ -715,6 +715,54 @@ def test_reranker_response_validation_fails_closed(results):
             provider="fixture")
 
 
+_GEMINI_DEBUG_ENVIRONMENT = (
+    "GOOGLE_GENAI_CLIENT_MODE",
+    "GOOGLE_GENAI_REPLAYS_DIRECTORY",
+    "GOOGLE_GENAI_REPLAY_ID",
+)
+
+
+def _reset_gemini_client_cache(monkeypatch):
+    monkeypatch.setattr(rag, "_gemini_client_cache", None)
+    monkeypatch.setattr(rag, "_gemini_client_key", "")
+    monkeypatch.setattr(rag, "_gemini_client_trust_environment", None)
+
+
+def _fake_debug_config_module():
+    class DebugConfig:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    module = ModuleType("google.genai.client")
+    module.DebugConfig = DebugConfig
+    return module
+
+
+def _install_fake_installed_gemini(monkeypatch, client_class, *,
+                                   client_module):
+    class Options:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    types_module = ModuleType("google.genai.types")
+    types_module.HttpOptions = Options
+    types_module.HttpRetryOptions = Options
+    genai_module = ModuleType("google.genai")
+    # A module file is what tells an installed SDK from a lightweight unit
+    # fake: an installed SDK must expose DebugConfig and yield a live client.
+    genai_module.__file__ = "fake-installed-genai"
+    genai_module.Client = client_class
+    genai_module.types = types_module
+    if client_module is not None:
+        genai_module.client = client_module
+    google_module = ModuleType("google")
+    google_module.genai = genai_module
+    monkeypatch.setitem(sys.modules, "google", google_module)
+    monkeypatch.setitem(sys.modules, "google.genai", genai_module)
+    monkeypatch.setitem(sys.modules, "google.genai.types", types_module)
+    _reset_gemini_client_cache(monkeypatch)
+
+
 def test_gemini_pins_provider_mode_origin_and_transport_policy(monkeypatch):
     clients = []
 
@@ -737,6 +785,7 @@ def test_gemini_pins_provider_mode_origin_and_transport_policy(monkeypatch):
     genai_module = ModuleType("google.genai")
     genai_module.Client = Client
     genai_module.types = types_module
+    genai_module.client = _fake_debug_config_module()
     google_module = ModuleType("google")
     google_module.genai = genai_module
     monkeypatch.setitem(sys.modules, "google", google_module)
@@ -748,6 +797,7 @@ def test_gemini_pins_provider_mode_origin_and_transport_policy(monkeypatch):
     monkeypatch.setenv(
         "GOOGLE_GEMINI_BASE_URL", "https://sink.invalid/v1beta")
     monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "true")
+    monkeypatch.setenv("GOOGLE_GENAI_CLIENT_MODE", "record")
     policy = release_security.ReleaseSecurityPolicy(
         network_policy="allow-cloud",
         trust_environment_network=True,
@@ -759,6 +809,9 @@ def test_gemini_pins_provider_mode_origin_and_transport_policy(monkeypatch):
     assert client is clients[0]
     assert returned_types is types_module
     assert client.kwargs["vertexai"] is False
+    # Explicit None outranks the SDK's GOOGLE_GENAI_* debug defaults.
+    assert vars(client.kwargs["debug_config"]) == {
+        "client_mode": None, "replays_directory": None, "replay_id": None}
     options = client.kwargs["http_options"]
     assert options.base_url == rag._GEMINI_API_BASE_URL
     assert options.api_version == "v1beta"
@@ -878,6 +931,135 @@ def test_installed_gemini_client_uses_the_pinned_transport(monkeypatch):
         assert api_client._async_httpx_client.trust_env is False
     finally:
         client.close()
+
+
+_REPLAY_API_CLIENT = type("ReplayApiClient", (), {})
+_BASE_API_CLIENT = type("BaseApiClient", (), {})
+
+
+@pytest.mark.parametrize(
+    ("client_mode", "api_client_class", "omitted", "close_fails"),
+    [
+        ("record", _REPLAY_API_CLIENT, None, False),
+        ("replay", _BASE_API_CLIENT, None, False),
+        (None, type("DerivedClient", (_REPLAY_API_CLIENT,), {}), None, True),
+        (None, _BASE_API_CLIENT, "_debug_config", False),
+        (None, _BASE_API_CLIENT, "_api_client", False),
+    ],
+    ids=[
+        "record-mode-replay-client",
+        "debug-mode-only",
+        "replay-client-subclass-close-fails",
+        "missing-debug-config",
+        "missing-api-client",
+    ],
+)
+def test_gemini_rejects_an_sdk_replay_client_before_caching(
+        monkeypatch, client_mode, api_client_class, omitted, close_fails):
+    clients = []
+
+    class Client:
+        # An SDK that ignores the pinned debug_config, or whose private
+        # attributes drifted, must not yield a cached client.
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.closed = False
+            self._debug_config = SimpleNamespace(client_mode=client_mode)
+            self._api_client = api_client_class()
+            if omitted is not None:
+                delattr(self, omitted)
+            clients.append(self)
+
+        def close(self):
+            self.closed = True
+            if close_fails:
+                raise RuntimeError("synthetic close failure")
+
+    _install_fake_installed_gemini(
+        monkeypatch, Client, client_module=_fake_debug_config_module())
+    policy = release_security.ReleaseSecurityPolicy(
+        profile="development", network_policy="allow-cloud")
+
+    with pytest.raises(ProviderCallError) as caught:
+        rag._load_gemini_client(
+            "nonworking-test-key", security_policy=policy)
+
+    assert caught.value.category == "configuration_error"
+    assert caught.value.transport_attempts == 0
+    assert rag._gemini_client_cache is None
+    assert len(clients) == 1
+    assert clients[0].closed is True
+
+
+@pytest.mark.parametrize(
+    "has_client_module", [False, True],
+    ids=["no-client-module", "no-debug-config"])
+def test_installed_gemini_sdk_without_debug_config_fails_closed(
+        monkeypatch, has_client_module):
+    clients = []
+
+    class Client:
+        def __init__(self, **kwargs):
+            clients.append(kwargs)
+
+    client_module = (
+        ModuleType("google.genai.client") if has_client_module else None)
+    _install_fake_installed_gemini(
+        monkeypatch, Client, client_module=client_module)
+    policy = release_security.ReleaseSecurityPolicy(
+        profile="development", network_policy="allow-cloud")
+
+    with pytest.raises(ProviderCallError) as caught:
+        rag._load_gemini_client(
+            "nonworking-test-key", security_policy=policy)
+
+    assert caught.value.category == "configuration_error"
+    assert caught.value.transport_attempts == 0
+    assert clients == []
+    assert rag._gemini_client_cache is None
+
+
+def test_installed_gemini_client_is_the_live_api_client_in_a_clean_environment(
+        monkeypatch):
+    pytest.importorskip("google.genai")
+    _reset_gemini_client_cache(monkeypatch)
+    for name in _GEMINI_DEBUG_ENVIRONMENT:
+        monkeypatch.delenv(name, raising=False)
+    policy = release_security.ReleaseSecurityPolicy(
+        profile="development", network_policy="allow-cloud")
+
+    client, _ = rag._load_gemini_client(
+        "nonworking-test-key", security_policy=policy)
+    try:
+        assert type(client.models._api_client).__name__ == "BaseApiClient"
+    finally:
+        client.close()
+
+
+@pytest.mark.parametrize("client_mode", ["record", "replay", "auto"])
+def test_installed_gemini_client_ignores_record_replay_environment(
+        monkeypatch, tmp_path, client_mode):
+    pytest.importorskip("google.genai")
+    _reset_gemini_client_cache(monkeypatch)
+    # Without a pinned DebugConfig these select the SDK's test-only
+    # ReplayApiClient, which prints each request, API key header included,
+    # and writes prompts and responses to a replay file on close.
+    monkeypatch.setenv("GOOGLE_GENAI_CLIENT_MODE", client_mode)
+    monkeypatch.setenv("GOOGLE_GENAI_REPLAYS_DIRECTORY", str(tmp_path))
+    monkeypatch.setenv("GOOGLE_GENAI_REPLAY_ID", "synthetic/replay/mldev")
+    policy = release_security.ReleaseSecurityPolicy(
+        profile="development", network_policy="allow-cloud")
+
+    client, _ = rag._load_gemini_client(
+        "nonworking-test-key", security_policy=policy)
+    try:
+        assert type(client.models._api_client).__name__ == "BaseApiClient"
+        assert client._debug_config.client_mode is None
+        assert client._debug_config.replays_directory is None
+        assert client._debug_config.replay_id is None
+    finally:
+        client.close()
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_local_only_ignores_ambient_gemini_key(monkeypatch):

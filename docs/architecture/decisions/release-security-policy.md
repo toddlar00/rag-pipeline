@@ -47,7 +47,7 @@ Policy version 1 has these defaults:
 | Inline key arguments | rejected | development profile only; still discouraged |
 | Custom gateway tenant identity | required, nonsecret | `--llm-cache-namespace LABEL`; only its SHA-256 identity persists |
 | Proxy/custom-CA/SDK endpoint environment | ignored or rejected | `--trust-environment-network` after operator review |
-| SDK implementation environment (Chroma's settings environment: `CHROMA_*` and unprefixed variables, and a working-directory `.env`) | pinned in code (ignored) | no release override; not covered by `--trust-environment-network` |
+| SDK implementation and test-mode environment (Chroma's settings environment: `CHROMA_*` and unprefixed variables, and a working-directory `.env`; google-genai's record/replay variables `GOOGLE_GENAI_CLIENT_MODE`, `GOOGLE_GENAI_REPLAYS_DIRECTORY`, and `GOOGLE_GENAI_REPLAY_ID`) | pinned in code (ignored) | no release override; not covered by `--trust-environment-network` |
 | Gradio principal boundary | disabled | `--trust-local-user` for a trusted single-user OS session |
 | Auxiliary analytics/telemetry | disabled | no release override |
 
@@ -88,7 +88,7 @@ receipts are containment and consistency mechanisms, not a sandbox.
 | Voyage/OpenAI/Cohere embeddings | full chunk text during indexing; query text during search | literal reviewed provider origin | `allow-cloud` | policy receipt binds jobs/evaluation; no provider SDK endpoint selection; MiniMax embedding IDs fail closed pending a reviewed current contract |
 | Cohere/Jina reranking | query plus bounded candidate text and metadata | literal reviewed provider origin | `allow-cloud` | reranker response is not separately cached |
 | OpenAI-compatible generation | prompts containing chunks, query/evidence, or generated-work inputs | validated official/custom endpoint | `allow-cloud`; custom release gateways also require namespace | release cache defaults off; events/reports carry only opaque identities |
-| Gemini generation | the same feature-specific prompt | pinned Gemini origin with Vertex mode disabled | `allow-cloud` | finite one-attempt SDK request; policy-aware client cache |
+| Gemini generation | the same feature-specific prompt | pinned Gemini origin with Vertex mode disabled | `allow-cloud` | finite one-attempt SDK request; policy-aware client cache; the SDK's record/replay/auto debug modes are pinned off (`GOOGLE_GENAI_CLIENT_MODE`, `GOOGLE_GENAI_REPLAYS_DIRECTORY`, and `GOOGLE_GENAI_REPLAY_ID` are ignored), and a constructed replay client fails closed before caching |
 | Ollama on literal loopback | prompt to a local process | canonical loopback IP | default | proxy and ambient credential lookup disabled |
 | Ollama on a public HTTPS endpoint | prompt | validated public endpoint | `allow-cloud`; custom release gateway namespace required | same LLM cache/receipt rules |
 | Evaluation | query, candidate, and optional answer data according to selected providers | same destinations as runtime | same policy as runtime | report configuration includes value-free policy provenance |
@@ -323,3 +323,15 @@ follow their `CHROMA_*` variables. None of them selects an implementation
 class or a destination. Pinning the first three is an option offered to the
 owner and not chosen here, because a pinned hash algorithm could lock out a
 store deliberately created with another one.
+
+The Gemini client passes google-genai 1.75's `client.DebugConfig` with its
+client mode, replay directory, and replay ID set to `None`, because the SDK
+otherwise reads them from `GOOGLE_GENAI_*` variables and its record, replay,
+or auto mode builds a test-only replay client. That client prints requests,
+API key header included, and records prompts to or answers from a local replay
+file. An installed SDK without `DebugConfig` fails closed, and a constructed
+client whose debug mode is set or whose API client is a `ReplayApiClient` by
+class name is closed and rejected before it is cached. That check reads the
+private `_debug_config` and `_api_client` attributes and fails closed when
+either is missing, so a google-genai upgrade must re-run the installed-SDK
+client tests.

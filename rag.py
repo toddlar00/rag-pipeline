@@ -5980,6 +5980,16 @@ def _load_gemini_client(
         from google.genai import types
         types.HttpOptions
         types.HttpRetryOptions
+        # Without an explicit DebugConfig, genai.Client reads
+        # GOOGLE_GENAI_CLIENT_MODE, GOOGLE_GENAI_REPLAYS_DIRECTORY and
+        # GOOGLE_GENAI_REPLAY_ID, and record/replay/auto select the SDK's
+        # test-only ReplayApiClient. Lightweight unit fakes omit DebugConfig;
+        # an installed SDK must expose it or fail closed.
+        debug_config_factory = getattr(
+            getattr(genai, "client", None), "DebugConfig", None)
+        installed_sdk = getattr(genai, "__file__", None) is not None
+        if debug_config_factory is None and installed_sdk:
+            raise AttributeError("google-genai DebugConfig")
     except (ImportError, AttributeError):
         raise ProviderCallError(
             "configuration_error", transport_attempts=0) from None
@@ -5995,6 +6005,12 @@ def _load_gemini_client(
                     "follow_redirects": False,
                     "verify": True,
                 }
+                client_kwargs = {}
+                if debug_config_factory is not None:
+                    # Explicit None outranks DebugConfig's os.getenv defaults.
+                    client_kwargs["debug_config"] = debug_config_factory(
+                        client_mode=None, replays_directory=None,
+                        replay_id=None)
                 new_client = genai.Client(
                     vertexai=False,
                     api_key=api_key,
@@ -6006,7 +6022,29 @@ def _load_gemini_client(
                         client_args=dict(transport_args),
                         async_client_args=dict(transport_args),
                     ),
+                    **client_kwargs,
                 )
+                if installed_sdk:
+                    # Verify the pin held before caching: a replay client
+                    # prints requests, API key header included, and records
+                    # prompts to or answers from a local replay file. Matching
+                    # the class name keeps a moved private module from
+                    # breaking construction.
+                    missing = object()
+                    debug_config = getattr(new_client, "_debug_config", None)
+                    api_client = getattr(new_client, "_api_client", None)
+                    if (debug_config is None
+                            or getattr(debug_config, "client_mode", missing)
+                            is not None
+                            or api_client is None
+                            or any(cls.__name__ == "ReplayApiClient"
+                                   for cls in type(api_client).__mro__)):
+                        try:
+                            new_client.close()
+                        except Exception:
+                            pass
+                        raise RuntimeError(
+                            "Gemini SDK test client modes are not allowed")
                 _gemini_client_cache = new_client
                 _gemini_client_key = api_key
                 _gemini_client_trust_environment = (
