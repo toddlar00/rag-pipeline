@@ -7,14 +7,15 @@ fresh-process repetitions.
 
 ## Provenance
 
-Both current reports were generated from the clean Service/UI dependency
-source checkpoint `f4204f8d543d93cd54c04cdb2d596edd6cace03d` (tree
-`9f392e802d21bcb4e7af4aae3f484a32a636c0fc`), which moves fastapi to
-0.142.2 and gradio to 6.29.1 and keeps FastAPI 0.142's native
-OpenTelemetry off at every app the repository launches, the second of
-three stacked one-domain dependency upgrades, stacked on the
-provider-transport cryptography 50.0.2 source `0b1bbe7` (gate-only child
-`488c848`, pending on #166, not merged), after a series of one-domain
+Both current reports were generated from the clean ML/runtime dependency
+source checkpoint `718ee9f1eac2bbb4e149141f666ca839d86a18fc` (tree
+`57832a08c64f896577a886ccfca1aa20ff321641`), which moves torch to 2.14.1
+and torchvision to 0.29.1 and changes no Python source, the last of three
+stacked one-domain dependency upgrades, stacked on the Service/UI fastapi
+0.142.2 source `f4204f8` (gate-only child `43a93e1`, pending on #167, not
+merged), which is stacked on the provider-transport cryptography 50.0.2
+source `0b1bbe7` (gate-only child `488c848`, pending on #166, not merged),
+after a series of one-domain
 dependency updates on `main` after the history-preserving merges of #121
 (`602bec1`),
 of that series, #122 to #130 (`1cffc58`), of its documentation follow-up #135
@@ -54,7 +55,8 @@ reranking and the fresh-OCR token fidelity fixes, followed by stacked
 one-domain dependency updates for vector stores, Service/UI, test-audit
 tooling, ML/runtime, docling-core, ML advisory promotions, h2, cryptography,
 supply-chain policy renewals, oauthlib, urllib3, the cryptography 50.0.2
-refresh and the fastapi 0.142.2 and gradio 6.29.1 refresh. The lock
+refresh, the fastapi 0.142.2 and gradio 6.29.1 refresh and the torch
+2.14.1 and torchvision 0.29.1 refresh. The lock
 changes add
 pytest-xdist 3.8.0 and execnet 2.1.2 to `requirements-test.lock` and
 `requirements-smoke.lock` and move FlagEmbedding from 1.4.0 to 1.4.2 in
@@ -93,11 +95,14 @@ Service/UI refresh moves fastapi from 0.141.1 to 0.142.2 and starlette
 from 1.3.1 to 1.7.0 in `requirements-service.lock` and
 `requirements-full.lock`, moves gradio from 6.28.0 to 6.29.1 and
 gradio-client from 2.7.1 to 2.7.2 in `requirements-full.lock`, and adds
-opentelemetry-api 1.45.0 to `requirements-service.lock`; no model lock
-changed.
+opentelemetry-api 1.45.0 to `requirements-service.lock`; the stacked
+ML/runtime refresh moves torch from 2.14.0 to 2.14.1 and torchvision from
+0.29.0 to 0.29.1 in `requirements-core.lock` and `requirements-full.lock`
+and changes no other record; no model lock changed.
 The executing environments were synchronized to this source's locks
-(urllib3 2.8.0, cryptography 50.0.2, fastapi 0.142.2 and gradio 6.29.1)
-with repository-pinned uv 0.12.20 against the exact CPU
+(urllib3 2.8.0, cryptography 50.0.2, fastapi 0.142.2, gradio 6.29.1,
+torch 2.14.1 and torchvision 0.29.1) with repository-pinned uv 0.12.20
+against the exact CPU
 application/test lock union plus its retained bootstrapper:
 
 - `requirements-full.lock`
@@ -113,8 +118,8 @@ marker-resolved distributions before generation.
 
 | Platform | Runtime | Report | Bytes | File SHA-256 | Embedded report SHA-256 |
 |---|---:|---|---:|---|---|
-| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,205 | `1a7a5a13b294e69ed9401bac77ea1ac5582ebdbdf57f47664e68cfd1b92d84fa` | `5c0ccf77d653083393ada8ca9f99b4e0a885a8d4f5fd5e95328c5f7ae89a0b54` |
-| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,602 | `0a360a05d88d01dbcd1c7bb3f3545cd0ad03f770aceb375bef2be8bb503a5aa4` | `18eef78f38040ae6a4581e639311f63f6d4884d046a15a30da197a9c6d2cdda3` |
+| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,202 | `273209a72e4ab5bfbf91c1c37d41861c8ba16d21afcc7e5301051551f02b804d` | `81f9c7272807c659a0731cc81bc7643a969809d8ca19a884e198ceb89b820c43` |
+| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,601 | `2138cb4993f1317dc1d97fb5df15cc8088efe1ba1cbbaf8b4dddb04e542fa2be` | `d7090eaf95c8e81a16f2459c6e8e35e671166cb5af27a51ed566980f21a5ce8d` |
 
 The reports attest the same source commit, clean-worktree state, tracked-diff
 digest, eight LF and `HEAD`-identical dependency/model-lock inputs, authoritative
@@ -686,6 +691,31 @@ restoring the pre-upgrade behaviour; it adds a FastAPI row to the
 release-security policy and six new or updated tests that fail before the
 change and pass after it. OSV lists no advisory for the replaced or new
 versions. It changes no pipeline output or model lock.
+The `f4204f8` pair (gate-only child `43a93e1`) passed the hosted CI
+promotion gate on [PR
+#167](https://github.com/toddlar00/rag-pipeline/pull/167), whose hosted
+checks are green; that pull request is stacked on #166, whose hosted
+checks are also green, and neither is merged. The stacked ML/runtime
+source `718ee9f` supersedes the `f4204f8` pair for its own pull request
+and is the last of the three stacked one-domain dependency upgrades. Under
+the pinned uv 0.12.20, `tools/refresh_locks.py --upgrade-package torch
+--upgrade-package torchvision` moves torch from 2.14.0 to 2.14.1 and
+torchvision from 0.29.0 to 0.29.1 (the `+cpu` records and the macOS
+records) in `requirements-core.lock` and `requirements-full.lock` and
+changes no other record, and a second plain regeneration is byte-stable.
+`requirements-audit.txt` moves the normalized versions that pip-audit
+checks for the `+cpu` wheels to torch 2.14.1 and torchvision 0.29.1, and
+`dependency-vulnerability-policy.json` moves the two `+cpu`
+`allowed_skips` (version and expected reason pattern) to the same
+versions, keeping their reasons and expiries. numpy stays 2.5.2 (the OCR
+observer recipe pin) and transformers 5.16.1 (below 5.17 for the Nomic
+embedding). OSV lists no advisory for torch 2.14.0 or torchvision 0.29.0.
+Real-model checks on local published runs found no output change: fixed
+queries on three runs, plain and reranked, kept the same results, order
+and recorded scores; scratch re-conversions of three runs with their
+published jobs' arguments (batch jobs narrowed to the one PDF) reached
+READY with identical chunk text (38, 50 and 325 chunks); and their stored
+embeddings were bitwise equal to the published ones. It changes no Python source or model lock.
 The current reports above
 bind
 that exact clean source and each passes an independent complete
