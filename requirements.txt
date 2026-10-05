@@ -28,7 +28,7 @@ sentence-transformers>=6.1.0,<7
 einops>=0.7,<1
 
 # Vector store (default backend)
-chromadb>=1.5.2,<2
+chromadb>=1.5.9,<2
 # Promoted from chromadb's kubernetes -> requests-oauthlib so the
 # CVE-2026-49264/CVE-2026-49265 fix (oauthlib 4.0.0) can be selected under the
 # dependency-domain policy.
