@@ -1305,6 +1305,59 @@ def _occurrence_component_bindings(
     return components, valid
 
 
+def _is_depth_heading(
+        ref: str, items: Mapping[str, dict], *,
+        excluded: frozenset[str], running: frozenset[str],
+        artifacts: frozenset[str], embedded_outline: Iterable[str],
+) -> bool:
+    """A section header that can open occurrence scope."""
+    return (_label(items.get(ref)) == "section_header"
+            and ref not in excluded and ref not in running
+            and ref not in artifacts
+            and ref not in embedded_outline
+            and bool(canonical_text(_text(items.get(ref)))))
+
+
+def nearest_preceding_heading_refs(
+        document: dict, *,
+        structural_ranges: Iterable[tuple[int, int]] = (),
+        excluded_heading_refs: Iterable[str] = (),
+) -> dict[str, str]:
+    """Map each source occurrence to the nearest scope heading at or before it.
+
+    Body order and the eligible headings are those of
+    ``expected_heading_bindings``: the repaired body order, without
+    excluded, running, sparse-OCR-artifact or embedded-outline headers.  A
+    structural range resets the nearest heading, as it resets occurrence
+    scope.  A heading maps to itself; occurrences before the first heading
+    and inside structural ranges are absent.  A running section heading
+    ends the nearest heading: it can resume an ancestor, and the audit then
+    supersedes that heading (``running_ancestor_resumption``), so the
+    occurrences after it are absent until the next scope heading.
+    """
+    ranges = tuple(sorted(set(structural_ranges)))
+    artifacts = sparse_ocr_heading_artifact_refs(document)
+    excluded = frozenset(excluded_heading_refs) - artifacts
+    items, groups = _catalog(document)
+    order = _ordered_source_refs(document, items, groups, ranges)
+    running = running_section_heading_refs(document) - artifacts
+    embedded_outline, _summary_scope_ends = _source_outline_analysis(
+        order, items, groups, running | artifacts)
+    nearest: dict[str, str] = {}
+    current: str | None = None
+    for ref in order:
+        if _inside_ranges(items[ref], ranges) or ref in running:
+            current = None
+            continue
+        if _is_depth_heading(
+                ref, items, excluded=excluded, running=running,
+                artifacts=artifacts, embedded_outline=embedded_outline):
+            current = ref
+        if current is not None:
+            nearest[ref] = current
+    return nearest
+
+
 def expected_heading_bindings(
         document: dict, records: Sequence[dict], *,
         structural_ranges: Iterable[tuple[int, int]] = (),
@@ -1333,11 +1386,9 @@ def expected_heading_bindings(
         skipped=running | artifacts, outline=embedded_outline)
     depth_heading_refs = frozenset(
         ref for ref in order
-        if (_label(items.get(ref)) == "section_header"
-            and ref not in excluded and ref not in running
-            and ref not in artifacts
-            and ref not in embedded_outline
-            and bool(canonical_text(_text(items.get(ref)))))
+        if _is_depth_heading(
+            ref, items, excluded=excluded, running=running,
+            artifacts=artifacts, embedded_outline=embedded_outline)
     )
     heading_keys = _heading_display_keys(
         order, items, depth_heading_refs)

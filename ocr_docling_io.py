@@ -47,6 +47,10 @@ def load_conversion_binding(docling_path: Path, *, document_sha256: str, documen
         # Retry OCR never merges layout regions; its text must not be spliced
         # into a conversion whose interleaved regions were merged.
         raise ValueError("conversions made with merged OCR regions are unsupported")
+    if binding.ocr_old_style_figures:
+        # Retry OCR never reads old-style figures; its "o" for "0" must not be
+        # spliced into a conversion whose OCR figures were read.
+        raise ValueError("conversions made with old-style figures read are unsupported")
     return binding
 
 
