@@ -127,6 +127,17 @@ def test_conversion_with_merged_ocr_regions_rejected(files):
     assert not files["output"].exists()
 
 
+def test_conversion_with_old_style_figures_rejected(files):
+    # Retry OCR never reads old-style figures; never splice its "o" for "0"
+    # into a document whose OCR figures were read.
+    value = json.loads(files["manifest"].read_bytes())
+    value["ocr_old_style_figures"] = True
+    files["manifest"].write_text(json.dumps(value), encoding="utf-8")
+    with pytest.raises(ValueError, match="old-style figures"):
+        run(files)
+    assert not files["output"].exists()
+
+
 def test_missing_completion_rejected(files):
     files["manifest"].unlink()
     with pytest.raises(FileNotFoundError):

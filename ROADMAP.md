@@ -2314,6 +2314,161 @@ open):
     because a documentation-only merge trips the recorded Phase A0
     push-run issue.
 
+### ClearScan font-metric text loss in docling-parse (2026-10-11, open defect)
+
+The source is a private 602-page administrative-law casebook. Acrobat
+Paper Capture rebuilt its scan as visible "ClearScan" text: synthesized
+`CIDFontType0C` fonts named `*Cambria-N`, `*Calibri-N`, `*Minion Pro-N` and
+so on, with 99.98% of text characters drawn visibly. The page images are
+gone; 408 pages have none and 101 keep a blank full-page background.
+
+- **Defect.** Docling's PDF parser (`DoclingParseDocumentBackend`, locked
+  docling 2.121.0) returns no text cells for glyphs set in the
+  `*Minion Pro-N` fonts.
+  - All 107 of their font descriptors carry absurd metrics:
+    `/Ascent 67306242`, `/CapHeight 100992260`, `/XHeight 84149251`. Every
+    other family's metrics are normal.
+  - PyMuPDF and pypdfium2 extract the same text normally.
+  - Changing only those four descriptor values in a scratch copy
+    (`/Ascent 1000`, `/Descent -250`, `/CapHeight 650`, `/XHeight 450`)
+    restores the text on every page tested. On PDF p. 432 the parser went
+    from 12 cells and 105 characters to 74 cells and 3,745.
+- **Effect.** The `full` run at `3d25d31` (`us-law-casebook-v1`) lost 9,762
+  of the 32,990 text-layer words on the 65 pages set mainly in that
+  family (29.6%). On the other 537 pages it matched the text layer for
+  99.82% of words.
+  - Automatic OCR recovered only the pages that keep a background image.
+    It was enabled for an unrelated reason (one blank image page has no
+    text), and visible PDF cells take priority, so OCR read image areas
+    only.
+- **Why nothing caught it.**
+  - `ingestion_core.pdf_text_layer_is_usable` measures the text layer
+    through PyMuPDF, which reads it correctly.
+  - The run then failed at chunking on occurrence-bound heading lineage
+    (732 issues), before any quality gate. So it is unknown whether
+    `source_token_fidelity` or another gate would have rejected the loss.
+- **Interim route (owner decision, 2026-10-11).** OCR of a 300-dpi
+  image-only derivative instead of the text layer.
+  - The OCR matches the text layer for 98.26% of words, and recovers the
+    affected pages (98.16%).
+  - A visual spot-check estimated about 0.07% word errors in the text
+    layer and about 0.14% in the OCR. The OCR's largest class was the
+    book's old-style figure zero read as the letter `o`.
+- **Follow-ups (not fixed).**
+  - A conversion-time detector: compare docling-parse's per-page
+    character count with PyMuPDF's native count, and fail closed or
+    force OCR on a material shortfall.
+  - A repair, chosen by the owner, from:
+    - a sanitized-metrics derivative input with its own receipt binding;
+    - a native-text fallback for the dropped cells; or
+    - an upstream docling-parse report with a synthetic reproduction that
+      carries no private text.
+
+### Fresh-OCR route fixes for the ClearScan casebook (2026-10-11, proposed)
+
+The branch `agent/clearscan-ocr-fixes-2026-10` (source checkpoint `0ac1972`,
+carrying its own Phase A0 pair; hosted checks pending; not merged)
+implements the owner's
+interim route above: fresh OCR of the image-only derivative, with the OCR's
+misreads of the book's figures fixed. One opt-in conversion setting and four
+chunking fixes take that run from failing to passing every chunk-stage gate.
+Each chunking fix fired only on output that failed before, so every
+published run re-chunks byte-identically. No schema, lock or policy version
+changed.
+
+- **`--ocr-old-style-figures` (opt-in, `convert`/`full`/`batch`).**
+  - **Defect.** The book prints old-style (lowercase) figures, and RapidOCR
+    reads their zero as the letter `o`: `2oo2`, `1o9(b)(1)`, `9,ooo`. That
+    accounted for 258 of 600 OCR/text-layer disagreements.
+  - **Fix.** `_old_style_figures_pipeline_cls` wraps only the Docling OCR
+    model, composed with the interleaved-region merge when both are on.
+    Every OCR text cell then reads `o` as `0` inside a run of digits, `o`
+    and `,` `.` `/` that holds a digit and is not attached to a preceding
+    letter. Native PDF cells and each OCR cell's raw `orig` never change.
+  - **Recording.** The setting follows the angle-classifier and merge
+    pattern. It is absent by default, normalized away by `--no-ocr`, and
+    bound by the parameters digest, the manifest field
+    `"ocr_old_style_figures": true`, resume commands and the binding check.
+    Docling OCR retry proposals refuse such conversions.
+  - **On the book.** It resolves 330 of the 600 disagreements, with no
+    regression. 16 new disagreements are places where the text layer itself
+    has the same misread.
+- **Leaderless contents pages.**
+  - **Defect.** OCR dropped the contents page's dot leaders, so
+    `Chapter 1: Overview 6` had no page under `_page_arabic`. It was parked
+    as a chapter label and fused into `Chapter 1: Overview 6 A. Origins`,
+    which binds to no heading: 19 lineage issues.
+  - **Fix.** This follows PR #138's conditional re-parse. Only when a
+    chapter entry is left fused as `<label> <page> <outline-labelled
+    entry>`, with the page no later than the fused entry's own page, is the
+    TOC parsed again. In that parse exactly those chapter rows read their
+    single-spaced trailing number as the page.
+- **A repeated short heading on the chunk's page.**
+  - **Defect.** `_filter_same_page_future_headings` matched heading spans by
+    (page, text). It therefore dropped an opinion-part marker (`A`, `V`)
+    governing a one-page chunk from an earlier page whenever the same marker
+    recurred below the chunk: 2 lineage issues. One repeat was genuine
+    (`II.A`, `III.A`). The other came from an OCR misread of `IV` as `V`.
+  - **Fix.** `heading_lineage.nearest_preceding_heading_refs` maps each
+    source item to the nearest scope heading in the audit's own body order.
+    A heading whose text matches that heading is never dropped. The
+    evidence is built only when the filter would drop something.
+  - **Running headers.** A running section heading ends the nearest
+    heading, because it can resume an ancestor and the audit then
+    supersedes that heading (`running_ancestor_resumption`). The first
+    version lacked this rule, and the tort casebook check caught it. There
+    a running `§ 10.02` header on PDF p. 913 sits between a p. 910
+    `Notes & Questions` and two records that sit above a second
+    `Notes & Questions`. That version kept the earlier heading for those
+    two records: still passing, but different bytes. With the rule, the
+    casebook re-chunks byte-identically.
+- **Body-text items that are only a number.**
+  - **Defect.** OCR labelled centered opinion-part numbers (`1`, `2`, `3`)
+    as body text. The generic cleaner deletes standalone 1-4 digit lines as
+    page numbers, while lineage still bound the items: 9
+    `source_token_fidelity` issues. The existing numeric rescue covers only
+    a fragment erased whole.
+  - **Fix.** The source-bound normalization scope now carries the numbers
+    that the fragment's ordinary body-text items consist of. Running page
+    furniture, other labels and furniture layers never qualify, and
+    `_strip_headers_footers` keeps that many such lines.
+- **A split item's slice beside another item.**
+  - **Defect.** PR #116 retracts a split item's slices when a per-item path
+    publishes it whole, but it recorded only a slice whose raw chunk held
+    that item alone. Here a "delivered the opinion" line shared its chunk
+    with the first slice of a long paragraph, and a synthetic-layout chunk
+    later published the paragraph whole: 2 `source_token_fidelity` issues.
+  - **Fix.** Such a slice is recorded when it is the chunk's one split item
+    and the other items are ordinary text. Retraction republishes those
+    items whole, in place.
+- **Evidence.**
+  - **Tests.** 6 TOC tests, 6 heading-filter and lineage-helper tests, 6
+    number-line tests, 2 shared-slice tests driving the real locked pass,
+    and the `--ocr-old-style-figures` tests (rule, wrapper, wiring, CLI,
+    stages, resume, jobs, manifest), plus the retry-guard and manifest
+    root-field cases. Each new behaviour test failed on the base.
+  - **Full suite** in `ocr-locked-py312-qualified-v5` (`-n 8`): 16,461
+    passed and 17 skipped. The one other failure was the architecture
+    inventory, which passes after its refresh.
+  - **The book.** It is READY from these sources: five publication gates
+    pass over 1,710 records. Its chunks re-chunk byte-identically, and no
+    `o` read for `0` remains in its published text.
+  - **Published runs.** All 19 READY h26 runs and the READY tort casebook
+    run re-chunk byte-identically (chunks and source oracles; quality
+    reports with no other changes).
+  - **On the book's fresh-OCR conversion.** Heading lineage goes from 21
+    issues to 0, and `source_token_fidelity` from 11 issues to 0. The
+    corpus gate passes over 1,710 records, with the
+    `canonical_text_duplicates` warning the tort casebook also shows.
+- **Follow-ups (not fixed).**
+  - The `IV` misread as `V` stays in the text. It is an owner-correction
+    candidate (see the owner-text gate program).
+  - A non-chapter contents row ending in a single-spaced page (for example
+    a case row ending in its year, then the page) still yields no entry, so
+    scaffold coverage is lower.
+  - Fresh OCR still reads a closing quote as `99` (7 times) and `1` as `i`
+    (3 times).
+
 ### Integrated convergence
 
 - **R1:** [PR #44](https://github.com/toddlar00/rag-pipeline/pull/44)
@@ -2895,10 +3050,23 @@ to start while `GRADIO_ALLOWED_PATHS` is non-empty or
 run-history page, and the local UI's footer link to it, disappear, and
 Gradio deletes the runs it had saved in the browser for these apps. It
 changes no dependency or lock.
-Its Windows/Linux
-pair (independent local same-platform comparisons passed) is that branch's
-candidate; its hosted checks and exact-SHA record are pending, and the
-merged pull requests carry theirs as PR comments.
+
+The `b48be4c` pair (gate-only child `6e891b6`) passed the hosted CI
+promotion gate on PR #169. #166, #167, #168 and #169 then merged through
+`3d25d31`.
+
+The ClearScan fresh-OCR route source `0ac1972` supersedes that pair for its
+own pull request. See "Fresh-OCR route fixes for the ClearScan casebook"
+above: an opt-in `--ocr-old-style-figures` and four failing-only chunking
+fixes, with no dependency or lock change. Full locked suites at the source
+passed under `-n 8`:
+
+- Windows: 16,462 passed and 17 skipped;
+- Linux: 16,387 passed and 92 skipped.
+
+Its Windows/Linux pair (independent local same-platform comparisons
+passed) is that branch's candidate. Its hosted checks and exact-SHA record
+are pending; the merged pull requests carry theirs as PR comments.
 
 Four operational follow-ups from the post-merge `main` push runs are
 recorded; two remain open, and two were fixed through the robustness

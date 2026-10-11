@@ -2796,6 +2796,18 @@ handshake deadline.
   `"ocr_merge_interleaved_regions": true`. Docling OCR retry proposals refuse
   such conversions, because retry OCR never merges regions. Apply it one PDF
   at a time, for the same reason as the angle-classifier flag.
+  `--ocr-old-style-figures` (`convert`, `full`, `batch`) is for books set in
+  old-style (lowercase) figures, whose zero RapidOCR reads as the letter `o`
+  (`2oo2` for 2002, `1o9(b)(1)` for 109(b)(1)). Whenever OCR runs, every OCR
+  text cell reads `o` as `0` inside a run of digits, `o` and the separators
+  `,` `.` `/` that holds at least one digit and is not attached to a
+  preceding letter. Words such as `No.`, `co2` and `too`, native PDF text and
+  each OCR cell's raw `orig` reading never change. It does not enable OCR,
+  `--no-ocr` overrides it, and it composes with the other OCR options. The
+  parameters digest records it, and the conversion manifest records it as
+  `"ocr_old_style_figures": true`. Docling OCR retry proposals refuse such
+  conversions, because retry OCR never reads old-style figures. Apply it one
+  PDF at a time, for the same reason as the angle-classifier flag.
 
 ```bash
 # Default: inspect text quality and choose OCR automatically
@@ -2810,6 +2822,9 @@ python rag.py convert --pdf upright_scan.pdf --ocr-no-angle-classifier
 
 # Per PDF only: a scan whose paragraph lines come out a line or two out of order
 python rag.py convert --pdf scan.pdf --ocr-merge-interleaved-regions
+
+# Per PDF only: a book set in old-style figures whose zeros OCR as "o"
+python rag.py convert --pdf scan.pdf --ocr-old-style-figures
 ```
 
 ### Text Cleaning

@@ -38,13 +38,14 @@
   (merged through `6303d8b`), the robustness follow-up pair at source
   `6e7a1e7` passed on PR #165 (merged through `717ac9e`), the
   provider-transport cryptography 50.0.2 pair at source `0b1bbe7` passed
-  on PR #166 (pending, not merged), the stacked Service/UI fastapi 0.142.2
-  pair at source `f4204f8` passed on PR #167 (pending, not merged), the
-  stacked ML/runtime torch 2.14.1 pair at source `718ee9f` passed on PR
-  #168 (pending, not merged), and the stacked resource-safety and
-  environment-isolation hardening pair at source `b48be4c` is pending;
-  exact-head human review and separate R8 owner authorization are not
-  recorded
+  on PR #166 (merged through `654577b`), the stacked Service/UI fastapi
+  0.142.2 pair at source `f4204f8` passed on PR #167 (merged through
+  `f3b1104`), the stacked ML/runtime torch 2.14.1 pair at source `718ee9f`
+  passed on PR #168 (merged through `b86fa64`), the stacked
+  resource-safety and environment-isolation hardening pair at source
+  `b48be4c` passed on PR #169 (merged through `3d25d31`), and the ClearScan
+  fresh-OCR route pair at source `0ac1972` is pending; exact-head human
+  review and separate R8 owner authorization are not recorded
 - **Milestone:** R10 prerequisite for the R8 pipeline-ownership move
 - **Report schema:** `phase-a0` v3
 
@@ -175,21 +176,21 @@ gate-only child `32153e9` and merge `376277c`
 Task 0.8 static-security pair at source `8891e1b` repeated it through
 gate-only child `1533164` and merge `e34103f`
 ([PR #107](https://github.com/toddlar00/rag-pipeline/pull/107)). The
-current replacement pair uses the clean resource-safety and
-environment-isolation hardening source
-`b48be4cdd67c1dd486f90e3968357e2fbaa64044` (tree
-`3b7440ad434f0e335158cc1aa1e58bbe2a2cdbac`), a behavior-preserving
-bounded-read fix plus fail-closed hardening that keeps environment
-variables (and, for Chroma, a working-directory `.env`) from selecting
-the Chroma, google-genai and Gradio implementations, telemetry and
-launch settings, changing no dependency or lock, stacked
-on the ML/runtime torch 2.14.1 source `718ee9f` (gate-only child
-`c6ad4ee`, pending on PR #168, not merged), the last of three stacked
-one-domain dependency upgrades, which is stacked on the Service/UI fastapi
-0.142.2 source `f4204f8` (gate-only child `43a93e1`, pending on PR #167,
-not merged), which is stacked on the provider-transport cryptography
-50.0.2 source `0b1bbe7` (gate-only child `488c848`, pending on PR #166,
-not merged), after a series of one-domain
+current replacement pair uses the clean ClearScan fresh-OCR route source
+`0ac19724659e1d2eeb8a81bbcba3387352d64486` (tree
+`60f3361fa4a6a2ca603316d6b4563205d84ef85d`). It adds an opt-in OCR setting
+(`--ocr-old-style-figures`) and four chunking fixes that change only output
+that failed before, and it changes no dependency or lock. It sits on `main`
+after the merges of:
+
+- the provider-transport cryptography 50.0.2 source `0b1bbe7` (PR #166,
+  `654577b`);
+- the Service/UI fastapi 0.142.2 source `f4204f8` (PR #167, `f3b1104`);
+- the ML/runtime torch 2.14.1 source `718ee9f` (PR #168, `b86fa64`);
+- the resource-safety and environment-isolation hardening source `b48be4c`
+  (gate-only child `6e891b6`, PR #169, `3d25d31`).
+
+Those followed a series of one-domain
 dependency updates, on `main` after the merges of the robustness
 follow-ups #165 (`717ac9e`, the base of the provider-transport source's
 single commit), the
@@ -938,15 +939,16 @@ then the stacked provider-transport cryptography 50.0.2 source `0b1bbe7`,
 then the stacked Service/UI fastapi 0.142.2 source `f4204f8`,
 then the stacked ML/runtime torch 2.14.1 source `718ee9f`,
 then the stacked resource-safety and environment-isolation hardening
-source `b48be4c`.
+source `b48be4c` (all four merged through `3d25d31`),
+then the ClearScan fresh-OCR route source `0ac1972`.
 Its Windows report
 is 51,202 bytes (file SHA-256
-`210ff86c641958fe9ca6541873114da92407b8921fdc3926d2afb150ad6f61f5`;
+`f6249aeb4dd43aaead058259560a3f620369e4ff779863ababf100af50051e4d`;
 embedded report SHA-256
-`7371ff43804e016ce78e7e8ce8b5d77f13f0fbe0945c56aae4b297fe50a751ae`).
-Its Linux report is 50,603 bytes (file SHA-256
-`71c1b4210b418e4a312c82ce3fb9944a9fa85051d31c592c151ca6fb3952b158`;
+`c8a7812715f9a3bfa28460508a4394b4656716267c5230f4b0cc1240bbd10a6e`).
+Its Linux report is 50,592 bytes (file SHA-256
+`5dc43d7c270863c6af9c802d1cf51756a67e09df3648f6529b23b20b274dad57`;
 embedded report SHA-256
-`bad3014693e9a24e2775f4ff0f6f633bac4dd714bf5bf776b9dd43e39774373e`).
+`2be2d2c8f43ba54f21324db2e794e0d6ed442257e409d44c3d11a5b8dd8c556e`).
 Both use CPython 3.12.13 and pass their complete local same-platform 9×5
 comparisons. Hosted promotion remains pending.

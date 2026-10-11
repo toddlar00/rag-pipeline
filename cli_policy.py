@@ -145,6 +145,8 @@ def _build_resume_cmd(
     if (getattr(args, "ocr_merge_interleaved_regions", False)
             and ocr is not False):
         parts.append("--ocr-merge-interleaved-regions")
+    if getattr(args, "ocr_old_style_figures", False) and ocr is not False:
+        parts.append("--ocr-old-style-figures")
 
     embedding_model = getattr(
         args, "embedding_model", defaults.embedding_model)

@@ -4208,6 +4208,30 @@ _TOC_GLYPH_LEADER_ROW = re.compile(
     rf"(?P<title>.*?\S)\s*{_TOC_GLYPH_LEADER_RUN}(?P<page>\d{{1,4}})\s*")
 _TOC_FUSED_GLYPH_TITLE = re.compile(
     rf"{_TOC_GLYPH_LEADER_RUN}\d{{1,4}}\s+\S")
+# OCR can drop the dot leaders entirely, leaving "Chapter 1: Overview 6" with
+# one space before the page. That row is parked as a chapter label and fuses
+# with the next row into "Chapter 1: Overview 6 A. Origins" (the pending
+# label joins with " " or " — ").
+_TOC_FUSED_LEADERLESS_TITLE = re.compile(
+    r"(?P<label>\S.*?\S) (?P<page>\d{1,4})(?: —)? "
+    r"(?:[A-Z]|[IVXLCDM]+|\d{1,3})[.)] \S.*")
+_TOC_LEADERLESS_PAGE_ROW = re.compile(r"(?P<title>.*?\S)\s+(?P<page>\d{1,4})\s*")
+
+
+def _toc_leaderless_fusions(entries: list[dict]) -> frozenset[tuple[str, int]]:
+    """Return (label, page) of chapter rows fused across a leaderless page.
+
+    The bare number must be no later than the fused entry's own page, which
+    belongs to the row that was joined to the label.
+    """
+    fusions = set()
+    for entry in entries:
+        match = (_TOC_FUSED_LEADERLESS_TITLE.fullmatch(entry["title"])
+                 if entry["level"] == 1 else None)
+        if (match is not None
+                and 0 < int(match.group("page")) <= int(entry["page"] or 0)):
+            fusions.add((match.group("label"), int(match.group("page"))))
+    return frozenset(fusions)
 
 
 def _parse_toc_tables(
@@ -4234,17 +4258,30 @@ def _parse_toc_tables(
     row (a run of at least three glyphs, a page number, then more text) is
     the TOC parsed a second time, in which every row that would be parked as
     a chapter label and reads "title<glyph leaders>page" becomes its own
-    entry instead. Every other TOC parses exactly as the first pass does.
+    entry instead. Likewise, only when a chapter title is left fused across
+    a leaderless page ("<label> <page> <outline label>. <text>", the page no
+    later than the fused entry's own) is it parsed again, splitting exactly
+    the chapter rows that produced those titles. Every other TOC parses
+    exactly as the first pass does.
     """
+    split_glyph_leaders = False
     entries = _parse_toc_tables_once(
         doc, toc_start, toc_end, structure_profile=structure_profile,
         summary_span=summary_span, split_glyph_leaders=False)
     if any(entry["level"] == 1
            and _TOC_FUSED_GLYPH_TITLE.search(entry["title"])
            for entry in entries):
+        split_glyph_leaders = True
         entries = _parse_toc_tables_once(
             doc, toc_start, toc_end, structure_profile=structure_profile,
             summary_span=summary_span, split_glyph_leaders=True)
+    leaderless_fusions = _toc_leaderless_fusions(entries)
+    if leaderless_fusions:
+        entries = _parse_toc_tables_once(
+            doc, toc_start, toc_end, structure_profile=structure_profile,
+            summary_span=summary_span,
+            split_glyph_leaders=split_glyph_leaders,
+            leaderless_fusions=leaderless_fusions)
     if entries:
         log.info(f"Table-parsed TOC: {len(entries)} entries, "
                  f"pages {entries[0]['page']}-{entries[-1]['page']}")
@@ -4258,6 +4295,7 @@ def _parse_toc_tables_once(
         ),
         summary_span: tuple[int, int] | None,
         split_glyph_leaders: bool,
+        leaderless_fusions: frozenset[tuple[str, int]] = frozenset(),
 ) -> list[dict]:
     """Run one TOC table parse; see ``_parse_toc_tables``."""
     profile = _document_profiles.get_profile(structure_profile)
@@ -4437,6 +4475,26 @@ def _parse_toc_tables_once(
                              "start_col_offset_idx": 0,
                              "end_col_offset_idx": 1},
                             {"text": glyph_row.group("page"),
+                             "start_col_offset_idx": 1,
+                             "end_col_offset_idx": 2},
+                        ])
+                        continue
+                    leaderless_row = (
+                        _TOC_LEADERLESS_PAGE_ROW.fullmatch(
+                            row_text_bare.strip())
+                        if leaderless_fusions else None)
+                    if leaderless_row is not None and (
+                            " ".join(_chunking_core.clean_heading_text(
+                                leaderless_row.group("title")).split()),
+                            int(leaderless_row.group("page")),
+                    ) in leaderless_fusions:
+                        # This row produced a fused "<label> <page> <next
+                        # entry>" title: its trailing number is its page.
+                        row_queue.insert(0, [
+                            {"text": leaderless_row.group("title"),
+                             "start_col_offset_idx": 0,
+                             "end_col_offset_idx": 1},
+                            {"text": leaderless_row.group("page"),
                              "start_col_offset_idx": 1,
                              "end_col_offset_idx": 2},
                         ])
@@ -6780,12 +6838,17 @@ def _normalize_text(
 # seam changes its signature.  The variable holds one scope per call, closed
 # when the call returns, so a context copied inside the call cannot revive it.
 class _SourceBoundScope:
-    """One active source-bound normalization call."""
+    """One active source-bound normalization call.
 
-    __slots__ = ("active",)
+    ``number_lines`` counts the standalone number lines that body-text items
+    of the fragment consist of (see ``_source_attested_number_lines``).
+    """
 
-    def __init__(self) -> None:
+    __slots__ = ("active", "number_lines")
+
+    def __init__(self, number_lines: Counter | None = None) -> None:
         self.active = True
+        self.number_lines = Counter(number_lines or ())
 
 
 _SOURCE_BOUND_NORMALIZATION: contextvars.ContextVar[
@@ -7052,9 +7115,15 @@ def _normalize_source_chunk_text(
         preserve_source_identity: bool = False,
         source_items: list | None = None,
         canonical_text_overrides: dict[str, str] | None = None,
-        text_rebuild_refs: set[str] | frozenset[str] = frozenset()) -> str:
-    """Preserve source-bound numeric text without retaining page furniture."""
-    scope = _SourceBoundScope()
+        text_rebuild_refs: set[str] | frozenset[str] = frozenset(),
+        source_attested_numbers: dict[str, int] | None = None) -> str:
+    """Preserve source-bound numeric text without retaining page furniture.
+
+    ``source_attested_numbers`` (from ``_source_attested_number_lines``)
+    keeps that many standalone number lines, which the generic cleaner
+    otherwise deletes as page numbers.
+    """
+    scope = _SourceBoundScope(source_attested_numbers)
     token = _SOURCE_BOUND_NORMALIZATION.set(scope)
     try:
         return _normalize_source_bound_chunk_text(
@@ -7255,8 +7324,55 @@ def _strip_headers_footers(text: str) -> str:
     provenance, short all-caps lines and Roman numerals are ambiguous: they are
     often legitimate legal headings (for example ``PERSONAL JURISDICTION`` or
     ``IV.``) and must be preserved.
+
+    Inside a source-bound normalization call, the standalone number lines
+    its body-text items attest are kept, first occurrences first.
     """
-    return _chunking_core._strip_headers_footers(text)
+    scope = _SOURCE_BOUND_NORMALIZATION.get()
+    if scope is None or not scope.active or not scope.number_lines:
+        return _chunking_core._strip_headers_footers(text)
+    remaining = Counter(scope.number_lines)
+
+    def keep_attested(match: re.Match) -> str:
+        number = match.group(0).strip()
+        if remaining[number] > 0:
+            remaining[number] -= 1
+            return match.group(0)
+        return ""
+
+    return _chunking_core._HEADER_FOOTER_RE.sub(keep_attested, text)
+
+
+def _source_attested_number_lines(
+        source_items: list | None, *,
+        excluded_refs: Iterable[str]) -> Counter:
+    """Count the standalone numbers that a fragment's body-text items are.
+
+    The generic cleaner deletes every standalone 1-4 digit line as a page
+    number.  An ordinary body-text item whose whole text is such a number,
+    such as an opinion's numbered part, is publishable source text.  Running
+    page furniture (``excluded_refs``), other labels and furniture layers
+    never attest a line; each distinct item counts once.
+    """
+    excluded = set(excluded_refs)
+    counts: Counter = Counter()
+    seen: set[str] = set()
+    for item in source_items or []:
+        ref = str(getattr(item, "self_ref", "") or "")
+        label = getattr(item, "label", "")
+        layer = getattr(item, "content_layer", "")
+        if (not ref or ref in seen or ref in excluded
+                or str(getattr(label, "value", label)).lower() != "text"
+                or "furniture" in str(
+                    getattr(layer, "value", layer)).lower()):
+            continue
+        text = str(getattr(item, "text", "") or getattr(item, "orig", "")
+                   or "")
+        match = re.fullmatch(r"\s*(\d{1,4})\s*", text)
+        if match is not None:
+            counts[match.group(1)] += 1
+            seen.add(ref)
+    return counts
 
 
 def _dedup_nearby_lines(text: str, window: int = 5) -> str:
@@ -7786,6 +7902,7 @@ def _conversion_parameters(*, batch_size_override: int | None,
                            ocr_full_page: bool = False,
                            ocr_angle_classifier: bool = True,
                            ocr_merge_interleaved_regions: bool = False,
+                           ocr_old_style_figures: bool = False,
                            watermark: re.Pattern | None) -> dict:
     # Full-page OCR is meaningless once OCR itself is disabled; normalize it
     # away so a disabled-OCR receipt hashes identically regardless of the
@@ -7812,6 +7929,9 @@ def _conversion_parameters(*, batch_size_override: int | None,
     # The interleaved OCR region merge follows the same opt-in rule.
     if ocr_merge_interleaved_regions and ocr is not False:
         parameters["ocr_merge_interleaved_regions"] = True
+    # So does reading old-style figures in OCR text.
+    if ocr_old_style_figures and ocr is not False:
+        parameters["ocr_old_style_figures"] = True
     return parameters
 
 
@@ -8164,6 +8284,61 @@ def _interleaved_region_merge_pipeline_cls():
     return InterleavedRegionMergePipeline
 
 
+# Books set in old-style (lowercase) figures print a zero that OCR reads as the
+# letter "o" ("2oo2", "1o9(b)(1)", "9,ooo").  A run of digits, "o" and the
+# separators , . / that holds a digit and is not attached to a preceding
+# letter is a number, and every "o" in it is a zero.
+_OCR_NUMERIC_RUN = re.compile(r"(?<![A-Za-z])[0-9o](?:[0-9o,./]*[0-9o])?")
+
+
+def _ocr_old_style_figures_text(text: str) -> str:
+    """Read OCR ``o`` as ``0`` inside numbers (``--ocr-old-style-figures``)."""
+    def read(match: re.Match) -> str:
+        run = match.group(0)
+        if "o" in run and any(character.isdigit() for character in run):
+            return run.replace("o", "0")
+        return run
+
+    return _OCR_NUMERIC_RUN.sub(read, text)
+
+
+class _OldStyleFiguresOcrModel:
+    """Pass another OCR model's pages through with OCR cells' figures read.
+
+    Only cells the OCR produced change, and only their ``text``: native PDF
+    cells stay as extracted and ``orig`` keeps the raw OCR reading.
+    """
+
+    def __init__(self, inner) -> None:
+        self.inner = inner
+
+    def __call__(self, conv_res, page_batch):
+        for page in self.inner(conv_res, page_batch):
+            parsed = getattr(page, "parsed_page", None)
+            for cell in getattr(parsed, "textline_cells", None) or ():
+                if getattr(cell, "from_ocr", False):
+                    cell.text = _ocr_old_style_figures_text(cell.text)
+            yield page
+
+
+def _old_style_figures_pipeline_cls(base=None):
+    """``base`` (default: Docling's PDF pipeline) with OCR figures read.
+
+    Only each pipeline instance's OCR model is wrapped, so every other stage,
+    including an interleaved-region merge in ``base``, stays untouched.
+    """
+    if base is None:
+        from docling.pipeline.standard_pdf_pipeline import StandardPdfPipeline
+        base = StandardPdfPipeline
+
+    class OldStyleFiguresPipeline(base):
+        def __init__(self, pipeline_options) -> None:
+            super().__init__(pipeline_options)
+            self.ocr_model = _OldStyleFiguresOcrModel(self.ocr_model)
+
+    return OldStyleFiguresPipeline
+
+
 def _converted_outputs_complete(
         pdf_path: Path, doc_output: Path, markdown_output: Path, *,
         parameters: dict,
@@ -8214,7 +8389,9 @@ def _converted_outputs_complete_locked(
                 or binding.ocr_angle_classifier
                 != parameters.get("ocr_angle_classifier", True)
                 or binding.ocr_merge_interleaved_regions
-                != parameters.get("ocr_merge_interleaved_regions", False)):
+                != parameters.get("ocr_merge_interleaved_regions", False)
+                or binding.ocr_old_style_figures
+                != parameters.get("ocr_old_style_figures", False)):
             return False
         outputs = {
             "docling_json": doc_output,
@@ -8257,6 +8434,7 @@ def convert_pdf(pdf_path: Path, doc_output: Path, *,
                 ocr_full_page: bool = False,
                 ocr_angle_classifier: bool = True,
                 ocr_merge_interleaved_regions: bool = False,
+                ocr_old_style_figures: bool = False,
                 preprocessed_output: Path | None = None,
                 markdown_output: Path | None = None,
                 security_policy: (
@@ -8288,6 +8466,7 @@ def convert_pdf(pdf_path: Path, doc_output: Path, *,
             ocr_full_page=ocr_full_page,
             ocr_angle_classifier=ocr_angle_classifier,
             ocr_merge_interleaved_regions=ocr_merge_interleaved_regions,
+            ocr_old_style_figures=ocr_old_style_figures,
             preprocessed_output=preprocessed_output,
             markdown_output=markdown_output,
             security_policy=security_policy,
@@ -8304,6 +8483,7 @@ def _convert_pdf_locked(pdf_path: Path, doc_output: Path, *,
                 ocr_full_page: bool = False,
                 ocr_angle_classifier: bool = True,
                 ocr_merge_interleaved_regions: bool = False,
+                ocr_old_style_figures: bool = False,
                 preprocessed_output: Path | None = None,
                 markdown_output: Path | None = None,
                 security_policy: (
@@ -8323,6 +8503,7 @@ def _convert_pdf_locked(pdf_path: Path, doc_output: Path, *,
         ocr_full_page=ocr_full_page,
         ocr_angle_classifier=ocr_angle_classifier,
         ocr_merge_interleaved_regions=ocr_merge_interleaved_regions,
+        ocr_old_style_figures=ocr_old_style_figures,
         watermark=watermark)
 
     if (not force and _converted_outputs_complete_locked(
@@ -8349,6 +8530,7 @@ def _convert_pdf_locked(pdf_path: Path, doc_output: Path, *,
             ocr_full_page=ocr_full_page,
             ocr_angle_classifier=ocr_angle_classifier,
             ocr_merge_interleaved_regions=ocr_merge_interleaved_regions,
+            ocr_old_style_figures=ocr_old_style_figures,
             preprocessed_output=preprocessed_path,
             markdown_output=markdown_output,
             security_policy=security_policy,
@@ -8408,6 +8590,9 @@ def _convert_pdf_locked(pdf_path: Path, doc_output: Path, *,
                if "ocr_angle_classifier" in completion_parameters else {}),
             **({"ocr_merge_interleaved_regions": True}
                if "ocr_merge_interleaved_regions" in completion_parameters
+               else {}),
+            **({"ocr_old_style_figures": True}
+               if "ocr_old_style_figures" in completion_parameters
                else {}),
         })
     if _cached_artifact_sha256(source_pdf_path) != source_snapshot.sha256:
@@ -8475,6 +8660,7 @@ def _convert_pdf_generation(
                 ocr_full_page: bool = False,
                 ocr_angle_classifier: bool = True,
                 ocr_merge_interleaved_regions: bool = False,
+                ocr_old_style_figures: bool = False,
                 preprocessed_output: Path | None = None,
                 markdown_output: Path | None = None,
                 security_policy: (
@@ -8615,6 +8801,13 @@ def _convert_pdf_generation(
         log.warning(
             "--ocr-merge-interleaved-regions has no effect because OCR is not "
             "running for this PDF.")
+    old_style_figures = effective_ocr and ocr_old_style_figures
+    if old_style_figures:
+        ocr_mode += ", old-style figures read"
+    elif ocr_old_style_figures:
+        log.warning(
+            "--ocr-old-style-figures has no effect because OCR is not "
+            "running for this PDF.")
     log.info(f"OCR: {ocr_mode}")
 
     # Explicit accelerator options beat OMP_NUM_THREADS and DOCLING_*
@@ -8656,11 +8849,15 @@ def _convert_pdf_generation(
             security_policy=security_policy)
         log.info(f"Docling verified model artifacts: {artifacts_root}")
 
-        # Without the opt-in merge, Docling keeps its default pipeline class.
+        # Without an opt-in OCR setting, Docling keeps its default pipeline
+        # class; reading old-style figures wraps the merging class if both.
         format_option = {"pipeline_options": pipeline_opts}
         if merge_interleaved_regions:
             format_option["pipeline_cls"] = (
                 _interleaved_region_merge_pipeline_cls())
+        if old_style_figures:
+            format_option["pipeline_cls"] = _old_style_figures_pipeline_cls(
+                format_option.get("pipeline_cls"))
         pdf_format_option = PdfFormatOption(**format_option)
         # Docling never reads DOCLING_PDF_BACKEND.  --backend stays in the
         # conversion parameters only so existing receipt digests still match.
@@ -9038,6 +9235,7 @@ def _filter_same_page_future_headings(
         heading_spans: dict[tuple[int, str], list[tuple[float, float]]],
         page_heights: dict[int, float],
         *, truncate_at_first: bool = False,
+        governing_identity: str | None = None,
 ) -> list[str]:
     """Drop headings physically below every source span in a one-page chunk.
 
@@ -9048,6 +9246,12 @@ def _filter_same_page_future_headings(
     ordered scaffold path may set ``truncate_at_first`` so descendants of the
     first future heading are removed with it, including captions whose source
     geometry is unavailable to this filter.
+
+    Same-page spans are matched by text identity, so a short marker such as
+    ``A`` that opened on an earlier page can share its text with a marker
+    below the chunk.  ``governing_identity`` is the identity of the nearest
+    source heading before the chunk in body order; a heading with that
+    identity is that occurrence, not the one below, and is never dropped.
     """
     page_start = metadata.get("page_start")
     page_end = metadata.get("page_end")
@@ -9082,9 +9286,10 @@ def _filter_same_page_future_headings(
 
     filtered: list[str] = []
     for heading in headings:
-        candidates = heading_spans.get((
-            page_start, _source_heading_identity(heading)), ())
+        identity = _source_heading_identity(heading)
+        candidates = heading_spans.get((page_start, identity), ())
         if (candidates
+                and identity != governing_identity
                 and all(top > chunk_bottom + 1.0
                         for top, _ in candidates)):
             if truncate_at_first:
@@ -11323,6 +11528,7 @@ class ConversionSourceBinding:
     effective_input_size: int
     ocr_angle_classifier: bool = True
     ocr_merge_interleaved_regions: bool = False
+    ocr_old_style_figures: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -11614,12 +11820,14 @@ def _load_conversion_source_binding(
     }
     # The only optional root fields record the opt-in OCR overrides.
     optional_root_fields = {
-        "ocr_angle_classifier", "ocr_merge_interleaved_regions"}
+        "ocr_angle_classifier", "ocr_merge_interleaved_regions",
+        "ocr_old_style_figures"}
     if set(payload) - optional_root_fields != expected_root_fields:
         raise ValueError("conversion completion has an invalid field set")
     if (payload.get("ocr_angle_classifier", False) is not False
             or payload.get("ocr_merge_interleaved_regions", True)
-            is not True):
+            is not True
+            or payload.get("ocr_old_style_figures", True) is not True):
         raise ValueError("conversion completion OCR override is invalid")
     if (payload.get("stage") != "conversion"
             or payload.get("source_record_count") is not None
@@ -11703,6 +11911,7 @@ def _load_conversion_source_binding(
         ocr_angle_classifier="ocr_angle_classifier" not in payload,
         ocr_merge_interleaved_regions=(
             "ocr_merge_interleaved_regions" in payload),
+        ocr_old_style_figures="ocr_old_style_figures" in payload,
     )
 
 
@@ -19072,33 +19281,71 @@ def _prepare_source_preserving_chunks(
     # the whole publication can retract it instead of repeating it.
     split_slice_entries: dict[
         str, list[tuple[str, list | None, list | None, bool]]] = {}
+    # A slice that shares its raw chunk with ordinary text items (an opinion's
+    # "delivered the opinion" line merged with the first part of a long
+    # paragraph).  Retracting it republishes those items whole.
+    shared_slice_entries: dict[
+        str, list[tuple[str, list | None, list | None, bool]]] = {}
 
     def retract_split_slices(ref: str) -> None:
         """Retract the recorded slices of an item about to be published whole.
 
         The complete item repeats their source tokens, which
-        ``source_token_fidelity`` always rejects.
+        ``source_token_fidelity`` always rejects.  A slice recorded beside
+        other items is replaced by those items, each published whole as the
+        per-item paths publish them.
         """
         retracted = {id(entry) for entry in split_slice_entries.pop(ref, ())}
-        if retracted:
-            prepared[:] = [
-                kept for kept in prepared if id(kept) not in retracted]
+        shared = {id(entry) for entry in shared_slice_entries.pop(ref, ())}
+        if not retracted and not shared:
+            return
+        rebuilt: list[tuple[str, list | None, list | None, bool]] = []
+        for kept in prepared:
+            if id(kept) in retracted:
+                continue
+            if id(kept) not in shared:
+                rebuilt.append(kept)
+                continue
+            _text, kept_headings, kept_items, _short = kept
+            for item in kept_items or []:
+                if str(getattr(item, "self_ref", "")) == ref:
+                    continue
+                value = item_display_text(item)
+                if value and value.strip():
+                    rebuilt.append((
+                        value.strip(),
+                        source_mapped_headings([item], kept_headings),
+                        [item], True,
+                    ))
+        prepared[:] = rebuilt
 
     def append_chunk_slice(
             entry: tuple[str, list | None, list | None, bool]) -> None:
-        """Append one chunk's retained text, recording a lone split slice.
+        """Append one chunk's retained text, recording a split slice.
 
         Only a slice with source tokens is recorded: repeating it can never
         pass ``source_token_fidelity``, so retracting it changes only output
-        that fails today.
+        that fails today.  Beside other items, it is recorded only when it is
+        the chunk's one split item and the others are ordinary text.
         """
         text, _headings, items, _preserve_short = entry
         prepared.append(entry)
-        ref = (str(getattr(items[0], "self_ref", ""))
-               if items is not None and len(items) == 1 else "")
-        if (ref and raw_ref_counts.get(ref, 0) > 1
-                and _source_fidelity_core.lexical_tokens(text)):
-            split_slice_entries.setdefault(ref, []).append(entry)
+        if not items or not _source_fidelity_core.lexical_tokens(text):
+            return
+        refs = [str(getattr(item, "self_ref", "")) for item in items]
+        split_refs = [
+            ref for ref in refs if ref and raw_ref_counts.get(ref, 0) > 1]
+        if len(items) == 1:
+            if split_refs:
+                split_slice_entries.setdefault(
+                    split_refs[0], []).append(entry)
+            return
+        if (len(split_refs) == 1 and all(
+                ref == split_refs[0]
+                or (ref and _doc_item_label(item) == "text"
+                    and ref not in all_footnote_refs)
+                for item, ref in zip(items, refs))):
+            shared_slice_entries.setdefault(split_refs[0], []).append(entry)
 
     def source_position(item) -> tuple[int, float] | None:
         position = _source_item_position(item)
@@ -22475,6 +22722,35 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
     }
     demoted_source_heading_refs.update(
         _heading_lineage.sparse_ocr_heading_artifact_refs(doc_dict))
+    nearest_source_heading_identities: dict[str, str] = {}
+
+    def governing_heading_identity(metadata: dict) -> str | None:
+        """Identity of the nearest source heading before a record's items.
+
+        Built on first use: only a chunk heading that the same-page future
+        filter would drop needs this body-order evidence.
+        """
+        if not nearest_source_heading_identities:
+            heading_text = {
+                str(item.get("self_ref")): str(
+                    item.get("text") or item.get("orig") or "")
+                for item in doc_dict.get("texts") or []
+                if isinstance(item, dict)
+            }
+            nearest_source_heading_identities.update({
+                ref: _source_heading_identity(heading_text.get(heading, ""))
+                for ref, heading in (
+                    _heading_lineage.nearest_preceding_heading_refs(
+                        doc_dict, structural_ranges=structural_ranges,
+                        excluded_heading_refs=demoted_source_heading_refs)
+                ).items()
+            })
+        for source_item in metadata.get("source_items") or []:
+            ref = (str(source_item.get("ref") or "")
+                   if isinstance(source_item, dict) else "")
+            if ref in nearest_source_heading_identities:
+                return nearest_source_heading_identities[ref]
+        return None
 
     if len(prepared_chunks) != len(raw_chunks):
         log.info(
@@ -22570,6 +22846,8 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
             source_items=doc_items,
             canonical_text_overrides=source_enrichments.text_overrides,
             text_rebuild_refs=source_enrichments.text_rebuild_refs,
+            source_attested_numbers=_source_attested_number_lines(
+                doc_items, excluded_refs=running_page_furniture_refs),
         )
         clean = _join_soft_hyphen_item_seams(
             clean, list(doc_items or []),
@@ -22871,9 +23149,16 @@ def _chunk_document_locked(doc_path: Path, chunks_output: Path, *,
                         source_headings.append(
                             canonical_heading_by_identity.get(
                                 (ch_num, local_identity), local_heading))
-                    source_headings = _filter_same_page_future_headings(
+                    filtered_headings = _filter_same_page_future_headings(
                         source_headings, rec["metadata"],
                         source_heading_spans, source_page_heights)
+                    if filtered_headings != source_headings:
+                        filtered_headings = _filter_same_page_future_headings(
+                            source_headings, rec["metadata"],
+                            source_heading_spans, source_page_heights,
+                            governing_identity=governing_heading_identity(
+                                rec["metadata"]))
+                    source_headings = filtered_headings
                     source_path_parts = [
                         part.strip() for part in source_path.split(" > ")
                         if part.strip()
@@ -32160,6 +32445,7 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
             args, "ocr_no_angle_classifier", False)
         ocr_merge_interleaved_regions = getattr(
             args, "ocr_merge_interleaved_regions", False)
+        ocr_old_style_figures = getattr(args, "ocr_old_style_figures", False)
         conversion_parameters = _conversion_parameters(
             batch_size_override=args.batch_size, backend=args.backend,
             auto_preprocess=not args.no_preprocess,
@@ -32167,6 +32453,7 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
             ocr_full_page=getattr(args, "ocr_full_page", False),
             ocr_angle_classifier=ocr_angle_classifier,
             ocr_merge_interleaved_regions=ocr_merge_interleaved_regions,
+            ocr_old_style_figures=ocr_old_style_figures,
             watermark=watermark)
         if resume and _converted_outputs_complete(
                 pdf_path, paths["doc"], paths["converted_markdown"],
@@ -32187,6 +32474,7 @@ def _run_pipeline_stages(pdf_path: Path, paths: PipelinePaths, args, *,
                 ocr_full_page=getattr(args, "ocr_full_page", False),
                 ocr_angle_classifier=ocr_angle_classifier,
                 ocr_merge_interleaved_regions=ocr_merge_interleaved_regions,
+                ocr_old_style_figures=ocr_old_style_figures,
                 preprocessed_output=paths["preprocessed"],
                 markdown_output=paths["converted_markdown"],
                 security_policy=llm_kwargs["security_policy"],
@@ -33298,6 +33586,16 @@ def main(argv: list[str] | None = None):
                  "is ignored with --no-ocr",
         )
 
+    def add_ocr_old_style_figures_flag(p):
+        p.add_argument(
+            "--ocr-old-style-figures",
+            action="store_true",
+            help="Read OCR 'o' as '0' inside numbers, for books set in "
+                 "old-style figures whose zero OCR reads as a lowercase o, "
+                 "whenever OCR runs. Native PDF text is never changed. Does "
+                 "not enable OCR itself and is ignored with --no-ocr",
+        )
+
     def add_chunk_llm_flags(p):
         p.add_argument("--llm-classify", action="store_true",
                         help="Use LLM for content classification")
@@ -33415,6 +33713,7 @@ def main(argv: list[str] | None = None):
     add_ocr_full_page_flag(p_conv)
     add_ocr_angle_classifier_flag(p_conv)
     add_ocr_merge_interleaved_regions_flag(p_conv)
+    add_ocr_old_style_figures_flag(p_conv)
 
     # chunk
     p_chunk = sub.add_parser("chunk", help="DoclingDocument to enriched chunks")
@@ -33739,6 +34038,7 @@ def main(argv: list[str] | None = None):
     add_ocr_full_page_flag(p_full)
     add_ocr_angle_classifier_flag(p_full)
     add_ocr_merge_interleaved_regions_flag(p_full)
+    add_ocr_old_style_figures_flag(p_full)
     add_chunk_llm_flags(p_full)
     add_table_retrieval_flag(p_full)
     add_markdown_validation_flag(p_full)
@@ -33786,6 +34086,7 @@ def main(argv: list[str] | None = None):
     add_ocr_full_page_flag(p_batch)
     add_ocr_angle_classifier_flag(p_batch)
     add_ocr_merge_interleaved_regions_flag(p_batch)
+    add_ocr_old_style_figures_flag(p_batch)
     add_chunk_llm_flags(p_batch)
     add_table_retrieval_flag(p_batch)
     add_markdown_validation_flag(p_batch)
@@ -33976,6 +34277,8 @@ def main(argv: list[str] | None = None):
                             args, "ocr_no_angle_classifier", False),
                         ocr_merge_interleaved_regions=getattr(
                             args, "ocr_merge_interleaved_regions", False),
+                        ocr_old_style_figures=getattr(
+                            args, "ocr_old_style_figures", False),
                         security_policy=security_policy,
                         telemetry=run_telemetry)
 
