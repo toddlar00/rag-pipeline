@@ -2366,7 +2366,9 @@ gone; 408 pages have none and 101 keep a blank full-page background.
 
 ### Fresh-OCR route fixes for the ClearScan casebook (2026-10-11, proposed)
 
-The branch `agent/clearscan-ocr-fixes-2026-10` implements the owner's
+The branch `agent/clearscan-ocr-fixes-2026-10` (source checkpoint `0ac1972`,
+carrying its own Phase A0 pair; hosted checks pending; not merged)
+implements the owner's
 interim route above: fresh OCR of the image-only derivative, with the OCR's
 misreads of the book's figures fixed. One opt-in conversion setting and four
 chunking fixes take that run from failing to passing every chunk-stage gate.
@@ -3048,10 +3050,23 @@ to start while `GRADIO_ALLOWED_PATHS` is non-empty or
 run-history page, and the local UI's footer link to it, disappear, and
 Gradio deletes the runs it had saved in the browser for these apps. It
 changes no dependency or lock.
-Its Windows/Linux
-pair (independent local same-platform comparisons passed) is that branch's
-candidate; its hosted checks and exact-SHA record are pending, and the
-merged pull requests carry theirs as PR comments.
+
+The `b48be4c` pair (gate-only child `6e891b6`) passed the hosted CI
+promotion gate on PR #169. #166, #167, #168 and #169 then merged through
+`3d25d31`.
+
+The ClearScan fresh-OCR route source `0ac1972` supersedes that pair for its
+own pull request. See "Fresh-OCR route fixes for the ClearScan casebook"
+above: an opt-in `--ocr-old-style-figures` and four failing-only chunking
+fixes, with no dependency or lock change. Full locked suites at the source
+passed under `-n 8`:
+
+- Windows: 16,462 passed and 17 skipped;
+- Linux: 16,387 passed and 92 skipped.
+
+Its Windows/Linux pair (independent local same-platform comparisons
+passed) is that branch's candidate. Its hosted checks and exact-SHA record
+are pending; the merged pull requests carry theirs as PR comments.
 
 Four operational follow-ups from the post-merge `main` push runs are
 recorded; two remain open, and two were fixed through the robustness

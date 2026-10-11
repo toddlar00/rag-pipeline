@@ -7,21 +7,21 @@ fresh-process repetitions.
 
 ## Provenance
 
-Both current reports were generated from the clean resource-safety and
-environment-isolation hardening source checkpoint
-`b48be4cdd67c1dd486f90e3968357e2fbaa64044` (tree
-`3b7440ad434f0e335158cc1aa1e58bbe2a2cdbac`), a behavior-preserving
-bounded-read fix plus fail-closed hardening that keeps environment
-variables (and, for Chroma, a working-directory `.env`) from selecting
-the Chroma, google-genai and Gradio implementations, telemetry and
-launch settings, changing no dependency or lock, stacked
-on the ML/runtime torch 2.14.1 source `718ee9f` (gate-only child
-`c6ad4ee`, pending on #168, not merged), the last of three stacked
-one-domain dependency upgrades, which is stacked on the Service/UI fastapi
-0.142.2 source `f4204f8` (gate-only child `43a93e1`, pending on #167, not
-merged), which is stacked on the provider-transport cryptography 50.0.2
-source `0b1bbe7` (gate-only child `488c848`, pending on #166, not merged),
-after a series of one-domain
+Both current reports were generated from the clean ClearScan fresh-OCR
+route source checkpoint `0ac19724659e1d2eeb8a81bbcba3387352d64486` (tree
+`60f3361fa4a6a2ca603316d6b4563205d84ef85d`). It adds an opt-in OCR setting
+(`--ocr-old-style-figures`) and four chunking fixes that change only output
+that failed before, and it changes no dependency or lock. It sits on `main`
+after the history-preserving merges of:
+
+- the provider-transport cryptography 50.0.2 source `0b1bbe7` (#166,
+  `654577b`);
+- the Service/UI fastapi 0.142.2 source `f4204f8` (#167, `f3b1104`);
+- the ML/runtime torch 2.14.1 source `718ee9f` (#168, `b86fa64`);
+- the resource-safety and environment-isolation hardening source
+  `b48be4c` (#169, `3d25d31`).
+
+Those followed a series of one-domain
 dependency updates on `main` after the history-preserving merges of #121
 (`602bec1`),
 of that series, #122 to #130 (`1cffc58`), of its documentation follow-up #135
@@ -105,7 +105,8 @@ opentelemetry-api 1.45.0 to `requirements-service.lock`; the stacked
 ML/runtime refresh moves torch from 2.14.0 to 2.14.1 and torchvision from
 0.29.0 to 0.29.1 in `requirements-core.lock` and `requirements-full.lock`
 and changes no other record; the stacked resource-safety and
-environment-isolation hardening changes no lock; no model lock changed.
+environment-isolation hardening changes no lock; the ClearScan fresh-OCR
+route changes no lock; no model lock changed.
 The executing environments were synchronized to this source's locks
 (urllib3 2.8.0, cryptography 50.0.2, fastapi 0.142.2, gradio 6.29.1,
 torch 2.14.1 and torchvision 0.29.1) with repository-pinned uv 0.12.20
@@ -125,8 +126,8 @@ marker-resolved distributions before generation.
 
 | Platform | Runtime | Report | Bytes | File SHA-256 | Embedded report SHA-256 |
 |---|---:|---|---:|---|---|
-| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,202 | `210ff86c641958fe9ca6541873114da92407b8921fdc3926d2afb150ad6f61f5` | `7371ff43804e016ce78e7e8ce8b5d77f13f0fbe0945c56aae4b297fe50a751ae` |
-| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,603 | `71c1b4210b418e4a312c82ce3fb9944a9fa85051d31c592c151ca6fb3952b158` | `bad3014693e9a24e2775f4ff0f6f633bac4dd714bf5bf776b9dd43e39774373e` |
+| Windows x86-64 | CPython 3.12.13 | `phase-a0-windows-cpython312.json` | 51,202 | `f6249aeb4dd43aaead058259560a3f620369e4ff779863ababf100af50051e4d` | `c8a7812715f9a3bfa28460508a4394b4656716267c5230f4b0cc1240bbd10a6e` |
+| Linux x86-64 | CPython 3.12.13 | `phase-a0-linux-cpython312.json` | 50,592 | `5dc43d7c270863c6af9c802d1cf51756a67e09df3648f6529b23b20b274dad57` | `2be2d2c8f43ba54f21324db2e794e0d6ed442257e409d44c3d11a5b8dd8c556e` |
 
 The reports attest the same source commit, clean-worktree state, tracked-diff
 digest, eight LF and `HEAD`-identical dependency/model-lock inputs, authoritative
@@ -751,12 +752,35 @@ to start while `GRADIO_ALLOWED_PATHS` is non-empty or
 run-history page, and the local UI's footer link to it, disappear, and
 Gradio deletes the runs it had saved in the browser for these apps. It
 changes no dependency or lock.
-The current reports above
-bind
-that exact clean source and each passes an independent complete
-same-platform 9×5 comparison. No hosted result for this replacement pair
-is claimed here yet; its hosted checks and external exact-SHA record
-remain pending.
+
+The `b48be4c` pair (gate-only child `6e891b6`) passed the hosted CI
+promotion gate on [PR #169](https://github.com/toddlar00/rag-pipeline/pull/169).
+#166, #167, #168 and #169 then merged through `3d25d31`.
+
+The ClearScan fresh-OCR route source `0ac1972` supersedes that pair for
+its own pull request. It adds `--ocr-old-style-figures`, an opt-in
+conversion setting recorded like the interleaved-region merge, which reads
+an OCR `o` as `0` inside numbers. It also adds four chunking fixes:
+
+- a conditional re-parse of chapter TOC rows whose dot leaders OCR
+  dropped;
+- a same-page future-heading filter that keeps a heading matching the
+  nearest scope heading;
+- standalone number lines that body-text items attest;
+- the retraction of a split item's slice that shares its raw chunk.
+
+Each chunking fix fires only where output failed before. All 19 READY h26
+runs and the READY tort casebook run re-chunk byte-identically. It
+changes no dependency or lock. Full locked suites at the source passed
+under `-n 8`:
+
+- Windows: 16,462 passed and 17 skipped;
+- Linux: 16,387 passed and 92 skipped.
+
+The current reports above bind that exact clean source, and each passes
+an independent complete same-platform 9×5 comparison. No hosted result
+for this replacement pair is claimed here yet: its hosted checks and
+external exact-SHA record remain pending.
 
 ## Checking
 
