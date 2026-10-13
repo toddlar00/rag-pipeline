@@ -18,4 +18,4 @@ google-genai>=1.68,<2      # Gemini fallback; per-request timeout/retry controls
 cryptography>=50.0.0,<51
 
 # Web UI
-gradio>=6.28.0,<7
+gradio>=6.30.0,<7
