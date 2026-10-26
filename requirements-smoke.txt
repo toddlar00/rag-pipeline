@@ -1,8 +1,8 @@
 # Real local vector-store smoke tests without the full ML/document stack.
 -r requirements-test.txt
-chromadb>=1.5.2,<2
+chromadb>=1.5.9,<2
 oauthlib>=4.0.0,<5
 onnxruntime>=1.14.1,<1.24; python_version < "3.11"
-onnxruntime>=1.30.0,<2; python_version >= "3.11"
-qdrant-client>=1.19.1,<2
+onnxruntime>=1.31.0,<2; python_version >= "3.11"
+qdrant-client>=1.20.0,<2
 h2>=4.4.1,<5

@@ -28,7 +28,7 @@ sentence-transformers>=6.1.0,<7
 einops>=0.7,<1
 
 # Vector store (default backend)
-chromadb>=1.5.2,<2
+chromadb>=1.5.9,<2
 # Promoted from chromadb's kubernetes -> requests-oauthlib so the
 # CVE-2026-49264/CVE-2026-49265 fix (oauthlib 4.0.0) can be selected under the
 # dependency-domain policy.
@@ -36,7 +36,7 @@ oauthlib>=4.0.0,<5
 # ONNX Runtime 1.24+ no longer publishes CPython 3.10 wheels. Keep the
 # transitive Chroma dependency installable across the supported 3.10-3.14 range.
 onnxruntime>=1.14.1,<1.24; python_version < "3.11"
-onnxruntime>=1.30.0,<2; python_version >= "3.11"
+onnxruntime>=1.31.0,<2; python_version >= "3.11"
 
 # Cross-encoder reranker
 FlagEmbedding>=1.4.2,<2
